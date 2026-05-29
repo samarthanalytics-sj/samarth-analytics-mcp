@@ -4,11 +4,17 @@ import crypto from "node:crypto";
 /**
  * /api/gtm/audit
  *
- * Fully self-contained: no imports outside of `node:*`. The QC audit
- * ruleset lives in this file so the route is guaranteed to bundle on
- * Vercel and never fails with "Audit module failed to load." Reliability
- * over DRY — the canonical engine still lives at
- * `apps/portal/server/gtm/audit.ts` for the local Express server.
+ * Evidence-based GTM QC auditor. Read-only against the GTM API v2.
+ * Self-contained (no imports outside of `node:*`) so the route always
+ * bundles on Vercel. The canonical engine still lives at
+ * `apps/portal/server/gtm/audit.ts` for the Express dev server.
+ *
+ * Design rules:
+ * - Only report what the configuration shows. No claims about runtime
+ *   behavior (does a tag actually fire, double-fire, send correct data).
+ * - If a tool call fails, record it in `toolFailures` and (where it
+ *   matters) raise a Low/Medium finding so gaps are not silent.
+ * - When uncertain, mark `needsManualReview: true` instead of guessing.
  */
 
 const COOKIE_VERSION = "v1";
@@ -34,6 +40,8 @@ interface GtmParameter {
   type?: string;
   key?: string;
   value?: string;
+  list?: GtmParameter[];
+  map?: GtmParameter[];
 }
 
 interface GtmTag {
@@ -46,6 +54,7 @@ interface GtmTag {
   firingRuleId?: string[];
   parameter?: GtmParameter[];
   parentFolderId?: string;
+  consentSettings?: { consentStatus?: string; consentType?: { value?: string } };
 }
 
 interface GtmTrigger {
@@ -53,6 +62,7 @@ interface GtmTrigger {
   name?: string;
   type?: string;
   filter?: unknown[];
+  customEventFilter?: unknown[];
   parentFolderId?: string;
 }
 
@@ -75,12 +85,38 @@ interface GtmBuiltInVariable {
   name?: string;
 }
 
-interface WorkspaceContents {
-  tags: GtmTag[];
-  triggers: GtmTrigger[];
-  variables: GtmVariable[];
-  folders: GtmFolder[];
-  builtInVariables: GtmBuiltInVariable[];
+interface GtmClient {
+  clientId?: string;
+  name?: string;
+  type?: string;
+  parameter?: GtmParameter[];
+}
+
+interface GtmWorkspace {
+  workspaceId?: string;
+  name?: string;
+  description?: string;
+}
+
+interface GtmContainer {
+  containerId?: string;
+  name?: string;
+  publicId?: string;
+  usageContext?: string[];
+  domainName?: string[];
+}
+
+interface GtmVersionHeader {
+  containerVersionId?: string;
+  name?: string;
+  deleted?: boolean;
+}
+
+interface GtmVersion {
+  containerVersionId?: string;
+  name?: string;
+  notes?: string;
+  fingerprint?: string;
 }
 
 // ── Audit result types (mirror shared/portal-types.ts) ───────────────────
@@ -96,7 +132,11 @@ type AuditCategory =
   | "performance"
   | "naming"
   | "duplication"
-  | "data_layer";
+  | "data_layer"
+  | "dead_config"
+  | "data_quality"
+  | "publishing"
+  | "tool_failure";
 
 interface AuditFinding {
   id: string;
@@ -106,6 +146,17 @@ interface AuditFinding {
   severity: AuditSeverity;
   affects?: string[];
   recommendation?: string;
+  finding?: string;
+  affected?: string[];
+  whyItMatters?: string;
+  suggestedFix?: string;
+  needsManualReview?: boolean;
+}
+
+interface AuditToolFailure {
+  resource: string;
+  message: string;
+  status?: number;
 }
 
 interface AuditSummary {
@@ -114,6 +165,29 @@ interface AuditSummary {
   healthScore: number;
   counts: { tags: number; triggers: number; variables: number };
   findings: AuditFinding[];
+  containerType?: string;
+  workspaceCount?: number;
+  publishedVersion?: { versionId?: string; name?: string; notes?: string } | null;
+  toolFailures?: AuditToolFailure[];
+  summary?: string;
+}
+
+interface AuditState {
+  contents: WorkspaceContents;
+  container: GtmContainer | null;
+  workspaces: GtmWorkspace[];
+  publishedVersion: GtmVersion | null;
+  clients: GtmClient[];
+  toolFailures: AuditToolFailure[];
+}
+
+interface WorkspaceContents {
+  tags: GtmTag[];
+  triggers: GtmTrigger[];
+  variables: GtmVariable[];
+  folders: GtmFolder[];
+  builtInVariables: GtmBuiltInVariable[];
+  templates: unknown[];
 }
 
 export default async function handler(
@@ -151,18 +225,19 @@ export default async function handler(
     if (!accountId || !containerId || !workspaceId) {
       return sendJson(res, 400, {
         error: "missing_params",
-        message: "accountId, containerId and workspaceId are required.",
+        message:
+          "accountId, containerId and workspaceId are required. Use /api/gtm/accounts, /api/gtm/accounts/:id/containers, and the workspaces list to choose them, then retry.",
       });
     }
 
     try {
-      const contents = await fetchWorkspaceContents(
+      const state = await pullAuditState(
         token,
         accountId,
         containerId,
         workspaceId,
       );
-      const summary = runAudit(contents, {
+      const summary = runAudit(state, {
         containerPublicId: containerPublicId ?? containerId,
       });
       return sendJson(res, 200, summary);
@@ -190,7 +265,12 @@ interface Ctx {
   variables: GtmVariable[];
   folders: GtmFolder[];
   builtIns: GtmBuiltInVariable[];
+  clients: GtmClient[];
+  container: GtmContainer | null;
+  workspaces: GtmWorkspace[];
+  publishedVersion: GtmVersion | null;
   triggerIdSet: Set<string>;
+  triggerById: Map<string, GtmTrigger>;
   builtInTypes: Set<string>;
   textBlob: string;
 }
@@ -201,22 +281,31 @@ function fid(seed: string): string {
   );
 }
 
-function buildCtx(contents: WorkspaceContents): Ctx {
+function buildCtx(state: AuditState): Ctx {
   const triggerIdSet = new Set(
-    contents.triggers.map((t) => t.triggerId ?? "").filter(Boolean),
+    state.contents.triggers.map((t) => t.triggerId ?? "").filter(Boolean),
   );
+  const triggerById = new Map<string, GtmTrigger>();
+  for (const t of state.contents.triggers) {
+    if (t.triggerId) triggerById.set(t.triggerId, t);
+  }
   const builtInTypes = new Set(
-    contents.builtInVariables.map((b) => b.type ?? "").filter(Boolean),
+    state.contents.builtInVariables.map((b) => b.type ?? "").filter(Boolean),
   );
   return {
-    tags: contents.tags,
-    triggers: contents.triggers,
-    variables: contents.variables,
-    folders: contents.folders,
-    builtIns: contents.builtInVariables,
+    tags: state.contents.tags,
+    triggers: state.contents.triggers,
+    variables: state.contents.variables,
+    folders: state.contents.folders,
+    builtIns: state.contents.builtInVariables,
+    clients: state.clients,
+    container: state.container,
+    workspaces: state.workspaces,
+    publishedVersion: state.publishedVersion,
     triggerIdSet,
+    triggerById,
     builtInTypes,
-    textBlob: collectTextBlob(contents),
+    textBlob: collectTextBlob(state.contents),
   };
 }
 
@@ -224,37 +313,66 @@ function collectTextBlob(c: WorkspaceContents): string {
   const parts: string[] = [];
   for (const t of c.tags) {
     parts.push(t.name ?? "", t.type ?? "");
-    for (const p of t.parameter ?? []) parts.push(p.key ?? "", p.value ?? "");
+    for (const p of t.parameter ?? []) walkParam(p, parts);
   }
   for (const v of c.variables) {
     parts.push(v.name ?? "", v.type ?? "");
-    for (const p of v.parameter ?? []) parts.push(p.key ?? "", p.value ?? "");
+    for (const p of v.parameter ?? []) walkParam(p, parts);
   }
   return parts.join("\n").toLowerCase();
+}
+
+function walkParam(p: GtmParameter, sink: string[]): void {
+  if (p.key) sink.push(p.key);
+  if (p.value) sink.push(p.value);
+  for (const child of p.list ?? []) walkParam(child, sink);
+  for (const child of p.map ?? []) walkParam(child, sink);
 }
 
 function tagParam(tag: GtmTag, key: string): string | undefined {
   return tag.parameter?.find((p) => p.key === key)?.value;
 }
 
+// Heuristics that match a wide set of GTM tag types. We are deliberately
+// conservative: only label families we can identify with confidence.
+
 function isGA4Config(tag: GtmTag): boolean {
+  // gaawc = GA4 Configuration (legacy); googtag = Google tag (current).
   return tag.type === "gaawc" || tag.type === "googtag";
 }
 function isGA4Event(tag: GtmTag): boolean {
   return tag.type === "gaawe";
 }
-
-function looksGeneric(name: string): boolean {
-  if (!name) return true;
-  const n = name.trim().toLowerCase();
-  if (!n) return true;
-  if (n === "unnamed" || n === "untitled") return true;
-  if (/^untitled\s*(tag|trigger|variable)?(\s*\d+)?$/i.test(n)) return true;
-  if (/^(new\s+)?(tag|trigger|variable)\s*\d*$/i.test(n)) return true;
-  if (/^copy\s+of\s+/i.test(n)) return true;
+function isMarketingOrAnalyticsTag(tag: GtmTag): boolean {
+  const t = (tag.type ?? "").toLowerCase();
+  if (!t) return false;
+  // GA4 / UA / Google Ads conversions / Floodlight / Meta-pixel templates /
+  // generic marketing pixel image tags.
+  if (
+    [
+      "gaawc",
+      "gaawe",
+      "googtag",
+      "ua",
+      "awct", // Google Ads conversion tracking
+      "sp", // Google Ads remarketing
+      "flc", // Floodlight counter
+      "fls", // Floodlight sales
+      "img", // image pixel
+    ].includes(t)
+  ) {
+    return true;
+  }
+  // Custom-template tags whose names hint at marketing/analytics platforms
+  // — flagged only as "needs manual review" by callers.
   return false;
 }
 
+const ALL_PAGES_TRIGGER_TYPE = "pageview";
+
+// ── Rules ────────────────────────────────────────────────────────────────
+
+// A. Dead / orphaned config
 function ruleTagsNoFiringTriggers(ctx: Ctx, out: AuditFinding[]) {
   for (const tag of ctx.tags) {
     const has =
@@ -262,184 +380,19 @@ function ruleTagsNoFiringTriggers(ctx: Ctx, out: AuditFinding[]) {
       (tag.firingRuleId?.length ?? 0) > 0;
     if (!has) {
       const name = tag.name ?? "Unnamed tag";
-      out.push({
+      pushFinding(out, {
         id: fid(`no-trigger:${tag.tagId}`),
-        category: "ga4",
+        category: "dead_config",
         severity: "high",
-        title: `Tag has no firing triggers`,
-        description: `Tag "${name}" (type: ${tag.type ?? "unknown"}) has no firing trigger configured, so it will never fire in production.`,
-        affects: [name],
-        recommendation:
-          "Attach an appropriate firing trigger, or delete the tag if it is no longer needed.",
+        finding: "Tag has no firing trigger attached",
+        affected: [name],
+        whyItMatters:
+          "Without a firing trigger the tag is dormant and serves no purpose in this workspace.",
+        suggestedFix:
+          "Attach an appropriate firing trigger or delete the tag if it is no longer needed.",
       });
     }
   }
-}
-
-function rulePausedTags(ctx: Ctx, out: AuditFinding[]) {
-  for (const tag of ctx.tags) {
-    if (tag.paused) {
-      const name = tag.name ?? "Unnamed tag";
-      out.push({
-        id: fid(`paused:${tag.tagId}`),
-        category: "ga4",
-        severity: "medium",
-        title: `Paused tag`,
-        description: `Tag "${name}" is paused and will not fire even when its trigger matches.`,
-        affects: [name],
-        recommendation:
-          "Unpause the tag if it is still required, otherwise remove it.",
-      });
-    }
-  }
-}
-
-function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
-  for (const tag of ctx.tags) {
-    const name = tag.name ?? "Unnamed tag";
-    for (const tid of tag.firingTriggerId ?? []) {
-      if (!ctx.triggerIdSet.has(tid)) {
-        out.push({
-          id: fid(`broken-fire:${tag.tagId}:${tid}`),
-          category: "ga4",
-          severity: "high",
-          title: `Tag references a missing firing trigger`,
-          description: `Tag "${name}" references firing trigger id "${tid}" which does not exist in this workspace.`,
-          affects: [name],
-          recommendation: "Re-attach a valid trigger or remove the dangling reference.",
-        });
-      }
-    }
-    for (const tid of tag.blockingTriggerId ?? []) {
-      if (!ctx.triggerIdSet.has(tid)) {
-        out.push({
-          id: fid(`broken-block:${tag.tagId}:${tid}`),
-          category: "ga4",
-          severity: "medium",
-          title: `Tag references a missing blocking trigger`,
-          description: `Tag "${name}" references blocking trigger id "${tid}" which does not exist.`,
-          affects: [name],
-          recommendation: "Remove the dangling blocking-trigger reference.",
-        });
-      }
-    }
-  }
-}
-
-function ruleGA4ConfigCount(ctx: Ctx, out: AuditFinding[]) {
-  const configTags = ctx.tags.filter(isGA4Config);
-  if (configTags.length > 1) {
-    out.push({
-      id: fid(`ga4-config-count:${configTags.length}`),
-      category: "duplication",
-      severity: "high",
-      title: `Multiple GA4 Config / Google Tag entries`,
-      description: `Found ${configTags.length} GA4 Config / Google Tag entries. A container should typically have exactly one. Multiple config tags cause duplicate sessions, pageviews, and events.`,
-      affects: configTags.map((t) => t.name ?? "Unnamed"),
-      recommendation: "Consolidate down to a single Google tag / GA4 Configuration tag.",
-    });
-  }
-}
-
-function ruleGA4MissingMeasurementId(ctx: Ctx, out: AuditFinding[]) {
-  for (const tag of ctx.tags) {
-    if (!isGA4Config(tag)) continue;
-    const measurementId =
-      tagParam(tag, "tagId") ?? tagParam(tag, "measurementId");
-    const name = tag.name ?? "GA4 config";
-    if (!measurementId || !/^G-/i.test(measurementId)) {
-      out.push({
-        id: fid(`ga4-mid:${tag.tagId}`),
-        category: "ga4",
-        severity: "critical",
-        title: `GA4 Config tag missing valid Measurement ID`,
-        description: `Tag "${name}" does not have a recognizable GA4 Measurement ID (G-XXXXXXX).`,
-        affects: [name],
-        recommendation: "Set a valid GA4 Measurement ID on the configuration tag.",
-      });
-    }
-  }
-}
-
-function ruleGA4EventCompleteness(ctx: Ctx, out: AuditFinding[]) {
-  for (const tag of ctx.tags) {
-    if (!isGA4Event(tag)) continue;
-    const name = tag.name ?? "GA4 event";
-    const eventName = tagParam(tag, "eventName");
-    if (!eventName) {
-      out.push({
-        id: fid(`ga4-event-name:${tag.tagId}`),
-        category: "ga4",
-        severity: "high",
-        title: `GA4 Event tag missing event name`,
-        description: `Tag "${name}" has no event_name parameter set; it will send blank events to GA4.`,
-        affects: [name],
-        recommendation: "Set an event_name (e.g. purchase, sign_up, generate_lead).",
-      });
-    }
-    const configRef =
-      tagParam(tag, "measurementId") ?? tagParam(tag, "measurementIdOverride");
-    if (!configRef) {
-      out.push({
-        id: fid(`ga4-event-config:${tag.tagId}`),
-        category: "ga4",
-        severity: "medium",
-        title: `GA4 Event tag missing measurement ID reference`,
-        description: `Tag "${name}" does not reference a measurement ID. Verify the linked Google Tag / measurement ID is correct.`,
-        affects: [name],
-        recommendation: "Confirm the measurement ID or measurement ID override is set.",
-      });
-    }
-  }
-}
-
-function ruleDuplicateGA4Events(ctx: Ctx, out: AuditFinding[]) {
-  const byKey = new Map<string, GtmTag[]>();
-  for (const tag of ctx.tags) {
-    if (!isGA4Event(tag)) continue;
-    const eventName = (tagParam(tag, "eventName") ?? "").trim().toLowerCase();
-    if (!eventName) continue;
-    const triggers = (tag.firingTriggerId ?? []).slice().sort().join("|");
-    const key = `${eventName}::${triggers}`;
-    const arr = byKey.get(key) ?? [];
-    arr.push(tag);
-    byKey.set(key, arr);
-  }
-  byKey.forEach((arr, key) => {
-    if (arr.length > 1) {
-      out.push({
-        id: fid(`ga4-dup-event:${key}`),
-        category: "duplication",
-        severity: "high",
-        title: `Duplicate GA4 event tags`,
-        description: `${arr.length} GA4 Event tags share the same event_name and firing triggers. They will produce duplicate events in GA4.`,
-        affects: arr.map((t) => t.name ?? "Unnamed"),
-        recommendation: "Keep one canonical event tag and delete or repurpose the duplicates.",
-      });
-    }
-  });
-}
-
-function ruleDuplicateTagNames(ctx: Ctx, out: AuditFinding[]) {
-  const counts = new Map<string, number>();
-  for (const tag of ctx.tags) {
-    const n = (tag.name ?? "").trim();
-    if (!n) continue;
-    counts.set(n, (counts.get(n) ?? 0) + 1);
-  }
-  counts.forEach((c, n) => {
-    if (c > 1) {
-      out.push({
-        id: fid(`dup-name:${n}`),
-        category: "duplication",
-        severity: "medium",
-        title: `Duplicate tag name "${n}"`,
-        description: `Tag name "${n}" is used ${c} times. Unique names make audits and debugging much easier.`,
-        affects: [n],
-        recommendation: "Rename the duplicates so each tag has a unique, descriptive name.",
-      });
-    }
-  });
 }
 
 function ruleUnusedTriggers(ctx: Ctx, out: AuditFinding[]) {
@@ -460,14 +413,16 @@ function ruleUnusedTriggers(ctx: Ctx, out: AuditFinding[]) {
     if (!id) continue;
     if (!used.has(id)) {
       const name = t.name ?? "Unnamed trigger";
-      out.push({
+      pushFinding(out, {
         id: fid(`unused-trigger:${id}`),
-        category: "performance",
-        severity: "info",
-        title: `Trigger not used by any tag`,
-        description: `Trigger "${name}" is not referenced by any tag or variable.`,
-        affects: [name],
-        recommendation: "Remove unused triggers to keep the workspace tidy.",
+        category: "dead_config",
+        severity: "low",
+        finding: "Trigger is not referenced by any tag or variable",
+        affected: [name],
+        whyItMatters:
+          "Unused triggers add clutter and obscure what the container is actually doing.",
+        suggestedFix:
+          "Remove the trigger if it is truly unused. Confirm first that nothing depends on it.",
       });
     }
   }
@@ -483,188 +438,607 @@ function ruleUnusedVariables(ctx: Ctx, out: AuditFinding[]) {
       namesUsed.add(m[1].trim().toLowerCase());
     }
   };
+  const walk = (p?: GtmParameter) => {
+    if (!p) return;
+    collect(p.value);
+    for (const c of p.list ?? []) walk(c);
+    for (const c of p.map ?? []) walk(c);
+  };
   for (const tag of ctx.tags) {
-    for (const p of tag.parameter ?? []) collect(p.value);
+    for (const p of tag.parameter ?? []) walk(p);
   }
   for (const v of ctx.variables) {
-    for (const p of v.parameter ?? []) collect(p.value);
+    for (const p of v.parameter ?? []) walk(p);
   }
   for (const t of ctx.triggers) {
     collect(JSON.stringify(t.filter ?? []));
+    collect(JSON.stringify(t.customEventFilter ?? []));
   }
   for (const v of ctx.variables) {
     const name = (v.name ?? "").trim();
     if (!name) continue;
     if (!namesUsed.has(name.toLowerCase())) {
-      out.push({
+      pushFinding(out, {
         id: fid(`unused-var:${v.variableId}`),
-        category: "performance",
-        severity: "info",
-        title: `User-defined variable not referenced`,
-        description: `Variable "${name}" does not appear to be referenced by any tag, trigger, or other variable.`,
-        affects: [name],
-        recommendation: "Confirm the variable is still needed; delete if it has no readers.",
+        category: "dead_config",
+        severity: "low",
+        finding: "User-defined variable is not referenced",
+        affected: [name],
+        whyItMatters:
+          "The variable is not read by any tag, trigger, or other variable in this workspace.",
+        suggestedFix:
+          "Delete the variable if it is no longer needed. Mark as 'needs manual review' if cross-workspace use is possible.",
+        needsManualReview: true,
       });
     }
   }
 }
 
-function ruleCustomHtmlForReview(ctx: Ctx, out: AuditFinding[]) {
+function rulePausedTags(ctx: Ctx, out: AuditFinding[]) {
   for (const tag of ctx.tags) {
-    if (tag.type !== "html") continue;
-    const name = tag.name ?? "Custom HTML tag";
-    out.push({
-      id: fid(`custom-html:${tag.tagId}`),
-      category: "performance",
-      severity: "medium",
-      title: `Custom HTML tag — manual review required`,
-      description: `Tag "${name}" runs arbitrary JavaScript inside the GTM container. Custom HTML tags should be reviewed for security, consent compliance, and performance impact.`,
-      affects: [name],
-      recommendation:
-        "Review the script body, confirm it respects consent, and prefer first-class tag templates when available.",
+    if (tag.paused) {
+      const name = tag.name ?? "Unnamed tag";
+      pushFinding(out, {
+        id: fid(`paused:${tag.tagId}`),
+        category: "dead_config",
+        severity: "medium",
+        finding: "Paused tag still present in the workspace",
+        affected: [name],
+        whyItMatters:
+          "Paused tags never publish but stay in the container, hiding the real configuration.",
+        suggestedFix:
+          "Unpause the tag if it is still required, otherwise delete it.",
+      });
+    }
+  }
+}
+
+function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
+  for (const tag of ctx.tags) {
+    const name = tag.name ?? "Unnamed tag";
+    for (const tid of tag.firingTriggerId ?? []) {
+      if (!ctx.triggerIdSet.has(tid)) {
+        pushFinding(out, {
+          id: fid(`broken-fire:${tag.tagId}:${tid}`),
+          category: "dead_config",
+          severity: "high",
+          finding: "Tag references a firing trigger that does not exist",
+          affected: [name],
+          whyItMatters: `Firing trigger id "${tid}" is not defined in this workspace. The tag's firing rule is incomplete.`,
+          suggestedFix: "Re-attach a valid trigger or remove the dangling reference.",
+        });
+      }
+    }
+    for (const tid of tag.blockingTriggerId ?? []) {
+      if (!ctx.triggerIdSet.has(tid)) {
+        pushFinding(out, {
+          id: fid(`broken-block:${tag.tagId}:${tid}`),
+          category: "dead_config",
+          severity: "medium",
+          finding: "Tag references a blocking trigger that does not exist",
+          affected: [name],
+          whyItMatters: `Blocking trigger id "${tid}" is not defined in this workspace.`,
+          suggestedFix: "Remove the dangling blocking-trigger reference.",
+        });
+      }
+    }
+  }
+}
+
+// B. GA4 integrity
+function ruleGA4ConfigCount(ctx: Ctx, out: AuditFinding[]) {
+  const configTags = ctx.tags.filter(isGA4Config);
+  if (configTags.length === 0) {
+    // Only emit if any GA4 event tag exists — otherwise this is not a GA4
+    // container and the finding would be a false positive.
+    if (ctx.tags.some(isGA4Event)) {
+      pushFinding(out, {
+        id: fid("ga4-config-missing"),
+        category: "ga4",
+        severity: "high",
+        finding: "GA4 event tags exist but no Google tag / GA4 Configuration tag was found",
+        whyItMatters:
+          "GA4 event tags rely on a configured Google tag (or GA4 Configuration tag) to set the measurement ID and initialise GA4.",
+        suggestedFix:
+          "Add a Google tag with the correct measurement ID, or confirm the measurement ID is set via measurementIdOverride on every event tag.",
+      });
+    }
+    return;
+  }
+  if (configTags.length > 1) {
+    pushFinding(out, {
+      id: fid(`ga4-config-count:${configTags.length}`),
+      category: "duplication",
+      severity: "high",
+      finding: `Container has ${configTags.length} Google tag / GA4 Configuration tags (one expected)`,
+      affected: configTags.map((t) => t.name ?? "Unnamed"),
+      whyItMatters:
+        "Multiple Google tag / GA4 Configuration tags configured in the same container is unusual; runtime behaviour depends on their triggers but the configuration alone signals possible duplication.",
+      suggestedFix:
+        "Consolidate down to one Google tag where possible, or document why both are needed.",
+      needsManualReview: true,
     });
   }
 }
 
-function ruleConsentMode(ctx: Ctx, out: AuditFinding[]) {
-  const hasAdStorage = /ad_storage/.test(ctx.textBlob);
-  const hasAnalyticsStorage = /analytics_storage/.test(ctx.textBlob);
-  const hasConsentEvent = /consent[_\s-]?(update|default|granted|denied)/.test(
-    ctx.textBlob,
-  );
-  if (!hasAdStorage && !hasAnalyticsStorage) {
-    out.push({
-      id: fid(`consent-missing`),
+function ruleGA4MeasurementIdsConsistent(ctx: Ctx, out: AuditFinding[]) {
+  const ids = new Set<string>();
+  const offenders: string[] = [];
+  for (const tag of ctx.tags) {
+    if (!isGA4Config(tag) && !isGA4Event(tag)) continue;
+    const id =
+      tagParam(tag, "tagId") ??
+      tagParam(tag, "measurementId") ??
+      tagParam(tag, "measurementIdOverride");
+    if (!id) continue;
+    if (/^G-/i.test(id) || /^GT-/i.test(id)) {
+      ids.add(id.toUpperCase());
+    } else if (id.startsWith("{{")) {
+      // Variable reference — track separately, do not flag as inconsistent.
+      ids.add(id);
+    } else {
+      offenders.push(`${tag.name ?? "(unnamed)"} → ${id}`);
+    }
+  }
+  if (offenders.length > 0) {
+    pushFinding(out, {
+      id: fid(`ga4-mid-shape:${offenders.length}`),
+      category: "ga4",
+      severity: "high",
+      finding: "GA4 tag has a measurement ID that does not look like G-XXXXXXX or GT-XXXXXXX",
+      affected: offenders,
+      whyItMatters:
+        "GA4 measurement IDs always start with G-. A different shape will not be accepted by GA4 and hits will not land.",
+      suggestedFix:
+        "Replace the value with a valid G-XXXXXXX measurement ID or a variable that resolves to one.",
+    });
+  }
+  if (ids.size > 1) {
+    pushFinding(out, {
+      id: fid(`ga4-mid-mixed:${Array.from(ids).sort().join(",")}`),
+      category: "ga4",
+      severity: "medium",
+      finding: "Multiple distinct GA4 measurement IDs referenced across tags",
+      affected: Array.from(ids),
+      whyItMatters:
+        "GA4 tags in this container point to more than one measurement ID. This may be intentional (multi-property streaming) but is often a mistake.",
+      suggestedFix:
+        "Confirm each measurement ID is intentional; otherwise standardise on one.",
+      needsManualReview: true,
+    });
+  }
+}
+
+function ruleGA4EventCompleteness(ctx: Ctx, out: AuditFinding[]) {
+  for (const tag of ctx.tags) {
+    if (!isGA4Event(tag)) continue;
+    const name = tag.name ?? "GA4 event";
+    const eventName = tagParam(tag, "eventName");
+    if (!eventName) {
+      pushFinding(out, {
+        id: fid(`ga4-event-name:${tag.tagId}`),
+        category: "ga4",
+        severity: "high",
+        finding: "GA4 Event tag is missing the event_name parameter",
+        affected: [name],
+        whyItMatters:
+          "Without an event_name GTM cannot send a labelled GA4 event.",
+        suggestedFix:
+          "Set an event_name (e.g. purchase, sign_up, generate_lead).",
+      });
+    }
+    const configRef =
+      tagParam(tag, "measurementId") ?? tagParam(tag, "measurementIdOverride");
+    if (!configRef) {
+      pushFinding(out, {
+        id: fid(`ga4-event-config:${tag.tagId}`),
+        category: "ga4",
+        severity: "low",
+        finding: "GA4 Event tag has no measurementIdOverride set",
+        affected: [name],
+        whyItMatters:
+          "Without an override, the event tag relies on the Google tag's measurement ID. This is usually fine, but worth confirming when multiple Google tags exist.",
+        suggestedFix:
+          "If multiple Google tags are present, set measurementIdOverride explicitly.",
+        needsManualReview: true,
+      });
+    }
+  }
+}
+
+function ruleGA4AllPages(ctx: Ctx, out: AuditFinding[]) {
+  // Flag GA4 *event* tags (not config) bound to an All Pages / pageview
+  // trigger — that pattern is rarely correct.
+  for (const tag of ctx.tags) {
+    if (!isGA4Event(tag)) continue;
+    const name = tag.name ?? "GA4 event";
+    const usesAllPages = (tag.firingTriggerId ?? []).some((tid) => {
+      const trig = ctx.triggerById.get(tid);
+      return trig?.type === ALL_PAGES_TRIGGER_TYPE;
+    });
+    if (usesAllPages) {
+      pushFinding(out, {
+        id: fid(`ga4-event-allpages:${tag.tagId}`),
+        category: "ga4",
+        severity: "medium",
+        finding: "GA4 Event tag fires on an All Pages / pageview trigger",
+        affected: [name],
+        whyItMatters:
+          "GA4 Configuration tags already send page_view on All Pages. A GA4 event tag bound to All Pages duplicates page_view or sends a custom event on every navigation.",
+        suggestedFix:
+          "Confirm this is intentional. Otherwise switch to a specific Custom Event trigger.",
+        needsManualReview: true,
+      });
+    }
+  }
+}
+
+// C. Consent and privacy
+function ruleConsentSettings(ctx: Ctx, out: AuditFinding[]) {
+  const missing: string[] = [];
+  for (const tag of ctx.tags) {
+    if (!isMarketingOrAnalyticsTag(tag)) continue;
+    const consentStatus = tag.consentSettings?.consentStatus;
+    if (!consentStatus || consentStatus === "NOT_SET") {
+      missing.push(tag.name ?? "Unnamed tag");
+    }
+  }
+  if (missing.length > 0) {
+    pushFinding(out, {
+      id: fid(`consent-not-set:${missing.length}`),
       category: "consent",
       severity: "high",
-      title: `No Consent Mode signals detected`,
-      description: `No references to ad_storage or analytics_storage were found across tags or variables. Consent Mode v2 is required for EEA traffic and recommended elsewhere.`,
-      recommendation:
-        "Implement Consent Mode v2 default/update signals before personalisation/ad tags fire.",
+      finding: `${missing.length} marketing/analytics tag(s) have no consent settings configured`,
+      affected: missing.slice(0, 20),
+      whyItMatters:
+        "When consentSettings is NOT_SET the tag will fire regardless of consent state. Consent Mode v2 requires explicit consent checks for marketing/analytics tags in regulated regions.",
+      suggestedFix:
+        "Set consentSettings to NEEDED (or NOT_NEEDED with justification) for each tag that loads marketing or analytics scripts/pixels.",
     });
-  } else if (!hasAdStorage || !hasAnalyticsStorage) {
-    out.push({
-      id: fid(`consent-partial`),
+  }
+}
+
+function ruleConsentSignalsPresent(ctx: Ctx, out: AuditFinding[]) {
+  const hasAdStorage = /ad_storage/.test(ctx.textBlob);
+  const hasAnalyticsStorage = /analytics_storage/.test(ctx.textBlob);
+  const hasConsentEvent =
+    /consent[_\s-]?(update|default|granted|denied)/.test(ctx.textBlob);
+  if (!hasAdStorage && !hasAnalyticsStorage && !hasConsentEvent) {
+    pushFinding(out, {
+      id: fid("consent-missing"),
       category: "consent",
       severity: "medium",
-      title: `Partial Consent Mode coverage`,
-      description: `Only one of ad_storage / analytics_storage was referenced. A complete Consent Mode v2 implementation needs both, plus ad_user_data and ad_personalization.`,
-      recommendation:
-        "Add the missing consent signals (ad_storage, analytics_storage, ad_user_data, ad_personalization).",
-    });
-  } else if (!hasConsentEvent) {
-    out.push({
-      id: fid(`consent-no-update`),
-      category: "consent",
-      severity: "low",
-      title: `Consent signals present but no update event detected`,
-      description: `ad_storage / analytics_storage were referenced but no consent update/default event was found in tag or variable text.`,
-      recommendation:
-        "Confirm a Consent Mode default and update event is wired up (often via the Consent Mode template).",
+      finding: "No Consent Mode v2 signals were found in tag or variable configuration",
+      whyItMatters:
+        "No references to ad_storage, analytics_storage, or consent default/update were found across tags or variables. A CMP outside GTM may still be supplying consent — this needs manual confirmation.",
+      suggestedFix:
+        "Confirm a CMP is initialising Consent Mode v2 before marketing/analytics tags fire. If consent is managed inside GTM, add the appropriate signals.",
+      needsManualReview: true,
     });
   }
 }
 
-function ruleEcommerce(ctx: Ctx, out: AuditFinding[]) {
-  const hasEcommerceEventTag = ctx.tags.some(
-    (t) =>
-      isGA4Event(t) &&
-      /(purchase|add_to_cart|begin_checkout|view_item|select_item|view_cart|add_to_wishlist)/i.test(
-        tagParam(t, "eventName") ?? "",
-      ),
-  );
-  const referencesEcommerceObject = /ecommerce|dataLayer/.test(ctx.textBlob);
-  if (hasEcommerceEventTag) {
-    const ecommerceVariable = ctx.variables.some(
-      (v) =>
-        /ecommerce/i.test(v.name ?? "") ||
-        /ecommerce/i.test(JSON.stringify(v.parameter ?? "")),
-    );
-    if (!ecommerceVariable) {
-      out.push({
-        id: fid(`ecommerce-no-var`),
-        category: "ecommerce",
-        severity: "medium",
-        title: `Ecommerce events without an ecommerce DataLayer variable`,
-        description: `GA4 ecommerce event tags are present but no Data Layer variable named or referencing "ecommerce" was found. Ecommerce events typically need an items[] array sourced from the dataLayer.`,
-        recommendation:
-          "Add a Data Layer Variable for ecommerce (or items) and pass it as event parameters.",
+// D. Data quality
+function ruleHardcodedIds(ctx: Ctx, out: AuditFinding[]) {
+  const offenders: string[] = [];
+  for (const tag of ctx.tags) {
+    const name = tag.name ?? "Unnamed tag";
+    for (const p of tag.parameter ?? []) {
+      const v = p.value;
+      if (!v || typeof v !== "string") continue;
+      // Hardcoded GA4 MID
+      if (/^G-[A-Z0-9]{6,}$/i.test(v.trim())) {
+        offenders.push(`${name} → ${p.key ?? "?"} = ${v}`);
+      }
+      // Hardcoded GTM container id
+      if (/^GTM-[A-Z0-9]{4,}$/i.test(v.trim())) {
+        offenders.push(`${name} → ${p.key ?? "?"} = ${v}`);
+      }
+      // Google Ads conversion id (AW-XXXXXXXXX)
+      if (/^AW-\d{6,}$/i.test(v.trim())) {
+        offenders.push(`${name} → ${p.key ?? "?"} = ${v}`);
+      }
+    }
+  }
+  // De-duplicate
+  const unique = Array.from(new Set(offenders));
+  if (unique.length > 0) {
+    pushFinding(out, {
+      id: fid(`hardcoded-ids:${unique.length}`),
+      category: "data_quality",
+      severity: "low",
+      finding: "Hardcoded IDs found in tag parameters",
+      affected: unique.slice(0, 20),
+      whyItMatters:
+        "Hardcoded measurement IDs, conversion IDs, or container IDs make it hard to swap environments and easy to point at the wrong property.",
+      suggestedFix:
+        "Move IDs into a Constant or Lookup variable and reference {{Variable Name}} from the tag.",
+    });
+  }
+}
+
+function ruleDataLayerNoDefault(ctx: Ctx, out: AuditFinding[]) {
+  const offenders: string[] = [];
+  for (const v of ctx.variables) {
+    if (v.type !== "v") continue; // Data Layer Variable
+    const hasDefault =
+      (v.parameter ?? []).some(
+        (p) => p.key === "defaultValue" && typeof p.value === "string" && p.value.length > 0,
+      ) ||
+      (v.parameter ?? []).some((p) => p.key === "setDefaultValue" && p.value === "true");
+    if (!hasDefault) offenders.push(v.name ?? "Unnamed DL variable");
+  }
+  if (offenders.length > 0) {
+    pushFinding(out, {
+      id: fid(`dl-no-default:${offenders.length}`),
+      category: "data_quality",
+      severity: "low",
+      finding: `${offenders.length} Data Layer variable(s) have no default value set`,
+      affected: offenders.slice(0, 20),
+      whyItMatters:
+        "A missing default means consumers receive `undefined` when the key is absent from the dataLayer. Downstream tags may send empty event parameters.",
+      suggestedFix:
+        "Set a sensible default (often empty string, 0, or 'not_set') on each Data Layer variable.",
+    });
+  }
+}
+
+function rulePiiManualReview(ctx: Ctx, out: AuditFinding[]) {
+  const PII_RE = /(email|e-mail|phone|tel|first_?name|last_?name|full_?name|ssn|dob|date_?of_?birth|address)/i;
+  const offenders: string[] = [];
+  for (const v of ctx.variables) {
+    const name = v.name ?? "";
+    const blob = `${name} ${JSON.stringify(v.parameter ?? [])}`;
+    if (PII_RE.test(blob)) offenders.push(`Variable: ${name || "(unnamed)"}`);
+  }
+  for (const tag of ctx.tags) {
+    const blob = `${tag.name ?? ""} ${JSON.stringify(tag.parameter ?? [])}`;
+    if (PII_RE.test(blob)) offenders.push(`Tag: ${tag.name ?? "(unnamed)"}`);
+  }
+  const unique = Array.from(new Set(offenders));
+  if (unique.length > 0) {
+    pushFinding(out, {
+      id: fid(`pii-review:${unique.length}`),
+      category: "data_quality",
+      severity: "medium",
+      finding: "Possible PII references found in tag or variable configuration",
+      affected: unique.slice(0, 20),
+      whyItMatters:
+        "Names like email/phone/first_name suggest PII may be read from URL params, dataLayer, or cookies. Sending PII to analytics platforms is usually a policy violation.",
+      suggestedFix:
+        "Manually review each item. Confirm values are hashed or removed before they reach downstream tools.",
+      needsManualReview: true,
+    });
+  }
+}
+
+// E. Duplicates and double-counting
+function ruleDuplicateGA4Events(ctx: Ctx, out: AuditFinding[]) {
+  const byKey = new Map<string, GtmTag[]>();
+  for (const tag of ctx.tags) {
+    if (!isGA4Event(tag)) continue;
+    const eventName = (tagParam(tag, "eventName") ?? "").trim().toLowerCase();
+    if (!eventName) continue;
+    const triggers = (tag.firingTriggerId ?? []).slice().sort().join("|");
+    const key = `${eventName}::${triggers}`;
+    const arr = byKey.get(key) ?? [];
+    arr.push(tag);
+    byKey.set(key, arr);
+  }
+  byKey.forEach((arr, key) => {
+    if (arr.length > 1) {
+      pushFinding(out, {
+        id: fid(`ga4-dup-event:${key}`),
+        category: "duplication",
+        severity: "high",
+        finding: `${arr.length} GA4 Event tags share the same event_name and firing triggers`,
+        affected: arr.map((t) => t.name ?? "Unnamed"),
+        whyItMatters:
+          "Tags configured identically on the same triggers send the same payload. Configuration overlap is a strong signal of double-counting risk.",
+        suggestedFix:
+          "Keep one canonical event tag and delete or repurpose the duplicates.",
       });
     }
-  } else if (!referencesEcommerceObject) {
-    out.push({
-      id: fid(`ecommerce-none`),
-      category: "data_layer",
-      severity: "info",
-      title: `No ecommerce / dataLayer references detected`,
-      description: `No tags or variables reference ecommerce or dataLayer. If this container is for an ecommerce site, ecommerce events are likely missing.`,
-      recommendation:
-        "If this is an ecommerce site, implement GA4 ecommerce events (purchase, add_to_cart, etc.).",
-    });
-  }
+  });
 }
 
-function ruleNamingConventions(ctx: Ctx, out: AuditFinding[]) {
-  const generic = (n?: string) => looksGeneric((n ?? "").toString());
-  const flagged: string[] = [];
-  for (const t of ctx.tags) if (generic(t.name)) flagged.push(`Tag: ${t.name ?? "(blank)"}`);
-  for (const t of ctx.triggers)
-    if (generic(t.name)) flagged.push(`Trigger: ${t.name ?? "(blank)"}`);
-  for (const v of ctx.variables)
-    if (generic(v.name)) flagged.push(`Variable: ${v.name ?? "(blank)"}`);
-  if (flagged.length > 0) {
-    out.push({
-      id: fid(`naming:${flagged.length}`),
-      category: "naming",
-      severity: "low",
-      title: `${flagged.length} entit${flagged.length === 1 ? "y has" : "ies have"} generic or untitled names`,
-      description: `Generic names like "Untitled Tag", "Tag 1", or "Copy of …" make audits harder. Use descriptive names (e.g. "GA4 — purchase").`,
-      affects: flagged.slice(0, 10),
-      recommendation: "Adopt a consistent naming convention such as `[Platform] - [Event] - [Context]`.",
-    });
-  }
-}
-
-function ruleBuiltInVariables(ctx: Ctx, out: AuditFinding[]) {
-  const recommended = ["event", "pageUrl", "pageHostname", "pagePath", "referrer"];
-  const missing = recommended.filter((r) => !ctx.builtInTypes.has(r));
-  if (missing.length > 0) {
-    out.push({
-      id: fid(`builtin:${missing.join(",")}`),
-      category: "ga4",
-      severity: "info",
-      title: `Recommended built-in variables not enabled`,
-      description: `These built-in variables are commonly needed: ${missing.join(", ")}.`,
-      affects: missing,
-      recommendation: "Enable the missing built-in variables under Variables → Configure.",
-    });
-  }
-}
-
-function ruleEmptyFolders(ctx: Ctx, out: AuditFinding[]) {
+function ruleDuplicateTagNames(ctx: Ctx, out: AuditFinding[]) {
   const counts = new Map<string, number>();
-  for (const f of ctx.folders) counts.set(f.folderId ?? "", 0);
-  const tally = (id?: string) => {
-    if (!id) return;
-    counts.set(id, (counts.get(id) ?? 0) + 1);
-  };
-  for (const t of ctx.tags) tally(t.parentFolderId);
-  for (const t of ctx.triggers) tally(t.parentFolderId);
-  for (const v of ctx.variables) tally(v.parentFolderId);
-  const empties = ctx.folders.filter(
-    (f) => (counts.get(f.folderId ?? "") ?? 0) === 0,
+  for (const tag of ctx.tags) {
+    const n = (tag.name ?? "").trim();
+    if (!n) continue;
+    counts.set(n, (counts.get(n) ?? 0) + 1);
+  }
+  counts.forEach((c, n) => {
+    if (c > 1) {
+      pushFinding(out, {
+        id: fid(`dup-name:${n}`),
+        category: "naming",
+        severity: "low",
+        finding: `Tag name "${n}" is used ${c} times`,
+        affected: [n],
+        whyItMatters:
+          "Duplicate names make it hard to identify which tag is which during debugging.",
+        suggestedFix: "Rename the duplicates so each tag has a unique, descriptive name.",
+      });
+    }
+  });
+}
+
+function ruleDuplicateConversionPages(ctx: Ctx, out: AuditFinding[]) {
+  // Multiple Google Ads conversion linker tags with the same conversion_id +
+  // overlapping triggers.
+  type ConvKey = { id: string; triggers: string };
+  const groups = new Map<string, GtmTag[]>();
+  for (const tag of ctx.tags) {
+    if (tag.type !== "awct") continue;
+    const id = (tagParam(tag, "conversionId") ?? "").trim();
+    if (!id) continue;
+    const triggers = (tag.firingTriggerId ?? []).slice().sort().join("|");
+    const key = `${id}::${triggers}`;
+    const arr = groups.get(key) ?? [];
+    arr.push(tag);
+    groups.set(key, arr);
+  }
+  groups.forEach((arr, key) => {
+    if (arr.length > 1) {
+      pushFinding(out, {
+        id: fid(`ads-conv-dup:${key}`),
+        category: "duplication",
+        severity: "high",
+        finding: `${arr.length} Google Ads conversion tags share the same conversion_id and firing triggers`,
+        affected: arr.map((t) => t.name ?? "Unnamed"),
+        whyItMatters:
+          "Configuration overlap between conversion tags is a strong signal of double-counted conversions.",
+        suggestedFix:
+          "Keep one conversion tag per conversion_id/trigger combination.",
+      });
+    }
+  });
+}
+
+// F. Naming and structure (kept conservative — only flag if folders are
+// used elsewhere, signalling that folders are part of the team's convention)
+function ruleFolderConsistency(ctx: Ctx, out: AuditFinding[]) {
+  if (ctx.folders.length === 0) return;
+  const orphans = ctx.tags.filter((t) => !t.parentFolderId);
+  if (orphans.length === 0) return;
+  if (orphans.length === ctx.tags.length) return; // folders unused — no signal
+  pushFinding(out, {
+    id: fid(`folder-orphans:${orphans.length}`),
+    category: "naming",
+    severity: "low",
+    finding: `${orphans.length} tag(s) are not placed in any folder, but folders are used elsewhere`,
+    affected: orphans.slice(0, 20).map((t) => t.name ?? "Unnamed"),
+    whyItMatters:
+      "Mixed folder usage suggests the team intended a structure but new tags drifted outside it, making maintenance harder.",
+    suggestedFix: "Place the orphan tags in the appropriate folder.",
+  });
+}
+
+// G. Server-side only
+function ruleServerSideClients(ctx: Ctx, out: AuditFinding[]) {
+  const isServer = (ctx.container?.usageContext ?? []).some(
+    (u) => u.toLowerCase() === "server",
   );
-  if (empties.length > 0) {
-    out.push({
-      id: fid(`empty-folders:${empties.length}`),
-      category: "performance",
-      severity: "info",
-      title: `${empties.length} empty folder${empties.length === 1 ? "" : "s"}`,
-      description: `Empty folders are clutter — they make the workspace harder to navigate.`,
-      affects: empties.map((f) => f.name ?? "Unnamed folder"),
-      recommendation: "Delete unused folders.",
+  if (!isServer) return;
+  if (ctx.clients.length === 0) {
+    pushFinding(out, {
+      id: fid("ss-no-clients"),
+      category: "server_side",
+      severity: "high",
+      finding: "Server container has no Clients configured",
+      whyItMatters:
+        "A server container without Clients cannot claim incoming requests, so no tags will run.",
+      suggestedFix: "Add the appropriate Client (e.g. GA4 client, Google Tag Manager: Web Container).",
+    });
+    return;
+  }
+  const hasGa4Client = ctx.clients.some((c) =>
+    /ga4|google[\s_-]?analytics/i.test(`${c.name ?? ""} ${c.type ?? ""}`),
+  );
+  const hasGa4OutTags = ctx.tags.some((t) => (t.type ?? "").toLowerCase().includes("ga4"));
+  if (hasGa4OutTags && !hasGa4Client) {
+    pushFinding(out, {
+      id: fid("ss-no-ga4-client"),
+      category: "server_side",
+      severity: "medium",
+      finding: "GA4 outbound tags exist but no GA4 Client appears to be configured",
+      whyItMatters:
+        "Without a GA4 Client the server container cannot accept GA4 hits from the web container.",
+      suggestedFix: "Add a GA4 Client (or confirm one is provided by a template).",
+      needsManualReview: true,
     });
   }
+}
+
+// H. Publishing state
+function rulePublishingState(ctx: Ctx, out: AuditFinding[]) {
+  if (ctx.workspaces.length > 1) {
+    pushFinding(out, {
+      id: fid(`ws-multi:${ctx.workspaces.length}`),
+      category: "publishing",
+      severity: "low",
+      finding: `${ctx.workspaces.length} open workspaces in this container`,
+      affected: ctx.workspaces.map((w) => w.name ?? "Unnamed workspace"),
+      whyItMatters:
+        "Multiple open workspaces increase the risk of conflicting edits and stale changes shipping.",
+      suggestedFix:
+        "Merge, publish, or abandon stale workspaces. Keep one active workspace per work-in-progress.",
+    });
+  }
+  if (ctx.publishedVersion && !ctx.publishedVersion.notes) {
+    pushFinding(out, {
+      id: fid(`pubver-no-notes:${ctx.publishedVersion.containerVersionId}`),
+      category: "publishing",
+      severity: "low",
+      finding: "Latest published version has no release notes",
+      affected: [
+        ctx.publishedVersion.name ??
+          `version ${ctx.publishedVersion.containerVersionId ?? "?"}`,
+      ],
+      whyItMatters:
+        "Release notes are the audit trail for what was published and why. Empty notes make rollbacks and reviews harder.",
+      suggestedFix:
+        "Add a short note to each new version describing what changed and why.",
+    });
+  }
+}
+
+// Tool failures surfaced as findings so users know the audit is incomplete.
+function ruleToolFailures(state: AuditState, out: AuditFinding[]) {
+  for (const tf of state.toolFailures) {
+    pushFinding(out, {
+      id: fid(`tool-fail:${tf.resource}`),
+      category: "tool_failure",
+      severity: severityForResource(tf.resource),
+      finding: `Could not read ${tf.resource} from the GTM API`,
+      whyItMatters: tf.message,
+      suggestedFix:
+        "Re-run the audit. If the failure persists, confirm the account has access to this resource.",
+      needsManualReview: true,
+    });
+  }
+}
+
+function severityForResource(resource: string): AuditSeverity {
+  // Workspace contents being unreadable is the only fatal case (we already
+  // throw before audit runs). Container/version metadata are nice-to-have.
+  if (resource === "publishedVersion" || resource === "workspaces") return "low";
+  if (resource === "container" || resource === "clients") return "medium";
+  return "low";
+}
+
+// ── Findings helpers ─────────────────────────────────────────────────────
+
+function pushFinding(
+  out: AuditFinding[],
+  f: {
+    id: string;
+    category: AuditCategory;
+    severity: AuditSeverity;
+    finding: string;
+    affected?: string[];
+    whyItMatters: string;
+    suggestedFix: string;
+    needsManualReview?: boolean;
+  },
+): void {
+  // Populate legacy aliases so older clients keep rendering correctly.
+  out.push({
+    id: f.id,
+    category: f.category,
+    severity: f.severity,
+    title: f.finding,
+    description: f.whyItMatters,
+    affects: f.affected,
+    recommendation: f.suggestedFix,
+    finding: f.finding,
+    affected: f.affected,
+    whyItMatters: f.whyItMatters,
+    suggestedFix: f.suggestedFix,
+    needsManualReview: f.needsManualReview ?? false,
+  });
 }
 
 const SEVERITY_WEIGHT: Record<AuditSeverity, number> = {
@@ -677,48 +1051,109 @@ const SEVERITY_WEIGHT: Record<AuditSeverity, number> = {
 
 function computeHealthScore(findings: AuditFinding[]): number {
   let score = 100;
-  for (const f of findings) score -= SEVERITY_WEIGHT[f.severity];
+  for (const f of findings) {
+    if (f.needsManualReview) {
+      // Manual-review items count for half — they are not confirmed defects.
+      score -= Math.max(1, Math.floor(SEVERITY_WEIGHT[f.severity] / 2));
+    } else {
+      score -= SEVERITY_WEIGHT[f.severity];
+    }
+  }
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
+function buildSummary(findings: AuditFinding[], itemsChecked: number): string {
+  const counts: Record<AuditSeverity, number> = {
+    critical: 0,
+    high: 0,
+    medium: 0,
+    low: 0,
+    info: 0,
+  };
+  for (const f of findings) counts[f.severity] += 1;
+  const parts = [
+    `Checked ${itemsChecked} item${itemsChecked === 1 ? "" : "s"}`,
+    `${counts.critical} Critical`,
+    `${counts.high} High`,
+    `${counts.medium} Medium`,
+    `${counts.low + counts.info} Low`,
+  ];
+  return `${parts[0]}: ${parts.slice(1).join(", ")}.`;
+}
+
 function runAudit(
-  contents: WorkspaceContents,
+  state: AuditState,
   opts: { containerPublicId: string },
 ): AuditSummary {
-  const ctx = buildCtx(contents);
+  const ctx = buildCtx(state);
   const findings: AuditFinding[] = [];
 
+  // A. Dead / orphaned config
   ruleTagsNoFiringTriggers(ctx, findings);
-  rulePausedTags(ctx, findings);
-  ruleBrokenReferences(ctx, findings);
-  ruleGA4ConfigCount(ctx, findings);
-  ruleGA4MissingMeasurementId(ctx, findings);
-  ruleGA4EventCompleteness(ctx, findings);
-  ruleDuplicateGA4Events(ctx, findings);
-  ruleDuplicateTagNames(ctx, findings);
   ruleUnusedTriggers(ctx, findings);
   ruleUnusedVariables(ctx, findings);
-  ruleCustomHtmlForReview(ctx, findings);
-  ruleConsentMode(ctx, findings);
-  ruleEcommerce(ctx, findings);
-  ruleNamingConventions(ctx, findings);
-  ruleBuiltInVariables(ctx, findings);
-  ruleEmptyFolders(ctx, findings);
+  rulePausedTags(ctx, findings);
+  ruleBrokenReferences(ctx, findings);
+  // B. GA4 integrity
+  ruleGA4ConfigCount(ctx, findings);
+  ruleGA4MeasurementIdsConsistent(ctx, findings);
+  ruleGA4EventCompleteness(ctx, findings);
+  ruleGA4AllPages(ctx, findings);
+  // C. Consent & privacy
+  ruleConsentSettings(ctx, findings);
+  ruleConsentSignalsPresent(ctx, findings);
+  // D. Data quality
+  ruleHardcodedIds(ctx, findings);
+  ruleDataLayerNoDefault(ctx, findings);
+  rulePiiManualReview(ctx, findings);
+  // E. Duplicates
+  ruleDuplicateGA4Events(ctx, findings);
+  ruleDuplicateTagNames(ctx, findings);
+  ruleDuplicateConversionPages(ctx, findings);
+  // F. Naming / structure
+  ruleFolderConsistency(ctx, findings);
+  // G. Server-side
+  ruleServerSideClients(ctx, findings);
+  // H. Publishing state
+  rulePublishingState(ctx, findings);
+  // Tool failures — surface gaps.
+  ruleToolFailures(state, findings);
 
   findings.sort(
     (a, b) => SEVERITY_WEIGHT[b.severity] - SEVERITY_WEIGHT[a.severity],
   );
+
+  const itemsChecked =
+    state.contents.tags.length +
+    state.contents.triggers.length +
+    state.contents.variables.length +
+    state.contents.folders.length +
+    state.contents.builtInVariables.length +
+    state.clients.length;
+
+  const containerType = (state.container?.usageContext ?? []).join(",") || undefined;
 
   return {
     containerId: opts.containerPublicId,
     generatedAt: new Date().toISOString(),
     healthScore: computeHealthScore(findings),
     counts: {
-      tags: contents.tags.length,
-      triggers: contents.triggers.length,
-      variables: contents.variables.length,
+      tags: state.contents.tags.length,
+      triggers: state.contents.triggers.length,
+      variables: state.contents.variables.length,
     },
     findings,
+    containerType,
+    workspaceCount: state.workspaces.length || undefined,
+    publishedVersion: state.publishedVersion
+      ? {
+          versionId: state.publishedVersion.containerVersionId,
+          name: state.publishedVersion.name,
+          notes: state.publishedVersion.notes,
+        }
+      : null,
+    toolFailures: state.toolFailures.length ? state.toolFailures : undefined,
+    summary: buildSummary(findings, itemsChecked),
   };
 }
 
@@ -748,15 +1183,22 @@ async function readJsonBody<T = unknown>(req: IncomingMessage): Promise<T> {
   }
 }
 
-async function fetchWorkspaceContents(
+async function pullAuditState(
   token: string,
   accountId: string,
   containerId: string,
   workspaceId: string,
-): Promise<WorkspaceContents> {
+): Promise<AuditState> {
   const base = `/accounts/${encodeURIComponent(accountId)}/containers/${encodeURIComponent(
     containerId,
   )}/workspaces/${encodeURIComponent(workspaceId)}`;
+  const containerBase = `/accounts/${encodeURIComponent(accountId)}/containers/${encodeURIComponent(
+    containerId,
+  )}`;
+  const toolFailures: AuditToolFailure[] = [];
+
+  // Workspace contents are required. If they fail, throw — the audit is
+  // meaningless without them.
   const [tagsRes, triggersRes, variablesRes, foldersRes, bivRes] =
     await Promise.all([
       gtmFetch<{ tag?: GtmTag[] }>(token, `${base}/tags`),
@@ -768,12 +1210,126 @@ async function fetchWorkspaceContents(
         `${base}/built_in_variables`,
       ),
     ]);
-  return {
+
+  const contents: WorkspaceContents = {
     tags: tagsRes.tag ?? [],
     triggers: triggersRes.trigger ?? [],
     variables: variablesRes.variable ?? [],
     folders: foldersRes.folder ?? [],
     builtInVariables: bivRes.builtInVariable ?? [],
+    templates: [],
+  };
+
+  // Best-effort: templates (not always present).
+  try {
+    const tplRes = await gtmFetch<{ template?: unknown[] }>(
+      token,
+      `${base}/templates`,
+    );
+    contents.templates = tplRes.template ?? [];
+  } catch (e) {
+    if (e instanceof GtmApiError && e.status !== 404) {
+      toolFailures.push({
+        resource: "templates",
+        message: e.message,
+        status: e.status,
+      });
+    }
+  }
+
+  // Container metadata (for type / usageContext).
+  let container: GtmContainer | null = null;
+  try {
+    container = await gtmFetch<GtmContainer>(token, containerBase);
+  } catch (e) {
+    toolFailures.push({
+      resource: "container",
+      message:
+        e instanceof GtmApiError ? e.message : safeErrorName(e),
+      status: e instanceof GtmApiError ? e.status : undefined,
+    });
+  }
+
+  // Workspaces in this container.
+  let workspaces: GtmWorkspace[] = [];
+  try {
+    const wsRes = await gtmFetch<{ workspace?: GtmWorkspace[] }>(
+      token,
+      `${containerBase}/workspaces`,
+    );
+    workspaces = wsRes.workspace ?? [];
+  } catch (e) {
+    toolFailures.push({
+      resource: "workspaces",
+      message: e instanceof GtmApiError ? e.message : safeErrorName(e),
+      status: e instanceof GtmApiError ? e.status : undefined,
+    });
+  }
+
+  // Latest published version: version_headers?latest=true returns the
+  // latest published version header.
+  let publishedVersion: GtmVersion | null = null;
+  try {
+    const headerRes = await gtmFetch<GtmVersionHeader>(
+      token,
+      `${containerBase}/version_headers:latest`,
+    );
+    const versionId = headerRes.containerVersionId;
+    if (versionId) {
+      try {
+        publishedVersion = await gtmFetch<GtmVersion>(
+          token,
+          `${containerBase}/versions/${encodeURIComponent(versionId)}`,
+        );
+      } catch (e) {
+        toolFailures.push({
+          resource: "publishedVersion",
+          message: e instanceof GtmApiError ? e.message : safeErrorName(e),
+          status: e instanceof GtmApiError ? e.status : undefined,
+        });
+      }
+    }
+  } catch (e) {
+    // 404 just means nothing published — not a failure.
+    if (e instanceof GtmApiError && e.status !== 404) {
+      toolFailures.push({
+        resource: "publishedVersion",
+        message: e.message,
+        status: e.status,
+      });
+    }
+  }
+
+  // Server-side clients (only meaningful for server containers).
+  let clients: GtmClient[] = [];
+  const isServer = (container?.usageContext ?? []).some(
+    (u) => u.toLowerCase() === "server",
+  );
+  if (isServer) {
+    try {
+      const cRes = await gtmFetch<{ client?: GtmClient[] }>(
+        token,
+        `${base}/clients`,
+      );
+      clients = cRes.client ?? [];
+    } catch (e) {
+      if (e instanceof GtmApiError && e.status !== 404) {
+        toolFailures.push({
+          resource: "clients",
+          message: e.message,
+          status: e.status,
+        });
+      }
+    }
+  }
+
+  return {
+    contents,
+    container,
+    workspaces,
+    publishedVersion,
+    clients,
+    toolFailures,
   };
 }
 

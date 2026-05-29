@@ -49,18 +49,45 @@ export type AuditCategory =
   | "performance"
   | "naming"
   | "duplication"
-  | "data_layer";
+  | "data_layer"
+  | "dead_config"
+  | "data_quality"
+  | "publishing"
+  | "tool_failure";
 
 export interface AuditFinding {
   id: string;
   category: AuditCategory;
+  /** Short headline (legacy alias for `finding`). */
   title: string;
+  /** Evidence-based description of the finding (legacy alias for `whyItMatters`). */
   description: string;
   severity: AuditSeverity;
   /** Element this affects e.g. tag name, trigger id, variable */
   affects?: string[];
-  /** Recommended fix summary */
+  /** Recommended fix summary (legacy alias for `suggestedFix`). */
   recommendation?: string;
+  /**
+   * Stricter QC fields, populated by the evidence-based auditor.
+   * Older clients can keep reading `title` / `description` /
+   * `recommendation` / `affects`.
+   */
+  finding?: string;
+  affected?: string[];
+  whyItMatters?: string;
+  suggestedFix?: string;
+  /** True when the rule can only flag for human review (e.g. PII suspicion). */
+  needsManualReview?: boolean;
+}
+
+/** A read operation against the GTM API that did not succeed. */
+export interface AuditToolFailure {
+  /** Short label e.g. "container", "publishedVersion", "workspaces". */
+  resource: string;
+  /** Friendly message describing the failure. */
+  message: string;
+  /** HTTP status when available. */
+  status?: number;
 }
 
 export interface AuditSummary {
@@ -73,6 +100,20 @@ export interface AuditSummary {
     variables: number;
   };
   findings: AuditFinding[];
+  /** GTM container type: "web" or "server" when known. */
+  containerType?: string;
+  /** Number of open workspaces (1 expected). */
+  workspaceCount?: number;
+  /** Latest published version id and notes, when readable. */
+  publishedVersion?: {
+    versionId?: string;
+    name?: string;
+    notes?: string;
+  } | null;
+  /** Reads that failed during the audit so gaps are not silently assumed-clean. */
+  toolFailures?: AuditToolFailure[];
+  /** Sentence summary: e.g. "Checked 47 items: 1 Critical, 3 High, 5 Medium, 2 Low." */
+  summary?: string;
 }
 
 export type RecommendationGoal =
