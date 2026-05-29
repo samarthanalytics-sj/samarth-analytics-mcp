@@ -1,3 +1,9 @@
+## [1.4.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.2...v1.4.3) (2026-05-29)
+
+### Bug Fixes
+
+* **portal:** stabilize OAuth status endpoint ([43424b3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/43424b3ab7c1bec07417c49c5d43cb4ffea69bcf))
+
 ## [1.4.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.1...v1.4.2) (2026-05-29)
 
 ### Bug Fixes
