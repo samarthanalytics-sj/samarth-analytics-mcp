@@ -53,7 +53,45 @@ export type AuditCategory =
   | "dead_config"
   | "data_quality"
   | "publishing"
+  | "governance"
+  | "privacy"
   | "tool_failure";
+
+/**
+ * Sources that produced (or are required to produce) a finding.
+ * - CONFIG: GTM API container/workspace reads.
+ * - RUNTIME: live browser harness (network hits, dataLayer pushes, tag order).
+ * - SGTM: server container reads (clients, transformations, routing).
+ * - GA4_ADMIN: GA4 Admin API (dimensions, filters, retention, streams).
+ */
+export type AuditSourceFlag = "CONFIG" | "RUNTIME" | "SGTM" | "GA4_ADMIN";
+
+export type AuditCoverage = "covered" | "partial" | "not_covered";
+
+export type AuditConfidence = "high" | "medium" | "low";
+
+export type AuditEffort = "S" | "M" | "L";
+
+/** Capability detection: which sources the portal can currently read. */
+export interface AuditCapabilityFlags {
+  CONFIG: boolean;
+  RUNTIME: boolean;
+  SGTM: boolean;
+  GA4_ADMIN: boolean;
+}
+
+/** A single row in the coverage matrix. */
+export interface AuditCoverageItem {
+  /** Stable id, kebab-case. */
+  id: string;
+  /** What is being covered (e.g. "Tag firing & order"). */
+  capability: string;
+  /** Which sources are required for full coverage of this capability. */
+  requires: AuditSourceFlag[];
+  status: AuditCoverage;
+  /** When status !== "covered", a one-line note describing what tool/source is needed. */
+  toolNeeded?: string;
+}
 
 export interface AuditFinding {
   id: string;
@@ -78,6 +116,18 @@ export interface AuditFinding {
   suggestedFix?: string;
   /** True when the rule can only flag for human review (e.g. PII suspicion). */
   needsManualReview?: boolean;
+  /** Sources used to produce this finding. */
+  sources?: AuditSourceFlag[];
+  /** Confidence level of the finding given the sources available. */
+  confidence?: AuditConfidence;
+  /** Entity that produced this finding (display name + GTM id / path). */
+  entity?: { name?: string; id?: string; path?: string };
+  /** Specific GTM parameter or admin setting implicated, when known. */
+  parameter?: string;
+  /** Plain-language description of the business impact if left unfixed. */
+  businessImpact?: string;
+  /** Rough engineering effort estimate. */
+  effort?: AuditEffort;
 }
 
 /** A read operation against the GTM API that did not succeed. */
@@ -88,6 +138,53 @@ export interface AuditToolFailure {
   message: string;
   /** HTTP status when available. */
   status?: number;
+}
+
+/** Maturity score for a single audit domain, 0-5. */
+export interface AuditDomainMaturity {
+  domain: string;
+  /** 0-5; lower means weaker implementation. Capped at 3 when only CONFIG is available. */
+  score: number;
+  /** Findings counts by severity contributing to this score. */
+  counts: { critical: number; high: number; medium: number; low: number };
+  /** Whether this domain depends on a source that is not currently available. */
+  capConfidence?: boolean;
+}
+
+/** Cell of the risk heat map: severity counts per domain. */
+export interface AuditHeatMapRow {
+  domain: string;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+}
+
+export interface AuditRoadmapItem {
+  id: string;
+  title: string;
+  /** "quick_win" finishes inside a sprint; "structural" needs more design / cross-team effort. */
+  type: "quick_win" | "structural";
+  effort: AuditEffort;
+  rationale: string;
+  /** Finding ids that motivated this item. */
+  findingIds: string[];
+}
+
+export interface AuditExecutiveSummary {
+  /** Overall maturity, 0-5, derived from per-domain maturity. */
+  overallMaturity: number;
+  /** Top three risks by severity + business impact. */
+  topRisks: { findingId: string; title: string; severity: AuditSeverity }[];
+  /**
+   * Whether the current state is safe to publish.
+   * CONFIG-only audits will set this to "caution" at best — runtime confirmation is required for "yes".
+   */
+  publishSafe: "yes" | "caution" | "no";
+  /** Plain-language reason for publishSafe state. */
+  publishSafeReason: string;
+  /** Hard limitation note when only a single source is connected. */
+  singleSourceWarning?: string;
 }
 
 export interface AuditSummary {
@@ -114,6 +211,20 @@ export interface AuditSummary {
   toolFailures?: AuditToolFailure[];
   /** Sentence summary: e.g. "Checked 47 items: 1 Critical, 3 High, 5 Medium, 2 Low." */
   summary?: string;
+
+  // ── New: capability-aware, source-tagged audit output ────────────────────
+  /** Which audit sources are connected/available for this run. */
+  capabilityFlags?: AuditCapabilityFlags;
+  /** Coverage matrix — what could be checked, what could not, and why. */
+  coverageMatrix?: AuditCoverageItem[];
+  /** Executive summary block. */
+  executiveSummary?: AuditExecutiveSummary;
+  /** Maturity per domain, 0-5. */
+  domainMaturity?: AuditDomainMaturity[];
+  /** Severity heat map rows. */
+  heatMap?: AuditHeatMapRow[];
+  /** Prioritized roadmap (quick wins → structural fixes). */
+  roadmap?: AuditRoadmapItem[];
 }
 
 export type RecommendationGoal =
