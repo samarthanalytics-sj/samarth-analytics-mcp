@@ -1,3 +1,9 @@
+## [1.4.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.1...v1.4.2) (2026-05-29)
+
+### Bug Fixes
+
+* **portal:** harden Vercel API health and auth status ([d8d088c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d8d088c27082a0f16cf38be5c73e66218d68068a))
+
 ## [1.4.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.0...v1.4.1) (2026-05-29)
 
 ### Bug Fixes
