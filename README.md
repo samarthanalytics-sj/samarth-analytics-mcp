@@ -1,5 +1,7 @@
 # Samarth GTM MCP Server
 
+[![CI](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/actions/workflows/ci.yml)
+
 A production-ready [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server for the **Google Tag Manager API v2**, built for Samarth Analytics.
 
 Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, guarded access to GTM — read workspace contents, create/update tags/triggers/variables, audit implementations, publish versions, and more.
