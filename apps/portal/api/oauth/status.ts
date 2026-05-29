@@ -9,6 +9,8 @@ interface SessionTokensShape {
   refreshToken?: string;
   expiresAt: number;
   email?: string;
+  userName?: string;
+  picture?: string;
   scopes?: string[];
 }
 
@@ -89,6 +91,8 @@ export default function handler(req: IncomingMessage, res: ServerResponse) {
       configured: true,
       sessionSecretSet: true,
       email: tokens.email ?? null,
+      userName: tokens.userName ?? null,
+      picture: tokens.picture ?? null,
       scopes: Array.isArray(tokens.scopes) ? tokens.scopes : [],
       expiresAt: expiresAtIso,
     });
@@ -199,6 +203,8 @@ function readSessionTokens(
       expiresAt:
         typeof parsed.expiresAt === "number" ? parsed.expiresAt : 0,
       email: typeof parsed.email === "string" ? parsed.email : undefined,
+      userName: typeof parsed.userName === "string" ? parsed.userName : undefined,
+      picture: typeof parsed.picture === "string" ? parsed.picture : undefined,
       scopes: Array.isArray(parsed.scopes) ? parsed.scopes : [],
     };
   } catch {

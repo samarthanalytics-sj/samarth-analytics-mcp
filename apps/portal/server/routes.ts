@@ -101,6 +101,8 @@ export async function registerRoutes(
       connected: true,
       configured: true,
       email: sess.email,
+      userName: sess.userName,
+      picture: sess.picture,
       scopes: sess.scopes,
       expiresAt: new Date(sess.expiresAt).toISOString(),
     });

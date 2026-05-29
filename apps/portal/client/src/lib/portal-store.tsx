@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, useCallback } from "react";
 import { portalApi } from "./portal-api";
+import { queryClient } from "./queryClient";
 import { MOCK_APPROVALS } from "@/data/mock";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -36,6 +37,12 @@ interface PortalStore {
   updateApproval: (id: string, patch: Partial<ApprovalItem>) => void;
   activePlan: ChangePlan | null;
   setActivePlan: (p: ChangePlan | null) => void;
+  /**
+   * Disconnects the Google session, clears any in-flight selections, and
+   * wipes react-query caches for GTM data so the next view starts clean.
+   * Returns the post-logout OAuth state.
+   */
+  disconnect: () => Promise<OAuthState>;
 }
 
 const Ctx = createContext<PortalStore | null>(null);
@@ -64,6 +71,20 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const disconnect = useCallback(async (): Promise<OAuthState> => {
+    const next = await portalApi.disconnectGoogle();
+    setOAuth(next);
+    setActivePlan(null);
+    // Drop cached GTM accounts/containers/workspaces and any audit results so a
+    // freshly-connected account does not see the previous account's data.
+    queryClient.removeQueries({ predicate: (q) => {
+      const key = q.queryKey;
+      if (!Array.isArray(key) || typeof key[0] !== "string") return false;
+      return key[0].startsWith("/api/gtm");
+    }});
+    return next;
+  }, []);
+
   const value = useMemo<PortalStore>(
     () => ({
       oauth,
@@ -76,8 +97,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         ),
       activePlan,
       setActivePlan,
+      disconnect,
     }),
-    [oauth, approvals, activePlan],
+    [oauth, approvals, activePlan, disconnect],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
