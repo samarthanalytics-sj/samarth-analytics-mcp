@@ -1,3 +1,9 @@
+## [1.5.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.5.1...v1.5.2) (2026-05-29)
+
+### Bug Fixes
+
+* **portal:** make GTM QC audit evidence based ([4d7bc87](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4d7bc87e6940372a01eb25aff8896db4612a85ee))
+
 ## [1.5.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.5.0...v1.5.1) (2026-05-29)
 
 ### Bug Fixes
