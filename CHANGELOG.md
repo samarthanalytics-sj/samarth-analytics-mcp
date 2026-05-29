@@ -1,3 +1,9 @@
+## [1.4.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.3.0...v1.4.0) (2026-05-29)
+
+### Features
+
+* **portal:** support Vercel deployment ([096ab9a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/096ab9af6ea4ff0832d92037fe78637cb9331b25))
+
 ## [1.3.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.2.0...v1.3.0) (2026-05-29)
 
 ### Features
