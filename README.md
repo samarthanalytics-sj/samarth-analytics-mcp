@@ -23,7 +23,8 @@ Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, g
 11. [Cloud Deployment](#cloud-deployment)
 12. [Security Notes](#security-notes)
 13. [Development](#development)
-14. [Troubleshooting](#troubleshooting)
+14. [Releases](#releases)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -555,6 +556,63 @@ samarth-gtm-mcp/
 ├── tsconfig.json
 └── README.md
 ```
+
+---
+
+## Releases
+
+Releases are fully automated via [semantic-release](https://semantic-release.gitbook.io/) and GitHub Actions. Every push to `main` triggers the [`release.yml`](.github/workflows/release.yml) workflow, which:
+
+1. Installs dependencies, type-checks, builds, and runs tests.
+2. Inspects commits since the last tag using the [Conventional Commits](https://www.conventionalcommits.org/) spec.
+3. Determines the next semantic version (`MAJOR.MINOR.PATCH`).
+4. Updates `CHANGELOG.md` and bumps the `version` in `package.json` / `package-lock.json`.
+5. Commits those files back to `main` with `chore(release): x.y.z [skip ci]` (the `[skip ci]` marker prevents an infinite release loop).
+6. Creates a Git tag (`vX.Y.Z`) and a GitHub Release with auto-generated notes.
+
+The workflow uses the built-in `GITHUB_TOKEN` and requires no additional secrets. `npm publish` is disabled — this package is distributed as a binary via the GitHub repo and releases, not via the npm registry.
+
+### Conventional Commit Examples
+
+Commit messages drive the version bump:
+
+| Commit prefix       | Effect                  | Example                                                    |
+| ------------------- | ----------------------- | ---------------------------------------------------------- |
+| `fix:`              | Patch release (`x.y.Z`) | `fix: handle empty workspace in audit tool`                |
+| `feat:`             | Minor release (`x.Y.0`) | `feat: add bulk tag import tool`                           |
+| `perf:`             | Patch release           | `perf: cache GTM client between tool calls`                |
+| `docs:` / `chore:` / `refactor:` / `test:` / `style:` / `ci:` / `build:` | No release | `docs: clarify OAuth setup steps` |
+| `BREAKING CHANGE:` footer or `!` after type | Major release (`X.0.0`) | see below                            |
+
+#### Breaking change examples
+
+```
+feat!: drop support for Node.js 18
+
+BREAKING CHANGE: minimum required Node version is now 20.
+```
+
+or:
+
+```
+refactor(auth): rename GOOGLE_REFRESH_TOKEN env var
+
+BREAKING CHANGE: GOOGLE_REFRESH_TOKEN is now GTM_GOOGLE_REFRESH_TOKEN.
+Update your .env file accordingly.
+```
+
+### Dry run locally
+
+To preview what the next release would look like without publishing:
+
+```bash
+GITHUB_TOKEN=<a-token-with-no-perms-is-fine-for-dry-run> \
+  npx semantic-release --dry-run --no-ci
+```
+
+### Manual release skip
+
+To intentionally land a commit without triggering a release, use a non-releasing type (`chore:`, `docs:`, etc.) or append `[skip ci]` to the commit subject.
 
 ---
 

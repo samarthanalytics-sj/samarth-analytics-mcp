@@ -24,7 +24,8 @@
     "test:jest": "node --experimental-vm-modules node_modules/.bin/jest",
     "test:watch": "jest --watch",
     "inspector": "npx @modelcontextprotocol/inspector dist/index.js",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "semantic-release": "semantic-release"
   },
   "keywords": [
     "mcp",
@@ -51,7 +52,15 @@
     "@jest/globals": "^29.7.0",
     "ts-jest": "^29.1.5",
     "tsx": "^4.7.1",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "semantic-release": "^24.1.0",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.0",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^11.0.0",
+    "@semantic-release/npm": "^12.0.1",
+    "@semantic-release/release-notes-generator": "^14.0.1",
+    "conventional-changelog-conventionalcommits": "^8.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
