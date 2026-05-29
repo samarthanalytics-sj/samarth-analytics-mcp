@@ -1,3 +1,9 @@
+## [1.5.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.5.0...v1.5.1) (2026-05-29)
+
+### Bug Fixes
+
+* **portal:** inline Vercel audit QC engine ([0f680e6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0f680e68898f4e7e2c2abc7549d1c05faf86386e))
+
 ## [1.5.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.8...v1.5.0) (2026-05-29)
 
 ### Features
