@@ -136,7 +136,29 @@ type AuditCategory =
   | "dead_config"
   | "data_quality"
   | "publishing"
+  | "governance"
+  | "privacy"
   | "tool_failure";
+
+type AuditSourceFlag = "CONFIG" | "RUNTIME" | "SGTM" | "GA4_ADMIN";
+type AuditCoverage = "covered" | "partial" | "not_covered";
+type AuditConfidence = "high" | "medium" | "low";
+type AuditEffort = "S" | "M" | "L";
+
+interface AuditCapabilityFlags {
+  CONFIG: boolean;
+  RUNTIME: boolean;
+  SGTM: boolean;
+  GA4_ADMIN: boolean;
+}
+
+interface AuditCoverageItem {
+  id: string;
+  capability: string;
+  requires: AuditSourceFlag[];
+  status: AuditCoverage;
+  toolNeeded?: string;
+}
 
 interface AuditFinding {
   id: string;
@@ -151,12 +173,50 @@ interface AuditFinding {
   whyItMatters?: string;
   suggestedFix?: string;
   needsManualReview?: boolean;
+  sources?: AuditSourceFlag[];
+  confidence?: AuditConfidence;
+  entity?: { name?: string; id?: string; path?: string };
+  parameter?: string;
+  businessImpact?: string;
+  effort?: AuditEffort;
 }
 
 interface AuditToolFailure {
   resource: string;
   message: string;
   status?: number;
+}
+
+interface AuditDomainMaturity {
+  domain: string;
+  score: number;
+  counts: { critical: number; high: number; medium: number; low: number };
+  capConfidence?: boolean;
+}
+
+interface AuditHeatMapRow {
+  domain: string;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+}
+
+interface AuditRoadmapItem {
+  id: string;
+  title: string;
+  type: "quick_win" | "structural";
+  effort: AuditEffort;
+  rationale: string;
+  findingIds: string[];
+}
+
+interface AuditExecutiveSummary {
+  overallMaturity: number;
+  topRisks: { findingId: string; title: string; severity: AuditSeverity }[];
+  publishSafe: "yes" | "caution" | "no";
+  publishSafeReason: string;
+  singleSourceWarning?: string;
 }
 
 interface AuditSummary {
@@ -170,6 +230,12 @@ interface AuditSummary {
   publishedVersion?: { versionId?: string; name?: string; notes?: string } | null;
   toolFailures?: AuditToolFailure[];
   summary?: string;
+  capabilityFlags?: AuditCapabilityFlags;
+  coverageMatrix?: AuditCoverageItem[];
+  executiveSummary?: AuditExecutiveSummary;
+  domainMaturity?: AuditDomainMaturity[];
+  heatMap?: AuditHeatMapRow[];
+  roadmap?: AuditRoadmapItem[];
 }
 
 interface AuditState {
@@ -390,6 +456,12 @@ function ruleTagsNoFiringTriggers(ctx: Ctx, out: AuditFinding[]) {
           "Without a firing trigger the tag is dormant and serves no purpose in this workspace.",
         suggestedFix:
           "Attach an appropriate firing trigger or delete the tag if it is no longer needed.",
+        sources: ["CONFIG"],
+        entity: tagEntity(tag),
+        parameter: "firingTriggerId",
+        businessImpact:
+          "Dead configuration accumulates and hides the true tag inventory, making future debugging slower.",
+        effort: "S",
       });
     }
   }
@@ -423,6 +495,10 @@ function ruleUnusedTriggers(ctx: Ctx, out: AuditFinding[]) {
           "Unused triggers add clutter and obscure what the container is actually doing.",
         suggestedFix:
           "Remove the trigger if it is truly unused. Confirm first that nothing depends on it.",
+        sources: ["CONFIG"],
+        entity: triggerEntity(t),
+        businessImpact: "Container clutter slows onboarding of new contributors.",
+        effort: "S",
       });
     }
   }
@@ -469,6 +545,10 @@ function ruleUnusedVariables(ctx: Ctx, out: AuditFinding[]) {
         suggestedFix:
           "Delete the variable if it is no longer needed. Mark as 'needs manual review' if cross-workspace use is possible.",
         needsManualReview: true,
+        sources: ["CONFIG"],
+        entity: variableEntity(v),
+        businessImpact: "Dead variables make refactoring riskier — engineers cannot tell what is safe to remove.",
+        effort: "S",
       });
     }
   }
@@ -488,6 +568,12 @@ function rulePausedTags(ctx: Ctx, out: AuditFinding[]) {
           "Paused tags never publish but stay in the container, hiding the real configuration.",
         suggestedFix:
           "Unpause the tag if it is still required, otherwise delete it.",
+        sources: ["CONFIG"],
+        entity: tagEntity(tag),
+        parameter: "paused",
+        businessImpact:
+          "Paused-but-present tags create ambiguity about which behaviours are live in production.",
+        effort: "S",
       });
     }
   }
@@ -506,6 +592,11 @@ function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
           affected: [name],
           whyItMatters: `Firing trigger id "${tid}" is not defined in this workspace. The tag's firing rule is incomplete.`,
           suggestedFix: "Re-attach a valid trigger or remove the dangling reference.",
+          sources: ["CONFIG"],
+          entity: tagEntity(tag),
+          parameter: "firingTriggerId",
+          businessImpact: "Broken references can silently disable measurement for important events.",
+          effort: "S",
         });
       }
     }
@@ -519,6 +610,11 @@ function ruleBrokenReferences(ctx: Ctx, out: AuditFinding[]) {
           affected: [name],
           whyItMatters: `Blocking trigger id "${tid}" is not defined in this workspace.`,
           suggestedFix: "Remove the dangling blocking-trigger reference.",
+          sources: ["CONFIG"],
+          entity: tagEntity(tag),
+          parameter: "blockingTriggerId",
+          businessImpact: "Dangling references confuse audits and reviews.",
+          effort: "S",
         });
       }
     }
@@ -541,6 +637,11 @@ function ruleGA4ConfigCount(ctx: Ctx, out: AuditFinding[]) {
           "GA4 event tags rely on a configured Google tag (or GA4 Configuration tag) to set the measurement ID and initialise GA4.",
         suggestedFix:
           "Add a Google tag with the correct measurement ID, or confirm the measurement ID is set via measurementIdOverride on every event tag.",
+        sources: ["CONFIG"],
+        parameter: "tagId / measurementId",
+        businessImpact:
+          "Without a base Google tag, GA4 events may not be initialised and reporting can be incomplete.",
+        effort: "S",
       });
     }
     return;
@@ -557,6 +658,9 @@ function ruleGA4ConfigCount(ctx: Ctx, out: AuditFinding[]) {
       suggestedFix:
         "Consolidate down to one Google tag where possible, or document why both are needed.",
       needsManualReview: true,
+      sources: ["CONFIG"],
+      businessImpact: "Duplicate base tags can cause double page_view counts in GA4.",
+      effort: "M",
     });
   }
 }
@@ -591,6 +695,10 @@ function ruleGA4MeasurementIdsConsistent(ctx: Ctx, out: AuditFinding[]) {
         "GA4 measurement IDs always start with G-. A different shape will not be accepted by GA4 and hits will not land.",
       suggestedFix:
         "Replace the value with a valid G-XXXXXXX measurement ID or a variable that resolves to one.",
+      sources: ["CONFIG"],
+      parameter: "measurementId / tagId",
+      businessImpact: "Hits with an invalid measurement ID will be dropped — analytics data is lost.",
+      effort: "S",
     });
   }
   if (ids.size > 1) {
@@ -605,6 +713,10 @@ function ruleGA4MeasurementIdsConsistent(ctx: Ctx, out: AuditFinding[]) {
       suggestedFix:
         "Confirm each measurement ID is intentional; otherwise standardise on one.",
       needsManualReview: true,
+      sources: ["CONFIG"],
+      parameter: "measurementId / tagId",
+      businessImpact: "Data may be split across properties, fragmenting reporting.",
+      effort: "M",
     });
   }
 }
@@ -625,6 +737,11 @@ function ruleGA4EventCompleteness(ctx: Ctx, out: AuditFinding[]) {
           "Without an event_name GTM cannot send a labelled GA4 event.",
         suggestedFix:
           "Set an event_name (e.g. purchase, sign_up, generate_lead).",
+        sources: ["CONFIG"],
+        entity: tagEntity(tag),
+        parameter: "eventName",
+        businessImpact: "Event will not be recorded as a distinct event in GA4 reporting.",
+        effort: "S",
       });
     }
     const configRef =
@@ -641,6 +758,11 @@ function ruleGA4EventCompleteness(ctx: Ctx, out: AuditFinding[]) {
         suggestedFix:
           "If multiple Google tags are present, set measurementIdOverride explicitly.",
         needsManualReview: true,
+        sources: ["CONFIG"],
+        entity: tagEntity(tag),
+        parameter: "measurementIdOverride",
+        businessImpact: "Possible misrouting of events between GA4 properties when multiple base tags exist.",
+        effort: "S",
       });
     }
   }
@@ -668,6 +790,11 @@ function ruleGA4AllPages(ctx: Ctx, out: AuditFinding[]) {
         suggestedFix:
           "Confirm this is intentional. Otherwise switch to a specific Custom Event trigger.",
         needsManualReview: true,
+        sources: ["CONFIG"],
+        entity: tagEntity(tag),
+        parameter: "firingTriggerId",
+        businessImpact: "Inflated event counts cause downstream reporting errors and noisy attribution.",
+        effort: "M",
       });
     }
   }
@@ -694,6 +821,11 @@ function ruleConsentSettings(ctx: Ctx, out: AuditFinding[]) {
         "When consentSettings is NOT_SET the tag will fire regardless of consent state. Consent Mode v2 requires explicit consent checks for marketing/analytics tags in regulated regions.",
       suggestedFix:
         "Set consentSettings to NEEDED (or NOT_NEEDED with justification) for each tag that loads marketing or analytics scripts/pixels.",
+      sources: ["CONFIG"],
+      parameter: "consentSettings.consentStatus",
+      businessImpact:
+        "Firing marketing/analytics tags without consent in regulated regions is a compliance risk (GDPR, ePrivacy, CCPA).",
+      effort: "M",
     });
   }
 }
@@ -714,6 +846,11 @@ function ruleConsentSignalsPresent(ctx: Ctx, out: AuditFinding[]) {
       suggestedFix:
         "Confirm a CMP is initialising Consent Mode v2 before marketing/analytics tags fire. If consent is managed inside GTM, add the appropriate signals.",
       needsManualReview: true,
+      sources: ["CONFIG"],
+      parameter: "ad_storage / analytics_storage / consent",
+      businessImpact:
+        "Without verified consent signalling, regulated jurisdictions may see non-compliant tag firing.",
+      effort: "M",
     });
   }
 }
@@ -753,6 +890,9 @@ function ruleHardcodedIds(ctx: Ctx, out: AuditFinding[]) {
         "Hardcoded measurement IDs, conversion IDs, or container IDs make it hard to swap environments and easy to point at the wrong property.",
       suggestedFix:
         "Move IDs into a Constant or Lookup variable and reference {{Variable Name}} from the tag.",
+      sources: ["CONFIG"],
+      businessImpact: "Increases risk of pointing production tags at the wrong account during environment swaps.",
+      effort: "M",
     });
   }
 }
@@ -771,7 +911,7 @@ function ruleDataLayerNoDefault(ctx: Ctx, out: AuditFinding[]) {
   if (offenders.length > 0) {
     pushFinding(out, {
       id: fid(`dl-no-default:${offenders.length}`),
-      category: "data_quality",
+      category: "data_layer",
       severity: "low",
       finding: `${offenders.length} Data Layer variable(s) have no default value set`,
       affected: offenders.slice(0, 20),
@@ -779,6 +919,10 @@ function ruleDataLayerNoDefault(ctx: Ctx, out: AuditFinding[]) {
         "A missing default means consumers receive `undefined` when the key is absent from the dataLayer. Downstream tags may send empty event parameters.",
       suggestedFix:
         "Set a sensible default (often empty string, 0, or 'not_set') on each Data Layer variable.",
+      sources: ["CONFIG"],
+      parameter: "defaultValue",
+      businessImpact: "Empty event params reduce GA4 dimension fill rates and harm reporting.",
+      effort: "S",
     });
   }
 }
@@ -799,7 +943,7 @@ function rulePiiManualReview(ctx: Ctx, out: AuditFinding[]) {
   if (unique.length > 0) {
     pushFinding(out, {
       id: fid(`pii-review:${unique.length}`),
-      category: "data_quality",
+      category: "privacy",
       severity: "medium",
       finding: "Possible PII references found in tag or variable configuration",
       affected: unique.slice(0, 20),
@@ -808,6 +952,10 @@ function rulePiiManualReview(ctx: Ctx, out: AuditFinding[]) {
       suggestedFix:
         "Manually review each item. Confirm values are hashed or removed before they reach downstream tools.",
       needsManualReview: true,
+      sources: ["CONFIG"],
+      businessImpact:
+        "Sending raw PII to analytics or ads platforms is a privacy/compliance violation in most jurisdictions.",
+      effort: "M",
     });
   }
 }
@@ -837,6 +985,10 @@ function ruleDuplicateGA4Events(ctx: Ctx, out: AuditFinding[]) {
           "Tags configured identically on the same triggers send the same payload. Configuration overlap is a strong signal of double-counting risk.",
         suggestedFix:
           "Keep one canonical event tag and delete or repurpose the duplicates.",
+        sources: ["CONFIG"],
+        parameter: "eventName + firingTriggerId",
+        businessImpact: "Double-counted events distort revenue and conversion KPIs.",
+        effort: "S",
       });
     }
   });
@@ -860,6 +1012,9 @@ function ruleDuplicateTagNames(ctx: Ctx, out: AuditFinding[]) {
         whyItMatters:
           "Duplicate names make it hard to identify which tag is which during debugging.",
         suggestedFix: "Rename the duplicates so each tag has a unique, descriptive name.",
+        sources: ["CONFIG"],
+        businessImpact: "Slower debugging and risk of editing the wrong tag.",
+        effort: "S",
       });
     }
   });
@@ -892,6 +1047,10 @@ function ruleDuplicateConversionPages(ctx: Ctx, out: AuditFinding[]) {
           "Configuration overlap between conversion tags is a strong signal of double-counted conversions.",
         suggestedFix:
           "Keep one conversion tag per conversion_id/trigger combination.",
+        sources: ["CONFIG"],
+        parameter: "conversionId + firingTriggerId",
+        businessImpact: "Inflated Google Ads conversions break ROAS optimisation and bidding.",
+        effort: "S",
       });
     }
   });
@@ -906,13 +1065,16 @@ function ruleFolderConsistency(ctx: Ctx, out: AuditFinding[]) {
   if (orphans.length === ctx.tags.length) return; // folders unused — no signal
   pushFinding(out, {
     id: fid(`folder-orphans:${orphans.length}`),
-    category: "naming",
+    category: "governance",
     severity: "low",
     finding: `${orphans.length} tag(s) are not placed in any folder, but folders are used elsewhere`,
     affected: orphans.slice(0, 20).map((t) => t.name ?? "Unnamed"),
     whyItMatters:
       "Mixed folder usage suggests the team intended a structure but new tags drifted outside it, making maintenance harder.",
     suggestedFix: "Place the orphan tags in the appropriate folder.",
+    sources: ["CONFIG"],
+    businessImpact: "Slower handovers and audits — orphaned tags break the team's organisation conventions.",
+    effort: "S",
   });
 }
 
@@ -931,6 +1093,9 @@ function ruleServerSideClients(ctx: Ctx, out: AuditFinding[]) {
       whyItMatters:
         "A server container without Clients cannot claim incoming requests, so no tags will run.",
       suggestedFix: "Add the appropriate Client (e.g. GA4 client, Google Tag Manager: Web Container).",
+      sources: ["CONFIG"],
+      businessImpact: "No server-side measurement is happening at all.",
+      effort: "M",
     });
     return;
   }
@@ -948,6 +1113,9 @@ function ruleServerSideClients(ctx: Ctx, out: AuditFinding[]) {
         "Without a GA4 Client the server container cannot accept GA4 hits from the web container.",
       suggestedFix: "Add a GA4 Client (or confirm one is provided by a template).",
       needsManualReview: true,
+      sources: ["CONFIG"],
+      businessImpact: "GA4 events from the web container may not reach the server container at all.",
+      effort: "M",
     });
   }
 }
@@ -957,7 +1125,7 @@ function rulePublishingState(ctx: Ctx, out: AuditFinding[]) {
   if (ctx.workspaces.length > 1) {
     pushFinding(out, {
       id: fid(`ws-multi:${ctx.workspaces.length}`),
-      category: "publishing",
+      category: "governance",
       severity: "low",
       finding: `${ctx.workspaces.length} open workspaces in this container`,
       affected: ctx.workspaces.map((w) => w.name ?? "Unnamed workspace"),
@@ -965,12 +1133,15 @@ function rulePublishingState(ctx: Ctx, out: AuditFinding[]) {
         "Multiple open workspaces increase the risk of conflicting edits and stale changes shipping.",
       suggestedFix:
         "Merge, publish, or abandon stale workspaces. Keep one active workspace per work-in-progress.",
+      sources: ["CONFIG"],
+      businessImpact: "Higher chance of stale or conflicting changes shipping to production.",
+      effort: "S",
     });
   }
   if (ctx.publishedVersion && !ctx.publishedVersion.notes) {
     pushFinding(out, {
       id: fid(`pubver-no-notes:${ctx.publishedVersion.containerVersionId}`),
-      category: "publishing",
+      category: "governance",
       severity: "low",
       finding: "Latest published version has no release notes",
       affected: [
@@ -981,6 +1152,10 @@ function rulePublishingState(ctx: Ctx, out: AuditFinding[]) {
         "Release notes are the audit trail for what was published and why. Empty notes make rollbacks and reviews harder.",
       suggestedFix:
         "Add a short note to each new version describing what changed and why.",
+      sources: ["CONFIG"],
+      parameter: "notes",
+      businessImpact: "Audit trail gaps slow incident response and rollbacks.",
+      effort: "S",
     });
   }
 }
@@ -997,6 +1172,91 @@ function ruleToolFailures(state: AuditState, out: AuditFinding[]) {
       suggestedFix:
         "Re-run the audit. If the failure persists, confirm the account has access to this resource.",
       needsManualReview: true,
+      sources: ["CONFIG"],
+      businessImpact: "Audit coverage is incomplete; findings should not be assumed clean for this area.",
+      effort: "S",
+    });
+  }
+}
+
+// I. Performance — Custom HTML count and document.write detection (CONFIG-only)
+function rulePerformance(ctx: Ctx, out: AuditFinding[]) {
+  const customHtml = ctx.tags.filter((t) => t.type === "html");
+  if (customHtml.length >= 8) {
+    pushFinding(out, {
+      id: fid(`perf-customhtml-count:${customHtml.length}`),
+      category: "performance",
+      severity: "medium",
+      finding: `Container has ${customHtml.length} Custom HTML tags`,
+      affected: customHtml.slice(0, 20).map((t) => t.name ?? "Unnamed"),
+      whyItMatters:
+        "Large numbers of Custom HTML tags are a configuration risk: they bypass GTM's template sandbox, are harder to review, and can slow page load when bound to All Pages.",
+      suggestedFix:
+        "Audit each Custom HTML tag, migrate to certified templates where possible, and constrain triggers narrowly.",
+      needsManualReview: true,
+      sources: ["CONFIG"],
+      businessImpact: "Higher risk of XSS, slower pages, and harder code review.",
+      effort: "L",
+    });
+  }
+  const docWriteOffenders: GtmTag[] = [];
+  for (const t of customHtml) {
+    const html = (t.parameter ?? []).find((p) => p.key === "html")?.value ?? "";
+    if (/document\.write/i.test(html)) docWriteOffenders.push(t);
+  }
+  if (docWriteOffenders.length > 0) {
+    pushFinding(out, {
+      id: fid(`perf-docwrite:${docWriteOffenders.length}`),
+      category: "performance",
+      severity: "high",
+      finding: `${docWriteOffenders.length} Custom HTML tag(s) use document.write`,
+      affected: docWriteOffenders.map((t) => t.name ?? "Unnamed"),
+      whyItMatters:
+        "document.write breaks the document after page load, can blank pages, and is blocked by modern browsers when called from third-party scripts.",
+      suggestedFix:
+        "Replace document.write with createElement / appendChild or migrate to a tag template.",
+      sources: ["CONFIG"],
+      parameter: "html",
+      businessImpact: "User-visible page breakage and worse performance metrics.",
+      effort: "M",
+    });
+  }
+  if (ctx.tags.length >= 100) {
+    pushFinding(out, {
+      id: fid(`perf-total-tags:${ctx.tags.length}`),
+      category: "performance",
+      severity: "low",
+      finding: `Container has ${ctx.tags.length} tags`,
+      whyItMatters:
+        "Large containers are slower to load and harder to audit. The risk depends on how many fire on All Pages, which is a runtime question.",
+      suggestedFix:
+        "Review for retired tags, paused tags awaiting deletion, and consolidate where possible.",
+      needsManualReview: true,
+      sources: ["CONFIG"],
+      businessImpact: "Slower page loads and worse Core Web Vitals.",
+      effort: "L",
+    });
+  }
+}
+
+// J. Ads Conversion Linker — flag Ads conversion tags without a Conversion Linker in the container.
+function ruleConversionLinker(ctx: Ctx, out: AuditFinding[]) {
+  const hasAdsConversions = ctx.tags.some((t) => t.type === "awct");
+  if (!hasAdsConversions) return;
+  const hasLinker = ctx.tags.some((t) => t.type === "gclidw");
+  if (!hasLinker) {
+    pushFinding(out, {
+      id: fid("ads-no-linker"),
+      category: "pixels",
+      severity: "high",
+      finding: "Google Ads conversion tags found but no Conversion Linker tag",
+      whyItMatters:
+        "Conversion Linker is required to store first-party gclid cookies so conversions attribute correctly under modern browser ITP / cookie limits.",
+      suggestedFix:
+        "Add a Conversion Linker tag fired on All Pages so click identifiers persist before conversion tags fire.",
+      sources: ["CONFIG"],
+      businessImpact: "Without a Conversion Linker, Google Ads conversion attribution will degrade significantly.",
+      effort: "S",
     });
   }
 }
@@ -1022,6 +1282,12 @@ function pushFinding(
     whyItMatters: string;
     suggestedFix: string;
     needsManualReview?: boolean;
+    sources?: AuditSourceFlag[];
+    confidence?: AuditConfidence;
+    entity?: { name?: string; id?: string; path?: string };
+    parameter?: string;
+    businessImpact?: string;
+    effort?: AuditEffort;
   },
 ): void {
   // Populate legacy aliases so older clients keep rendering correctly.
@@ -1038,7 +1304,50 @@ function pushFinding(
     whyItMatters: f.whyItMatters,
     suggestedFix: f.suggestedFix,
     needsManualReview: f.needsManualReview ?? false,
+    sources: f.sources ?? ["CONFIG"],
+    confidence: f.confidence ?? defaultConfidence(f.sources, f.needsManualReview),
+    entity: f.entity,
+    parameter: f.parameter,
+    businessImpact: f.businessImpact,
+    effort: f.effort,
   });
+}
+
+function defaultConfidence(
+  sources: AuditSourceFlag[] | undefined,
+  needsManualReview: boolean | undefined,
+): AuditConfidence {
+  if (needsManualReview) return "low";
+  const s = sources ?? ["CONFIG"];
+  // CONFIG-only findings are at most "medium" confidence — configuration
+  // intent is not observed runtime behaviour.
+  if (s.length === 1 && s[0] === "CONFIG") return "medium";
+  if (s.includes("RUNTIME") || s.includes("SGTM") || s.includes("GA4_ADMIN")) return "high";
+  return "medium";
+}
+
+function tagEntity(tag: GtmTag): { name?: string; id?: string; path?: string } {
+  return {
+    name: tag.name,
+    id: tag.tagId,
+    path: tag.tagId ? `tags/${tag.tagId}` : undefined,
+  };
+}
+
+function variableEntity(v: GtmVariable): { name?: string; id?: string; path?: string } {
+  return {
+    name: v.name,
+    id: v.variableId,
+    path: v.variableId ? `variables/${v.variableId}` : undefined,
+  };
+}
+
+function triggerEntity(t: GtmTrigger): { name?: string; id?: string; path?: string } {
+  return {
+    name: t.name,
+    id: t.triggerId,
+    path: t.triggerId ? `triggers/${t.triggerId}` : undefined,
+  };
 }
 
 const SEVERITY_WEIGHT: Record<AuditSeverity, number> = {
@@ -1116,6 +1425,10 @@ function runAudit(
   ruleServerSideClients(ctx, findings);
   // H. Publishing state
   rulePublishingState(ctx, findings);
+  // I. Performance
+  rulePerformance(ctx, findings);
+  // J. Conversion Linker
+  ruleConversionLinker(ctx, findings);
   // Tool failures — surface gaps.
   ruleToolFailures(state, findings);
 
@@ -1132,6 +1445,27 @@ function runAudit(
     state.clients.length;
 
   const containerType = (state.container?.usageContext ?? []).join(",") || undefined;
+
+  // ── Capability detection ───────────────────────────────────────────────
+  // Today the portal only has CONFIG. RUNTIME / SGTM / GA4_ADMIN routes are
+  // not implemented; flip these to true when corresponding tools are added.
+  const capabilityFlags: AuditCapabilityFlags = {
+    CONFIG: true,
+    RUNTIME: false,
+    SGTM: false,
+    GA4_ADMIN: false,
+  };
+
+  const coverageMatrix = buildCoverageMatrix(capabilityFlags, ctx);
+  const domainMaturity = buildDomainMaturity(findings, capabilityFlags);
+  const heatMap = buildHeatMap(findings);
+  const executiveSummary = buildExecutiveSummary(
+    findings,
+    domainMaturity,
+    capabilityFlags,
+    state,
+  );
+  const roadmap = buildRoadmap(findings);
 
   return {
     containerId: opts.containerPublicId,
@@ -1154,7 +1488,307 @@ function runAudit(
       : null,
     toolFailures: state.toolFailures.length ? state.toolFailures : undefined,
     summary: buildSummary(findings, itemsChecked),
+    capabilityFlags,
+    coverageMatrix,
+    executiveSummary,
+    domainMaturity,
+    heatMap,
+    roadmap,
   };
+}
+
+// ── Capability-aware output builders ─────────────────────────────────────
+
+const DOMAINS: { key: string; label: string; categories: AuditCategory[] }[] = [
+  { key: "ga4", label: "GA4 architecture", categories: ["ga4"] },
+  { key: "consent", label: "Consent Mode v2", categories: ["consent"] },
+  { key: "privacy", label: "Privacy & PII", categories: ["privacy"] },
+  { key: "server_side", label: "Server-side", categories: ["server_side"] },
+  { key: "pixels", label: "Vendor pixels", categories: ["pixels"] },
+  { key: "ecommerce", label: "Ecommerce", categories: ["ecommerce"] },
+  { key: "data_layer", label: "Data layer", categories: ["data_layer"] },
+  { key: "data_quality", label: "Data quality", categories: ["data_quality"] },
+  { key: "duplication", label: "Duplication", categories: ["duplication"] },
+  { key: "performance", label: "Performance", categories: ["performance"] },
+  { key: "governance", label: "Governance", categories: ["governance", "publishing", "naming"] },
+  { key: "dead_config", label: "Dead config", categories: ["dead_config"] },
+];
+
+// Domain weights — heavier on safety/compliance/architecture domains.
+const DOMAIN_WEIGHT: Record<string, number> = {
+  ga4: 1.4,
+  consent: 1.5,
+  privacy: 1.4,
+  server_side: 1.3,
+  pixels: 1.1,
+  ecommerce: 1.0,
+  data_layer: 1.0,
+  data_quality: 1.0,
+  duplication: 1.0,
+  performance: 0.9,
+  governance: 0.7,
+  dead_config: 0.6,
+};
+
+function buildCoverageMatrix(
+  flags: AuditCapabilityFlags,
+  ctx: Ctx,
+): AuditCoverageItem[] {
+  const isServer = (ctx.container?.usageContext ?? []).some(
+    (u) => u.toLowerCase() === "server",
+  );
+  const row = (
+    id: string,
+    capability: string,
+    requires: AuditSourceFlag[],
+    toolNeeded?: string,
+  ): AuditCoverageItem => {
+    const hasAll = requires.every((r) => flags[r]);
+    const hasSome = requires.some((r) => flags[r]);
+    let status: AuditCoverage = "not_covered";
+    if (hasAll) status = requires.length === 1 ? "covered" : "partial";
+    else if (hasSome) status = "partial";
+    return {
+      id,
+      capability,
+      requires,
+      status,
+      toolNeeded: status === "covered" ? undefined : toolNeeded,
+    };
+  };
+  return [
+    row(
+      "config-inventory",
+      "GTM config inventory (tags, triggers, variables, built-ins, versions)",
+      ["CONFIG"],
+      "GTM API access (currently CONFIG-only)",
+    ),
+    row(
+      "tag-firing-order",
+      "Tag firing & order at runtime",
+      ["RUNTIME"],
+      "Runtime browser harness (e.g. Puppeteer/Playwright capture of dataLayer + network)",
+    ),
+    row(
+      "datalayer-pushes",
+      "Live dataLayer pushes & event sequence",
+      ["RUNTIME"],
+      "Runtime browser harness",
+    ),
+    row(
+      "pixel-capi-dedup",
+      "Meta Pixel ↔ CAPI deduplication (eventID)",
+      ["RUNTIME", "SGTM"],
+      "Runtime capture + sGTM logs + Meta Events Manager (final proof is manual)",
+    ),
+    row(
+      "consent-runtime",
+      "Consent state matrix at runtime (granted/denied paths)",
+      ["RUNTIME"],
+      "Runtime harness toggling consent states",
+    ),
+    row(
+      "ecommerce-runtime",
+      "Ecommerce events shape vs spec (purchase, items[], value)",
+      ["RUNTIME"],
+      "Runtime capture of purchase/view_item flows",
+    ),
+    row(
+      "sgtm-clients",
+      "sGTM clients, transformations, and routing",
+      ["SGTM"],
+      "Server container read tools (clients, transformations, server-side tags)",
+    ),
+    row(
+      isServer ? "sgtm-config-server-only" : "sgtm-server-config",
+      "Server container CONFIG-visible checks",
+      ["CONFIG"],
+      isServer ? undefined : "This container is not a server container",
+    ),
+    row(
+      "ga4-admin-dimensions",
+      "GA4 custom dimensions & metrics",
+      ["GA4_ADMIN"],
+      "GA4 Admin API access",
+    ),
+    row(
+      "ga4-admin-filters",
+      "GA4 data filters, referral exclusions, retention, data streams",
+      ["GA4_ADMIN"],
+      "GA4 Admin API access",
+    ),
+    row(
+      "cross-source-recon",
+      "Cross-source reconciliation (CONFIG ↔ RUNTIME ↔ SGTM ↔ GA4_ADMIN)",
+      ["CONFIG", "RUNTIME"],
+      "Requires at least RUNTIME alongside CONFIG to reconcile intent vs reality",
+    ),
+  ];
+}
+
+function severityFor(f: AuditFinding): "critical" | "high" | "medium" | "low" {
+  if (f.severity === "info") return "low";
+  return f.severity;
+}
+
+function buildHeatMap(findings: AuditFinding[]): AuditHeatMapRow[] {
+  const out: AuditHeatMapRow[] = [];
+  for (const d of DOMAINS) {
+    const cells: AuditHeatMapRow = {
+      domain: d.label,
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+    };
+    for (const f of findings) {
+      if (!d.categories.includes(f.category)) continue;
+      cells[severityFor(f)] += 1;
+    }
+    if (cells.critical + cells.high + cells.medium + cells.low > 0) {
+      out.push(cells);
+    }
+  }
+  return out;
+}
+
+function buildDomainMaturity(
+  findings: AuditFinding[],
+  flags: AuditCapabilityFlags,
+): AuditDomainMaturity[] {
+  // Maturity is 5 minus a weighted penalty per finding, clamped to [0, 5].
+  // CONFIG-only audits cap maturity at 3 for runtime-sensitive domains.
+  const out: AuditDomainMaturity[] = [];
+  const SEV_PENALTY = { critical: 2.0, high: 1.0, medium: 0.5, low: 0.2 };
+  const RUNTIME_SENSITIVE = new Set([
+    "ga4",
+    "consent",
+    "pixels",
+    "ecommerce",
+    "server_side",
+  ]);
+  for (const d of DOMAINS) {
+    let penalty = 0;
+    const counts = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const f of findings) {
+      if (!d.categories.includes(f.category)) continue;
+      const sev = severityFor(f);
+      counts[sev] += 1;
+      penalty += SEV_PENALTY[sev];
+    }
+    let score = Math.max(0, Math.min(5, 5 - penalty));
+    const capConfidence =
+      RUNTIME_SENSITIVE.has(d.key) && (!flags.RUNTIME || !flags.GA4_ADMIN);
+    if (capConfidence) score = Math.min(score, 3);
+    out.push({
+      domain: d.label,
+      score: Math.round(score * 10) / 10,
+      counts,
+      capConfidence,
+    });
+  }
+  return out;
+}
+
+function buildExecutiveSummary(
+  findings: AuditFinding[],
+  domainMaturity: AuditDomainMaturity[],
+  flags: AuditCapabilityFlags,
+  state: AuditState,
+): AuditExecutiveSummary {
+  const weighted = domainMaturity.reduce(
+    (acc, d) => {
+      const key = DOMAINS.find((x) => x.label === d.domain)?.key ?? "";
+      const w = DOMAIN_WEIGHT[key] ?? 1.0;
+      acc.sum += d.score * w;
+      acc.wsum += w;
+      return acc;
+    },
+    { sum: 0, wsum: 0 },
+  );
+  const overallMaturity = weighted.wsum
+    ? Math.round((weighted.sum / weighted.wsum) * 10) / 10
+    : 0;
+
+  const sortedBySev = [...findings]
+    .filter((f) => !f.needsManualReview || f.severity === "critical" || f.severity === "high")
+    .sort((a, b) => SEVERITY_WEIGHT[b.severity] - SEVERITY_WEIGHT[a.severity]);
+  const topRisks = sortedBySev.slice(0, 3).map((f) => ({
+    findingId: f.id,
+    title: f.finding ?? f.title,
+    severity: f.severity,
+  }));
+
+  const onlyConfig = flags.CONFIG && !flags.RUNTIME && !flags.SGTM && !flags.GA4_ADMIN;
+  const hasCriticalOrHigh = findings.some(
+    (f) => (f.severity === "critical" || f.severity === "high") && !f.needsManualReview,
+  );
+  let publishSafe: "yes" | "caution" | "no" = "yes";
+  let publishSafeReason = "No high-severity configuration findings detected.";
+  if (hasCriticalOrHigh) {
+    publishSafe = "no";
+    publishSafeReason =
+      "High or critical-severity configuration findings exist. Resolve them before publishing.";
+  } else if (onlyConfig) {
+    publishSafe = "caution";
+    publishSafeReason =
+      "Config-only audit: runtime behaviour (tag firing, consent, ecommerce, Pixel/CAPI dedup) has not been verified. Validate in a runtime harness before publishing.";
+  }
+  if (state.toolFailures.length > 0 && publishSafe === "yes") {
+    publishSafe = "caution";
+    publishSafeReason =
+      "Some GTM API reads failed; clean result on incomplete reads is not a clean audit.";
+  }
+
+  const singleSourceWarning = onlyConfig
+    ? "Only CONFIG is connected. Cross-source reconciliation is Not Covered. A clean result from a single source is not a clean audit."
+    : undefined;
+
+  return {
+    overallMaturity,
+    topRisks,
+    publishSafe,
+    publishSafeReason,
+    singleSourceWarning,
+  };
+}
+
+function buildRoadmap(findings: AuditFinding[]): AuditRoadmapItem[] {
+  const items: AuditRoadmapItem[] = [];
+  // Quick wins: S-effort, high or medium severity.
+  const quickWins = findings.filter(
+    (f) =>
+      (f.effort === "S" || !f.effort) &&
+      (f.severity === "high" || f.severity === "medium") &&
+      !f.needsManualReview,
+  );
+  if (quickWins.length > 0) {
+    items.push({
+      id: fid(`roadmap-quickwins:${quickWins.length}`),
+      title: `Resolve ${quickWins.length} quick-win finding${quickWins.length === 1 ? "" : "s"}`,
+      type: "quick_win",
+      effort: "S",
+      rationale:
+        "Small, high-leverage fixes (config tweaks, attaching triggers, removing dead config) that can land in a single workspace cycle.",
+      findingIds: quickWins.map((f) => f.id).slice(0, 20),
+    });
+  }
+  // Structural: M/L effort or many findings in one domain.
+  const structural = findings.filter(
+    (f) => f.effort === "M" || f.effort === "L",
+  );
+  if (structural.length > 0) {
+    items.push({
+      id: fid(`roadmap-structural:${structural.length}`),
+      title: `Plan ${structural.length} structural change${structural.length === 1 ? "" : "s"}`,
+      type: "structural",
+      effort: structural.some((f) => f.effort === "L") ? "L" : "M",
+      rationale:
+        "Larger changes (consent rollout, server-side migration, ID-management refactor, performance reduction) that need design and cross-team coordination.",
+      findingIds: structural.map((f) => f.id).slice(0, 20),
+    });
+  }
+  return items;
 }
 
 // ── HTTP/transport helpers ───────────────────────────────────────────────
