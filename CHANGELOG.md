@@ -1,3 +1,9 @@
+## [1.4.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.3...v1.4.4) (2026-05-29)
+
+### Bug Fixes
+
+* **portal:** harden OAuth start/callback/logout routes on Vercel ([904b298](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/904b298b049b49994aa01d774d995b0b147f7009))
+
 ## [1.4.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.2...v1.4.3) (2026-05-29)
 
 ### Bug Fixes
