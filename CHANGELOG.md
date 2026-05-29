@@ -1,3 +1,9 @@
+## [1.4.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.0...v1.4.1) (2026-05-29)
+
+### Bug Fixes
+
+* **portal:** correct Vercel routing for Vite SPA and API functions ([59205a1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/59205a1f3e6eb4a7639d235f0b66845ee06a30b6))
+
 ## [1.4.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.3.0...v1.4.0) (2026-05-29)
 
 ### Features
