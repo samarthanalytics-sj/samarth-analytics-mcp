@@ -1,3 +1,9 @@
+## [1.6.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.5.2...v1.6.0) (2026-05-29)
+
+### Features
+
+* **portal:** capability-aware senior audit mode for GTM QC ([6d57918](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6d57918fdedf957ac214755a9ee2d61ff272b885))
+
 ## [1.5.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.5.1...v1.5.2) (2026-05-29)
 
 ### Bug Fixes
