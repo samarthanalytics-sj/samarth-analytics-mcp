@@ -1,3 +1,9 @@
+## [1.4.8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.7...v1.4.8) (2026-05-29)
+
+### Bug Fixes
+
+* **portal:** make GTM API routes Vercel-safe ([4bc5fd1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4bc5fd16653587862384175b116e7c13db5b29ef))
+
 ## [1.4.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.6...v1.4.7) (2026-05-29)
 
 ### Bug Fixes
