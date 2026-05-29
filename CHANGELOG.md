@@ -1,3 +1,9 @@
+## [1.5.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.8...v1.5.0) (2026-05-29)
+
+### Features
+
+* **portal:** add Google account profile and logout ([d302f21](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d302f21075c2603faf0af414853140c0454c764d))
+
 ## [1.4.8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.7...v1.4.8) (2026-05-29)
 
 ### Bug Fixes
