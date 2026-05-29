@@ -5,9 +5,11 @@ A browser-based, white-label customer portal that sits on top of the
 Manager account, run audits, and prepare implementation plans. Every change
 goes through a **Samarth approval queue** before anything is published to GTM.
 
-> **MVP status.** The portal is a polished frontend with realistic mock data
-> and a clean adapter boundary (`client/src/lib/portal-api.ts`). It does not
-> yet talk to live Google APIs. The TODOs below describe how to wire it up.
+> **MVP status.** The portal now runs a **live, read-only QC audit** against
+> Google Tag Manager via Google OAuth. The Connect button on the landing page
+> and the Audit page both hit real GTM API v2 endpoints. The rest of the
+> surface (mixed-source container inventory, approval queue, recommendation
+> builder) is still mock and is documented in the TODOs below.
 
 ---
 
@@ -124,61 +126,98 @@ npm run dev
 The existing MCP server's scripts (`npm run build`, `npm test`, etc.) are
 unchanged.
 
-## Integration TODOs
+## Live QC audit flow
 
-These are the concrete steps to take the MVP to production:
+The portal now implements a live, browser-driven QC audit:
 
-1. **Hosted OAuth.**
-   - Add `/api/oauth/start` and `/api/oauth/callback` routes to
-     `apps/portal/server/routes.ts`.
-   - Reuse `googleapis` + `google-auth-library` (already deps of the MCP
-     server) to mint refresh tokens.
-   - Store refresh tokens encrypted, keyed by `userId`. Never expose tokens
-     to the browser.
-   - On callback, set `OAuthState.connected = true` and redirect to `/#/containers`.
+1. **User clicks "Connect Google Tag Manager"** on the landing page.
+2. **Browser redirects to** `/api/oauth/start` (Express), which sends them to
+   Google's consent screen with GTM read-only scope.
+3. **Google redirects back to** `/api/oauth/callback?code=…`. The portal
+   exchanges the code for tokens server-side and stores them in an in-memory
+   session keyed by an httpOnly cookie.
+4. **The Audit page** uses live GTM API v2 endpoints to populate three
+   selectors — Account → Container → Workspace.
+5. **"Run QC audit"** posts to `/api/gtm/audit`, which reads tags, triggers,
+   variables, folders, and built-in variables, then runs the QC rule set
+   in `apps/portal/server/gtm/audit.ts`. Nothing is written back to GTM.
 
-2. **MCP HTTP proxy.**
-   - Boot the MCP server with `GTM_MCP_TRANSPORT=http` (see root
+### One-time setup
+
+1. Create an **OAuth client** in
+   [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
+   - Application type: **Web application**
+   - Authorized redirect URI: e.g. `http://localhost:5000/api/oauth/callback`
+2. Copy `apps/portal/.env.example` to `apps/portal/.env` and fill in
+   `PORTAL_GOOGLE_OAUTH_CLIENT_ID`, `PORTAL_GOOGLE_OAUTH_CLIENT_SECRET`, and
+   `PORTAL_GOOGLE_OAUTH_REDIRECT_URI` (or `PORTAL_PUBLIC_URL` for hosted).
+3. Make sure the OAuth consent screen has the Tag Manager API
+   (`tagmanager.readonly`) scope enabled.
+
+### Endpoints added in this milestone
+
+| Route                                                                            | Method | Purpose                              |
+|----------------------------------------------------------------------------------|--------|--------------------------------------|
+| `/api/oauth/status`                                                              | GET    | Whether the session is connected     |
+| `/api/oauth/start`                                                               | GET    | Begin Google OAuth                   |
+| `/api/oauth/callback`                                                            | GET    | Exchange code for tokens             |
+| `/api/oauth/logout`                                                              | POST   | Clear the session                    |
+| `/api/gtm/accounts`                                                              | GET    | List GTM accounts                    |
+| `/api/gtm/accounts/:accountId/containers`                                        | GET    | List containers                      |
+| `/api/gtm/accounts/:accountId/containers/:containerId/workspaces`                | GET    | List workspaces                      |
+| `/api/gtm/audit`                                                                 | POST   | Run the QC audit on a workspace      |
+
+### Production notes (non-negotiable)
+
+- The OAuth client secret is **only** stored on the portal backend (env var).
+  It is never bundled into the client app or committed to the repo.
+- Token storage in this MVP is **in-memory** (`apps/portal/server/gtm/oauth.ts`).
+  Sessions disappear on process restart and are not shared across instances.
+  For production multi-instance, move the session map to Redis or a database.
+- All cookies are `HttpOnly` + `SameSite=Lax`, and `Secure` when
+  `NODE_ENV=production`. Always serve the production portal over HTTPS.
+
+## Other integration TODOs
+
+These are the steps still left to take the MVP to production:
+
+1. **MCP HTTP proxy.**
+   - Boot the MCP server with `GTM_MCP_TRANSPORT=http` (root
      `package.json` → `start:http`).
-   - Add a portal-side `POST /api/mcp/call` that forwards
-     `{ tool, args }` to the MCP server, injecting the authenticated
-     customer's OAuth token via headers.
-   - Replace `portalApi.runAudit` to call `audit_workspace`.
-   - Wire `portalApi.submitForReview` to create a workspace version via
-     MCP, then store the approval row server-side.
+   - Add a portal-side `POST /api/mcp/call` that forwards `{ tool, args }` to
+     the MCP server, injecting the authenticated customer's OAuth token via
+     headers.
+   - Wire `portalApi.submitForReview` to create a workspace version via MCP
+     and store the approval row server-side.
 
-3. **Mixed-source container index.**
+2. **Mixed-source container index.**
    - Implement `portalApi.listContainers` against the canonical
      spreadsheet + Google API merge that Samarth already maintains.
-   - The `ContainerRecord` shape in `shared/portal-types.ts` is the contract.
 
-4. **Approval guardrails.**
-   - On the backend, *reject* any MCP `publish` call unless the originating
+3. **Approval guardrails.**
+   - On the backend, reject any MCP `publish` call unless the originating
      approval row is in state `approved`.
-   - Add Slack/email notification when status flips to `pending_review`.
 
-5. **Persistence.**
-   - Swap the in-memory store in `portal-store.tsx` for a small SQLite or
-     Postgres table (`approvals`, `change_plans`).
-
-6. **Auth / multi-tenancy.**
-   - Add a session model (cookie-based). Each customer sees only their own
-     containers and approval rows. Samarth staff have a reviewer role.
-
-7. **Secrets handling.**
-   - Add `apps/portal/.env.example` once OAuth client ID/secret keys are wired.
-   - Never bundle Google credentials into the client bundle.
+4. **Persistence + multi-tenancy.**
+   - Replace the in-memory session map with Redis / Postgres for
+     multi-instance production deployments.
+   - Each customer should only see their own containers and approval rows.
 
 ## Deployment notes
 
-The portal builds to a static bundle (`apps/portal/dist/public/`) plus a
-small Express server (`apps/portal/dist/index.cjs`). Static-only deploy is
-possible today because no backend logic is needed for the MVP — the
-Express server is kept ready for the integration steps above.
-
-Static deploy:
+The portal now requires a **backend deployment** — static-only is no longer
+sufficient because OAuth + GTM API calls all run on the Express server.
 
 ```bash
-npm --prefix apps/portal run build
-# deploy apps/portal/dist/public as a static site
+# from repo root
+npm run portal:install
+npm run portal:build
+npm --prefix apps/portal start
 ```
+
+Bundle layout:
+- `apps/portal/dist/index.cjs` — Express server (serves API + static files)
+- `apps/portal/dist/public/` — built React app
+
+Default port is `5000` (override with `PORT`). Set the OAuth env vars
+before starting, and serve over HTTPS in production.
