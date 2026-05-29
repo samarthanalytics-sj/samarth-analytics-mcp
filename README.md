@@ -12,19 +12,20 @@ Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, g
 
 1. [Features](#features)
 2. [Quick Start](#quick-start)
-3. [Google Cloud OAuth Setup](#google-cloud-oauth-setup)
-4. [Service Account Limitations](#service-account-limitations)
-5. [Environment Variables Reference](#environment-variables-reference)
-6. [Guardrails](#guardrails)
-7. [Available Tools](#available-tools)
-8. [Claude Desktop Config](#claude-desktop-config)
-9. [Cursor Config](#cursor-config)
-10. [Claude Code Config](#claude-code-config)
-11. [Cloud Deployment](#cloud-deployment)
-12. [Security Notes](#security-notes)
-13. [Development](#development)
-14. [Releases](#releases)
-15. [Troubleshooting](#troubleshooting)
+3. [Friendly Google Auth Options](#friendly-google-auth-options)
+4. [Google Cloud OAuth Setup](#google-cloud-oauth-setup)
+5. [Service Account Limitations](#service-account-limitations)
+6. [Environment Variables Reference](#environment-variables-reference)
+7. [Guardrails](#guardrails)
+8. [Available Tools](#available-tools)
+9. [Claude Desktop Config](#claude-desktop-config)
+10. [Cursor Config](#cursor-config)
+11. [Claude Code Config](#claude-code-config)
+12. [Cloud Deployment](#cloud-deployment)
+13. [Security Notes](#security-notes)
+14. [Development](#development)
+15. [Releases](#releases)
+16. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -63,17 +64,20 @@ npm run build
 
 ### One-time OAuth Setup
 
+The fastest way is the new browser-based onboarding script:
+
 ```bash
-npx tsx src/scripts/oauth-setup.ts
-# Or after build:
-node dist/scripts/oauth-setup.js
+npm run auth:google
 ```
 
-Follow the prompts:
-1. Visit the authorization URL in your browser
-2. Authorize the GTM scopes
-3. Copy the `code` from the redirect URL and paste it back
-4. Copy the printed `GOOGLE_ACCESS_TOKEN` and `GOOGLE_REFRESH_TOKEN` into your `.env`
+This will:
+1. Start a tiny local callback server on `http://localhost:3001/oauth/callback`.
+2. Open the Google authorization URL in your default browser (or print it if no browser is available).
+3. Capture the redirect, exchange the code for tokens, and save them to `./.gtm-mcp-tokens.json` (mode `0600`, already in `.gitignore`).
+
+You do **not** need to paste tokens into `.env` afterwards — the server reads them from the token file automatically. If you prefer to manage tokens by hand, the legacy paste-the-code helper is still available as `npm run oauth:setup`.
+
+See [Friendly Google Auth Options](#friendly-google-auth-options) for the three supported setup paths (hosted, local dev, advanced).
 
 ### Verify it works
 
@@ -84,6 +88,84 @@ npm start
 # Or use the MCP inspector
 npm run inspector
 ```
+
+---
+
+## Friendly Google Auth Options
+
+Google's Tag Manager API requires an OAuth-enabled Google Cloud project — **somebody has to own one**. There is no anonymous, key-free way to call the GTM API. What this MCP can do is hide that complexity behind a hosted backend, while still giving developers and teams the option to run everything themselves.
+
+There are three supported paths. Pick the one that fits your situation.
+
+### 1. Easiest — Samarth-hosted MCP (recommended for non-developers)
+
+> Status: planned. This section documents the intended UX; the hosted endpoint is owned by Samarth Analytics and announced separately.
+
+If you don't want to manage a Google Cloud project at all:
+
+1. Point your MCP client at the Samarth-hosted endpoint (e.g. `https://mcp.samarthanalytics.com/mcp` via [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)).
+2. Sign in with Google in the browser when prompted.
+3. Done — the hosted server uses the **Samarth-owned, Google-verified OAuth app**. The client secret lives only on the hosted backend; nothing sensitive ever ships to your machine.
+
+Trade-off: you trust the Samarth-hosted backend to broker your Google tokens. It only ever requests the GTM scopes listed below.
+
+### 2. Local developer — self-hosted with your own OAuth client
+
+Best if you're comfortable in Google Cloud Console and want full control.
+
+1. Create an **OAuth 2.0 Client ID** (type: **Desktop app** or **Web application**) in your own Google Cloud project. See [Google Cloud OAuth Setup](#google-cloud-oauth-setup) below for the exact steps.
+2. Copy the client ID and secret into `.env`:
+   ```env
+   GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
+   GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
+   GOOGLE_OAUTH_REDIRECT_URI=http://localhost:3001/oauth/callback
+   ```
+   (The legacy `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` names still work.)
+3. Run the browser-based onboarding flow:
+   ```bash
+   npm run auth:google
+   ```
+   It boots a local callback server, opens the consent screen, and writes tokens to `./.gtm-mcp-tokens.json` (gitignored, `0600`). The token file path is configurable via `GTM_MCP_TOKEN_FILE`.
+4. Start the MCP server (`npm start` or via Claude Desktop / Cursor / Claude Code). Tokens are picked up from the file automatically — no need to paste anything into `.env`.
+
+Trade-off: you maintain your own Google Cloud project and re-authorise every 7 days while the OAuth app is in "Testing" mode (or publish + verify it for permanent tokens).
+
+### 3. Advanced / team — Samarth-owned OAuth on your own infra
+
+Best for agencies and teams that want a hosted server with their own auth/IAM in front of it.
+
+1. Deploy the MCP HTTP server (Render, Fly.io, Docker — see [Cloud Deployment](#cloud-deployment)).
+2. Set the Samarth-owned (or your team-owned) OAuth client on the **server only**:
+   ```env
+   SAMARTH_GOOGLE_OAUTH_CLIENT_ID=public-client-id
+   SAMARTH_GOOGLE_OAUTH_CLIENT_SECRET=secret-injected-from-secret-manager
+   ```
+   The secret **must** come from your platform's secret manager (Render Secrets, Fly Secrets, Vault, etc.). It is never committed to this repo and never shipped to client machines.
+3. Front the `/mcp` endpoint with your own auth layer (API key header, IP allowlist, SSO proxy). The MCP server itself has no built-in user auth — see [Security Notes](#security-notes).
+4. Users connect with their MCP client and never see Google Cloud Console.
+
+Trade-off: you own the operational burden (Google API quota, OAuth app verification, secret rotation, user provisioning) in exchange for a friendly UX.
+
+### Why we can't ship a "no-setup" client secret
+
+Public OAuth clients distributed in source form (or pre-baked into an installer) are not secure: anyone can extract the secret and impersonate the app, leading to Google revoking it. This repo therefore:
+
+- **Never** hardcodes a client secret.
+- Treats `SAMARTH_GOOGLE_OAUTH_CLIENT_SECRET` as runtime-injected on the hosted backend only.
+- Defaults the local flow (option 2) to your own OAuth client, which keeps the secret on your machine.
+
+Scopes requested in every path:
+
+```
+https://www.googleapis.com/auth/tagmanager.readonly
+https://www.googleapis.com/auth/tagmanager.edit.containers
+https://www.googleapis.com/auth/tagmanager.edit.containerversions
+https://www.googleapis.com/auth/tagmanager.manage.accounts
+https://www.googleapis.com/auth/tagmanager.manage.users
+https://www.googleapis.com/auth/tagmanager.publish
+```
+
+These are the least-privilege GTM scopes needed to cover the server's full tool surface. Read-only deployments can re-run `npm run auth:google` after removing the `edit.*`, `manage.*`, and `publish` scopes from your OAuth consent screen.
 
 ---
 
@@ -130,7 +212,13 @@ npm run inspector
 ### Step 4: Run OAuth Setup
 
 ```bash
-npx tsx src/scripts/oauth-setup.ts
+npm run auth:google
+```
+
+Or, if you prefer the older paste-the-code helper:
+
+```bash
+npm run oauth:setup
 ```
 
 ---
@@ -175,11 +263,15 @@ For Google Workspace organizations:
 
 | Variable | Default | Description |
 |---|---|---|
-| `GOOGLE_CLIENT_ID` | — | OAuth client ID from Google Cloud Console |
-| `GOOGLE_CLIENT_SECRET` | — | OAuth client secret |
-| `GOOGLE_REDIRECT_URI` | `http://localhost:3001/oauth/callback` | OAuth redirect URI |
-| `GOOGLE_ACCESS_TOKEN` | — | Current OAuth access token |
-| `GOOGLE_REFRESH_TOKEN` | — | OAuth refresh token (long-lived) |
+| `GOOGLE_OAUTH_CLIENT_ID` | — | OAuth client ID (preferred). Falls back to `GOOGLE_CLIENT_ID`. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | — | OAuth client secret (preferred). Falls back to `GOOGLE_CLIENT_SECRET`. |
+| `GOOGLE_OAUTH_REDIRECT_URI` | `http://localhost:3001/oauth/callback` | OAuth redirect URI. Falls back to `GOOGLE_REDIRECT_URI`. |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | — | Legacy names, still supported. |
+| `SAMARTH_GOOGLE_OAUTH_CLIENT_ID` | — | **Hosted-only.** Samarth-owned public OAuth client. Takes precedence over the self-hosted vars when set. |
+| `SAMARTH_GOOGLE_OAUTH_CLIENT_SECRET` | — | **Hosted-only.** Inject from your platform secret manager. Never commit. |
+| `GOOGLE_ACCESS_TOKEN` | — | Current OAuth access token. Env vars take precedence over the token file. |
+| `GOOGLE_REFRESH_TOKEN` | — | OAuth refresh token (long-lived). Env vars take precedence over the token file. |
+| `GTM_MCP_TOKEN_FILE` | `./.gtm-mcp-tokens.json` | Path to the local OAuth token file written by `npm run auth:google` (gitignored). |
 | `GOOGLE_SERVICE_ACCOUNT_KEY_FILE` | — | Path to service account JSON key (see limitations above) |
 | `GTM_MCP_TRANSPORT` | `stdio` | Transport: `stdio` or `http` |
 | `GTM_MCP_HTTP_PORT` | `3001` | HTTP server port (http transport only) |
@@ -546,7 +638,8 @@ samarth-gtm-mcp/
 │   │   ├── gtm.ts            # GTM API type definitions
 │   │   └── index.ts
 │   ├── scripts/
-│   │   └── oauth-setup.ts    # Interactive OAuth token helper
+│   │   ├── auth-google.ts    # Browser-based OAuth onboarding (`npm run auth:google`)
+│   │   └── oauth-setup.ts    # Interactive OAuth token helper (legacy paste-the-code flow)
 │   └── __tests__/
 │       ├── guardrails.test.ts
 │       └── server.test.ts
@@ -626,8 +719,9 @@ To intentionally land a commit without triggering a release, use a non-releasing
 
 ### "invalid_grant" or "Token has been expired or revoked"
 
-- Re-run `npx tsx src/scripts/oauth-setup.ts` to get a fresh refresh token
-- Make sure `GOOGLE_REFRESH_TOKEN` is set correctly in `.env`
+- Re-run `npm run auth:google` to refresh the token file
+- Or set `GOOGLE_REFRESH_TOKEN` directly in `.env` if you prefer env-managed tokens
+- If you're stuck in a loop where Google won't return a `refresh_token`, revoke prior access at [myaccount.google.com/permissions](https://myaccount.google.com/permissions) and re-run the auth script
 
 ### "Write operations are disabled"
 
