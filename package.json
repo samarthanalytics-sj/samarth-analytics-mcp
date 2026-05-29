@@ -26,6 +26,11 @@
     "test:jest": "node --experimental-vm-modules node_modules/.bin/jest",
     "test:watch": "jest --watch",
     "inspector": "npx @modelcontextprotocol/inspector dist/index.js",
+    "portal:install": "npm --prefix apps/portal install",
+    "portal:dev": "npm --prefix apps/portal run dev",
+    "portal:build": "npm --prefix apps/portal run build",
+    "portal:check": "npm --prefix apps/portal run check",
+    "portal:start": "npm --prefix apps/portal start",
     "prepublishOnly": "npm run build",
     "semantic-release": "semantic-release"
   },
