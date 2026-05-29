@@ -1,0 +1,197 @@
+/**
+ * GTM Container Versions tools
+ * Covers: list/get/create (checkpoint) + live version
+ */
+
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+import type { GtmClient } from '../utils/gtmClient.js';
+import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+
+const containerBase = z.object({
+  accountId: z.string(),
+  containerId: z.string(),
+});
+
+const wsBase = containerBase.extend({ workspaceId: z.string() });
+
+export function registerVersionTools(server: McpServer, getClient: () => GtmClient): void {
+  // ── versions/list ────────────────────────────────────────────────────────
+  server.registerTool(
+    'versions_list',
+    {
+      description: 'List all container version headers (summary) for a GTM container.',
+      inputSchema: containerBase.extend({
+        includeDeleted: z.boolean().optional().describe('Include deleted versions in results.'),
+      }),
+    },
+    async ({ accountId, containerId, includeDeleted }) => {
+      try {
+        const client = getClient();
+        // GTM API v2 uses version_headers.list for listing version summaries
+        const res = await client.accounts.containers.version_headers.list({
+          parent: `accounts/${accountId}/containers/${containerId}`,
+          ...(includeDeleted !== undefined ? { includeDeleted } : {}),
+        });
+        const versions = res.data.containerVersionHeader ?? [];
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ versions, count: versions.length }, null, 2) }],
+        };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: `versions_list failed: ${formatGoogleError(err)}` }] };
+      }
+    }
+  );
+
+  // ── versions/get ─────────────────────────────────────────────────────────
+  server.registerTool(
+    'versions_get',
+    {
+      description: 'Get the full contents of a specific GTM container version. Pass "live" as containerVersionId to get the currently live version.',
+      inputSchema: containerBase.extend({
+        containerVersionId: z.string().describe('The container version ID, or "live" for the current live version.'),
+      }),
+    },
+    async ({ accountId, containerId, containerVersionId }) => {
+      try {
+        const client = getClient();
+        const path = `accounts/${accountId}/containers/${containerId}/versions/${containerVersionId}`;
+        const res = containerVersionId === 'live'
+          ? await client.accounts.containers.versions.live({ parent: `accounts/${accountId}/containers/${containerId}` })
+          : await client.accounts.containers.versions.get({ path });
+        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: `versions_get failed: ${formatGoogleError(err)}` }] };
+      }
+    }
+  );
+
+  // ── versions/create (checkpoint) ────────────────────────────────────────
+  server.registerTool(
+    'versions_create',
+    {
+      description:
+        '[WRITE] Create a new GTM container version from a workspace (checkpoint). ' +
+        'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true. ' +
+        'This takes a snapshot of the workspace into a versioned checkpoint without publishing.',
+      inputSchema: wsBase.extend({
+        name: z.string().optional().describe('Version name/label.'),
+        notes: z.string().optional().describe('Version notes / change description.'),
+        confirm: z.boolean(),
+      }),
+    },
+    async ({ accountId, containerId, workspaceId, name, notes, confirm }) => {
+      try {
+        const config = getGuardrailConfig();
+        const { dryRun } = checkGuardrails('write', confirm, config);
+        if (dryRun) {
+          return {
+            content: [{ type: 'text', text: `[DRY RUN] Would create version "${name}" from workspace ${workspaceId}` }],
+          };
+        }
+        const client = getClient();
+        const res = await client.accounts.containers.workspaces.create_version({
+          path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+          requestBody: { name, notes },
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: `versions_create failed: ${formatGoogleError(err)}` }] };
+      }
+    }
+  );
+
+  // ── versions/set_latest ──────────────────────────────────────────────────
+  server.registerTool(
+    'versions_set_latest',
+    {
+      description:
+        '[WRITE] Set a specific container version as the "latest" (synchronizes the default workspace with this version). ' +
+        'Note: This does NOT publish. Use versions_publish to go live. ' +
+        'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
+      inputSchema: containerBase.extend({
+        containerVersionId: z.string().describe('The version ID to set as latest.'),
+        confirm: z.boolean(),
+      }),
+    },
+    async ({ accountId, containerId, containerVersionId, confirm }) => {
+      try {
+        const config = getGuardrailConfig();
+        const { dryRun } = checkGuardrails('write', confirm, config);
+        if (dryRun) {
+          return {
+            content: [{ type: 'text', text: `[DRY RUN] Would set version ${containerVersionId} as latest.` }],
+          };
+        }
+        const client = getClient();
+        const res = await client.accounts.containers.versions.set_latest({
+          path: `accounts/${accountId}/containers/${containerId}/versions/${containerVersionId}`,
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: `versions_set_latest failed: ${formatGoogleError(err)}` }] };
+      }
+    }
+  );
+
+  // ── versions/undelete ────────────────────────────────────────────────────
+  server.registerTool(
+    'versions_undelete',
+    {
+      description:
+        '[WRITE] Undelete a previously deleted GTM container version. ' +
+        'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
+      inputSchema: containerBase.extend({
+        containerVersionId: z.string(),
+        confirm: z.boolean(),
+      }),
+    },
+    async ({ accountId, containerId, containerVersionId, confirm }) => {
+      try {
+        const config = getGuardrailConfig();
+        const { dryRun } = checkGuardrails('write', confirm, config);
+        if (dryRun) {
+          return { content: [{ type: 'text', text: `[DRY RUN] Would undelete version ${containerVersionId}` }] };
+        }
+        const client = getClient();
+        const res = await client.accounts.containers.versions.undelete({
+          path: `accounts/${accountId}/containers/${containerId}/versions/${containerVersionId}`,
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: `versions_undelete failed: ${formatGoogleError(err)}` }] };
+      }
+    }
+  );
+
+  // ── versions/delete ──────────────────────────────────────────────────────
+  server.registerTool(
+    'versions_delete',
+    {
+      description:
+        '[DELETE] Delete a GTM container version. ' +
+        'Requires GTM_MCP_ENABLE_DELETES=true and confirm=true. ' +
+        'Cannot delete a currently published (live) version.',
+      inputSchema: containerBase.extend({
+        containerVersionId: z.string(),
+        confirm: z.boolean(),
+      }),
+    },
+    async ({ accountId, containerId, containerVersionId, confirm }) => {
+      try {
+        const config = getGuardrailConfig();
+        const { dryRun } = checkGuardrails('delete', confirm, config);
+        if (dryRun) {
+          return { content: [{ type: 'text', text: `[DRY RUN] Would delete version ${containerVersionId}` }] };
+        }
+        const client = getClient();
+        await client.accounts.containers.versions.delete({
+          path: `accounts/${accountId}/containers/${containerId}/versions/${containerVersionId}`,
+        });
+        return { content: [{ type: 'text', text: `Version ${containerVersionId} deleted (marked as deleted).` }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: `versions_delete failed: ${formatGoogleError(err)}` }] };
+      }
+    }
+  );
+}
