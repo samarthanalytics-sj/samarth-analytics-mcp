@@ -91,16 +91,24 @@ export default function OverviewPage() {
               <Button
                 size="sm"
                 data-testid="button-connect-google"
-                onClick={async () => {
-                  const next = await portalApi.connectGoogle();
-                  setOAuth(next);
-                  toast({
-                    title: "Google connected",
-                    description: "Hosted OAuth simulated. Real flow ships with backend.",
-                  });
+                disabled={oauth.configured === false}
+                onClick={() => {
+                  if (oauth.configured === false) {
+                    toast({
+                      title: "OAuth not configured",
+                      description:
+                        oauth.message ??
+                        "The portal administrator must configure Google OAuth credentials before sign-in is available.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  portalApi.redirectToGoogleOAuth();
                 }}
               >
-                Connect Google Tag Manager
+                {oauth.configured === false
+                  ? "OAuth not configured"
+                  : "Connect Google Tag Manager"}
               </Button>
             )}
             <Button asChild variant="outline" size="sm">

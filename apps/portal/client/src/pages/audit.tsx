@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Tag,
   Zap,
@@ -9,6 +8,8 @@ import {
   ShieldAlert,
   CheckCircle2,
   RefreshCw,
+  Play,
+  PlugZap,
 } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -24,6 +25,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { HealthBadge, SeverityChip } from "@/components/status-chip";
 import { portalApi } from "@/lib/portal-api";
+import { usePortal } from "@/lib/portal-store";
+import type { AuditSummary } from "@shared/portal-types";
 
 const CATEGORY_LABEL: Record<string, string> = {
   ga4: "GA4",
@@ -37,115 +40,210 @@ const CATEGORY_LABEL: Record<string, string> = {
   data_layer: "Data layer",
 };
 
-function useQueryParam(name: string): [string | null, (v: string) => void] {
-  const [location, setLocation] = useLocation();
-  const params = new URLSearchParams(location.split("?")[1] ?? "");
-  const value = params.get(name);
-  const set = (v: string) => {
-    const sp = new URLSearchParams(location.split("?")[1] ?? "");
-    sp.set(name, v);
-    const base = location.split("?")[0];
-    setLocation(`${base}?${sp.toString()}`);
-  };
-  return [value, set];
-}
-
 export default function AuditPage() {
-  const { data: containers } = useQuery({
-    queryKey: ["/api/containers"],
-    queryFn: () => portalApi.listContainers(),
+  const { oauth } = usePortal();
+
+  // Selectors
+  const [accountId, setAccountId] = useState<string>("");
+  const [containerId, setContainerId] = useState<string>("");
+  const [workspaceId, setWorkspaceId] = useState<string>("");
+
+  const accountsQuery = useQuery({
+    queryKey: ["/api/gtm/accounts"],
+    queryFn: () => portalApi.listGtmAccounts(),
+    enabled: oauth.connected,
+    retry: false,
   });
 
-  const [containerParam, setContainerParam] = useQueryParam("c");
-  const [selected, setSelected] = useState<string>(containerParam ?? "GTM-N4VBT9C");
+  const containersQuery = useQuery({
+    queryKey: ["/api/gtm/containers", accountId],
+    queryFn: () => portalApi.listGtmContainers(accountId),
+    enabled: oauth.connected && Boolean(accountId),
+    retry: false,
+  });
 
+  const workspacesQuery = useQuery({
+    queryKey: ["/api/gtm/workspaces", accountId, containerId],
+    queryFn: () => portalApi.listGtmWorkspaces(accountId, containerId),
+    enabled: oauth.connected && Boolean(accountId && containerId),
+    retry: false,
+  });
+
+  // Auto-select first available on each tier.
   useEffect(() => {
-    if (containerParam && containerParam !== selected) setSelected(containerParam);
-  }, [containerParam]);
+    const list = accountsQuery.data ?? [];
+    if (!accountId && list.length > 0) setAccountId(list[0].accountId);
+  }, [accountsQuery.data, accountId]);
+  useEffect(() => {
+    const list = containersQuery.data ?? [];
+    if (containerId && !list.some((c) => c.containerId === containerId)) setContainerId("");
+    if (!containerId && list.length > 0) setContainerId(list[0].containerId);
+  }, [containersQuery.data, containerId]);
+  useEffect(() => {
+    const list = workspacesQuery.data ?? [];
+    if (workspaceId && !list.some((w) => w.workspaceId === workspaceId)) setWorkspaceId("");
+    if (!workspaceId && list.length > 0) setWorkspaceId(list[0].workspaceId);
+  }, [workspacesQuery.data, workspaceId]);
 
-  const { data: audit, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ["/api/audit", selected],
-    queryFn: () => portalApi.runAudit(selected),
-    enabled: Boolean(selected),
+  const containerPublicId = useMemo(() => {
+    const c = (containersQuery.data ?? []).find((c) => c.containerId === containerId);
+    return c?.publicId ?? containerId;
+  }, [containersQuery.data, containerId]);
+
+  const [audit, setAudit] = useState<AuditSummary | null>(null);
+
+  const auditMutation = useMutation({
+    mutationFn: () =>
+      portalApi.runLiveAudit({
+        accountId,
+        containerId,
+        workspaceId,
+        containerPublicId,
+      }),
+    onSuccess: (data) => setAudit(data),
   });
 
-  const container = useMemo(
-    () => containers?.find((c) => c.containerId === selected),
-    [containers, selected],
-  );
+  const auditError = auditMutation.error as (Error & { status?: number }) | null;
+  const canRun = Boolean(accountId && containerId && workspaceId);
+
+  // Reset stale audit on selection change
+  useEffect(() => {
+    setAudit(null);
+    auditMutation.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId, containerId, workspaceId]);
+
+  if (!oauth.connected) {
+    return (
+      <>
+        <PageHeader
+          eyebrow="Audit"
+          title="Audit workspace"
+          description="Read-only health checks across tags, triggers, and variables."
+        />
+        <PageBody>
+          <Card>
+            <CardContent className="py-10 text-center space-y-4">
+              <div className="mx-auto h-10 w-10 rounded-full bg-primary/10 text-primary flex items-center justify-center">
+                <PlugZap className="h-5 w-5" />
+              </div>
+              <h3 className="text-base font-semibold">Connect Google Tag Manager to run a live audit</h3>
+              <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                The audit uses the Google Tag Manager API to read tags, triggers, and variables
+                from the workspace you choose. Nothing is modified in GTM.
+              </p>
+              {oauth.configured === false ? (
+                <p className="text-xs text-amber-600 dark:text-amber-400 max-w-md mx-auto">
+                  {oauth.message ??
+                    "Google OAuth credentials are not configured on this portal. Ask your administrator to set them up."}
+                </p>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={() => portalApi.redirectToGoogleOAuth()}
+                  data-testid="button-audit-connect-google"
+                >
+                  Connect Google Tag Manager
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        </PageBody>
+      </>
+    );
+  }
+
+  const accounts = accountsQuery.data ?? [];
+  const containers = containersQuery.data ?? [];
+  const workspaces = workspacesQuery.data ?? [];
+  const isLoading = auditMutation.isPending;
 
   return (
     <>
       <PageHeader
         eyebrow="Audit"
         title="Audit workspace"
-        description="Health checks across tags, triggers, and variables. Findings are read-only — no GTM writes happen here."
+        description="Live read-only health checks via the GTM API. Findings are diagnostic — no writes ever happen here."
         actions={
           <Button
             size="sm"
-            variant="outline"
-            onClick={() => refetch()}
-            disabled={isFetching}
-            data-testid="button-rerun-audit"
+            onClick={() => auditMutation.mutate()}
+            disabled={!canRun || isLoading}
+            data-testid="button-run-audit"
           >
-            <RefreshCw className={`mr-1.5 h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
-            Re-run audit
+            {isLoading ? (
+              <RefreshCw className="mr-1.5 h-4 w-4 animate-spin" />
+            ) : (
+              <Play className="mr-1.5 h-4 w-4" />
+            )}
+            {audit ? "Re-run audit" : "Run QC audit"}
           </Button>
         }
       />
       <PageBody>
-        {/* Container picker + summary */}
+        {/* Selectors */}
         <Card className="mb-5">
-          <CardContent className="py-4">
-            <div className="flex flex-col sm:flex-row sm:items-end gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
-                  Container
-                </div>
-                <Select
-                  value={selected}
-                  onValueChange={(v) => {
-                    setSelected(v);
-                    setContainerParam(v);
-                  }}
-                >
-                  <SelectTrigger data-testid="select-container">
-                    <SelectValue placeholder="Choose a container" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(containers ?? []).map((c) => (
-                      <SelectItem key={c.id} value={c.containerId}>
-                        {c.client} — {c.containerId}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {container && (
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <Badge variant="outline">{container.industry}</Badge>
-                  <Badge variant="outline" className="capitalize">{container.platform}</Badge>
-                  <HealthBadge score={audit?.healthScore ?? container.healthScore} />
-                </div>
-              )}
+          <CardContent className="py-4 space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <SelectorBlock
+                label="GTM Account"
+                value={accountId}
+                onChange={(v) => {
+                  setAccountId(v);
+                  setContainerId("");
+                  setWorkspaceId("");
+                }}
+                loading={accountsQuery.isLoading}
+                error={accountsQuery.error as Error | null}
+                placeholder="Choose an account"
+                options={accounts.map((a) => ({ value: a.accountId, label: a.name }))}
+                testId="select-account"
+              />
+              <SelectorBlock
+                label="Container"
+                value={containerId}
+                onChange={(v) => {
+                  setContainerId(v);
+                  setWorkspaceId("");
+                }}
+                loading={containersQuery.isLoading}
+                error={containersQuery.error as Error | null}
+                placeholder="Choose a container"
+                options={containers.map((c) => ({
+                  value: c.containerId,
+                  label: `${c.name} — ${c.publicId}`,
+                }))}
+                disabled={!accountId}
+                testId="select-container"
+              />
+              <SelectorBlock
+                label="Workspace"
+                value={workspaceId}
+                onChange={setWorkspaceId}
+                loading={workspacesQuery.isLoading}
+                error={workspacesQuery.error as Error | null}
+                placeholder="Choose a workspace"
+                options={workspaces.map((w) => ({ value: w.workspaceId, label: w.name }))}
+                disabled={!containerId}
+                testId="select-workspace"
+              />
             </div>
+            {audit && (
+              <div className="flex flex-wrap items-center gap-2 text-xs pt-1">
+                <Badge variant="outline">{containerPublicId}</Badge>
+                <HealthBadge score={audit.healthScore} />
+                <span className="text-muted-foreground">
+                  Generated {new Date(audit.generatedAt).toLocaleString()}
+                </span>
+              </div>
+            )}
           </CardContent>
         </Card>
 
         {/* Stat cards */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 md:gap-4">
-          <StatCard
-            label="Tags"
-            value={audit?.counts.tags}
-            icon={Tag}
-            loading={isLoading}
-          />
-          <StatCard
-            label="Triggers"
-            value={audit?.counts.triggers}
-            icon={Zap}
-            loading={isLoading}
-          />
+          <StatCard label="Tags" value={audit?.counts.tags} icon={Tag} loading={isLoading} />
+          <StatCard label="Triggers" value={audit?.counts.triggers} icon={Zap} loading={isLoading} />
           <StatCard
             label="Variables"
             value={audit?.counts.variables}
@@ -153,6 +251,26 @@ export default function AuditPage() {
             loading={isLoading}
           />
         </div>
+
+        {/* Error */}
+        {auditError && (
+          <Card className="mt-5 border-destructive/40">
+            <CardContent className="py-4 text-sm text-destructive">
+              <div className="font-medium mb-1">Audit failed</div>
+              <div className="text-xs">{auditError.message}</div>
+              {auditError.status === 401 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => portalApi.redirectToGoogleOAuth()}
+                >
+                  Reconnect Google
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Findings */}
         <div className="mt-7 flex items-end justify-between mb-3">
@@ -172,14 +290,18 @@ export default function AuditPage() {
               <Skeleton key={i} className="h-24 w-full" />
             ))}
           </div>
-        ) : audit && audit.findings.length === 0 ? (
+        ) : !audit ? (
+          <Card className="p-8 text-center text-sm text-muted-foreground">
+            Choose an account, container, and workspace, then run the audit.
+          </Card>
+        ) : audit.findings.length === 0 ? (
           <Card className="p-8 text-center text-sm">
             <CheckCircle2 className="h-6 w-6 mx-auto text-emerald-500 mb-2" />
-            Clean audit. No critical issues detected.
+            Clean audit. No issues detected.
           </Card>
         ) : (
           <div className="space-y-3">
-            {audit?.findings.map((f) => (
+            {audit.findings.map((f) => (
               <Card key={f.id} data-testid={`card-finding-${f.id}`}>
                 <CardContent className="py-4">
                   <div className="flex flex-col sm:flex-row sm:items-start gap-3">
@@ -193,15 +315,13 @@ export default function AuditPage() {
                           {CATEGORY_LABEL[f.category] ?? f.category}
                         </Badge>
                       </div>
-                      <h4 className="mt-1.5 text-sm font-semibold leading-snug">
-                        {f.title}
-                      </h4>
+                      <h4 className="mt-1.5 text-sm font-semibold leading-snug">{f.title}</h4>
                       <p className="text-xs text-muted-foreground mt-1">{f.description}</p>
                       {f.affects && f.affects.length > 0 && (
                         <div className="mt-2 flex flex-wrap gap-1.5">
-                          {f.affects.map((a) => (
+                          {f.affects.map((a, i) => (
                             <span
-                              key={a}
+                              key={`${a}-${i}`}
                               className="font-mono text-[11px] px-2 py-0.5 rounded bg-muted text-muted-foreground"
                             >
                               {a}
@@ -227,6 +347,52 @@ export default function AuditPage() {
         )}
       </PageBody>
     </>
+  );
+}
+
+function SelectorBlock({
+  label,
+  value,
+  onChange,
+  options,
+  placeholder,
+  loading,
+  error,
+  disabled,
+  testId,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  placeholder: string;
+  loading?: boolean;
+  error?: Error | null;
+  disabled?: boolean;
+  testId?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">{label}</div>
+      <Select value={value} onValueChange={onChange} disabled={disabled || loading}>
+        <SelectTrigger data-testid={testId}>
+          <SelectValue placeholder={loading ? "Loading…" : placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {error && (
+        <div className="mt-1 text-[11px] text-destructive truncate">{error.message}</div>
+      )}
+      {!error && !loading && options.length === 0 && !disabled && (
+        <div className="mt-1 text-[11px] text-muted-foreground">None available.</div>
+      )}
+    </div>
   );
 }
 

@@ -1,24 +1,13 @@
 // Portal API adapter.
 //
-// All UI calls go through this module. Today every method returns mock data.
-// Tomorrow, swap the implementation for calls against the existing
-// Samarth GTM MCP server (Streamable HTTP transport) without changing the UI.
-//
-// Production wiring will look roughly like:
-//   - POST /api/mcp/call  -> proxies to MCP server tools (audit_workspace, etc.)
-//   - GET  /api/oauth/start -> initiates Google OAuth (hosted)
-//   - GET  /api/oauth/callback -> exchanges code, stores refresh token server-side
-//   - GET  /api/containers -> reads from mixed sources (Google API + Sheets/CSV imports)
-//
-// The MCP server's HTTP transport is already exposed at GTM_MCP_TRANSPORT=http
-// (see ../../../package.json scripts: `start:http`). The portal backend
-// will sit in front of it and inject the authenticated user's OAuth token.
+// Live methods (OAuth status, GTM discovery, audit) hit the portal backend
+// implemented in apps/portal/server/routes.ts. Mock methods (containers
+// inventory, recommendations, approvals) remain in place for the rest of
+// the MVP until those flows are wired up.
 
 import {
   MOCK_APPROVALS,
-  MOCK_AUDITS,
   MOCK_CONTAINERS,
-  MOCK_OAUTH,
   MOCK_PLAN_TEMPLATES,
 } from "@/data/mock";
 import type {
@@ -27,41 +16,117 @@ import type {
   AuditSummary,
   ChangePlan,
   ContainerRecord,
+  GtmAccountSummary,
+  GtmContainerSummary,
+  GtmWorkspaceSummary,
   OAuthState,
   RecommendationGoal,
 } from "@shared/portal-types";
 
+const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 const FAKE_LATENCY_MS = 120;
 
 function delay<T>(value: T, ms = FAKE_LATENCY_MS): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms));
 }
 
+async function parseError(res: Response): Promise<Error & { status?: number }> {
+  let message: string;
+  try {
+    const data = await res.json();
+    message = data?.message || data?.error || res.statusText;
+  } catch {
+    message = (await res.text()) || res.statusText;
+  }
+  const err = new Error(`${res.status}: ${message}`) as Error & { status?: number };
+  err.status = res.status;
+  return err;
+}
+
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${url}`, { credentials: "include" });
+  if (!res.ok) throw await parseError(res);
+  return (await res.json()) as T;
+}
+
+async function postJson<T>(url: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${url}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw await parseError(res);
+  return (await res.json()) as T;
+}
+
 export const portalApi = {
-  // -------- OAuth --------
+  // -------- OAuth (live) --------
   async getOAuthState(): Promise<OAuthState> {
-    return delay({ ...MOCK_OAUTH });
+    try {
+      return await getJson<OAuthState>("/api/oauth/status");
+    } catch {
+      return { connected: false, configured: false };
+    }
   },
 
   /**
-   * In production this opens the hosted OAuth flow:
-   *   window.location.href = "/api/oauth/start";
-   * The mock just toggles state locally.
+   * Live OAuth: redirect the browser to the backend start endpoint.
+   * The backend redirects to Google. After the round-trip the user lands
+   * back on `/#/?connected=1`.
    */
-  async connectGoogle(): Promise<OAuthState> {
-    return delay({
-      connected: true,
-      email: "swapnil@samarthanalytics.com",
-      scopes: ["tagmanager.readonly", "tagmanager.edit.containers"],
-      expiresAt: new Date(Date.now() + 1000 * 60 * 60).toISOString(),
-    });
+  redirectToGoogleOAuth(): void {
+    if (typeof window === "undefined") return;
+    window.location.href = `${API_BASE}/api/oauth/start`;
   },
 
   async disconnectGoogle(): Promise<OAuthState> {
-    return delay({ connected: false });
+    try {
+      return await postJson<OAuthState>("/api/oauth/logout", {});
+    } catch {
+      return { connected: false };
+    }
   },
 
-  // -------- Containers (mixed-source inventory) --------
+  // -------- Live GTM discovery --------
+  async listGtmAccounts(): Promise<GtmAccountSummary[]> {
+    const data = await getJson<{ accounts: GtmAccountSummary[] }>("/api/gtm/accounts");
+    return data.accounts ?? [];
+  },
+
+  async listGtmContainers(accountId: string): Promise<GtmContainerSummary[]> {
+    const data = await getJson<{ containers: GtmContainerSummary[] }>(
+      `/api/gtm/accounts/${encodeURIComponent(accountId)}/containers`,
+    );
+    return data.containers ?? [];
+  },
+
+  async listGtmWorkspaces(
+    accountId: string,
+    containerId: string,
+  ): Promise<GtmWorkspaceSummary[]> {
+    const data = await getJson<{ workspaces: GtmWorkspaceSummary[] }>(
+      `/api/gtm/accounts/${encodeURIComponent(accountId)}/containers/${encodeURIComponent(
+        containerId,
+      )}/workspaces`,
+    );
+    return data.workspaces ?? [];
+  },
+
+  /**
+   * Live audit. Provide the GTM account/container/workspace ids. Backend
+   * pulls the workspace contents via GTM API v2 and runs portal QC rules.
+   */
+  async runLiveAudit(args: {
+    accountId: string;
+    containerId: string;
+    workspaceId: string;
+    containerPublicId?: string;
+  }): Promise<AuditSummary> {
+    return postJson<AuditSummary>("/api/gtm/audit", args);
+  },
+
+  // -------- Containers (mixed-source inventory — still mock) --------
   async listContainers(): Promise<ContainerRecord[]> {
     return delay([...MOCK_CONTAINERS]);
   },
@@ -70,15 +135,8 @@ export const portalApi = {
     return delay(MOCK_CONTAINERS.find((c) => c.id === id));
   },
 
-  // -------- Audits --------
-  /**
-   * Production: calls MCP tool `audit_workspace` with the container's
-   * accountId/containerId/workspaceId. The MCP server already implements
-   * this tool — we just need a thin proxy.
-   */
+  // -------- Audits (legacy mock path kept for non-live demo usage) --------
   async runAudit(containerPublicId: string): Promise<AuditSummary> {
-    const found = MOCK_AUDITS[containerPublicId];
-    if (found) return delay(found);
     return delay({
       containerId: containerPublicId,
       generatedAt: new Date().toISOString(),
@@ -108,10 +166,6 @@ export const portalApi = {
     return delay([...MOCK_APPROVALS]);
   },
 
-  /**
-   * Frontend-only stub. Production: POST to /api/approvals with the plan,
-   * then route it to a Samarth reviewer dashboard.
-   */
   async submitForReview(plan: ChangePlan, client: string): Promise<ApprovalItem> {
     const item: ApprovalItem = {
       id: `ap_${Math.random().toString(36).slice(2, 8)}`,

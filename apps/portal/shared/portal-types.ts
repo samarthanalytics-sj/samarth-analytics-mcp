@@ -128,12 +128,39 @@ export interface ApprovalItem {
 
 export interface OAuthState {
   connected: boolean;
+  /** Whether the portal backend has Google OAuth client credentials configured. */
+  configured?: boolean;
   email?: string;
   scopes?: string[];
   // Hosted OAuth (server-side token vault) state.
   // When the portal is wired to the MCP backend, `connected: true` means
   // the backend has a valid refresh token for this user.
   expiresAt?: string;
+  /** Friendly message when not configured. */
+  message?: string;
+}
+
+export interface GtmAccountSummary {
+  accountId: string;
+  name: string;
+  path?: string;
+}
+
+export interface GtmContainerSummary {
+  accountId: string;
+  containerId: string;
+  publicId: string;
+  name: string;
+  usageContext?: string[];
+  domainName?: string[];
+}
+
+export interface GtmWorkspaceSummary {
+  accountId: string;
+  containerId: string;
+  workspaceId: string;
+  name: string;
+  description?: string;
 }
 
 export const GOAL_LABELS: Record<RecommendationGoal, string> = {
