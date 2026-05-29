@@ -208,6 +208,8 @@ These are the steps still left to take the MVP to production:
 The portal now requires a **backend deployment** — static-only is no longer
 sufficient because OAuth + GTM API calls all run on the Express server.
 
+### Option A — single Express process (self-hosted, EC2/Render/Fly/etc.)
+
 ```bash
 # from repo root
 npm run portal:install
@@ -221,3 +223,75 @@ Bundle layout:
 
 Default port is `5000` (override with `PORT`). Set the OAuth env vars
 before starting, and serve over HTTPS in production.
+
+### Option B — Vercel (serverless functions + static site)
+
+The repo ships Vercel-compatible serverless handlers in `apps/portal/api/`.
+They reuse the same GTM client and audit logic as the Express routes, but
+swap the in-memory session map for a **stateless, HMAC-signed cookie** so
+the OAuth tokens survive across cold starts and different function
+instances.
+
+**Project root in Vercel:** `apps/portal` (the repo is a monorepo and the
+portal lives in a subfolder — point Vercel at it via *Project Settings →
+General → Root Directory*).
+
+**Project settings:**
+- Framework Preset: **Other** (the included `vercel.json` overrides build
+  + output)
+- Root Directory: `apps/portal`
+- Build Command: *inherited from `vercel.json`* → `npm run vercel-build`
+- Output Directory: *inherited from `vercel.json`* → `dist/public`
+- Install Command: *default* (`npm install`)
+- Node.js Version: 20.x (set under *Project → Settings → General*)
+
+**Required environment variables (Project → Settings → Environment
+Variables):**
+
+| Name | Value |
+|------|-------|
+| `PORTAL_GOOGLE_OAUTH_CLIENT_ID` | OAuth client id from Google Cloud |
+| `PORTAL_GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret |
+| `PORTAL_GOOGLE_OAUTH_REDIRECT_URI` | `https://<your-vercel-domain>/api/oauth/callback` |
+| `PORTAL_SESSION_SECRET` | 32+ char random hex (generate with `openssl rand -hex 32`) |
+
+`PORTAL_GOOGLE_OAUTH_REDIRECT_URI` must also be added as an authorized
+redirect URI on the Google OAuth client. For preview deployments add the
+preview-URL callback too, or pin a stable alias.
+
+**Deploy from the workspace root:**
+
+```bash
+# one-time
+npm i -g vercel
+vercel login
+
+# link this folder to a Vercel project (run inside the portal directory)
+cd apps/portal
+vercel link
+
+# deploy a preview build
+vercel
+
+# deploy to production
+vercel --prod
+```
+
+Note: Vercel needs to be invoked from `apps/portal` (the project root). If
+you prefer to drive deploys from the workspace root, run
+`vercel --cwd apps/portal --prod`.
+
+**Limitations on Vercel:**
+- OAuth tokens live in a signed cookie on the user's browser, not in a
+  server-side store. They are protected by the user's HttpOnly + Secure
+  cookie. Access tokens expire after ~1 hour and are refreshed on demand
+  (rotating the cookie).
+- There is **no shared server-side state** — anything currently using the
+  in-memory `Map` in `server/gtm/oauth.ts` (the session map and CSRF
+  state map) is replaced by signed cookies in the Vercel handlers.
+  If you add features that require a shared cache, plug a Redis / Upstash
+  store into `apps/portal/server/gtm/vercel-helpers.ts`.
+- The SQLite `data.db` used by `server/storage.ts` is **not** writable on
+  Vercel. The current `users` table is unused; if/when persistence is
+  added, swap it for a hosted Postgres (Neon, Supabase, etc.).
+- Function cold starts add ~150-300ms to the first request after idle.
