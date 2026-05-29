@@ -1,3 +1,9 @@
+## [1.4.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.5...v1.4.6) (2026-05-29)
+
+### Bug Fixes
+
+* **portal:** handle GTM API error responses once ([b50ed9e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b50ed9e740d4d6e785437c001f69e1fbc17d73bb))
+
 ## [1.4.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.4...v1.4.5) (2026-05-29)
 
 ### Bug Fixes
