@@ -10,11 +10,22 @@ import {
   X,
   CircleUserRound,
   ShieldCheck,
+  UserCircle2,
 } from "lucide-react";
 import { BrandLogo } from "./brand-logo";
 import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { usePortal } from "@/lib/portal-store";
 import { cn } from "@/lib/utils";
+
+function initialsFor(name?: string, email?: string): string {
+  const source = (name || email || "").trim();
+  if (!source) return "G";
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return source.slice(0, 1).toUpperCase();
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 
 interface NavItem {
   href: string;
@@ -28,6 +39,7 @@ const NAV: NavItem[] = [
   { href: "/audit", label: "Audit", icon: ClipboardCheck },
   { href: "/recommend", label: "Recommendations", icon: Sparkles },
   { href: "/approvals", label: "Approvals", icon: GitPullRequest },
+  { href: "/profile", label: "Profile", icon: UserCircle2 },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -67,17 +79,57 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
-        <div className="px-4 py-4 border-t border-sidebar-border text-xs">
-          <div className="flex items-center gap-2">
-            {oauth.connected ? (
-              <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-            ) : (
-              <CircleUserRound className="h-3.5 w-3.5 text-sidebar-foreground/60" />
+        <div className="px-3 py-3 border-t border-sidebar-border">
+          <Link
+            href="/profile"
+            data-testid="link-user-chip"
+            className={cn(
+              "flex items-center gap-2.5 rounded-md px-2 py-2 text-xs transition-colors",
+              isActive("/profile")
+                ? "bg-sidebar-primary text-sidebar-primary-foreground"
+                : "text-sidebar-foreground/85 hover-elevate",
             )}
-            <span className="truncate text-sidebar-foreground/80" data-testid="text-auth-status">
-              {oauth.connected ? oauth.email ?? "Connected" : "Google not connected"}
-            </span>
-          </div>
+          >
+            <Avatar className="h-7 w-7 shrink-0">
+              {oauth.connected && oauth.picture ? (
+                <AvatarImage
+                  src={oauth.picture}
+                  alt={oauth.userName ?? oauth.email ?? "Profile"}
+                  referrerPolicy="no-referrer"
+                />
+              ) : null}
+              <AvatarFallback className="text-[10px] font-semibold bg-sidebar-accent text-sidebar-accent-foreground">
+                {oauth.connected ? initialsFor(oauth.userName, oauth.email) : "•"}
+              </AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                {oauth.connected ? (
+                  <ShieldCheck className="h-3 w-3 text-emerald-400 shrink-0" />
+                ) : (
+                  <CircleUserRound className="h-3 w-3 text-sidebar-foreground/60 shrink-0" />
+                )}
+                <span
+                  className="truncate font-medium"
+                  data-testid="text-auth-status"
+                >
+                  {oauth.connected
+                    ? oauth.userName ?? oauth.email ?? "Connected"
+                    : "Sign in"}
+                </span>
+              </div>
+              {oauth.connected && oauth.userName && oauth.email ? (
+                <div className="truncate text-[11px] text-sidebar-foreground/60">
+                  {oauth.email}
+                </div>
+              ) : null}
+              {!oauth.connected ? (
+                <div className="truncate text-[11px] text-sidebar-foreground/60">
+                  Google not connected
+                </div>
+              ) : null}
+            </div>
+          </Link>
         </div>
       </aside>
 
@@ -85,15 +137,36 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex-1 flex flex-col min-w-0">
         <header className="md:hidden h-14 px-4 flex items-center justify-between border-b border-border bg-sidebar text-sidebar-foreground sticky top-0 z-30">
           <BrandLogo size={22} />
-          <button
-            type="button"
-            data-testid="button-menu"
-            aria-label="Open menu"
-            onClick={() => setMobileOpen(true)}
-            className="p-2 rounded-md hover-elevate"
-          >
-            <Menu className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-1">
+            <Link
+              href="/profile"
+              data-testid="link-user-chip-mobile"
+              aria-label="Open profile"
+              className="p-1.5 rounded-md hover-elevate"
+            >
+              <Avatar className="h-7 w-7">
+                {oauth.connected && oauth.picture ? (
+                  <AvatarImage
+                    src={oauth.picture}
+                    alt={oauth.userName ?? oauth.email ?? "Profile"}
+                    referrerPolicy="no-referrer"
+                  />
+                ) : null}
+                <AvatarFallback className="text-[10px] font-semibold bg-sidebar-accent text-sidebar-accent-foreground">
+                  {oauth.connected ? initialsFor(oauth.userName, oauth.email) : "•"}
+                </AvatarFallback>
+              </Avatar>
+            </Link>
+            <button
+              type="button"
+              data-testid="button-menu"
+              aria-label="Open menu"
+              onClick={() => setMobileOpen(true)}
+              className="p-2 rounded-md hover-elevate"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+          </div>
         </header>
 
         {/* Mobile drawer */}
@@ -138,16 +211,51 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   );
                 })}
               </nav>
-              <div className="mt-auto pt-4 text-xs text-sidebar-foreground/70">
+              <Link
+                href="/profile"
+                onClick={() => setMobileOpen(false)}
+                className="mt-auto pt-4 flex items-center gap-2.5 text-xs text-sidebar-foreground/80 hover:text-sidebar-foreground"
+              >
+                <Avatar className="h-8 w-8">
+                  {oauth.connected && oauth.picture ? (
+                    <AvatarImage
+                      src={oauth.picture}
+                      alt={oauth.userName ?? oauth.email ?? "Profile"}
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : null}
+                  <AvatarFallback className="text-[10px] font-semibold bg-sidebar-accent text-sidebar-accent-foreground">
+                    {oauth.connected ? initialsFor(oauth.userName, oauth.email) : "•"}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  {oauth.connected ? (
+                    <>
+                      <div className="truncate font-medium text-sidebar-foreground">
+                        {oauth.userName ?? oauth.email ?? "Connected"}
+                      </div>
+                      <div className="truncate text-[11px] text-sidebar-foreground/60">
+                        {oauth.email ?? "Google connected"}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="truncate font-medium text-sidebar-foreground">
+                        Sign in
+                      </div>
+                      <div className="truncate text-[11px] text-sidebar-foreground/60">
+                        Google not connected
+                      </div>
+                    </>
+                  )}
+                </div>
                 {oauth.connected ? (
-                  <Badge variant="secondary" className="gap-1">
+                  <Badge variant="secondary" className="gap-1 shrink-0">
                     <ShieldCheck className="h-3 w-3" />
-                    Google connected
+                    Connected
                   </Badge>
-                ) : (
-                  <span>Google not connected</span>
-                )}
-              </div>
+                ) : null}
+              </Link>
             </div>
           </div>
         )}

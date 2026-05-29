@@ -131,6 +131,10 @@ export interface OAuthState {
   /** Whether the portal backend has Google OAuth client credentials configured. */
   configured?: boolean;
   email?: string;
+  /** Display name from Google id_token / userinfo, when available. */
+  userName?: string;
+  /** Profile picture URL from Google id_token / userinfo, when available. */
+  picture?: string;
   scopes?: string[];
   // Hosted OAuth (server-side token vault) state.
   // When the portal is wired to the MCP backend, `connected: true` means

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Tag,
@@ -10,6 +11,7 @@ import {
   RefreshCw,
   Play,
   PlugZap,
+  UserCircle2,
 } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -165,19 +167,35 @@ export default function AuditPage() {
         title="Audit workspace"
         description="Live read-only health checks via the GTM API. Findings are diagnostic — no writes ever happen here."
         actions={
-          <Button
-            size="sm"
-            onClick={() => auditMutation.mutate()}
-            disabled={!canRun || isLoading}
-            data-testid="button-run-audit"
-          >
-            {isLoading ? (
-              <RefreshCw className="mr-1.5 h-4 w-4 animate-spin" />
-            ) : (
-              <Play className="mr-1.5 h-4 w-4" />
-            )}
-            {audit ? "Re-run audit" : "Run QC audit"}
-          </Button>
+          <>
+            <Button
+              asChild
+              size="sm"
+              variant="outline"
+              data-testid="button-audit-profile"
+              title={oauth.email ?? "Manage Google account"}
+            >
+              <Link href="/profile">
+                <UserCircle2 className="mr-1.5 h-4 w-4" />
+                <span className="max-w-[10rem] truncate">
+                  {oauth.userName ?? oauth.email ?? "Account"}
+                </span>
+              </Link>
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => auditMutation.mutate()}
+              disabled={!canRun || isLoading}
+              data-testid="button-run-audit"
+            >
+              {isLoading ? (
+                <RefreshCw className="mr-1.5 h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="mr-1.5 h-4 w-4" />
+              )}
+              {audit ? "Re-run audit" : "Run QC audit"}
+            </Button>
+          </>
         }
       />
       <PageBody>

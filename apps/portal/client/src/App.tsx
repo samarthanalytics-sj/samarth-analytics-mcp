@@ -10,6 +10,7 @@ import ContainersPage from "@/pages/containers";
 import AuditPage from "@/pages/audit";
 import RecommendPage from "@/pages/recommend";
 import ApprovalsPage from "@/pages/approvals";
+import ProfilePage from "@/pages/profile";
 import { AppShell } from "@/components/app-shell";
 import { PortalProvider } from "@/lib/portal-store";
 import { ThemeProvider } from "@/lib/theme-provider";
@@ -22,6 +23,8 @@ function AppRouter() {
       <Route path="/audit" component={AuditPage} />
       <Route path="/recommend" component={RecommendPage} />
       <Route path="/approvals" component={ApprovalsPage} />
+      <Route path="/profile" component={ProfilePage} />
+      <Route path="/account" component={ProfilePage} />
       <Route component={NotFound} />
     </Switch>
   );

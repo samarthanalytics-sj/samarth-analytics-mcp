@@ -29,7 +29,15 @@ export interface SessionTokens {
   /** ms epoch */
   expiresAt: number;
   email?: string;
+  userName?: string;
+  picture?: string;
   scopes: string[];
+}
+
+interface UserInfoShape {
+  email?: string;
+  name?: string;
+  picture?: string;
 }
 
 export function resolvePortalOAuthClient(): OAuthClientConfig | null {
@@ -141,12 +149,15 @@ export async function exchangeCodeForTokens(
     id_token?: string;
   };
 
-  let email: string | undefined;
-  if (data.id_token) {
-    email = parseIdTokenEmail(data.id_token);
-  }
-  if (!email && data.access_token) {
-    email = await fetchUserEmail(data.access_token);
+  const fromIdToken = data.id_token ? parseIdTokenProfile(data.id_token) : {};
+  let email = fromIdToken.email;
+  let userName = fromIdToken.name;
+  let picture = fromIdToken.picture;
+  if ((!email || !userName || !picture) && data.access_token) {
+    const fromUserInfo = await fetchUserInfo(data.access_token);
+    email = email ?? fromUserInfo.email;
+    userName = userName ?? fromUserInfo.name;
+    picture = picture ?? fromUserInfo.picture;
   }
 
   return {
@@ -154,6 +165,8 @@ export async function exchangeCodeForTokens(
     refreshToken: data.refresh_token,
     expiresAt: Date.now() + (data.expires_in - 30) * 1000,
     email,
+    userName,
+    picture,
     scopes: data.scope ? data.scope.split(" ") : GTM_SCOPES,
   };
 }
@@ -184,29 +197,41 @@ export async function refreshAccessToken(
   };
 }
 
-function parseIdTokenEmail(idToken: string): string | undefined {
+function parseIdTokenProfile(idToken: string): UserInfoShape {
   try {
     const [, payload] = idToken.split(".");
-    if (!payload) return undefined;
+    if (!payload) return {};
     const decoded = JSON.parse(
       Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"),
-    ) as { email?: string };
-    return decoded.email;
+    ) as { email?: string; name?: string; picture?: string };
+    return {
+      email: typeof decoded.email === "string" ? decoded.email : undefined,
+      name: typeof decoded.name === "string" ? decoded.name : undefined,
+      picture: typeof decoded.picture === "string" ? decoded.picture : undefined,
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
-async function fetchUserEmail(accessToken: string): Promise<string | undefined> {
+async function fetchUserInfo(accessToken: string): Promise<UserInfoShape> {
   try {
     const res = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    if (!res.ok) return undefined;
-    const data = (await res.json()) as { email?: string };
-    return data.email;
+    if (!res.ok) return {};
+    const data = (await res.json()) as {
+      email?: string;
+      name?: string;
+      picture?: string;
+    };
+    return {
+      email: typeof data.email === "string" ? data.email : undefined,
+      name: typeof data.name === "string" ? data.name : undefined,
+      picture: typeof data.picture === "string" ? data.picture : undefined,
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
