@@ -1,3 +1,9 @@
+## [1.4.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.6...v1.4.7) (2026-05-29)
+
+### Bug Fixes
+
+* **portal:** harden GTM serverless routes ([09e49fa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/09e49fafcb7b432d59f568ece174826d0866efd1))
+
 ## [1.4.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.4.5...v1.4.6) (2026-05-29)
 
 ### Bug Fixes
