@@ -30,16 +30,47 @@ function delay<T>(value: T, ms = FAKE_LATENCY_MS): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms));
 }
 
-async function parseError(res: Response): Promise<Error & { status?: number }> {
-  let message: string;
+async function parseError(res: Response): Promise<Error & { status?: number; code?: string }> {
+  // Read the body exactly once as text, then try to parse it as JSON.
+  // Reading via res.json() and then falling back to res.text() on the same
+  // Response throws "Failed to execute 'text' on 'Response': body stream
+  // already read" — Response bodies are single-use streams.
+  let rawBody = "";
   try {
-    const data = await res.json();
-    message = data?.message || data?.error || res.statusText;
+    rawBody = await res.text();
   } catch {
-    message = (await res.text()) || res.statusText;
+    rawBody = "";
   }
-  const err = new Error(`${res.status}: ${message}`) as Error & { status?: number };
+
+  let message = "";
+  let code: string | undefined;
+  if (rawBody) {
+    try {
+      const data = JSON.parse(rawBody);
+      if (data && typeof data === "object") {
+        message = (data.message as string) || (data.error as string) || "";
+        if (typeof data.error === "string") code = data.error;
+      }
+    } catch {
+      message = rawBody.length < 200 ? rawBody : "";
+    }
+  }
+
+  if (res.status === 401 || code === "not_connected" || code === "unauthorized") {
+    message = "Google session expired. Please reconnect Google Tag Manager.";
+  } else if (res.status === 403 || code === "forbidden") {
+    message =
+      message ||
+      "Google Tag Manager denied access. Make sure your Google account has access to this container.";
+  } else if (code === "oauth_not_configured") {
+    message = message || "Google OAuth is not configured on this portal. Ask your administrator.";
+  } else if (!message) {
+    message = res.statusText || `Request failed (${res.status})`;
+  }
+
+  const err = new Error(message) as Error & { status?: number; code?: string };
   err.status = res.status;
+  err.code = code;
   return err;
 }
 
