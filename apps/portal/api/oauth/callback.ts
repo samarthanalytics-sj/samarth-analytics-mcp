@@ -83,13 +83,14 @@ export default async function handler(
     const state = url.searchParams.get("state") ?? "";
     const oauthError = url.searchParams.get("error") ?? "";
     if (oauthError) {
-      return sendHtml(
-        res,
-        400,
-        renderErrorPage(
-          `Google returned an error during sign-in: ${oauthError}. Please try again.`,
-        ),
+      res.statusCode = 302;
+      res.setHeader(
+        "Location",
+        `/?oauth_error=${encodeURIComponent(oauthError)}#/`,
       );
+      res.setHeader("Cache-Control", "no-store");
+      res.end();
+      return;
     }
 
     const cookies = parseCookies(req.headers.cookie);
@@ -143,7 +144,7 @@ export default async function handler(
     }
 
     res.statusCode = 302;
-    res.setHeader("Location", "/#/?connected=1");
+    res.setHeader("Location", "/?connected=1#/");
     res.setHeader("Cache-Control", "no-store");
     res.end();
   } catch (e) {

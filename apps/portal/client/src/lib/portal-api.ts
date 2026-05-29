@@ -73,7 +73,8 @@ export const portalApi = {
   /**
    * Live OAuth: redirect the browser to the backend start endpoint.
    * The backend redirects to Google. After the round-trip the user lands
-   * back on `/#/?connected=1`.
+   * back on `/?connected=1#/` (query in search so wouter's hash router
+   * still sees `/` as the path).
    */
   redirectToGoogleOAuth(): void {
     if (typeof window === "undefined") return;
