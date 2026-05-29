@@ -40,6 +40,10 @@ const CATEGORY_LABEL: Record<string, string> = {
   naming: "Naming",
   duplication: "Duplication",
   data_layer: "Data layer",
+  dead_config: "Dead config",
+  data_quality: "Data quality",
+  publishing: "Publishing",
+  tool_failure: "Tool failure",
 };
 
 export default function AuditPage() {
@@ -165,7 +169,7 @@ export default function AuditPage() {
       <PageHeader
         eyebrow="Audit"
         title="Audit workspace"
-        description="Live read-only health checks via the GTM API. Findings are diagnostic — no writes ever happen here."
+        description="Read-only, evidence-based QC of the GTM container configuration. We report only what the API shows — not runtime behaviour. No writes ever happen here."
         actions={
           <>
             <Button
@@ -251,9 +255,38 @@ export default function AuditPage() {
               <div className="flex flex-wrap items-center gap-2 text-xs pt-1">
                 <Badge variant="outline">{containerPublicId}</Badge>
                 <HealthBadge score={audit.healthScore} />
+                {audit.containerType && (
+                  <Badge variant="outline" className="text-[11px]">
+                    {audit.containerType}
+                  </Badge>
+                )}
+                {typeof audit.workspaceCount === "number" && (
+                  <Badge variant="outline" className="text-[11px]">
+                    {audit.workspaceCount} workspace{audit.workspaceCount === 1 ? "" : "s"}
+                  </Badge>
+                )}
                 <span className="text-muted-foreground">
                   Generated {new Date(audit.generatedAt).toLocaleString()}
                 </span>
+              </div>
+            )}
+            {audit?.summary && (
+              <div className="text-xs text-muted-foreground" data-testid="audit-summary">
+                {audit.summary}
+              </div>
+            )}
+            {audit?.toolFailures && audit.toolFailures.length > 0 && (
+              <div className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/40 rounded p-2">
+                <div className="font-medium mb-1">
+                  Some reads failed — the audit may be incomplete:
+                </div>
+                <ul className="list-disc ml-4 space-y-0.5">
+                  {audit.toolFailures.map((tf, i) => (
+                    <li key={`${tf.resource}-${i}`}>
+                      <span className="font-mono">{tf.resource}</span>: {tf.message}
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
           </CardContent>
@@ -320,48 +353,72 @@ export default function AuditPage() {
           </Card>
         ) : (
           <div className="space-y-3">
-            {audit.findings.map((f) => (
-              <Card key={f.id} data-testid={`card-finding-${f.id}`}>
-                <CardContent className="py-4">
-                  <div className="flex flex-col sm:flex-row sm:items-start gap-3">
-                    <div className="h-8 w-8 rounded-md bg-primary/10 text-primary flex items-center justify-center shrink-0">
-                      <ShieldAlert className="h-4 w-4" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <SeverityChip severity={f.severity} />
-                        <Badge variant="outline" className="text-[11px]">
-                          {CATEGORY_LABEL[f.category] ?? f.category}
-                        </Badge>
+            {audit.findings.map((f) => {
+              const headline = f.finding ?? f.title;
+              const why = f.whyItMatters ?? f.description;
+              const fix = f.suggestedFix ?? f.recommendation;
+              const affected = (f.affected ?? f.affects) ?? [];
+              return (
+                <Card key={f.id} data-testid={`card-finding-${f.id}`}>
+                  <CardContent className="py-4">
+                    <div className="flex flex-col sm:flex-row sm:items-start gap-3">
+                      <div className="h-8 w-8 rounded-md bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                        <ShieldAlert className="h-4 w-4" />
                       </div>
-                      <h4 className="mt-1.5 text-sm font-semibold leading-snug">{f.title}</h4>
-                      <p className="text-xs text-muted-foreground mt-1">{f.description}</p>
-                      {f.affects && f.affects.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {f.affects.map((a, i) => (
-                            <span
-                              key={`${a}-${i}`}
-                              className="font-mono text-[11px] px-2 py-0.5 rounded bg-muted text-muted-foreground"
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <SeverityChip severity={f.severity} />
+                          <Badge variant="outline" className="text-[11px]">
+                            {CATEGORY_LABEL[f.category] ?? f.category}
+                          </Badge>
+                          {f.needsManualReview && (
+                            <Badge
+                              variant="outline"
+                              className="text-[11px] border-amber-400 text-amber-700 dark:text-amber-300"
                             >
-                              {a}
+                              Needs manual review
+                            </Badge>
+                          )}
+                        </div>
+                        <h4 className="mt-1.5 text-sm font-semibold leading-snug">{headline}</h4>
+                        {why && (
+                          <div className="mt-1 text-xs">
+                            <span className="font-medium">Why it matters: </span>
+                            <span className="text-muted-foreground">{why}</span>
+                          </div>
+                        )}
+                        {affected.length > 0 && (
+                          <div className="mt-2">
+                            <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+                              Affected
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {affected.map((a, i) => (
+                                <span
+                                  key={`${a}-${i}`}
+                                  className="font-mono text-[11px] px-2 py-0.5 rounded bg-muted text-muted-foreground"
+                                >
+                                  {a}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {fix && (
+                          <div className="mt-2.5 flex items-start gap-1.5 text-xs">
+                            <Search className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />
+                            <span>
+                              <span className="font-medium">Suggested fix: </span>
+                              <span className="text-muted-foreground">{fix}</span>
                             </span>
-                          ))}
-                        </div>
-                      )}
-                      {f.recommendation && (
-                        <div className="mt-2.5 flex items-start gap-1.5 text-xs">
-                          <Search className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />
-                          <span>
-                            <span className="font-medium">Recommendation: </span>
-                            <span className="text-muted-foreground">{f.recommendation}</span>
-                          </span>
-                        </div>
-                      )}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         )}
       </PageBody>
