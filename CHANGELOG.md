@@ -1,3 +1,9 @@
+## [1.3.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.2.0...v1.3.0) (2026-05-29)
+
+### Features
+
+* **portal:** add live GTM QC flow ([3f32b73](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3f32b730c15ceb0dab662260423ddaf19eeb0902))
+
 ## [1.2.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.1.0...v1.2.0) (2026-05-29)
 
 ### Features
