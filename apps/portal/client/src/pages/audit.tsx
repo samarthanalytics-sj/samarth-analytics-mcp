@@ -194,10 +194,11 @@ export default function AuditPage() {
                   setWorkspaceId("");
                 }}
                 loading={accountsQuery.isLoading}
-                error={accountsQuery.error as Error | null}
+                error={accountsQuery.error as (Error & { status?: number }) | null}
                 placeholder="Choose an account"
                 options={accounts.map((a) => ({ value: a.accountId, label: a.name }))}
                 testId="select-account"
+                onReconnect={() => portalApi.redirectToGoogleOAuth()}
               />
               <SelectorBlock
                 label="Container"
@@ -360,6 +361,7 @@ function SelectorBlock({
   error,
   disabled,
   testId,
+  onReconnect,
 }: {
   label: string;
   value: string;
@@ -367,9 +369,10 @@ function SelectorBlock({
   options: { value: string; label: string }[];
   placeholder: string;
   loading?: boolean;
-  error?: Error | null;
+  error?: (Error & { status?: number }) | null;
   disabled?: boolean;
   testId?: string;
+  onReconnect?: () => void;
 }) {
   return (
     <div className="min-w-0">
@@ -387,7 +390,14 @@ function SelectorBlock({
         </SelectContent>
       </Select>
       {error && (
-        <div className="mt-1 text-[11px] text-destructive truncate">{error.message}</div>
+        <div className="mt-1 space-y-1">
+          <div className="text-[11px] text-destructive break-words">{error.message}</div>
+          {error.status === 401 && onReconnect && (
+            <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={onReconnect}>
+              Reconnect Google
+            </Button>
+          )}
+        </div>
       )}
       {!error && !loading && options.length === 0 && !disabled && (
         <div className="mt-1 text-[11px] text-muted-foreground">None available.</div>
