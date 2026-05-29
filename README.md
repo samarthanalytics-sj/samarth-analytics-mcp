@@ -6,6 +6,8 @@ A production-ready [Model Context Protocol (MCP)](https://modelcontextprotocol.i
 
 Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, guarded access to GTM — read workspace contents, create/update tags/triggers/variables, audit implementations, publish versions, and more.
 
+> **New: browser portal.** A white-label, browser-based customer experience that sits on top of this MCP server lives in [`apps/portal/`](./apps/portal/README.md). Customers connect Google, audit tracking, and prepare change requests — publishes require Samarth approval. Run with `npm run portal:dev`.
+
 ---
 
 ## Table of Contents
