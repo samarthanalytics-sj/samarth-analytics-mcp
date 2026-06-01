@@ -52,6 +52,17 @@ export const GTM_SCOPES = [
   'https://www.googleapis.com/auth/tagmanager.publish',
 ];
 
+// Google Analytics Admin API (GA4) read-only scope. Powers the read-only
+// ga4_* MCP tools (account/property summaries, data streams, custom
+// dimensions/metrics, data retention, etc.). This is the ONLY GA4 scope the
+// server requests — it grants no write/delete capability on GA4 resources.
+export const GA4_ADMIN_READONLY_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
+
+// Full set of scopes requested during the OAuth onboarding flow. A single
+// consent grant covers both the GTM tool surface and the read-only GA4 Admin
+// tools, so users only authorize once.
+export const ALL_SCOPES = [...GTM_SCOPES, GA4_ADMIN_READONLY_SCOPE];
+
 export type AuthMode = 'oauth2' | 'service_account';
 
 export interface AuthOptions {
@@ -176,7 +187,7 @@ export async function buildGoogleAuth(opts: AuthOptions = {}): Promise<OAuth2Cli
     );
     const auth = new google.auth.GoogleAuth({
       keyFile: serviceAccountKeyFile,
-      scopes: GTM_SCOPES,
+      scopes: ALL_SCOPES,
       ...(impersonateEmail ? { clientOptions: { subject: impersonateEmail } } : {}),
     });
     return auth.getClient() as Promise<OAuth2Client>;
@@ -231,9 +242,9 @@ export async function buildGoogleAuth(opts: AuthOptions = {}): Promise<OAuth2Cli
   console.error(
     '[auth] No explicit credentials found. Falling back to Application Default Credentials.' +
       ' Run: gcloud auth application-default login --scopes=' +
-      GTM_SCOPES.join(',')
+      ALL_SCOPES.join(',')
   );
-  const auth = new google.auth.GoogleAuth({ scopes: GTM_SCOPES });
+  const auth = new google.auth.GoogleAuth({ scopes: ALL_SCOPES });
   return auth.getClient() as Promise<OAuth2Client>;
 }
 
@@ -260,7 +271,7 @@ export function getOAuthAuthorizationUrl(): string {
   const oauth2Client = buildOAuth2ClientForFlow();
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    scope: GTM_SCOPES,
+    scope: ALL_SCOPES,
     prompt: 'consent',
   });
 }

@@ -74,6 +74,30 @@ const mockClient = {
   },
 } as unknown;
 
+// Mock the GA4 Admin (v1beta) client
+const mockGa4Client = {
+  accountSummaries: { list: jest.fn().mockResolvedValue({ data: { accountSummaries: [] } }) },
+  properties: {
+    list: jest.fn().mockResolvedValue({ data: { properties: [] } }),
+    get: jest.fn().mockResolvedValue({ data: {} }),
+    getDataRetentionSettings: jest.fn().mockResolvedValue({ data: {} }),
+    dataStreams: { list: jest.fn().mockResolvedValue({ data: { dataStreams: [] } }) },
+    customDimensions: { list: jest.fn().mockResolvedValue({ data: { customDimensions: [] } }) },
+    customMetrics: { list: jest.fn().mockResolvedValue({ data: { customMetrics: [] } }) },
+    keyEvents: { list: jest.fn().mockResolvedValue({ data: { keyEvents: [] } }) },
+    googleAdsLinks: { list: jest.fn().mockResolvedValue({ data: { googleAdsLinks: [] } }) },
+  },
+} as unknown;
+
+// Mock the GA4 Admin (v1alpha) client — only enhanced measurement is used here.
+const mockGa4AlphaClient = {
+  properties: {
+    dataStreams: {
+      getEnhancedMeasurementSettings: jest.fn().mockResolvedValue({ data: {} }),
+    },
+  },
+} as unknown;
+
 describe('MCP Server Tool Registration', () => {
   let server: McpServer;
 
@@ -84,7 +108,15 @@ describe('MCP Server Tool Registration', () => {
       { name: 'test-server', version: '0.0.1' },
       { capabilities: { tools: {} } }
     );
-    registerAllTools(server, () => mockClient as ReturnType<typeof import('../utils/gtmClient.js').getGtmClient>);
+    registerAllTools(
+      server,
+      () => mockClient as ReturnType<typeof import('../utils/gtmClient.js').getGtmClient>,
+      () => mockGa4Client as ReturnType<typeof import('../utils/ga4Client.js').getGa4AdminClient>,
+      () =>
+        mockGa4AlphaClient as ReturnType<
+          typeof import('../utils/ga4Client.js').getGa4AdminAlphaClient
+        >
+    );
   });
 
   it('server is created successfully', () => {
@@ -105,7 +137,15 @@ describe('Tool handler: accounts_list (read-only, no auth needed)', () => {
       { name: 'test-server', version: '0.0.1' },
       { capabilities: { tools: {} } }
     );
-    registerAllTools(server, () => mockClient as ReturnType<typeof import('../utils/gtmClient.js').getGtmClient>);
+    registerAllTools(
+      server,
+      () => mockClient as ReturnType<typeof import('../utils/gtmClient.js').getGtmClient>,
+      () => mockGa4Client as ReturnType<typeof import('../utils/ga4Client.js').getGa4AdminClient>,
+      () =>
+        mockGa4AlphaClient as ReturnType<
+          typeof import('../utils/ga4Client.js').getGa4AdminAlphaClient
+        >
+    );
     // Server registration succeeded without throwing
     expect(server).toBeTruthy();
   });

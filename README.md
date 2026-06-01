@@ -167,9 +167,10 @@ https://www.googleapis.com/auth/tagmanager.edit.containerversions
 https://www.googleapis.com/auth/tagmanager.manage.accounts
 https://www.googleapis.com/auth/tagmanager.manage.users
 https://www.googleapis.com/auth/tagmanager.publish
+https://www.googleapis.com/auth/analytics.readonly
 ```
 
-These are the least-privilege GTM scopes needed to cover the server's full tool surface. Read-only deployments can re-run `npm run auth:google` after removing the `edit.*`, `manage.*`, and `publish` scopes from your OAuth consent screen.
+These are the least-privilege scopes needed to cover the server's full tool surface. The final scope, `analytics.readonly`, powers the **read-only GA4 Admin tools** (`ga4_*`) and grants no write access to Google Analytics. Read-only deployments can re-run `npm run auth:google` after removing the `edit.*`, `manage.*`, and `publish` scopes from your OAuth consent screen; keep `tagmanager.readonly` and `analytics.readonly` for full read coverage.
 
 ---
 
@@ -181,6 +182,7 @@ These are the least-privilege GTM scopes needed to cover the server's full tool 
 2. Select or create a project
 3. Navigate to **APIs & Services → Library**
 4. Search for **"Tag Manager API"** and click **Enable**
+5. Search for **"Google Analytics Admin API"** and click **Enable** (required for the read-only `ga4_*` tools)
 
 ### Step 2: Create OAuth 2.0 Credentials
 
@@ -209,6 +211,7 @@ These are the least-privilege GTM scopes needed to cover the server's full tool 
    - `https://www.googleapis.com/auth/tagmanager.manage.accounts`
    - `https://www.googleapis.com/auth/tagmanager.manage.users`
    - `https://www.googleapis.com/auth/tagmanager.publish`
+   - `https://www.googleapis.com/auth/analytics.readonly` (read-only GA4 Admin tools)
 5. Add your Google account as a **test user** (while the app is in "testing" mode)
 
 > **Note**: For personal/agency use, keeping the app in "Testing" mode is fine. You will need to re-authorize every 7 days unless you publish the app or get it verified.
@@ -461,6 +464,41 @@ and (except `gtag_config`) `*_revert` ✏️.
 |---|---|
 | `audit_container` | Inspect workspace for analytics issues |
 | `export_container` | Export workspace as structured JSON |
+
+### GA4 Admin (read-only)
+
+Read-only wrappers over the **Google Analytics Admin API** (v1beta, with a single
+v1alpha call for enhanced measurement). These never write, update, or delete GA4
+resources and require no `confirm` flag. They power the senior audit framework's
+GA4_ADMIN checks (custom dimensions/metrics, data streams & measurement IDs, data
+retention, enhanced measurement, key events, Google Ads links).
+
+Requires the `https://www.googleapis.com/auth/analytics.readonly` scope and the
+**Google Analytics Admin API** enabled in your Google Cloud project. A 403 mentioning
+scope means you should re-run `npm run auth:google`.
+
+| Tool | Description |
+|---|---|
+| `ga4_account_summaries_list` | List GA4 accounts + their property summaries (best discovery entry point) |
+| `ga4_properties_list` | List properties under a parent account (display name, time zone, currency, service level) |
+| `ga4_property_get` | Get a single property by ID |
+| `ga4_data_streams_list` | List data streams (web/Android/iOS) incl. web **measurement IDs** |
+| `ga4_enhanced_measurement_get` | Get enhanced measurement settings for a web data stream (v1alpha) |
+| `ga4_custom_dimensions_list` | List custom dimensions (parameter, scope) |
+| `ga4_custom_metrics_list` | List custom metrics (parameter, unit, scope) |
+| `ga4_data_retention_get` | Get event data-retention settings |
+| `ga4_key_events_list` | List key events (formerly "conversion events" — current Admin naming) |
+| `ga4_google_ads_links_list` | List Google Ads links (customer ID, auto-tagging/ads-personalization flags) |
+
+Accepts either a bare numeric ID (`123456789`) or the fully-qualified form
+(`properties/123456789`, `accounts/123456`) wherever a property/account is required.
+
+**Documented limitations** (not exposed by the GA4 Admin API v1beta, so intentionally
+**not** implemented rather than faked):
+
+- Internal-traffic / unwanted-referral **data filters** — no public `dataFilters` collection; configured per data stream.
+- **Referral exclusions** — no dedicated Admin API resource.
+- **Channel groups** and **audiences** — exist only on the v1alpha surface and are out of scope for this read-only v1beta set.
 
 ### Pagination
 

@@ -6,6 +6,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { OAuth2Client } from 'google-auth-library';
 import { getGtmClient } from './utils/gtmClient.js';
+import { getGa4AdminClient, getGa4AdminAlphaClient } from './utils/ga4Client.js';
 import { registerAllTools } from './tools/index.js';
 import { getGuardrailConfig } from './utils/guardrails.js';
 
@@ -23,10 +24,12 @@ export function createGtmMcpServer(auth: OAuth2Client): McpServer {
     }
   );
 
-  // Lazy client getter — created once auth is available
+  // Lazy client getters — created once auth is available
   const getClient = () => getGtmClient(auth);
+  const getGa4Client = () => getGa4AdminClient(auth);
+  const getGa4AlphaClient = () => getGa4AdminAlphaClient(auth);
 
-  registerAllTools(server, getClient);
+  registerAllTools(server, getClient, getGa4Client, getGa4AlphaClient);
 
   return server;
 }
@@ -41,7 +44,8 @@ function buildInstructions(config: ReturnType<typeof getGuardrailConfig>): strin
   return [
     'Samarth Analytics — Google Tag Manager MCP Server',
     '',
-    'This server provides full access to the Google Tag Manager API v2.',
+    'This server provides full access to the Google Tag Manager API v2, plus a ' +
+      'read-only Google Analytics (GA4) Admin API tool surface.',
     '',
     'Current mode: ' + (modes.length > 0 ? modes.join(', ') : 'Full write access enabled'),
     '',
@@ -72,6 +76,18 @@ function buildInstructions(config: ReturnType<typeof getGuardrailConfig>): strin
     '- workspace_get_status — review the change diff (changed entities + conflicts) before versioning',
     '- audit_container — inspect for analytics issues',
     '- export_container — full workspace export as JSON',
+    '',
+    'GA4 ADMIN (READ-ONLY) — Google Analytics Admin API v1beta:',
+    '- ga4_account_summaries_list — discover GA4 accounts + property summaries',
+    '- ga4_properties_list, ga4_property_get',
+    '- ga4_data_streams_list, ga4_enhanced_measurement_get (web streams + measurement IDs)',
+    '- ga4_custom_dimensions_list, ga4_custom_metrics_list',
+    '- ga4_data_retention_get',
+    '- ga4_key_events_list (formerly conversion events), ga4_google_ads_links_list',
+    '  These tools never write/delete and need no confirm flag. They require the',
+    "  'analytics.readonly' OAuth scope — re-run npm run auth:google if a 403 mentions scope.",
+    '  Not exposed by Admin API v1beta (documented limitations, not faked): internal-traffic/',
+    '  unwanted-referral data filters, referral exclusions, channel groups, audiences.',
     '',
     'PAGINATION: All list tools that support it auto-follow pagination to return all results. ',
     'Pass maxPages to bound the work; truncated results include truncated:true and nextPageToken to resume.',
