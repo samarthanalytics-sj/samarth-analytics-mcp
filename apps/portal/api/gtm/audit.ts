@@ -1,25 +1,29 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import crypto from "node:crypto";
-import {
-  runConsentAudit,
-  type ConsentAuditResult,
-  type ConsentConfigInput,
-  type ConsentFinding,
-  type ConsentStateLabel,
-  type RuntimeConsentEvent,
-  type RuntimeCookie,
-  type RuntimeHit as ConsentRuntimeHit,
-  type RuntimeInput as ConsentRuntimeInput,
-  type RuntimePage as ConsentRuntimePage,
+import type {
+  ConsentAuditResult,
+  ConsentConfigInput,
+  ConsentFinding,
+  ConsentStateLabel,
+  RuntimeConsentEvent,
+  RuntimeCookie,
+  RuntimeHit as ConsentRuntimeHit,
+  RuntimeInput as ConsentRuntimeInput,
+  RuntimePage as ConsentRuntimePage,
 } from "../../shared/consent-audit";
 
 /**
  * /api/gtm/audit
  *
  * Evidence-based GTM QC auditor. Read-only against the GTM API v2.
- * Self-contained (no imports outside of `node:*`) so the route always
- * bundles on Vercel. The canonical engine still lives at
- * `apps/portal/server/gtm/audit.ts` for the Express dev server.
+ * Self-contained at module load (only `node:*` runtime imports) so the route
+ * always bundles and evaluates on Vercel. The consent engine in
+ * `../../shared/consent-audit` is referenced for *types* only here and pulled
+ * in lazily via `await import(...)` inside `runAudit()`, i.e. *after* session
+ * validation. This guarantees unauthenticated probes get a clean 401 before
+ * the shared module is ever evaluated, and any import failure surfaces as
+ * JSON instead of a platform FUNCTION_INVOCATION_FAILED. The canonical engine
+ * still lives at `apps/portal/server/gtm/audit.ts` for the Express dev server.
  *
  * Design rules:
  * - Only report what the configuration shows. No claims about runtime
@@ -494,7 +498,7 @@ export default async function handler(
           ? await pullDataApiState(token, ga4PropertyId)
           : null;
 
-      const summary = runAudit(state, {
+      const summary = await runAudit(state, {
         containerPublicId: containerPublicId ?? containerId,
         ga4,
         runtime,
@@ -2217,7 +2221,7 @@ function buildSummary(findings: AuditFinding[], itemsChecked: number): string {
   return `${parts[0]}: ${parts.slice(1).join(", ")}.`;
 }
 
-function runAudit(
+async function runAudit(
   state: AuditState,
   opts: {
     containerPublicId: string;
@@ -2226,7 +2230,7 @@ function runAudit(
     sgtm?: SgtmContextState | null;
     dataApi?: DataApiState | null;
   },
-): AuditSummary {
+): Promise<AuditSummary> {
   const runtime = opts.runtime ?? null;
   const sgtm = opts.sgtm ?? null;
   const dataApi = opts.dataApi ?? null;
@@ -2247,11 +2251,31 @@ function runAudit(
   // C. Consent Mode v2 + runtime proof engine (pure module — see
   // shared/consent-audit.ts). Covers CONFIG-only checks, and (when a capture
   // was imported) RUNTIME-only and CONFIG+RUNTIME reconciliation checks.
-  const consentResult: ConsentAuditResult = runConsentAudit(
-    toConsentConfigInput(ctx),
-    toConsentRuntimeInput(runtime),
-  );
-  for (const cf of consentResult.findings) findings.push(consentFindingToAudit(cf));
+  // Loaded lazily so the shared module is only evaluated here, after the
+  // handler has already validated the session. An import failure is caught and
+  // recorded as a finding instead of crashing the function.
+  let consentResult: ConsentAuditResult | null = null;
+  try {
+    const { runConsentAudit } = await import("../../shared/consent-audit");
+    consentResult = runConsentAudit(
+      toConsentConfigInput(ctx),
+      toConsentRuntimeInput(runtime),
+    );
+    for (const cf of consentResult.findings) findings.push(consentFindingToAudit(cf));
+  } catch (e) {
+    findings.push({
+      id: "consent-engine-unavailable",
+      category: "consent",
+      title: "Consent Mode v2 checks could not run",
+      description:
+        "The consent audit engine failed to load, so Consent Mode v2 checks were skipped. The rest of the audit ran normally.",
+      severity: "low",
+      whyItMatters:
+        "Consent Mode v2 coverage was not evaluated for this run; rerun the audit to obtain it.",
+      finding: safeErrorName(e),
+      needsManualReview: true,
+    });
+  }
   // D. Data quality
   ruleHardcodedIds(ctx, findings);
   ruleDataLayerNoDefault(ctx, findings);
@@ -2364,12 +2388,14 @@ function runAudit(
     domainMaturity,
     heatMap,
     roadmap,
-    consentAudit: {
-      coverage: consentResult.coverage,
-      runtimeStates: consentResult.runtimeStates,
-      stateCoverage: consentResult.stateCoverage,
-      findingCount: consentResult.findings.length,
-    },
+    consentAudit: consentResult
+      ? {
+          coverage: consentResult.coverage,
+          runtimeStates: consentResult.runtimeStates,
+          stateCoverage: consentResult.stateCoverage,
+          findingCount: consentResult.findings.length,
+        }
+      : undefined,
   };
 }
 
