@@ -1,3 +1,9 @@
+## [1.12.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.11.1...v1.12.0) (2026-06-01)
+
+### Features
+
+* **portal:** add Consent Mode v2 runtime proof engine ([75809aa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/75809aa6c6a3b5a02df94fcdde3dd69afc5f1d9f))
+
 ## [1.11.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.11.0...v1.11.1) (2026-06-01)
 
 ### Bug Fixes
