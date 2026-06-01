@@ -1,3 +1,9 @@
+## [1.6.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.6.0...v1.6.1) (2026-06-01)
+
+### Bug Fixes
+
+* **portal:** show live GTM containers responsively ([9552e07](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9552e07cf7d27c3c8d4bb35d8aaee2320511eabd))
+
 ## [1.6.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.5.2...v1.6.0) (2026-05-29)
 
 ### Features
