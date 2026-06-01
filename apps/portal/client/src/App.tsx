@@ -8,6 +8,7 @@ import NotFound from "@/pages/not-found";
 import OverviewPage from "@/pages/overview";
 import ContainersPage from "@/pages/containers";
 import AuditPage from "@/pages/audit";
+import ServerSidePage from "@/pages/server-side";
 import RecommendPage from "@/pages/recommend";
 import ApprovalsPage from "@/pages/approvals";
 import ProfilePage from "@/pages/profile";
@@ -21,6 +22,7 @@ function AppRouter() {
       <Route path="/" component={OverviewPage} />
       <Route path="/containers" component={ContainersPage} />
       <Route path="/audit" component={AuditPage} />
+      <Route path="/server-side" component={ServerSidePage} />
       <Route path="/recommend" component={RecommendPage} />
       <Route path="/approvals" component={ApprovalsPage} />
       <Route path="/profile" component={ProfilePage} />

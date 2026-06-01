@@ -99,6 +99,7 @@ apps/portal
 | `/#/`            | Landing + KPIs + onboarding   |
 | `/#/containers`  | Mixed-source container table  |
 | `/#/audit`       | Audit workspace with findings |
+| `/#/server-side` | sGTM server container visibility |
 | `/#/recommend`   | Recommendation builder        |
 | `/#/approvals`   | Approval queue (status chips) |
 
@@ -166,6 +167,8 @@ The portal now implements a live, browser-driven QC audit:
 | `/api/gtm/accounts/:accountId/containers`                                        | GET    | List containers                      |
 | `/api/gtm/accounts/:accountId/containers/:containerId/workspaces`                | GET    | List workspaces                      |
 | `/api/gtm/audit`                                                                 | POST   | Run the QC audit on a workspace      |
+| `/api/gtm/sgtm`                                                                  | POST   | Read a server (sGTM) container (read-only) |
+| `/api/ga4/admin`                                                                 | POST   | GA4 Admin reads (account summaries, data streams) |
 
 ### Production notes (non-negotiable)
 
@@ -176,6 +179,62 @@ The portal now implements a live, browser-driven QC audit:
   For production multi-instance, move the session map to Redis or a database.
 - All cookies are `HttpOnly` + `SameSite=Lax`, and `Secure` when
   `NODE_ENV=production`. Always serve the production portal over HTTPS.
+
+## Audit sources & coverage
+
+The audit is **capability-aware**: every finding is tagged with the source(s)
+that produced it, and the coverage matrix states plainly what could *not* be
+checked. A clean single-source audit is **not** a clean audit overall.
+
+| Source       | What it reads                                              | Status (hosted/Vercel) |
+|--------------|------------------------------------------------------------|------------------------|
+| `CONFIG`     | GTM workspace: tags, triggers, variables, versions         | Covered                |
+| `GA4_ADMIN`  | GA4 Admin API: properties, data streams, dimensions        | Covered when a GA4 property is selected and reads succeed |
+| `SGTM`       | Server container: clients, transformations, zones, etc.    | **Available** via the Server-side panel (not folded into the audit run) |
+| `RUNTIME`    | Live browser: network hits, dataLayer, console, tag order  | **Not Covered** on Vercel — requires the local runtime harness |
+
+### Server-side (sGTM) visibility
+
+The **Server-side** page (`/#/server-side`, backed by `POST /api/gtm/sgtm`)
+reads a GTM **server** container's resources using the connected session:
+
+- clients (with extracted claim paths / criteria parameters)
+- transformations, zones, templates
+- gtag config and container-level (Google tag) destinations
+
+It is strictly **read-only** (list/get only; no create/update/delete/publish).
+When the selected container is not a server container it returns an explanatory
+state instead of fabricating coverage, and per-resource read failures are
+surfaced verbatim so gaps show as Partial / failures rather than a false clean.
+
+Because the audit engine does not call this route, the audit's `sgtm-clients`
+coverage row stays **Not Covered** there (no faked parity) and points you to the
+Server-side panel for the actual reads.
+
+### Runtime capture harness (RUNTIME)
+
+`RUNTIME` confirmation (does the tag actually fire? what hits the network? what
+does the dataLayer look like?) cannot run in Vercel — serverless functions have
+no browser and a hard time budget. It runs as a **local / CI-worker** harness:
+
+```bash
+# one-time (optional dependency — kept out of the serverless bundle)
+npm i -D playwright
+npx playwright install chromium
+
+# capture a page (read-only: it navigates and observes, nothing more)
+npm run runtime:capture -- --url https://example.com --output runtime-capture.json
+```
+
+The harness (`apps/portal/scripts/runtime-capture.mjs`) records page URL,
+console/page errors, analytics network hits (GA4 `/g/collect`, Meta `/tr`,
+Google Ads / Floodlight, and more), a network request count, and dataLayer
+snapshots before/after load. Playwright is loaded via a dynamic import — if it
+is not installed the script prints install instructions and exits non-zero
+rather than emitting an empty/fake capture.
+
+Until a capture artifact is produced and connected, the hosted audit reports
+`RUNTIME` as **Not Covered**.
 
 ## Other integration TODOs
 

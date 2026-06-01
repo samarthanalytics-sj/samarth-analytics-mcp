@@ -11,6 +11,7 @@ import {
   CircleUserRound,
   ShieldCheck,
   UserCircle2,
+  ServerCog,
 } from "lucide-react";
 import { BrandLogo } from "./brand-logo";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +38,7 @@ const NAV: NavItem[] = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/containers", label: "Containers", icon: Boxes },
   { href: "/audit", label: "Audit", icon: ClipboardCheck },
+  { href: "/server-side", label: "Server-side", icon: ServerCog },
   { href: "/recommend", label: "Recommendations", icon: Sparkles },
   { href: "/approvals", label: "Approvals", icon: GitPullRequest },
   { href: "/profile", label: "Profile", icon: UserCircle2 },
