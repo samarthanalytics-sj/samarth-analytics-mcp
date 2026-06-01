@@ -7,6 +7,7 @@ import {
   Variable,
   Search,
   ShieldAlert,
+  ShieldCheck,
   CheckCircle2,
   RefreshCw,
   Play,
@@ -667,6 +668,20 @@ export default function AuditPage() {
           </div>
         )}
 
+        {/* Consent Mode v2 proof */}
+        {audit && (
+          <div className="mt-6">
+            <SectionTitle
+              title="Consent Mode v2 proof"
+              hint="Live consent behaviour is only claimed when a runtime capture is imported. Without one, this is a config-only inspection."
+            />
+            <ConsentProofCard
+              consentAudit={audit.consentAudit}
+              runtimeReady={Boolean(runtimeCapture)}
+            />
+          </div>
+        )}
+
         {/* Roadmap */}
         {audit?.roadmap && audit.roadmap.length > 0 && (
           <div className="mt-6">
@@ -816,7 +831,7 @@ function CrossSourceInputs(props: {
           <Textarea
             value={props.runtimeText}
             onChange={(e) => props.onRuntimeText(e.target.value)}
-            placeholder='Paste a runtime-worker / CLI capture artifact ({"schema":"samarth.runtime-capture/v2", ...}). Generate one with the runtime-worker POST /capture or `node cli.mjs`.'
+            placeholder='Paste a runtime-worker / CLI capture artifact (schema "samarth.runtime-capture/v2" or v3 multi-state). For Consent Mode v2 proof, capture denied/granted/partial states: `node cli.mjs --url https://example.com --states default_denied,granted,analytics_granted_ads_denied`.'
             className="font-mono text-[11px] min-h-[90px]"
             data-testid="textarea-runtime"
           />
@@ -1015,6 +1030,102 @@ function SectionTitle({ title, hint }: { title: string; hint?: string }) {
       </h3>
       {hint && <div className="text-[11px] text-muted-foreground mt-0.5">{hint}</div>}
     </div>
+  );
+}
+
+function ConsentProofCard({
+  consentAudit,
+  runtimeReady,
+}: {
+  consentAudit?: AuditSummary["consentAudit"];
+  runtimeReady: boolean;
+}) {
+  const coverage = consentAudit?.coverage ?? "config_only";
+  const coverageLabel =
+    coverage === "reconciled"
+      ? "Reconciled (config + runtime)"
+      : coverage === "runtime_imported"
+        ? "Runtime imported"
+        : "Config only";
+  const coverageTone =
+    coverage === "reconciled"
+      ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-300"
+      : coverage === "runtime_imported"
+        ? "border-sky-500/40 text-sky-700 dark:text-sky-300"
+        : "border-amber-500/40 text-amber-700 dark:text-amber-300";
+
+  const states = [
+    { key: "denied" as const, label: "Denied" },
+    { key: "granted" as const, label: "Granted" },
+    { key: "partial" as const, label: "Partial" },
+  ];
+  const sc = consentAudit?.stateCoverage;
+  const hasRuntime = coverage !== "config_only";
+
+  return (
+    <Card data-testid="card-consent-proof">
+      <CardContent className="py-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {hasRuntime ? (
+            <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
+          ) : (
+            <ShieldAlert className="h-4 w-4 text-amber-500 shrink-0" />
+          )}
+          <Badge variant="outline" className={`text-[10.5px] ${coverageTone}`}>
+            {coverageLabel}
+          </Badge>
+          {typeof consentAudit?.findingCount === "number" && (
+            <span className="text-xs text-muted-foreground">
+              {consentAudit.findingCount} consent finding
+              {consentAudit.findingCount === 1 ? "" : "s"}
+            </span>
+          )}
+        </div>
+
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
+            Consent states proven by capture
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {states.map((st) => {
+              const on = Boolean(sc?.[st.key]);
+              return (
+                <span
+                  key={st.key}
+                  data-testid={`consent-state-${st.key}`}
+                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] ${
+                    on
+                      ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-300"
+                      : "border-border/60 text-muted-foreground"
+                  }`}
+                >
+                  {on ? (
+                    <CheckCircle2 className="h-3 w-3" />
+                  ) : (
+                    <X className="h-3 w-3" />
+                  )}
+                  {st.label}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+
+        {consentAudit?.runtimeStates && consentAudit.runtimeStates.length > 0 && (
+          <div className="text-[11px] text-muted-foreground">
+            Captured states: {consentAudit.runtimeStates.join(", ")}
+          </div>
+        )}
+
+        {!hasRuntime && (
+          <div className="rounded-md bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-200">
+            {runtimeReady
+              ? "A runtime capture is loaded but it carries no usable consent states yet — re-run the audit to reconcile it."
+              : "No runtime capture imported. Consent Mode v2 was checked from GTM configuration only — live tag/cookie behaviour under denied/granted states is NOT verified. Import a capture (runtime-worker POST /capture or `node cli.mjs --states default_denied,granted,analytics_granted_ads_denied`) above to enable runtime proof and reconciliation."}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

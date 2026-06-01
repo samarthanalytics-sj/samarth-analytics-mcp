@@ -299,6 +299,18 @@ export interface AuditSummary {
   heatMap?: AuditHeatMapRow[];
   /** Prioritized roadmap (quick wins → structural fixes). */
   roadmap?: AuditRoadmapItem[];
+  /**
+   * Consent Mode v2 + runtime proof summary. `coverage` reflects whether the
+   * audit had config only, an imported runtime capture, or could reconcile the
+   * two. `stateCoverage` reports which declared consent states the capture
+   * exercised (denied / granted / partial).
+   */
+  consentAudit?: {
+    coverage: "config_only" | "runtime_imported" | "reconciled";
+    runtimeStates: string[];
+    stateCoverage: { denied: boolean; granted: boolean; partial: boolean };
+    findingCount: number;
+  };
 }
 
 export type RecommendationGoal =

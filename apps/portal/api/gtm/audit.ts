@@ -1,5 +1,17 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import crypto from "node:crypto";
+import {
+  runConsentAudit,
+  type ConsentAuditResult,
+  type ConsentConfigInput,
+  type ConsentFinding,
+  type ConsentStateLabel,
+  type RuntimeConsentEvent,
+  type RuntimeCookie,
+  type RuntimeHit as ConsentRuntimeHit,
+  type RuntimeInput as ConsentRuntimeInput,
+  type RuntimePage as ConsentRuntimePage,
+} from "../../shared/consent-audit";
 
 /**
  * /api/gtm/audit
@@ -175,20 +187,34 @@ interface RuntimeTrackerHit {
   method?: string;
   matched?: string[];
   groups?: string[];
+  /** Parsed query params (v3 captures stamp gcs/gcd/tid/en/…). */
+  query?: Record<string, string>;
+  /** ms since navigation start, when the capture recorded ordering. */
+  tMs?: number;
 }
 interface RuntimePageCapture {
   requestedUrl?: string;
   finalUrl?: string | null;
+  /** Declared Consent Mode state this page was captured under (v3). */
+  consentState?: ConsentStateLabel;
   consoleErrors?: string[];
   pageErrors?: string[];
   trackerHits?: RuntimeTrackerHit[];
   sgtmCandidates?: { url?: string }[];
   dataLayerEvents?: string[];
   dataLayerKeys?: string[];
+  /** Consent default/update events observed in the dataLayer (v3). */
+  consentEvents?: RuntimeConsentEvent[];
+  /** Cookies observed, optionally with first-seen timing (v3). */
+  cookies?: RuntimeCookie[];
+  /** ms since navigation start of the first GA4 hit (v3). */
+  firstMeasurementTMs?: number;
 }
 interface RuntimeState {
   capturedAt?: string;
   pages: RuntimePageCapture[];
+  /** Distinct declared consent states present across pages (v3). */
+  states: ConsentStateLabel[];
   /** True when the artifact parsed into at least one page. */
   ok: boolean;
 }
@@ -348,6 +374,13 @@ interface AuditSummary {
   domainMaturity?: AuditDomainMaturity[];
   heatMap?: AuditHeatMapRow[];
   roadmap?: AuditRoadmapItem[];
+  /** Consent Mode v2 + runtime proof summary (see shared/consent-audit.ts). */
+  consentAudit?: {
+    coverage: "config_only" | "runtime_imported" | "reconciled";
+    runtimeStates: string[];
+    stateCoverage: { denied: boolean; granted: boolean; partial: boolean };
+    findingCount: number;
+  };
 }
 
 interface AuditState {
@@ -976,60 +1009,9 @@ function ruleGA4AllPages(ctx: Ctx, out: AuditFinding[]) {
   }
 }
 
-// C. Consent and privacy
-function ruleConsentSettings(ctx: Ctx, out: AuditFinding[]) {
-  const missing: string[] = [];
-  for (const tag of ctx.tags) {
-    if (!isMarketingOrAnalyticsTag(tag)) continue;
-    const consentStatus = tag.consentSettings?.consentStatus;
-    if (!consentStatus || consentStatus === "NOT_SET") {
-      missing.push(tag.name ?? "Unnamed tag");
-    }
-  }
-  if (missing.length > 0) {
-    pushFinding(out, {
-      id: fid(`consent-not-set:${missing.length}`),
-      category: "consent",
-      severity: "high",
-      finding: `${missing.length} marketing/analytics tag(s) have no consent settings configured`,
-      affected: missing.slice(0, 20),
-      whyItMatters:
-        "When consentSettings is NOT_SET the tag will fire regardless of consent state. Consent Mode v2 requires explicit consent checks for marketing/analytics tags in regulated regions.",
-      suggestedFix:
-        "Set consentSettings to NEEDED (or NOT_NEEDED with justification) for each tag that loads marketing or analytics scripts/pixels.",
-      sources: ["CONFIG"],
-      parameter: "consentSettings.consentStatus",
-      businessImpact:
-        "Firing marketing/analytics tags without consent in regulated regions is a compliance risk (GDPR, ePrivacy, CCPA).",
-      effort: "M",
-    });
-  }
-}
-
-function ruleConsentSignalsPresent(ctx: Ctx, out: AuditFinding[]) {
-  const hasAdStorage = /ad_storage/.test(ctx.textBlob);
-  const hasAnalyticsStorage = /analytics_storage/.test(ctx.textBlob);
-  const hasConsentEvent =
-    /consent[_\s-]?(update|default|granted|denied)/.test(ctx.textBlob);
-  if (!hasAdStorage && !hasAnalyticsStorage && !hasConsentEvent) {
-    pushFinding(out, {
-      id: fid("consent-missing"),
-      category: "consent",
-      severity: "medium",
-      finding: "No Consent Mode v2 signals were found in tag or variable configuration",
-      whyItMatters:
-        "No references to ad_storage, analytics_storage, or consent default/update were found across tags or variables. A CMP outside GTM may still be supplying consent — this needs manual confirmation.",
-      suggestedFix:
-        "Confirm a CMP is initialising Consent Mode v2 before marketing/analytics tags fire. If consent is managed inside GTM, add the appropriate signals.",
-      needsManualReview: true,
-      sources: ["CONFIG"],
-      parameter: "ad_storage / analytics_storage / consent",
-      businessImpact:
-        "Without verified consent signalling, regulated jurisdictions may see non-compliant tag firing.",
-      effort: "M",
-    });
-  }
-}
+// C. Consent Mode v2 — see runConsentAudit() / shared/consent-audit.ts. The
+// CONFIG, RUNTIME, and reconciliation consent rules now live in that pure,
+// separately-tested module and are invoked from runAudit().
 
 // D. Data quality
 function ruleHardcodedIds(ctx: Ctx, out: AuditFinding[]) {
@@ -1857,39 +1839,8 @@ function ruleRuntimeConfiguredEventsNotObserved(ctx: Ctx, out: AuditFinding[]) {
   });
 }
 
-function ruleRuntimeConsentSignals(ctx: Ctx, out: AuditFinding[]) {
-  const rt = ctx.runtime;
-  if (!rt?.ok) return;
-  // Inspect GA4 collect hit URLs for the Consent Mode signal params gcs/gcd.
-  let ga4Hits = 0;
-  let withConsent = 0;
-  for (const page of rt.pages) {
-    for (const h of page.trackerHits ?? []) {
-      if (!(h.groups ?? []).includes("ga4")) continue;
-      ga4Hits++;
-      const url = h.url ?? "";
-      if (/[?&](gcs|gcd)=/.test(url)) withConsent++;
-    }
-  }
-  if (ga4Hits === 0) return;
-  if (withConsent === 0) {
-    pushFinding(out, {
-      id: fid(`rt-consent-missing:${ga4Hits}`),
-      category: "consent",
-      severity: "medium",
-      finding: "GA4 hits observed without Consent Mode signals (gcs/gcd)",
-      whyItMatters:
-        `${ga4Hits} GA4 collect request(s) were captured but none carried the gcs/gcd Consent Mode parameters. This suggests Consent Mode may not be wired up on the captured page(s).`,
-      suggestedFix:
-        "Verify Consent Mode v2 default/update is configured and that the CMP sets consent before GA4 fires.",
-      sources: ["RUNTIME"],
-      confidence: "medium",
-      businessImpact:
-        "Without Consent Mode signals, modelling and regional compliance behaviour may be incorrect.",
-      effort: "M",
-    });
-  }
-}
+// (Runtime Consent Mode signal checks moved to shared/consent-audit.ts and are
+// invoked via runConsentAudit() in runAudit.)
 
 // ── M. Cross-source: GTM CONFIG ↔ sGTM server container ───────────────────
 // Requires a selected server container (ctx.sgtm?.ok). Reconciles the web
@@ -2187,6 +2138,66 @@ function computeHealthScore(findings: AuditFinding[]): number {
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
+// ── Consent Mode v2 engine bridge ─────────────────────────────────────────
+// The Consent Mode v2 + runtime proof logic lives in the pure, separately
+// tested module shared/consent-audit.ts. Here we adapt the audit's Ctx/Runtime
+// into that module's plain-data inputs, run it, and map its findings back into
+// the route's AuditFinding shape. CONFIG-only consent rules from that engine
+// REPLACE the older inline ruleConsentSettings/ruleConsentSignalsPresent so a
+// container is never double-flagged.
+
+function toConsentConfigInput(ctx: Ctx): ConsentConfigInput {
+  return {
+    tags: ctx.tags as unknown as ConsentConfigInput["tags"],
+    triggers: ctx.triggers as unknown as ConsentConfigInput["triggers"],
+    variables: ctx.variables as unknown as ConsentConfigInput["variables"],
+    textBlob: ctx.textBlob,
+    usageContexts: (ctx.container?.usageContext ?? []).map((u) => u.toLowerCase()),
+  };
+}
+
+function toConsentRuntimeInput(rt: RuntimeState | null): ConsentRuntimeInput | null {
+  if (!rt?.ok) return null;
+  const pages: ConsentRuntimePage[] = rt.pages.map((p) => ({
+    requestedUrl: p.requestedUrl,
+    finalUrl: p.finalUrl,
+    consentState: p.consentState,
+    consoleErrors: p.consoleErrors,
+    pageErrors: p.pageErrors,
+    trackerHits: (p.trackerHits ?? []) as unknown as ConsentRuntimeHit[],
+    dataLayerEvents: p.dataLayerEvents,
+    dataLayerKeys: p.dataLayerKeys,
+    consentEvents: p.consentEvents,
+    cookies: p.cookies,
+    firstMeasurementTMs: p.firstMeasurementTMs,
+  }));
+  return { capturedAt: rt.capturedAt, pages, states: rt.states, ok: true };
+}
+
+function consentFindingToAudit(f: ConsentFinding): AuditFinding {
+  return {
+    id: fid(`consent:${f.id}`),
+    category: "consent",
+    title: f.finding,
+    description: f.whyItMatters,
+    severity: f.severity,
+    finding: f.finding,
+    affected: f.affected,
+    whyItMatters: f.whyItMatters,
+    suggestedFix:
+      f.evidence && f.evidence.length
+        ? `${f.suggestedFix} Evidence: ${f.evidence.join(" | ")}`
+        : f.suggestedFix,
+    needsManualReview: f.needsManualReview,
+    sources: f.sources,
+    confidence: f.confidence,
+    entity: f.entity,
+    parameter: f.parameter,
+    businessImpact: f.businessImpact,
+    effort: f.effort,
+  };
+}
+
 function buildSummary(findings: AuditFinding[], itemsChecked: number): string {
   const counts: Record<AuditSeverity, number> = {
     critical: 0,
@@ -2233,9 +2244,14 @@ function runAudit(
   ruleGA4MeasurementIdsConsistent(ctx, findings);
   ruleGA4EventCompleteness(ctx, findings);
   ruleGA4AllPages(ctx, findings);
-  // C. Consent & privacy
-  ruleConsentSettings(ctx, findings);
-  ruleConsentSignalsPresent(ctx, findings);
+  // C. Consent Mode v2 + runtime proof engine (pure module — see
+  // shared/consent-audit.ts). Covers CONFIG-only checks, and (when a capture
+  // was imported) RUNTIME-only and CONFIG+RUNTIME reconciliation checks.
+  const consentResult: ConsentAuditResult = runConsentAudit(
+    toConsentConfigInput(ctx),
+    toConsentRuntimeInput(runtime),
+  );
+  for (const cf of consentResult.findings) findings.push(consentFindingToAudit(cf));
   // D. Data quality
   ruleHardcodedIds(ctx, findings);
   ruleDataLayerNoDefault(ctx, findings);
@@ -2265,7 +2281,7 @@ function runAudit(
   ruleRuntimeGa4PageViews(ctx, findings);
   ruleRuntimeConsoleErrors(ctx, findings);
   ruleRuntimeConfiguredEventsNotObserved(ctx, findings);
-  ruleRuntimeConsentSignals(ctx, findings);
+  // (Consent Mode signal checks for runtime are handled by runConsentAudit above.)
   // M. Cross-source: CONFIG ↔ SGTM (only when a server container was selected).
   ruleSgtmTransportMatch(ctx, findings);
   ruleSgtmGa4ClientPresence(ctx, findings);
@@ -2348,6 +2364,12 @@ function runAudit(
     domainMaturity,
     heatMap,
     roadmap,
+    consentAudit: {
+      coverage: consentResult.coverage,
+      runtimeStates: consentResult.runtimeStates,
+      stateCoverage: consentResult.stateCoverage,
+      findingCount: consentResult.findings.length,
+    },
   };
 }
 
@@ -3237,20 +3259,59 @@ function parseRuntimeCapture(raw: unknown): RuntimeState | null {
                       : id,
                 )
                 .filter(Boolean);
+          const query =
+            h.query && typeof h.query === "object" && !Array.isArray(h.query)
+              ? Object.fromEntries(
+                  Object.entries(h.query as Record<string, unknown>)
+                    .filter(([, v]) => typeof v === "string")
+                    .map(([k, v]) => [k, v as string]),
+                )
+              : undefined;
           return {
             url: typeof h.url === "string" ? h.url : undefined,
             method: typeof h.method === "string" ? h.method : undefined,
             matched,
             groups,
+            query,
+            tMs: typeof h.tMs === "number" ? h.tMs : undefined,
           };
         })
       : [];
     const strArr = (v: unknown): string[] =>
       Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    const consentEvents: RuntimeConsentEvent[] = Array.isArray(p.consentEvents)
+      ? (p.consentEvents as Record<string, unknown>[]).map((e) => {
+          const fields =
+            e.fields && typeof e.fields === "object" && !Array.isArray(e.fields)
+              ? (Object.fromEntries(
+                  Object.entries(e.fields as Record<string, unknown>).filter(
+                    ([, v]) => v === "granted" || v === "denied",
+                  ),
+                ) as RuntimeConsentEvent["fields"])
+              : undefined;
+          return {
+            kind: typeof e.kind === "string" ? e.kind : undefined,
+            tMs: typeof e.tMs === "number" ? e.tMs : undefined,
+            fields,
+          };
+        })
+      : [];
+    const cookies: RuntimeCookie[] = Array.isArray(p.cookies)
+      ? (p.cookies as unknown[]).map((c) => {
+          if (typeof c === "string") return { name: c };
+          const obj = (c ?? {}) as Record<string, unknown>;
+          return {
+            name: typeof obj.name === "string" ? obj.name : undefined,
+            tMs: typeof obj.tMs === "number" ? obj.tMs : undefined,
+          };
+        })
+      : [];
     return {
       requestedUrl:
         typeof p.requestedUrl === "string" ? p.requestedUrl : undefined,
       finalUrl: typeof p.finalUrl === "string" ? p.finalUrl : null,
+      consentState:
+        typeof p.consentState === "string" ? p.consentState : undefined,
       consoleErrors: strArr(p.consoleErrors),
       pageErrors: strArr(p.pageErrors),
       trackerHits: hits,
@@ -3259,12 +3320,44 @@ function parseRuntimeCapture(raw: unknown): RuntimeState | null {
         : [],
       dataLayerEvents: strArr(p.dataLayerEvents),
       dataLayerKeys: strArr(p.dataLayerKeys),
+      consentEvents,
+      cookies,
+      firstMeasurementTMs:
+        typeof p.firstMeasurementTMs === "number"
+          ? p.firstMeasurementTMs
+          : undefined,
     };
   };
 
   let pages: RuntimePageCapture[] = [];
-  if (Array.isArray(obj.pages)) {
+  if (Array.isArray(obj.states)) {
+    // v3 grouped-by-state artifact: states: [{ state, pages: [...] }, ...].
+    for (const block of obj.states as Record<string, unknown>[]) {
+      const stateLabel =
+        typeof block.state === "string" ? block.state : undefined;
+      const blockPages = Array.isArray(block.pages)
+        ? (block.pages as Record<string, unknown>[])
+        : [];
+      for (const p of blockPages) {
+        const np = normalizePage(p);
+        // Block-level state is the default; a page may override it.
+        if (!np.consentState && stateLabel) np.consentState = stateLabel;
+        pages.push(np);
+      }
+    }
+  } else if (Array.isArray(obj.pages)) {
     pages = (obj.pages as Record<string, unknown>[]).map(normalizePage);
+    // A top-level consentState/declaredConsentState applies to all pages that
+    // do not declare their own (v2 single-state captures).
+    const topState =
+      typeof obj.declaredConsentState === "string"
+        ? (obj.declaredConsentState as string)
+        : typeof obj.consentStateLabel === "string"
+          ? (obj.consentStateLabel as string)
+          : undefined;
+    if (topState) {
+      for (const p of pages) if (!p.consentState) p.consentState = topState;
+    }
   } else if (typeof obj.requestedUrl === "string" || obj.trackerHits) {
     // Legacy v1 single-page artifact — wrap it. Derive dataLayer events from
     // dataLayerAfter if event names were not pre-extracted.
@@ -3283,9 +3376,17 @@ function parseRuntimeCapture(raw: unknown): RuntimeState | null {
   }
 
   if (pages.length === 0) return null;
+  const states = Array.from(
+    new Set(
+      pages
+        .map((p) => p.consentState)
+        .filter((s): s is ConsentStateLabel => typeof s === "string" && s.length > 0),
+    ),
+  );
   return {
     capturedAt: typeof obj.capturedAt === "string" ? obj.capturedAt : undefined,
     pages,
+    states,
     ok: true,
   };
 }
