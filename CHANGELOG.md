@@ -1,3 +1,9 @@
+## [1.7.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.6.1...v1.7.0) (2026-06-01)
+
+### Features
+
+* **mcp:** expand GTM API v2 parity coverage ([41960b4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/41960b48854b280db7ca7dbb05b2c61473e175f5))
+
 ## [1.6.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.6.0...v1.6.1) (2026-06-01)
 
 ### Bug Fixes
