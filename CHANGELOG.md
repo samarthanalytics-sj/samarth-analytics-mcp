@@ -1,3 +1,9 @@
+## [1.12.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.12.1...v1.12.2) (2026-06-01)
+
+### Bug Fixes
+
+* **portal:** make audit coverage gaps actionable ([42b50ca](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/42b50ca228984c6cddc5ec970faec941e256a91d))
+
 ## [1.12.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.12.0...v1.12.1) (2026-06-01)
 
 ### Bug Fixes
