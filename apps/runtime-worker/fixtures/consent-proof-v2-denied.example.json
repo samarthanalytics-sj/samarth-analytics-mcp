@@ -1,0 +1,42 @@
+{
+  "schema": "samarth.runtime-capture/v2",
+  "capturedAt": "2026-06-01T00:00:00.000Z",
+  "requestedUrls": ["https://example.com/"],
+  "consentState": {
+    "ad_storage": "denied",
+    "analytics_storage": "denied",
+    "ad_user_data": "denied",
+    "ad_personalization": "denied"
+  },
+  "notes": [
+    "Single-state (v2) passive capture under a default-denied consent state.",
+    "EXAMPLE fixture for documentation and tests — not a real capture.",
+    "A correctly wired site still sends a cookieless GA4 ping under denial with gcs=G100."
+  ],
+  "pages": [
+    {
+      "requestedUrl": "https://example.com/",
+      "finalUrl": "https://example.com/",
+      "consentState": "default_denied",
+      "consoleErrors": [],
+      "pageErrors": [],
+      "consentEvents": [
+        { "kind": "default", "tMs": 110, "fields": { "ad_storage": "denied", "analytics_storage": "denied", "ad_user_data": "denied", "ad_personalization": "denied" } }
+      ],
+      "firstMeasurementTMs": 450,
+      "trackerHits": [
+        {
+          "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-XXXX&en=page_view&gcs=G100&gcd=11111",
+          "method": "POST",
+          "groups": ["ga4"],
+          "matched": ["ga4_collect"],
+          "query": { "gcs": "G100", "gcd": "11111", "tid": "G-XXXX", "en": "page_view" },
+          "tMs": 450
+        }
+      ],
+      "cookies": [],
+      "dataLayerEvents": ["gtm.js", "gtm.dom", "gtm.load"],
+      "dataLayerKeys": ["event", "consent"]
+    }
+  ]
+}

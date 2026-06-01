@@ -25,7 +25,7 @@
 
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { capture, summarizeCapture, loadPlaywright, PlaywrightMissingError } from "./capture.mjs";
+import { capture, captureConsentStates, summarizeCapture, loadPlaywright, PlaywrightMissingError } from "./capture.mjs";
 
 const PORT = Number(process.env.PORT) || 8080;
 const TOKEN = (process.env.RUNTIME_WORKER_TOKEN ?? "").trim();
@@ -183,10 +183,19 @@ const server = createServer(async (req, res) => {
     const timeout = Math.min(Number(body.timeout) || NAV_TIMEOUT, NAV_TIMEOUT);
 
     try {
-      const artifact = await capture(
-        { urls, consentState: body.consentState, actions: body.actions },
-        { wait, timeout },
-      );
+      // Multi-state proof capture when `consentStates` is supplied; otherwise a
+      // single-state (or no-consent) capture for backwards compatibility.
+      const wantsMultiState =
+        Array.isArray(body.consentStates) && body.consentStates.length > 0;
+      const artifact = wantsMultiState
+        ? await captureConsentStates(
+            { urls, consentStates: body.consentStates, actions: body.actions },
+            { wait, timeout },
+          )
+        : await capture(
+            { urls, consentState: body.consentState, actions: body.actions },
+            { wait, timeout },
+          );
       return sendJson(res, 200, {
         ...artifact,
         summary: summarizeCapture(artifact),

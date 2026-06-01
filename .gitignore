@@ -11,3 +11,6 @@ coverage/
 # OAuth token storage written by `npm run auth:google`
 .gtm-mcp-tokens.json
 *.gtm-mcp-tokens.json
+
+# Vercel CLI local artifacts
+.vercel/
