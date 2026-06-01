@@ -211,6 +211,12 @@ export interface AuditSummary {
   toolFailures?: AuditToolFailure[];
   /** Sentence summary: e.g. "Checked 47 items: 1 Critical, 3 High, 5 Medium, 2 Low." */
   summary?: string;
+  /**
+   * GA4 measurement IDs (G-XXXX / GT-XXXX) discovered on GTM GA4 config/event
+   * tags. Used by the audit page to auto-match a GA4 property for cross-source
+   * reconciliation. Empty when the container has no GA4 tags.
+   */
+  gtmMeasurementIds?: string[];
 
   // ── New: capability-aware, source-tagged audit output ────────────────────
   /** Which audit sources are connected/available for this run. */
@@ -317,6 +323,27 @@ export interface GtmWorkspaceSummary {
   workspaceId: string;
   name: string;
   description?: string;
+}
+
+/** A GA4 property (flattened from account summaries) for the audit selector. */
+export interface Ga4PropertySummary {
+  /** Numeric property id without the "properties/" prefix, e.g. "123456789". */
+  propertyId: string;
+  displayName: string;
+  accountName: string;
+  accountId: string;
+}
+
+/** A GA4 web data stream, used to auto-match a GTM measurement ID. */
+export interface Ga4DataStreamSummary {
+  /** Full resource name: properties/123/dataStreams/456. */
+  name: string;
+  /** Numeric data stream id (last path segment). */
+  dataStreamId: string;
+  displayName: string;
+  type?: string;
+  /** Measurement ID (G-XXXXXXX) for web streams. */
+  measurementId?: string;
 }
 
 export const GOAL_LABELS: Record<RecommendationGoal, string> = {

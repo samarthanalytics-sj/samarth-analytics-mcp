@@ -12,6 +12,9 @@ import crypto from "node:crypto";
 
 export const GTM_SCOPES = [
   "https://www.googleapis.com/auth/tagmanager.readonly",
+  // GA4 Admin API (read-only) — required for the portal's GA4_ADMIN audit
+  // coverage. Read-only; no GA4 resource is ever created/updated/deleted.
+  "https://www.googleapis.com/auth/analytics.readonly",
   "openid",
   "email",
   "profile",

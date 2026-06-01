@@ -16,6 +16,8 @@ import type {
   AuditSummary,
   ChangePlan,
   ContainerRecord,
+  Ga4DataStreamSummary,
+  Ga4PropertySummary,
   GtmAccountSummary,
   GtmContainerSummary,
   GtmWorkspaceSummary,
@@ -58,6 +60,10 @@ async function parseError(res: Response): Promise<Error & { status?: number; cod
 
   if (res.status === 401 || code === "not_connected" || code === "unauthorized") {
     message = "Google session expired. Please reconnect Google Tag Manager.";
+  } else if (code === "ga4_scope_missing") {
+    message =
+      message ||
+      "GA4 Admin access requires the Google Analytics read-only scope. Reconnect Google to grant it, then retry.";
   } else if (res.status === 403 || code === "forbidden") {
     message =
       message ||
@@ -176,15 +182,55 @@ export const portalApi = {
     return data.workspaces ?? [];
   },
 
+  // -------- Live GA4 Admin (read-only) --------
+  /**
+   * List GA4 properties the connected Google account can read. Powers the
+   * audit page's optional GA4 property selector / auto-match. Returns an empty
+   * list rather than throwing when GA4 is not connected, so the audit page
+   * degrades gracefully to CONFIG-only.
+   */
+  async listGa4Properties(): Promise<Ga4PropertySummary[]> {
+    const data = await postJson<{ properties?: Ga4PropertySummary[] }>(
+      "/api/ga4/admin",
+      { action: "account_summaries" },
+    );
+    return data.properties ?? [];
+  },
+
+  /**
+   * List the web/app data streams on a GA4 property. Used to auto-match a GTM
+   * GA4 measurement ID to a property when the user has not selected one.
+   */
+  async listGa4DataStreams(propertyId: string): Promise<Ga4DataStreamSummary[]> {
+    const data = await postJson<{
+      dataStreams?: {
+        name?: string;
+        type?: string;
+        displayName?: string;
+        webStreamData?: { measurementId?: string };
+      }[];
+    }>("/api/ga4/admin", { action: "data_streams", propertyId });
+    return (data.dataStreams ?? []).map((s) => ({
+      name: s.name ?? "",
+      dataStreamId: (s.name ?? "").split("/").pop() ?? "",
+      displayName: s.displayName ?? "",
+      type: s.type,
+      measurementId: s.webStreamData?.measurementId,
+    }));
+  },
+
   /**
    * Live audit. Provide the GTM account/container/workspace ids. Backend
    * pulls the workspace contents via GTM API v2 and runs portal QC rules.
+   * Optionally pass a `ga4PropertyId` to enable CONFIG ↔ GA4_ADMIN
+   * cross-source reconciliation findings.
    */
   async runLiveAudit(args: {
     accountId: string;
     containerId: string;
     workspaceId: string;
     containerPublicId?: string;
+    ga4PropertyId?: string;
   }): Promise<AuditSummary> {
     return postJson<AuditSummary>("/api/gtm/audit", args);
   },

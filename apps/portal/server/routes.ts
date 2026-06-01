@@ -263,6 +263,119 @@ export async function registerRoutes(
     }
   });
 
+  // ── GA4 Admin (read-only) ───────────────────────────────────────────────
+  // Dev-server parity with the Vercel route at apps/portal/api/ga4/admin.ts.
+  // Only list/get calls; never mutates GA4. Requires the analytics.readonly
+  // scope (the OAuth flow now requests it). Action-dispatched POST.
+  app.post("/api/ga4/admin", async (req, res) => {
+    const client = resolvePortalOAuthClient();
+    if (!client) return res.status(503).json({ error: "oauth_not_configured" });
+    const sid = getSid(req);
+    const sess = getSession(sid);
+    if (!sess) return res.status(401).json({ error: "not_connected" });
+
+    const GA4_READONLY = "https://www.googleapis.com/auth/analytics.readonly";
+    const scopes = sess.scopes ?? [];
+    if (scopes.length > 0 && !scopes.includes(GA4_READONLY)) {
+      return res.status(403).json({
+        error: "ga4_scope_missing",
+        message:
+          "GA4 Admin access requires the Google Analytics read-only scope. Reconnect Google to grant analytics.readonly, then retry.",
+        reconnect: true,
+      });
+    }
+
+    const token = await getValidAccessToken(sid, client);
+    if (!token) return res.status(401).json({ error: "not_connected" });
+
+    const body = (req.body ?? {}) as { action?: string; propertyId?: string };
+    const action = (body.action ?? "").trim();
+    const v1beta = "https://analyticsadmin.googleapis.com/v1beta";
+
+    const ga4Get = async (url: string): Promise<unknown> => {
+      const r = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      });
+      if (!r.ok) {
+        const text = await r.text();
+        const status = r.status === 401 ? 401 : r.status === 403 ? 403 : 502;
+        throw Object.assign(new Error(text.slice(0, 300)), { httpStatus: status });
+      }
+      return r.json();
+    };
+
+    try {
+      if (action === "account_summaries") {
+        const data = (await ga4Get(`${v1beta}/accountSummaries?pageSize=200`)) as {
+          accountSummaries?: {
+            account?: string;
+            displayName?: string;
+            propertySummaries?: { property?: string; displayName?: string }[];
+          }[];
+        };
+        const properties: {
+          propertyId: string;
+          displayName: string;
+          accountName: string;
+          accountId: string;
+        }[] = [];
+        for (const acc of data.accountSummaries ?? []) {
+          const accountId = (acc.account ?? "").replace(/^accounts\//, "");
+          for (const p of acc.propertySummaries ?? []) {
+            const propertyId = (p.property ?? "").replace(/^properties\//, "");
+            if (!propertyId) continue;
+            properties.push({
+              propertyId,
+              displayName: p.displayName ?? propertyId,
+              accountName: acc.displayName ?? accountId,
+              accountId,
+            });
+          }
+        }
+        return res.json({
+          accountSummaries: data.accountSummaries ?? [],
+          properties,
+        });
+      }
+      if (action === "data_streams") {
+        const propertyId = (body.propertyId ?? "").trim();
+        if (!propertyId) {
+          return res
+            .status(400)
+            .json({ error: "bad_request", message: "propertyId is required." });
+        }
+        const property = propertyId.startsWith("properties/")
+          ? propertyId
+          : `properties/${propertyId}`;
+        const data = (await ga4Get(
+          `${v1beta}/${property}/dataStreams?pageSize=200`,
+        )) as { dataStreams?: unknown[] };
+        return res.json({ dataStreams: data.dataStreams ?? [] });
+      }
+      return res
+        .status(400)
+        .json({ error: "bad_request", message: `Unknown action "${action}".` });
+    } catch (e) {
+      const status = (e as { httpStatus?: number }).httpStatus ?? 500;
+      const message = e instanceof Error ? e.message : "GA4 Admin request failed";
+      if (status === 403) {
+        return res.status(403).json({
+          error: "ga4_scope_missing",
+          message:
+            "GA4 Admin denied access. The analytics.readonly scope may be missing or the account lacks GA4 access. Reconnect Google.",
+          reconnect: true,
+          detail: message,
+        });
+      }
+      return res
+        .status(status === 401 ? 401 : 502)
+        .json({
+          error: status === 401 ? "unauthorized" : "ga4_api_error",
+          message,
+        });
+    }
+  });
+
   // Suppress unused-var warning while keeping the storage import wired
   void storage;
   return httpServer;
