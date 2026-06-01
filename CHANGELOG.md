@@ -1,3 +1,9 @@
+## [1.8.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.7.0...v1.8.0) (2026-06-01)
+
+### Features
+
+* **mcp:** add GA4 Admin read tools ([14daf2f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/14daf2f5def71e88080e94eaa93d0712d445501d))
+
 ## [1.7.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.6.1...v1.7.0) (2026-06-01)
 
 ### Features
