@@ -1,3 +1,9 @@
+## [1.12.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.12.0...v1.12.1) (2026-06-01)
+
+### Bug Fixes
+
+* **portal:** keep consent audit route Vercel-safe ([1858235](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/18582358a2831d5d8624d3aeed996ef65c28b605)), closes [#2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/2)
+
 ## [1.12.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.11.1...v1.12.0) (2026-06-01)
 
 ### Features
