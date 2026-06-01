@@ -313,6 +313,50 @@ export interface AuditSummary {
   };
 }
 
+// ── Consent Mode v2 focused audit (POST /api/gtm/consent-audit) ────────────
+// Response from the dedicated consent auditor. Mirrors the engine output in
+// shared/consent-audit.ts but flattens findings with a `layer` tag so the
+// Consent v2 page can split CONFIG / RUNTIME / reconciliation rows.
+
+export type ConsentAuditLayer = "config" | "runtime" | "reconcile";
+
+export interface ConsentAuditResponseFinding {
+  id: string;
+  severity: AuditSeverity;
+  confidence: AuditConfidence;
+  /** CONFIG and/or RUNTIME — which sources produced the finding. */
+  sources: ("CONFIG" | "RUNTIME")[];
+  finding: string;
+  whyItMatters: string;
+  suggestedFix: string;
+  businessImpact: string;
+  effort: AuditEffort;
+  needsManualReview?: boolean;
+  parameter?: string;
+  entity?: { name?: string; id?: string; path?: string };
+  affected?: string[];
+  evidence?: string[];
+  /** Which layer produced the finding (derived from `sources`). */
+  layer: ConsentAuditLayer;
+}
+
+export interface ConsentAuditResponse {
+  containerId: string;
+  containerPublicId?: string;
+  /** Container usageContext joined (e.g. "web" / "server"), when readable. */
+  containerType?: string;
+  generatedAt: string;
+  coverage: "config_only" | "runtime_imported" | "reconciled";
+  /** Distinct declared consent states exercised by the runtime capture. */
+  runtimeStates: string[];
+  stateCoverage: { denied: boolean; granted: boolean; partial: boolean };
+  counts: { tags: number; triggers: number; variables: number };
+  findingCount: number;
+  severityCounts: Record<AuditSeverity, number>;
+  findings: ConsentAuditResponseFinding[];
+  toolFailures?: AuditToolFailure[];
+}
+
 export type RecommendationGoal =
   | "ga4_ecommerce"
   | "consent_mode_v2"

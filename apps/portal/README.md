@@ -99,6 +99,7 @@ apps/portal
 | `/#/`            | Landing + KPIs + onboarding   |
 | `/#/containers`  | Mixed-source container table  |
 | `/#/audit`       | Audit workspace with findings |
+| `/#/consent-v2`  | Dedicated Consent Mode v2 audit (consent findings only) |
 | `/#/server-side` | sGTM server container visibility |
 | `/#/recommend`   | Recommendation builder        |
 | `/#/approvals`   | Approval queue (status chips) |
@@ -167,6 +168,7 @@ The portal now implements a live, browser-driven QC audit:
 | `/api/gtm/accounts/:accountId/containers`                                        | GET    | List containers                      |
 | `/api/gtm/accounts/:accountId/containers/:containerId/workspaces`                | GET    | List workspaces                      |
 | `/api/gtm/audit`                                                                 | POST   | Run the QC audit on a workspace      |
+| `/api/gtm/consent-audit`                                                         | POST   | Run the focused Consent Mode v2 audit (consent findings only, read-only) |
 | `/api/gtm/sgtm`                                                                  | POST   | Read a server (sGTM) container (read-only) |
 | `/api/ga4/admin`                                                                 | POST   | GA4 Admin reads (account summaries, data streams) |
 
@@ -233,6 +235,18 @@ container. In addition, selecting a server container under the Audit page's
 turns on the `SGTM` source (transport-match, client presence, transformation
 review). Without a server container selected, the audit's `sgtm-clients`
 coverage row stays **Not Covered** (no faked parity).
+
+### Dedicated Consent Mode v2 audit
+
+The **Consent v2** page (`/#/consent-v2`, backed by `POST /api/gtm/consent-audit`)
+is a focused, read-only sibling of the full Audit page. It runs **only** the
+Consent Mode v2 rules from the shared engine (`shared/consent-audit.ts`) — no
+GA4 architecture, sGTM, naming, or general QC findings appear here. Findings are
+split into three layers: **Config** (consent intent declared in GTM), **Runtime**
+(observed in an imported capture), and **Config + Runtime reconciliation**. As on
+the Audit page, runtime/reconciliation layers stay empty until a runtime capture
+is imported — coverage is never fabricated. Use the full Audit page for
+everything else.
 
 ### Runtime capture (RUNTIME)
 
