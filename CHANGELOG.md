@@ -1,3 +1,9 @@
+## [1.9.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.8.0...v1.9.0) (2026-06-01)
+
+### Features
+
+* **portal:** add GA4 Admin audit coverage ([b1b14fe](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b1b14fe960cafa5de2d36eeb4089aa85fada6320))
+
 ## [1.8.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.7.0...v1.8.0) (2026-06-01)
 
 ### Features
