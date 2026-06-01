@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
@@ -17,6 +17,10 @@ import {
   Server,
   BarChart3,
   X,
+  Sparkles,
+  Download,
+  ArrowRight,
+  ExternalLink,
 } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -35,6 +39,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { HealthBadge, SeverityChip } from "@/components/status-chip";
 import { portalApi } from "@/lib/portal-api";
 import { usePortal } from "@/lib/portal-store";
+import { SAMPLE_RUNTIME_CAPTURE_JSON } from "@/lib/sample-runtime-capture";
 import type {
   AuditSummary,
   AuditCapabilityFlags,
@@ -159,6 +164,13 @@ export default function AuditPage() {
 
   const [audit, setAudit] = useState<AuditSummary | null>(null);
 
+  // Anchors so the "Improve coverage" cards and the coverage-matrix action
+  // buttons can scroll the relevant opt-in control into view.
+  const crossSourceRef = useRef<HTMLDivElement | null>(null);
+  const ga4SelectorRef = useRef<HTMLDivElement | null>(null);
+  const scrollTo = (ref: { current: HTMLElement | null }) =>
+    ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+
   // ── Cross-source inputs (all strictly opt-in) ─────────────────────────────
   // RUNTIME: a pasted/uploaded runtime-worker (or CLI) capture artifact. We do
   // NOT fabricate runtime data — the audit only turns on RUNTIME when a
@@ -197,6 +209,27 @@ export default function AuditPage() {
     } catch {
       setRuntimeError("Could not read that file.");
     }
+  };
+
+  // Load the bundled SAMPLE capture (synthetic — clearly not real evidence).
+  // Lets a user preview a populated coverage matrix / Consent proof without
+  // standing up the runtime worker.
+  const loadSampleRuntime = () => {
+    applyRuntimeText(SAMPLE_RUNTIME_CAPTURE_JSON);
+    scrollTo(crossSourceRef);
+  };
+
+  const downloadSampleRuntime = () => {
+    if (typeof window === "undefined") return;
+    const blob = new Blob([SAMPLE_RUNTIME_CAPTURE_JSON], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "sample-runtime-capture.json";
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   // SGTM: an optional SERVER container/workspace to reconcile against. Off by
@@ -396,6 +429,44 @@ export default function AuditPage() {
   const workspaces = workspacesQuery.data ?? [];
   const isLoading = auditMutation.isPending;
 
+  // Shared actions wired into the "Improve coverage" panel and the coverage
+  // matrix action buttons. Each one nudges an opt-in control — none of them
+  // fabricate coverage; they only make the missing source easy to connect.
+  const ga4ScopeMissing = ga4Properties.length === 0 && !ga4PropertiesQuery.isLoading;
+  // Reconnect when the Analytics scope is missing, otherwise focus the GA4
+  // selector (flipping it off NONE so a property can resolve). Returns true
+  // when a property is already resolved, so callers can proceed.
+  const focusGa4Selection = (): boolean => {
+    if (effectiveGa4PropertyId) return true;
+    if (ga4ScopeMissing) {
+      portalApi.redirectToGoogleOAuth();
+      return false;
+    }
+    if (ga4Choice === NONE) setGa4Choice(AUTO);
+    scrollTo(ga4SelectorRef);
+    return false;
+  };
+  const coverageActions: CoverageActions = {
+    importRuntime: () => scrollTo(crossSourceRef),
+    loadSampleRuntime,
+    selectGa4: () => {
+      if (focusGa4Selection()) scrollTo(ga4SelectorRef);
+    },
+    enableDataApi: () => {
+      if (!focusGa4Selection()) return;
+      setEnableDataApi(true);
+      scrollTo(crossSourceRef);
+    },
+    selectServerContainer: () => {
+      setServerEnabled(true);
+      scrollTo(crossSourceRef);
+    },
+    rerun: () => {
+      if (canRun && !isLoading) auditMutation.mutate();
+    },
+    ga4ScopeMissing,
+  };
+
   return (
     <>
       <PageHeader
@@ -482,7 +553,7 @@ export default function AuditPage() {
                 disabled={!containerId}
                 testId="select-workspace"
               />
-              <div className="min-w-0">
+              <div className="min-w-0" ref={ga4SelectorRef}>
                 <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
                   GA4 property{" "}
                   <span className="text-muted-foreground/70 normal-case">(optional)</span>
@@ -578,6 +649,7 @@ export default function AuditPage() {
         </Card>
 
         {/* Cross-source inputs (opt-in) */}
+        <div ref={crossSourceRef} className="scroll-mt-20">
         <CrossSourceInputs
           runtimeText={runtimeText}
           runtimeError={runtimeError}
@@ -585,6 +657,8 @@ export default function AuditPage() {
           onRuntimeText={applyRuntimeText}
           onRuntimeFile={onRuntimeFile}
           onClearRuntime={() => applyRuntimeText("")}
+          onLoadSample={loadSampleRuntime}
+          onDownloadSample={downloadSampleRuntime}
           serverEnabled={serverEnabled}
           onToggleServer={setServerEnabled}
           serverAccountId={serverAccountId}
@@ -609,6 +683,7 @@ export default function AuditPage() {
           onToggleDataApi={setEnableDataApi}
           ga4Selected={Boolean(effectiveGa4PropertyId)}
         />
+        </div>
 
         {audit?.executiveSummary && (
           <ExecutiveSummaryCard
@@ -662,9 +737,16 @@ export default function AuditPage() {
           <div className="mt-6">
             <SectionTitle
               title="Coverage matrix"
-              hint="What each finding-domain needs to be fully covered. Items marked Not Covered cannot be claimed clean."
+              hint="What each finding-domain needs to be fully covered. Items marked Not Covered are honest gaps, not software bugs — connect the listed source to close them."
             />
-            <CoverageMatrix items={audit.coverageMatrix} />
+            <ImproveCoveragePanel
+              items={audit.coverageMatrix}
+              flags={audit.capabilityFlags}
+              actions={coverageActions}
+              runtimeReady={Boolean(runtimeCapture)}
+              serverEnabled={serverEnabled}
+            />
+            <CoverageMatrix items={audit.coverageMatrix} actions={coverageActions} />
           </div>
         )}
 
@@ -760,6 +842,8 @@ function CrossSourceInputs(props: {
   onRuntimeText: (v: string) => void;
   onRuntimeFile: (f: File | null) => void;
   onClearRuntime: () => void;
+  onLoadSample: () => void;
+  onDownloadSample: () => void;
   serverEnabled: boolean;
   onToggleServer: (v: boolean) => void;
   serverAccountId: string;
@@ -803,7 +887,7 @@ function CrossSourceInputs(props: {
                 </Badge>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <label className="cursor-pointer text-[11px] text-primary underline-offset-2 hover:underline">
                 Upload JSON
                 <input
@@ -816,6 +900,22 @@ function CrossSourceInputs(props: {
                   }
                 />
               </label>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-[11px] text-primary underline-offset-2 hover:underline"
+                onClick={props.onLoadSample}
+                data-testid="button-runtime-sample"
+              >
+                <Sparkles className="h-3 w-3" /> Use sample capture
+              </button>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                onClick={props.onDownloadSample}
+                data-testid="button-runtime-download-sample"
+              >
+                <Download className="h-3 w-3" /> Download example
+              </button>
               {props.runtimeText && (
                 <button
                   type="button"
@@ -840,6 +940,20 @@ function CrossSourceInputs(props: {
               {props.runtimeError}
             </div>
           )}
+          <div className="text-[11px] text-muted-foreground space-y-0.5">
+            <div>
+              Generate a real single-page capture locally:{" "}
+              <code className="font-mono bg-muted px-1 py-0.5 rounded">
+                npm run runtime:capture -- --url https://yoursite.com --output capture.json
+              </code>
+            </div>
+            <div>
+              Multi-state / multi-page capture (denied vs granted consent) runs
+              on the separately-hosted runtime worker (POST{" "}
+              <span className="font-mono">/capture</span>). The sample capture is
+              synthetic demo data — not real audit evidence.
+            </div>
+          </div>
         </div>
 
         {/* SGTM */}
@@ -1338,7 +1452,291 @@ function SevCell({
   );
 }
 
-function CoverageMatrix({ items }: { items: AuditCoverageItem[] }) {
+interface CoverageActions {
+  importRuntime: () => void;
+  loadSampleRuntime: () => void;
+  selectGa4: () => void;
+  enableDataApi: () => void;
+  selectServerContainer: () => void;
+  rerun: () => void;
+  ga4ScopeMissing: boolean;
+}
+
+/**
+ * A coverage-row id maps to one concrete next step. The action button on a
+ * Not-Covered / Partial row triggers the matching opt-in control — it never
+ * fabricates evidence, it just removes the friction of finding the right input.
+ * `manual` rows (Meta Events Manager) have no in-portal action.
+ */
+type CoverageActionKind =
+  | "runtime"
+  | "ga4"
+  | "data_api"
+  | "sgtm"
+  | "manual"
+  | "config"
+  | "none";
+
+function coverageActionKind(it: AuditCoverageItem): CoverageActionKind {
+  switch (it.id) {
+    case "tag-firing-order":
+    case "datalayer-pushes":
+    case "consent-runtime":
+    case "ecommerce-runtime":
+      return "runtime";
+    case "pixel-capi-dedup":
+      return "manual";
+    case "sgtm-clients":
+      return "sgtm";
+    case "ga4-admin-dimensions":
+    case "ga4-admin-filters":
+      return "ga4";
+    case "ga4-data-api-events":
+      return "data_api";
+    case "cross-source-recon":
+      // Multi-source row — route to whichever single source is missing first.
+      if (!it.requires.includes("RUNTIME")) return "runtime";
+      if (!it.requires.includes("SGTM")) return "sgtm";
+      if (!it.requires.includes("GA4_ADMIN")) return "ga4";
+      if (!it.requires.includes("DATA_API")) return "data_api";
+      return "none";
+    case "config-inventory":
+    case "sgtm-server-config":
+    case "sgtm-config-server-only":
+      return "config";
+    default:
+      return "none";
+  }
+}
+
+function CoverageActionButton({
+  it,
+  actions,
+}: {
+  it: AuditCoverageItem;
+  actions: CoverageActions;
+}) {
+  if (it.status === "covered") return null;
+  const kind = coverageActionKind(it);
+
+  const btn = (label: string, onClick: () => void, testId: string) => (
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-7 text-[11px] mt-1"
+      onClick={onClick}
+      data-testid={testId}
+    >
+      {label}
+      <ArrowRight className="ml-1 h-3 w-3" />
+    </Button>
+  );
+
+  switch (kind) {
+    case "runtime":
+      return btn(
+        "Import runtime capture",
+        actions.importRuntime,
+        `coverage-action-${it.id}`,
+      );
+    case "ga4":
+      return btn(
+        actions.ga4ScopeMissing ? "Reconnect Google (Analytics)" : "Select GA4 property",
+        actions.selectGa4,
+        `coverage-action-${it.id}`,
+      );
+    case "data_api":
+      return btn(
+        "Enable GA4 Data API check",
+        actions.enableDataApi,
+        `coverage-action-${it.id}`,
+      );
+    case "sgtm":
+      return (
+        <div className="flex flex-wrap gap-1.5">
+          {btn(
+            "Select server container",
+            actions.selectServerContainer,
+            `coverage-action-${it.id}`,
+          )}
+          <Button
+            asChild
+            variant="outline"
+            size="sm"
+            className="h-7 text-[11px] mt-1"
+          >
+            <Link href="/server-side">
+              Open Server-side
+              <ExternalLink className="ml-1 h-3 w-3" />
+            </Link>
+          </Button>
+        </div>
+      );
+    case "manual":
+      return (
+        <Badge
+          variant="outline"
+          className="mt-1 text-[10.5px] border-amber-500/40 text-amber-700 dark:text-amber-300"
+        >
+          Manual: Meta Events Manager required for final proof
+        </Badge>
+      );
+    default:
+      return null;
+  }
+}
+
+function ImproveCoveragePanel({
+  items,
+  flags,
+  actions,
+  runtimeReady,
+  serverEnabled,
+}: {
+  items: AuditCoverageItem[];
+  flags?: AuditCapabilityFlags;
+  actions: CoverageActions;
+  runtimeReady: boolean;
+  serverEnabled: boolean;
+}) {
+  const gapCount = items.filter((it) => it.status !== "covered").length;
+  if (gapCount === 0) return null;
+
+  const cards = [
+    {
+      key: "runtime",
+      icon: Upload,
+      title: "Runtime proof",
+      on: Boolean(flags?.RUNTIME) || runtimeReady,
+      body: "Import a runtime capture to prove live tag firing, dataLayer pushes, consent states and ecommerce shape.",
+      primary: { label: "Import capture", onClick: actions.importRuntime },
+      secondary: { label: "Use sample", onClick: actions.loadSampleRuntime },
+      testId: "improve-runtime",
+    },
+    {
+      key: "ga4",
+      icon: BarChart3,
+      title: "GA4 Admin / Data",
+      on: Boolean(flags?.GA4_ADMIN),
+      body: actions.ga4ScopeMissing
+        ? "Reconnect Google with the Analytics read-only scope to read custom dimensions, filters and streams."
+        : "Select a GA4 property to reconcile custom dimensions, data filters, retention and data streams.",
+      primary: {
+        label: actions.ga4ScopeMissing ? "Reconnect Google" : "Select property",
+        onClick: actions.selectGa4,
+      },
+      secondary: { label: "Enable Data API", onClick: actions.enableDataApi },
+      testId: "improve-ga4",
+    },
+    {
+      key: "sgtm",
+      icon: Server,
+      title: "sGTM server context",
+      on: Boolean(flags?.SGTM) || serverEnabled,
+      body: "Select a server container/workspace to fold in clients, transformations and routing for reconciliation.",
+      primary: {
+        label: "Select server container",
+        onClick: actions.selectServerContainer,
+      },
+      secondary: null,
+      testId: "improve-sgtm",
+    },
+    {
+      key: "meta",
+      icon: ShieldAlert,
+      title: "Meta Pixel ↔ CAPI",
+      on: false,
+      body: "Final Pixel/CAPI dedup proof is manual — confirm eventID dedup in Meta Events Manager (Test events).",
+      primary: null,
+      secondary: null,
+      testId: "improve-meta",
+    },
+  ];
+
+  return (
+    <Card className="mb-3 border-primary/20 bg-primary/[0.02]">
+      <CardContent className="py-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          <div>
+            <div className="text-sm font-semibold">Improve coverage</div>
+            <div className="text-[11px] text-muted-foreground">
+              {gapCount} capabilit{gapCount === 1 ? "y is" : "ies are"} not yet
+              fully covered. Connect the sources below — each step is read-only.
+            </div>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {cards.map((c) => (
+            <div
+              key={c.key}
+              data-testid={c.testId}
+              className="rounded-md border border-border/60 bg-background p-3 flex flex-col gap-2"
+            >
+              <div className="flex items-center gap-2 text-xs font-medium">
+                <c.icon className="h-3.5 w-3.5 text-primary" />
+                {c.title}
+                {c.on && (
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
+                  >
+                    Connected
+                  </Badge>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground flex-1">{c.body}</p>
+              <div className="flex flex-wrap gap-1.5">
+                {c.primary && (
+                  <Button
+                    size="sm"
+                    className="h-7 text-[11px]"
+                    onClick={c.primary.onClick}
+                    data-testid={`${c.testId}-primary`}
+                  >
+                    {c.primary.label}
+                  </Button>
+                )}
+                {c.secondary && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-[11px]"
+                    onClick={c.secondary.onClick}
+                    data-testid={`${c.testId}-secondary`}
+                  >
+                    {c.secondary.label}
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="text-[11px] text-muted-foreground rounded-md bg-muted/40 border border-border/50 px-3 py-2">
+          A config-only audit cannot be declared clean until runtime, sGTM and
+          GA4 Admin/Data sources are connected or imported. That is expected —
+          connect a source above and re-run to turn red rows amber/green.{" "}
+          <button
+            type="button"
+            className="text-primary underline-offset-2 hover:underline"
+            onClick={actions.rerun}
+            data-testid="improve-rerun"
+          >
+            Re-run audit
+          </button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CoverageMatrix({
+  items,
+  actions,
+}: {
+  items: AuditCoverageItem[];
+  actions: CoverageActions;
+}) {
   return (
     <div className="overflow-x-auto rounded border border-border/60">
       <table className="min-w-full text-xs">
@@ -1371,7 +1769,8 @@ function CoverageMatrix({ items }: { items: AuditCoverageItem[] }) {
                 </span>
               </td>
               <td className="px-2.5 py-1.5 text-muted-foreground">
-                {it.toolNeeded ?? "—"}
+                <div>{it.toolNeeded ?? "—"}</div>
+                <CoverageActionButton it={it} actions={actions} />
               </td>
             </tr>
           ))}
