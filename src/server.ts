@@ -6,7 +6,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { OAuth2Client } from 'google-auth-library';
 import { getGtmClient } from './utils/gtmClient.js';
-import { getGa4AdminClient, getGa4AdminAlphaClient } from './utils/ga4Client.js';
+import {
+  getGa4AdminClient,
+  getGa4AdminAlphaClient,
+  getGa4DataClient,
+} from './utils/ga4Client.js';
 import { registerAllTools } from './tools/index.js';
 import { getGuardrailConfig } from './utils/guardrails.js';
 
@@ -28,8 +32,15 @@ export function createGtmMcpServer(auth: OAuth2Client): McpServer {
   const getClient = () => getGtmClient(auth);
   const getGa4Client = () => getGa4AdminClient(auth);
   const getGa4AlphaClient = () => getGa4AdminAlphaClient(auth);
+  const getGa4DataClientFn = () => getGa4DataClient(auth);
 
-  registerAllTools(server, getClient, getGa4Client, getGa4AlphaClient);
+  registerAllTools(
+    server,
+    getClient,
+    getGa4Client,
+    getGa4AlphaClient,
+    getGa4DataClientFn
+  );
 
   return server;
 }
@@ -88,6 +99,13 @@ function buildInstructions(config: ReturnType<typeof getGuardrailConfig>): strin
     "  'analytics.readonly' OAuth scope — re-run npm run auth:google if a 403 mentions scope.",
     '  Not exposed by Admin API v1beta (documented limitations, not faked): internal-traffic/',
     '  unwanted-referral data filters, referral exclusions, channel groups, audiences.',
+    '',
+    'GA4 DATA API (READ-ONLY) — Google Analytics Data API v1beta:',
+    '- ga4_run_report — report dimensions/metrics over a date range (e.g. eventCount by eventName).',
+    '- ga4_run_realtime_report — events in roughly the last 30 minutes for live QA.',
+    '  Read-only; no confirm flag. Same analytics.readonly scope as the Admin tools.',
+    '  Use to reconcile configured events vs. events GA4 actually reports.',
+    '  Not exposed here (documented gaps, not stubbed): pivots, cohorts, funnels.',
     '',
     'PAGINATION: All list tools that support it auto-follow pagination to return all results. ',
     'Pass maxPages to bound the work; truncated results include truncated:true and nextPageToken to resume.',

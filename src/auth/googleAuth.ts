@@ -52,10 +52,12 @@ export const GTM_SCOPES = [
   'https://www.googleapis.com/auth/tagmanager.publish',
 ];
 
-// Google Analytics Admin API (GA4) read-only scope. Powers the read-only
-// ga4_* MCP tools (account/property summaries, data streams, custom
-// dimensions/metrics, data retention, etc.). This is the ONLY GA4 scope the
-// server requests — it grants no write/delete capability on GA4 resources.
+// Google Analytics read-only scope. Powers BOTH the read-only GA4 Admin tools
+// (account/property summaries, data streams, custom dimensions/metrics, data
+// retention, etc.) AND the read-only GA4 Data API reporting tools
+// (ga4_run_report / ga4_run_realtime_report). The Data API needs no additional
+// scope. This is the ONLY GA4 scope the server requests — it grants no
+// write/delete capability on GA4 resources.
 export const GA4_ADMIN_READONLY_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
 
 // Full set of scopes requested during the OAuth onboarding flow. A single

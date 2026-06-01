@@ -7,14 +7,21 @@
  * provided the `analytics.readonly` scope was granted during onboarding.
  */
 
-import { google, analyticsadmin_v1beta, analyticsadmin_v1alpha } from 'googleapis';
+import {
+  google,
+  analyticsadmin_v1beta,
+  analyticsadmin_v1alpha,
+  analyticsdata_v1beta,
+} from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
 
 export type Ga4AdminClient = analyticsadmin_v1beta.Analyticsadmin;
 export type Ga4AdminAlphaClient = analyticsadmin_v1alpha.Analyticsadmin;
+export type Ga4DataClient = analyticsdata_v1beta.Analyticsdata;
 
 let _client: Ga4AdminClient | null = null;
 let _alphaClient: Ga4AdminAlphaClient | null = null;
+let _dataClient: Ga4DataClient | null = null;
 
 export function getGa4AdminClient(auth: OAuth2Client): Ga4AdminClient {
   if (!_client) {
@@ -34,8 +41,21 @@ export function getGa4AdminAlphaClient(auth: OAuth2Client): Ga4AdminAlphaClient 
   return _alphaClient;
 }
 
+/**
+ * GA4 Data API client (analyticsdata v1beta). Used ONLY for read-only reporting
+ * (`runReport`, `runRealtimeReport`). The same `analytics.readonly` scope that
+ * authorizes the Admin client also authorizes Data API reads — no extra scope.
+ */
+export function getGa4DataClient(auth: OAuth2Client): Ga4DataClient {
+  if (!_dataClient) {
+    _dataClient = google.analyticsdata({ version: 'v1beta', auth });
+  }
+  return _dataClient;
+}
+
 /** Reset clients (useful in tests). */
 export function resetGa4AdminClient(): void {
   _client = null;
   _alphaClient = null;
+  _dataClient = null;
 }
