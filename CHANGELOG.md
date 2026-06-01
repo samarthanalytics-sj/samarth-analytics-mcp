@@ -1,3 +1,9 @@
+## [1.10.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.9.0...v1.10.0) (2026-06-01)
+
+### Features
+
+* **portal:** add sGTM visibility and runtime capture harness ([de59dec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/de59deca3a486205916abae01fcf5890ffb2e205))
+
 ## [1.9.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.8.0...v1.9.0) (2026-06-01)
 
 ### Features
