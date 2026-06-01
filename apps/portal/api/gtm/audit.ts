@@ -167,6 +167,63 @@ interface Ga4AdminState {
   ok: boolean;
 }
 
+// ── Runtime capture (RUNTIME source) ─────────────────────────────────────
+// Parsed/normalized from an uploaded runtime-worker artifact. The audit NEVER
+// fabricates these — RUNTIME stays Not Covered unless a capture is provided.
+interface RuntimeTrackerHit {
+  url?: string;
+  method?: string;
+  matched?: string[];
+  groups?: string[];
+}
+interface RuntimePageCapture {
+  requestedUrl?: string;
+  finalUrl?: string | null;
+  consoleErrors?: string[];
+  pageErrors?: string[];
+  trackerHits?: RuntimeTrackerHit[];
+  sgtmCandidates?: { url?: string }[];
+  dataLayerEvents?: string[];
+  dataLayerKeys?: string[];
+}
+interface RuntimeState {
+  capturedAt?: string;
+  pages: RuntimePageCapture[];
+  /** True when the artifact parsed into at least one page. */
+  ok: boolean;
+}
+
+// ── Server-side GTM context (SGTM source) ────────────────────────────────
+// Optional reads of a selected server container, used to reconcile web GA4
+// transport against the server endpoint and surface server clients/transforms.
+interface SgtmContextState {
+  accountId: string;
+  containerId: string;
+  isServer: boolean;
+  /** Server container domain(s) / public id, used to match transport_url. */
+  domainNames: string[];
+  publicId?: string;
+  clientTypes: string[];
+  clientNames: string[];
+  transformationNames: string[];
+  failures: AuditToolFailure[];
+  /** True when the container is server AND at least one read succeeded. */
+  ok: boolean;
+}
+
+// ── GA4 Data API (DATA_API source) ───────────────────────────────────────
+// Optional reporting read: event counts over the last N days, used to flag
+// GTM-configured GA4 events that report zero activity.
+interface DataApiState {
+  propertyId: string;
+  /** eventName → eventCount over the window. */
+  eventCounts: Record<string, number>;
+  windowDays: number;
+  failures: AuditToolFailure[];
+  /** True when the report read succeeded. */
+  ok: boolean;
+}
+
 // ── Audit result types (mirror shared/portal-types.ts) ───────────────────
 
 type AuditSeverity = "info" | "low" | "medium" | "high" | "critical";
@@ -188,7 +245,12 @@ type AuditCategory =
   | "privacy"
   | "tool_failure";
 
-type AuditSourceFlag = "CONFIG" | "RUNTIME" | "SGTM" | "GA4_ADMIN";
+type AuditSourceFlag =
+  | "CONFIG"
+  | "RUNTIME"
+  | "SGTM"
+  | "GA4_ADMIN"
+  | "DATA_API";
 type AuditCoverage = "covered" | "partial" | "not_covered";
 type AuditConfidence = "high" | "medium" | "low";
 type AuditEffort = "S" | "M" | "L";
@@ -198,6 +260,7 @@ interface AuditCapabilityFlags {
   RUNTIME: boolean;
   SGTM: boolean;
   GA4_ADMIN: boolean;
+  DATA_API: boolean;
 }
 
 interface AuditCoverageItem {
@@ -336,6 +399,13 @@ export default async function handler(
       workspaceId?: string;
       containerPublicId?: string;
       ga4PropertyId?: string;
+      runtimeCapture?: unknown;
+      serverContext?: {
+        accountId?: string;
+        containerId?: string;
+        workspaceId?: string;
+      };
+      enableDataApi?: boolean;
     }>(req);
     const { accountId, containerId, workspaceId, containerPublicId } = body;
     const ga4PropertyId =
@@ -350,6 +420,17 @@ export default async function handler(
       });
     }
 
+    // Parse an uploaded runtime capture (RUNTIME source). Never fabricated —
+    // null unless the caller supplies a parseable artifact.
+    const runtime = parseRuntimeCapture(body.runtimeCapture);
+
+    // Optional server-side context (SGTM source). Only used when the caller
+    // selected a server account/container/workspace distinct from a stub.
+    const sc = body.serverContext;
+    const hasServerContext = Boolean(
+      sc && sc.accountId && sc.containerId && sc.workspaceId,
+    );
+
     try {
       const state = await pullAuditState(
         token,
@@ -362,9 +443,30 @@ export default async function handler(
       const ga4 = ga4PropertyId
         ? await pullGa4AdminState(token, ga4PropertyId)
         : null;
+
+      // Optional server container reads (SGTM). Best-effort; failures recorded.
+      const sgtm = hasServerContext
+        ? await pullSgtmContext(
+            token,
+            sc!.accountId!,
+            sc!.containerId!,
+            sc!.workspaceId!,
+          )
+        : null;
+
+      // Optional GA4 Data API report (DATA_API). Only when a property was
+      // selected AND the caller opted in. Failures never abort the audit.
+      const dataApi =
+        ga4PropertyId && body.enableDataApi === true
+          ? await pullDataApiState(token, ga4PropertyId)
+          : null;
+
       const summary = runAudit(state, {
         containerPublicId: containerPublicId ?? containerId,
         ga4,
+        runtime,
+        sgtm,
+        dataApi,
       });
       return sendJson(res, 200, summary);
     } catch (e) {
@@ -400,6 +502,9 @@ interface Ctx {
   builtInTypes: Set<string>;
   textBlob: string;
   ga4: Ga4AdminState | null;
+  runtime: RuntimeState | null;
+  sgtm: SgtmContextState | null;
+  dataApi: DataApiState | null;
 }
 
 function fid(seed: string): string {
@@ -408,7 +513,13 @@ function fid(seed: string): string {
   );
 }
 
-function buildCtx(state: AuditState, ga4: Ga4AdminState | null): Ctx {
+function buildCtx(
+  state: AuditState,
+  ga4: Ga4AdminState | null,
+  runtime: RuntimeState | null = null,
+  sgtm: SgtmContextState | null = null,
+  dataApi: DataApiState | null = null,
+): Ctx {
   const triggerIdSet = new Set(
     state.contents.triggers.map((t) => t.triggerId ?? "").filter(Boolean),
   );
@@ -434,6 +545,9 @@ function buildCtx(state: AuditState, ga4: Ga4AdminState | null): Ctx {
     builtInTypes,
     textBlob: collectTextBlob(state.contents),
     ga4,
+    runtime,
+    sgtm,
+    dataApi,
   };
 }
 
@@ -1581,6 +1695,388 @@ function ruleGa4ToolFailures(ctx: Ctx, out: AuditFinding[]) {
   }
 }
 
+// ── L. Cross-source: GTM CONFIG ↔ RUNTIME capture ────────────────────────
+// Every rule below requires a parsed runtime capture (ctx.runtime?.ok). They
+// only assert what was OBSERVED in the capture — never a site-wide claim, and
+// never an inference when no capture is present.
+
+/** GA4 event names configured on GTM GA4 Event tags (lower-cased, distinct). */
+function configuredGa4EventNames(ctx: Ctx): Set<string> {
+  const names = new Set<string>();
+  for (const tag of ctx.tags) {
+    if (!isGA4Event(tag)) continue;
+    const ev = (tagParam(tag, "eventName") ?? "").trim().toLowerCase();
+    // Skip dynamic event names ({{...}}) — they cannot be matched by literal.
+    if (ev && !ev.includes("{{")) names.add(ev);
+  }
+  return names;
+}
+
+/** Custom-event trigger event names configured in the container (lower-cased). */
+function configuredCustomEventNames(ctx: Ctx): Set<string> {
+  const names = new Set<string>();
+  type Filter = { parameter?: GtmParameter[] };
+  for (const t of ctx.triggers) {
+    if ((t.type ?? "").toLowerCase() !== "customevent") continue;
+    // The event name lives in a filter comparing {{_event}} against a literal.
+    const filters = (t.customEventFilter ?? t.filter ?? []) as Filter[];
+    for (const f of filters) {
+      for (const p of f.parameter ?? []) {
+        // GTM stores the matched value in the "arg1" parameter of the filter;
+        // "arg0" is the {{_event}} reference.
+        if (
+          p.key === "arg1" &&
+          typeof p.value === "string" &&
+          p.value &&
+          !p.value.includes("{{")
+        ) {
+          names.add(p.value.trim().toLowerCase());
+        }
+      }
+    }
+  }
+  return names;
+}
+
+/** Aggregate all observed dataLayer event names across captured pages. */
+function observedDataLayerEvents(runtime: RuntimeState): Set<string> {
+  const out = new Set<string>();
+  for (const page of runtime.pages) {
+    for (const ev of page.dataLayerEvents ?? []) {
+      if (typeof ev === "string" && ev) out.add(ev.trim().toLowerCase());
+    }
+  }
+  return out;
+}
+
+function ruleRuntimeGa4PageViews(ctx: Ctx, out: AuditFinding[]) {
+  const rt = ctx.runtime;
+  if (!rt?.ok) return;
+  for (const page of rt.pages) {
+    const ga4Hits = (page.trackerHits ?? []).filter((h) =>
+      (h.groups ?? []).includes("ga4"),
+    ).length;
+    const where = page.finalUrl || page.requestedUrl || "(page)";
+    if (ga4Hits === 0) {
+      pushFinding(out, {
+        id: fid(`rt-ga4-zero:${where}`),
+        category: "ga4",
+        severity: "high",
+        finding: "No GA4 collect hit observed on a captured page",
+        affected: [where],
+        whyItMatters:
+          "The runtime capture recorded zero GA4 /g/collect requests for this page load. If GA4 is expected here, page_view is not being sent.",
+        suggestedFix:
+          "Confirm the GA4 configuration tag fires on this page and that consent / network conditions allow the hit.",
+        sources: ["RUNTIME"],
+        confidence: "high",
+        entity: { path: where },
+        businessImpact:
+          "Missing page_view hits mean lost traffic data and broken downstream reporting/attribution for this page.",
+        effort: "M",
+      });
+    } else if (ga4Hits > 1) {
+      pushFinding(out, {
+        id: fid(`rt-ga4-multi:${where}:${ga4Hits}`),
+        category: "duplication",
+        severity: "medium",
+        finding: `${ga4Hits} GA4 collect hits observed on a single page load`,
+        affected: [where],
+        whyItMatters:
+          "Multiple GA4 collect requests on one load can indicate duplicate configuration tags or double page_view firing.",
+        suggestedFix:
+          "Review whether more than one GA4 configuration/page_view path is firing; consolidate to a single source of page_view.",
+        sources: ["RUNTIME"],
+        confidence: "medium",
+        entity: { path: where },
+        businessImpact:
+          "Duplicate hits inflate sessions/users and distort engagement metrics.",
+        effort: "M",
+      });
+    }
+  }
+}
+
+function ruleRuntimeConsoleErrors(ctx: Ctx, out: AuditFinding[]) {
+  const rt = ctx.runtime;
+  if (!rt?.ok) return;
+  for (const page of rt.pages) {
+    const errs = page.pageErrors ?? [];
+    const consoleErrs = page.consoleErrors ?? [];
+    const where = page.finalUrl || page.requestedUrl || "(page)";
+    const total = errs.length + consoleErrs.length;
+    if (total === 0) continue;
+    const sample = [...errs, ...consoleErrs].slice(0, 5);
+    pushFinding(out, {
+      id: fid(`rt-console:${where}:${total}`),
+      category: "data_quality",
+      severity: errs.length > 0 ? "medium" : "low",
+      finding: `${total} JavaScript error${total === 1 ? "" : "s"} observed during page load`,
+      affected: [where],
+      whyItMatters:
+        "Uncaught page errors and console errors observed at runtime can interrupt tag execution and dataLayer pushes.",
+      suggestedFix:
+        "Investigate the errors below; ensure analytics scripts are not throwing before tags fire. Sample: " +
+        sample.map((s) => s.slice(0, 160)).join(" | "),
+      sources: ["RUNTIME"],
+      confidence: "high",
+      entity: { path: where },
+      businessImpact:
+        "Script errors can silently drop analytics/marketing events on affected pages.",
+      effort: "M",
+    });
+  }
+}
+
+function ruleRuntimeConfiguredEventsNotObserved(ctx: Ctx, out: AuditFinding[]) {
+  const rt = ctx.runtime;
+  if (!rt?.ok) return;
+  const observed = observedDataLayerEvents(rt);
+  // Only meaningful if we actually observed SOME dataLayer events; otherwise
+  // GTM may use a custom dataLayer name and absence proves nothing.
+  if (observed.size === 0) return;
+  const configured = configuredCustomEventNames(ctx);
+  const missing = Array.from(configured).filter((name) => !observed.has(name));
+  if (missing.length === 0) return;
+  pushFinding(out, {
+    id: fid(`rt-cfg-events-missing:${missing.sort().join(",")}`),
+    category: "data_layer",
+    severity: "medium",
+    finding: `${missing.length} configured custom-event trigger name${missing.length === 1 ? "" : "s"} not observed in captured dataLayer`,
+    affected: missing,
+    whyItMatters:
+      "These custom-event names drive GTM triggers but were not seen in the dataLayer on the captured page(s). They may simply not fire on these specific pages — this is not a site-wide claim.",
+    suggestedFix:
+      "Capture the page(s)/flows where these events are expected to fire and re-check, or confirm the dataLayer push exists.",
+    needsManualReview: true,
+    sources: ["CONFIG", "RUNTIME"],
+    confidence: "medium",
+    businessImpact:
+      "Triggers that never receive their event do nothing; dependent tags stay dormant on these pages.",
+    effort: "M",
+  });
+}
+
+function ruleRuntimeConsentSignals(ctx: Ctx, out: AuditFinding[]) {
+  const rt = ctx.runtime;
+  if (!rt?.ok) return;
+  // Inspect GA4 collect hit URLs for the Consent Mode signal params gcs/gcd.
+  let ga4Hits = 0;
+  let withConsent = 0;
+  for (const page of rt.pages) {
+    for (const h of page.trackerHits ?? []) {
+      if (!(h.groups ?? []).includes("ga4")) continue;
+      ga4Hits++;
+      const url = h.url ?? "";
+      if (/[?&](gcs|gcd)=/.test(url)) withConsent++;
+    }
+  }
+  if (ga4Hits === 0) return;
+  if (withConsent === 0) {
+    pushFinding(out, {
+      id: fid(`rt-consent-missing:${ga4Hits}`),
+      category: "consent",
+      severity: "medium",
+      finding: "GA4 hits observed without Consent Mode signals (gcs/gcd)",
+      whyItMatters:
+        `${ga4Hits} GA4 collect request(s) were captured but none carried the gcs/gcd Consent Mode parameters. This suggests Consent Mode may not be wired up on the captured page(s).`,
+      suggestedFix:
+        "Verify Consent Mode v2 default/update is configured and that the CMP sets consent before GA4 fires.",
+      sources: ["RUNTIME"],
+      confidence: "medium",
+      businessImpact:
+        "Without Consent Mode signals, modelling and regional compliance behaviour may be incorrect.",
+      effort: "M",
+    });
+  }
+}
+
+// ── M. Cross-source: GTM CONFIG ↔ sGTM server container ───────────────────
+// Requires a selected server container (ctx.sgtm?.ok). Reconciles the web
+// container's GA4 transport target against the chosen server endpoint and
+// surfaces server clients/transformations for manual review.
+
+function tagTransportUrl(tag: GtmTag): string | undefined {
+  return (
+    tagParam(tag, "serverContainerUrl") ??
+    tagParam(tag, "server_container_url") ??
+    tagParam(tag, "transportUrl") ??
+    tagParam(tag, "transport_url")
+  );
+}
+
+function ruleSgtmTransportMatch(ctx: Ctx, out: AuditFinding[]) {
+  const sg = ctx.sgtm;
+  if (!sg?.ok) return;
+  const serverHosts = sg.domainNames
+    .map((d) => d.toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, ""))
+    .filter(Boolean);
+  for (const tag of ctx.tags) {
+    if (!isGA4Config(tag) && !isGA4Event(tag)) continue;
+    const transport = tagTransportUrl(tag);
+    if (!transport || transport.includes("{{")) continue;
+    let host = "";
+    try {
+      host = new URL(transport).hostname.toLowerCase();
+    } catch {
+      continue;
+    }
+    const matches =
+      serverHosts.length === 0 ||
+      serverHosts.some((h) => host === h || host.endsWith(`.${h}`));
+    if (!matches) {
+      pushFinding(out, {
+        id: fid(`sgtm-transport-mismatch:${tag.tagId}:${host}`),
+        category: "server_side",
+        severity: "medium",
+        finding:
+          "GA4 tag transport_url does not match the selected server container domain",
+        affected: [tag.name ?? "Unnamed GA4 tag"],
+        whyItMatters:
+          `This tag sends to "${host}", which is not among the selected server container's domain(s) (${serverHosts.join(", ") || "none configured"}). The web and server containers may be misaligned.`,
+        suggestedFix:
+          "Confirm the transport_url points at the intended sGTM endpoint, or select the correct server container for this audit.",
+        sources: ["CONFIG", "SGTM"],
+        confidence: "medium",
+        entity: { name: tag.name, id: tag.tagId },
+        parameter: "transport_url",
+        businessImpact:
+          "Misrouted server-side transport can silently drop server events or split data across endpoints.",
+        effort: "M",
+      });
+    }
+  }
+}
+
+function ruleSgtmGa4ClientPresence(ctx: Ctx, out: AuditFinding[]) {
+  const sg = ctx.sgtm;
+  if (!sg?.ok) return;
+  const hasGa4Client = sg.clientTypes.some((t) =>
+    /gaaw|ga4|google/i.test(t),
+  );
+  // Does the web container route GA4 to a server? (any transport_url present)
+  const webRoutesToServer = ctx.tags.some(
+    (t) => (isGA4Config(t) || isGA4Event(t)) && Boolean(tagTransportUrl(t)),
+  );
+  if (webRoutesToServer && !hasGa4Client) {
+    pushFinding(out, {
+      id: fid("sgtm-no-ga4-client"),
+      category: "server_side",
+      severity: "high",
+      finding:
+        "Web GA4 tags route to a server container, but no GA4 client was found there",
+      whyItMatters:
+        "The web container sets a server transport_url, yet the selected server container has no GA4/GAAW client to receive those requests.",
+      suggestedFix:
+        "Add a GA4 client to the server container, or confirm the correct server container is selected.",
+      sources: ["CONFIG", "SGTM"],
+      confidence: "medium",
+      businessImpact:
+        "Server-bound GA4 hits with no matching client are dropped — total data loss for server-side GA4.",
+      effort: "M",
+    });
+  }
+}
+
+function ruleSgtmTransformations(ctx: Ctx, out: AuditFinding[]) {
+  const sg = ctx.sgtm;
+  if (!sg?.ok) return;
+  if (sg.transformationNames.length === 0) return;
+  pushFinding(out, {
+    id: fid(`sgtm-transforms:${sg.transformationNames.length}`),
+    category: "server_side",
+    severity: "low",
+    finding: `${sg.transformationNames.length} server-side transformation${sg.transformationNames.length === 1 ? "" : "s"} present`,
+    affected: sg.transformationNames.slice(0, 20),
+    whyItMatters:
+      "Transformations rewrite event data server-side before it reaches destinations. They can affect PII, ecommerce, and GA4 parameters in ways CONFIG alone cannot verify.",
+    suggestedFix:
+      "Manually review each transformation to confirm it does not strip required parameters or leak PII.",
+    needsManualReview: true,
+    sources: ["CONFIG", "SGTM"],
+    confidence: "medium",
+    businessImpact:
+      "An over-broad transformation can silently drop ecommerce fields or alter attribution.",
+    effort: "M",
+  });
+}
+
+function ruleSgtmFailures(ctx: Ctx, out: AuditFinding[]) {
+  const sg = ctx.sgtm;
+  if (!sg) return;
+  for (const tf of sg.failures) {
+    pushFinding(out, {
+      id: fid(`sgtm-fail:${tf.resource}`),
+      category: "tool_failure",
+      severity: "low",
+      finding: `Could not read ${tf.resource} from the server container`,
+      whyItMatters: tf.message,
+      suggestedFix:
+        "Confirm the selected account/container/workspace is correct and that your Google account has access.",
+      needsManualReview: true,
+      sources: ["SGTM"],
+      businessImpact:
+        "SGTM coverage is incomplete for this area; do not assume it is clean.",
+      effort: "S",
+    });
+  }
+}
+
+// ── N. Cross-source: GTM CONFIG ↔ GA4 Data API ───────────────────────────
+// Requires ctx.dataApi?.ok. Flags GTM-configured GA4 event names that report
+// zero events over the window. Source is DATA_API (reported counts), never
+// RUNTIME.
+
+function ruleDataApiZeroEvents(ctx: Ctx, out: AuditFinding[]) {
+  const da = ctx.dataApi;
+  if (!da?.ok) return;
+  const configured = configuredGa4EventNames(ctx);
+  if (configured.size === 0) return;
+  const reported = new Set(
+    Object.keys(da.eventCounts).map((n) => n.trim().toLowerCase()),
+  );
+  const zero = Array.from(configured).filter((name) => !reported.has(name));
+  if (zero.length === 0) return;
+  pushFinding(out, {
+    id: fid(`da-zero-events:${zero.sort().join(",")}`),
+    category: "ga4",
+    severity: "medium",
+    finding: `${zero.length} GTM-configured GA4 event${zero.length === 1 ? "" : "s"} reported zero events in the last ${da.windowDays} days`,
+    affected: zero,
+    whyItMatters:
+      "These event names are configured on GTM GA4 Event tags but the GA4 Data API reports no occurrences in the recent window. They may be broken, mis-named, or simply rarely triggered.",
+    suggestedFix:
+      "Confirm whether these events should be firing. If they should, debug the trigger/tag; if retired, remove the tag.",
+    needsManualReview: true,
+    sources: ["CONFIG", "DATA_API"],
+    confidence: "medium",
+    businessImpact:
+      "Configured-but-never-reported events indicate broken tracking or dead configuration.",
+    effort: "M",
+  });
+}
+
+function ruleDataApiFailures(ctx: Ctx, out: AuditFinding[]) {
+  const da = ctx.dataApi;
+  if (!da) return;
+  for (const tf of da.failures) {
+    pushFinding(out, {
+      id: fid(`da-fail:${tf.resource}`),
+      category: "tool_failure",
+      severity: "low",
+      finding: `Could not read ${tf.resource} from the GA4 Data API`,
+      whyItMatters: tf.message,
+      suggestedFix:
+        "Confirm the property id is correct and that the analytics.readonly scope (which covers the Data API) was granted.",
+      needsManualReview: true,
+      sources: ["DATA_API"],
+      businessImpact:
+        "DATA_API coverage is incomplete; do not assume reported-event checks ran.",
+      effort: "S",
+    });
+  }
+}
+
 function severityForResource(resource: string): AuditSeverity {
   // Workspace contents being unreadable is the only fatal case (we already
   // throw before audit runs). Container/version metadata are nice-to-have.
@@ -1712,9 +2208,18 @@ function buildSummary(findings: AuditFinding[], itemsChecked: number): string {
 
 function runAudit(
   state: AuditState,
-  opts: { containerPublicId: string; ga4: Ga4AdminState | null },
+  opts: {
+    containerPublicId: string;
+    ga4: Ga4AdminState | null;
+    runtime?: RuntimeState | null;
+    sgtm?: SgtmContextState | null;
+    dataApi?: DataApiState | null;
+  },
 ): AuditSummary {
-  const ctx = buildCtx(state, opts.ga4);
+  const runtime = opts.runtime ?? null;
+  const sgtm = opts.sgtm ?? null;
+  const dataApi = opts.dataApi ?? null;
+  const ctx = buildCtx(state, opts.ga4, runtime, sgtm, dataApi);
   const findings: AuditFinding[] = [];
 
   // A. Dead / orphaned config
@@ -1756,6 +2261,19 @@ function runAudit(
   ruleCrossGoogleAdsLinks(ctx, findings);
   ruleCrossEnhancedMeasurement(ctx, findings);
   ruleGa4ToolFailures(ctx, findings);
+  // L. Cross-source: CONFIG ↔ RUNTIME (only when a capture was uploaded).
+  ruleRuntimeGa4PageViews(ctx, findings);
+  ruleRuntimeConsoleErrors(ctx, findings);
+  ruleRuntimeConfiguredEventsNotObserved(ctx, findings);
+  ruleRuntimeConsentSignals(ctx, findings);
+  // M. Cross-source: CONFIG ↔ SGTM (only when a server container was selected).
+  ruleSgtmTransportMatch(ctx, findings);
+  ruleSgtmGa4ClientPresence(ctx, findings);
+  ruleSgtmTransformations(ctx, findings);
+  ruleSgtmFailures(ctx, findings);
+  // N. Cross-source: CONFIG ↔ DATA_API (only when a Data API report was run).
+  ruleDataApiZeroEvents(ctx, findings);
+  ruleDataApiFailures(ctx, findings);
   // Tool failures — surface gaps.
   ruleToolFailures(state, findings);
 
@@ -1774,18 +2292,21 @@ function runAudit(
   const containerType = (state.container?.usageContext ?? []).join(",") || undefined;
 
   // ── Capability detection ───────────────────────────────────────────────
-  // CONFIG is always present (we read the GTM workspace). RUNTIME and SGTM
-  // routes are not implemented in the portal yet.
-  //
-  // GA4_ADMIN is true ONLY when a GA4 property was selected AND at least one
-  // GA4 Admin read succeeded for it (opts.ga4.ok). Selecting a property whose
-  // reads all fail leaves GA4_ADMIN false, so the audit never claims coverage
-  // it could not deliver. With no property selected, opts.ga4 is null → false.
+  // CONFIG is always present (we read the GTM workspace). The other sources
+  // are true ONLY when the caller supplied the matching input AND at least one
+  // read/parse succeeded:
+  //   RUNTIME   — an uploaded runtime capture parsed into >=1 page.
+  //   SGTM      — a server container was selected and is server + readable.
+  //   GA4_ADMIN — a GA4 property was selected and >=1 Admin read succeeded.
+  //   DATA_API  — a GA4 property was selected, Data API opted in, report ok.
+  // A source whose reads all fail stays false, so the audit never claims
+  // coverage it could not deliver.
   const capabilityFlags: AuditCapabilityFlags = {
     CONFIG: true,
-    RUNTIME: false,
-    SGTM: false,
+    RUNTIME: runtime?.ok ?? false,
+    SGTM: sgtm?.ok ?? false,
     GA4_ADMIN: opts.ga4?.ok ?? false,
+    DATA_API: dataApi?.ok ?? false,
   };
 
   const coverageMatrix = buildCoverageMatrix(capabilityFlags, ctx);
@@ -1930,13 +2451,15 @@ function buildCoverageMatrix(
       "sgtm-clients",
       "sGTM clients, transformations, and routing",
       ["SGTM"],
-      // The portal can now read server containers via the Server-side panel
-      // (/api/gtm/sgtm). The audit run itself does not fold those reads in, so
-      // this stays Not Covered here rather than faking parity — open the
-      // Server-side page to inspect clients, transformations and routing.
-      isServer
-        ? "Available now — open the Server-side panel to read this server container's clients, transformations, zones, templates and destinations (not folded into this audit run)"
-        : "Server-side read available via the Server-side panel; this container is not a server container",
+      // When a server container is selected for the audit, its clients,
+      // transformations and routing ARE folded in (SGTM flag true → covered).
+      // Otherwise this stays Not Covered — open the Server-side panel or select
+      // a server container in the audit to enable it.
+      flags.SGTM
+        ? undefined
+        : isServer
+          ? "Select this server container under 'Server-side reconciliation' in the audit to fold its clients/transformations in (or open the Server-side panel)"
+          : "Select a server container under 'Server-side reconciliation', or open the Server-side panel; this web container is not a server container",
     ),
     row(
       isServer ? "sgtm-config-server-only" : "sgtm-server-config",
@@ -1956,25 +2479,56 @@ function buildCoverageMatrix(
       ["GA4_ADMIN"],
       "GA4 Admin API access",
     ),
+    row(
+      "ga4-data-api-events",
+      "GA4 reported event volumes (configured events with zero activity)",
+      ["DATA_API"],
+      "Enable the GA4 Data API check (requires a selected GA4 property)",
+    ),
     // Cross-source reconciliation. When GA4_ADMIN is connected we genuinely
     // reconcile GTM CONFIG against the GA4 property (measurement IDs, custom
     // dimensions, retention, Ads links, enhanced measurement) — so require
     // CONFIG + GA4_ADMIN, which yields "partial" coverage. RUNTIME is still
     // needed for the full intent-vs-reality picture, hence never "covered".
-    flags.GA4_ADMIN
-      ? row(
-          "cross-source-recon",
-          "Cross-source reconciliation (CONFIG ↔ GA4_ADMIN; RUNTIME/SGTM still needed for full coverage)",
-          ["CONFIG", "GA4_ADMIN"],
-          "Add RUNTIME (and SGTM where relevant) to reconcile configured intent against observed runtime behaviour",
-        )
-      : row(
-          "cross-source-recon",
-          "Cross-source reconciliation (CONFIG ↔ RUNTIME ↔ SGTM ↔ GA4_ADMIN)",
-          ["CONFIG", "RUNTIME"],
-          "Select a GA4 property for CONFIG ↔ GA4_ADMIN recon, and add RUNTIME to reconcile intent vs reality",
-        ),
+    crossSourceReconRow(flags),
   ];
+}
+
+// Cross-source reconciliation row. Requires every connected source so adding
+// more sources tightens (never loosens) the requirement. With all four
+// non-CONFIG sources connected this still yields "partial" (>1 require), which
+// is honest: full intent-vs-reality proof for some checks (e.g. Pixel/CAPI
+// dedup) remains manual.
+function crossSourceReconRow(flags: AuditCapabilityFlags): AuditCoverageItem {
+  const requires: AuditSourceFlag[] = ["CONFIG"];
+  if (flags.RUNTIME) requires.push("RUNTIME");
+  if (flags.SGTM) requires.push("SGTM");
+  if (flags.GA4_ADMIN) requires.push("GA4_ADMIN");
+  if (flags.DATA_API) requires.push("DATA_API");
+
+  const connected = requires.filter((r) => r !== "CONFIG");
+  const missing: string[] = [];
+  if (!flags.RUNTIME) missing.push("RUNTIME (upload a runtime capture)");
+  if (!flags.SGTM) missing.push("SGTM (select a server container)");
+  if (!flags.GA4_ADMIN) missing.push("GA4_ADMIN (select a GA4 property)");
+  if (!flags.DATA_API) missing.push("DATA_API (enable the GA4 Data API check)");
+
+  // hasAll is always true here (we only push connected sources), so status is
+  // "partial" whenever any non-CONFIG source is connected, else "not_covered".
+  const status: AuditCoverage =
+    connected.length === 0 ? "not_covered" : "partial";
+
+  return {
+    id: "cross-source-recon",
+    capability:
+      "Cross-source reconciliation (CONFIG ↔ RUNTIME ↔ SGTM ↔ GA4_ADMIN ↔ DATA_API)",
+    requires,
+    status,
+    toolNeeded:
+      missing.length > 0
+        ? `Add ${missing.join(", ")} for fuller intent-vs-reality coverage`
+        : undefined,
+  };
 }
 
 function severityFor(f: AuditFinding): "critical" | "high" | "medium" | "low" {
@@ -2482,6 +3036,257 @@ async function pullGa4AdminState(
     enhancedMeasurement,
     failures,
     ok: okCount > 0,
+  };
+}
+
+// ── Server-side GTM context read (SGTM source) ───────────────────────────
+// Read-only reads of a selected SERVER container: metadata (to confirm it is a
+// server container and learn its domain/public id) plus the workspace clients
+// and transformations. Every read is wrapped so a single failure cannot abort
+// the audit. `ok` requires the container to actually be a server container AND
+// at least one read to have succeeded — otherwise SGTM stays Not Covered.
+async function pullSgtmContext(
+  token: string,
+  accountId: string,
+  containerId: string,
+  workspaceId: string,
+): Promise<SgtmContextState> {
+  const base = `/accounts/${encodeURIComponent(accountId)}/containers/${encodeURIComponent(
+    containerId,
+  )}/workspaces/${encodeURIComponent(workspaceId)}`;
+  const containerBase = `/accounts/${encodeURIComponent(accountId)}/containers/${encodeURIComponent(
+    containerId,
+  )}`;
+  const failures: AuditToolFailure[] = [];
+  let okCount = 0;
+
+  const record = (resource: string, e: unknown) => {
+    if (e instanceof GtmApiError && e.status === 404) return;
+    failures.push({
+      resource,
+      message: e instanceof GtmApiError ? e.message : safeErrorName(e),
+      status: e instanceof GtmApiError ? e.status : undefined,
+    });
+  };
+
+  let container: GtmContainer | null = null;
+  try {
+    container = await gtmFetch<GtmContainer>(token, containerBase);
+    okCount++;
+  } catch (e) {
+    record("server_container", e);
+  }
+
+  const usageContext = container?.usageContext ?? [];
+  const isServer = usageContext.some((u) => u.toLowerCase() === "server");
+  const domainNames = (container?.domainName ?? []).filter(Boolean);
+
+  const clientTypes: string[] = [];
+  const clientNames: string[] = [];
+  const transformationNames: string[] = [];
+
+  // Only read clients/transformations when the container is actually a server
+  // container — these endpoints are meaningless (and 404) otherwise.
+  if (isServer) {
+    try {
+      const cRes = await gtmFetch<{ client?: GtmClient[] }>(
+        token,
+        `${base}/clients`,
+      );
+      for (const c of cRes.client ?? []) {
+        if (c.type) clientTypes.push(c.type);
+        if (c.name) clientNames.push(c.name);
+      }
+      okCount++;
+    } catch (e) {
+      record("server_clients", e);
+    }
+
+    try {
+      const tRes = await gtmFetch<{ transformation?: { name?: string }[] }>(
+        token,
+        `${base}/transformations`,
+      );
+      for (const t of tRes.transformation ?? []) {
+        if (t.name) transformationNames.push(t.name);
+      }
+      okCount++;
+    } catch (e) {
+      record("server_transformations", e);
+    }
+  }
+
+  return {
+    accountId,
+    containerId,
+    isServer,
+    domainNames,
+    publicId: container?.publicId,
+    clientTypes,
+    clientNames,
+    transformationNames,
+    failures,
+    ok: isServer && okCount > 0,
+  };
+}
+
+// ── GA4 Data API report read (DATA_API source) ───────────────────────────
+// Read-only runReport against the analyticsdata endpoint: event counts over
+// the last 7 days keyed by eventName. Used only to flag GTM-configured GA4
+// events that report zero activity. A failure records a tool failure and
+// leaves DATA_API Not Covered — counts are never fabricated.
+const GA4_DATA_V1BETA = "https://analyticsdata.googleapis.com/v1beta";
+const DATA_API_WINDOW_DAYS = 7;
+
+async function pullDataApiState(
+  token: string,
+  rawPropertyId: string,
+): Promise<DataApiState> {
+  const numericId = rawPropertyId.startsWith("properties/")
+    ? rawPropertyId.slice("properties/".length)
+    : rawPropertyId;
+  const failures: AuditToolFailure[] = [];
+  const eventCounts: Record<string, number> = {};
+  let ok = false;
+
+  try {
+    const r = await fetch(
+      `${GA4_DATA_V1BETA}/properties/${encodeURIComponent(numericId)}:runReport`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          dimensions: [{ name: "eventName" }],
+          metrics: [{ name: "eventCount" }],
+          dateRanges: [
+            { startDate: `${DATA_API_WINDOW_DAYS}daysAgo`, endDate: "today" },
+          ],
+          limit: 250,
+        }),
+      },
+    );
+    if (!r.ok) {
+      const text = await r.text();
+      failures.push({
+        resource: "ga4_run_report",
+        message: text.slice(0, 300) || `HTTP ${r.status}`,
+        status: r.status,
+      });
+    } else {
+      const json = (await r.json()) as {
+        rows?: {
+          dimensionValues?: { value?: string }[];
+          metricValues?: { value?: string }[];
+        }[];
+      };
+      for (const row of json.rows ?? []) {
+        const name = row.dimensionValues?.[0]?.value;
+        const count = Number(row.metricValues?.[0]?.value ?? "0");
+        if (name) eventCounts[name] = Number.isFinite(count) ? count : 0;
+      }
+      ok = true;
+    }
+  } catch (e) {
+    failures.push({
+      resource: "ga4_run_report",
+      message: safeErrorName(e),
+    });
+  }
+
+  return {
+    propertyId: numericId,
+    eventCounts,
+    windowDays: DATA_API_WINDOW_DAYS,
+    failures,
+    ok,
+  };
+}
+
+// ── Runtime capture parsing (RUNTIME source) ─────────────────────────────
+// Accepts the worker's v2 multi-page artifact and tolerates the legacy v1
+// single-page harness shape. Returns null when nothing parseable was given —
+// the audit then leaves RUNTIME Not Covered (never fabricated).
+function parseRuntimeCapture(raw: unknown): RuntimeState | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+
+  const normalizePage = (p: Record<string, unknown>): RuntimePageCapture => {
+    const hits = Array.isArray(p.trackerHits)
+      ? (p.trackerHits as Record<string, unknown>[]).map((h) => {
+          const matched = Array.isArray(h.matched)
+            ? (h.matched as unknown[]).filter(
+                (m): m is string => typeof m === "string",
+              )
+            : [];
+          // Legacy v1 had only `matched` ids; derive groups for GA4 so runtime
+          // rules still work. Newer artifacts include explicit `groups`.
+          const groups = Array.isArray(h.groups)
+            ? (h.groups as unknown[]).filter(
+                (g): g is string => typeof g === "string",
+              )
+            : matched
+                .map((id) =>
+                  id.includes("ga4") || id.includes("collect") || id === "ua_collect"
+                    ? "ga4"
+                    : id.includes("meta")
+                      ? "meta"
+                      : id,
+                )
+                .filter(Boolean);
+          return {
+            url: typeof h.url === "string" ? h.url : undefined,
+            method: typeof h.method === "string" ? h.method : undefined,
+            matched,
+            groups,
+          };
+        })
+      : [];
+    const strArr = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    return {
+      requestedUrl:
+        typeof p.requestedUrl === "string" ? p.requestedUrl : undefined,
+      finalUrl: typeof p.finalUrl === "string" ? p.finalUrl : null,
+      consoleErrors: strArr(p.consoleErrors),
+      pageErrors: strArr(p.pageErrors),
+      trackerHits: hits,
+      sgtmCandidates: Array.isArray(p.sgtmCandidates)
+        ? (p.sgtmCandidates as { url?: string }[])
+        : [],
+      dataLayerEvents: strArr(p.dataLayerEvents),
+      dataLayerKeys: strArr(p.dataLayerKeys),
+    };
+  };
+
+  let pages: RuntimePageCapture[] = [];
+  if (Array.isArray(obj.pages)) {
+    pages = (obj.pages as Record<string, unknown>[]).map(normalizePage);
+  } else if (typeof obj.requestedUrl === "string" || obj.trackerHits) {
+    // Legacy v1 single-page artifact — wrap it. Derive dataLayer events from
+    // dataLayerAfter if event names were not pre-extracted.
+    const single = normalizePage(obj);
+    if ((single.dataLayerEvents ?? []).length === 0 && Array.isArray(obj.dataLayerAfter)) {
+      const evs: string[] = [];
+      for (const entry of obj.dataLayerAfter as unknown[]) {
+        if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+          const ev = (entry as Record<string, unknown>).event;
+          if (typeof ev === "string") evs.push(ev);
+        }
+      }
+      single.dataLayerEvents = evs;
+    }
+    pages = [single];
+  }
+
+  if (pages.length === 0) return null;
+  return {
+    capturedAt: typeof obj.capturedAt === "string" ? obj.capturedAt : undefined,
+    pages,
+    ok: true,
   };
 }
 
