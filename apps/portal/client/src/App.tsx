@@ -8,6 +8,7 @@ import NotFound from "@/pages/not-found";
 import OverviewPage from "@/pages/overview";
 import ContainersPage from "@/pages/containers";
 import AuditPage from "@/pages/audit";
+import ConsentV2Page from "@/pages/consent-v2";
 import ServerSidePage from "@/pages/server-side";
 import RecommendPage from "@/pages/recommend";
 import ApprovalsPage from "@/pages/approvals";
@@ -27,6 +28,7 @@ function AppRouter() {
         <Route path="/" component={OverviewPage} />
         <Route path="/containers" component={ContainersPage} />
         <Route path="/audit" component={AuditPage} />
+        <Route path="/consent-v2" component={ConsentV2Page} />
         <Route path="/server-side" component={ServerSidePage} />
         <Route path="/recommend" component={RecommendPage} />
         <Route path="/approvals" component={ApprovalsPage} />

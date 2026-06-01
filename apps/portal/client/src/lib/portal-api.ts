@@ -15,6 +15,7 @@ import type {
   ApprovalStatus,
   AuditSummary,
   ChangePlan,
+  ConsentAuditResponse,
   ContainerRecord,
   Ga4DataStreamSummary,
   Ga4PropertySummary,
@@ -249,6 +250,22 @@ export const portalApi = {
     enableDataApi?: boolean;
   }): Promise<AuditSummary> {
     return postJson<AuditSummary>("/api/gtm/audit", args);
+  },
+
+  /**
+   * Focused Consent Mode v2 audit (read-only). Reads the chosen GTM workspace
+   * and returns ONLY consent-engine findings — no GA4/sGTM/naming output. Pass
+   * an optional `runtimeCapture` artifact to activate RUNTIME + reconciliation
+   * checks; without one the audit is config-only and never fabricates coverage.
+   */
+  async runConsentAudit(args: {
+    accountId: string;
+    containerId: string;
+    workspaceId: string;
+    containerPublicId?: string;
+    runtimeCapture?: RuntimeCapture | unknown;
+  }): Promise<ConsentAuditResponse> {
+    return postJson<ConsentAuditResponse>("/api/gtm/consent-audit", args);
   },
 
   // -------- Live server-side GTM (sGTM) visibility (read-only) --------
