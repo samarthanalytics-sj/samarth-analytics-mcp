@@ -5,7 +5,11 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { GtmClient } from '../utils/gtmClient.js';
-import type { Ga4AdminClient, Ga4AdminAlphaClient } from '../utils/ga4Client.js';
+import type {
+  Ga4AdminClient,
+  Ga4AdminAlphaClient,
+  Ga4DataClient,
+} from '../utils/ga4Client.js';
 
 import { registerAccountTools } from './accounts.js';
 import { registerContainerTools } from './containers.js';
@@ -23,12 +27,14 @@ import { registerEnvironmentTools } from './environments.js';
 import { registerUserPermissionTools } from './userPermissions.js';
 import { registerServerSideTools } from './serverSide.js';
 import { registerGa4AdminTools } from './ga4Admin.js';
+import { registerGa4DataTools } from './ga4Data.js';
 
 export function registerAllTools(
   server: McpServer,
   getClient: () => GtmClient,
   getGa4Client: () => Ga4AdminClient,
-  getGa4AlphaClient: () => Ga4AdminAlphaClient
+  getGa4AlphaClient: () => Ga4AdminAlphaClient,
+  getGa4DataClient: () => Ga4DataClient
 ): void {
   registerAccountTools(server, getClient);
   registerContainerTools(server, getClient);
@@ -46,4 +52,5 @@ export function registerAllTools(
   registerAuditTools(server, getClient);
   registerExportTools(server, getClient);
   registerGa4AdminTools(server, getGa4Client, getGa4AlphaClient);
+  registerGa4DataTools(server, getGa4DataClient);
 }
