@@ -1,0 +1,23 @@
+{
+  "name": "samarth-runtime-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only runtime capture worker for the Samarth GTM audit portal. Loads pages in headless Chromium and records analytics network hits, dataLayer snapshots, and console/page errors. NOT for Vercel — deploy to a host with a real browser (Render/Fly/Railway/VPS).",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "bin": {
+    "samarth-runtime-worker": "server.mjs"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "capture": "node capture.mjs",
+    "postinstall-browser": "playwright install chromium",
+    "check": "node --check server.mjs && node --check capture.mjs && node --check cli.mjs"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.48.0"
+  }
+}
