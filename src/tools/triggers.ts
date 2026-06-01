@@ -6,6 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 
 const wsBase = z.object({
   accountId: z.string(),
@@ -32,18 +33,20 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
   server.registerTool(
     'triggers_list',
     {
-      description: 'List all GTM triggers in a workspace.',
-      inputSchema: wsBase,
+      description: 'List all GTM triggers in a workspace. Automatically follows pagination to return all triggers.',
+      inputSchema: wsBase.extend(paginationFields),
     },
-    async ({ accountId, containerId, workspaceId }) => {
+    async ({ accountId, containerId, workspaceId, pageToken, maxPages }) => {
       try {
         const client = getClient();
-        const res = await client.accounts.containers.workspaces.triggers.list({
-          parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
-        });
-        const triggers = res.data.trigger ?? [];
+        const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+        const result = await paginate(
+          (token) => client.accounts.containers.workspaces.triggers.list({ parent, pageToken: token }).then((r) => r.data),
+          (data) => data.trigger,
+          { pageToken, maxPages }
+        );
         return {
-          content: [{ type: 'text', text: JSON.stringify({ triggers, count: triggers.length }, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(buildListResult('triggers', result), null, 2) }],
         };
       } catch (err) {
         return { isError: true, content: [{ type: 'text', text: `triggers_list failed: ${formatGoogleError(err)}` }] };

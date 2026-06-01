@@ -6,6 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 
 const wsBase = z.object({
   accountId: z.string().describe('The GTM account ID.'),
@@ -31,18 +32,20 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
   server.registerTool(
     'tags_list',
     {
-      description: 'List all GTM tags in a workspace.',
-      inputSchema: wsBase,
+      description: 'List all GTM tags in a workspace. Automatically follows pagination to return all tags.',
+      inputSchema: wsBase.extend(paginationFields),
     },
-    async ({ accountId, containerId, workspaceId }) => {
+    async ({ accountId, containerId, workspaceId, pageToken, maxPages }) => {
       try {
         const client = getClient();
-        const res = await client.accounts.containers.workspaces.tags.list({
-          parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
-        });
-        const tags = res.data.tag ?? [];
+        const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+        const result = await paginate(
+          (token) => client.accounts.containers.workspaces.tags.list({ parent, pageToken: token }).then((r) => r.data),
+          (data) => data.tag,
+          { pageToken, maxPages }
+        );
         return {
-          content: [{ type: 'text', text: JSON.stringify({ tags, count: tags.length }, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(buildListResult('tags', result), null, 2) }],
         };
       } catch (err) {
         return {
