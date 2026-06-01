@@ -1,3 +1,11 @@
+## [1.11.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.10.0...v1.11.0) (2026-06-01)
+
+### Features
+
+* **mcp:** add read-only GA4 Data API reporting tools ([e91570e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e91570e30e72bf65d72fc07787a8d6c5d158b3af))
+* **portal:** fold runtime, sGTM and GA4 Data API into the live audit ([54638c9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/54638c93079e9e4737209b4a5bbb4f1446cb1c92))
+* **runtime-worker:** add hosted read-only runtime capture worker ([2585aaf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2585aafac7bf34ec3f04e721289c9af4295bb25f))
+
 ## [1.10.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.9.0...v1.10.0) (2026-06-01)
 
 ### Features
