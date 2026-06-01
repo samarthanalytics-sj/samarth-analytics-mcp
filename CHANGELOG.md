@@ -1,3 +1,9 @@
+## [1.13.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.12.2...v1.13.0) (2026-06-01)
+
+### Features
+
+* **portal:** add dedicated Consent Mode v2 audit section ([cb5c11d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cb5c11de141d1662505796b071c59653e9c31013))
+
 ## [1.12.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.12.1...v1.12.2) (2026-06-01)
 
 ### Bug Fixes
