@@ -6,6 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 
 const workspaceBase = z.object({
   accountId: z.string().describe('The GTM account ID.'),
@@ -17,19 +18,21 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
   server.registerTool(
     'workspaces_list',
     {
-      description: 'List all workspaces within a GTM container.',
-      inputSchema: workspaceBase,
+      description: 'List all workspaces within a GTM container. Automatically follows pagination to return all workspaces.',
+      inputSchema: workspaceBase.extend(paginationFields),
     },
-    async ({ accountId, containerId }) => {
+    async ({ accountId, containerId, pageToken, maxPages }) => {
       try {
         const client = getClient();
-        const res = await client.accounts.containers.workspaces.list({
-          parent: `accounts/${accountId}/containers/${containerId}`,
-        });
-        const workspaces = res.data.workspace ?? [];
+        const parent = `accounts/${accountId}/containers/${containerId}`;
+        const result = await paginate(
+          (token) => client.accounts.containers.workspaces.list({ parent, pageToken: token }).then((r) => r.data),
+          (data) => data.workspace,
+          { pageToken, maxPages }
+        );
         return {
           content: [
-            { type: 'text', text: JSON.stringify({ workspaces, count: workspaces.length }, null, 2) },
+            { type: 'text', text: JSON.stringify(buildListResult('workspaces', result), null, 2) },
           ],
         };
       } catch (err) {
@@ -98,6 +101,52 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
         return {
           isError: true,
           content: [{ type: 'text', text: `workspaces_create failed: ${formatGoogleError(err)}` }],
+        };
+      }
+    }
+  );
+
+  // ── workspace/get_status ─────────────────────────────────────────────────
+  server.registerTool(
+    'workspace_get_status',
+    {
+      description:
+        'Get the status of a GTM workspace: the list of changed entities (workspaceChange) ' +
+        'relative to the latest container version, plus any merge conflicts. ' +
+        'Use this to review a change diff before creating a version or publishing.',
+      inputSchema: workspaceBase.extend({
+        workspaceId: z.string().describe('The GTM workspace ID.'),
+      }),
+    },
+    async ({ accountId, containerId, workspaceId }) => {
+      try {
+        const client = getClient();
+        const res = await client.accounts.containers.workspaces.getStatus({
+          path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+        });
+        const changes = res.data.workspaceChange ?? [];
+        const conflicts = res.data.mergeConflict ?? [];
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  workspaceChange: changes,
+                  changeCount: changes.length,
+                  mergeConflict: conflicts,
+                  conflictCount: conflicts.length,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `workspace_get_status failed: ${formatGoogleError(err)}` }],
         };
       }
     }

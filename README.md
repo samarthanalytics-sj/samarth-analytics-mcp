@@ -34,6 +34,8 @@ Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, g
 ## Features
 
 - **Full GTM API v2 surface** — accounts, containers, workspaces, tags, triggers, variables, folders, built-in variables, versions, sync, publish, preview
+- **Server-side & advanced GTM coverage** — environments, user permissions, destinations, clients, transformations, zones, custom templates, gtag config, plus container snippet/lookup/combine/move-tag-id and workspace change-diff status
+- **Automatic pagination** — every paginated list tool transparently follows `nextPageToken` to return all results, with optional `maxPages`/`pageToken` bounds
 - **Two transport modes**: stdio (local, for Claude Desktop/Cursor) and Streamable HTTP (cloud/team)
 - **Guardrails by default**: read-only unless explicitly enabled; publish and delete gated separately
 - **Dry-run mode**: simulate all writes without touching the API
@@ -336,16 +338,28 @@ GTM_MCP_ENABLE_DELETES=true
 ### Containers
 | Tool | Description |
 |---|---|
-| `containers_list` | List containers in an account |
+| `containers_list` | List containers in an account (auto-paginated) |
 | `containers_get` | Get a specific container |
 | `containers_create` | ✏️ Create a new container |
+| `containers_snippet` | Get the GTM installation snippet for a container |
+| `containers_lookup` | Look up a container by linked destination/tag ID (e.g. `G-XXXX`) |
+| `containers_combine` | ✏️ Combine (merge) another container into this one |
+| `containers_move_tag_id` | ✏️ Move a Tag ID out into a new container |
+
+### Destinations
+| Tool | Description |
+|---|---|
+| `destinations_list` | List linked destinations (Google tags / GA4) for a container |
+| `destinations_get` | Get a specific destination |
+| `destinations_link` | ✏️ Link a destination to a container |
 
 ### Workspaces
 | Tool | Description |
 |---|---|
-| `workspaces_list` | List workspaces in a container |
+| `workspaces_list` | List workspaces in a container (auto-paginated) |
 | `workspaces_get` | Get a specific workspace |
 | `workspaces_create` | ✏️ Create a new workspace |
+| `workspace_get_status` | Review the change diff (changed entities + merge conflicts) before versioning |
 | `workspace_sync` | ✏️ Sync workspace to latest container version |
 | `workspace_resolve_conflict` | ✏️ Resolve a merge conflict |
 | `workspace_quick_preview` | Generate a preview link (read-safe) |
@@ -408,11 +422,58 @@ GTM_MCP_ENABLE_DELETES=true
 | `versions_undelete` | ✏️ Undelete a version |
 | `versions_delete` | 🗑️ Delete a version |
 
+### Environments
+| Tool | Description |
+|---|---|
+| `environments_list` | List environments in a container (auto-paginated) |
+| `environments_get` | Get a specific environment |
+| `environments_create` | ✏️ Create an environment |
+| `environments_update` | ✏️ Update an environment |
+| `environments_reauthorize` | 🚀 Re-generate the environment authorization token (high-impact) |
+| `environments_delete` | 🗑️ Delete an environment |
+
+### User Permissions (account-level)
+| Tool | Description |
+|---|---|
+| `user_permissions_list` | List user permissions for an account (auto-paginated) |
+| `user_permissions_get` | Get a specific user permission |
+| `user_permissions_create` | ✏️ Grant a user account/container access |
+| `user_permissions_update` | ✏️ Update a user's access levels |
+| `user_permissions_delete` | 🗑️ Revoke a user's access |
+
+### Server-Side & Advanced Container Resources
+
+These are workspace-scoped resources from GTM API v2. Create/update accept the full
+resource as a JSON string (`bodyJson`) since their bodies are deeply nested. Each
+supports `*_list` (auto-paginated), `*_get`, `*_create` ✏️, `*_update` ✏️, `*_delete` 🗑️,
+and (except `gtag_config`) `*_revert` ✏️.
+
+| Resource | Tools | Notes |
+|---|---|---|
+| Clients | `clients_*` | Server container request clients |
+| Transformations | `transformations_*` | Server container event transformations |
+| Zones | `zones_*` | Zone delegation |
+| Templates | `templates_*` | Custom / gallery-installed templates |
+| Gtag Config | `gtag_config_*` | Google tag (gtag) configuration — no `revert` |
+
 ### Analytics & Export
 | Tool | Description |
 |---|---|
 | `audit_container` | Inspect workspace for analytics issues |
 | `export_container` | Export workspace as structured JSON |
+
+### Pagination
+
+All list tools backed by paginated GTM endpoints (`accounts_*`-scoped containers,
+workspaces, tags, triggers, variables, folders, environments, user permissions,
+clients, transformations, zones, templates, gtag configs) **auto-follow pagination
+and return all results by default**. Optional arguments:
+
+- `maxPages` — cap the number of API pages fetched (default 50). If more pages remain,
+  the response includes `"truncated": true` and a `nextPageToken`.
+- `pageToken` — resume from a previous truncated result.
+
+Non-truncated responses keep the original `{ <key>: [...], count }` shape unchanged.
 
 Legend: ✏️ requires `GTM_MCP_ENABLE_WRITES=true` | 🗑️ requires `GTM_MCP_ENABLE_DELETES=true` | 🚀 requires `GTM_MCP_ENABLE_PUBLISH=true`
 

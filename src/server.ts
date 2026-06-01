@@ -64,7 +64,16 @@ function buildInstructions(config: ReturnType<typeof getGuardrailConfig>): strin
     '- folders_list, folders_get, folders_create, folders_update, folders_delete, folders_entities, folders_move_entities',
     '- built_in_variables_list, built_in_variables_enable, built_in_variables_disable, built_in_variables_revert',
     '- versions_list, versions_get, versions_create, versions_publish, versions_set_latest, versions_undelete, versions_delete',
+    '- environments_list, environments_get, environments_create, environments_update, environments_reauthorize, environments_delete',
+    '- user_permissions_list, user_permissions_get, user_permissions_create, user_permissions_update, user_permissions_delete',
+    '- clients_*, transformations_*, zones_*, templates_* (list/get/create/update/delete/revert), gtag_config_* (no revert) — server-side & advanced container resources',
+    '- containers_snippet, containers_lookup, containers_combine, containers_move_tag_id',
+    '- destinations_list, destinations_get, destinations_link',
+    '- workspace_get_status — review the change diff (changed entities + conflicts) before versioning',
     '- audit_container — inspect for analytics issues',
     '- export_container — full workspace export as JSON',
+    '',
+    'PAGINATION: All list tools that support it auto-follow pagination to return all results. ',
+    'Pass maxPages to bound the work; truncated results include truncated:true and nextPageToken to resume.',
   ].join('\n');
 }

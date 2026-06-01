@@ -18,6 +18,9 @@ import { registerVersionTools } from './versions.js';
 import { registerPublishTools } from './publish.js';
 import { registerAuditTools } from './audit.js';
 import { registerExportTools } from './export.js';
+import { registerEnvironmentTools } from './environments.js';
+import { registerUserPermissionTools } from './userPermissions.js';
+import { registerServerSideTools } from './serverSide.js';
 
 export function registerAllTools(server: McpServer, getClient: () => GtmClient): void {
   registerAccountTools(server, getClient);
@@ -30,6 +33,9 @@ export function registerAllTools(server: McpServer, getClient: () => GtmClient):
   registerBuiltInVariableTools(server, getClient);
   registerVersionTools(server, getClient);
   registerPublishTools(server, getClient);
+  registerEnvironmentTools(server, getClient);
+  registerUserPermissionTools(server, getClient);
+  registerServerSideTools(server, getClient);
   registerAuditTools(server, getClient);
   registerExportTools(server, getClient);
 }
