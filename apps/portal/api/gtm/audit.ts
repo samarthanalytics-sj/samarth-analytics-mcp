@@ -119,6 +119,54 @@ interface GtmVersion {
   fingerprint?: string;
 }
 
+// ── GA4 Admin API subset types ───────────────────────────────────────────
+
+interface Ga4DataStream {
+  name?: string; // properties/123/dataStreams/456
+  type?: string;
+  displayName?: string;
+  webStreamData?: { measurementId?: string; defaultUri?: string };
+  androidAppStreamData?: { packageName?: string };
+  iosAppStreamData?: { bundleId?: string };
+}
+interface Ga4CustomDimension {
+  parameterName?: string;
+  displayName?: string;
+  scope?: string;
+}
+interface Ga4CustomMetric {
+  parameterName?: string;
+  displayName?: string;
+  scope?: string;
+}
+interface Ga4DataRetention {
+  eventDataRetention?: string;
+  resetUserDataOnNewActivity?: boolean;
+}
+interface Ga4GoogleAdsLink {
+  customerId?: string;
+  adsPersonalizationEnabled?: boolean;
+}
+interface Ga4EnhancedMeasurement {
+  streamEnabled?: boolean;
+}
+
+/** Result of the optional GA4 Admin cross-source read. */
+interface Ga4AdminState {
+  propertyId: string;
+  dataStreams: Ga4DataStream[];
+  customDimensions: Ga4CustomDimension[];
+  customMetrics: Ga4CustomMetric[];
+  dataRetention: Ga4DataRetention | null;
+  googleAdsLinks: Ga4GoogleAdsLink[];
+  /** dataStreamId → enhanced measurement (web streams only). */
+  enhancedMeasurement: Record<string, Ga4EnhancedMeasurement>;
+  /** GA4 Admin reads that failed — surfaced so coverage is not over-claimed. */
+  failures: AuditToolFailure[];
+  /** True when at least one GA4 Admin call succeeded for this property. */
+  ok: boolean;
+}
+
 // ── Audit result types (mirror shared/portal-types.ts) ───────────────────
 
 type AuditSeverity = "info" | "low" | "medium" | "high" | "critical";
@@ -230,6 +278,7 @@ interface AuditSummary {
   publishedVersion?: { versionId?: string; name?: string; notes?: string } | null;
   toolFailures?: AuditToolFailure[];
   summary?: string;
+  gtmMeasurementIds?: string[];
   capabilityFlags?: AuditCapabilityFlags;
   coverageMatrix?: AuditCoverageItem[];
   executiveSummary?: AuditExecutiveSummary;
@@ -286,8 +335,13 @@ export default async function handler(
       containerId?: string;
       workspaceId?: string;
       containerPublicId?: string;
+      ga4PropertyId?: string;
     }>(req);
     const { accountId, containerId, workspaceId, containerPublicId } = body;
+    const ga4PropertyId =
+      typeof body.ga4PropertyId === "string" && body.ga4PropertyId.trim()
+        ? body.ga4PropertyId.trim()
+        : undefined;
     if (!accountId || !containerId || !workspaceId) {
       return sendJson(res, 400, {
         error: "missing_params",
@@ -303,8 +357,14 @@ export default async function handler(
         containerId,
         workspaceId,
       );
+      // Optional GA4 Admin cross-source read. Failures never abort the audit —
+      // they are recorded so the audit can mark GA4_ADMIN Partial / Not Covered.
+      const ga4 = ga4PropertyId
+        ? await pullGa4AdminState(token, ga4PropertyId)
+        : null;
       const summary = runAudit(state, {
         containerPublicId: containerPublicId ?? containerId,
+        ga4,
       });
       return sendJson(res, 200, summary);
     } catch (e) {
@@ -339,6 +399,7 @@ interface Ctx {
   triggerById: Map<string, GtmTrigger>;
   builtInTypes: Set<string>;
   textBlob: string;
+  ga4: Ga4AdminState | null;
 }
 
 function fid(seed: string): string {
@@ -347,7 +408,7 @@ function fid(seed: string): string {
   );
 }
 
-function buildCtx(state: AuditState): Ctx {
+function buildCtx(state: AuditState, ga4: Ga4AdminState | null): Ctx {
   const triggerIdSet = new Set(
     state.contents.triggers.map((t) => t.triggerId ?? "").filter(Boolean),
   );
@@ -372,6 +433,7 @@ function buildCtx(state: AuditState): Ctx {
     triggerById,
     builtInTypes,
     textBlob: collectTextBlob(state.contents),
+    ga4,
   };
 }
 
@@ -1261,6 +1323,264 @@ function ruleConversionLinker(ctx: Ctx, out: AuditFinding[]) {
   }
 }
 
+// ── K. Cross-source: GTM CONFIG ↔ GA4 Admin ──────────────────────────────
+// These rules only run when a GA4 property was selected and at least one GA4
+// Admin read succeeded. Every finding cites Source(s): CONFIG + GA4_ADMIN.
+// No runtime claims are made — this reconciles configuration intent against
+// the GA4 property's registered settings.
+
+/** Collect distinct GA4 measurement IDs (G-/GT-) referenced in GTM config. */
+function gtmGa4MeasurementIds(ctx: Ctx): Set<string> {
+  const ids = new Set<string>();
+  for (const tag of ctx.tags) {
+    if (!isGA4Config(tag) && !isGA4Event(tag)) continue;
+    const id =
+      tagParam(tag, "tagId") ??
+      tagParam(tag, "measurementId") ??
+      tagParam(tag, "measurementIdOverride");
+    if (!id) continue;
+    if (/^G-/i.test(id) || /^GT-/i.test(id)) ids.add(id.toUpperCase());
+  }
+  return ids;
+}
+
+/** Collect event parameter keys configured on GA4 event tags in GTM. */
+function gtmGa4EventParamKeys(ctx: Ctx): Set<string> {
+  const keys = new Set<string>();
+  for (const tag of ctx.tags) {
+    if (!isGA4Event(tag)) continue;
+    for (const p of tag.parameter ?? []) {
+      // GA4 event tags carry their custom params under an "eventParameters"
+      // list of {name, value} maps. Walk the structure and collect names.
+      if (p.key === "eventParameters" || p.key === "userProperties") {
+        for (const entry of p.list ?? []) {
+          const nameParam = (entry.map ?? []).find((m) => m.key === "name");
+          const name = (nameParam?.value ?? "").trim();
+          if (name && !name.startsWith("{{")) keys.add(name.toLowerCase());
+        }
+      }
+    }
+  }
+  return keys;
+}
+
+function ruleCrossMeasurementIds(ctx: Ctx, out: AuditFinding[]) {
+  const ga4 = ctx.ga4;
+  if (!ga4 || ga4.dataStreams.length === 0) return;
+  const streamIds = new Set<string>();
+  for (const s of ga4.dataStreams) {
+    const mid = s.webStreamData?.measurementId;
+    if (mid) streamIds.add(mid.toUpperCase());
+  }
+  if (streamIds.size === 0) return; // app-only property; nothing to reconcile
+  const gtmIds = gtmGa4MeasurementIds(ctx);
+  if (gtmIds.size === 0) return;
+
+  const orphanGtm = Array.from(gtmIds).filter((id) => !streamIds.has(id));
+  if (orphanGtm.length > 0) {
+    pushFinding(out, {
+      id: fid(`x-mid-mismatch:${orphanGtm.sort().join(",")}`),
+      category: "ga4",
+      severity: "high",
+      finding:
+        "GTM references GA4 measurement ID(s) that do not match any data stream on the selected GA4 property",
+      affected: orphanGtm,
+      whyItMatters:
+        "The Google tag / GA4 event tags in this container send to measurement IDs that are not present as web data streams on the GA4 property you selected. Either the wrong property was selected, or hits are flowing to a different property than expected.",
+      suggestedFix:
+        "Confirm the GTM measurement ID matches a web data stream on the intended GA4 property. If it should match, re-select the correct property; otherwise correct the measurement ID in GTM.",
+      sources: ["CONFIG", "GA4_ADMIN"],
+      parameter: "measurementId",
+      businessImpact:
+        "Data may be landing in the wrong GA4 property or being dropped — reporting and attribution break silently.",
+      effort: "M",
+    });
+  }
+}
+
+function ruleCrossCustomDimensions(ctx: Ctx, out: AuditFinding[]) {
+  const ga4 = ctx.ga4;
+  if (!ga4) return;
+  // Only run when we successfully read custom dimensions/metrics. An empty list
+  // after a successful read is meaningful (none registered); a failed read is
+  // already surfaced as a tool failure, so skip in that case.
+  const cdFailed = ga4.failures.some((f) => f.resource === "ga4_custom_dimensions");
+  const cmFailed = ga4.failures.some((f) => f.resource === "ga4_custom_metrics");
+  if (cdFailed && cmFailed) return;
+
+  const registered = new Set<string>();
+  for (const d of ga4.customDimensions) {
+    if (d.parameterName) registered.add(d.parameterName.toLowerCase());
+  }
+  for (const m of ga4.customMetrics) {
+    if (m.parameterName) registered.add(m.parameterName.toLowerCase());
+  }
+  const sent = gtmGa4EventParamKeys(ctx);
+  if (sent.size === 0) return;
+
+  // GA4 collects a set of automatically-handled params that never need
+  // registration as custom dimensions. Don't flag those.
+  const AUTO = new Set([
+    "page_location",
+    "page_title",
+    "page_referrer",
+    "language",
+    "screen_resolution",
+    "value",
+    "currency",
+    "transaction_id",
+    "items",
+    "coupon",
+    "tax",
+    "shipping",
+  ]);
+
+  const unregistered = Array.from(sent).filter(
+    (k) => !registered.has(k) && !AUTO.has(k),
+  );
+  if (unregistered.length > 0) {
+    pushFinding(out, {
+      id: fid(`x-unreg-params:${unregistered.sort().join(",").slice(0, 80)}`),
+      category: "ga4",
+      severity: "medium",
+      finding:
+        "GTM sends event parameters that are not registered as GA4 custom dimensions/metrics",
+      affected: unregistered.slice(0, 20),
+      whyItMatters:
+        "These parameters are configured on GA4 event tags in GTM but have no matching registered custom dimension or metric on the GA4 property. Unregistered event-scoped parameters are collected but are NOT available in standard reports or explorations beyond the realtime/DebugView window.",
+      suggestedFix:
+        "Register each business-relevant parameter as a GA4 custom dimension (event scope) or custom metric so it is reportable. Confirm naming matches exactly (case-sensitive in GA4).",
+      needsManualReview: true,
+      sources: ["CONFIG", "GA4_ADMIN"],
+      parameter: "eventParameters",
+      businessImpact:
+        "Parameters that are sent but unregistered cannot be used in reports — the data is effectively invisible to analysts.",
+      effort: "M",
+    });
+  }
+}
+
+function ruleCrossDataRetention(ctx: Ctx, out: AuditFinding[]) {
+  const ga4 = ctx.ga4;
+  if (!ga4 || !ga4.dataRetention) return;
+  const retention = ga4.dataRetention.eventDataRetention;
+  if (!retention) return;
+  // GA4 default is TWO_MONTHS; FOURTEEN_MONTHS (or longer on 360) is usually
+  // wanted for year-over-year and longer lookback explorations.
+  if (/two_months|2_months/i.test(retention)) {
+    pushFinding(out, {
+      id: fid("x-retention-2mo"),
+      category: "data_quality",
+      severity: "medium",
+      finding: "GA4 event data retention is set to 2 months",
+      affected: [`eventDataRetention=${retention}`],
+      whyItMatters:
+        "With 2-month retention, user-level and event-level data in explorations is dropped after ~60 days. Standard aggregated reports are unaffected, but any exploration, cohort, or custom-funnel analysis needing a longer lookback will be incomplete.",
+      suggestedFix:
+        "If the client needs explorations or year-over-year analysis, increase event data retention to 14 months (Admin → Data Settings → Data Retention). Confirm this is acceptable under the client's data-retention/privacy policy first.",
+      needsManualReview: true,
+      sources: ["GA4_ADMIN"],
+      parameter: "dataRetentionSettings.eventDataRetention",
+      businessImpact:
+        "Limited retention silently caps the depth of behavioural analysis available to the client.",
+      effort: "S",
+    });
+  }
+}
+
+function ruleCrossGoogleAdsLinks(ctx: Ctx, out: AuditFinding[]) {
+  const ga4 = ctx.ga4;
+  if (!ga4) return;
+  const adsFailed = ga4.failures.some((f) => f.resource === "ga4_google_ads_links");
+  if (adsFailed) return;
+  const hasAdsTagsInGtm = ctx.tags.some(
+    (t) => t.type === "awct" || t.type === "sp" || t.type === "gclidw",
+  );
+  if (!hasAdsTagsInGtm) return;
+  if (ga4.googleAdsLinks.length === 0) {
+    pushFinding(out, {
+      id: fid("x-ads-link-missing"),
+      category: "pixels",
+      severity: "medium",
+      finding:
+        "GTM has Google Ads tags but the GA4 property has no Google Ads link",
+      whyItMatters:
+        "Google Ads conversion/remarketing tags are configured in GTM, but the selected GA4 property has no linked Google Ads account. Without a GA4 ↔ Ads link you lose GA4-based audiences, imported conversions, and cross-tool reporting.",
+      suggestedFix:
+        "Link the Google Ads account in GA4 (Admin → Product Links → Google Ads) so audiences and conversions can flow between GA4 and Ads. Confirm the correct Ads customer ID.",
+      needsManualReview: true,
+      sources: ["CONFIG", "GA4_ADMIN"],
+      parameter: "googleAdsLinks",
+      businessImpact:
+        "Missing the GA4 ↔ Ads link blocks GA4 audience activation and conversion import, weakening campaign optimisation.",
+      effort: "S",
+    });
+  }
+}
+
+function ruleCrossEnhancedMeasurement(ctx: Ctx, out: AuditFinding[]) {
+  const ga4 = ctx.ga4;
+  if (!ga4) return;
+  // Detect manual page_view configuration in GTM: a Google tag with
+  // send_page_view=false, or GA4 event tags sending event_name=page_view.
+  let manualPageView = false;
+  for (const tag of ctx.tags) {
+    if (isGA4Config(tag)) {
+      const sendPv = tagParam(tag, "sendPageView") ?? tagParam(tag, "send_page_view");
+      if (sendPv && /false/i.test(sendPv)) manualPageView = true;
+    }
+    if (isGA4Event(tag)) {
+      const ev = (tagParam(tag, "eventName") ?? "").trim().toLowerCase();
+      if (ev === "page_view") manualPageView = true;
+    }
+  }
+  // Find any web stream with enhanced measurement that has streamEnabled.
+  const emValues = Object.values(ga4.enhancedMeasurement);
+  if (emValues.length === 0) return;
+  const anyEnhancedOn = emValues.some((e) => e.streamEnabled);
+  if (manualPageView && anyEnhancedOn) {
+    pushFinding(out, {
+      id: fid("x-enhanced-vs-manual-pv"),
+      category: "ga4",
+      severity: "low",
+      finding:
+        "GA4 enhanced measurement is enabled while GTM appears to send page_view manually",
+      whyItMatters:
+        "Enhanced measurement (which includes its own page-view handling) is enabled on a GA4 web stream, while GTM config suggests page_view is also being managed manually (send_page_view=false or a manual page_view event). Whether this double-counts depends on runtime behaviour, which CONFIG + GA4_ADMIN alone cannot confirm.",
+      suggestedFix:
+        "Manually review page_view handling: decide whether enhanced measurement or the GTM tag owns page_view, and disable the other to avoid duplicate page_view hits.",
+      needsManualReview: true,
+      sources: ["CONFIG", "GA4_ADMIN"],
+      parameter: "enhancedMeasurement / send_page_view",
+      businessImpact:
+        "If both paths fire, page_view is double-counted, inflating sessions and engagement metrics.",
+      effort: "M",
+    });
+  }
+}
+
+// Surface GA4 Admin read failures as findings so coverage gaps are not silent.
+function ruleGa4ToolFailures(ctx: Ctx, out: AuditFinding[]) {
+  const ga4 = ctx.ga4;
+  if (!ga4) return;
+  for (const tf of ga4.failures) {
+    pushFinding(out, {
+      id: fid(`ga4-tool-fail:${tf.resource}`),
+      category: "tool_failure",
+      severity: "low",
+      finding: `Could not read ${tf.resource} from the GA4 Admin API`,
+      whyItMatters: tf.message,
+      suggestedFix:
+        "Re-run the audit. If it persists, confirm the account has GA4 access to this property and that the analytics.readonly scope was granted (reconnect Google if needed).",
+      needsManualReview: true,
+      sources: ["GA4_ADMIN"],
+      businessImpact:
+        "GA4_ADMIN coverage is incomplete for this area; do not assume it is clean.",
+      effort: "S",
+    });
+  }
+}
+
 function severityForResource(resource: string): AuditSeverity {
   // Workspace contents being unreadable is the only fatal case (we already
   // throw before audit runs). Container/version metadata are nice-to-have.
@@ -1392,9 +1712,9 @@ function buildSummary(findings: AuditFinding[], itemsChecked: number): string {
 
 function runAudit(
   state: AuditState,
-  opts: { containerPublicId: string },
+  opts: { containerPublicId: string; ga4: Ga4AdminState | null },
 ): AuditSummary {
-  const ctx = buildCtx(state);
+  const ctx = buildCtx(state, opts.ga4);
   const findings: AuditFinding[] = [];
 
   // A. Dead / orphaned config
@@ -1429,6 +1749,13 @@ function runAudit(
   rulePerformance(ctx, findings);
   // J. Conversion Linker
   ruleConversionLinker(ctx, findings);
+  // K. Cross-source: GTM CONFIG ↔ GA4 Admin (only when a property was read).
+  ruleCrossMeasurementIds(ctx, findings);
+  ruleCrossCustomDimensions(ctx, findings);
+  ruleCrossDataRetention(ctx, findings);
+  ruleCrossGoogleAdsLinks(ctx, findings);
+  ruleCrossEnhancedMeasurement(ctx, findings);
+  ruleGa4ToolFailures(ctx, findings);
   // Tool failures — surface gaps.
   ruleToolFailures(state, findings);
 
@@ -1447,21 +1774,18 @@ function runAudit(
   const containerType = (state.container?.usageContext ?? []).join(",") || undefined;
 
   // ── Capability detection ───────────────────────────────────────────────
-  // Today the portal only has CONFIG. RUNTIME / SGTM / GA4_ADMIN routes are
-  // not implemented in the portal; flip these to true when corresponding
-  // server-side routes are added.
+  // CONFIG is always present (we read the GTM workspace). RUNTIME and SGTM
+  // routes are not implemented in the portal yet.
   //
-  // GA4_ADMIN note: the MCP server now ships read-only GA4 Admin tools
-  // (ga4_account_summaries_list, ga4_data_streams_list, ga4_custom_dimensions_list,
-  // ga4_data_retention_get, etc.) backed by the analytics.readonly scope. The
-  // portal flag stays false until a Vercel-safe portal API route calls those
-  // GA4 Admin endpoints with the user's token — do NOT set this true without a
-  // live route, or the audit will report GA4_ADMIN coverage it cannot deliver.
+  // GA4_ADMIN is true ONLY when a GA4 property was selected AND at least one
+  // GA4 Admin read succeeded for it (opts.ga4.ok). Selecting a property whose
+  // reads all fail leaves GA4_ADMIN false, so the audit never claims coverage
+  // it could not deliver. With no property selected, opts.ga4 is null → false.
   const capabilityFlags: AuditCapabilityFlags = {
     CONFIG: true,
     RUNTIME: false,
     SGTM: false,
-    GA4_ADMIN: false,
+    GA4_ADMIN: opts.ga4?.ok ?? false,
   };
 
   const coverageMatrix = buildCoverageMatrix(capabilityFlags, ctx);
@@ -1496,6 +1820,7 @@ function runAudit(
       : null,
     toolFailures: state.toolFailures.length ? state.toolFailures : undefined,
     summary: buildSummary(findings, itemsChecked),
+    gtmMeasurementIds: Array.from(gtmGa4MeasurementIds(ctx)),
     capabilityFlags,
     coverageMatrix,
     executiveSummary,
@@ -1625,12 +1950,24 @@ function buildCoverageMatrix(
       ["GA4_ADMIN"],
       "GA4 Admin API access",
     ),
-    row(
-      "cross-source-recon",
-      "Cross-source reconciliation (CONFIG ↔ RUNTIME ↔ SGTM ↔ GA4_ADMIN)",
-      ["CONFIG", "RUNTIME"],
-      "Requires at least RUNTIME alongside CONFIG to reconcile intent vs reality",
-    ),
+    // Cross-source reconciliation. When GA4_ADMIN is connected we genuinely
+    // reconcile GTM CONFIG against the GA4 property (measurement IDs, custom
+    // dimensions, retention, Ads links, enhanced measurement) — so require
+    // CONFIG + GA4_ADMIN, which yields "partial" coverage. RUNTIME is still
+    // needed for the full intent-vs-reality picture, hence never "covered".
+    flags.GA4_ADMIN
+      ? row(
+          "cross-source-recon",
+          "Cross-source reconciliation (CONFIG ↔ GA4_ADMIN; RUNTIME/SGTM still needed for full coverage)",
+          ["CONFIG", "GA4_ADMIN"],
+          "Add RUNTIME (and SGTM where relevant) to reconcile configured intent against observed runtime behaviour",
+        )
+      : row(
+          "cross-source-recon",
+          "Cross-source reconciliation (CONFIG ↔ RUNTIME ↔ SGTM ↔ GA4_ADMIN)",
+          ["CONFIG", "RUNTIME"],
+          "Select a GA4 property for CONFIG ↔ GA4_ADMIN recon, and add RUNTIME to reconcile intent vs reality",
+        ),
   ];
 }
 
@@ -1972,6 +2309,173 @@ async function pullAuditState(
     publishedVersion,
     clients,
     toolFailures,
+  };
+}
+
+// ── GA4 Admin cross-source read ──────────────────────────────────────────
+// Read-only. Every individual read is wrapped so one failure cannot abort the
+// audit; failures are recorded and surfaced as low-severity findings. `ok` is
+// set when at least one read succeeds, which gates the GA4_ADMIN capability.
+
+const GA4_ADMIN_V1BETA = "https://analyticsadmin.googleapis.com/v1beta";
+const GA4_ADMIN_V1ALPHA = "https://analyticsadmin.googleapis.com/v1alpha";
+
+class Ga4AdminApiError extends Error {
+  status: number;
+  body: string;
+  constructor(status: number, body: string) {
+    super(`GA4 Admin API ${status}: ${body.slice(0, 300)}`);
+    this.status = status;
+    this.body = body;
+  }
+}
+
+async function ga4AdminFetch<T>(token: string, url: string): Promise<T> {
+  const r = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Ga4AdminApiError(r.status, text);
+  }
+  return (await r.json()) as T;
+}
+
+/** Paginated list helper. Caps at 5 pages; GA4 admin collections are small. */
+async function ga4AdminList<T>(
+  token: string,
+  baseUrl: string,
+  field: string,
+): Promise<T[]> {
+  const out: T[] = [];
+  let pageToken: string | undefined;
+  for (let i = 0; i < 5; i++) {
+    const url = new URL(baseUrl);
+    url.searchParams.set("pageSize", "200");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const data = await ga4AdminFetch<Record<string, unknown>>(
+      token,
+      url.toString(),
+    );
+    const items = (data[field] as T[] | undefined) ?? [];
+    out.push(...items);
+    const next = data.nextPageToken;
+    if (typeof next === "string" && next) pageToken = next;
+    else break;
+  }
+  return out;
+}
+
+async function pullGa4AdminState(
+  token: string,
+  rawPropertyId: string,
+): Promise<Ga4AdminState> {
+  const propertyId = rawPropertyId.startsWith("properties/")
+    ? rawPropertyId
+    : `properties/${rawPropertyId}`;
+  const failures: AuditToolFailure[] = [];
+  let okCount = 0;
+
+  const record = (resource: string, e: unknown) => {
+    failures.push({
+      resource,
+      message: e instanceof Ga4AdminApiError ? e.message : safeErrorName(e),
+      status: e instanceof Ga4AdminApiError ? e.status : undefined,
+    });
+  };
+
+  let dataStreams: Ga4DataStream[] = [];
+  try {
+    dataStreams = await ga4AdminList<Ga4DataStream>(
+      token,
+      `${GA4_ADMIN_V1BETA}/${propertyId}/dataStreams`,
+      "dataStreams",
+    );
+    okCount++;
+  } catch (e) {
+    record("ga4_data_streams", e);
+  }
+
+  let customDimensions: Ga4CustomDimension[] = [];
+  try {
+    customDimensions = await ga4AdminList<Ga4CustomDimension>(
+      token,
+      `${GA4_ADMIN_V1BETA}/${propertyId}/customDimensions`,
+      "customDimensions",
+    );
+    okCount++;
+  } catch (e) {
+    record("ga4_custom_dimensions", e);
+  }
+
+  let customMetrics: Ga4CustomMetric[] = [];
+  try {
+    customMetrics = await ga4AdminList<Ga4CustomMetric>(
+      token,
+      `${GA4_ADMIN_V1BETA}/${propertyId}/customMetrics`,
+      "customMetrics",
+    );
+    okCount++;
+  } catch (e) {
+    record("ga4_custom_metrics", e);
+  }
+
+  let dataRetention: Ga4DataRetention | null = null;
+  try {
+    dataRetention = await ga4AdminFetch<Ga4DataRetention>(
+      token,
+      `${GA4_ADMIN_V1BETA}/${propertyId}/dataRetentionSettings`,
+    );
+    okCount++;
+  } catch (e) {
+    record("ga4_data_retention", e);
+  }
+
+  let googleAdsLinks: Ga4GoogleAdsLink[] = [];
+  try {
+    googleAdsLinks = await ga4AdminList<Ga4GoogleAdsLink>(
+      token,
+      `${GA4_ADMIN_V1BETA}/${propertyId}/googleAdsLinks`,
+      "googleAdsLinks",
+    );
+    okCount++;
+  } catch (e) {
+    record("ga4_google_ads_links", e);
+  }
+
+  // Enhanced measurement is per web data stream and lives on v1alpha. Only
+  // probe web streams we actually found; cap the number of probes to stay
+  // inside the serverless time budget.
+  const enhancedMeasurement: Record<string, Ga4EnhancedMeasurement> = {};
+  const webStreams = dataStreams
+    .filter((s) => s.webStreamData?.measurementId)
+    .slice(0, 10);
+  for (const s of webStreams) {
+    const streamName = s.name; // properties/123/dataStreams/456
+    if (!streamName) continue;
+    const streamId = streamName.split("/").pop() ?? streamName;
+    try {
+      const em = await ga4AdminFetch<Ga4EnhancedMeasurement>(
+        token,
+        `${GA4_ADMIN_V1ALPHA}/${streamName}/enhancedMeasurementSettings`,
+      );
+      enhancedMeasurement[streamId] = em;
+      okCount++;
+    } catch (e) {
+      record(`ga4_enhanced_measurement:${streamId}`, e);
+    }
+  }
+
+  return {
+    propertyId,
+    dataStreams,
+    customDimensions,
+    customMetrics,
+    dataRetention,
+    googleAdsLinks,
+    enhancedMeasurement,
+    failures,
+    ok: okCount > 0,
   };
 }
 

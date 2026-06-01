@@ -19,6 +19,10 @@ const STATE_TTL_MS = 10 * 60 * 1000;
 
 const GTM_SCOPES = [
   "https://www.googleapis.com/auth/tagmanager.readonly",
+  // GA4 Admin API (read-only) — powers the portal's GA4_ADMIN audit coverage
+  // (data streams, custom dimensions/metrics, retention, Google Ads links,
+  // enhanced measurement). Read-only; nothing in GA4 is ever mutated.
+  "https://www.googleapis.com/auth/analytics.readonly",
   "openid",
   "email",
   "profile",

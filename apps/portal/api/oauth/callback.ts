@@ -33,6 +33,7 @@ interface UserInfoShape {
 
 const GTM_SCOPES = [
   "https://www.googleapis.com/auth/tagmanager.readonly",
+  "https://www.googleapis.com/auth/analytics.readonly",
   "openid",
   "email",
   "profile",

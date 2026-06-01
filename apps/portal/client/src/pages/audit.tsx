@@ -82,6 +82,14 @@ export default function AuditPage() {
   const [accountId, setAccountId] = useState<string>("");
   const [containerId, setContainerId] = useState<string>("");
   const [workspaceId, setWorkspaceId] = useState<string>("");
+  // GA4 property selection. "" = auto-match (default), "__none__" = config-only,
+  // otherwise an explicit GA4 propertyId. Auto-match resolves the GTM
+  // measurement ID against each property's data streams.
+  const AUTO = "";
+  const NONE = "__none__";
+  const [ga4Choice, setGa4Choice] = useState<string>(AUTO);
+  const [autoMatchedId, setAutoMatchedId] = useState<string>("");
+  const [autoMatchNote, setAutoMatchNote] = useState<string>("");
 
   const accountsQuery = useQuery({
     queryKey: ["/api/gtm/accounts"],
@@ -103,6 +111,18 @@ export default function AuditPage() {
     enabled: oauth.connected && Boolean(accountId && containerId),
     retry: false,
   });
+
+  // GA4 properties for the optional cross-source selector. Failures (e.g. the
+  // analytics.readonly scope was never granted) must not block the audit — the
+  // page degrades gracefully to CONFIG-only, so retry:false and errors are
+  // swallowed at the boundary (portalApi.listGa4Properties returns []).
+  const ga4PropertiesQuery = useQuery({
+    queryKey: ["/api/ga4/properties"],
+    queryFn: () => portalApi.listGa4Properties(),
+    enabled: oauth.connected,
+    retry: false,
+  });
+  const ga4Properties = ga4PropertiesQuery.data ?? [];
 
   // Auto-select first available on each tier.
   useEffect(() => {
@@ -127,6 +147,19 @@ export default function AuditPage() {
 
   const [audit, setAudit] = useState<AuditSummary | null>(null);
 
+  // Resolve the effective GA4 property to reconcile against:
+  // - explicit choice (a propertyId) wins,
+  // - NONE → config-only (no GA4 reads),
+  // - AUTO → the auto-matched property (resolved from GTM measurement IDs), or
+  //   the single property when only one exists.
+  const effectiveGa4PropertyId = useMemo(() => {
+    if (ga4Choice === NONE) return undefined;
+    if (ga4Choice && ga4Choice !== AUTO) return ga4Choice;
+    if (autoMatchedId) return autoMatchedId;
+    if (ga4Properties.length === 1) return ga4Properties[0].propertyId;
+    return undefined;
+  }, [ga4Choice, autoMatchedId, ga4Properties]);
+
   const auditMutation = useMutation({
     mutationFn: () =>
       portalApi.runLiveAudit({
@@ -134,19 +167,63 @@ export default function AuditPage() {
         containerId,
         workspaceId,
         containerPublicId,
+        ga4PropertyId: effectiveGa4PropertyId,
       }),
     onSuccess: (data) => setAudit(data),
   });
 
-  const auditError = auditMutation.error as (Error & { status?: number }) | null;
+  const auditError = auditMutation.error as
+    | (Error & { status?: number; code?: string })
+    | null;
   const canRun = Boolean(accountId && containerId && workspaceId);
+  const needsReconnect =
+    auditError?.status === 401 || auditError?.code === "ga4_scope_missing";
 
-  // Reset stale audit on selection change
+  // Reset stale audit + GA4 auto-match on selection change.
   useEffect(() => {
     setAudit(null);
+    setAutoMatchedId("");
+    setAutoMatchNote("");
     auditMutation.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId, containerId, workspaceId]);
+
+  // Auto-match: after a CONFIG run surfaces the GTM measurement IDs, find the
+  // GA4 property whose data streams use one of them. Only runs when the user
+  // left the selector on AUTO and more than one property is available (a
+  // single property is matched directly in effectiveGa4PropertyId). Failures
+  // are non-fatal — the selector simply stays unresolved.
+  useEffect(() => {
+    if (ga4Choice !== AUTO) return;
+    if (autoMatchedId) return;
+    if (ga4Properties.length < 2) return;
+    const gtmIds = (audit?.gtmMeasurementIds ?? []).map((s) => s.toUpperCase());
+    if (gtmIds.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const prop of ga4Properties) {
+        if (cancelled) return;
+        try {
+          const streams = await portalApi.listGa4DataStreams(prop.propertyId);
+          const hit = streams.find(
+            (s) => s.measurementId && gtmIds.includes(s.measurementId.toUpperCase()),
+          );
+          if (hit && !cancelled) {
+            setAutoMatchedId(prop.propertyId);
+            setAutoMatchNote(
+              `Auto-matched ${prop.displayName} via ${hit.measurementId}. Re-run to reconcile against GA4.`,
+            );
+            return;
+          }
+        } catch {
+          // ignore per-property failures; keep scanning
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [audit?.gtmMeasurementIds, ga4Properties, ga4Choice, autoMatchedId]);
 
   if (!oauth.connected) {
     return (
@@ -235,7 +312,7 @@ export default function AuditPage() {
         {/* Selectors */}
         <Card className="mb-5">
           <CardContent className="py-4 space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
               <SelectorBlock
                 label="GTM Account"
                 value={accountId}
@@ -279,6 +356,54 @@ export default function AuditPage() {
                 disabled={!containerId}
                 testId="select-workspace"
               />
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+                  GA4 property{" "}
+                  <span className="text-muted-foreground/70 normal-case">(optional)</span>
+                </div>
+                <Select value={ga4Choice} onValueChange={setGa4Choice}>
+                  <SelectTrigger data-testid="select-ga4-property">
+                    <SelectValue
+                      placeholder={
+                        ga4PropertiesQuery.isLoading ? "Loading…" : "Auto-match"
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={AUTO}>Auto-match (recommended)</SelectItem>
+                    <SelectItem value={NONE}>None — config-only</SelectItem>
+                    {ga4Properties.map((p) => (
+                      <SelectItem key={p.propertyId} value={p.propertyId}>
+                        {p.displayName} — {p.accountName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {ga4Choice === AUTO && autoMatchNote && (
+                  <div className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-300">
+                    {autoMatchNote}
+                  </div>
+                )}
+                {ga4Choice === AUTO &&
+                  !autoMatchNote &&
+                  ga4Properties.length === 0 &&
+                  !ga4PropertiesQuery.isLoading && (
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      No GA4 properties readable. Audit runs config-only. Reconnect
+                      Google with the Analytics read-only scope to enable
+                      cross-source checks.
+                    </div>
+                  )}
+                {ga4Choice === AUTO &&
+                  !autoMatchNote &&
+                  ga4Properties.length > 1 &&
+                  audit && (
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      No GA4 property auto-matched the GTM measurement IDs. Pick one
+                      manually to reconcile.
+                    </div>
+                  )}
+              </div>
             </div>
             {audit && (
               <div className="flex flex-wrap items-center gap-2 text-xs pt-1">
@@ -349,7 +474,7 @@ export default function AuditPage() {
             <CardContent className="py-4 text-sm text-destructive">
               <div className="font-medium mb-1">Audit failed</div>
               <div className="text-xs">{auditError.message}</div>
-              {auditError.status === 401 && (
+              {needsReconnect && (
                 <Button
                   variant="outline"
                   size="sm"
