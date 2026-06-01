@@ -31,7 +31,7 @@ import {
   exchangeCodeForTokens,
   getTokenFilePath,
   resolveOAuthClient,
-  GTM_SCOPES,
+  ALL_SCOPES,
 } from '../auth/googleAuth.js';
 
 function openInBrowser(url: string): void {
@@ -139,7 +139,7 @@ async function main(): Promise<void> {
   console.log(`Redirect URI        : ${creds.redirectUri}`);
   console.log(`Token file (output) : ${getTokenFilePath()}`);
   console.log(`Scopes              :`);
-  for (const s of GTM_SCOPES) console.log(`  - ${s}`);
+  for (const s of ALL_SCOPES) console.log(`  - ${s}`);
   console.log('');
 
   let parsed: ParsedRedirect;
@@ -154,7 +154,7 @@ async function main(): Promise<void> {
   const oauth2Client = buildOAuth2ClientForFlow();
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    scope: GTM_SCOPES,
+    scope: ALL_SCOPES,
     prompt: 'consent',
   });
 

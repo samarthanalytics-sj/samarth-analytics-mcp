@@ -22,7 +22,7 @@
     "dev:http": "GTM_MCP_TRANSPORT=http tsx src/index.ts",
     "auth:google": "tsx src/scripts/auth-google.ts",
     "oauth:setup": "tsx src/scripts/oauth-setup.ts",
-    "test": "node src/__tests__/guardrails.node.test.mjs && node src/__tests__/auth.node.test.mjs && node src/__tests__/pagination.node.test.mjs",
+    "test": "node src/__tests__/guardrails.node.test.mjs && node src/__tests__/auth.node.test.mjs && node src/__tests__/pagination.node.test.mjs && node src/__tests__/ga4Admin.node.test.mjs",
     "test:jest": "node --experimental-vm-modules node_modules/.bin/jest",
     "test:watch": "jest --watch",
     "inspector": "npx @modelcontextprotocol/inspector dist/index.js",

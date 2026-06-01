@@ -1448,7 +1448,15 @@ function runAudit(
 
   // ── Capability detection ───────────────────────────────────────────────
   // Today the portal only has CONFIG. RUNTIME / SGTM / GA4_ADMIN routes are
-  // not implemented; flip these to true when corresponding tools are added.
+  // not implemented in the portal; flip these to true when corresponding
+  // server-side routes are added.
+  //
+  // GA4_ADMIN note: the MCP server now ships read-only GA4 Admin tools
+  // (ga4_account_summaries_list, ga4_data_streams_list, ga4_custom_dimensions_list,
+  // ga4_data_retention_get, etc.) backed by the analytics.readonly scope. The
+  // portal flag stays false until a Vercel-safe portal API route calls those
+  // GA4 Admin endpoints with the user's token — do NOT set this true without a
+  // live route, or the audit will report GA4_ADMIN coverage it cannot deliver.
   const capabilityFlags: AuditCapabilityFlags = {
     CONFIG: true,
     RUNTIME: false,

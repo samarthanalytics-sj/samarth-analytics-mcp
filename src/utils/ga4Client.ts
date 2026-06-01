@@ -1,0 +1,41 @@
+/**
+ * Google Analytics Admin API (GA4) client factory.
+ *
+ * Wraps the googleapis analyticsadmin v1beta client. The server only ever uses
+ * read methods (list/get) on this client — no GA4 resource is created, updated,
+ * or deleted. The same OAuth2 credentials used for GTM authorize these calls,
+ * provided the `analytics.readonly` scope was granted during onboarding.
+ */
+
+import { google, analyticsadmin_v1beta, analyticsadmin_v1alpha } from 'googleapis';
+import type { OAuth2Client } from 'google-auth-library';
+
+export type Ga4AdminClient = analyticsadmin_v1beta.Analyticsadmin;
+export type Ga4AdminAlphaClient = analyticsadmin_v1alpha.Analyticsadmin;
+
+let _client: Ga4AdminClient | null = null;
+let _alphaClient: Ga4AdminAlphaClient | null = null;
+
+export function getGa4AdminClient(auth: OAuth2Client): Ga4AdminClient {
+  if (!_client) {
+    _client = google.analyticsadmin({ version: 'v1beta', auth });
+  }
+  return _client;
+}
+
+/**
+ * v1alpha client — used only for read methods that v1beta does not yet expose
+ * (currently: enhanced measurement settings). Same read-only scope applies.
+ */
+export function getGa4AdminAlphaClient(auth: OAuth2Client): Ga4AdminAlphaClient {
+  if (!_alphaClient) {
+    _alphaClient = google.analyticsadmin({ version: 'v1alpha', auth });
+  }
+  return _alphaClient;
+}
+
+/** Reset clients (useful in tests). */
+export function resetGa4AdminClient(): void {
+  _client = null;
+  _alphaClient = null;
+}
