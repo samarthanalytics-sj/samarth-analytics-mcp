@@ -91,10 +91,12 @@ export default function AuditPage() {
   const [accountId, setAccountId] = useState<string>("");
   const [containerId, setContainerId] = useState<string>("");
   const [workspaceId, setWorkspaceId] = useState<string>("");
-  // GA4 property selection. "" = auto-match (default), "__none__" = config-only,
-  // otherwise an explicit GA4 propertyId. Auto-match resolves the GTM
-  // measurement ID against each property's data streams.
-  const AUTO = "";
+  // GA4 property selection. "__auto__" = auto-match (default), "__none__" =
+  // config-only, otherwise an explicit GA4 propertyId. Auto-match resolves the
+  // GTM measurement ID against each property's data streams.
+  // Radix <SelectItem> throws on an empty-string value, so the auto sentinel
+  // must be a non-empty token.
+  const AUTO = "__auto__";
   const NONE = "__none__";
   const [ga4Choice, setGa4Choice] = useState<string>(AUTO);
   const [autoMatchedId, setAutoMatchedId] = useState<string>("");
@@ -495,11 +497,13 @@ export default function AuditPage() {
                   <SelectContent>
                     <SelectItem value={AUTO}>Auto-match (recommended)</SelectItem>
                     <SelectItem value={NONE}>None — config-only</SelectItem>
-                    {ga4Properties.map((p) => (
-                      <SelectItem key={p.propertyId} value={p.propertyId}>
-                        {p.displayName} — {p.accountName}
-                      </SelectItem>
-                    ))}
+                    {ga4Properties
+                      .filter((p) => Boolean(p.propertyId))
+                      .map((p) => (
+                        <SelectItem key={p.propertyId} value={p.propertyId}>
+                          {p.displayName} — {p.accountName}
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
                 {ga4Choice === AUTO && autoMatchNote && (
@@ -948,11 +952,16 @@ function SelectorBlock({
           <SelectValue placeholder={loading ? "Loading…" : placeholder} />
         </SelectTrigger>
         <SelectContent>
-          {options.map((o) => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
+          {/* Radix <SelectItem> throws on an empty-string value; drop any
+              option whose id is missing so a malformed API row can't crash
+              the page. */}
+          {options
+            .filter((o) => Boolean(o.value))
+            .map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
         </SelectContent>
       </Select>
       {error && (

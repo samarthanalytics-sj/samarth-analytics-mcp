@@ -1,4 +1,4 @@
-import { Switch, Route, Router } from "wouter";
+import { Switch, Route, Router, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -13,22 +13,28 @@ import RecommendPage from "@/pages/recommend";
 import ApprovalsPage from "@/pages/approvals";
 import ProfilePage from "@/pages/profile";
 import { AppShell } from "@/components/app-shell";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { PortalProvider } from "@/lib/portal-store";
 import { ThemeProvider } from "@/lib/theme-provider";
 
 function AppRouter() {
+  // Key the boundary on the route so navigating to another page clears a
+  // previously-caught render error instead of stranding the user on it.
+  const [location] = useLocation();
   return (
-    <Switch>
-      <Route path="/" component={OverviewPage} />
-      <Route path="/containers" component={ContainersPage} />
-      <Route path="/audit" component={AuditPage} />
-      <Route path="/server-side" component={ServerSidePage} />
-      <Route path="/recommend" component={RecommendPage} />
-      <Route path="/approvals" component={ApprovalsPage} />
-      <Route path="/profile" component={ProfilePage} />
-      <Route path="/account" component={ProfilePage} />
-      <Route component={NotFound} />
-    </Switch>
+    <ErrorBoundary key={location} title="This page">
+      <Switch>
+        <Route path="/" component={OverviewPage} />
+        <Route path="/containers" component={ContainersPage} />
+        <Route path="/audit" component={AuditPage} />
+        <Route path="/server-side" component={ServerSidePage} />
+        <Route path="/recommend" component={RecommendPage} />
+        <Route path="/approvals" component={ApprovalsPage} />
+        <Route path="/profile" component={ProfilePage} />
+        <Route path="/account" component={ProfilePage} />
+        <Route component={NotFound} />
+      </Switch>
+    </ErrorBoundary>
   );
 }
 
