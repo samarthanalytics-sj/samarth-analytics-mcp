@@ -15,6 +15,7 @@
     "vercel-build": "vite build",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
+    "runtime:capture": "node scripts/runtime-capture.mjs",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {

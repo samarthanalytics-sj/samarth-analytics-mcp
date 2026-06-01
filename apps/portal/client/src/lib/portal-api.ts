@@ -23,6 +23,7 @@ import type {
   GtmWorkspaceSummary,
   OAuthState,
   RecommendationGoal,
+  SgtmOverview,
 } from "@shared/portal-types";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -233,6 +234,25 @@ export const portalApi = {
     ga4PropertyId?: string;
   }): Promise<AuditSummary> {
     return postJson<AuditSummary>("/api/gtm/audit", args);
+  },
+
+  // -------- Live server-side GTM (sGTM) visibility (read-only) --------
+  /**
+   * Read the server-side resources of a GTM server container/workspace:
+   * clients (with claim paths/criteria), transformations, zones, templates,
+   * gtag config and container destinations. Returns `isServer: false` with an
+   * explanatory message when the selected container is not server-side, so the
+   * Server-side page can degrade gracefully instead of throwing.
+   */
+  async getServerSideOverview(args: {
+    accountId: string;
+    containerId: string;
+    workspaceId: string;
+  }): Promise<SgtmOverview> {
+    return postJson<SgtmOverview>("/api/gtm/sgtm", {
+      action: "overview",
+      ...args,
+    });
   },
 
   // -------- Containers (mixed-source inventory — still mock) --------

@@ -346,6 +346,86 @@ export interface Ga4DataStreamSummary {
   measurementId?: string;
 }
 
+// ── Server-side GTM (sGTM) visibility ─────────────────────────────────────
+// Shapes returned by /api/gtm/sgtm (action "overview"). Read-only; mirrors the
+// honest coverage philosophy used by the audit (per-resource failures are
+// surfaced, never assumed-clean).
+
+export interface SgtmClaim {
+  key: string;
+  value: string;
+}
+
+export interface SgtmClientSummary {
+  clientId?: string;
+  name: string;
+  type?: string;
+  priority?: number;
+  /** Human-readable claim paths / criteria params extracted from the client. */
+  claims: SgtmClaim[];
+}
+
+export interface SgtmTransformationSummary {
+  transformationId?: string;
+  name: string;
+  type?: string;
+}
+
+export interface SgtmZoneSummary {
+  zoneId?: string;
+  name: string;
+}
+
+export interface SgtmTemplateSummary {
+  templateId?: string;
+  name: string;
+  /** Community Template Gallery reference name, when sourced from the gallery. */
+  gallery?: string;
+}
+
+export interface SgtmGtagConfigSummary {
+  gtagConfigId?: string;
+  type?: string;
+  tagId?: string;
+}
+
+export interface SgtmDestinationSummary {
+  destinationId?: string;
+  name?: string;
+}
+
+/** A server resource read that did not succeed (non-404). */
+export interface SgtmResourceFailure {
+  resource: string;
+  message: string;
+  status?: number;
+}
+
+export interface SgtmContainerInfo {
+  containerId?: string;
+  name?: string;
+  publicId?: string;
+  usageContext: string[];
+}
+
+export interface SgtmOverview {
+  /** True when the selected container's usageContext includes "server". */
+  isServer: boolean;
+  container: SgtmContainerInfo;
+  /** Present only when isServer is false (explanatory message). */
+  message?: string;
+  clients?: SgtmClientSummary[];
+  transformations?: SgtmTransformationSummary[];
+  zones?: SgtmZoneSummary[];
+  templates?: SgtmTemplateSummary[];
+  gtagConfig?: SgtmGtagConfigSummary[];
+  destinations?: SgtmDestinationSummary[];
+  /** Per-resource read failures so gaps are not silently assumed-clean. */
+  failures?: SgtmResourceFailure[];
+  /** True when server AND at least one resource read succeeded (or none failed). */
+  ok?: boolean;
+}
+
 export const GOAL_LABELS: Record<RecommendationGoal, string> = {
   ga4_ecommerce: "GA4 Ecommerce",
   consent_mode_v2: "Consent Mode v2",

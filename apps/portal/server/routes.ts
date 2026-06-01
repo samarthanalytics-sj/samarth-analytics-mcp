@@ -14,6 +14,7 @@ import {
   setSession,
 } from "./gtm/oauth";
 import {
+  fetchServerOverview,
   fetchWorkspaceContents,
   GtmApiError,
   listAccounts,
@@ -260,6 +261,50 @@ export async function registerRoutes(
       res.json(summary);
     } catch (e) {
       sendGtmError(res, e, "Failed to run GTM audit");
+    }
+  });
+
+  // ── Server-side GTM (sGTM) visibility (read-only) ────────────────────────
+  // Dev-server parity with the Vercel route at apps/portal/api/gtm/sgtm.ts.
+  // Only list/get calls; never mutates GTM. Action-dispatched POST.
+  app.post("/api/gtm/sgtm", async (req, res) => {
+    const client = resolvePortalOAuthClient();
+    if (!client) return res.status(503).json({ error: "oauth_not_configured" });
+    const token = await getValidAccessToken(getSid(req), client);
+    if (!token) return res.status(401).json({ error: "not_connected" });
+
+    const body = (req.body ?? {}) as {
+      action?: string;
+      accountId?: string;
+      containerId?: string;
+      workspaceId?: string;
+    };
+    const action = (body.action ?? "overview").trim();
+    const accountId = (body.accountId ?? "").trim();
+    const containerId = (body.containerId ?? "").trim();
+    const workspaceId = (body.workspaceId ?? "").trim();
+    if (!accountId || !containerId || !workspaceId) {
+      return res.status(400).json({
+        error: "missing_params",
+        message:
+          "accountId, containerId and workspaceId are required. Select a server container/workspace first.",
+      });
+    }
+    if (action !== "overview") {
+      return res
+        .status(400)
+        .json({ error: "bad_request", message: `Unknown action "${action}".` });
+    }
+    try {
+      const overview = await fetchServerOverview(
+        token,
+        accountId,
+        containerId,
+        workspaceId,
+      );
+      res.json(overview);
+    } catch (e) {
+      sendGtmError(res, e, "Failed to read server-side container");
     }
   });
 

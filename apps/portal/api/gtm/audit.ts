@@ -1930,7 +1930,13 @@ function buildCoverageMatrix(
       "sgtm-clients",
       "sGTM clients, transformations, and routing",
       ["SGTM"],
-      "Server container read tools (clients, transformations, server-side tags)",
+      // The portal can now read server containers via the Server-side panel
+      // (/api/gtm/sgtm). The audit run itself does not fold those reads in, so
+      // this stays Not Covered here rather than faking parity — open the
+      // Server-side page to inspect clients, transformations and routing.
+      isServer
+        ? "Available now — open the Server-side panel to read this server container's clients, transformations, zones, templates and destinations (not folded into this audit run)"
+        : "Server-side read available via the Server-side panel; this container is not a server container",
     ),
     row(
       isServer ? "sgtm-config-server-only" : "sgtm-server-config",
