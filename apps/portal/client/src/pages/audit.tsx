@@ -12,6 +12,10 @@ import {
   Play,
   PlugZap,
   UserCircle2,
+  Upload,
+  Server,
+  BarChart3,
+  X,
 } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -25,6 +29,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { HealthBadge, SeverityChip } from "@/components/status-chip";
 import { portalApi } from "@/lib/portal-api";
 import { usePortal } from "@/lib/portal-store";
@@ -33,6 +39,8 @@ import type {
   AuditCapabilityFlags,
   AuditCoverageItem,
   AuditFinding,
+  GtmContainerSummary,
+  GtmWorkspaceSummary,
 } from "@shared/portal-types";
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -58,6 +66,7 @@ const SOURCE_LABEL: Record<string, string> = {
   RUNTIME: "Runtime",
   SGTM: "sGTM",
   GA4_ADMIN: "GA4 Admin",
+  DATA_API: "GA4 Data API",
 };
 
 const COVERAGE_STYLES: Record<string, string> = {
@@ -147,6 +156,110 @@ export default function AuditPage() {
 
   const [audit, setAudit] = useState<AuditSummary | null>(null);
 
+  // ── Cross-source inputs (all strictly opt-in) ─────────────────────────────
+  // RUNTIME: a pasted/uploaded runtime-worker (or CLI) capture artifact. We do
+  // NOT fabricate runtime data — the audit only turns on RUNTIME when a
+  // parseable capture is supplied here.
+  const [runtimeText, setRuntimeText] = useState<string>("");
+  const [runtimeCapture, setRuntimeCapture] = useState<unknown>(null);
+  const [runtimeError, setRuntimeError] = useState<string>("");
+
+  const applyRuntimeText = (text: string) => {
+    setRuntimeText(text);
+    setRuntimeError("");
+    const trimmed = text.trim();
+    if (!trimmed) {
+      setRuntimeCapture(null);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!parsed || typeof parsed !== "object") {
+        throw new Error("Not a JSON object");
+      }
+      setRuntimeCapture(parsed);
+    } catch (e) {
+      setRuntimeCapture(null);
+      setRuntimeError(
+        e instanceof Error ? `Invalid JSON: ${e.message}` : "Invalid JSON",
+      );
+    }
+  };
+
+  const onRuntimeFile = async (file: File | null) => {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      applyRuntimeText(text);
+    } catch {
+      setRuntimeError("Could not read that file.");
+    }
+  };
+
+  // SGTM: an optional SERVER container/workspace to reconcile against. Off by
+  // default; when no server context is chosen, SGTM stays Not Covered.
+  const [serverEnabled, setServerEnabled] = useState<boolean>(false);
+  const [serverAccountId, setServerAccountId] = useState<string>("");
+  const [serverContainerId, setServerContainerId] = useState<string>("");
+  const [serverWorkspaceId, setServerWorkspaceId] = useState<string>("");
+
+  const serverContainersQuery = useQuery<GtmContainerSummary[]>({
+    queryKey: ["/api/gtm/containers", serverAccountId, "sgtm"],
+    queryFn: () => portalApi.listGtmContainers(serverAccountId),
+    enabled: oauth.connected && serverEnabled && Boolean(serverAccountId),
+    retry: false,
+  });
+  const serverWorkspacesQuery = useQuery<GtmWorkspaceSummary[]>({
+    queryKey: [
+      "/api/gtm/workspaces",
+      serverAccountId,
+      serverContainerId,
+      "sgtm",
+    ],
+    queryFn: () =>
+      portalApi.listGtmWorkspaces(serverAccountId, serverContainerId),
+    enabled:
+      oauth.connected &&
+      serverEnabled &&
+      Boolean(serverAccountId && serverContainerId),
+    retry: false,
+  });
+
+  const hasServerContext = Boolean(
+    serverEnabled &&
+      serverAccountId &&
+      serverContainerId &&
+      serverWorkspaceId,
+  );
+
+  // DATA_API: opt-in GA4 reporting check. Only meaningful when a GA4 property
+  // is being reconciled; the engine ignores it without a propertyId.
+  const [enableDataApi, setEnableDataApi] = useState<boolean>(false);
+
+  // Default the server account to the primary GTM account when the sGTM panel
+  // is first enabled, then auto-select the first server container/workspace.
+  useEffect(() => {
+    if (serverEnabled && !serverAccountId && accountId) {
+      setServerAccountId(accountId);
+    }
+  }, [serverEnabled, serverAccountId, accountId]);
+  useEffect(() => {
+    const list = serverContainersQuery.data ?? [];
+    if (serverContainerId && !list.some((c) => c.containerId === serverContainerId)) {
+      setServerContainerId("");
+      setServerWorkspaceId("");
+    }
+  }, [serverContainersQuery.data, serverContainerId]);
+  useEffect(() => {
+    const list = serverWorkspacesQuery.data ?? [];
+    if (serverWorkspaceId && !list.some((w) => w.workspaceId === serverWorkspaceId)) {
+      setServerWorkspaceId("");
+    }
+    if (!serverWorkspaceId && list.length > 0) {
+      setServerWorkspaceId(list[0].workspaceId);
+    }
+  }, [serverWorkspacesQuery.data, serverWorkspaceId]);
+
   // Resolve the effective GA4 property to reconcile against:
   // - explicit choice (a propertyId) wins,
   // - NONE → config-only (no GA4 reads),
@@ -168,6 +281,16 @@ export default function AuditPage() {
         workspaceId,
         containerPublicId,
         ga4PropertyId: effectiveGa4PropertyId,
+        runtimeCapture: runtimeCapture ?? undefined,
+        serverContext: hasServerContext
+          ? {
+              accountId: serverAccountId,
+              containerId: serverContainerId,
+              workspaceId: serverWorkspaceId,
+            }
+          : undefined,
+        enableDataApi:
+          enableDataApi && Boolean(effectiveGa4PropertyId) ? true : undefined,
       }),
     onSuccess: (data) => setAudit(data),
   });
@@ -449,6 +572,39 @@ export default function AuditPage() {
           </CardContent>
         </Card>
 
+        {/* Cross-source inputs (opt-in) */}
+        <CrossSourceInputs
+          runtimeText={runtimeText}
+          runtimeError={runtimeError}
+          runtimeReady={Boolean(runtimeCapture)}
+          onRuntimeText={applyRuntimeText}
+          onRuntimeFile={onRuntimeFile}
+          onClearRuntime={() => applyRuntimeText("")}
+          serverEnabled={serverEnabled}
+          onToggleServer={setServerEnabled}
+          serverAccountId={serverAccountId}
+          onServerAccount={(v) => {
+            setServerAccountId(v);
+            setServerContainerId("");
+            setServerWorkspaceId("");
+          }}
+          serverContainerId={serverContainerId}
+          onServerContainer={(v) => {
+            setServerContainerId(v);
+            setServerWorkspaceId("");
+          }}
+          serverWorkspaceId={serverWorkspaceId}
+          onServerWorkspace={setServerWorkspaceId}
+          accounts={accounts}
+          serverContainers={serverContainersQuery.data ?? []}
+          serverWorkspaces={serverWorkspacesQuery.data ?? []}
+          serverContainersLoading={serverContainersQuery.isLoading}
+          serverWorkspacesLoading={serverWorkspacesQuery.isLoading}
+          enableDataApi={enableDataApi}
+          onToggleDataApi={setEnableDataApi}
+          ga4Selected={Boolean(effectiveGa4PropertyId)}
+        />
+
         {audit?.executiveSummary && (
           <ExecutiveSummaryCard
             summary={audit.executiveSummary}
@@ -578,6 +734,189 @@ export default function AuditPage() {
   );
 }
 
+function CrossSourceInputs(props: {
+  runtimeText: string;
+  runtimeError: string;
+  runtimeReady: boolean;
+  onRuntimeText: (v: string) => void;
+  onRuntimeFile: (f: File | null) => void;
+  onClearRuntime: () => void;
+  serverEnabled: boolean;
+  onToggleServer: (v: boolean) => void;
+  serverAccountId: string;
+  onServerAccount: (v: string) => void;
+  serverContainerId: string;
+  onServerContainer: (v: string) => void;
+  serverWorkspaceId: string;
+  onServerWorkspace: (v: string) => void;
+  accounts: { accountId: string; name: string }[];
+  serverContainers: GtmContainerSummary[];
+  serverWorkspaces: GtmWorkspaceSummary[];
+  serverContainersLoading: boolean;
+  serverWorkspacesLoading: boolean;
+  enableDataApi: boolean;
+  onToggleDataApi: (v: boolean) => void;
+  ga4Selected: boolean;
+}) {
+  return (
+    <Card className="mb-5">
+      <CardContent className="py-4 space-y-4">
+        <SectionTitle
+          title="Cross-source inputs (optional)"
+          hint="Each source is strictly opt-in. Without these, the audit is config-only and never claims runtime, server, or reported-data coverage."
+        />
+
+        {/* RUNTIME */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-medium">
+              <Upload className="h-3.5 w-3.5 text-primary" />
+              Runtime capture
+              <span className="font-normal text-muted-foreground">
+                (RUNTIME source)
+              </span>
+              {props.runtimeReady && (
+                <Badge
+                  variant="outline"
+                  className="text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
+                >
+                  Loaded
+                </Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="cursor-pointer text-[11px] text-primary underline-offset-2 hover:underline">
+                Upload JSON
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  data-testid="input-runtime-file"
+                  onChange={(e) =>
+                    props.onRuntimeFile(e.target.files?.[0] ?? null)
+                  }
+                />
+              </label>
+              {props.runtimeText && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={props.onClearRuntime}
+                  data-testid="button-runtime-clear"
+                >
+                  <X className="h-3 w-3" /> Clear
+                </button>
+              )}
+            </div>
+          </div>
+          <Textarea
+            value={props.runtimeText}
+            onChange={(e) => props.onRuntimeText(e.target.value)}
+            placeholder='Paste a runtime-worker / CLI capture artifact ({"schema":"samarth.runtime-capture/v2", ...}). Generate one with the runtime-worker POST /capture or `node cli.mjs`.'
+            className="font-mono text-[11px] min-h-[90px]"
+            data-testid="textarea-runtime"
+          />
+          {props.runtimeError && (
+            <div className="text-[11px] text-destructive">
+              {props.runtimeError}
+            </div>
+          )}
+        </div>
+
+        {/* SGTM */}
+        <div className="space-y-2 border-t pt-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-medium">
+              <Server className="h-3.5 w-3.5 text-primary" />
+              Server container
+              <span className="font-normal text-muted-foreground">
+                (SGTM source)
+              </span>
+            </div>
+            <Switch
+              checked={props.serverEnabled}
+              onCheckedChange={props.onToggleServer}
+              data-testid="switch-sgtm"
+            />
+          </div>
+          {props.serverEnabled && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <SelectorBlock
+                label="Server account"
+                value={props.serverAccountId}
+                onChange={props.onServerAccount}
+                placeholder="Choose an account"
+                options={props.accounts.map((a) => ({
+                  value: a.accountId,
+                  label: a.name,
+                }))}
+                testId="select-sgtm-account"
+              />
+              <SelectorBlock
+                label="Server container"
+                value={props.serverContainerId}
+                onChange={props.onServerContainer}
+                loading={props.serverContainersLoading}
+                placeholder="Choose a container"
+                options={props.serverContainers.map((c) => ({
+                  value: c.containerId,
+                  label: `${c.name} — ${c.publicId}`,
+                }))}
+                disabled={!props.serverAccountId}
+                testId="select-sgtm-container"
+              />
+              <SelectorBlock
+                label="Server workspace"
+                value={props.serverWorkspaceId}
+                onChange={props.onServerWorkspace}
+                loading={props.serverWorkspacesLoading}
+                placeholder="Choose a workspace"
+                options={props.serverWorkspaces.map((w) => ({
+                  value: w.workspaceId,
+                  label: w.name,
+                }))}
+                disabled={!props.serverContainerId}
+                testId="select-sgtm-workspace"
+              />
+            </div>
+          )}
+          {props.serverEnabled && (
+            <div className="text-[11px] text-muted-foreground">
+              Reconciles web GA4 transport against the selected server domain
+              and surfaces server clients/transformations. If the chosen
+              container is not a server container, SGTM stays Not Covered.
+            </div>
+          )}
+        </div>
+
+        {/* DATA_API */}
+        <div className="space-y-2 border-t pt-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-medium">
+              <BarChart3 className="h-3.5 w-3.5 text-primary" />
+              GA4 reported events
+              <span className="font-normal text-muted-foreground">
+                (DATA_API source)
+              </span>
+            </div>
+            <Switch
+              checked={props.enableDataApi}
+              onCheckedChange={props.onToggleDataApi}
+              disabled={!props.ga4Selected}
+              data-testid="switch-data-api"
+            />
+          </div>
+          <div className="text-[11px] text-muted-foreground">
+            {props.ga4Selected
+              ? "Runs a read-only GA4 Data API report (last 7 days) to flag GTM-configured GA4 events with zero reported activity."
+              : "Select a GA4 property above to enable the reported-events check."}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function SelectorBlock({
   label,
   value,
@@ -676,6 +1015,7 @@ function CapabilityFlagsBar({ flags }: { flags: AuditCapabilityFlags }) {
     { key: "RUNTIME", label: "Runtime" },
     { key: "SGTM", label: "sGTM" },
     { key: "GA4_ADMIN", label: "GA4 Admin" },
+    { key: "DATA_API", label: "GA4 Data API" },
   ];
   return (
     <div className="pt-1.5 border-t border-border/50">
@@ -684,7 +1024,7 @@ function CapabilityFlagsBar({ flags }: { flags: AuditCapabilityFlags }) {
       </div>
       <div className="flex flex-wrap gap-1.5">
         {items.map((it) => {
-          const on = flags[it.key];
+          const on = Boolean(flags[it.key]);
           return (
             <span
               key={it.key}

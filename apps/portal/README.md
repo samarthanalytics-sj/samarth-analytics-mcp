@@ -190,8 +190,28 @@ checked. A clean single-source audit is **not** a clean audit overall.
 |--------------|------------------------------------------------------------|------------------------|
 | `CONFIG`     | GTM workspace: tags, triggers, variables, versions         | Covered                |
 | `GA4_ADMIN`  | GA4 Admin API: properties, data streams, dimensions        | Covered when a GA4 property is selected and reads succeed |
-| `SGTM`       | Server container: clients, transformations, zones, etc.    | **Available** via the Server-side panel (not folded into the audit run) |
-| `RUNTIME`    | Live browser: network hits, dataLayer, console, tag order  | **Not Covered** on Vercel — requires the local runtime harness |
+| `SGTM`       | Server container: clients, transformations, transport match | Covered when a **server container** is selected under *Cross-source inputs* and reads succeed; otherwise **Not Covered** |
+| `RUNTIME`    | Live browser: network hits, dataLayer, console, tag order  | Covered when a runtime-capture artifact is uploaded/pasted under *Cross-source inputs*; otherwise **Not Covered** |
+| `DATA_API`   | GA4 Data API: reported event counts over the last 7 days   | Covered when a GA4 property is selected **and** the reported-events toggle is on; otherwise **Not Covered** |
+
+### Cross-source inputs (opt-in, on the Audit page)
+
+The Audit page exposes a **Cross-source inputs** card. Each input is strictly
+opt-in and the audit never claims a source it could not actually read:
+
+- **Runtime capture** — paste or upload a runtime-worker / CLI artifact (see
+  below) to enable `RUNTIME`. Findings are derived **only** from observed data
+  (per-URL GA4 page_view hit counts, console errors, dataLayer event names,
+  missing consent signals on GA4 hits). Absence on a captured page is reported
+  as page-scoped, never as a site-wide claim.
+- **Server container** — pick a GTM **server** account/container/workspace to
+  enable `SGTM`. Reconciles web GA4 `transport_url` / `server_container_url`
+  against the selected server domain, lists server clients (GA4 client
+  presence), and flags transformations touching PII/ecommerce/GA4 for manual
+  review. A non-server container leaves `SGTM` Not Covered.
+- **GA4 reported events** — when a GA4 property is selected, toggle this to run
+  a read-only GA4 Data API report (last 7 days) and flag GTM-configured GA4
+  events with **zero** reported activity (`DATA_API` source, not `RUNTIME`).
 
 ### Server-side (sGTM) visibility
 
@@ -207,15 +227,27 @@ When the selected container is not a server container it returns an explanatory
 state instead of fabricating coverage, and per-resource read failures are
 surfaced verbatim so gaps show as Partial / failures rather than a false clean.
 
-Because the audit engine does not call this route, the audit's `sgtm-clients`
-coverage row stays **Not Covered** there (no faked parity) and points you to the
-Server-side panel for the actual reads.
+The Server-side panel is still available for free-form exploration of a server
+container. In addition, selecting a server container under the Audit page's
+**Cross-source inputs** now folds those reads into the audit run itself and
+turns on the `SGTM` source (transport-match, client presence, transformation
+review). Without a server container selected, the audit's `sgtm-clients`
+coverage row stays **Not Covered** (no faked parity).
 
-### Runtime capture harness (RUNTIME)
+### Runtime capture (RUNTIME)
 
 `RUNTIME` confirmation (does the tag actually fire? what hits the network? what
 does the dataLayer look like?) cannot run in Vercel — serverless functions have
-no browser and a hard time budget. It runs as a **local / CI-worker** harness:
+no browser and a hard time budget. Produce a capture artifact out-of-band, then
+upload/paste it under **Cross-source inputs** on the Audit page.
+
+**Option 1 — hosted runtime worker** (recommended; see
+[`apps/runtime-worker/`](../runtime-worker/README.md)). A small read-only
+Playwright HTTP service you deploy to Render / Fly / Railway / a VPS (NOT
+Vercel). `POST /capture` with `{ urls, consentState?, actions? }` and save the
+returned JSON.
+
+**Option 2 — local CLI harness**:
 
 ```bash
 # one-time (optional dependency — kept out of the serverless bundle)
@@ -226,14 +258,14 @@ npx playwright install chromium
 npm run runtime:capture -- --url https://example.com --output runtime-capture.json
 ```
 
-The harness (`apps/portal/scripts/runtime-capture.mjs`) records page URL,
+Both produce the same `samarth.runtime-capture/v2` artifact: page URL,
 console/page errors, analytics network hits (GA4 `/g/collect`, Meta `/tr`,
-Google Ads / Floodlight, and more), a network request count, and dataLayer
-snapshots before/after load. Playwright is loaded via a dynamic import — if it
-is not installed the script prints install instructions and exits non-zero
-rather than emitting an empty/fake capture.
+Google Ads / Floodlight, sGTM endpoint candidates, and more), a network request
+count, and dataLayer snapshots/event names before/after load. Playwright is
+loaded via dynamic import — if it is not installed the tooling prints install
+instructions and exits non-zero rather than emitting an empty/fake capture.
 
-Until a capture artifact is produced and connected, the hosted audit reports
+Until a capture artifact is uploaded/pasted on the Audit page, the audit reports
 `RUNTIME` as **Not Covered**.
 
 ## Other integration TODOs

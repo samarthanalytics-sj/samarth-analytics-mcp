@@ -23,6 +23,7 @@ import type {
   GtmWorkspaceSummary,
   OAuthState,
   RecommendationGoal,
+  RuntimeCapture,
   SgtmOverview,
 } from "@shared/portal-types";
 
@@ -225,6 +226,13 @@ export const portalApi = {
    * pulls the workspace contents via GTM API v2 and runs portal QC rules.
    * Optionally pass a `ga4PropertyId` to enable CONFIG ↔ GA4_ADMIN
    * cross-source reconciliation findings.
+   *
+   * Optional cross-source inputs (each strictly opt-in — coverage is never
+   * claimed without them):
+   * - `runtimeCapture`: a runtime-worker / CLI artifact to enable RUNTIME.
+   * - `serverContext`: a selected SERVER container/workspace to enable SGTM.
+   * - `enableDataApi`: when true AND a `ga4PropertyId` is set, runs a GA4 Data
+   *   API report to enable DATA_API zero-event reconciliation.
    */
   async runLiveAudit(args: {
     accountId: string;
@@ -232,6 +240,13 @@ export const portalApi = {
     workspaceId: string;
     containerPublicId?: string;
     ga4PropertyId?: string;
+    runtimeCapture?: RuntimeCapture | unknown;
+    serverContext?: {
+      accountId: string;
+      containerId: string;
+      workspaceId: string;
+    };
+    enableDataApi?: boolean;
   }): Promise<AuditSummary> {
     return postJson<AuditSummary>("/api/gtm/audit", args);
   },

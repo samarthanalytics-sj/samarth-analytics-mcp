@@ -35,6 +35,7 @@ Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, g
 
 - **Full GTM API v2 surface** — accounts, containers, workspaces, tags, triggers, variables, folders, built-in variables, versions, sync, publish, preview
 - **Server-side & advanced GTM coverage** — environments, user permissions, destinations, clients, transformations, zones, custom templates, gtag config, plus container snippet/lookup/combine/move-tag-id and workspace change-diff status
+- **Read-only GA4 coverage** — GA4 Admin tools (`ga4_*`) plus GA4 Data API reporting (`ga4_run_report`, `ga4_run_realtime_report`) for intent-vs-reality reconciliation, all under a single `analytics.readonly` scope
 - **Automatic pagination** — every paginated list tool transparently follows `nextPageToken` to return all results, with optional `maxPages`/`pageToken` bounds
 - **Two transport modes**: stdio (local, for Claude Desktop/Cursor) and Streamable HTTP (cloud/team)
 - **Guardrails by default**: read-only unless explicitly enabled; publish and delete gated separately
@@ -170,7 +171,7 @@ https://www.googleapis.com/auth/tagmanager.publish
 https://www.googleapis.com/auth/analytics.readonly
 ```
 
-These are the least-privilege scopes needed to cover the server's full tool surface. The final scope, `analytics.readonly`, powers the **read-only GA4 Admin tools** (`ga4_*`) and grants no write access to Google Analytics. Read-only deployments can re-run `npm run auth:google` after removing the `edit.*`, `manage.*`, and `publish` scopes from your OAuth consent screen; keep `tagmanager.readonly` and `analytics.readonly` for full read coverage.
+These are the least-privilege scopes needed to cover the server's full tool surface. The final scope, `analytics.readonly`, powers both the **read-only GA4 Admin tools** (`ga4_*`) and the **read-only GA4 Data API reporting tools** (`ga4_run_report`, `ga4_run_realtime_report`) and grants no write access to Google Analytics. Read-only deployments can re-run `npm run auth:google` after removing the `edit.*`, `manage.*`, and `publish` scopes from your OAuth consent screen; keep `tagmanager.readonly` and `analytics.readonly` for full read coverage.
 
 ---
 
@@ -182,7 +183,8 @@ These are the least-privilege scopes needed to cover the server's full tool surf
 2. Select or create a project
 3. Navigate to **APIs & Services → Library**
 4. Search for **"Tag Manager API"** and click **Enable**
-5. Search for **"Google Analytics Admin API"** and click **Enable** (required for the read-only `ga4_*` tools)
+5. Search for **"Google Analytics Admin API"** and click **Enable** (required for the read-only `ga4_*` Admin tools)
+6. Search for **"Google Analytics Data API"** and click **Enable** (required for `ga4_run_report` / `ga4_run_realtime_report`)
 
 ### Step 2: Create OAuth 2.0 Credentials
 
@@ -211,7 +213,7 @@ These are the least-privilege scopes needed to cover the server's full tool surf
    - `https://www.googleapis.com/auth/tagmanager.manage.accounts`
    - `https://www.googleapis.com/auth/tagmanager.manage.users`
    - `https://www.googleapis.com/auth/tagmanager.publish`
-   - `https://www.googleapis.com/auth/analytics.readonly` (read-only GA4 Admin tools)
+   - `https://www.googleapis.com/auth/analytics.readonly` (read-only GA4 Admin **and** Data API tools)
 5. Add your Google account as a **test user** (while the app is in "testing" mode)
 
 > **Note**: For personal/agency use, keeping the app in "Testing" mode is fine. You will need to re-authorize every 7 days unless you publish the app or get it verified.
@@ -499,6 +501,25 @@ Accepts either a bare numeric ID (`123456789`) or the fully-qualified form
 - Internal-traffic / unwanted-referral **data filters** — no public `dataFilters` collection; configured per data stream.
 - **Referral exclusions** — no dedicated Admin API resource.
 - **Channel groups** and **audiences** — exist only on the v1alpha surface and are out of scope for this read-only v1beta set.
+
+### GA4 Data API (read-only reporting)
+
+Read-only wrappers over the **Google Analytics Data API** (v1beta). They never
+write and require no `confirm` flag. Use them to reconcile *intent vs. reality* —
+comparing the events a container is configured to send against the events GA4
+actually reports (zero reported activity for a configured event is a red flag).
+
+These use the **same** `https://www.googleapis.com/auth/analytics.readonly` scope
+as the GA4 Admin tools, so no extra consent is needed. Enable the **Google
+Analytics Data API** in your Google Cloud project.
+
+| Tool | Description |
+|---|---|
+| `ga4_run_report` | Run a report over a date range (dimensions + metrics, e.g. `eventCount` by `eventName`); supports `limit`, `offset`, and ordering |
+| `ga4_run_realtime_report` | Run a Realtime report (events in roughly the last 30 minutes) for live QA |
+
+**Documented gaps** (intentionally not exposed rather than faked): pivot reports,
+cohorts, and funnels.
 
 ### Pagination
 

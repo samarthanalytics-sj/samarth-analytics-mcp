@@ -63,8 +63,14 @@ export type AuditCategory =
  * - RUNTIME: live browser harness (network hits, dataLayer pushes, tag order).
  * - SGTM: server container reads (clients, transformations, routing).
  * - GA4_ADMIN: GA4 Admin API (dimensions, filters, retention, streams).
+ * - DATA_API: GA4 Data API (reported event counts over a date range).
  */
-export type AuditSourceFlag = "CONFIG" | "RUNTIME" | "SGTM" | "GA4_ADMIN";
+export type AuditSourceFlag =
+  | "CONFIG"
+  | "RUNTIME"
+  | "SGTM"
+  | "GA4_ADMIN"
+  | "DATA_API";
 
 export type AuditCoverage = "covered" | "partial" | "not_covered";
 
@@ -78,6 +84,68 @@ export interface AuditCapabilityFlags {
   RUNTIME: boolean;
   SGTM: boolean;
   GA4_ADMIN: boolean;
+  DATA_API?: boolean;
+}
+
+// ── Runtime capture (RUNTIME source) ──────────────────────────────────────
+// Shape produced by the runtime-worker (apps/runtime-worker) and the local CLI
+// harness. Uploaded/pasted on the Audit page to enable the RUNTIME source.
+// The portal NEVER infers runtime behaviour without one of these artifacts.
+
+export interface RuntimeTrackerHit {
+  url: string;
+  method?: string;
+  /** Pattern ids matched (e.g. "ga4_collect", "meta_pixel"). */
+  matched?: string[];
+  /** Vendor groups matched (e.g. "ga4", "meta", "google_ads"). */
+  groups?: string[];
+  resourceType?: string;
+}
+
+export interface RuntimeSgtmCandidate {
+  url: string;
+  method?: string;
+  resourceType?: string;
+}
+
+export interface RuntimePageCapture {
+  requestedUrl: string;
+  finalUrl?: string | null;
+  httpStatus?: number | null;
+  consoleErrors?: string[];
+  consoleWarnings?: string[];
+  pageErrors?: string[];
+  trackerHits?: RuntimeTrackerHit[];
+  sgtmCandidates?: RuntimeSgtmCandidate[];
+  networkRequestCount?: number;
+  dataLayerBefore?: unknown;
+  dataLayerAfter?: unknown;
+  /** Event names observed in the dataLayer (push `event` + gtag event calls). */
+  dataLayerEvents?: string[];
+  /** Distinct top-level dataLayer object keys observed. */
+  dataLayerKeys?: string[];
+  notes?: string[];
+}
+
+/**
+ * Runtime capture artifact. Supports the v2 multi-page shape from the worker
+ * and tolerates the legacy v1 single-page harness shape (mapped client-side
+ * into `pages` on import).
+ */
+export interface RuntimeCapture {
+  schema?: string;
+  capturedAt?: string;
+  requestedUrls?: string[];
+  consentState?: Record<string, string>;
+  pages?: RuntimePageCapture[];
+  notes?: string[];
+  /** Optional summary block the worker adds. */
+  summary?: {
+    pages?: number;
+    groups?: Record<string, number>;
+    consoleErrors?: number;
+    pageErrors?: number;
+  };
 }
 
 /** A single row in the coverage matrix. */

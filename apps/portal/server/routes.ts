@@ -235,11 +235,21 @@ export async function registerRoutes(
     const token = await getValidAccessToken(getSid(req), client);
     if (!token) return res.status(401).json({ error: "not_connected" });
 
+    // NOTE: this dev-server route uses the legacy CONFIG-only auditor in
+    // server/gtm/audit.ts. The capability-aware engine (GA4_ADMIN / RUNTIME /
+    // SGTM / DATA_API cross-source reconciliation) lives in the Vercel route
+    // apps/portal/api/gtm/audit.ts. We accept the cross-source body fields here
+    // so the portal UI works against `npm run dev`, but they are intentionally
+    // ignored — the dev auditor never claims coverage it cannot produce.
     const body = (req.body ?? {}) as {
       accountId?: string;
       containerId?: string;
       workspaceId?: string;
       containerPublicId?: string;
+      ga4PropertyId?: string;
+      runtimeCapture?: unknown;
+      serverContext?: unknown;
+      enableDataApi?: boolean;
     };
     const { accountId, containerId, workspaceId, containerPublicId } = body;
     if (!accountId || !containerId || !workspaceId) {
