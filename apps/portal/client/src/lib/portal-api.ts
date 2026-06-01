@@ -133,6 +133,37 @@ export const portalApi = {
     return data.containers ?? [];
   },
 
+  /**
+   * Fetch containers across every supplied account in parallel. Per-account
+   * failures are captured rather than rejecting the whole batch, so one
+   * account the user lacks access to does not blank out the rest.
+   */
+  async listAllGtmContainers(
+    accounts: GtmAccountSummary[],
+  ): Promise<{
+    containers: GtmContainerSummary[];
+    errors: { accountId: string; message: string }[];
+  }> {
+    const results = await Promise.all(
+      accounts.map(async (a) => {
+        try {
+          const containers = await portalApi.listGtmContainers(a.accountId);
+          return { containers, error: null as null };
+        } catch (e) {
+          const err = e as Error;
+          return {
+            containers: [] as GtmContainerSummary[],
+            error: { accountId: a.accountId, message: err.message },
+          };
+        }
+      }),
+    );
+    return {
+      containers: results.flatMap((r) => r.containers),
+      errors: results.flatMap((r) => (r.error ? [r.error] : [])),
+    };
+  },
+
   async listGtmWorkspaces(
     accountId: string,
     containerId: string,
