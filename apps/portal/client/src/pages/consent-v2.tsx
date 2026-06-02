@@ -497,7 +497,9 @@ export default function ConsentV2Page() {
           </div>
         ) : !result ? (
           <Card className="p-8 text-center text-sm text-muted-foreground mt-6">
-            Choose an account, container, and workspace, then run the consent audit.
+            {canRun
+              ? 'Ready to audit the selected workspace — press "Run consent audit" above.'
+              : "Choose an account, container, and workspace, then run the consent audit."}
           </Card>
         ) : result.findings.length === 0 ? (
           <Card className="p-8 text-center text-sm mt-6">

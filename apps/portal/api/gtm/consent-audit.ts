@@ -404,6 +404,36 @@ function fid(seed: string): string {
 // GTM reads (read-only)
 // ════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Fetch one workspace list (tags/triggers/variables). On a 401/403 the caller
+ * has no read access to this container, so we rethrow to abort the whole run
+ * (sendGtmError turns it into a precise unauthorized/forbidden response). Any
+ * other failure is recorded in `toolFailures` and yields an empty list so the
+ * remaining sources can still be audited.
+ */
+async function pullList<T>(
+  token: string,
+  path: string,
+  itemKey: string,
+  resource: string,
+  toolFailures: ConsentToolFailure[],
+): Promise<T[]> {
+  try {
+    const data = await gtmFetch<Record<string, T[] | undefined>>(token, path);
+    return data[itemKey] ?? [];
+  } catch (e) {
+    if (e instanceof GtmApiError && (e.status === 401 || e.status === 403)) {
+      throw e;
+    }
+    toolFailures.push({
+      resource,
+      message: e instanceof GtmApiError ? e.message : safeErrorName(e),
+      status: e instanceof GtmApiError ? e.status : undefined,
+    });
+    return [];
+  }
+}
+
 async function pullConsentState(
   token: string,
   accountId: string,
@@ -418,18 +448,22 @@ async function pullConsentState(
   )}`;
   const toolFailures: ConsentToolFailure[] = [];
 
-  // Workspace contents are required — the consent audit is meaningless without
-  // tags/triggers/variables, so a failure here throws.
+  // Workspace contents. Each list is fetched independently so one transient or
+  // 404 list failure degrades to a partial audit (reported via toolFailures)
+  // instead of blanking the whole run. Auth/permission failures (401/403) are
+  // fatal — they mean the caller can't read this container at all, so we throw
+  // and let sendGtmError surface a precise unauthorized/forbidden response
+  // rather than a misleading "0 findings" result.
   const [tagsRes, triggersRes, variablesRes] = await Promise.all([
-    gtmFetch<{ tag?: GtmTag[] }>(token, `${base}/tags`),
-    gtmFetch<{ trigger?: GtmTrigger[] }>(token, `${base}/triggers`),
-    gtmFetch<{ variable?: GtmVariable[] }>(token, `${base}/variables`),
+    pullList<GtmTag>(token, `${base}/tags`, "tag", "tags", toolFailures),
+    pullList<GtmTrigger>(token, `${base}/triggers`, "trigger", "triggers", toolFailures),
+    pullList<GtmVariable>(token, `${base}/variables`, "variable", "variables", toolFailures),
   ]);
 
   const contents: WorkspaceContents = {
-    tags: tagsRes.tag ?? [],
-    triggers: triggersRes.trigger ?? [],
-    variables: variablesRes.variable ?? [],
+    tags: tagsRes,
+    triggers: triggersRes,
+    variables: variablesRes,
   };
 
   // Container metadata (for usageContext / type). Best-effort.
