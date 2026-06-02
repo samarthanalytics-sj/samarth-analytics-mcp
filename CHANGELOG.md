@@ -1,3 +1,9 @@
+## [1.13.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.13.0...v1.13.1) (2026-06-02)
+
+### Bug Fixes
+
+* **portal:** repair Consent v2 audit execution ([b431f7c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b431f7c7f8967789b669febf9021f33df51b7a90))
+
 ## [1.13.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.12.2...v1.13.0) (2026-06-01)
 
 ### Features
