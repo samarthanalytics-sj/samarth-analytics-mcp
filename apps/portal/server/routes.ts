@@ -14,6 +14,7 @@ import {
   setSession,
 } from "./gtm/oauth";
 import {
+  fetchConsentWorkspaceContents,
   fetchServerOverview,
   fetchWorkspaceContents,
   GtmApiError,
@@ -313,7 +314,7 @@ export async function registerRoutes(
     }
 
     try {
-      const contents = await fetchWorkspaceContents(
+      const contents = await fetchConsentWorkspaceContents(
         token,
         accountId,
         containerId,
@@ -321,7 +322,11 @@ export async function registerRoutes(
       );
 
       // Container metadata is best-effort (for usageContext / display type).
-      const toolFailures: { resource: string; message: string; status?: number }[] = [];
+      // Seed with any per-list read failures so partial coverage is reported
+      // rather than collapsing into a generic failure.
+      const toolFailures: { resource: string; message: string; status?: number }[] = [
+        ...contents.toolFailures,
+      ];
       let usageContexts: string[] = [];
       let containerType: string | undefined;
       try {
