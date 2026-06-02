@@ -353,6 +353,67 @@ export async function fetchServerOverview(
   };
 }
 
+export interface ConsentToolFailure {
+  resource: string;
+  message: string;
+  status?: number;
+}
+
+export interface ConsentWorkspaceContents {
+  tags: GtmTag[];
+  triggers: GtmTrigger[];
+  variables: GtmVariable[];
+  toolFailures: ConsentToolFailure[];
+}
+
+/**
+ * Resilient workspace read for the Consent Mode v2 audit. Each list is fetched
+ * independently: a 401/403 (no read access to the container) rethrows to abort
+ * the run, but any other per-list failure is recorded in `toolFailures` and
+ * yields an empty list so the remaining sources can still be audited instead of
+ * the whole audit collapsing to a generic failure.
+ */
+export async function fetchConsentWorkspaceContents(
+  token: string,
+  accountId: string,
+  containerId: string,
+  workspaceId: string,
+): Promise<ConsentWorkspaceContents> {
+  const base = `/accounts/${encodeURIComponent(accountId)}/containers/${encodeURIComponent(
+    containerId,
+  )}/workspaces/${encodeURIComponent(workspaceId)}`;
+  const toolFailures: ConsentToolFailure[] = [];
+
+  const pull = async <T>(
+    path: string,
+    itemKey: string,
+    resource: string,
+  ): Promise<T[]> => {
+    try {
+      const data = await gtmFetch<Record<string, T[] | undefined>>(token, path);
+      return data[itemKey] ?? [];
+    } catch (e) {
+      if (e instanceof GtmApiError && (e.status === 401 || e.status === 403)) {
+        throw e;
+      }
+      toolFailures.push({
+        resource,
+        message: e instanceof GtmApiError ? e.message : String(e),
+        status: e instanceof GtmApiError ? e.status : undefined,
+      });
+      return [];
+    }
+  };
+
+  const [tags, triggers, variables] = await Promise.all([
+    pull<GtmTag>(`${base}/tags`, "tag", "tags"),
+    pull<GtmTrigger>(`${base}/triggers`, "trigger", "triggers"),
+    pull<GtmVariable>(`${base}/variables`, "variable", "variables"),
+  ]);
+
+  return { tags, triggers, variables, toolFailures };
+}
+
 export async function fetchWorkspaceContents(
   token: string,
   accountId: string,
