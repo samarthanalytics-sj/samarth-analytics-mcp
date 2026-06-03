@@ -1,3 +1,9 @@
+## [1.13.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.13.1...v1.13.2) (2026-06-03)
+
+### Bug Fixes
+
+* **mcp:** start server when no Google credentials are configured ([f5d94a2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f5d94a2fcd1e7a6e8508551c5d9377bb3f9be1fe))
+
 ## [1.13.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.13.0...v1.13.1) (2026-06-02)
 
 ### Bug Fixes
