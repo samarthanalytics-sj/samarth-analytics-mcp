@@ -192,7 +192,11 @@ export async function buildGoogleAuth(opts: AuthOptions = {}): Promise<OAuth2Cli
       scopes: ALL_SCOPES,
       ...(impersonateEmail ? { clientOptions: { subject: impersonateEmail } } : {}),
     });
-    return auth.getClient() as Promise<OAuth2Client>;
+    // Return the GoogleAuth instance directly instead of eagerly resolving the
+    // underlying client. googleapis accepts a GoogleAuth as `auth` and resolves
+    // the client lazily per request, so a bad/missing key surfaces on the first
+    // API call rather than crashing the MCP server before it can connect.
+    return auth as unknown as OAuth2Client;
   }
 
   // ── Mode 2: OAuth2 with stored tokens ───────────────────────────────────
@@ -243,11 +247,18 @@ export async function buildGoogleAuth(opts: AuthOptions = {}): Promise<OAuth2Cli
   // ── Mode 3: Application Default Credentials ─────────────────────────────
   console.error(
     '[auth] No explicit credentials found. Falling back to Application Default Credentials.' +
-      ' Run: gcloud auth application-default login --scopes=' +
+      ' If no credentials are available, tool calls will return an auth error until you run:' +
+      ' npm run auth:google (OAuth) or gcloud auth application-default login --scopes=' +
       ALL_SCOPES.join(',')
   );
+  // Return the GoogleAuth instance directly. Do NOT eagerly call getClient():
+  // with no ADC present that throws, and because this runs in main() before the
+  // stdio/HTTP transport connects, the whole MCP server would exit(1) and every
+  // tool would be unusable. Returning the lazy GoogleAuth lets the server start
+  // and register all tools; the missing-credentials error then surfaces per
+  // tool call instead of taking down the entire server.
   const auth = new google.auth.GoogleAuth({ scopes: ALL_SCOPES });
-  return auth.getClient() as Promise<OAuth2Client>;
+  return auth as unknown as OAuth2Client;
 }
 
 /**
