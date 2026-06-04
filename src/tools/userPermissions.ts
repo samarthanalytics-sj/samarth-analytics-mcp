@@ -9,7 +9,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import type { tagmanager_v2 } from 'googleapis';
 
@@ -54,9 +55,9 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
           (data) => data.userPermission,
           { pageToken, maxPages }
         );
-        return { content: [{ type: 'text', text: JSON.stringify(buildListResult('userPermissions', result), null, 2) }] };
+        return jsonResult(buildListResult('userPermissions', result));
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `user_permissions_list failed: ${formatGoogleError(err)}` }] };
+        return errorResult('user_permissions_list', err);
       }
     }
   );
@@ -76,9 +77,9 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
         const res = await client.accounts.user_permissions.get({
           path: `accounts/${accountId}/user_permissions/${userPermissionId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `user_permissions_get failed: ${formatGoogleError(err)}` }] };
+        return errorResult('user_permissions_get', err);
       }
     }
   );
@@ -102,7 +103,7 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would grant ${emailAddress} access on account ${accountId}` }] };
+          return textResult(`[DRY RUN] Would grant ${emailAddress} access on account ${accountId}`);
         }
         const client = getClient();
         const res = await client.accounts.user_permissions.create({
@@ -113,9 +114,9 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
             ...(containerAccess ? { containerAccess } : {}),
           },
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `user_permissions_create failed: ${formatGoogleError(err)}` }] };
+        return errorResult('user_permissions_create', err);
       }
     }
   );
@@ -140,7 +141,7 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would update permission ${userPermissionId} on account ${accountId}` }] };
+          return textResult(`[DRY RUN] Would update permission ${userPermissionId} on account ${accountId}`);
         }
         const body: tagmanager_v2.Schema$UserPermission = {
           ...(acctPerm ? { accountAccess: { permission: acctPerm } } : {}),
@@ -151,9 +152,9 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
           path: `accounts/${accountId}/user_permissions/${userPermissionId}`,
           requestBody: body,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `user_permissions_update failed: ${formatGoogleError(err)}` }] };
+        return errorResult('user_permissions_update', err);
       }
     }
   );
@@ -175,15 +176,15 @@ export function registerUserPermissionTools(server: McpServer, getClient: () => 
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('delete', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would delete permission ${userPermissionId} from account ${accountId}` }] };
+          return textResult(`[DRY RUN] Would delete permission ${userPermissionId} from account ${accountId}`);
         }
         const client = getClient();
         await client.accounts.user_permissions.delete({
           path: `accounts/${accountId}/user_permissions/${userPermissionId}`,
         });
-        return { content: [{ type: 'text', text: `User permission ${userPermissionId} deleted from account ${accountId}.` }] };
+        return textResult(`User permission ${userPermissionId} deleted from account ${accountId}.`);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `user_permissions_delete failed: ${formatGoogleError(err)}` }] };
+        return errorResult('user_permissions_delete', err);
       }
     }
   );

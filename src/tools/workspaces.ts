@@ -5,8 +5,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
+import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
 
 const workspaceBase = z.object({
   accountId: z.string().describe('The GTM account ID.'),
@@ -30,16 +31,9 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
           (data) => data.workspace,
           { pageToken, maxPages }
         );
-        return {
-          content: [
-            { type: 'text', text: JSON.stringify(buildListResult('workspaces', result), null, 2) },
-          ],
-        };
+        return jsonResult(buildListResult('workspaces', result));
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `workspaces_list failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('workspaces_list', err);
       }
     }
   );
@@ -59,12 +53,9 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
         const res = await client.accounts.containers.workspaces.get({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `workspaces_get failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('workspaces_get', err);
       }
     }
   );
@@ -85,23 +76,16 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return {
-            content: [
-              { type: 'text', text: `[DRY RUN] Would create workspace "${name}" in container ${containerId}` },
-            ],
-          };
+          return textResult(`[DRY RUN] Would create workspace "${name}" in container ${containerId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.create({
           parent: `accounts/${accountId}/containers/${containerId}`,
           requestBody: { name, description },
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `workspaces_create failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('workspaces_create', err);
       }
     }
   );
@@ -126,28 +110,14 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
         });
         const changes = res.data.workspaceChange ?? [];
         const conflicts = res.data.mergeConflict ?? [];
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                {
-                  workspaceChange: changes,
-                  changeCount: changes.length,
-                  mergeConflict: conflicts,
-                  conflictCount: conflicts.length,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
+        return jsonResult({
+          workspaceChange: changes,
+          changeCount: changes.length,
+          mergeConflict: conflicts,
+          conflictCount: conflicts.length,
+        });
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `workspace_get_status failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('workspace_get_status', err);
       }
     }
   );
@@ -169,22 +139,15 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return {
-            content: [
-              { type: 'text', text: `[DRY RUN] Would sync workspace ${workspaceId} to latest container version.` },
-            ],
-          };
+          return textResult(`[DRY RUN] Would sync workspace ${workspaceId} to latest container version.`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.sync({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `workspace_sync failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('workspace_sync', err);
       }
     }
   );
@@ -215,20 +178,13 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return {
-            content: [
-              { type: 'text', text: `[DRY RUN] Would resolve conflict in workspace ${workspaceId}.` },
-            ],
-          };
+          return textResult(`[DRY RUN] Would resolve conflict in workspace ${workspaceId}.`);
         }
         let entity: unknown;
         try {
           entity = JSON.parse(entityJson);
         } catch {
-          return {
-            isError: true,
-            content: [{ type: 'text', text: 'entityJson must be valid JSON.' }],
-          };
+          return errorText('entityJson must be valid JSON.');
         }
         const client = getClient();
         // GTM API: accounts.containers.workspaces.resolve_conflict
@@ -238,16 +194,9 @@ export function registerWorkspaceTools(server: McpServer, getClient: () => GtmCl
           fingerprint,
           requestBody: entity as Record<string, unknown>,
         });
-        return {
-          content: [{ type: 'text', text: JSON.stringify(res.data ?? { success: true }, null, 2) }],
-        };
+        return jsonResult(res.data ?? { success: true });
       } catch (err) {
-        return {
-          isError: true,
-          content: [
-            { type: 'text', text: `workspace_resolve_conflict failed: ${formatGoogleError(err)}` },
-          ],
-        };
+        return errorResult('workspace_resolve_conflict', err);
       }
     }
   );

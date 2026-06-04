@@ -8,7 +8,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError } from '../utils/guardrails.js';
+import { jsonResult, errorResult } from '../utils/toolResponse.js';
 
 export function registerExportTools(server: McpServer, getClient: () => GtmClient): void {
   server.registerTool(
@@ -132,14 +132,9 @@ export function registerExportTools(server: McpServer, getClient: () => GtmClien
           };
         }
 
-        return {
-          content: [{ type: 'text', text: JSON.stringify(exportData, null, 2) }],
-        };
+        return jsonResult(exportData);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `export_container failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('export_container', err);
       }
     }
   );

@@ -31,6 +31,7 @@ import type { Ga4AdminClient, Ga4AdminAlphaClient } from '../utils/ga4Client.js'
 import { formatGoogleError } from '../utils/guardrails.js';
 import { paginate, buildListResult, paginationFields } from '../utils/pagination.js';
 import { GA4_ADMIN_READONLY_SCOPE } from '../auth/googleAuth.js';
+import { jsonResult, errorText } from '../utils/toolResponse.js';
 
 /**
  * Format a GA4 Admin error. When the failure is a missing-scope / permission
@@ -98,19 +99,9 @@ export function registerGa4AdminTools(
           (data) => data.accountSummaries ?? [],
           { pageToken, maxPages }
         );
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(buildListResult('accountSummaries', result), null, 2),
-            },
-          ],
-        };
+        return jsonResult(buildListResult('accountSummaries', result));
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: formatGa4Error('ga4_account_summaries_list', err) }],
-        };
+        return errorText(formatGa4Error('ga4_account_summaries_list', err));
       }
     }
   );
@@ -152,16 +143,9 @@ export function registerGa4AdminTools(
           (data) => data.properties ?? [],
           { pageToken, maxPages }
         );
-        return {
-          content: [
-            { type: 'text', text: JSON.stringify(buildListResult('properties', result), null, 2) },
-          ],
-        };
+        return jsonResult(buildListResult('properties', result));
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: formatGa4Error('ga4_properties_list', err) }],
-        };
+        return errorText(formatGa4Error('ga4_properties_list', err));
       }
     }
   );
@@ -179,12 +163,9 @@ export function registerGa4AdminTools(
       try {
         const client = getClient();
         const res = await client.properties.get({ name: toPropertyName(property) });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: formatGa4Error('ga4_property_get', err) }],
-        };
+        return errorText(formatGa4Error('ga4_property_get', err));
       }
     }
   );
@@ -212,16 +193,9 @@ export function registerGa4AdminTools(
           (data) => data.dataStreams ?? [],
           { pageToken, maxPages }
         );
-        return {
-          content: [
-            { type: 'text', text: JSON.stringify(buildListResult('dataStreams', result), null, 2) },
-          ],
-        };
+        return jsonResult(buildListResult('dataStreams', result));
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: formatGa4Error('ga4_data_streams_list', err) }],
-        };
+        return errorText(formatGa4Error('ga4_data_streams_list', err));
       }
     }
   );
@@ -251,14 +225,9 @@ export function registerGa4AdminTools(
           : `dataStreams/${dataStreamId.trim()}`;
         const name = `${toPropertyName(property)}/${streamSuffix}/enhancedMeasurementSettings`;
         const res = await client.properties.dataStreams.getEnhancedMeasurementSettings({ name });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [
-            { type: 'text', text: formatGa4Error('ga4_enhanced_measurement_get', err) },
-          ],
-        };
+        return errorText(formatGa4Error('ga4_enhanced_measurement_get', err));
       }
     }
   );
@@ -284,19 +253,9 @@ export function registerGa4AdminTools(
           (data) => data.customDimensions ?? [],
           { pageToken, maxPages }
         );
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(buildListResult('customDimensions', result), null, 2),
-            },
-          ],
-        };
+        return jsonResult(buildListResult('customDimensions', result));
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: formatGa4Error('ga4_custom_dimensions_list', err) }],
-        };
+        return errorText(formatGa4Error('ga4_custom_dimensions_list', err));
       }
     }
   );
@@ -323,19 +282,9 @@ export function registerGa4AdminTools(
           (data) => data.customMetrics ?? [],
           { pageToken, maxPages }
         );
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(buildListResult('customMetrics', result), null, 2),
-            },
-          ],
-        };
+        return jsonResult(buildListResult('customMetrics', result));
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: formatGa4Error('ga4_custom_metrics_list', err) }],
-        };
+        return errorText(formatGa4Error('ga4_custom_metrics_list', err));
       }
     }
   );
@@ -354,12 +303,9 @@ export function registerGa4AdminTools(
         const client = getClient();
         const name = `${toPropertyName(property)}/dataRetentionSettings`;
         const res = await client.properties.getDataRetentionSettings({ name });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: formatGa4Error('ga4_data_retention_get', err) }],
-        };
+        return errorText(formatGa4Error('ga4_data_retention_get', err));
       }
     }
   );
@@ -386,16 +332,9 @@ export function registerGa4AdminTools(
           (data) => data.keyEvents ?? [],
           { pageToken, maxPages }
         );
-        return {
-          content: [
-            { type: 'text', text: JSON.stringify(buildListResult('keyEvents', result), null, 2) },
-          ],
-        };
+        return jsonResult(buildListResult('keyEvents', result));
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: formatGa4Error('ga4_key_events_list', err) }],
-        };
+        return errorText(formatGa4Error('ga4_key_events_list', err));
       }
     }
   );
@@ -421,19 +360,9 @@ export function registerGa4AdminTools(
           (data) => data.googleAdsLinks ?? [],
           { pageToken, maxPages }
         );
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(buildListResult('googleAdsLinks', result), null, 2),
-            },
-          ],
-        };
+        return jsonResult(buildListResult('googleAdsLinks', result));
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: formatGa4Error('ga4_google_ads_links_list', err) }],
-        };
+        return errorText(formatGa4Error('ga4_google_ads_links_list', err));
       }
     }
   );

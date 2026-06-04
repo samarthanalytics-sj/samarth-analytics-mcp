@@ -19,7 +19,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError } from '../utils/guardrails.js';
+import { jsonResult, errorResult } from '../utils/toolResponse.js';
 
 export interface AuditFinding {
   severity: 'error' | 'warning' | 'info';
@@ -314,14 +314,9 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
           findings: filteredFindings,
         };
 
-        return {
-          content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }],
-        };
+        return jsonResult(summary);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `audit_container failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('audit_container', err);
       }
     }
   );

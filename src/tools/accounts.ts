@@ -6,7 +6,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError } from '../utils/guardrails.js';
+import { jsonResult, errorResult } from '../utils/toolResponse.js';
 
 export function registerAccountTools(server: McpServer, getClient: () => GtmClient): void {
   // ── accounts/list ────────────────────────────────────────────────────────
@@ -30,19 +30,9 @@ export function registerAccountTools(server: McpServer, getClient: () => GtmClie
           ...(includeGoogleTags !== undefined ? { includeGoogleTags } : {}),
         });
         const accounts = res.data.account ?? [];
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ accounts, count: accounts.length }, null, 2),
-            },
-          ],
-        };
+        return jsonResult({ accounts, count: accounts.length });
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `accounts_list failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('accounts_list', err);
       }
     }
   );
@@ -60,14 +50,9 @@ export function registerAccountTools(server: McpServer, getClient: () => GtmClie
       try {
         const client = getClient();
         const res = await client.accounts.get({ path: `accounts/${accountId}` });
-        return {
-          content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }],
-        };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `accounts_get failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('accounts_get', err);
       }
     }
   );

@@ -5,8 +5,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
+import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 
 export function registerContainerTools(server: McpServer, getClient: () => GtmClient): void {
   // ── containers/list ──────────────────────────────────────────────────────
@@ -27,16 +28,9 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
           (data) => data.container,
           { pageToken, maxPages }
         );
-        return {
-          content: [
-            { type: 'text', text: JSON.stringify(buildListResult('containers', result), null, 2) },
-          ],
-        };
+        return jsonResult(buildListResult('containers', result));
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `containers_list failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('containers_list', err);
       }
     }
   );
@@ -57,12 +51,9 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
         const res = await client.accounts.containers.get({
           path: `accounts/${accountId}/containers/${containerId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `containers_get failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('containers_get', err);
       }
     }
   );
@@ -89,26 +80,16 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `[DRY RUN] Would create container "${name}" in account ${accountId} with context: ${usageContext.join(', ')}`,
-              },
-            ],
-          };
+          return textResult(`[DRY RUN] Would create container "${name}" in account ${accountId} with context: ${usageContext.join(', ')}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.create({
           parent: `accounts/${accountId}`,
           requestBody: { name, usageContext, domainName, notes },
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `containers_create failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('containers_create', err);
       }
     }
   );
@@ -129,9 +110,9 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
         const res = await client.accounts.containers.snippet({
           path: `accounts/${accountId}/containers/${containerId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify({ snippet: res.data.snippet }, null, 2) }] };
+        return jsonResult({ snippet: res.data.snippet });
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `containers_snippet failed: ${formatGoogleError(err)}` }] };
+        return errorResult('containers_snippet', err);
       }
     }
   );
@@ -150,9 +131,9 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
       try {
         const client = getClient();
         const res = await client.accounts.containers.lookup({ destinationId });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `containers_lookup failed: ${formatGoogleError(err)}` }] };
+        return errorResult('containers_lookup', err);
       }
     }
   );
@@ -185,7 +166,7 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would combine container ${containerIdToCombine} into ${containerId}` }] };
+          return textResult(`[DRY RUN] Would combine container ${containerIdToCombine} into ${containerId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.combine({
@@ -194,9 +175,9 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
           ...(settingSource ? { settingSource } : {}),
           ...(allowUserPermissionFeatureUpdate !== undefined ? { allowUserPermissionFeatureUpdate } : {}),
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `containers_combine failed: ${formatGoogleError(err)}` }] };
+        return errorResult('containers_combine', err);
       }
     }
   );
@@ -225,7 +206,7 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would move tag ID ${tagId} out of container ${containerId}` }] };
+          return textResult(`[DRY RUN] Would move tag ID ${tagId} out of container ${containerId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.move_tag_id({
@@ -237,9 +218,9 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
           ...(copyTermsOfService !== undefined ? { copyTermsOfService } : {}),
           ...(allowUserPermissionFeatureUpdate !== undefined ? { allowUserPermissionFeatureUpdate } : {}),
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `containers_move_tag_id failed: ${formatGoogleError(err)}` }] };
+        return errorResult('containers_move_tag_id', err);
       }
     }
   );
@@ -261,9 +242,9 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
           parent: `accounts/${accountId}/containers/${containerId}`,
         });
         const destinations = res.data.destination ?? [];
-        return { content: [{ type: 'text', text: JSON.stringify({ destinations, count: destinations.length }, null, 2) }] };
+        return jsonResult({ destinations, count: destinations.length });
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `destinations_list failed: ${formatGoogleError(err)}` }] };
+        return errorResult('destinations_list', err);
       }
     }
   );
@@ -285,9 +266,9 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
         const res = await client.accounts.containers.destinations.get({
           path: `accounts/${accountId}/containers/${containerId}/destinations/${destinationId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `destinations_get failed: ${formatGoogleError(err)}` }] };
+        return errorResult('destinations_get', err);
       }
     }
   );
@@ -312,7 +293,7 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would link destination ${destinationId} to container ${containerId}` }] };
+          return textResult(`[DRY RUN] Would link destination ${destinationId} to container ${containerId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.destinations.link({
@@ -320,9 +301,9 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
           destinationId,
           ...(allowUserPermissionFeatureUpdate !== undefined ? { allowUserPermissionFeatureUpdate } : {}),
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `destinations_link failed: ${formatGoogleError(err)}` }] };
+        return errorResult('destinations_link', err);
       }
     }
   );

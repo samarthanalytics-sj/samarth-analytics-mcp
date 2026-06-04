@@ -23,6 +23,7 @@ import { z } from 'zod';
 import type { Ga4DataClient } from '../utils/ga4Client.js';
 import { formatGoogleError } from '../utils/guardrails.js';
 import { GA4_ADMIN_READONLY_SCOPE } from '../auth/googleAuth.js';
+import { jsonResult, errorText } from '../utils/toolResponse.js';
 
 function formatGa4Error(toolName: string, err: unknown): string {
   const base = formatGoogleError(err);
@@ -158,30 +159,16 @@ export function registerGa4DataTools(
           });
           return out;
         });
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                {
-                  property: toPropertyName(property),
-                  dateRange: { startDate, endDate },
-                  rowCount: data.rowCount ?? rows.length,
-                  dimensionHeaders: dimHeaders,
-                  metricHeaders: metHeaders,
-                  rows,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
+        return jsonResult({
+          property: toPropertyName(property),
+          dateRange: { startDate, endDate },
+          rowCount: data.rowCount ?? rows.length,
+          dimensionHeaders: dimHeaders,
+          metricHeaders: metHeaders,
+          rows,
+        });
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: formatGa4Error('ga4_run_report', err) }],
-        };
+        return errorText(formatGa4Error('ga4_run_report', err));
       }
     }
   );
@@ -233,31 +220,15 @@ export function registerGa4DataTools(
           });
           return out;
         });
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                {
-                  property: toPropertyName(property),
-                  rowCount: data.rowCount ?? rows.length,
-                  dimensionHeaders: dimHeaders,
-                  metricHeaders: metHeaders,
-                  rows,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
+        return jsonResult({
+          property: toPropertyName(property),
+          rowCount: data.rowCount ?? rows.length,
+          dimensionHeaders: dimHeaders,
+          metricHeaders: metHeaders,
+          rows,
+        });
       } catch (err) {
-        return {
-          isError: true,
-          content: [
-            { type: 'text', text: formatGa4Error('ga4_run_realtime_report', err) },
-          ],
-        };
+        return errorText(formatGa4Error('ga4_run_realtime_report', err));
       }
     }
   );
