@@ -1,3 +1,9 @@
+## [1.13.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.13.2...v1.13.3) (2026-06-04)
+
+### Performance Improvements
+
+* optimize production hot paths across MCP, portal, and worker ([8d28197](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8d281974dc06976e106682a4e5c7f292fade3dcd))
+
 ## [1.13.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.13.1...v1.13.2) (2026-06-03)
 
 ### Bug Fixes
