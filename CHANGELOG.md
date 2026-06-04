@@ -1,3 +1,9 @@
+## [1.17.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.16.0...v1.17.0) (2026-06-04)
+
+### Features
+
+* **production:** add async job and cache foundation ([d57ce01](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d57ce01874b354c00e93fd71c1d1d49420c62a46))
+
 ## [1.16.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.15.0...v1.16.0) (2026-06-04)
 
 ### Features
