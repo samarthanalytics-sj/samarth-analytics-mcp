@@ -26,6 +26,7 @@
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { capture, captureConsentStates, summarizeCapture, loadPlaywright, PlaywrightMissingError } from "./capture.mjs";
+import { urlAllowed as guardUrlAllowed } from "./url-guard.mjs";
 
 const PORT = Number(process.env.PORT) || 8080;
 const TOKEN = (process.env.RUNTIME_WORKER_TOKEN ?? "").trim();
@@ -61,39 +62,13 @@ function tokenOk(req) {
   }
 }
 
+// SSRF admission check. Delegates to the hardened, unit-tested guard in
+// url-guard.mjs (covers loopback/RFC-1918/link-local + the cloud metadata IP,
+// IPv6 private ranges, IPv4-mapped IPv6, and decimal/octal/hex IP encodings).
+// The same guard is re-applied to every in-browser navigation in capture.mjs so
+// a redirect from an allowlisted page to an internal host is still blocked.
 function urlAllowed(rawUrl) {
-  let parsed;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    return { ok: false, reason: "not a valid URL" };
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return { ok: false, reason: "only http(s) URLs are allowed" };
-  }
-  const host = parsed.hostname.toLowerCase();
-  // Block obvious SSRF targets regardless of allowlist.
-  if (
-    host === "localhost" ||
-    host === "0.0.0.0" ||
-    host === "::1" ||
-    /^127\./.test(host) ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^169\.254\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
-  ) {
-    return { ok: false, reason: "private/loopback addresses are not allowed" };
-  }
-  if (ALLOWLIST.length > 0) {
-    const matches = ALLOWLIST.some(
-      (suffix) => host === suffix || host.endsWith(`.${suffix}`),
-    );
-    if (!matches) {
-      return { ok: false, reason: `host not in RUNTIME_WORKER_ALLOWLIST` };
-    }
-  }
-  return { ok: true };
+  return guardUrlAllowed(rawUrl, ALLOWLIST);
 }
 
 function readBody(req) {

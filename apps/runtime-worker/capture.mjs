@@ -20,6 +20,8 @@
 //
 // This module is shared by the HTTP worker (server.mjs) and the CLI wrapper.
 
+import { urlAllowed } from "./url-guard.mjs";
+
 export const CAPTURE_SCHEMA = "samarth.runtime-capture/v2";
 // v3 adds multi-consent-state grouping, parsed GA4 query params, hit timing,
 // cookie snapshots, and observed consent default/update events. v2 single-state
@@ -507,6 +509,22 @@ function deriveStateLabel(fields) {
 // Capture all URLs in a fresh context under one consent state. Returns { pages, note }.
 async function captureUnderConsent(browser, urls, consentFields, stateLabel, opts) {
   const context = await browser.newContext();
+  // SSRF defense-in-depth: block any in-browser request (including a redirect
+  // from an allowlisted page, a sub-resource, or a JS-initiated fetch) that
+  // targets loopback / RFC-1918 / link-local / cloud-metadata addresses. The
+  // initial-URL admission check in server.mjs only inspects the requested host;
+  // this catches a host that *resolves* or *redirects* to an internal target.
+  // We enforce only the private-IP block here (not the allowlist suffix match)
+  // so legitimate third-party analytics beacons still load.
+  await context.route("**/*", (route) => {
+    const reqUrl = route.request().url();
+    const verdict = urlAllowed(reqUrl, []);
+    if (!verdict.ok) {
+      route.abort("blockedbyclient").catch(() => {});
+      return;
+    }
+    route.continue().catch(() => {});
+  }).catch(() => {});
   let note;
   if (consentFields) {
     const safeConsent = {};
