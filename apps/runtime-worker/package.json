@@ -16,7 +16,8 @@
     "capture": "node capture.mjs",
     "queue": "RUNTIME_WORKER_MODE=queue node queue-consumer.mjs",
     "postinstall-browser": "playwright install chromium",
-    "check": "node --check server.mjs && node --check capture.mjs && node --check cli.mjs && node --check queue-consumer.mjs"
+    "check": "node --check server.mjs && node --check capture.mjs && node --check cli.mjs && node --check queue-consumer.mjs && node --check url-guard.mjs",
+    "test": "node --test url-guard.test.mjs"
   },
   "optionalDependencies": {
     "playwright": "^1.48.0"
