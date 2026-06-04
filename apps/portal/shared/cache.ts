@@ -94,7 +94,7 @@ export class InMemoryCache implements CacheStore {
 
   async deleteByPrefix(prefix: string): Promise<number> {
     let n = 0;
-    for (const key of [...this.map.keys()]) {
+    for (const key of Array.from(this.map.keys())) {
       if (key.startsWith(prefix)) {
         this.map.delete(key);
         n++;
