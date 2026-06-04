@@ -28,38 +28,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Ga4AdminClient, Ga4AdminAlphaClient } from '../utils/ga4Client.js';
-import { formatGoogleError } from '../utils/guardrails.js';
 import { paginate, buildListResult, paginationFields } from '../utils/pagination.js';
-import { GA4_ADMIN_READONLY_SCOPE } from '../auth/googleAuth.js';
 import { jsonResult, errorText } from '../utils/toolResponse.js';
-
-/**
- * Format a GA4 Admin error. When the failure is a missing-scope / permission
- * problem, append a hint pointing at the read-only analytics scope so users
- * know to re-consent rather than chasing a GA4 permissions red herring.
- */
-function formatGa4Error(toolName: string, err: unknown): string {
-  const base = formatGoogleError(err);
-  const lower = base.toLowerCase();
-  const looksLikeScopeIssue =
-    lower.includes('insufficient') ||
-    lower.includes('permission_denied') ||
-    lower.includes('permission denied') ||
-    lower.includes('403') ||
-    lower.includes('scope') ||
-    lower.includes('access_token_scope_insufficient');
-  const hint = looksLikeScopeIssue
-    ? `\nHint: this often means the GA4 read scope is missing. Re-run "npm run auth:google" ` +
-      `to grant ${GA4_ADMIN_READONLY_SCOPE}, or confirm the account has GA4 access.`
-    : '';
-  return `${toolName} failed: ${base}${hint}`;
-}
-
-/** Normalize a property identifier into the API's `properties/{id}` form. */
-function toPropertyName(property: string): string {
-  const trimmed = property.trim();
-  return trimmed.startsWith('properties/') ? trimmed : `properties/${trimmed}`;
-}
+import { formatGa4Error, toPropertyName } from '../utils/ga4Errors.js';
 
 /** Normalize an account identifier into the API's `accounts/{id}` form. */
 function toAccountName(account: string): string {

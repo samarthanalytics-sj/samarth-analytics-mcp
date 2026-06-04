@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import {
   ShieldCheck,
   ShieldAlert,
@@ -23,18 +23,14 @@ import {
 } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { SeverityChip } from "@/components/status-chip";
+import { SelectorBlock, StatCard } from "@/components/gtm-selectors";
+import { useGtmSelection } from "@/hooks/use-gtm-selection";
+import { useRuntimeCapture } from "@/hooks/use-runtime-capture";
 import { portalApi } from "@/lib/portal-api";
 import { usePortal } from "@/lib/portal-store";
 // The synthetic sample capture (~6KB) is only needed when the user clicks
@@ -82,49 +78,19 @@ const LAYER_META: Record<
 export default function ConsentV2Page() {
   const { oauth } = usePortal();
 
-  const [accountId, setAccountId] = useState<string>("");
-  const [containerId, setContainerId] = useState<string>("");
-  const [workspaceId, setWorkspaceId] = useState<string>("");
-
-  const accountsQuery = useQuery({
-    queryKey: ["/api/gtm/accounts"],
-    queryFn: () => portalApi.listGtmAccounts(),
-    enabled: oauth.connected,
-    retry: false,
-  });
-  const containersQuery = useQuery({
-    queryKey: ["/api/gtm/containers", accountId],
-    queryFn: () => portalApi.listGtmContainers(accountId),
-    enabled: oauth.connected && Boolean(accountId),
-    retry: false,
-  });
-  const workspacesQuery = useQuery({
-    queryKey: ["/api/gtm/workspaces", accountId, containerId],
-    queryFn: () => portalApi.listGtmWorkspaces(accountId, containerId),
-    enabled: oauth.connected && Boolean(accountId && containerId),
-    retry: false,
-  });
-
-  // Auto-select the first available option at each tier.
-  useEffect(() => {
-    const list = accountsQuery.data ?? [];
-    if (!accountId && list.length > 0) setAccountId(list[0].accountId);
-  }, [accountsQuery.data, accountId]);
-  useEffect(() => {
-    const list = containersQuery.data ?? [];
-    if (containerId && !list.some((c) => c.containerId === containerId)) setContainerId("");
-    if (!containerId && list.length > 0) setContainerId(list[0].containerId);
-  }, [containersQuery.data, containerId]);
-  useEffect(() => {
-    const list = workspacesQuery.data ?? [];
-    if (workspaceId && !list.some((w) => w.workspaceId === workspaceId)) setWorkspaceId("");
-    if (!workspaceId && list.length > 0) setWorkspaceId(list[0].workspaceId);
-  }, [workspacesQuery.data, workspaceId]);
-
-  const containerPublicId = useMemo(() => {
-    const c = (containersQuery.data ?? []).find((c) => c.containerId === containerId);
-    return c?.publicId ?? containerId;
-  }, [containersQuery.data, containerId]);
+  const selection = useGtmSelection({ enabled: oauth.connected });
+  const {
+    accountId,
+    containerId,
+    workspaceId,
+    setWorkspaceId,
+    selectAccount,
+    selectContainer,
+    accountsQuery,
+    containersQuery,
+    workspacesQuery,
+    containerPublicId,
+  } = selection;
 
   const [result, setResult] = useState<ConsentAuditResponse | null>(null);
 
@@ -145,55 +111,9 @@ export default function ConsentV2Page() {
   // Optional runtime proof import (RUNTIME source). Never fabricated — runtime
   // and reconciliation checks only activate when a parseable capture is loaded.
   const runtimeRef = useRef<HTMLDivElement | null>(null);
-  const [runtimeText, setRuntimeText] = useState<string>("");
-  const [runtimeCapture, setRuntimeCapture] = useState<unknown>(null);
-  const [runtimeError, setRuntimeError] = useState<string>("");
-
-  const applyRuntimeText = (text: string) => {
-    setRuntimeText(text);
-    setRuntimeError("");
-    const trimmed = text.trim();
-    if (!trimmed) {
-      setRuntimeCapture(null);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (!parsed || typeof parsed !== "object") throw new Error("Not a JSON object");
-      setRuntimeCapture(parsed);
-    } catch (e) {
-      setRuntimeCapture(null);
-      setRuntimeError(e instanceof Error ? `Invalid JSON: ${e.message}` : "Invalid JSON");
-    }
-  };
-  const onRuntimeFile = async (file: File | null) => {
-    if (!file) return;
-    try {
-      applyRuntimeText(await file.text());
-    } catch {
-      setRuntimeError("Could not read that file.");
-    }
-  };
-  const loadSampleRuntime = async () => {
-    const { SAMPLE_RUNTIME_CAPTURE_JSON } = await import(
-      "@/lib/sample-runtime-capture"
-    );
-    applyRuntimeText(SAMPLE_RUNTIME_CAPTURE_JSON);
-    runtimeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-  };
-  const downloadSampleRuntime = async () => {
-    if (typeof window === "undefined") return;
-    const { SAMPLE_RUNTIME_CAPTURE_JSON } = await import(
-      "@/lib/sample-runtime-capture"
-    );
-    const blob = new Blob([SAMPLE_RUNTIME_CAPTURE_JSON], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "sample-runtime-capture.json";
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const runtime = useRuntimeCapture(() =>
+    runtimeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }),
+  );
 
   const consentMutation = useMutation({
     mutationFn: () =>
@@ -202,7 +122,7 @@ export default function ConsentV2Page() {
         containerId,
         workspaceId,
         containerPublicId,
-        runtimeCapture: runtimeCapture ?? undefined,
+        runtimeCapture: runtime.runtimeCapture ?? undefined,
       }),
     onSuccess: (data) => setResult(data),
   });
@@ -210,7 +130,7 @@ export default function ConsentV2Page() {
   const consentError = consentMutation.error as
     | (Error & { status?: number; code?: string })
     | null;
-  const canRun = Boolean(accountId && containerId && workspaceId);
+  const canRun = selection.canRun;
   const isLoading = consentMutation.isPending;
   const needsReconnect = consentError?.status === 401;
 
@@ -264,9 +184,7 @@ export default function ConsentV2Page() {
     );
   }
 
-  const accounts = accountsQuery.data ?? [];
-  const containers = containersQuery.data ?? [];
-  const workspaces = workspacesQuery.data ?? [];
+  const { accounts, containers, workspaces } = selection;
 
   const byLayer = (layer: ConsentAuditLayer): ConsentAuditResponseFinding[] =>
     findingsByLayer[layer] ?? [];
@@ -333,11 +251,7 @@ export default function ConsentV2Page() {
               <SelectorBlock
                 label="GTM Account"
                 value={accountId}
-                onChange={(v) => {
-                  setAccountId(v);
-                  setContainerId("");
-                  setWorkspaceId("");
-                }}
+                onChange={selectAccount}
                 loading={accountsQuery.isLoading}
                 error={accountsQuery.error as (Error & { status?: number }) | null}
                 placeholder="Choose an account"
@@ -348,10 +262,7 @@ export default function ConsentV2Page() {
               <SelectorBlock
                 label="Container"
                 value={containerId}
-                onChange={(v) => {
-                  setContainerId(v);
-                  setWorkspaceId("");
-                }}
+                onChange={selectContainer}
                 loading={containersQuery.isLoading}
                 error={containersQuery.error as Error | null}
                 placeholder="Choose a container"
@@ -413,7 +324,7 @@ export default function ConsentV2Page() {
                 <Upload className="h-3.5 w-3.5 text-primary" />
                 Runtime proof
                 <span className="font-normal text-muted-foreground">(RUNTIME source — optional)</span>
-                {runtimeCapture ? (
+                {runtime.ready ? (
                   <Badge
                     variant="outline"
                     className="text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
@@ -430,13 +341,13 @@ export default function ConsentV2Page() {
                     accept="application/json,.json"
                     className="hidden"
                     data-testid="input-consent-runtime-file"
-                    onChange={(e) => onRuntimeFile(e.target.files?.[0] ?? null)}
+                    onChange={(e) => runtime.onRuntimeFile(e.target.files?.[0] ?? null)}
                   />
                 </label>
                 <button
                   type="button"
                   className="inline-flex items-center gap-1 text-[11px] text-primary underline-offset-2 hover:underline"
-                  onClick={loadSampleRuntime}
+                  onClick={runtime.loadSample}
                   data-testid="button-consent-runtime-sample"
                 >
                   <Sparkles className="h-3 w-3" /> Use sample capture
@@ -444,16 +355,16 @@ export default function ConsentV2Page() {
                 <button
                   type="button"
                   className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-                  onClick={downloadSampleRuntime}
+                  onClick={runtime.downloadSample}
                   data-testid="button-consent-runtime-download"
                 >
                   <Download className="h-3 w-3" /> Download example
                 </button>
-                {runtimeText ? (
+                {runtime.runtimeText ? (
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-                    onClick={() => applyRuntimeText("")}
+                    onClick={() => runtime.applyRuntimeText("")}
                     data-testid="button-consent-runtime-clear"
                   >
                     <X className="h-3 w-3" /> Clear
@@ -462,14 +373,14 @@ export default function ConsentV2Page() {
               </div>
             </div>
             <Textarea
-              value={runtimeText}
-              onChange={(e) => applyRuntimeText(e.target.value)}
+              value={runtime.runtimeText}
+              onChange={(e) => runtime.applyRuntimeText(e.target.value)}
               placeholder='Paste a runtime capture artifact to prove Consent Mode v2 behaviour. Capture denied/granted/partial states, e.g. `node cli.mjs --url https://example.com --states default_denied,granted,analytics_granted_ads_denied`.'
               className="font-mono text-[11px] min-h-[80px]"
               data-testid="textarea-consent-runtime"
             />
-            {runtimeError ? (
-              <div className="text-[11px] text-destructive">{runtimeError}</div>
+            {runtime.runtimeError ? (
+              <div className="text-[11px] text-destructive">{runtime.runtimeError}</div>
             ) : null}
             <div className="text-[11px] text-muted-foreground">
               Without a capture this audit is config-only — live tag/cookie
@@ -481,7 +392,7 @@ export default function ConsentV2Page() {
         </Card>
 
         {/* Coverage + state summary */}
-        {result && <ConsentSummary result={result} runtimeReady={Boolean(runtimeCapture)} />}
+        {result && <ConsentSummary result={result} runtimeReady={runtime.ready} />}
 
         {/* Stat cards */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 md:gap-4 mt-5">
@@ -531,7 +442,7 @@ export default function ConsentV2Page() {
         ) : (
           <div className="mt-6 space-y-6">
             {(["config", "runtime", "reconcile"] as ConsentAuditLayer[]).map((layer) => (
-              <LayerSection key={layer} layer={layer} findings={byLayer(layer)} runtimeReady={Boolean(runtimeCapture)} />
+              <LayerSection key={layer} layer={layer} findings={byLayer(layer)} runtimeReady={runtime.ready} />
             ))}
           </div>
         )}
@@ -785,88 +696,3 @@ function ConsentFindingCard({ f }: { f: ConsentAuditResponseFinding }) {
   );
 }
 
-function SelectorBlock({
-  label,
-  value,
-  onChange,
-  options,
-  placeholder,
-  loading,
-  error,
-  disabled,
-  testId,
-  onReconnect,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-  placeholder: string;
-  loading?: boolean;
-  error?: (Error & { status?: number }) | null;
-  disabled?: boolean;
-  testId?: string;
-  onReconnect?: () => void;
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">{label}</div>
-      <Select value={value} onValueChange={onChange} disabled={disabled || loading}>
-        <SelectTrigger data-testid={testId}>
-          <SelectValue placeholder={loading ? "Loading…" : placeholder} />
-        </SelectTrigger>
-        <SelectContent>
-          {/* Radix <SelectItem> throws on an empty-string value; drop any
-              option whose id is missing so a malformed API row can't crash
-              the page. */}
-          {options
-            .filter((o) => Boolean(o.value))
-            .map((o) => (
-              <SelectItem key={o.value} value={o.value}>
-                {o.label}
-              </SelectItem>
-            ))}
-        </SelectContent>
-      </Select>
-      {error && (
-        <div className="mt-1 space-y-1">
-          <div className="text-[11px] text-destructive break-words">{error.message}</div>
-          {error.status === 401 && onReconnect && (
-            <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={onReconnect}>
-              Reconnect Google
-            </Button>
-          )}
-        </div>
-      )}
-      {!error && !loading && options.length === 0 && !disabled && (
-        <div className="mt-1 text-[11px] text-muted-foreground">None available.</div>
-      )}
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-  loading,
-}: {
-  label: string;
-  value?: number;
-  icon: typeof Tag;
-  loading?: boolean;
-}) {
-  return (
-    <Card>
-      <CardContent className="py-3.5 md:py-4">
-        <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
-          <Icon className="h-3.5 w-3.5 text-primary" />
-          {label}
-        </div>
-        <div className="mt-2 font-mono text-xl tabular-nums">
-          {loading ? <Skeleton className="h-6 w-12" /> : value ?? 0}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}

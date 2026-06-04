@@ -37,6 +37,9 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { HealthBadge, SeverityChip } from "@/components/status-chip";
+import { SelectorBlock, StatCard } from "@/components/gtm-selectors";
+import { useGtmSelection } from "@/hooks/use-gtm-selection";
+import { useRuntimeCapture } from "@/hooks/use-runtime-capture";
 import { portalApi } from "@/lib/portal-api";
 import { usePortal } from "@/lib/portal-store";
 // The synthetic sample capture (~6KB) is only needed when the user clicks
@@ -95,10 +98,21 @@ const COVERAGE_LABEL: Record<string, string> = {
 export default function AuditPage() {
   const { oauth } = usePortal();
 
-  // Selectors
-  const [accountId, setAccountId] = useState<string>("");
-  const [containerId, setContainerId] = useState<string>("");
-  const [workspaceId, setWorkspaceId] = useState<string>("");
+  // Primary account → container → workspace cascade (auto-selects each tier).
+  const selection = useGtmSelection({ enabled: oauth.connected });
+  const {
+    accountId,
+    containerId,
+    workspaceId,
+    setWorkspaceId,
+    selectAccount,
+    selectContainer,
+    accountsQuery,
+    containersQuery,
+    workspacesQuery,
+    containerPublicId,
+  } = selection;
+
   // GA4 property selection. "__auto__" = auto-match (default), "__none__" =
   // config-only, otherwise an explicit GA4 propertyId. Auto-match resolves the
   // GTM measurement ID against each property's data streams.
@@ -109,27 +123,6 @@ export default function AuditPage() {
   const [ga4Choice, setGa4Choice] = useState<string>(AUTO);
   const [autoMatchedId, setAutoMatchedId] = useState<string>("");
   const [autoMatchNote, setAutoMatchNote] = useState<string>("");
-
-  const accountsQuery = useQuery({
-    queryKey: ["/api/gtm/accounts"],
-    queryFn: () => portalApi.listGtmAccounts(),
-    enabled: oauth.connected,
-    retry: false,
-  });
-
-  const containersQuery = useQuery({
-    queryKey: ["/api/gtm/containers", accountId],
-    queryFn: () => portalApi.listGtmContainers(accountId),
-    enabled: oauth.connected && Boolean(accountId),
-    retry: false,
-  });
-
-  const workspacesQuery = useQuery({
-    queryKey: ["/api/gtm/workspaces", accountId, containerId],
-    queryFn: () => portalApi.listGtmWorkspaces(accountId, containerId),
-    enabled: oauth.connected && Boolean(accountId && containerId),
-    retry: false,
-  });
 
   // GA4 properties for the optional cross-source selector. Failures (e.g. the
   // analytics.readonly scope was never granted) must not block the audit — the
@@ -142,27 +135,6 @@ export default function AuditPage() {
     retry: false,
   });
   const ga4Properties = ga4PropertiesQuery.data ?? [];
-
-  // Auto-select first available on each tier.
-  useEffect(() => {
-    const list = accountsQuery.data ?? [];
-    if (!accountId && list.length > 0) setAccountId(list[0].accountId);
-  }, [accountsQuery.data, accountId]);
-  useEffect(() => {
-    const list = containersQuery.data ?? [];
-    if (containerId && !list.some((c) => c.containerId === containerId)) setContainerId("");
-    if (!containerId && list.length > 0) setContainerId(list[0].containerId);
-  }, [containersQuery.data, containerId]);
-  useEffect(() => {
-    const list = workspacesQuery.data ?? [];
-    if (workspaceId && !list.some((w) => w.workspaceId === workspaceId)) setWorkspaceId("");
-    if (!workspaceId && list.length > 0) setWorkspaceId(list[0].workspaceId);
-  }, [workspacesQuery.data, workspaceId]);
-
-  const containerPublicId = useMemo(() => {
-    const c = (containersQuery.data ?? []).find((c) => c.containerId === containerId);
-    return c?.publicId ?? containerId;
-  }, [containersQuery.data, containerId]);
 
   const [audit, setAudit] = useState<AuditSummary | null>(null);
 
@@ -177,68 +149,8 @@ export default function AuditPage() {
   // RUNTIME: a pasted/uploaded runtime-worker (or CLI) capture artifact. We do
   // NOT fabricate runtime data — the audit only turns on RUNTIME when a
   // parseable capture is supplied here.
-  const [runtimeText, setRuntimeText] = useState<string>("");
-  const [runtimeCapture, setRuntimeCapture] = useState<unknown>(null);
-  const [runtimeError, setRuntimeError] = useState<string>("");
-
-  const applyRuntimeText = (text: string) => {
-    setRuntimeText(text);
-    setRuntimeError("");
-    const trimmed = text.trim();
-    if (!trimmed) {
-      setRuntimeCapture(null);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (!parsed || typeof parsed !== "object") {
-        throw new Error("Not a JSON object");
-      }
-      setRuntimeCapture(parsed);
-    } catch (e) {
-      setRuntimeCapture(null);
-      setRuntimeError(
-        e instanceof Error ? `Invalid JSON: ${e.message}` : "Invalid JSON",
-      );
-    }
-  };
-
-  const onRuntimeFile = async (file: File | null) => {
-    if (!file) return;
-    try {
-      const text = await file.text();
-      applyRuntimeText(text);
-    } catch {
-      setRuntimeError("Could not read that file.");
-    }
-  };
-
-  // Load the bundled SAMPLE capture (synthetic — clearly not real evidence).
-  // Lets a user preview a populated coverage matrix / Consent proof without
-  // standing up the runtime worker.
-  const loadSampleRuntime = async () => {
-    const { SAMPLE_RUNTIME_CAPTURE_JSON } = await import(
-      "@/lib/sample-runtime-capture"
-    );
-    applyRuntimeText(SAMPLE_RUNTIME_CAPTURE_JSON);
-    scrollTo(crossSourceRef);
-  };
-
-  const downloadSampleRuntime = async () => {
-    if (typeof window === "undefined") return;
-    const { SAMPLE_RUNTIME_CAPTURE_JSON } = await import(
-      "@/lib/sample-runtime-capture"
-    );
-    const blob = new Blob([SAMPLE_RUNTIME_CAPTURE_JSON], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "sample-runtime-capture.json";
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const runtime = useRuntimeCapture(() => scrollTo(crossSourceRef));
+  const runtimeCapture = runtime.runtimeCapture;
 
   // SGTM: an optional SERVER container/workspace to reconcile against. Off by
   // default; when no server context is chosen, SGTM stays Not Covered.
@@ -456,7 +368,7 @@ export default function AuditPage() {
   };
   const coverageActions: CoverageActions = {
     importRuntime: () => scrollTo(crossSourceRef),
-    loadSampleRuntime,
+    loadSampleRuntime: runtime.loadSample,
     selectGa4: () => {
       if (focusGa4Selection()) scrollTo(ga4SelectorRef);
     },
@@ -521,11 +433,7 @@ export default function AuditPage() {
               <SelectorBlock
                 label="GTM Account"
                 value={accountId}
-                onChange={(v) => {
-                  setAccountId(v);
-                  setContainerId("");
-                  setWorkspaceId("");
-                }}
+                onChange={selectAccount}
                 loading={accountsQuery.isLoading}
                 error={accountsQuery.error as (Error & { status?: number }) | null}
                 placeholder="Choose an account"
@@ -536,10 +444,7 @@ export default function AuditPage() {
               <SelectorBlock
                 label="Container"
                 value={containerId}
-                onChange={(v) => {
-                  setContainerId(v);
-                  setWorkspaceId("");
-                }}
+                onChange={selectContainer}
                 loading={containersQuery.isLoading}
                 error={containersQuery.error as Error | null}
                 placeholder="Choose a container"
@@ -659,14 +564,14 @@ export default function AuditPage() {
         {/* Cross-source inputs (opt-in) */}
         <div ref={crossSourceRef} className="scroll-mt-20">
         <CrossSourceInputs
-          runtimeText={runtimeText}
-          runtimeError={runtimeError}
-          runtimeReady={Boolean(runtimeCapture)}
-          onRuntimeText={applyRuntimeText}
-          onRuntimeFile={onRuntimeFile}
-          onClearRuntime={() => applyRuntimeText("")}
-          onLoadSample={loadSampleRuntime}
-          onDownloadSample={downloadSampleRuntime}
+          runtimeText={runtime.runtimeText}
+          runtimeError={runtime.runtimeError}
+          runtimeReady={runtime.ready}
+          onRuntimeText={runtime.applyRuntimeText}
+          onRuntimeFile={runtime.onRuntimeFile}
+          onClearRuntime={() => runtime.applyRuntimeText("")}
+          onLoadSample={runtime.loadSample}
+          onDownloadSample={runtime.downloadSample}
           serverEnabled={serverEnabled}
           onToggleServer={setServerEnabled}
           serverAccountId={serverAccountId}
@@ -751,7 +656,7 @@ export default function AuditPage() {
               items={audit.coverageMatrix}
               flags={audit.capabilityFlags}
               actions={coverageActions}
-              runtimeReady={Boolean(runtimeCapture)}
+              runtimeReady={runtime.ready}
               serverEnabled={serverEnabled}
             />
             <CoverageMatrix items={audit.coverageMatrix} actions={coverageActions} />
@@ -767,7 +672,7 @@ export default function AuditPage() {
             />
             <ConsentProofCard
               consentAudit={audit.consentAudit}
-              runtimeReady={Boolean(runtimeCapture)}
+              runtimeReady={runtime.ready}
             />
           </div>
         )}
@@ -1052,92 +957,6 @@ function CrossSourceInputs(props: {
               ? "Runs a read-only GA4 Data API report (last 7 days) to flag GTM-configured GA4 events with zero reported activity."
               : "Select a GA4 property above to enable the reported-events check."}
           </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function SelectorBlock({
-  label,
-  value,
-  onChange,
-  options,
-  placeholder,
-  loading,
-  error,
-  disabled,
-  testId,
-  onReconnect,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-  placeholder: string;
-  loading?: boolean;
-  error?: (Error & { status?: number }) | null;
-  disabled?: boolean;
-  testId?: string;
-  onReconnect?: () => void;
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">{label}</div>
-      <Select value={value} onValueChange={onChange} disabled={disabled || loading}>
-        <SelectTrigger data-testid={testId}>
-          <SelectValue placeholder={loading ? "Loading…" : placeholder} />
-        </SelectTrigger>
-        <SelectContent>
-          {/* Radix <SelectItem> throws on an empty-string value; drop any
-              option whose id is missing so a malformed API row can't crash
-              the page. */}
-          {options
-            .filter((o) => Boolean(o.value))
-            .map((o) => (
-              <SelectItem key={o.value} value={o.value}>
-                {o.label}
-              </SelectItem>
-            ))}
-        </SelectContent>
-      </Select>
-      {error && (
-        <div className="mt-1 space-y-1">
-          <div className="text-[11px] text-destructive break-words">{error.message}</div>
-          {error.status === 401 && onReconnect && (
-            <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={onReconnect}>
-              Reconnect Google
-            </Button>
-          )}
-        </div>
-      )}
-      {!error && !loading && options.length === 0 && !disabled && (
-        <div className="mt-1 text-[11px] text-muted-foreground">None available.</div>
-      )}
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-  loading,
-}: {
-  label: string;
-  value?: number;
-  icon: typeof Tag;
-  loading?: boolean;
-}) {
-  return (
-    <Card>
-      <CardContent className="py-3.5 md:py-4">
-        <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
-          <Icon className="h-3.5 w-3.5 text-primary" />
-          {label}
-        </div>
-        <div className="mt-2 font-mono text-xl tabular-nums">
-          {loading ? <Skeleton className="h-6 w-12" /> : value ?? 0}
         </div>
       </CardContent>
     </Card>
