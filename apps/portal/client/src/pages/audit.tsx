@@ -39,7 +39,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { HealthBadge, SeverityChip } from "@/components/status-chip";
 import { portalApi } from "@/lib/portal-api";
 import { usePortal } from "@/lib/portal-store";
-import { SAMPLE_RUNTIME_CAPTURE_JSON } from "@/lib/sample-runtime-capture";
+// The synthetic sample capture (~6KB) is only needed when the user clicks
+// "load/download sample", so it is imported dynamically inside those handlers
+// instead of being bundled into the audit page chunk.
 import type {
   AuditSummary,
   AuditCapabilityFlags,
@@ -214,13 +216,19 @@ export default function AuditPage() {
   // Load the bundled SAMPLE capture (synthetic — clearly not real evidence).
   // Lets a user preview a populated coverage matrix / Consent proof without
   // standing up the runtime worker.
-  const loadSampleRuntime = () => {
+  const loadSampleRuntime = async () => {
+    const { SAMPLE_RUNTIME_CAPTURE_JSON } = await import(
+      "@/lib/sample-runtime-capture"
+    );
     applyRuntimeText(SAMPLE_RUNTIME_CAPTURE_JSON);
     scrollTo(crossSourceRef);
   };
 
-  const downloadSampleRuntime = () => {
+  const downloadSampleRuntime = async () => {
     if (typeof window === "undefined") return;
+    const { SAMPLE_RUNTIME_CAPTURE_JSON } = await import(
+      "@/lib/sample-runtime-capture"
+    );
     const blob = new Blob([SAMPLE_RUNTIME_CAPTURE_JSON], {
       type: "application/json",
     });

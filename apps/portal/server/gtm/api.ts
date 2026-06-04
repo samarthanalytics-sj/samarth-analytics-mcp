@@ -250,86 +250,87 @@ export async function fetchServerOverview(
     priority?: number;
     parameter?: GtmParameterNode[];
   };
-  let clients: SgtmOverviewResult["clients"] = [];
-  try {
-    const r = await gtmFetch<{ client?: ClientRaw[] }>(token, `${base}/clients`);
-    clients = (r.client ?? []).map((c) => ({
-      clientId: c.clientId,
-      name: c.name ?? "Unnamed client",
-      type: c.type,
-      priority: c.priority,
-      claims: extractServerClaims(c.parameter),
-    }));
-  } catch (e) {
-    record("clients", e);
-  }
+  // The six server-resource reads are independent — run them concurrently so
+  // total latency is one round-trip instead of six. Each still records its own
+  // failure (404s skipped) so one failing resource degrades gracefully.
+  const pull = async <T>(
+    resource: string,
+    path: string,
+    map: (r: never) => T[],
+  ): Promise<T[]> => {
+    try {
+      return map(await gtmFetch<never>(token, path));
+    } catch (e) {
+      record(resource, e);
+      return [];
+    }
+  };
 
-  let transformations: SgtmOverviewResult["transformations"] = [];
-  try {
-    const r = await gtmFetch<{
-      transformation?: { transformationId?: string; name?: string; type?: string }[];
-    }>(token, `${base}/transformations`);
-    transformations = (r.transformation ?? []).map((t) => ({
-      transformationId: t.transformationId,
-      name: t.name ?? "Unnamed transformation",
-      type: t.type,
-    }));
-  } catch (e) {
-    record("transformations", e);
-  }
-
-  let zones: SgtmOverviewResult["zones"] = [];
-  try {
-    const r = await gtmFetch<{ zone?: { zoneId?: string; name?: string }[] }>(
-      token,
-      `${base}/zones`,
-    );
-    zones = (r.zone ?? []).map((z) => ({ zoneId: z.zoneId, name: z.name ?? "Unnamed zone" }));
-  } catch (e) {
-    record("zones", e);
-  }
-
-  let templates: SgtmOverviewResult["templates"] = [];
-  try {
-    const r = await gtmFetch<{
-      template?: { templateId?: string; name?: string; galleryReference?: { name?: string } }[];
-    }>(token, `${base}/templates`);
-    templates = (r.template ?? []).map((t) => ({
-      templateId: t.templateId,
-      name: t.name ?? "Unnamed template",
-      gallery: t.galleryReference?.name,
-    }));
-  } catch (e) {
-    record("templates", e);
-  }
-
-  let gtagConfig: SgtmOverviewResult["gtagConfig"] = [];
-  try {
-    const r = await gtmFetch<{
-      gtagConfig?: { gtagConfigId?: string; type?: string; parameter?: GtmParameterNode[] }[];
-    }>(token, `${base}/gtag_config`);
-    gtagConfig = (r.gtagConfig ?? []).map((g) => ({
-      gtagConfigId: g.gtagConfigId,
-      type: g.type,
-      tagId: g.parameter?.find((p) => p.key === "tagId")?.value,
-    }));
-  } catch (e) {
-    record("gtag_config", e);
-  }
-
-  let destinations: SgtmOverviewResult["destinations"] = [];
-  try {
-    const r = await gtmFetch<{ destination?: { destinationId?: string; name?: string }[] }>(
-      token,
-      `${containerBase}/destinations`,
-    );
-    destinations = (r.destination ?? []).map((d) => ({
-      destinationId: d.destinationId,
-      name: d.name,
-    }));
-  } catch (e) {
-    record("destinations", e);
-  }
+  const [clients, transformations, zones, templates, gtagConfig, destinations] =
+    await Promise.all([
+      pull<NonNullable<SgtmOverviewResult["clients"]>[number]>("clients", `${base}/clients`, (r) =>
+        ((r as { client?: ClientRaw[] }).client ?? []).map((c) => ({
+          clientId: c.clientId,
+          name: c.name ?? "Unnamed client",
+          type: c.type,
+          priority: c.priority,
+          claims: extractServerClaims(c.parameter),
+        })),
+      ),
+      pull<NonNullable<SgtmOverviewResult["transformations"]>[number]>(
+        "transformations",
+        `${base}/transformations`,
+        (r) =>
+          (
+            (r as {
+              transformation?: { transformationId?: string; name?: string; type?: string }[];
+            }).transformation ?? []
+          ).map((t) => ({
+            transformationId: t.transformationId,
+            name: t.name ?? "Unnamed transformation",
+            type: t.type,
+          })),
+      ),
+      pull<NonNullable<SgtmOverviewResult["zones"]>[number]>("zones", `${base}/zones`, (r) =>
+        ((r as { zone?: { zoneId?: string; name?: string }[] }).zone ?? []).map((z) => ({
+          zoneId: z.zoneId,
+          name: z.name ?? "Unnamed zone",
+        })),
+      ),
+      pull<NonNullable<SgtmOverviewResult["templates"]>[number]>("templates", `${base}/templates`, (r) =>
+        (
+          (r as {
+            template?: { templateId?: string; name?: string; galleryReference?: { name?: string } }[];
+          }).template ?? []
+        ).map((t) => ({
+          templateId: t.templateId,
+          name: t.name ?? "Unnamed template",
+          gallery: t.galleryReference?.name,
+        })),
+      ),
+      pull<NonNullable<SgtmOverviewResult["gtagConfig"]>[number]>("gtag_config", `${base}/gtag_config`, (r) =>
+        (
+          (r as {
+            gtagConfig?: { gtagConfigId?: string; type?: string; parameter?: GtmParameterNode[] }[];
+          }).gtagConfig ?? []
+        ).map((g) => ({
+          gtagConfigId: g.gtagConfigId,
+          type: g.type,
+          tagId: g.parameter?.find((p) => p.key === "tagId")?.value,
+        })),
+      ),
+      pull<NonNullable<SgtmOverviewResult["destinations"]>[number]>(
+        "destinations",
+        `${containerBase}/destinations`,
+        (r) =>
+          ((r as { destination?: { destinationId?: string; name?: string }[] }).destination ?? []).map(
+            (d) => ({
+              destinationId: d.destinationId,
+              name: d.name,
+            }),
+          ),
+      ),
+    ]);
 
   const total =
     (clients?.length ?? 0) +

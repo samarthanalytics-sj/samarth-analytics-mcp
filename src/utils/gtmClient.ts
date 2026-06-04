@@ -3,7 +3,11 @@
  * Wraps the googleapis tagmanager v2 client with sensible defaults.
  */
 
-import { google, tagmanager_v2 } from 'googleapis';
+// Import only the tagmanager sub-API rather than the full `googleapis` aggregate.
+// The aggregate eagerly loads hundreds of API surfaces (~560ms / ~125MB RSS at
+// startup); the per-API entrypoint exposes the same `tagmanager()` factory and
+// `tagmanager_v2` types at a fraction of the cost (~90ms / ~57MB).
+import { tagmanager, tagmanager_v2 } from 'googleapis/build/src/apis/tagmanager/index.js';
 import type { OAuth2Client } from 'google-auth-library';
 
 export type GtmClient = tagmanager_v2.Tagmanager;
@@ -12,7 +16,7 @@ let _client: GtmClient | null = null;
 
 export function getGtmClient(auth: OAuth2Client): GtmClient {
   if (!_client) {
-    _client = google.tagmanager({ version: 'v2', auth });
+    _client = tagmanager({ version: 'v2', auth });
   }
   return _client;
 }

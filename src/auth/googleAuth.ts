@@ -35,8 +35,11 @@
  * as a GTM user, or use Google Workspace Domain-Wide Delegation. See README.
  */
 
-import { google } from 'googleapis';
-import { OAuth2Client } from 'google-auth-library';
+// Use GoogleAuth from google-auth-library directly rather than `google.auth`
+// off the full googleapis aggregate. `google.auth.GoogleAuth` IS this class;
+// importing it here avoids eagerly loading every Google API surface (~560ms /
+// ~125MB RSS) just to construct an auth client.
+import { OAuth2Client, GoogleAuth } from 'google-auth-library';
 import fs from 'fs';
 import path from 'path';
 
@@ -187,7 +190,7 @@ export async function buildGoogleAuth(opts: AuthOptions = {}): Promise<OAuth2Cli
       '[auth] ⚠ WARNING: GTM API requires the service account to be explicitly granted access.' +
         ' See README → Service Account Limitations.'
     );
-    const auth = new google.auth.GoogleAuth({
+    const auth = new GoogleAuth({
       keyFile: serviceAccountKeyFile,
       scopes: ALL_SCOPES,
       ...(impersonateEmail ? { clientOptions: { subject: impersonateEmail } } : {}),
@@ -257,7 +260,7 @@ export async function buildGoogleAuth(opts: AuthOptions = {}): Promise<OAuth2Cli
   // tool would be unusable. Returning the lazy GoogleAuth lets the server start
   // and register all tools; the missing-credentials error then surfaces per
   // tool call instead of taking down the entire server.
-  const auth = new google.auth.GoogleAuth({ scopes: ALL_SCOPES });
+  const auth = new GoogleAuth({ scopes: ALL_SCOPES });
   return auth as unknown as OAuth2Client;
 }
 

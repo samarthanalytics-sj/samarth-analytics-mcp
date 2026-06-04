@@ -2758,9 +2758,22 @@ async function readJsonBody<T = unknown>(req: IncomingMessage): Promise<T> {
     }
     return maybeParsed as T;
   }
+  // Cap the buffered body so a huge (or malicious) runtime-capture / container
+  // upload cannot exhaust the serverless function's memory. We count bytes as
+  // they stream and reject once the ceiling is crossed, before Buffer.concat
+  // ever materializes the whole payload.
+  const MAX_BODY_BYTES = 12 * 1024 * 1024; // 12 MB
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of req as AsyncIterable<Buffer | string>) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    total += buf.length;
+    if (total > MAX_BODY_BYTES) {
+      throw new Error(
+        `Request body exceeds the ${Math.floor(MAX_BODY_BYTES / (1024 * 1024))}MB limit.`,
+      );
+    }
+    chunks.push(buf);
   }
   if (chunks.length === 0) return {} as T;
   try {

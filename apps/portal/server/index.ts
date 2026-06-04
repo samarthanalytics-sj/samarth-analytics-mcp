@@ -16,6 +16,11 @@ declare module "http" {
 
 app.use(
   express.json({
+    // Match the serverless functions' body cap (see readJsonBody in api/**):
+    // large enough for real runtime-capture artifacts, bounded so an oversized
+    // upload can't exhaust memory. Express's 100KB default would reject valid
+    // captures; an unbounded limit would risk OOM.
+    limit: "12mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },

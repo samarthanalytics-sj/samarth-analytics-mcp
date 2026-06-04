@@ -212,19 +212,33 @@ async function capturePage(context, url, opts) {
     notes: [],
   };
 
+  // Per-page caps so a chatty page (thousands of analytics beacons or a console
+  // error flood) can't grow these arrays without bound and blow up worker
+  // memory / the artifact size. `networkRequestCount` stays a true counter; only
+  // the stored detail arrays are bounded. A page hitting these limits is already
+  // an outlier the audit can flag from the counts.
+  const MAX_TRACKER_HITS = 1000;
+  const MAX_SGTM_CANDIDATES = 500;
+  const MAX_CONSOLE = 200;
   page.on("console", (msg) => {
     const type = msg.type();
-    if (type === "error") record.consoleErrors.push(msg.text().slice(0, 1000));
-    else if (type === "warning") record.consoleWarnings.push(msg.text().slice(0, 1000));
+    if (type === "error") {
+      if (record.consoleErrors.length < MAX_CONSOLE) record.consoleErrors.push(msg.text().slice(0, 1000));
+    } else if (type === "warning") {
+      if (record.consoleWarnings.length < MAX_CONSOLE) record.consoleWarnings.push(msg.text().slice(0, 1000));
+    }
   });
   page.on("pageerror", (err) => {
-    record.pageErrors.push(String(err?.message ?? err).slice(0, 1000));
+    if (record.pageErrors.length < MAX_CONSOLE) {
+      record.pageErrors.push(String(err?.message ?? err).slice(0, 1000));
+    }
   });
   page.on("request", (req) => {
     record.networkRequestCount++;
     const reqUrl = req.url();
     const { ids, groups } = classify(reqUrl);
     if (ids.length > 0) {
+      if (record.trackerHits.length >= MAX_TRACKER_HITS) return;
       const tMs = sinceNav();
       // GA4 hits carry consent + identity params in the query string; parse a
       // safe subset so the audit can read gcs/gcd/tid/en without re-parsing URLs.
@@ -248,6 +262,7 @@ async function capturePage(context, url, opts) {
         resourceType: req.resourceType(),
       });
     } else if (isSgtmCandidate(reqUrl)) {
+      if (record.sgtmCandidates.length >= MAX_SGTM_CANDIDATES) return;
       record.sgtmCandidates.push({
         url: reqUrl.slice(0, 2000),
         method: req.method(),

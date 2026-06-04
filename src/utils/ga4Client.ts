@@ -7,12 +7,19 @@
  * provided the `analytics.readonly` scope was granted during onboarding.
  */
 
+// Import only the analytics sub-APIs instead of the full `googleapis` aggregate.
+// The aggregate eagerly evaluates every Google API (~560ms / ~125MB RSS at
+// startup); these per-API entrypoints expose the same factory functions and
+// namespaces at a fraction of the cost. See gtmClient.ts for the same pattern.
 import {
-  google,
+  analyticsadmin,
   analyticsadmin_v1beta,
   analyticsadmin_v1alpha,
+} from 'googleapis/build/src/apis/analyticsadmin/index.js';
+import {
+  analyticsdata,
   analyticsdata_v1beta,
-} from 'googleapis';
+} from 'googleapis/build/src/apis/analyticsdata/index.js';
 import type { OAuth2Client } from 'google-auth-library';
 
 export type Ga4AdminClient = analyticsadmin_v1beta.Analyticsadmin;
@@ -25,7 +32,7 @@ let _dataClient: Ga4DataClient | null = null;
 
 export function getGa4AdminClient(auth: OAuth2Client): Ga4AdminClient {
   if (!_client) {
-    _client = google.analyticsadmin({ version: 'v1beta', auth });
+    _client = analyticsadmin({ version: 'v1beta', auth });
   }
   return _client;
 }
@@ -36,7 +43,7 @@ export function getGa4AdminClient(auth: OAuth2Client): Ga4AdminClient {
  */
 export function getGa4AdminAlphaClient(auth: OAuth2Client): Ga4AdminAlphaClient {
   if (!_alphaClient) {
-    _alphaClient = google.analyticsadmin({ version: 'v1alpha', auth });
+    _alphaClient = analyticsadmin({ version: 'v1alpha', auth });
   }
   return _alphaClient;
 }
@@ -48,7 +55,7 @@ export function getGa4AdminAlphaClient(auth: OAuth2Client): Ga4AdminAlphaClient 
  */
 export function getGa4DataClient(auth: OAuth2Client): Ga4DataClient {
   if (!_dataClient) {
-    _dataClient = google.analyticsdata({ version: 'v1beta', auth });
+    _dataClient = analyticsdata({ version: 'v1beta', auth });
   }
   return _dataClient;
 }
