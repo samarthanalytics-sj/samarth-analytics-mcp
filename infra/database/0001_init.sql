@@ -395,4 +395,34 @@ BEGIN
   END LOOP;
 END $$;
 
+-- ===========================================================================
+-- DATA RETENTION  (policy lives in apps/portal/shared/retention.ts)
+-- ===========================================================================
+-- Retention is enforced by a scheduled SWEEP, not by the schema. The windows
+-- below mirror RETENTION_POLICY in apps/portal/shared/retention.ts — keep them
+-- in lockstep. The sweep should run as a single tenant-agnostic maintenance job
+-- (RLS off / service role), deleting rows OLDER than the cutoff:
+--
+--   runtime_captures : 30 days  — PII-sensitive; expires via explicit expires_at
+--                                 (writer stamps it at creation). Sweep deletes
+--                                 WHERE expires_at <= now().
+--   audit_runs       : 365 days — swept on created_at (findings cascade via FK).
+--   audit_findings   : 365 days — normally removed by the audit_runs cascade.
+--   worker_jobs      : 30 days  — terminal jobs only, swept on finished_at.
+--   (logs)           : 14 days  — operational logs live in the external sink,
+--                                 not Postgres; retained there with the same TTL.
+--
+-- Reference sweep (schedule via pg_cron, a Vercel cron route, or the worker):
+--
+--   DELETE FROM runtime_captures WHERE expires_at IS NOT NULL AND expires_at <= now();
+--   DELETE FROM audit_runs       WHERE created_at  < now() - INTERVAL '365 days';
+--   DELETE FROM worker_jobs       WHERE finished_at IS NOT NULL
+--                                   AND finished_at < now() - INTERVAL '30 days'
+--                                   AND status IN ('succeeded','failed','cancelled');
+--
+-- The app derives the same cutoffs deterministically via cutoffFor()/isExpired()
+-- so an application-driven sweep and a SQL-driven sweep agree to the second.
+-- Never extend runtime_captures retention without a documented data-protection
+-- reason: raw captures may contain dataLayer PII.
+
 COMMIT;

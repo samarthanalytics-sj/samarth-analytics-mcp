@@ -361,6 +361,13 @@ stale — a polling client must see fresh state.
 
 ## 8. Observability / monitoring / logging
 
+> Full playbook — event catalog, metric names, dashboards, and alert
+> thresholds — lives in [`OBSERVABILITY.md`](./OBSERVABILITY.md). The structured
+> event taxonomy + redaction (`apps/portal/shared/observability.ts`) and the
+> metric naming contract (`apps/portal/shared/metrics.ts`) are shipped as inert
+> foundation (no vendor SDK, no live connection); call sites adopt them
+> incrementally.
+
 - **Structured logs:** JSON lines from serverless + worker (request id, org id —
   *never* token bytes or raw capture payloads). Ship to a log sink (Vercel log
   drains / Datadog / Logtail).
@@ -383,6 +390,14 @@ Each phase is independently shippable and preserves current behavior.
 **Phase 0 — Foundation.** Schema, domain types, cache-key policy, capability
 probe, env docs. No live services. *Done.*
 
+**Phase 0.5 — Storage/security primitives (Workstream A).** DB client
+abstraction + config (`shared/db/`), `TokenVault` interface + inert dev stub
+(`shared/token-vault.ts`), pure RBAC matrix/authorization (`shared/rbac.ts`), and
+retention policy/cutoff helpers (`shared/retention.ts`), all unit-tested without
+credentials. The Postgres adapter is a loud-failing skeleton (no driver
+dependency). See [`STORAGE_SECURITY.md`](./STORAGE_SECURITY.md). No live
+services. *Done.*
+
 **Phase 0.5 — Inert async + cache abstractions (Workstream B).** Pure
 `CacheStore` (`cache.ts`) + `JobQueue` (`jobs.ts`) interfaces with in-memory/noop
 dev adapters and an Upstash REST skeleton; runtime-capture payload/result
@@ -391,10 +406,10 @@ async create/status/result API contract ([`API_JOBS.md`](./API_JOBS.md)). Still
 no live services — defaults are no-op, current synchronous routes and the
 worker's HTTP `/capture` are unchanged. *Done.*
 
-**Phase 1 — Durable identity + discovery cache.** Provision Postgres; implement
-`ProductionStore` (orgs/users/memberships, discovery snapshots). Wire Upstash
-for discovery SWR behind a feature check on `DATABASE_URL`/`UPSTASH_*`. Cookie
-stays `v1`; no UX change.
+**Phase 1 — Durable identity + discovery cache.** Provision Postgres; flesh out
+the `PostgresStore` skeleton (orgs/users/memberships, discovery snapshots). Wire
+Upstash for discovery SWR behind a feature check on `DATABASE_URL`/`UPSTASH_*`.
+Cookie stays `v1`; no UX change.
 
 **Phase 2 — Token vault.** Introduce `v2` session-id cookie + secret-manager
 vault; dual-read cookies for backwards compatibility. Tokens leave the browser.
