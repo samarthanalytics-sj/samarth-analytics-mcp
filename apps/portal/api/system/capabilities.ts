@@ -48,6 +48,54 @@ export default function handler(_req: IncomingMessage, res: ServerResponse) {
       present("KV_REST_API_URL");
     const runtimeWorkerConfigured =
       present("RUNTIME_WORKER_URL") || present("PORTAL_RUNTIME_WORKER_URL");
+    const vaultConfigured =
+      present("TOKEN_VAULT_URL") ||
+      present("GCP_SECRET_MANAGER_PROJECT") ||
+      present("AWS_SECRETS_MANAGER_REGION");
+
+    // Subsystem readiness: a subsystem is "ready" only when EVERYTHING it needs
+    // to function is present, "degraded" when partially wired, and "unconfigured"
+    // when absent (the expected state on the current signed-cookie deployment).
+    // Derived purely from env presence — no probe, no secret value is read.
+    const isProd = process.env.VERCEL_ENV === "production";
+
+    const readiness = {
+      auth: sessionConfigured && oauthConfigured
+        ? "ready"
+        : sessionConfigured || oauthConfigured
+          ? "degraded"
+          : "unconfigured",
+      persistence: databaseConfigured ? "ready" : "unconfigured",
+      cache: cacheConfigured ? "ready" : "unconfigured",
+      tokenVault: vaultConfigured ? "ready" : "unconfigured",
+      runtimeCapture: runtimeWorkerConfigured ? "ready" : "unconfigured",
+    } as const;
+
+    // Production-mode caveats: non-fatal advisories ops should see when running
+    // in `VERCEL_ENV=production` without the durable subsystems wired. These
+    // describe *operational* posture; they never block a request and never name
+    // a secret. Empty in non-production or once everything is provisioned.
+    const caveats: string[] = [];
+    if (isProd && !databaseConfigured) {
+      caveats.push(
+        "No database configured: sessions are signed-cookie only and audit history is not persisted.",
+      );
+    }
+    if (isProd && !cacheConfigured) {
+      caveats.push(
+        "No cache configured: every discovery read hits the Google API (no SWR, higher latency/quota use).",
+      );
+    }
+    if (isProd && databaseConfigured && !vaultConfigured) {
+      caveats.push(
+        "Database present but no token vault: confirm OAuth token bytes are not being written to Postgres.",
+      );
+    }
+    if (isProd && !runtimeWorkerConfigured) {
+      caveats.push(
+        "No runtime worker configured: runtime-capture (live tag) audits are unavailable.",
+      );
+    }
 
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -65,7 +113,12 @@ export default function handler(_req: IncomingMessage, res: ServerResponse) {
           database: databaseConfigured,
           cache: cacheConfigured,
           runtimeWorker: runtimeWorkerConfigured,
+          tokenVault: vaultConfigured,
         },
+        // Per-subsystem readiness for deploy verification / ops dashboards.
+        readiness,
+        // Operational advisories for production mode. Empty unless caveats apply.
+        caveats,
         // Current persistence mode. Until a DB is wired this is "signed_cookie".
         sessionMode: databaseConfigured ? "database" : "signed_cookie",
       }),
