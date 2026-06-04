@@ -1,3 +1,9 @@
+## [1.15.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.14.2...v1.15.0) (2026-06-04)
+
+### Features
+
+* **production:** add durable storage and security foundation ([c740945](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c7409454abc69e1f20e916567af7fffe2f020a4f))
+
 ## [1.14.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.14.1...v1.14.2) (2026-06-04)
 
 ### Bug Fixes
