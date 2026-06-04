@@ -8,12 +8,7 @@ import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
-
-const wsBase = z.object({
-  accountId: z.string(),
-  containerId: z.string(),
-  workspaceId: z.string(),
-});
+import { workspaceScope as wsBase } from '../utils/schemas.js';
 
 export function registerFolderTools(server: McpServer, getClient: () => GtmClient): void {
   server.registerTool(

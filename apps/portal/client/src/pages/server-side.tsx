@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import {
   ServerCog,
   RefreshCw,
@@ -16,16 +16,11 @@ import {
 } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { SelectorBlock, StatCard } from "@/components/gtm-selectors";
+import { useGtmSelection } from "@/hooks/use-gtm-selection";
 import { portalApi } from "@/lib/portal-api";
 import { usePortal } from "@/lib/portal-store";
 import type { SgtmOverview } from "@shared/portal-types";
@@ -33,59 +28,29 @@ import type { SgtmOverview } from "@shared/portal-types";
 export default function ServerSidePage() {
   const { oauth } = usePortal();
 
-  const [accountId, setAccountId] = useState<string>("");
-  const [containerId, setContainerId] = useState<string>("");
-  const [workspaceId, setWorkspaceId] = useState<string>("");
-
-  const accountsQuery = useQuery({
-    queryKey: ["/api/gtm/accounts"],
-    queryFn: () => portalApi.listGtmAccounts(),
-    enabled: oauth.connected,
-    retry: false,
-  });
-
-  const containersQuery = useQuery({
-    queryKey: ["/api/gtm/containers", accountId],
-    queryFn: () => portalApi.listGtmContainers(accountId),
-    enabled: oauth.connected && Boolean(accountId),
-    retry: false,
-  });
-
-  const workspacesQuery = useQuery({
-    queryKey: ["/api/gtm/workspaces", accountId, containerId],
-    queryFn: () => portalApi.listGtmWorkspaces(accountId, containerId),
-    enabled: oauth.connected && Boolean(accountId && containerId),
-    retry: false,
-  });
-
   // Auto-select first available at each tier, preferring a server container.
-  useEffect(() => {
-    const list = accountsQuery.data ?? [];
-    if (!accountId && list.length > 0) setAccountId(list[0].accountId);
-  }, [accountsQuery.data, accountId]);
-  useEffect(() => {
-    const list = containersQuery.data ?? [];
-    if (containerId && !list.some((c) => c.containerId === containerId)) {
-      setContainerId("");
-    }
-    if (!containerId && list.length > 0) {
-      const server = list.find((c) =>
+  const selection = useGtmSelection({
+    enabled: oauth.connected,
+    preferContainer: (list) =>
+      list.find((c) =>
         (c.usageContext ?? []).some((u) => u.toLowerCase() === "server"),
-      );
-      setContainerId((server ?? list[0]).containerId);
-    }
-  }, [containersQuery.data, containerId]);
-  useEffect(() => {
-    const list = workspacesQuery.data ?? [];
-    if (workspaceId && !list.some((w) => w.workspaceId === workspaceId)) {
-      setWorkspaceId("");
-    }
-    if (!workspaceId && list.length > 0) setWorkspaceId(list[0].workspaceId);
-  }, [workspacesQuery.data, workspaceId]);
+      ),
+  });
+  const {
+    accountId,
+    containerId,
+    workspaceId,
+    setWorkspaceId,
+    selectAccount,
+    selectContainer,
+    accountsQuery,
+    containersQuery,
+    workspacesQuery,
+  } = selection;
 
   const selectedContainer = useMemo(
-    () => (containersQuery.data ?? []).find((c) => c.containerId === containerId),
-    [containersQuery.data, containerId],
+    () => selection.containers.find((c) => c.containerId === containerId),
+    [selection.containers, containerId],
   );
   const selectedIsServer = useMemo(
     () =>
@@ -106,7 +71,7 @@ export default function ServerSidePage() {
   const overviewError = overviewMutation.error as
     | (Error & { status?: number; code?: string })
     | null;
-  const canRun = Boolean(accountId && containerId && workspaceId);
+  const canRun = selection.canRun;
   const needsReconnect = overviewError?.status === 401;
 
   // Reset stale results on selection change.
@@ -159,9 +124,7 @@ export default function ServerSidePage() {
     );
   }
 
-  const accounts = accountsQuery.data ?? [];
-  const containers = containersQuery.data ?? [];
-  const workspaces = workspacesQuery.data ?? [];
+  const { accounts, containers, workspaces } = selection;
   const isLoading = overviewMutation.isPending;
 
   return (
@@ -210,11 +173,7 @@ export default function ServerSidePage() {
               <SelectorBlock
                 label="GTM Account"
                 value={accountId}
-                onChange={(v) => {
-                  setAccountId(v);
-                  setContainerId("");
-                  setWorkspaceId("");
-                }}
+                onChange={selectAccount}
                 loading={accountsQuery.isLoading}
                 error={accountsQuery.error as (Error & { status?: number }) | null}
                 placeholder="Choose an account"
@@ -225,10 +184,7 @@ export default function ServerSidePage() {
               <SelectorBlock
                 label="Container"
                 value={containerId}
-                onChange={(v) => {
-                  setContainerId(v);
-                  setWorkspaceId("");
-                }}
+                onChange={selectContainer}
                 loading={containersQuery.isLoading}
                 error={containersQuery.error as Error | null}
                 placeholder="Choose a container"
@@ -570,84 +526,5 @@ function SimpleTable({
 function EmptyRow({ text }: { text: string }) {
   return (
     <Card className="p-4 text-center text-xs text-muted-foreground">{text}</Card>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-}: {
-  label: string;
-  value: number;
-  icon: typeof Boxes;
-}) {
-  return (
-    <Card>
-      <CardContent className="py-3.5">
-        <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
-          <Icon className="h-3.5 w-3.5 text-primary" />
-          {label}
-        </div>
-        <div className="mt-2 font-mono text-xl tabular-nums">{value}</div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function SelectorBlock({
-  label,
-  value,
-  onChange,
-  options,
-  placeholder,
-  loading,
-  error,
-  disabled,
-  testId,
-  onReconnect,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-  placeholder: string;
-  loading?: boolean;
-  error?: (Error & { status?: number }) | null;
-  disabled?: boolean;
-  testId?: string;
-  onReconnect?: () => void;
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
-        {label}
-      </div>
-      <Select value={value} onValueChange={onChange} disabled={disabled || loading}>
-        <SelectTrigger data-testid={testId}>
-          <SelectValue placeholder={loading ? "Loading…" : placeholder} />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((o) => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {error && (
-        <div className="mt-1 space-y-1">
-          <div className="text-[11px] text-destructive break-words">{error.message}</div>
-          {error.status === 401 && onReconnect && (
-            <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={onReconnect}>
-              Reconnect Google
-            </Button>
-          )}
-        </div>
-      )}
-      {!error && !loading && options.length === 0 && !disabled && (
-        <div className="mt-1 text-[11px] text-muted-foreground">None available.</div>
-      )}
-    </div>
   );
 }

@@ -8,12 +8,7 @@ import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
-
-const wsBase = z.object({
-  accountId: z.string(),
-  containerId: z.string(),
-  workspaceId: z.string(),
-});
+import { workspaceScope as wsBase } from '../utils/schemas.js';
 
 // Known built-in variable types for GTM v2
 const BUILT_IN_VARIABLE_TYPES = [

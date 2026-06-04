@@ -56,6 +56,14 @@ function takes the server plus the client getters it needs (1 for GTM, 2 for GA4
 Admin). Tools are declared with `server.registerTool(name, { description,
 inputSchema }, handler)` using Zod input schemas.
 
+Two small input fragments are shared from `src/utils/`: `paginationFields`
+(§2.6) and `workspaceScope` (`src/utils/schemas.ts`) — the bare
+account/container/workspace selector reused by the variables, triggers,
+builtInVariables and folders tools (imported as `wsBase`). It is deliberately
+description-free: the tags and serverSide tools keep their own `.describe()`-
+annotated copies because that text is exposed as part of the published
+`inputSchema`, so sharing the bare version there would change the API shape.
+
 ### 2.5 Guardrails (`src/utils/guardrails.ts`)
 
 `getGuardrailConfig()` reads `GTM_MCP_ENABLE_WRITES/PUBLISH/DELETES` and
@@ -84,6 +92,12 @@ All tool handlers return the MCP text envelope. These helpers centralize it:
 - `errorResult(toolName, err)` → `{ isError: true, content: [{ type:'text', text: `${toolName} failed: ${formatGoogleError(err)}` }] }`
 - `errorText(text)` → an `isError` envelope around an already-formatted string
   (used by GA4 tools, whose `formatGa4Error` adds a re-consent hint).
+
+GA4 error formatting and id normalization are shared from
+`src/utils/ga4Errors.ts`: `formatGa4Error(toolName, err)` (appends the
+read-scope re-consent hint on permission failures) and `toPropertyName(id)`
+(normalizes to `properties/{id}`), both consumed by the ga4Admin and ga4Data
+tool modules.
 
 The `ToolResult` interface carries an index signature so it stays assignable to
 the MCP SDK's open `CallToolResult` type.
@@ -115,9 +129,26 @@ friendly messages, and `getJson`/`postJson` helpers. `lib/portal-store.tsx` is a
 Context store for OAuth state, approvals, and the active plan. Errors surface via
 toasts, inline error cards, and a render-time `error-boundary.tsx`.
 
-The audit-style pages (`audit.tsx`, `consent-v2.tsx`, `server-side.tsx`) share a
-three-tier account → container → workspace selector with auto-selection effects,
-plus runtime-capture JSON paste/file-upload handling.
+The audit-style pages (`audit.tsx`, `consent-v2.tsx`, `server-side.tsx`) share
+their cross-cutting machinery through extracted, single-source modules instead
+of per-page copies:
+
+- `hooks/use-gtm-selection.ts` — the three-tier account → container → workspace
+  cascade: three dependent TanStack queries plus the auto-select effects that
+  pick the first option at each tier and clear a stale selection when the
+  upstream list changes. `preferContainer` lets a page bias the auto-pick
+  (server-side prefers a server container); explicit user choices always win.
+- `hooks/use-runtime-capture.ts` — the optional runtime-capture import shared by
+  the audit and consent-v2 pages (parse/validate pasted or uploaded JSON, plus
+  lazily-imported synthetic sample load/download). Runtime checks only activate
+  once a parseable capture is supplied — evidence is never fabricated.
+- `components/gtm-selectors.tsx` — the presentational `SelectorBlock` (label +
+  Radix `Select` + inline error/reconnect) and `StatCard`, previously
+  re-declared in each page.
+
+These were triplicated until the R3 refactor (§6, §7); the pages now compose
+the hooks/components and keep only their page-specific state (e.g. the audit
+page's GA4-property auto-match and opt-in sGTM/Data-API panels).
 
 ### 3.2 Serverless API (`apps/portal/api/**`) — Vercel-safe pattern
 
@@ -191,7 +222,7 @@ timeouts. It never writes to GTM/GA4 and never persists captures.
 | --- | --- | --- | --- | --- |
 | R1 | Serverless inlining duplication | `apps/portal/api/**` | Medium | Cookie/OAuth/response code copy-pasted per route. Intentional (Vercel cold-start safety) but drifts easily. Mitigate with a lazily-imported, `node:*`-only shared module — non-trivial, defer. |
 | R2 | Dev-vs-serverless divergence | `server/` vs `api/` | Medium | Two implementations of the same session logic must be kept in sync by hand. |
-| R3 | Client page duplication | `audit.tsx`, `consent-v2.tsx`, `server-side.tsx` | Medium | Triplicated account→container→workspace selector + runtime-input + error-card blocks; large single-file pages. Extract a shared selector hook/component + `useApiError` hook. |
+| R3 | Client page duplication | `audit.tsx`, `consent-v2.tsx`, `server-side.tsx` | **Mitigated** | Triplicated account→container→workspace cascade, runtime-capture handling, and `SelectorBlock`/`StatCard` extracted to `hooks/use-gtm-selection.ts`, `hooks/use-runtime-capture.ts`, and `components/gtm-selectors.tsx` (§3.1, §7.2). Pages now compose the shared modules and keep only page-specific state. Remaining: error-card/reconnect logic is still inline per page (a future `useApiError`). |
 | R4 | No caching / per-call client getter | `src/tools/*` | Low | Each tool call re-fetches from Google; no TTL cache. Acceptable for an MCP tool surface; revisit only if audits get slow. |
 | R5 | HTTP MCP session map is in-process | `src/index.ts` | Low | `transports` is a single-process `Map`; fine for single-instance HTTP, not horizontally scalable. |
 | R6 | Bundle size | portal client | Low | ~471 kB JS (142 kB gzip). Code-splitting would help first paint. |
@@ -203,14 +234,30 @@ timeouts. It never writes to GTM/GA4 and never persists captures.
    `content: [{ type:'text', text: JSON.stringify(...) }]` / error envelopes
    into `jsonResult` / `textResult` / `errorResult` / `errorText`. Output is
    byte-identical; behavior unchanged. Low risk, high readability win.
-2. **Client `useApiError` hook + shared GTM selector** (R3). Normalize the
-   duplicated error-card + reconnect logic and the triplicated cascading
-   selector. Medium effort, behavior-preserving, well-tested by eye in the UI.
-3. **Vercel-safe shared session module** (R1/R2). A single module importing only
+2. **Done — client shared GTM selector / hooks** (R3). Extracted the triplicated
+   cascading selector into `hooks/use-gtm-selection.ts`, the runtime-capture
+   import into `hooks/use-runtime-capture.ts`, and the `SelectorBlock`/`StatCard`
+   presentational pieces into `components/gtm-selectors.tsx`. The audit,
+   consent-v2, and server-side pages now compose these instead of carrying their
+   own copies. Behavior-preserving (UI verified; portal `tsc` + `vite build`
+   clean); the chunks code-split cleanly and the synthetic sample stays lazily
+   imported. Still inline per page: the error-card + reconnect logic (a future
+   `useApiError` hook).
+3. **Done — MCP shared input/error fragments.** Extracted the bare
+   account/container/workspace Zod object to `src/utils/schemas.ts`
+   (`workspaceScope`, used by 4 tool files as `wsBase`) and the duplicated
+   `formatGa4Error` / `toPropertyName` to `src/utils/ga4Errors.ts` (ga4Admin +
+   ga4Data). The `.describe()`-annotated `wsBase` in tags/serverSide is left
+   untouched to preserve their published `inputSchema`. Output byte-identical;
+   guardrails and the GA4 scope-error test unchanged.
+4. **Vercel-safe shared session module** (R1/R2). A single module importing only
    `node:*`, pulled in via `await import()` after auth validation, replacing the
    per-route inlining and the dev/serverless split. Higher risk — must be
    validated against real Vercel cold starts before adoption.
-4. **Optional, only if measured**: client code-splitting (R6), MCP read cache
+5. **Client `useApiError` hook** (residual R3). Normalize the duplicated
+   error-card + reconnect logic still inline in each audit-style page. Low
+   effort, behavior-preserving.
+6. **Optional, only if measured**: client code-splitting (R6), MCP read cache
    (R4). Do not pursue speculatively.
 
 ### Non-goals / guardrails to preserve in any refactor
