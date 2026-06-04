@@ -1,3 +1,9 @@
+## [1.14.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.13.3...v1.14.0) (2026-06-04)
+
+### Features
+
+* **architecture:** add scalable production foundation ([c1f0532](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c1f053245d5b65002045c4b2d5d7b834e641c38e))
+
 ## [1.13.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.13.2...v1.13.3) (2026-06-04)
 
 ### Performance Improvements
