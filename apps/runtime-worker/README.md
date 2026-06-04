@@ -74,6 +74,44 @@ portal Audit page, or paste it into the "Import runtime capture" box.
 
 Returns `{ ok, playwrightAvailable, authRequired, allowlist }`.
 
+## Queue consumer mode (opt-in, forward-looking)
+
+In addition to the HTTP `/capture` endpoint above (the default and currently
+supported mode), the worker can run as a **queue consumer**: instead of being
+called over HTTP, it pulls runtime-capture jobs from a durable queue, runs the
+same read-only capture, and reports the result back. This is the model described
+in [`docs/PRODUCTION_ARCHITECTURE.md`](../../docs/PRODUCTION_ARCHITECTURE.md)
+§4.3 (Postgres `worker_jobs` with `SKIP LOCKED`, graduating to QStash/SQS).
+
+`queue-consumer.mjs` ships as a **skeleton**:
+
+- The queue **client is pluggable** (`QueueClient` = `lease` / `complete` /
+  `fail`). No Redis/Postgres driver is imported and no credentials are required.
+- The job **payload/result shapes mirror**
+  [`apps/portal/shared/jobs.ts`](../portal/shared/jobs.ts)
+  (`RuntimeCaptureJobPayload` / `RuntimeCaptureJobResult`), so the portal-side
+  enqueue and this consumer share one contract.
+- Capture itself reuses `capture.mjs` unchanged — same read-only guarantee, same
+  v2/v3 artifact schemas as HTTP mode.
+
+Run the loop against a built-in in-memory queue (no external services):
+
+```bash
+RUNTIME_WORKER_MODE=queue node queue-consumer.mjs --demo
+# or:
+npm run queue -- --demo
+```
+
+Queue mode is **opt-in**: without `RUNTIME_WORKER_MODE=queue` the consumer
+refuses to start, and importing the module never starts the loop. The HTTP
+server (`npm start`) is unaffected and remains the default. To wire a real
+backend, implement `QueueClient` against your durable store and call
+`runQueueConsumer(queue, opts)`.
+
+| Env var | Effect |
+| --- | --- |
+| `RUNTIME_WORKER_MODE` | Set to `queue` to enable consumer mode. Anything else keeps HTTP-only behavior. |
+
 ## Security (all opt-in via env)
 
 | Env var | Effect |

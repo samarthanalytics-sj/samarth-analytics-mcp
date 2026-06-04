@@ -99,23 +99,34 @@ apps/portal/
   shared/
     portal-types.ts           # product shapes (source of truth) — unchanged
     consent-audit.ts          # consent engine — unchanged (170/170)
-    production-types.ts       # NEW: DB domain models + ProductionStore iface
-    cache-keys.ts             # NEW: cache key namespace + TTL policy
+    production-types.ts       # DB domain models + ProductionStore iface
+    cache-keys.ts             # cache key namespace + TTL policy
+    cache.ts                  # NEW: CacheStore iface + in-memory/noop + Upstash skeleton
+    jobs.ts                   # NEW: job lifecycle + payload/result + JobQueue + adapters
     __tests__/
       consent-audit.node.test.ts   # unchanged
-      cache-keys.node.test.mjs     # NEW: cache-key invariants
-apps/runtime-worker/          # headless capture worker (unchanged)
+      cache-keys.node.test.mjs     # cache-key invariants
+      cache.node.test.mjs          # NEW: TTL/SWR + policy behavior
+      jobs.node.test.mjs           # NEW: lifecycle/lease/retry invariants
+apps/runtime-worker/          # headless capture worker
+  server.mjs                  # HTTP /capture (default mode, unchanged)
+  queue-consumer.mjs          # NEW: opt-in queue-consumer skeleton
 infra/
   database/
-    0001_init.sql             # NEW: portable Postgres schema
+    0001_init.sql             # portable Postgres schema
 docs/
   ARCHITECTURE.md             # system as-is
   PRODUCTION_ARCHITECTURE.md  # this file
+  API_JOBS.md                 # NEW: async create/status/result + cache contract
 ```
 
 The `ProductionStore` interface in `production-types.ts` is the seam: route and
 worker code can be written against it now; a concrete `pg`/Drizzle/Supabase
-implementation drops in later without touching call sites.
+implementation drops in later without touching call sites. Two more seams join
+it: `CacheStore` (`cache.ts`) and `JobQueue` (`jobs.ts`) — both pure interfaces
+with in-memory/noop dev adapters today, so call sites are backend-agnostic
+before any Redis/Upstash or durable queue is provisioned. The async API contract
+they back is specified in [`API_JOBS.md`](./API_JOBS.md).
 
 ---
 
@@ -183,7 +194,8 @@ worker/function → executes, writes findings, flips status
 ```
 
 The response shape returned to the client is **unchanged**; the async variant is
-additive (a new status endpoint), opt-in per deployment.
+additive (a new status endpoint), opt-in per deployment. Full request/response
+contract and the status state machine: [`API_JOBS.md`](./API_JOBS.md).
 
 ### 4.3 Runtime capture (queue + worker)
 
@@ -302,8 +314,13 @@ for fidelity now; the scaling roadmap moves them to object storage with only a
 ## 7. Caching strategy
 
 Policy + keys: [`apps/portal/shared/cache-keys.ts`](../apps/portal/shared/cache-keys.ts)
-(pure, no Redis connection). Recommended backend: **Upstash Redis REST** (works
-from Vercel functions over HTTPS; no socket pool to manage).
+(pure, no Redis connection). Abstraction + adapters:
+[`apps/portal/shared/cache.ts`](../apps/portal/shared/cache.ts) — the
+`CacheStore` interface, an in-memory TTL/SWR implementation for tests, a no-op
+default, and a dependency-free `UpstashRestCache` skeleton. `getOrSet` /
+`setWithPolicy` read TTLs straight from `CACHE_POLICY` so call sites never
+hardcode them. Recommended backend: **Upstash Redis REST** (works from Vercel
+functions over HTTPS; no socket pool to manage).
 
 ### Keys
 All keys are tenant-scoped first: `sa:v1:{orgId}:{resource}:{…parts}`. This makes
@@ -363,8 +380,16 @@ stale — a polling client must see fresh state.
 
 Each phase is independently shippable and preserves current behavior.
 
-**Phase 0 — Foundation (this change).** Schema, domain types, cache-key policy,
-capability probe, env docs. No live services. *Done.*
+**Phase 0 — Foundation.** Schema, domain types, cache-key policy, capability
+probe, env docs. No live services. *Done.*
+
+**Phase 0.5 — Inert async + cache abstractions (Workstream B).** Pure
+`CacheStore` (`cache.ts`) + `JobQueue` (`jobs.ts`) interfaces with in-memory/noop
+dev adapters and an Upstash REST skeleton; runtime-capture payload/result
+schemas; an opt-in worker queue-consumer skeleton (`queue-consumer.mjs`); the
+async create/status/result API contract ([`API_JOBS.md`](./API_JOBS.md)). Still
+no live services — defaults are no-op, current synchronous routes and the
+worker's HTTP `/capture` are unchanged. *Done.*
 
 **Phase 1 — Durable identity + discovery cache.** Provision Postgres; implement
 `ProductionStore` (orgs/users/memberships, discovery snapshots). Wire Upstash
