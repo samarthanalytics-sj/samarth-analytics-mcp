@@ -288,7 +288,7 @@ export class InMemoryJobQueue implements JobQueue {
   async lease(workerId: string, leaseSeconds: number): Promise<QueuedJob | null> {
     const t = this.now();
     // Reclaim expired leases first so abandoned jobs become runnable again.
-    for (const job of this.jobs.values()) {
+    for (const job of Array.from(this.jobs.values())) {
       if (
         job.status === "leased" &&
         job.leaseExpiresAt !== null &&
@@ -300,7 +300,7 @@ export class InMemoryJobQueue implements JobQueue {
       }
     }
     // Highest priority first, then oldest (FIFO) among queued jobs.
-    const candidates = [...this.jobs.values()]
+    const candidates = Array.from(this.jobs.values())
       .filter((j) => j.status === "queued")
       .sort((a, b) => b.priority - a.priority || a.createdAt - b.createdAt);
     const next = candidates[0];
