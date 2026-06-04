@@ -1,3 +1,9 @@
+## [1.14.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.14.0...v1.14.1) (2026-06-04)
+
+### Bug Fixes
+
+* **audit:** harden evidence-scoped accuracy invariants ([dd93f13](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dd93f137228ca9093ffebf6a2e0869f9674993d0))
+
 ## [1.14.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.13.3...v1.14.0) (2026-06-04)
 
 ### Features
