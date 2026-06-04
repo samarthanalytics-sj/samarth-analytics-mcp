@@ -37,6 +37,8 @@ import {
   SectionHeader,
   StatusBadge,
   ConsentStatePills,
+  EvidenceList,
+  AccuracyNotes,
 } from "@/components/common";
 import { useGtmSelection } from "@/hooks/use-gtm-selection";
 import { useRuntimeCapture } from "@/hooks/use-runtime-capture";
@@ -539,8 +541,21 @@ function ConsentFindingCard({ f }: { f: ConsentAuditResponseFinding }) {
                 </Badge>
               ))}
               {f.confidence && (
-                <Badge variant="outline" className="text-[10.5px]">
+                <Badge
+                  variant="outline"
+                  className={`text-[10.5px] ${
+                    f.confidenceDowngraded
+                      ? "border-amber-400 text-amber-700 dark:text-amber-300"
+                      : ""
+                  }`}
+                  title={
+                    f.confidenceDowngraded
+                      ? "Confidence was lowered by the accuracy guardrails — see note below."
+                      : undefined
+                  }
+                >
                   Confidence: {f.confidence}
+                  {f.confidenceDowngraded ? " ↓" : ""}
                 </Badge>
               )}
               {f.effort && (
@@ -602,23 +617,29 @@ function ConsentFindingCard({ f }: { f: ConsentAuditResponseFinding }) {
                 </div>
               </div>
             )}
-            {f.evidence && f.evidence.length > 0 && (
-              <div className="mt-2">
-                <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
-                  Evidence
+            {f.evidenceItems && f.evidenceItems.length > 0 ? (
+              <EvidenceList items={f.evidenceItems} />
+            ) : (
+              f.evidence &&
+              f.evidence.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+                    Evidence
+                  </div>
+                  <ul className="space-y-0.5">
+                    {f.evidence.map((e, i) => (
+                      <li
+                        key={`${e}-${i}`}
+                        className="font-mono text-[11px] text-muted-foreground break-all"
+                      >
+                        {e}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-                <ul className="space-y-0.5">
-                  {f.evidence.map((e, i) => (
-                    <li
-                      key={`${e}-${i}`}
-                      className="font-mono text-[11px] text-muted-foreground break-all"
-                    >
-                      {e}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              )
             )}
+            <AccuracyNotes notes={f.accuracyNotes} />
             {f.suggestedFix && (
               <div className="mt-2.5 flex items-start gap-1.5 text-xs">
                 <Search className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />

@@ -148,6 +148,25 @@ export interface RuntimeCapture {
   };
 }
 
+/**
+ * One short, structured, PII-safe piece of evidence backing a finding. Mirrors
+ * `EvidenceItem` in shared/audit-accuracy.ts. Values are deliberately brief —
+ * never raw JSON blobs.
+ */
+export interface EvidenceItem {
+  source: AuditSourceFlag;
+  /** Short human label, e.g. "GTM parameter", "Captured GA4 hit". */
+  label: string;
+  /** Short observed value/snippet. */
+  value?: string;
+  /** GTM entity path the evidence points at, e.g. "tags/12". */
+  entityPath?: string;
+  /** Implicated parameter / setting key. */
+  parameter?: string;
+  /** Confidence this single piece of evidence carries, when meaningful. */
+  confidence?: AuditConfidence;
+}
+
 /** A single row in the coverage matrix. */
 export interface AuditCoverageItem {
   /** Stable id, kebab-case. */
@@ -159,6 +178,12 @@ export interface AuditCoverageItem {
   status: AuditCoverage;
   /** When status !== "covered", a one-line note describing what tool/source is needed. */
   toolNeeded?: string;
+  /**
+   * When status is partial/not_covered, a plain-language explanation of WHY this
+   * capability is not fully covered and what evidence would close it. Phrased as
+   * positive next action, not a failure. Absent when status is "covered".
+   */
+  whyNotCovered?: string;
 }
 
 export interface AuditFinding {
@@ -196,6 +221,12 @@ export interface AuditFinding {
   businessImpact?: string;
   /** Rough engineering effort estimate. */
   effort?: AuditEffort;
+  /** Structured, short evidence rows backing the finding (source-scoped). */
+  evidence?: EvidenceItem[];
+  /** Plain-language notes about any accuracy tightening applied (downgrades). */
+  accuracyNotes?: string[];
+  /** True when the accuracy normalizer lowered the rule's supplied confidence. */
+  confidenceDowngraded?: boolean;
 }
 
 /** A read operation against the GTM API that did not succeed. */
@@ -335,7 +366,14 @@ export interface ConsentAuditResponseFinding {
   parameter?: string;
   entity?: { name?: string; id?: string; path?: string };
   affected?: string[];
+  /** Free-text evidence snippets emitted by the consent engine (legacy shape). */
   evidence?: string[];
+  /** Structured, source-scoped evidence rows (mirrors the full audit). */
+  evidenceItems?: EvidenceItem[];
+  /** Plain-language notes about any accuracy tightening applied (downgrades). */
+  accuracyNotes?: string[];
+  /** True when the accuracy normalizer lowered the engine's supplied confidence. */
+  confidenceDowngraded?: boolean;
   /** Which layer produced the finding (derived from `sources`). */
   layer: ConsentAuditLayer;
 }
