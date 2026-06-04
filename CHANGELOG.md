@@ -1,3 +1,9 @@
+## [1.17.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.17.1...v1.17.2) (2026-06-04)
+
+### Bug Fixes
+
+* **security:** harden runtime worker SSRF controls and bound request bodies ([e06e432](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e06e432dea80a81b70b5e9090adb3dea8fab5b6a))
+
 ## [1.17.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.17.0...v1.17.1) (2026-06-04)
 
 ### Bug Fixes
