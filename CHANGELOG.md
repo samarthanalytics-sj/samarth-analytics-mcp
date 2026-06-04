@@ -1,3 +1,9 @@
+## [1.16.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.15.0...v1.16.0) (2026-06-04)
+
+### Features
+
+* **production:** add observability and alerting foundation ([ff4e205](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ff4e2052e361640ef2a9ee1dbb5df9c67edde811))
+
 ## [1.15.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.14.2...v1.15.0) (2026-06-04)
 
 ### Features
