@@ -344,6 +344,13 @@ stale — a polling client must see fresh state.
 
 ## 8. Observability / monitoring / logging
 
+> Full playbook — event catalog, metric names, dashboards, and alert
+> thresholds — lives in [`OBSERVABILITY.md`](./OBSERVABILITY.md). The structured
+> event taxonomy + redaction (`apps/portal/shared/observability.ts`) and the
+> metric naming contract (`apps/portal/shared/metrics.ts`) are shipped as inert
+> foundation (no vendor SDK, no live connection); call sites adopt them
+> incrementally.
+
 - **Structured logs:** JSON lines from serverless + worker (request id, org id —
   *never* token bytes or raw capture payloads). Ship to a log sink (Vercel log
   drains / Datadog / Logtail).
