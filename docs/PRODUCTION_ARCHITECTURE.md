@@ -363,13 +363,21 @@ stale — a polling client must see fresh state.
 
 Each phase is independently shippable and preserves current behavior.
 
-**Phase 0 — Foundation (this change).** Schema, domain types, cache-key policy,
-capability probe, env docs. No live services. *Done.*
+**Phase 0 — Foundation.** Schema, domain types, cache-key policy, capability
+probe, env docs. No live services. *Done.*
 
-**Phase 1 — Durable identity + discovery cache.** Provision Postgres; implement
-`ProductionStore` (orgs/users/memberships, discovery snapshots). Wire Upstash
-for discovery SWR behind a feature check on `DATABASE_URL`/`UPSTASH_*`. Cookie
-stays `v1`; no UX change.
+**Phase 0.5 — Storage/security primitives (Workstream A).** DB client
+abstraction + config (`shared/db/`), `TokenVault` interface + inert dev stub
+(`shared/token-vault.ts`), pure RBAC matrix/authorization (`shared/rbac.ts`), and
+retention policy/cutoff helpers (`shared/retention.ts`), all unit-tested without
+credentials. The Postgres adapter is a loud-failing skeleton (no driver
+dependency). See [`STORAGE_SECURITY.md`](./STORAGE_SECURITY.md). No live
+services. *Done.*
+
+**Phase 1 — Durable identity + discovery cache.** Provision Postgres; flesh out
+the `PostgresStore` skeleton (orgs/users/memberships, discovery snapshots). Wire
+Upstash for discovery SWR behind a feature check on `DATABASE_URL`/`UPSTASH_*`.
+Cookie stays `v1`; no UX change.
 
 **Phase 2 — Token vault.** Introduce `v2` session-id cookie + secret-manager
 vault; dual-read cookies for backwards compatibility. Tokens leave the browser.
