@@ -233,66 +233,50 @@ async function pullServerOverview(
     });
   };
 
-  let clients: GtmClient[] = [];
-  try {
-    const r = await gtmFetch<{ client?: GtmClient[] }>(token, `${base}/clients`);
-    clients = r.client ?? [];
-  } catch (e) {
-    record("clients", e);
-  }
+  // These six reads are independent, so fetch them concurrently instead of
+  // serially — turns ~6× round-trip latency into ~1× within the serverless
+  // budget. Each still records its own failure (and skips 404s) so a single
+  // failing resource degrades gracefully rather than failing the whole panel.
+  const pull = async <T>(
+    resource: string,
+    path: string,
+    extract: (r: never) => T[],
+  ): Promise<T[]> => {
+    try {
+      const r = await gtmFetch<never>(token, path);
+      return extract(r) ?? [];
+    } catch (e) {
+      record(resource, e);
+      return [];
+    }
+  };
 
-  let transformations: GtmTransformation[] = [];
-  try {
-    const r = await gtmFetch<{ transformation?: GtmTransformation[] }>(
-      token,
-      `${base}/transformations`,
-    );
-    transformations = r.transformation ?? [];
-  } catch (e) {
-    record("transformations", e);
-  }
-
-  let zones: GtmZone[] = [];
-  try {
-    const r = await gtmFetch<{ zone?: GtmZone[] }>(token, `${base}/zones`);
-    zones = r.zone ?? [];
-  } catch (e) {
-    record("zones", e);
-  }
-
-  let templates: GtmTemplate[] = [];
-  try {
-    const r = await gtmFetch<{ template?: GtmTemplate[] }>(
-      token,
-      `${base}/templates`,
-    );
-    templates = r.template ?? [];
-  } catch (e) {
-    record("templates", e);
-  }
-
-  let gtagConfig: GtmGtagConfig[] = [];
-  try {
-    const r = await gtmFetch<{ gtagConfig?: GtmGtagConfig[] }>(
-      token,
-      `${base}/gtag_config`,
-    );
-    gtagConfig = r.gtagConfig ?? [];
-  } catch (e) {
-    record("gtag_config", e);
-  }
-
-  // Destinations live at the container level (linked Google tag destinations).
-  let destinations: GtmDestination[] = [];
-  try {
-    const r = await gtmFetch<{ destination?: GtmDestination[] }>(
-      token,
-      `${containerBase}/destinations`,
-    );
-    destinations = r.destination ?? [];
-  } catch (e) {
-    record("destinations", e);
-  }
+  const [clients, transformations, zones, templates, gtagConfig, destinations] =
+    await Promise.all([
+      pull<GtmClient>("clients", `${base}/clients`, (r) => (r as { client?: GtmClient[] }).client ?? []),
+      pull<GtmTransformation>(
+        "transformations",
+        `${base}/transformations`,
+        (r) => (r as { transformation?: GtmTransformation[] }).transformation ?? [],
+      ),
+      pull<GtmZone>("zones", `${base}/zones`, (r) => (r as { zone?: GtmZone[] }).zone ?? []),
+      pull<GtmTemplate>(
+        "templates",
+        `${base}/templates`,
+        (r) => (r as { template?: GtmTemplate[] }).template ?? [],
+      ),
+      pull<GtmGtagConfig>(
+        "gtag_config",
+        `${base}/gtag_config`,
+        (r) => (r as { gtagConfig?: GtmGtagConfig[] }).gtagConfig ?? [],
+      ),
+      // Destinations live at the container level (linked Google tag destinations).
+      pull<GtmDestination>(
+        "destinations",
+        `${containerBase}/destinations`,
+        (r) => (r as { destination?: GtmDestination[] }).destination ?? [],
+      ),
+    ]);
 
   return {
     isServer: true,
@@ -632,9 +616,21 @@ async function readJsonBody<T = unknown>(req: IncomingMessage): Promise<T> {
     }
     return maybeParsed as T;
   }
+  // Cap the buffered body so a huge (or malicious) upload cannot exhaust the
+  // serverless function's memory. We count bytes as they stream and reject once
+  // the ceiling is crossed, before Buffer.concat materializes the whole payload.
+  const MAX_BODY_BYTES = 12 * 1024 * 1024; // 12 MB
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of req as AsyncIterable<Buffer | string>) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    total += buf.length;
+    if (total > MAX_BODY_BYTES) {
+      throw new Error(
+        `Request body exceeds the ${Math.floor(MAX_BODY_BYTES / (1024 * 1024))}MB limit.`,
+      );
+    }
+    chunks.push(buf);
   }
   if (chunks.length === 0) return {} as T;
   try {

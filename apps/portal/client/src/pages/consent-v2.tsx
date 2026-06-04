@@ -37,7 +37,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { SeverityChip } from "@/components/status-chip";
 import { portalApi } from "@/lib/portal-api";
 import { usePortal } from "@/lib/portal-store";
-import { SAMPLE_RUNTIME_CAPTURE_JSON } from "@/lib/sample-runtime-capture";
+// The synthetic sample capture (~6KB) is only needed when the user clicks
+// "load/download sample", so it is imported dynamically inside those handlers
+// instead of being bundled into the consent-v2 page chunk.
 import type {
   ConsentAuditResponse,
   ConsentAuditResponseFinding,
@@ -126,6 +128,20 @@ export default function ConsentV2Page() {
 
   const [result, setResult] = useState<ConsentAuditResponse | null>(null);
 
+  // Group findings by layer once per result change instead of re-filtering the
+  // full findings array three times on every render (config/runtime/reconcile).
+  const findingsByLayer = useMemo(() => {
+    const groups: Record<ConsentAuditLayer, ConsentAuditResponseFinding[]> = {
+      config: [],
+      runtime: [],
+      reconcile: [],
+    };
+    for (const f of result?.findings ?? []) {
+      (groups[f.layer] ??= []).push(f);
+    }
+    return groups;
+  }, [result]);
+
   // Optional runtime proof import (RUNTIME source). Never fabricated — runtime
   // and reconciliation checks only activate when a parseable capture is loaded.
   const runtimeRef = useRef<HTMLDivElement | null>(null);
@@ -158,12 +174,18 @@ export default function ConsentV2Page() {
       setRuntimeError("Could not read that file.");
     }
   };
-  const loadSampleRuntime = () => {
+  const loadSampleRuntime = async () => {
+    const { SAMPLE_RUNTIME_CAPTURE_JSON } = await import(
+      "@/lib/sample-runtime-capture"
+    );
     applyRuntimeText(SAMPLE_RUNTIME_CAPTURE_JSON);
     runtimeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
-  const downloadSampleRuntime = () => {
+  const downloadSampleRuntime = async () => {
     if (typeof window === "undefined") return;
+    const { SAMPLE_RUNTIME_CAPTURE_JSON } = await import(
+      "@/lib/sample-runtime-capture"
+    );
     const blob = new Blob([SAMPLE_RUNTIME_CAPTURE_JSON], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -247,7 +269,7 @@ export default function ConsentV2Page() {
   const workspaces = workspacesQuery.data ?? [];
 
   const byLayer = (layer: ConsentAuditLayer): ConsentAuditResponseFinding[] =>
-    (result?.findings ?? []).filter((f) => f.layer === layer);
+    findingsByLayer[layer] ?? [];
 
   return (
     <>
