@@ -1,3 +1,9 @@
+## [1.17.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.17.0...v1.17.1) (2026-06-04)
+
+### Bug Fixes
+
+* **production:** support portal TypeScript target in cache and jobs ([1741734](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/17417346f0492f47eac951538cc6bd61855ebbc1))
+
 ## [1.17.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.16.0...v1.17.0) (2026-06-04)
 
 ### Features
