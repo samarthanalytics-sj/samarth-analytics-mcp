@@ -10,7 +10,6 @@ import {
   Globe,
   Server,
   UserCircle2,
-  AlertTriangle,
 } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,6 +17,11 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  StateCard,
+  SkeletonGrid,
+  ErrorState,
+} from "@/components/common";
 import {
   Select,
   SelectContent,
@@ -124,25 +128,13 @@ export default function ContainersPage() {
           description="Live Google Tag Manager containers from your connected Google account."
         />
         <PageBody>
-          <Card>
-            <CardContent className="py-10 px-5 text-center space-y-4">
-              <div className="mx-auto h-11 w-11 rounded-full bg-primary/10 text-primary flex items-center justify-center">
-                <PlugZap className="h-5 w-5" />
-              </div>
-              <h3 className="text-base font-semibold">
-                Connect Google Tag Manager to see your containers
-              </h3>
-              <p className="text-sm text-muted-foreground max-w-md mx-auto leading-relaxed">
-                The portal reads your GTM accounts and containers using the
-                Google Tag Manager API. We need your permission to list them —
-                nothing is ever modified or published in GTM.
-              </p>
-              {oauth.configured === false ? (
-                <p className="text-xs text-amber-600 dark:text-amber-400 max-w-md mx-auto">
-                  {oauth.message ??
-                    "Google OAuth credentials are not configured on this portal. Ask your administrator to set them up."}
-                </p>
-              ) : (
+          <StateCard
+            icon={PlugZap}
+            tone="primary"
+            title="Connect Google Tag Manager to see your containers"
+            description="The portal reads your GTM accounts and containers using the Google Tag Manager API. We need your permission to list them — nothing is ever modified or published in GTM."
+            actions={
+              oauth.configured === false ? undefined : (
                 <Button
                   size="lg"
                   className="min-h-11"
@@ -151,9 +143,16 @@ export default function ContainersPage() {
                 >
                   <a href="/api/oauth/start">Connect Google Tag Manager</a>
                 </Button>
-              )}
-            </CardContent>
-          </Card>
+              )
+            }
+          >
+            {oauth.configured === false && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 max-w-md mx-auto">
+                {oauth.message ??
+                  "Google OAuth credentials are not configured on this portal. Ask your administrator to set them up."}
+              </p>
+            )}
+          </StateCard>
 
           <SamarthRecordsSection />
         </PageBody>
@@ -229,49 +228,23 @@ export default function ContainersPage() {
 
         {/* Accounts error (session/permission) */}
         {accountsError && (
-          <Card className="mb-4 border-destructive/40">
-            <CardContent className="py-4 px-4 text-sm">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-                <div className="min-w-0">
-                  <div className="font-medium text-destructive">
-                    Couldn’t load your GTM accounts
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-0.5 break-words">
-                    {accountsError.message}
-                  </div>
-                  {(accountsError.status === 401 ||
-                    accountsError.status === 403) && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-3 min-h-9"
-                      asChild
-                    >
-                      <a href="/api/oauth/start">Reconnect Google</a>
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <ErrorState
+            title="Couldn’t load your GTM accounts"
+            message={accountsError.message}
+            showReconnect={
+              accountsError.status === 401 || accountsError.status === 403
+            }
+            className="mb-4"
+          />
         )}
 
         {/* Empty: connected but no GTM accounts */}
         {noAccounts && (
-          <Card>
-            <CardContent className="py-10 px-5 text-center space-y-3">
-              <div className="mx-auto h-11 w-11 rounded-full bg-muted text-muted-foreground flex items-center justify-center">
-                <Boxes className="h-5 w-5" />
-              </div>
-              <h3 className="text-base font-semibold">No GTM accounts found</h3>
-              <p className="text-sm text-muted-foreground max-w-md mx-auto leading-relaxed">
-                Your Google account is connected, but it doesn’t have access to
-                any Google Tag Manager accounts. Ask an admin to grant your
-                Google account access, then refresh.
-              </p>
-            </CardContent>
-          </Card>
+          <StateCard
+            icon={Boxes}
+            title="No GTM accounts found"
+            description="Your Google account is connected, but it doesn’t have access to any Google Tag Manager accounts. Ask an admin to grant your Google account access, then refresh."
+          />
         )}
 
         {/* Filters + content (only when we have accounts) */}
@@ -440,12 +413,14 @@ export default function ContainersPage() {
             </Card>
 
             {/* Mobile + tablet cards (1 col mobile, 2 col tablet) */}
+            {isLoading ? (
+              <SkeletonGrid
+                count={4}
+                className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-3"
+              />
+            ) : (
             <div className="lg:hidden grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {isLoading
-                ? Array.from({ length: 4 }).map((_, i) => (
-                    <Skeleton key={i} className="h-36 w-full rounded-lg" />
-                  ))
-                : filtered.map((c) => {
+              {filtered.map((c) => {
                     const acct = accountById.get(c.accountId);
                     return (
                       <Card
@@ -514,13 +489,16 @@ export default function ContainersPage() {
                     );
                   })}
             </div>
+            )}
 
             {!isLoading && filtered.length === 0 && (
-              <Card className="p-8 text-center text-sm text-muted-foreground">
-                {allContainers.length === 0
-                  ? "No containers found in your GTM accounts."
-                  : "No containers match the current filters."}
-              </Card>
+              <StateCard
+                description={
+                  allContainers.length === 0
+                    ? "No containers found in your GTM accounts."
+                    : "No containers match the current filters."
+                }
+              />
             )}
           </>
         )}

@@ -12,14 +12,21 @@ import {
   LayoutGrid,
   Puzzle,
   Globe,
-  Info,
 } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { SelectorBlock, StatCard } from "@/components/gtm-selectors";
+import {
+  StateCard,
+  EmptyRow,
+  NotConnectedState,
+  LoadingBlock,
+  ErrorState,
+  ToolFailureList,
+  SectionHeader,
+} from "@/components/common";
 import { useGtmSelection } from "@/hooks/use-gtm-selection";
 import { portalApi } from "@/lib/portal-api";
 import { usePortal } from "@/lib/portal-store";
@@ -90,35 +97,12 @@ export default function ServerSidePage() {
           description="Read-only view of a server container's clients, transformations, and routing."
         />
         <PageBody>
-          <Card>
-            <CardContent className="py-10 text-center space-y-4">
-              <div className="mx-auto h-10 w-10 rounded-full bg-primary/10 text-primary flex items-center justify-center">
-                <PlugZap className="h-5 w-5" />
-              </div>
-              <h3 className="text-base font-semibold">
-                Connect Google Tag Manager to inspect a server container
-              </h3>
-              <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                Server-side visibility reads the clients, transformations, zones,
-                templates and destinations of a GTM server container. Nothing is
-                modified in GTM.
-              </p>
-              {oauth.configured === false ? (
-                <p className="text-xs text-amber-600 dark:text-amber-400 max-w-md mx-auto">
-                  {oauth.message ??
-                    "Google OAuth credentials are not configured on this portal. Ask your administrator to set them up."}
-                </p>
-              ) : (
-                <Button
-                  size="sm"
-                  onClick={() => portalApi.redirectToGoogleOAuth()}
-                  data-testid="button-sgtm-connect-google"
-                >
-                  Connect Google Tag Manager
-                </Button>
-              )}
-            </CardContent>
-          </Card>
+          <NotConnectedState
+            oauth={oauth}
+            title="Connect Google Tag Manager to inspect a server container"
+            description="Server-side visibility reads the clients, transformations, zones, templates and destinations of a GTM server container. Nothing is modified in GTM."
+            testId="button-sgtm-connect-google"
+          />
         </PageBody>
       </>
     );
@@ -244,36 +228,19 @@ export default function ServerSidePage() {
 
         {/* Error */}
         {overviewError && (
-          <Card className="mb-5 border-destructive/40">
-            <CardContent className="py-4 text-sm text-destructive">
-              <div className="font-medium mb-1">Could not read server container</div>
-              <div className="text-xs">{overviewError.message}</div>
-              {needsReconnect && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-3"
-                  onClick={() => portalApi.redirectToGoogleOAuth()}
-                >
-                  Reconnect Google
-                </Button>
-              )}
-            </CardContent>
-          </Card>
+          <ErrorState
+            title="Could not read server container"
+            message={overviewError.message}
+            showReconnect={needsReconnect}
+            className="mb-5"
+          />
         )}
 
         {isLoading ? (
-          <div className="space-y-3">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-28 w-full" />
-            ))}
-          </div>
+          <LoadingBlock rows={3} rowClassName="h-28 w-full" label="Reading server container…" />
         ) : !overview ? (
           selectedIsServer || !selectedContainer ? (
-            <Card className="p-8 text-center text-sm text-muted-foreground">
-              Choose a server account, container, and workspace, then read the
-              server container.
-            </Card>
+            <StateCard description="Choose a server account, container, and workspace, then read the server container." />
           ) : null
         ) : overview.isServer === false ? (
           <NotServerNotice message={overview.message} />
@@ -329,22 +296,10 @@ function ServerOverview({ overview }: { overview: SgtmOverview }) {
   return (
     <div className="space-y-5">
       {/* Honest gaps banner. */}
-      {failures.length > 0 && (
-        <div className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/40 rounded p-2">
-          <div className="font-medium mb-1 flex items-center gap-1.5">
-            <Info className="h-3.5 w-3.5" />
-            Some server reads failed — this view may be incomplete:
-          </div>
-          <ul className="list-disc ml-4 space-y-0.5">
-            {failures.map((tf, i) => (
-              <li key={`${tf.resource}-${i}`}>
-                <span className="font-mono">{tf.resource}</span>: {tf.message}
-                {typeof tf.status === "number" ? ` (${tf.status})` : ""}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <ToolFailureList
+        title="Some server reads failed — this view may be incomplete:"
+        failures={failures}
+      />
 
       {/* Counts */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -359,7 +314,7 @@ function ServerOverview({ overview }: { overview: SgtmOverview }) {
       {/* Clients with claims */}
       <Section title="Clients" count={clients.length} icon={Boxes}>
         {clients.length === 0 ? (
-          <EmptyRow text="No clients readable on this server container." />
+          <EmptyRow>No clients readable on this server container.</EmptyRow>
         ) : (
           <div className="space-y-2">
             {clients.map((c) => (
@@ -413,7 +368,7 @@ function ServerOverview({ overview }: { overview: SgtmOverview }) {
       {/* Transformations */}
       <Section title="Transformations" count={transformations.length} icon={Shuffle}>
         {transformations.length === 0 ? (
-          <EmptyRow text="No transformations on this server container." />
+          <EmptyRow>No transformations on this server container.</EmptyRow>
         ) : (
           <SimpleTable
             rows={transformations.map((t) => ({
@@ -483,13 +438,7 @@ function Section({
 }) {
   return (
     <div>
-      <div className="flex items-center gap-2 mb-2">
-        <Icon className="h-4 w-4 text-primary" />
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-          {title}
-        </h3>
-        <span className="text-xs text-muted-foreground">({count})</span>
-      </div>
+      <SectionHeader title={title} icon={Icon} count={count} />
       {children}
     </div>
   );
@@ -523,8 +472,3 @@ function SimpleTable({
   );
 }
 
-function EmptyRow({ text }: { text: string }) {
-  return (
-    <Card className="p-4 text-center text-xs text-muted-foreground">{text}</Card>
-  );
-}

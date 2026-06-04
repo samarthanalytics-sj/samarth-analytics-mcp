@@ -11,7 +11,6 @@ import {
   CheckCircle2,
   RefreshCw,
   Play,
-  PlugZap,
   UserCircle2,
   Upload,
   Server,
@@ -32,12 +31,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { HealthBadge, SeverityChip } from "@/components/status-chip";
 import { SelectorBlock, StatCard } from "@/components/gtm-selectors";
+import {
+  StateCard,
+  NotConnectedState,
+  LoadingBlock,
+  ErrorState,
+  ToolFailureList,
+  SectionHeader,
+  StatusBadge,
+  ConsentStatePills,
+} from "@/components/common";
 import { useGtmSelection } from "@/hooks/use-gtm-selection";
 import { useRuntimeCapture } from "@/hooks/use-runtime-capture";
 import { portalApi } from "@/lib/portal-api";
@@ -313,32 +321,12 @@ export default function AuditPage() {
           description="Read-only health checks across tags, triggers, and variables."
         />
         <PageBody>
-          <Card>
-            <CardContent className="py-10 text-center space-y-4">
-              <div className="mx-auto h-10 w-10 rounded-full bg-primary/10 text-primary flex items-center justify-center">
-                <PlugZap className="h-5 w-5" />
-              </div>
-              <h3 className="text-base font-semibold">Connect Google Tag Manager to run a live audit</h3>
-              <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                The audit uses the Google Tag Manager API to read tags, triggers, and variables
-                from the workspace you choose. Nothing is modified in GTM.
-              </p>
-              {oauth.configured === false ? (
-                <p className="text-xs text-amber-600 dark:text-amber-400 max-w-md mx-auto">
-                  {oauth.message ??
-                    "Google OAuth credentials are not configured on this portal. Ask your administrator to set them up."}
-                </p>
-              ) : (
-                <Button
-                  size="sm"
-                  onClick={() => portalApi.redirectToGoogleOAuth()}
-                  data-testid="button-audit-connect-google"
-                >
-                  Connect Google Tag Manager
-                </Button>
-              )}
-            </CardContent>
-          </Card>
+          <NotConnectedState
+            oauth={oauth}
+            title="Connect Google Tag Manager to run a live audit"
+            description="The audit uses the Google Tag Manager API to read tags, triggers, and variables from the workspace you choose. Nothing is modified in GTM."
+            testId="button-audit-connect-google"
+          />
         </PageBody>
       </>
     );
@@ -541,19 +529,11 @@ export default function AuditPage() {
                 {audit.summary}
               </div>
             )}
-            {audit?.toolFailures && audit.toolFailures.length > 0 && (
-              <div className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/40 rounded p-2">
-                <div className="font-medium mb-1">
-                  Some reads failed — the audit may be incomplete:
-                </div>
-                <ul className="list-disc ml-4 space-y-0.5">
-                  {audit.toolFailures.map((tf, i) => (
-                    <li key={`${tf.resource}-${i}`}>
-                      <span className="font-mono">{tf.resource}</span>: {tf.message}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            {audit?.toolFailures && (
+              <ToolFailureList
+                title="Some reads failed — the audit may be incomplete:"
+                failures={audit.toolFailures}
+              />
             )}
             {audit?.capabilityFlags && (
               <CapabilityFlagsBar flags={audit.capabilityFlags} />
@@ -619,22 +599,11 @@ export default function AuditPage() {
 
         {/* Error */}
         {auditError && (
-          <Card className="mt-5 border-destructive/40">
-            <CardContent className="py-4 text-sm text-destructive">
-              <div className="font-medium mb-1">Audit failed</div>
-              <div className="text-xs">{auditError.message}</div>
-              {needsReconnect && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-3"
-                  onClick={() => portalApi.redirectToGoogleOAuth()}
-                >
-                  Reconnect Google
-                </Button>
-              )}
-            </CardContent>
-          </Card>
+          <ErrorState
+            title="Audit failed"
+            message={auditError.message}
+            showReconnect={needsReconnect}
+          />
         )}
 
         {/* Heat map + maturity */}
@@ -710,32 +679,30 @@ export default function AuditPage() {
         )}
 
         {/* Findings */}
-        <div className="mt-7 flex items-end justify-between mb-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            Findings
-          </h3>
-          {audit && (
-            <span className="text-xs text-muted-foreground">
-              {audit.findings.length} issue{audit.findings.length === 1 ? "" : "s"}
-            </span>
-          )}
+        <div className="mt-7 mb-3">
+          <SectionHeader
+            title="Findings"
+            right={
+              audit ? (
+                <span className="text-xs text-muted-foreground">
+                  {audit.findings.length} issue
+                  {audit.findings.length === 1 ? "" : "s"}
+                </span>
+              ) : undefined
+            }
+          />
         </div>
 
         {isLoading ? (
-          <div className="space-y-3">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-24 w-full" />
-            ))}
-          </div>
+          <LoadingBlock rows={3} label="Running audit…" />
         ) : !audit ? (
-          <Card className="p-8 text-center text-sm text-muted-foreground">
-            Choose an account, container, and workspace, then run the audit.
-          </Card>
+          <StateCard description="Choose an account, container, and workspace, then run the audit." />
         ) : audit.findings.length === 0 ? (
-          <Card className="p-8 text-center text-sm">
-            <CheckCircle2 className="h-6 w-6 mx-auto text-emerald-500 mb-2" />
-            Clean audit. No issues detected.
-          </Card>
+          <StateCard
+            icon={CheckCircle2}
+            tone="success"
+            title="Clean audit. No issues detected."
+          />
         ) : (
           <div className="space-y-3">
             {audit.findings.map((f) => (
@@ -792,12 +759,9 @@ function CrossSourceInputs(props: {
                 (RUNTIME source)
               </span>
               {props.runtimeReady && (
-                <Badge
-                  variant="outline"
-                  className="text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-                >
+                <StatusBadge tone="success" pill={false}>
                   Loaded
-                </Badge>
+                </StatusBadge>
               )}
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -964,14 +928,7 @@ function CrossSourceInputs(props: {
 }
 
 function SectionTitle({ title, hint }: { title: string; hint?: string }) {
-  return (
-    <div className="mb-2">
-      <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-        {title}
-      </h3>
-      {hint && <div className="text-[11px] text-muted-foreground mt-0.5">{hint}</div>}
-    </div>
-  );
+  return <SectionHeader title={title} hint={hint} />;
 }
 
 function ConsentProofCard({
@@ -995,11 +952,6 @@ function ConsentProofCard({
         ? "border-sky-500/40 text-sky-700 dark:text-sky-300"
         : "border-amber-500/40 text-amber-700 dark:text-amber-300";
 
-  const states = [
-    { key: "denied" as const, label: "Denied" },
-    { key: "granted" as const, label: "Granted" },
-    { key: "partial" as const, label: "Partial" },
-  ];
   const sc = consentAudit?.stateCoverage;
   const hasRuntime = coverage !== "config_only";
 
@@ -1027,29 +979,7 @@ function ConsentProofCard({
           <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
             Consent states proven by capture
           </div>
-          <div className="flex flex-wrap gap-1.5">
-            {states.map((st) => {
-              const on = Boolean(sc?.[st.key]);
-              return (
-                <span
-                  key={st.key}
-                  data-testid={`consent-state-${st.key}`}
-                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] ${
-                    on
-                      ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-300"
-                      : "border-border/60 text-muted-foreground"
-                  }`}
-                >
-                  {on ? (
-                    <CheckCircle2 className="h-3 w-3" />
-                  ) : (
-                    <X className="h-3 w-3" />
-                  )}
-                  {st.label}
-                </span>
-              );
-            })}
-          </div>
+          <ConsentStatePills coverage={sc} />
         </div>
 
         {consentAudit?.runtimeStates && consentAudit.runtimeStates.length > 0 && (
@@ -1504,12 +1434,9 @@ function ImproveCoveragePanel({
                 <c.icon className="h-3.5 w-3.5 text-primary" />
                 {c.title}
                 {c.on && (
-                  <Badge
-                    variant="outline"
-                    className="text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-                  >
+                  <StatusBadge tone="success" pill={false}>
                     Connected
-                  </Badge>
+                  </StatusBadge>
                 )}
               </div>
               <p className="text-[11px] text-muted-foreground flex-1">{c.body}</p>
