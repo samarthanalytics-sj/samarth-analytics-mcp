@@ -11,6 +11,10 @@ import type {
   RuntimeInput as ConsentRuntimeInput,
   RuntimePage as ConsentRuntimePage,
 } from "../../shared/consent-audit";
+// Pure, dependency-free accuracy invariants. Safe to import at the top level on
+// Vercel (no node:*, no engine, no googleapis) — same contract as
+// shared/cache-keys.ts. Centralizes the evidence-scoped rules so they can't drift.
+import { normalizeFindingAccuracy } from "../../shared/audit-accuracy";
 
 /**
  * /api/gtm/audit
@@ -996,10 +1000,10 @@ function ruleGA4AllPages(ctx: Ctx, out: AuditFinding[]) {
         id: fid(`ga4-event-allpages:${tag.tagId}`),
         category: "ga4",
         severity: "medium",
-        finding: "GA4 Event tag fires on an All Pages / pageview trigger",
+        finding: "GA4 Event tag is configured on an All Pages / pageview trigger",
         affected: [name],
         whyItMatters:
-          "GA4 Configuration tags already send page_view on All Pages. A GA4 event tag bound to All Pages duplicates page_view or sends a custom event on every navigation.",
+          "GA4 Configuration tags already handle page_view on All Pages. A GA4 event tag bound to All Pages is configured to run on every navigation, which can duplicate page_view or emit a custom event site-wide. Whether it actually double-counts depends on runtime behaviour, which CONFIG alone cannot confirm.",
         suggestedFix:
           "Confirm this is intentional. Otherwise switch to a specific Custom Event trigger.",
         needsManualReview: true,
@@ -2061,11 +2065,23 @@ function pushFinding(
     effort?: AuditEffort;
   },
 ): void {
+  // Enforce the evidence-scoped accuracy invariants (CONFIG-only confidence cap,
+  // severity downgrade on incomplete evidence, runtime-wording guard) in one
+  // place so every rule is held to them. Pure + behaviour-compatible: it only
+  // ever tightens severity/confidence, never the reverse. See
+  // shared/audit-accuracy.ts and docs/audit-accuracy.md.
+  const acc = normalizeFindingAccuracy({
+    finding: f.finding,
+    severity: f.severity,
+    sources: f.sources ?? ["CONFIG"],
+    confidence: f.confidence ?? defaultConfidence(f.sources, f.needsManualReview),
+    needsManualReview: f.needsManualReview ?? false,
+  });
   // Populate legacy aliases so older clients keep rendering correctly.
   out.push({
     id: f.id,
     category: f.category,
-    severity: f.severity,
+    severity: acc.severity,
     title: f.finding,
     description: f.whyItMatters,
     affects: f.affected,
@@ -2074,9 +2090,9 @@ function pushFinding(
     affected: f.affected,
     whyItMatters: f.whyItMatters,
     suggestedFix: f.suggestedFix,
-    needsManualReview: f.needsManualReview ?? false,
-    sources: f.sources ?? ["CONFIG"],
-    confidence: f.confidence ?? defaultConfidence(f.sources, f.needsManualReview),
+    needsManualReview: acc.needsManualReview,
+    sources: acc.sources,
+    confidence: acc.confidence,
     entity: f.entity,
     parameter: f.parameter,
     businessImpact: f.businessImpact,
