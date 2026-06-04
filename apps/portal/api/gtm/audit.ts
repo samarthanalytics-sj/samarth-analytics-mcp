@@ -14,7 +14,10 @@ import type {
 // Pure, dependency-free accuracy invariants. Safe to import at the top level on
 // Vercel (no node:*, no engine, no googleapis) — same contract as
 // shared/cache-keys.ts. Centralizes the evidence-scoped rules so they can't drift.
-import { normalizeFindingAccuracy } from "../../shared/audit-accuracy";
+import {
+  normalizeFindingAccuracy,
+  type EvidenceItem as AccuracyEvidenceItem,
+} from "../../shared/audit-accuracy";
 
 /**
  * /api/gtm/audit
@@ -297,12 +300,22 @@ interface AuditCapabilityFlags {
   DATA_API: boolean;
 }
 
+interface EvidenceItem {
+  source: AuditSourceFlag;
+  label: string;
+  value?: string;
+  entityPath?: string;
+  parameter?: string;
+  confidence?: AuditConfidence;
+}
+
 interface AuditCoverageItem {
   id: string;
   capability: string;
   requires: AuditSourceFlag[];
   status: AuditCoverage;
   toolNeeded?: string;
+  whyNotCovered?: string;
 }
 
 interface AuditFinding {
@@ -324,6 +337,9 @@ interface AuditFinding {
   parameter?: string;
   businessImpact?: string;
   effort?: AuditEffort;
+  evidence?: EvidenceItem[];
+  accuracyNotes?: string[];
+  confidenceDowngraded?: boolean;
 }
 
 interface AuditToolFailure {
@@ -2063,19 +2079,25 @@ function pushFinding(
     parameter?: string;
     businessImpact?: string;
     effort?: AuditEffort;
+    /** Optional explicit evidence rows; otherwise derived from source/entity/parameter. */
+    evidence?: EvidenceItem[];
   },
 ): void {
   // Enforce the evidence-scoped accuracy invariants (CONFIG-only confidence cap,
   // severity downgrade on incomplete evidence, runtime-wording guard) in one
   // place so every rule is held to them. Pure + behaviour-compatible: it only
-  // ever tightens severity/confidence, never the reverse. See
-  // shared/audit-accuracy.ts and docs/audit-accuracy.md.
+  // ever tightens severity/confidence, never the reverse. It also fills the
+  // evidence floor and records any downgrade as accuracyNotes / confidenceDowngraded.
+  // See shared/audit-accuracy.ts and docs/AUDIT_ACCURACY.md.
   const acc = normalizeFindingAccuracy({
     finding: f.finding,
     severity: f.severity,
     sources: f.sources ?? ["CONFIG"],
     confidence: f.confidence ?? defaultConfidence(f.sources, f.needsManualReview),
     needsManualReview: f.needsManualReview ?? false,
+    evidence: f.evidence as AccuracyEvidenceItem[] | undefined,
+    entity: f.entity,
+    parameter: f.parameter,
   });
   // Populate legacy aliases so older clients keep rendering correctly.
   out.push({
@@ -2097,6 +2119,9 @@ function pushFinding(
     parameter: f.parameter,
     businessImpact: f.businessImpact,
     effort: f.effort,
+    evidence: acc.evidence as EvidenceItem[] | undefined,
+    accuracyNotes: acc.accuracyNotes,
+    confidenceDowngraded: acc.confidenceDowngraded,
   });
 }
 
@@ -2460,6 +2485,7 @@ function buildCoverageMatrix(
     capability: string,
     requires: AuditSourceFlag[],
     toolNeeded?: string,
+    whyNotCovered?: string,
   ): AuditCoverageItem => {
     const hasAll = requires.every((r) => flags[r]);
     const hasSome = requires.some((r) => flags[r]);
@@ -2472,6 +2498,9 @@ function buildCoverageMatrix(
       requires,
       status,
       toolNeeded: status === "covered" ? undefined : toolNeeded,
+      // Explain WHY only when there is a gap. Positive, action-first wording:
+      // what evidence is missing and what it would prove once supplied.
+      whyNotCovered: status === "covered" ? undefined : whyNotCovered,
     };
   };
   return [
@@ -2480,36 +2509,42 @@ function buildCoverageMatrix(
       "GTM config inventory (tags, triggers, variables, built-ins, versions)",
       ["CONFIG"],
       "GTM API access (currently CONFIG-only)",
+      "CONFIG reads the container's setup (intent). It does not prove what happens on a live page — add a runtime capture for that.",
     ),
     row(
       "tag-firing-order",
       "Tag firing & order at runtime",
       ["RUNTIME"],
       "Runtime browser harness (e.g. Puppeteer/Playwright capture of dataLayer + network)",
+      "No runtime capture was supplied, so actual tag firing and order cannot be observed. Upload a runtime-worker capture to prove which tags fire and in what sequence.",
     ),
     row(
       "datalayer-pushes",
       "Live dataLayer pushes & event sequence",
       ["RUNTIME"],
       "Runtime browser harness",
+      "Live dataLayer pushes are only visible in a real browser session. Upload a runtime capture to confirm the event sequence pages actually emit.",
     ),
     row(
       "pixel-capi-dedup",
       "Meta Pixel ↔ CAPI deduplication (eventID)",
       ["RUNTIME", "SGTM"],
       "Runtime capture + sGTM logs + Meta Events Manager (final proof is manual)",
+      "Dedup proof needs a runtime capture, the server container, AND Meta Events Manager — the final eventID match is confirmed in Meta's console, so this stays a guided manual check.",
     ),
     row(
       "consent-runtime",
       "Consent state matrix at runtime (granted/denied paths)",
       ["RUNTIME"],
       "Runtime harness toggling consent states",
+      "Consent behaviour is only proven by loading pages under each consent state. Upload a runtime capture exercising granted/denied paths to verify the gcs/gcd signals.",
     ),
     row(
       "ecommerce-runtime",
       "Ecommerce events shape vs spec (purchase, items[], value)",
       ["RUNTIME"],
       "Runtime capture of purchase/view_item flows",
+      "Ecommerce payload shape (items[], value, currency) can only be checked against real events. Capture a purchase/view_item flow at runtime to validate it against the GA4 spec.",
     ),
     row(
       "sgtm-clients",
@@ -2524,30 +2559,39 @@ function buildCoverageMatrix(
         : isServer
           ? "Select this server container under 'Server-side reconciliation' in the audit to fold its clients/transformations in (or open the Server-side panel)"
           : "Select a server container under 'Server-side reconciliation', or open the Server-side panel; this web container is not a server container",
+      isServer
+        ? "The server container's clients, transformations and routing were not read this run. Select it under 'Server-side reconciliation' to fold them in."
+        : "This is a web container, so it has no server-side clients/transformations. Select a server (sGTM) container to cover server-side routing.",
     ),
     row(
       isServer ? "sgtm-config-server-only" : "sgtm-server-config",
       "Server container CONFIG-visible checks",
       ["CONFIG"],
       isServer ? undefined : "This container is not a server container",
+      isServer
+        ? undefined
+        : "This is a web container; server-side CONFIG checks only apply to an sGTM (server) container.",
     ),
     row(
       "ga4-admin-dimensions",
       "GA4 custom dimensions & metrics",
       ["GA4_ADMIN"],
       "GA4 Admin API access",
+      "No GA4 property was connected with Admin scope, so registered custom dimensions/metrics could not be read. Select a GA4 property (read-only Admin API) to reconcile event parameters against it.",
     ),
     row(
       "ga4-admin-filters",
       "GA4 data filters, referral exclusions, retention, data streams",
       ["GA4_ADMIN"],
       "GA4 Admin API access",
+      "GA4 property settings (filters, referral exclusions, retention, streams) need the read-only Admin API. Connect a GA4 property to include them.",
     ),
     row(
       "ga4-data-api-events",
       "GA4 reported event volumes (configured events with zero activity)",
       ["DATA_API"],
       "Enable the GA4 Data API check (requires a selected GA4 property)",
+      "Reported event volumes come from the GA4 Data API, which was not enabled this run. Select a GA4 property and enable the Data API check to surface configured events that reported zero activity.",
     ),
     // Cross-source reconciliation. When GA4_ADMIN is connected we genuinely
     // reconcile GTM CONFIG against the GA4 property (measurement IDs, custom
@@ -2591,6 +2635,10 @@ function crossSourceReconRow(flags: AuditCapabilityFlags): AuditCoverageItem {
     toolNeeded:
       missing.length > 0
         ? `Add ${missing.join(", ")} for fuller intent-vs-reality coverage`
+        : undefined,
+    whyNotCovered:
+      missing.length > 0
+        ? `Reconciliation is only as strong as its sources. ${connected.length === 0 ? "Only CONFIG is connected, so nothing is cross-checked yet." : "Some sources are connected, but gaps remain."} Add ${missing.join(", ")} so intent (CONFIG) can be reconciled against observed reality.`
         : undefined,
   };
 }

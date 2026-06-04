@@ -45,6 +45,8 @@ import {
   SectionHeader,
   StatusBadge,
   ConsentStatePills,
+  EvidenceList,
+  AccuracyNotes,
 } from "@/components/common";
 import { useGtmSelection } from "@/hooks/use-gtm-selection";
 import { useRuntimeCapture } from "@/hooks/use-runtime-capture";
@@ -1524,6 +1526,14 @@ function CoverageMatrix({
               </td>
               <td className="px-2.5 py-1.5 text-muted-foreground">
                 <div>{it.toolNeeded ?? "—"}</div>
+                {it.whyNotCovered && it.status !== "covered" && (
+                  <div className="mt-1 text-[11px] leading-snug text-muted-foreground/90">
+                    <span className="font-medium text-foreground/80">
+                      Why:{" "}
+                    </span>
+                    {it.whyNotCovered}
+                  </div>
+                )}
                 <CoverageActionButton it={it} actions={actions} />
               </td>
             </tr>
@@ -1565,8 +1575,21 @@ function FindingCard({ f }: { f: AuditFinding }) {
                 </Badge>
               ))}
               {f.confidence && (
-                <Badge variant="outline" className="text-[10.5px]">
+                <Badge
+                  variant="outline"
+                  className={`text-[10.5px] ${
+                    f.confidenceDowngraded
+                      ? "border-amber-400 text-amber-700 dark:text-amber-300"
+                      : ""
+                  }`}
+                  title={
+                    f.confidenceDowngraded
+                      ? "Confidence was lowered by the accuracy guardrails — see note below."
+                      : undefined
+                  }
+                >
                   Confidence: {f.confidence}
+                  {f.confidenceDowngraded ? " ↓" : ""}
                 </Badge>
               )}
               {f.effort && (
@@ -1628,6 +1651,8 @@ function FindingCard({ f }: { f: AuditFinding }) {
                 </div>
               </div>
             )}
+            <EvidenceList items={f.evidence} />
+            <AccuracyNotes notes={f.accuracyNotes} />
             {fix && (
               <div className="mt-2.5 flex items-start gap-1.5 text-xs">
                 <Search className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />

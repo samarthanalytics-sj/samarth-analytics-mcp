@@ -55,6 +55,55 @@ The normalizer only ever **tightens** (downgrades). It never invents a higher
 severity or stronger confidence than a rule asked for, and it never edits a
 finding's id, category, or text — so response shapes stay backward-compatible.
 
+## Structured evidence (`evidence[]`)
+
+Every finding carries a structured `evidence: EvidenceItem[]` array, produced by
+`normalizeFindingAccuracy`. Each row restates the finding's *provenance* as a
+short, source-scoped fact rather than a prose claim:
+
+```ts
+interface EvidenceItem {
+  source: AuditSourceFlag;   // CONFIG | RUNTIME | SGTM | GA4_ADMIN | DATA_API
+  label: string;             // e.g. "Tag", "Parameter", "Source"
+  value?: string;            // short value (truncated to ≤160 chars)
+  entityPath?: string;       // e.g. tag/trigger path or captured page path
+  parameter?: string;        // the GTM parameter key in question
+  confidence?: AuditConfidence;
+}
+```
+
+Guarantees:
+
+- **Always present.** If a rule supplies explicit evidence it is preserved;
+  otherwise the normalizer derives an evidence floor from the finding's
+  `sources` / `entity` / `parameter` so `evidence[]` is never empty.
+- **Short and safe.** Values are truncated (`shortValue`, ≤160 chars). We never
+  dump raw container JSON, full hit bodies, or PII into evidence.
+- **Source-scoped.** Each row names the source it came from, so a reader can see
+  *why* a finding is `CONFIG`-only vs proof-backed at a glance. In a CONFIG-only
+  run, every evidence row is itself `CONFIG`-sourced.
+
+The full-audit route (`audit.ts`) and the consent route (`consent-audit.ts`) both
+emit `evidence[]`; the consent route also keeps its legacy `evidence?: string[]`
+snippets for backward compatibility under a separate `evidenceItems` field.
+
+## Surfacing accuracy adjustments in the UI
+
+When the normalizer tightens a finding it records *why*, so the portal can show
+the reader that a number was deliberately conservative (never inflated):
+
+- `confidenceDowngraded: boolean` — set only when the caller-supplied confidence
+  was actively lowered (e.g. a CONFIG-only finding that asked for `high`). The
+  audit and Consent Mode v2 pages render the confidence badge with a `↓` marker,
+  amber styling, and a tooltip explaining the cap.
+- `accuracyNotes: string[]` — plain-language notes (e.g. *"Config-only finding:
+  capped at medium confidence"*, *"Wording implies runtime behaviour but no
+  capture backs it — flagged for manual review"*). Rendered by the shared
+  `AccuracyNotes` component as an amber-bordered note box beneath the finding.
+
+These are presentational only — they describe tightening the normalizer already
+applied. They never change the stored severity/confidence a second time.
+
 ## Coverage states
 
 The coverage matrix reports, per capability, whether the run actually covered it:
@@ -67,6 +116,12 @@ A missing API/tool produces a **coverage gap**, never an inferred finding. When
 `CONFIG` is the only connected source the executive summary carries an explicit
 single-source warning: *"A clean result from a single source is not a clean
 audit."*
+
+Each non-`covered` coverage row carries a `whyNotCovered` string written in
+positive-action language: *what evidence would close the gap and why it matters*
+(e.g. *"Import a runtime capture to observe live tag firing order — config alone
+shows intent, not sequence."*). The portal renders this beneath any `partial` /
+`not_covered` row so the gap reads as an actionable next step, not a dead end.
 
 ## What stays manual
 
@@ -97,6 +152,30 @@ claim. The event may be rare, seasonal, or recently deployed. The finding carrie
 - **Manual proof needs.** The most consequential marketing checks (Pixel/CAPI
   dedup) require third-party consoles. We mark these manual rather than implying
   we verified them.
+
+## Golden fixtures & snapshot tests
+
+The accuracy invariants are locked end-to-end by a golden suite
+(`apps/portal/shared/__tests__/audit-snapshot.node.test.ts`, run via
+`npm run test:snapshot`, also chained into `npm test`).
+
+- **Synthetic fixtures only.** The fixtures in
+  `apps/portal/shared/__tests__/fixtures/anonymized-containers.ts` are
+  hand-authored to mirror the *shapes* of real GTM exports (tag types, parameter
+  keys, trigger ids, consent settings) **without reproducing any real account's
+  contents**. Public ids use the reserved `GTM-XXXXXXX` / `G-XXXXXXX` placeholder
+  forms and all names are generic. **No real client data is ever committed.**
+- **Real cores, not mocks.** Fixtures are fed through the actual shared engine
+  (`runConsentAudit`) and the actual normalizer (`normalizeFindingAccuracy`) —
+  the same pure cores the production routes call — so the test exercises real
+  behaviour, not a stubbed approximation.
+- **Invariant assertions, not brittle blobs.** Rather than committing a raw
+  response snapshot (which churns on timestamps and ordering), the suite asserts
+  a normalized projection and the load-bearing invariants: findings are
+  source-scoped, a CONFIG-only run caps confidence at `medium` and makes no
+  observed-runtime headline claims (unless flagged for manual review), structured
+  `evidence[]` is always present and short/safe, high confidence requires a
+  `RUNTIME` source, and normalization is idempotent (stable output).
 
 ## Public-SaaS quality bar
 

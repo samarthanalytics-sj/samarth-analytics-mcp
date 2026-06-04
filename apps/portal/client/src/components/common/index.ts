@@ -5,3 +5,4 @@ export { ErrorState, ToolFailureList } from "./error-state";
 export { SectionHeader } from "./section-header";
 export { StatusBadge, ConsentStatePills } from "./status-badge";
 export type { StatusTone } from "./status-badge";
+export { EvidenceList, AccuracyNotes } from "./evidence-list";
