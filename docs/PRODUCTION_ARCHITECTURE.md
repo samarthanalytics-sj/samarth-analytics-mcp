@@ -13,6 +13,17 @@ user-facing behavior**.
 > (`apps/portal/shared/cache-keys.ts`), and a read-only capability probe
 > (`apps/portal/api/system/capabilities.ts`). Nothing here wires a live external
 > service. For the system *as it is today*, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+>
+> **Current state: foundation only.** No live Postgres, token vault, Redis/Upstash,
+> job queue, deployed runtime worker, or metrics exporter is wired — the code seams
+> exist and are unit-tested without credentials, but nothing is connected until a
+> provider is selected. When you are ready to provision real services, follow the
+> phased, reversible procedure in
+> [`PRODUCTION_CUTOVER_RUNBOOK.md`](./PRODUCTION_CUTOVER_RUNBOOK.md) (provider-neutral
+> steps + Supabase/Upstash/Render/Fly/Sentry/Grafana/Datadog examples, per-phase env
+> contracts, validation, rollback, and security checks). A machine-readable
+> companion lives at
+> [`infra/production-cutover-checklist.json`](../infra/production-cutover-checklist.json).
 
 ## Guardrails this design preserves
 
@@ -385,7 +396,10 @@ stale — a polling client must see fresh state.
 
 ## 9. Scaling roadmap
 
-Each phase is independently shippable and preserves current behavior.
+Each phase is independently shippable and preserves current behavior. Phases 1–6
+below are the **live-cutover** phases; their operational procedure (provisioning
+steps, env contracts, validation, rollback, security checks) is in
+[`PRODUCTION_CUTOVER_RUNBOOK.md`](./PRODUCTION_CUTOVER_RUNBOOK.md).
 
 **Phase 0 — Foundation.** Schema, domain types, cache-key policy, capability
 probe, env docs. No live services. *Done.*
