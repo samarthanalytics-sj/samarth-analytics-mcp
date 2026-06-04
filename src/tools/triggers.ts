@@ -5,8 +5,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
+import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 
 const wsBase = z.object({
   accountId: z.string(),
@@ -45,11 +46,9 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
           (data) => data.trigger,
           { pageToken, maxPages }
         );
-        return {
-          content: [{ type: 'text', text: JSON.stringify(buildListResult('triggers', result), null, 2) }],
-        };
+        return jsonResult(buildListResult('triggers', result));
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `triggers_list failed: ${formatGoogleError(err)}` }] };
+        return errorResult('triggers_list', err);
       }
     }
   );
@@ -66,9 +65,9 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         const res = await client.accounts.containers.workspaces.triggers.get({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/triggers/${triggerId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `triggers_get failed: ${formatGoogleError(err)}` }] };
+        return errorResult('triggers_get', err);
       }
     }
   );
@@ -93,16 +92,16 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would create trigger "${name}" (type: ${type})` }] };
+          return textResult(`[DRY RUN] Would create trigger "${name}" (type: ${type})`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.triggers.create({
           parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
           requestBody: { name, type, filter, customEventFilter, eventName, notes, parentFolderId },
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `triggers_create failed: ${formatGoogleError(err)}` }] };
+        return errorResult('triggers_create', err);
       }
     }
   );
@@ -128,7 +127,7 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would update trigger ${triggerId}` }] };
+          return textResult(`[DRY RUN] Would update trigger ${triggerId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.triggers.update({
@@ -136,9 +135,9 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
           ...(fingerprint ? { fingerprint } : {}),
           requestBody: updates,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `triggers_update failed: ${formatGoogleError(err)}` }] };
+        return errorResult('triggers_update', err);
       }
     }
   );
@@ -157,15 +156,15 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('delete', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would delete trigger ${triggerId}` }] };
+          return textResult(`[DRY RUN] Would delete trigger ${triggerId}`);
         }
         const client = getClient();
         await client.accounts.containers.workspaces.triggers.delete({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/triggers/${triggerId}`,
         });
-        return { content: [{ type: 'text', text: `Trigger ${triggerId} deleted successfully.` }] };
+        return textResult(`Trigger ${triggerId} deleted successfully.`);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `triggers_delete failed: ${formatGoogleError(err)}` }] };
+        return errorResult('triggers_delete', err);
       }
     }
   );

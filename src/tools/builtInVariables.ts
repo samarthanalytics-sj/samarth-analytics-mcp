@@ -6,7 +6,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 
 const wsBase = z.object({
   accountId: z.string(),
@@ -50,19 +51,9 @@ export function registerBuiltInVariableTools(server: McpServer, getClient: () =>
           parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
         });
         const builtInVariables = res.data.builtInVariable ?? [];
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ builtInVariables, count: builtInVariables.length }, null, 2),
-            },
-          ],
-        };
+        return jsonResult({ builtInVariables, count: builtInVariables.length });
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `built_in_variables_list failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('built_in_variables_list', err);
       }
     }
   );
@@ -87,27 +78,16 @@ export function registerBuiltInVariableTools(server: McpServer, getClient: () =>
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return {
-            content: [
-              { type: 'text', text: `[DRY RUN] Would enable built-in variables: ${types.join(', ')}` },
-            ],
-          };
+          return textResult(`[DRY RUN] Would enable built-in variables: ${types.join(', ')}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.built_in_variables.create({
           parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
           type: types,
         });
-        return {
-          content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }],
-        };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [
-            { type: 'text', text: `built_in_variables_enable failed: ${formatGoogleError(err)}` },
-          ],
-        };
+        return errorResult('built_in_variables_enable', err);
       }
     }
   );
@@ -128,27 +108,16 @@ export function registerBuiltInVariableTools(server: McpServer, getClient: () =>
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('delete', confirm, config);
         if (dryRun) {
-          return {
-            content: [
-              { type: 'text', text: `[DRY RUN] Would disable built-in variables: ${types.join(', ')}` },
-            ],
-          };
+          return textResult(`[DRY RUN] Would disable built-in variables: ${types.join(', ')}`);
         }
         const client = getClient();
         await client.accounts.containers.workspaces.built_in_variables.delete({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
           type: types,
         });
-        return {
-          content: [{ type: 'text', text: `Built-in variables disabled: ${types.join(', ')}` }],
-        };
+        return textResult(`Built-in variables disabled: ${types.join(', ')}`);
       } catch (err) {
-        return {
-          isError: true,
-          content: [
-            { type: 'text', text: `built_in_variables_disable failed: ${formatGoogleError(err)}` },
-          ],
-        };
+        return errorResult('built_in_variables_disable', err);
       }
     }
   );
@@ -169,23 +138,16 @@ export function registerBuiltInVariableTools(server: McpServer, getClient: () =>
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return {
-            content: [{ type: 'text', text: `[DRY RUN] Would revert built-in variable: ${type}` }],
-          };
+          return textResult(`[DRY RUN] Would revert built-in variable: ${type}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.built_in_variables.revert({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
           type,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [
-            { type: 'text', text: `built_in_variables_revert failed: ${formatGoogleError(err)}` },
-          ],
-        };
+        return errorResult('built_in_variables_revert', err);
       }
     }
   );

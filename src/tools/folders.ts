@@ -5,8 +5,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
+import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 
 const wsBase = z.object({
   accountId: z.string(),
@@ -30,11 +31,9 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
           (data) => data.folder,
           { pageToken, maxPages }
         );
-        return {
-          content: [{ type: 'text', text: JSON.stringify(buildListResult('folders', result), null, 2) }],
-        };
+        return jsonResult(buildListResult('folders', result));
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `folders_list failed: ${formatGoogleError(err)}` }] };
+        return errorResult('folders_list', err);
       }
     }
   );
@@ -51,9 +50,9 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
         const res = await client.accounts.containers.workspaces.folders.get({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/folders/${folderId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `folders_get failed: ${formatGoogleError(err)}` }] };
+        return errorResult('folders_get', err);
       }
     }
   );
@@ -70,9 +69,9 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
         const res = await client.accounts.containers.workspaces.folders.entities({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/folders/${folderId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `folders_entities failed: ${formatGoogleError(err)}` }] };
+        return errorResult('folders_entities', err);
       }
     }
   );
@@ -92,16 +91,16 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would create folder "${name}"` }] };
+          return textResult(`[DRY RUN] Would create folder "${name}"`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.folders.create({
           parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
           requestBody: { name, notes },
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `folders_create failed: ${formatGoogleError(err)}` }] };
+        return errorResult('folders_create', err);
       }
     }
   );
@@ -123,7 +122,7 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would update folder ${folderId}` }] };
+          return textResult(`[DRY RUN] Would update folder ${folderId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.folders.update({
@@ -131,9 +130,9 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
           ...(fingerprint ? { fingerprint } : {}),
           requestBody: { name, notes },
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `folders_update failed: ${formatGoogleError(err)}` }] };
+        return errorResult('folders_update', err);
       }
     }
   );
@@ -152,15 +151,15 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('delete', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would delete folder ${folderId}` }] };
+          return textResult(`[DRY RUN] Would delete folder ${folderId}`);
         }
         const client = getClient();
         await client.accounts.containers.workspaces.folders.delete({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/folders/${folderId}`,
         });
-        return { content: [{ type: 'text', text: `Folder ${folderId} deleted. Contents moved to root.` }] };
+        return textResult(`Folder ${folderId} deleted. Contents moved to root.`);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `folders_delete failed: ${formatGoogleError(err)}` }] };
+        return errorResult('folders_delete', err);
       }
     }
   );
@@ -182,9 +181,7 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return {
-            content: [{ type: 'text', text: `[DRY RUN] Would move ${(tagId?.length ?? 0) + (triggerId?.length ?? 0) + (variableId?.length ?? 0)} entities into folder ${folderId}` }],
-          };
+          return textResult(`[DRY RUN] Would move ${(tagId?.length ?? 0) + (triggerId?.length ?? 0) + (variableId?.length ?? 0)} entities into folder ${folderId}`);
         }
         const client = getClient();
         // tagId, triggerId, variableId are passed as query params, not in requestBody
@@ -195,9 +192,9 @@ export function registerFolderTools(server: McpServer, getClient: () => GtmClien
           variableId,
           requestBody: {},
         });
-        return { content: [{ type: 'text', text: `Entities moved to folder ${folderId} successfully.` }] };
+        return textResult(`Entities moved to folder ${folderId} successfully.`);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `folders_move_entities failed: ${formatGoogleError(err)}` }] };
+        return errorResult('folders_move_entities', err);
       }
     }
   );

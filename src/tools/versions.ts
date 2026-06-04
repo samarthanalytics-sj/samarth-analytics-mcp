@@ -6,7 +6,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 
 const containerBase = z.object({
   accountId: z.string(),
@@ -34,11 +35,9 @@ export function registerVersionTools(server: McpServer, getClient: () => GtmClie
           ...(includeDeleted !== undefined ? { includeDeleted } : {}),
         });
         const versions = res.data.containerVersionHeader ?? [];
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ versions, count: versions.length }, null, 2) }],
-        };
+        return jsonResult({ versions, count: versions.length });
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `versions_list failed: ${formatGoogleError(err)}` }] };
+        return errorResult('versions_list', err);
       }
     }
   );
@@ -59,9 +58,9 @@ export function registerVersionTools(server: McpServer, getClient: () => GtmClie
         const res = containerVersionId === 'live'
           ? await client.accounts.containers.versions.live({ parent: `accounts/${accountId}/containers/${containerId}` })
           : await client.accounts.containers.versions.get({ path });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `versions_get failed: ${formatGoogleError(err)}` }] };
+        return errorResult('versions_get', err);
       }
     }
   );
@@ -85,18 +84,16 @@ export function registerVersionTools(server: McpServer, getClient: () => GtmClie
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return {
-            content: [{ type: 'text', text: `[DRY RUN] Would create version "${name}" from workspace ${workspaceId}` }],
-          };
+          return textResult(`[DRY RUN] Would create version "${name}" from workspace ${workspaceId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.create_version({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
           requestBody: { name, notes },
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `versions_create failed: ${formatGoogleError(err)}` }] };
+        return errorResult('versions_create', err);
       }
     }
   );
@@ -119,17 +116,15 @@ export function registerVersionTools(server: McpServer, getClient: () => GtmClie
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return {
-            content: [{ type: 'text', text: `[DRY RUN] Would set version ${containerVersionId} as latest.` }],
-          };
+          return textResult(`[DRY RUN] Would set version ${containerVersionId} as latest.`);
         }
         const client = getClient();
         const res = await client.accounts.containers.versions.set_latest({
           path: `accounts/${accountId}/containers/${containerId}/versions/${containerVersionId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `versions_set_latest failed: ${formatGoogleError(err)}` }] };
+        return errorResult('versions_set_latest', err);
       }
     }
   );
@@ -151,15 +146,15 @@ export function registerVersionTools(server: McpServer, getClient: () => GtmClie
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would undelete version ${containerVersionId}` }] };
+          return textResult(`[DRY RUN] Would undelete version ${containerVersionId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.versions.undelete({
           path: `accounts/${accountId}/containers/${containerId}/versions/${containerVersionId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `versions_undelete failed: ${formatGoogleError(err)}` }] };
+        return errorResult('versions_undelete', err);
       }
     }
   );
@@ -182,15 +177,15 @@ export function registerVersionTools(server: McpServer, getClient: () => GtmClie
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('delete', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would delete version ${containerVersionId}` }] };
+          return textResult(`[DRY RUN] Would delete version ${containerVersionId}`);
         }
         const client = getClient();
         await client.accounts.containers.versions.delete({
           path: `accounts/${accountId}/containers/${containerId}/versions/${containerVersionId}`,
         });
-        return { content: [{ type: 'text', text: `Version ${containerVersionId} deleted (marked as deleted).` }] };
+        return textResult(`Version ${containerVersionId} deleted (marked as deleted).`);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `versions_delete failed: ${formatGoogleError(err)}` }] };
+        return errorResult('versions_delete', err);
       }
     }
   );

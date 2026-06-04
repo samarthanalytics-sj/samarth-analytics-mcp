@@ -16,8 +16,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
+import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
 
 /** A GTM resource collection that lives directly under a workspace. */
 interface WorkspaceResourceApi {
@@ -86,9 +87,9 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
           (data) => data[spec.listKey] as unknown[] | undefined,
           { pageToken, maxPages }
         );
-        return { content: [{ type: 'text', text: JSON.stringify(buildListResult(spec.toolPrefix, result), null, 2) }] };
+        return jsonResult(buildListResult(spec.toolPrefix, result));
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `${spec.toolPrefix}_list failed: ${formatGoogleError(err)}` }] };
+        return errorResult(`${spec.toolPrefix}_list`, err);
       }
     }
   );
@@ -106,9 +107,9 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
       try {
         const api = spec.select(getClient());
         const res = await api.get({ path: itemPath(accountId, containerId, workspaceId, id) });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `${spec.toolPrefix}_get failed: ${formatGoogleError(err)}` }] };
+        return errorResult(`${spec.toolPrefix}_get`, err);
       }
     }
   );
@@ -131,20 +132,20 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would create ${spec.label} in workspace ${workspaceId}` }] };
+          return textResult(`[DRY RUN] Would create ${spec.label} in workspace ${workspaceId}`);
         }
         const parsed = parseBody(bodyJson);
         if (!parsed.ok) {
-          return { isError: true, content: [{ type: 'text', text: 'bodyJson must be a valid JSON object.' }] };
+          return errorText('bodyJson must be a valid JSON object.');
         }
         const api = spec.select(getClient());
         const res = await api.create({
           parent: wsPath(accountId, containerId, workspaceId),
           requestBody: parsed.value,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `${spec.toolPrefix}_create failed: ${formatGoogleError(err)}` }] };
+        return errorResult(`${spec.toolPrefix}_create`, err);
       }
     }
   );
@@ -171,11 +172,11 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm as boolean | undefined, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would update ${spec.label} ${id} in workspace ${workspaceId}` }] };
+          return textResult(`[DRY RUN] Would update ${spec.label} ${id} in workspace ${workspaceId}`);
         }
         const parsed = parseBody(bodyJson as string);
         if (!parsed.ok) {
-          return { isError: true, content: [{ type: 'text', text: 'bodyJson must be a valid JSON object.' }] };
+          return errorText('bodyJson must be a valid JSON object.');
         }
         const api = spec.select(getClient());
         const res = await api.update({
@@ -183,9 +184,9 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
           ...(fingerprint ? { fingerprint: fingerprint as string } : {}),
           requestBody: parsed.value,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `${spec.toolPrefix}_update failed: ${formatGoogleError(err)}` }] };
+        return errorResult(`${spec.toolPrefix}_update`, err);
       }
     }
   );
@@ -209,13 +210,13 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('delete', confirm as boolean | undefined, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would delete ${spec.label} ${id} from workspace ${workspaceId}` }] };
+          return textResult(`[DRY RUN] Would delete ${spec.label} ${id} from workspace ${workspaceId}`);
         }
         const api = spec.select(getClient());
         await api.delete({ path: itemPath(accountId as string, containerId as string, workspaceId as string, id) });
-        return { content: [{ type: 'text', text: `${spec.label.replace(/s$/, '')} ${id} deleted from workspace ${workspaceId}.` }] };
+        return textResult(`${spec.label.replace(/s$/, '')} ${id} deleted from workspace ${workspaceId}.`);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `${spec.toolPrefix}_delete failed: ${formatGoogleError(err)}` }] };
+        return errorResult(`${spec.toolPrefix}_delete`, err);
       }
     }
   );
@@ -241,19 +242,19 @@ function registerResource(server: McpServer, getClient: () => GtmClient, spec: R
           const config = getGuardrailConfig();
           const { dryRun } = checkGuardrails('write', confirm as boolean | undefined, config);
           if (dryRun) {
-            return { content: [{ type: 'text', text: `[DRY RUN] Would revert ${spec.label} ${id} in workspace ${workspaceId}` }] };
+            return textResult(`[DRY RUN] Would revert ${spec.label} ${id} in workspace ${workspaceId}`);
           }
           const api = spec.select(getClient());
           if (!api.revert) {
-            return { isError: true, content: [{ type: 'text', text: `${spec.toolPrefix}_revert is not supported by the API.` }] };
+            return errorText(`${spec.toolPrefix}_revert is not supported by the API.`);
           }
           const res = await api.revert({
             path: itemPath(accountId as string, containerId as string, workspaceId as string, id),
             ...(fingerprint ? { fingerprint: fingerprint as string } : {}),
           });
-          return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+          return jsonResult(res.data);
         } catch (err) {
-          return { isError: true, content: [{ type: 'text', text: `${spec.toolPrefix}_revert failed: ${formatGoogleError(err)}` }] };
+          return errorResult(`${spec.toolPrefix}_revert`, err);
         }
       }
     );

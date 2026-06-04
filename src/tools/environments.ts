@@ -7,7 +7,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import type { tagmanager_v2 } from 'googleapis';
 
@@ -33,9 +34,9 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
           (data) => data.environment,
           { pageToken, maxPages }
         );
-        return { content: [{ type: 'text', text: JSON.stringify(buildListResult('environments', result), null, 2) }] };
+        return jsonResult(buildListResult('environments', result));
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `environments_list failed: ${formatGoogleError(err)}` }] };
+        return errorResult('environments_list', err);
       }
     }
   );
@@ -53,9 +54,9 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
         const res = await client.accounts.containers.environments.get({
           path: `accounts/${accountId}/containers/${containerId}/environments/${environmentId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `environments_get failed: ${formatGoogleError(err)}` }] };
+        return errorResult('environments_get', err);
       }
     }
   );
@@ -79,16 +80,16 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would create environment "${name}" in container ${containerId}` }] };
+          return textResult(`[DRY RUN] Would create environment "${name}" in container ${containerId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.environments.create({
           parent: `accounts/${accountId}/containers/${containerId}`,
           requestBody: { name, description, url, enableDebug },
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `environments_create failed: ${formatGoogleError(err)}` }] };
+        return errorResult('environments_create', err);
       }
     }
   );
@@ -114,7 +115,7 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would update environment ${environmentId}` }] };
+          return textResult(`[DRY RUN] Would update environment ${environmentId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.environments.update({
@@ -122,9 +123,9 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
           ...(fingerprint ? { fingerprint } : {}),
           requestBody: updates as tagmanager_v2.Schema$Environment,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `environments_update failed: ${formatGoogleError(err)}` }] };
+        return errorResult('environments_update', err);
       }
     }
   );
@@ -147,16 +148,16 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('publish', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would reauthorize environment ${environmentId}` }] };
+          return textResult(`[DRY RUN] Would reauthorize environment ${environmentId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.environments.reauthorize({
           path: `accounts/${accountId}/containers/${containerId}/environments/${environmentId}`,
           requestBody: {},
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `environments_reauthorize failed: ${formatGoogleError(err)}` }] };
+        return errorResult('environments_reauthorize', err);
       }
     }
   );
@@ -177,15 +178,15 @@ export function registerEnvironmentTools(server: McpServer, getClient: () => Gtm
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('delete', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would delete environment ${environmentId}` }] };
+          return textResult(`[DRY RUN] Would delete environment ${environmentId}`);
         }
         const client = getClient();
         await client.accounts.containers.environments.delete({
           path: `accounts/${accountId}/containers/${containerId}/environments/${environmentId}`,
         });
-        return { content: [{ type: 'text', text: `Environment ${environmentId} deleted successfully.` }] };
+        return textResult(`Environment ${environmentId} deleted successfully.`);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `environments_delete failed: ${formatGoogleError(err)}` }] };
+        return errorResult('environments_delete', err);
       }
     }
   );

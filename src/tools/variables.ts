@@ -5,8 +5,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
+import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 
 const wsBase = z.object({
   accountId: z.string(),
@@ -34,11 +35,9 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
           (data) => data.variable,
           { pageToken, maxPages }
         );
-        return {
-          content: [{ type: 'text', text: JSON.stringify(buildListResult('variables', result), null, 2) }],
-        };
+        return jsonResult(buildListResult('variables', result));
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `variables_list failed: ${formatGoogleError(err)}` }] };
+        return errorResult('variables_list', err);
       }
     }
   );
@@ -55,9 +54,9 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
         const res = await client.accounts.containers.workspaces.variables.get({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/variables/${variableId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `variables_get failed: ${formatGoogleError(err)}` }] };
+        return errorResult('variables_get', err);
       }
     }
   );
@@ -82,16 +81,16 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would create variable "${name}" (type: ${type})` }] };
+          return textResult(`[DRY RUN] Would create variable "${name}" (type: ${type})`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.variables.create({
           parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
           requestBody: { name, type, parameter, notes, parentFolderId, enablingTriggerId, disablingTriggerId },
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `variables_create failed: ${formatGoogleError(err)}` }] };
+        return errorResult('variables_create', err);
       }
     }
   );
@@ -115,7 +114,7 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would update variable ${variableId}` }] };
+          return textResult(`[DRY RUN] Would update variable ${variableId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.variables.update({
@@ -123,9 +122,9 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
           ...(fingerprint ? { fingerprint } : {}),
           requestBody: updates,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `variables_update failed: ${formatGoogleError(err)}` }] };
+        return errorResult('variables_update', err);
       }
     }
   );
@@ -144,15 +143,15 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('delete', confirm, config);
         if (dryRun) {
-          return { content: [{ type: 'text', text: `[DRY RUN] Would delete variable ${variableId}` }] };
+          return textResult(`[DRY RUN] Would delete variable ${variableId}`);
         }
         const client = getClient();
         await client.accounts.containers.workspaces.variables.delete({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/variables/${variableId}`,
         });
-        return { content: [{ type: 'text', text: `Variable ${variableId} deleted successfully.` }] };
+        return textResult(`Variable ${variableId} deleted successfully.`);
       } catch (err) {
-        return { isError: true, content: [{ type: 'text', text: `variables_delete failed: ${formatGoogleError(err)}` }] };
+        return errorResult('variables_delete', err);
       }
     }
   );

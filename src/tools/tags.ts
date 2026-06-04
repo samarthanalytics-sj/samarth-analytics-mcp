@@ -5,8 +5,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
+import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 
 const wsBase = z.object({
   accountId: z.string().describe('The GTM account ID.'),
@@ -44,14 +45,9 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
           (data) => data.tag,
           { pageToken, maxPages }
         );
-        return {
-          content: [{ type: 'text', text: JSON.stringify(buildListResult('tags', result), null, 2) }],
-        };
+        return jsonResult(buildListResult('tags', result));
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `tags_list failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('tags_list', err);
       }
     }
   );
@@ -71,12 +67,9 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
         const res = await client.accounts.containers.workspaces.tags.get({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `tags_get failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('tags_get', err);
       }
     }
   );
@@ -108,21 +101,16 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return {
-            content: [{ type: 'text', text: `[DRY RUN] Would create tag "${name}" (type: ${type}) in workspace ${workspaceId}` }],
-          };
+          return textResult(`[DRY RUN] Would create tag "${name}" (type: ${type}) in workspace ${workspaceId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.tags.create({
           parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
           requestBody: { name, type, parameter: parameter as import('googleapis').tagmanager_v2.Schema$Parameter[] | undefined, firingTriggerId, blockingTriggerId, notes, parentFolderId, paused },
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `tags_create failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('tags_create', err);
       }
     }
   );
@@ -152,9 +140,7 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
         if (dryRun) {
-          return {
-            content: [{ type: 'text', text: `[DRY RUN] Would update tag ${tagId} in workspace ${workspaceId}` }],
-          };
+          return textResult(`[DRY RUN] Would update tag ${tagId} in workspace ${workspaceId}`);
         }
         const client = getClient();
         const res = await client.accounts.containers.workspaces.tags.update({
@@ -162,12 +148,9 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
           ...(fingerprint ? { fingerprint } : {}),
           requestBody: updates as import('googleapis').tagmanager_v2.Schema$Tag,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(res.data, null, 2) }] };
+        return jsonResult(res.data);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `tags_update failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('tags_update', err);
       }
     }
   );
@@ -189,22 +172,15 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('delete', confirm, config);
         if (dryRun) {
-          return {
-            content: [{ type: 'text', text: `[DRY RUN] Would delete tag ${tagId} from workspace ${workspaceId}` }],
-          };
+          return textResult(`[DRY RUN] Would delete tag ${tagId} from workspace ${workspaceId}`);
         }
         const client = getClient();
         await client.accounts.containers.workspaces.tags.delete({
           path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`,
         });
-        return {
-          content: [{ type: 'text', text: `Tag ${tagId} deleted successfully from workspace ${workspaceId}.` }],
-        };
+        return textResult(`Tag ${tagId} deleted successfully from workspace ${workspaceId}.`);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `tags_delete failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('tags_delete', err);
       }
     }
   );

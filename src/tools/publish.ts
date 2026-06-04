@@ -9,7 +9,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
-import { formatGoogleError, checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
+import { jsonResult, textResult, errorResult, errorText } from '../utils/toolResponse.js';
 
 const containerBase = z.object({
   accountId: z.string(),
@@ -47,12 +48,9 @@ export function registerPublishTools(server: McpServer, getClient: () => GtmClie
             tagManagerUrl: data.containerVersion.tagManagerUrl,
           };
         }
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        return jsonResult(result);
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `workspace_quick_preview failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('workspace_quick_preview', err);
       }
     }
   );
@@ -75,37 +73,19 @@ export function registerPublishTools(server: McpServer, getClient: () => GtmClie
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('publish', confirm, config);
         if (dryRun) {
-          return {
-            content: [
-              { type: 'text', text: `[DRY RUN] Would publish version ${containerVersionId} to live.` },
-            ],
-          };
+          return textResult(`[DRY RUN] Would publish version ${containerVersionId} to live.`);
         }
         const client = getClient();
         const res = await client.accounts.containers.versions.publish({
           path: `accounts/${accountId}/containers/${containerId}/versions/${containerVersionId}`,
         });
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                {
-                  success: true,
-                  compilerError: res.data.compilerError ?? false,
-                  containerVersion: res.data.containerVersion,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
+        return jsonResult({
+          success: true,
+          compilerError: res.data.compilerError ?? false,
+          containerVersion: res.data.containerVersion,
+        });
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `versions_publish failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('versions_publish', err);
       }
     }
   );
@@ -129,11 +109,7 @@ export function registerPublishTools(server: McpServer, getClient: () => GtmClie
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('publish', confirm, config);
         if (dryRun) {
-          return {
-            content: [
-              { type: 'text', text: `[DRY RUN] Would create version "${name}" from workspace ${workspaceId} and publish it.` },
-            ],
-          };
+          return textResult(`[DRY RUN] Would create version "${name}" from workspace ${workspaceId} and publish it.`);
         }
         const client = getClient();
 
@@ -145,22 +121,13 @@ export function registerPublishTools(server: McpServer, getClient: () => GtmClie
 
         const versionId = createRes.data.containerVersion?.containerVersionId;
         if (!versionId) {
-          return {
-            isError: true,
-            content: [{ type: 'text', text: 'Failed to get version ID from create_version response.' }],
-          };
+          return errorText('Failed to get version ID from create_version response.');
         }
 
         if (createRes.data.compilerError) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: 'text',
-                text: `Version created (${versionId}) but has compiler errors — NOT published. Fix errors before publishing.\n${JSON.stringify(createRes.data, null, 2)}`,
-              },
-            ],
-          };
+          return errorText(
+            `Version created (${versionId}) but has compiler errors — NOT published. Fix errors before publishing.\n${JSON.stringify(createRes.data, null, 2)}`
+          );
         }
 
         // Step 2: publish the new version
@@ -168,28 +135,14 @@ export function registerPublishTools(server: McpServer, getClient: () => GtmClie
           path: `accounts/${accountId}/containers/${containerId}/versions/${versionId}`,
         });
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                {
-                  success: true,
-                  publishedVersionId: versionId,
-                  compilerError: publishRes.data.compilerError ?? false,
-                  containerVersion: publishRes.data.containerVersion,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
+        return jsonResult({
+          success: true,
+          publishedVersionId: versionId,
+          compilerError: publishRes.data.compilerError ?? false,
+          containerVersion: publishRes.data.containerVersion,
+        });
       } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `workspace_create_version_and_publish failed: ${formatGoogleError(err)}` }],
-        };
+        return errorResult('workspace_create_version_and_publish', err);
       }
     }
   );
