@@ -21,6 +21,7 @@ import {
   analyticsdata_v1beta,
 } from 'googleapis/build/src/apis/analyticsdata/index.js';
 import type { OAuth2Client } from 'google-auth-library';
+import { buildRetryOptions } from './apiRetry.js';
 
 export type Ga4AdminClient = analyticsadmin_v1beta.Analyticsadmin;
 export type Ga4AdminAlphaClient = analyticsadmin_v1alpha.Analyticsadmin;
@@ -32,7 +33,9 @@ let _dataClient: Ga4DataClient | null = null;
 
 export function getGa4AdminClient(auth: OAuth2Client): Ga4AdminClient {
   if (!_client) {
-    _client = analyticsadmin({ version: 'v1beta', auth });
+    // All GA4 tools are read-only (GET), so retry/backoff applies to every
+    // call this client makes. See apiRetry.ts.
+    _client = analyticsadmin({ version: 'v1beta', auth, ...buildRetryOptions() });
   }
   return _client;
 }
@@ -43,7 +46,7 @@ export function getGa4AdminClient(auth: OAuth2Client): Ga4AdminClient {
  */
 export function getGa4AdminAlphaClient(auth: OAuth2Client): Ga4AdminAlphaClient {
   if (!_alphaClient) {
-    _alphaClient = analyticsadmin({ version: 'v1alpha', auth });
+    _alphaClient = analyticsadmin({ version: 'v1alpha', auth, ...buildRetryOptions() });
   }
   return _alphaClient;
 }
@@ -55,7 +58,13 @@ export function getGa4AdminAlphaClient(auth: OAuth2Client): Ga4AdminAlphaClient 
  */
 export function getGa4DataClient(auth: OAuth2Client): Ga4DataClient {
   if (!_dataClient) {
-    _dataClient = analyticsdata({ version: 'v1beta', auth });
+    // runReport/runRealtimeReport are pure reads carried over POST, and this
+    // client has no mutating surface, so POST retry is safe here (and only here).
+    _dataClient = analyticsdata({
+      version: 'v1beta',
+      auth,
+      ...buildRetryOptions(process.env, { extraMethodsToRetry: ['POST'] }),
+    });
   }
   return _dataClient;
 }

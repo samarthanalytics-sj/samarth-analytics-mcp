@@ -9,6 +9,7 @@
 // `tagmanager_v2` types at a fraction of the cost (~90ms / ~57MB).
 import { tagmanager, tagmanager_v2 } from 'googleapis/build/src/apis/tagmanager/index.js';
 import type { OAuth2Client } from 'google-auth-library';
+import { buildRetryOptions } from './apiRetry.js';
 
 export type GtmClient = tagmanager_v2.Tagmanager;
 
@@ -16,7 +17,9 @@ let _client: GtmClient | null = null;
 
 export function getGtmClient(auth: OAuth2Client): GtmClient {
   if (!_client) {
-    _client = tagmanager({ version: 'v2', auth });
+    // Retry options apply to every request: transient 429/5xx on READ methods
+    // back off and retry; mutations are never auto-retried. See apiRetry.ts.
+    _client = tagmanager({ version: 'v2', auth, ...buildRetryOptions() });
   }
   return _client;
 }
