@@ -50,18 +50,47 @@ async function startHttpServer(server: Awaited<ReturnType<typeof createGtmMcpSer
   const { StreamableHTTPServerTransport } = await import(
     '@modelcontextprotocol/sdk/server/streamableHttp.js'
   );
-  const { randomUUID } = await import('crypto');
+  const { randomUUID, timingSafeEqual } = await import('crypto');
   const { default: express } = await import('express');
 
   const app = express();
   app.use(express.json());
 
-  const port = parseInt(process.env.GTM_MCP_HTTP_PORT ?? '3001', 10);
+  // PORT is the conventional env var injected by hosts like Render/Fly;
+  // GTM_MCP_HTTP_PORT takes precedence when explicitly set.
+  const port = parseInt(process.env.GTM_MCP_HTTP_PORT ?? process.env.PORT ?? '3001', 10);
+
+  // Bearer-token gate for the /mcp endpoint. When GTM_MCP_HTTP_AUTH_TOKEN is
+  // set, every /mcp request must carry `Authorization: Bearer <token>`. When
+  // unset (local dev), the endpoint is open and a warning is logged — never
+  // expose an ungated /mcp to the public internet.
+  const authToken = process.env.GTM_MCP_HTTP_AUTH_TOKEN ?? '';
+  if (!authToken) {
+    console.error(
+      '[samarth-gtm-mcp] WARNING: GTM_MCP_HTTP_AUTH_TOKEN is not set — /mcp is unauthenticated. ' +
+        'Set it before exposing this server beyond localhost.'
+    );
+  }
+  const requireAuth: import('express').RequestHandler = (req, res, next) => {
+    if (!authToken) {
+      next();
+      return;
+    }
+    const header = req.headers.authorization ?? '';
+    const expected = Buffer.from(`Bearer ${authToken}`);
+    const actual = Buffer.from(header);
+    const ok = expected.length === actual.length && timingSafeEqual(expected, actual);
+    if (!ok) {
+      res.status(401).json({ error: 'Unauthorized. Provide Authorization: Bearer <token>.' });
+      return;
+    }
+    next();
+  };
 
   // Map of session ID → transport (for stateful sessions)
   const transports = new Map<string, InstanceType<typeof StreamableHTTPServerTransport>>();
 
-  app.post('/mcp', async (req, res) => {
+  app.post('/mcp', requireAuth, async (req, res) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
     let transport: InstanceType<typeof StreamableHTTPServerTransport>;
@@ -95,7 +124,7 @@ async function startHttpServer(server: Awaited<ReturnType<typeof createGtmMcpSer
   });
 
   // SSE stream endpoint (GET /mcp) — for clients that support SSE-style streaming
-  app.get('/mcp', async (req, res) => {
+  app.get('/mcp', requireAuth, async (req, res) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     if (!sessionId || !transports.has(sessionId)) {
       res.status(400).json({ error: 'Missing or invalid mcp-session-id header.' });
@@ -106,7 +135,7 @@ async function startHttpServer(server: Awaited<ReturnType<typeof createGtmMcpSer
   });
 
   // DELETE /mcp — client-initiated session termination
-  app.delete('/mcp', async (req, res) => {
+  app.delete('/mcp', requireAuth, async (req, res) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     if (sessionId && transports.has(sessionId)) {
       const transport = transports.get(sessionId)!;

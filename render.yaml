@@ -1,0 +1,35 @@
+# Render blueprint — hosted MCP HTTP endpoint (mcp.samarthanalytics.com).
+#
+# Deploy: Render dashboard → New + → Blueprint → select this repo.
+# After the first deploy:
+#   1. Service → Settings → Custom Domains → add mcp.samarthanalytics.com.
+#   2. At the DNS provider (Hostinger), add the CNAME Render shows
+#      (mcp → <service>.onrender.com). TLS is provisioned automatically.
+#   3. GTM_MCP_HTTP_AUTH_TOKEN is auto-generated — copy it from the service's
+#      Environment tab; clients connect with `Authorization: Bearer <token>`.
+#
+# Google credentials are intentionally NOT listed here. The single-identity
+# team mode takes GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET /
+# GOOGLE_REFRESH_TOKEN added by hand in the dashboard (never in this file).
+# The multi-user OAuth broker is a separate workstream.
+
+services:
+  - type: web
+    name: samarth-gtm-mcp
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: GTM_MCP_TRANSPORT
+        value: http
+      - key: GTM_MCP_HTTP_AUTH_TOKEN
+        generateValue: true
+      # Guardrails stay at their read-only defaults; flip deliberately in the
+      # dashboard if this instance should ever write.
+      - key: GTM_MCP_ENABLE_WRITES
+        value: "false"
+      - key: GTM_MCP_ENABLE_PUBLISH
+        value: "false"
+      - key: GTM_MCP_ENABLE_DELETES
+        value: "false"

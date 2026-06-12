@@ -298,7 +298,8 @@ For Google Workspace organizations:
 | `GTM_MCP_TOKEN_FILE` | `./.gtm-mcp-tokens.json` | Path to the local OAuth token file written by `npm run auth:google` (gitignored). |
 | `GOOGLE_SERVICE_ACCOUNT_KEY_FILE` | — | Path to service account JSON key (see limitations above) |
 | `GTM_MCP_TRANSPORT` | `stdio` | Transport: `stdio` or `http` |
-| `GTM_MCP_HTTP_PORT` | `3001` | HTTP server port (http transport only) |
+| `GTM_MCP_HTTP_PORT` | `3001` | HTTP server port (http transport only; falls back to `PORT`) |
+| `GTM_MCP_HTTP_AUTH_TOKEN` | — | Bearer token gating `/mcp` (http transport). **Required before exposing the server beyond localhost**; unset = open + startup warning. |
 | `GTM_MCP_ENABLE_WRITES` | `false` | Allow create/update operations |
 | `GTM_MCP_ENABLE_PUBLISH` | `false` | Allow publish operations |
 | `GTM_MCP_ENABLE_DELETES` | `false` | Allow delete operations |
