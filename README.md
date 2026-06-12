@@ -37,6 +37,7 @@ Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, g
 - **Server-side & advanced GTM coverage** — environments, user permissions, destinations, clients, transformations, zones, custom templates, gtag config, plus container snippet/lookup/combine/move-tag-id and workspace change-diff status
 - **Read-only GA4 coverage** — GA4 Admin tools (`ga4_*`) plus GA4 Data API reporting (`ga4_run_report`, `ga4_run_realtime_report`) for intent-vs-reality reconciliation, all under a single `analytics.readonly` scope
 - **Automatic pagination** — every paginated list tool transparently follows `nextPageToken` to return all results, with optional `maxPages`/`pageToken` bounds
+- **Retry with exponential backoff + jitter** — transient Google API failures (HTTP 408/429/5xx, network errors) on read requests are retried automatically; mutations are never auto-retried (tunable via `GTM_MCP_RETRY_*`)
 - **Two transport modes**: stdio (local, for Claude Desktop/Cursor) and Streamable HTTP (cloud/team)
 - **Guardrails by default**: read-only unless explicitly enabled; publish and delete gated separately
 - **Dry-run mode**: simulate all writes without touching the API
@@ -56,11 +57,25 @@ Gives Claude Desktop, Cursor, Claude Code, and any MCP-compatible client full, g
 - A Google Cloud project with the **Tag Manager API** enabled
 - A Google account with access to your GTM containers
 
-### Install & Build
+### Run with npx (no clone needed)
+
+Once the package is on npm, the fastest path is:
 
 ```bash
-git clone <this-repo>
-cd samarth-gtm-mcp
+# One-time OAuth onboarding (opens your browser; writes a local token file)
+GOOGLE_OAUTH_CLIENT_ID=... GOOGLE_OAUTH_CLIENT_SECRET=... npx -y -p samarth-gtm-mcp samarth-gtm-auth
+
+# Run the server (stdio)
+npx -y samarth-gtm-mcp
+```
+
+In MCP client configs, use `"command": "npx", "args": ["-y", "samarth-gtm-mcp"]`.
+
+### Install & Build (from source)
+
+```bash
+git clone https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git
+cd samarth-analytics-mcp
 npm install
 cp .env.example .env
 # Edit .env — at minimum add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
@@ -288,6 +303,9 @@ For Google Workspace organizations:
 | `GTM_MCP_ENABLE_PUBLISH` | `false` | Allow publish operations |
 | `GTM_MCP_ENABLE_DELETES` | `false` | Allow delete operations |
 | `DRY_RUN` | `false` | Simulate all writes without calling the API |
+| `GTM_MCP_RETRY_MAX` | `3` | Retry attempts for transient read failures (408/429/5xx, network). `0` disables retries. Mutations are never auto-retried. |
+| `GTM_MCP_RETRY_MAX_DELAY_MS` | `30000` | Cap on a single backoff sleep (exponential backoff with jitter) |
+| `GTM_MCP_RETRY_TOTAL_TIMEOUT_MS` | `60000` | Cap on total wall time from first request to last retry |
 | `GTM_DEFAULT_ACCOUNT_ID` | — | Optional default accountId |
 | `GTM_DEFAULT_CONTAINER_ID` | — | Optional default containerId |
 | `GTM_DEFAULT_WORKSPACE_ID` | — | Optional default workspaceId |
@@ -723,8 +741,15 @@ npm run dev
 # Run HTTP dev server
 npm run dev:http
 
-# Tests
+# Tests (run `npm run build` first — some suites test the compiled dist)
 npm test
+
+# Smoke test: server boots and answers tools/list
+npm run smoke -- --mcp dist/index.js
+
+# Full-surface smoke test: invokes ALL registered tools with a sanitized,
+# credential-free env — every handler must respond cleanly (no crash/hang)
+npm run smoke:all
 
 # MCP Inspector (interactive tool debugging)
 npm run inspector
@@ -752,10 +777,20 @@ samarth-gtm-mcp/
 │   │   ├── versions.ts       # versions list/get/create/publish/delete
 │   │   ├── publish.ts        # quick_preview, versions_publish, create+publish
 │   │   ├── audit.ts          # audit_container analytics checks
-│   │   └── export.ts         # export_container JSON dump
+│   │   ├── export.ts         # export_container JSON dump
+│   │   ├── environments.ts   # environments CRUD + reauthorize
+│   │   ├── userPermissions.ts # account-level user permissions
+│   │   ├── serverSide.ts     # clients, transformations, zones, templates, gtag config
+│   │   ├── ga4Admin.ts       # read-only GA4 Admin tools (ga4_*)
+│   │   └── ga4Data.ts        # read-only GA4 Data API reporting
 │   ├── utils/
 │   │   ├── guardrails.ts     # Guardrail enforcement, error formatting
-│   │   └── gtmClient.ts      # googleapis GTM v2 client factory
+│   │   ├── gtmClient.ts      # googleapis GTM v2 client factory
+│   │   ├── ga4Client.ts      # GA4 Admin/Data client factories
+│   │   ├── apiRetry.ts       # retry/backoff config (429/5xx, reads only)
+│   │   ├── pagination.ts     # transparent nextPageToken following
+│   │   ├── schemas.ts        # shared Zod input schemas
+│   │   └── toolResponse.ts   # standard tool result shaping
 │   ├── types/
 │   │   ├── gtm.ts            # GTM API type definitions
 │   │   └── index.ts
@@ -763,8 +798,14 @@ samarth-gtm-mcp/
 │   │   ├── auth-google.ts    # Browser-based OAuth onboarding (`npm run auth:google`)
 │   │   └── oauth-setup.ts    # Interactive OAuth token helper (legacy paste-the-code flow)
 │   └── __tests__/
-│       ├── guardrails.test.ts
-│       └── server.test.ts
+│       ├── guardrails.node.test.mjs  # guardrails + buildPath
+│       ├── auth.node.test.mjs        # env/auth resolution + token file paths
+│       ├── pagination.node.test.mjs  # paginate/buildListResult
+│       ├── ga4Admin.node.test.mjs    # GA4 tool registration (tests compiled dist)
+│       └── apiRetry.node.test.mjs    # retry/backoff config (tests compiled dist)
+├── scripts/
+│   ├── smoke-test.mjs        # health probe: portal endpoints + MCP tools/list
+│   └── smoke-all-tools.mjs   # invokes all tools with sanitized env
 ├── .env.example
 ├── .gitignore
 ├── package.json
@@ -873,11 +914,9 @@ To intentionally land a commit without triggering a release, use a non-releasing
 
 - `workspace_resolve_conflict`: The GTM API's resolve_conflict endpoint accepts a full entity body — the exact request body schema is complex. The current implementation passes through the user-supplied JSON; validate it against the entity type before calling.
 - `containers_create`: The `usageContext` enum values may differ slightly by GTM region/version. Refer to the [GTM API docs](https://developers.google.com/tag-manager/api/v2/reference/accounts/containers/create) for the latest allowed values.
-- **Pagination**: Large accounts with many tags/triggers/variables may be paginated. The current implementation returns the first page only. Add `pageToken` iteration for full coverage if needed.
-- **User Management**: `accounts.user_permissions` endpoints are not yet implemented. Add `user_permissions_list/create/update/delete` if team management is needed.
-- **Environments**: GTM Environments API is not yet implemented.
-- **Transformation**: GTM Transformations (server-side containers) are not yet implemented.
-- **Rate limiting**: No exponential backoff implemented. The googleapis client has basic retry logic but not full quota management.
+- **HTTP transport has no built-in user auth**: the `/mcp` endpoint must be fronted by your own auth layer (API key, IP allowlist, SSO proxy) for team/cloud deployments — see [Security Notes](#security-notes).
+- **HTTP sessions are in-memory**: sessions live in the server process, so horizontal scaling requires sticky sessions. Fine for a single team instance; not yet built for multi-instance load balancing.
+- **Single OAuth identity per deployment**: all requests share one Google identity and therefore one Google API quota pool. Heavy multi-user load through one deployment will exhaust it; retries with backoff soften this but don't remove the quota ceiling.
 
 ---
 
