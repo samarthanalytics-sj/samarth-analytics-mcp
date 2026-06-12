@@ -1,3 +1,15 @@
+## [1.18.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.17.2...v1.18.0) (2026-06-12)
+
+### Features
+
+* **release:** publish to npm with provenance and add npx binaries ([2556268](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/255626809d295a95e45d3679e416853ba6933ee3))
+* retry transient Google API failures with backoff and add full-surface smoke test ([e98d23a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e98d23ae4f4dcbbc25327ac3b603f410266fc8b8))
+
+### Bug Fixes
+
+* **ci:** drop registry-url from setup-node so NPM_TOKEN auth works ([a686025](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a686025bada7dd8cde1571f3fda59aa9e0f0cb1d))
+* **test:** import compiled modules via file:// URLs for Windows ESM ([34048e8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/34048e80bda948d724d1163e3d0d40487e891333))
+
 ## [1.17.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.17.1...v1.17.2) (2026-06-04)
 
 ### Bug Fixes
