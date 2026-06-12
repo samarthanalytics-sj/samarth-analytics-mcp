@@ -1,3 +1,9 @@
+## [1.19.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.18.0...v1.19.0) (2026-06-12)
+
+### Features
+
+* **http:** gate /mcp behind a bearer token and add Render blueprint ([b411616](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b4116166cc92f36efb610520bcfd75bb89674dac))
+
 ## [1.18.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.17.2...v1.18.0) (2026-06-12)
 
 ### Features
