@@ -17,7 +17,7 @@
 
 import assert from 'assert';
 import { existsSync } from 'fs';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,8 +34,8 @@ if (!existsSync(distTools)) {
   process.exit(1);
 }
 
-const { registerGa4AdminTools } = await import(distTools);
-const { McpServer } = await import(distSdk);
+const { registerGa4AdminTools } = await import(pathToFileURL(distTools).href);
+const { McpServer } = await import(pathToFileURL(distSdk).href);
 
 const EXPECTED_TOOLS = [
   'ga4_account_summaries_list',
