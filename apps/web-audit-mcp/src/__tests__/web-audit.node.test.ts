@@ -1,0 +1,306 @@
+/**
+ * Web Audit MCP — pure-logic test suite (no browser required).
+ * Run: tsx apps/web-audit-mcp/src/__tests__/web-audit.node.test.ts
+ *
+ * Covers the SSRF guard, CMP registry shape + text heuristics, form PII
+ * analysis, the banner compliance rules over fixture captures, and the
+ * RuntimeInput bridge into the shared Consent Mode v2 engine.
+ */
+
+import { urlAllowed } from '../utils/urlGuard.js';
+import { classifyUrl, parseQuery, MEASUREMENT_GROUPS } from '../agent/browser.js';
+import { CMP_VENDORS, ACCEPT_TEXT_RE, REJECT_TEXT_RE } from '../agent/cmp.js';
+import { analyzeForms, classifyFieldPii, type RawForm, type RawFormField } from '../agent/forms.js';
+import { sameSite, normalizeUrl, urlPriority } from '../agent/crawler.js';
+import { extractConsentEvents, extractEventNames, type ScenarioCapture } from '../agent/capture.js';
+import {
+  evaluateBannerRules,
+  evaluateFormFindings,
+  buildRuntimeInput,
+  scoreFindings,
+  sortFindings,
+  isFiringHit,
+  gcsIndicatesDenied,
+} from '../agent/compliance.js';
+import { runConsentRuntimeRules } from '../../../portal/shared/consent-audit.js';
+
+let passed = 0;
+let failed = 0;
+const failures: string[] = [];
+
+function check(name: string, cond: boolean, detail?: string): void {
+  if (cond) {
+    passed += 1;
+  } else {
+    failed += 1;
+    failures.push(`✗ ${name}${detail ? ` — ${detail}` : ''}`);
+  }
+}
+
+// ── urlGuard ────────────────────────────────────────────────────────────────
+
+check('guard: public https ok', urlAllowed('https://example.com/x').ok);
+check('guard: plain http ok', urlAllowed('http://example.com').ok);
+check('guard: ftp blocked', !urlAllowed('ftp://example.com').ok);
+check('guard: file blocked', !urlAllowed('file:///etc/passwd').ok);
+check('guard: localhost blocked', !urlAllowed('http://localhost:3000').ok);
+check('guard: .localhost blocked', !urlAllowed('http://foo.localhost').ok);
+check('guard: 127.0.0.1 blocked', !urlAllowed('http://127.0.0.1').ok);
+check('guard: 10.x blocked', !urlAllowed('http://10.1.2.3').ok);
+check('guard: 192.168 blocked', !urlAllowed('http://192.168.1.1').ok);
+check('guard: 172.16 blocked', !urlAllowed('http://172.16.0.1').ok);
+check('guard: 172.32 allowed', urlAllowed('http://172.32.0.1').ok);
+check('guard: metadata blocked', !urlAllowed('http://169.254.169.254/latest/meta-data/').ok);
+check('guard: CGNAT blocked', !urlAllowed('http://100.64.0.1').ok);
+check('guard: decimal ip blocked', !urlAllowed('http://2130706433/').ok);
+check('guard: hex ip blocked', !urlAllowed('http://0x7f000001/').ok);
+check('guard: octal ip blocked', !urlAllowed('http://0177.0.0.1/').ok);
+check('guard: ipv6 loopback blocked', !urlAllowed('http://[::1]/').ok);
+check('guard: ipv6 mapped loopback blocked', !urlAllowed('http://[::ffff:127.0.0.1]/').ok);
+check('guard: ipv6 mapped hex metadata blocked', !urlAllowed('http://[::ffff:a9fe:a9fe]/').ok);
+check('guard: ULA blocked', !urlAllowed('http://[fc00::1]/').ok);
+check('guard: allowlist match', urlAllowed('https://shop.example.com', ['example.com']).ok);
+check('guard: allowlist exact', urlAllowed('https://example.com', ['example.com']).ok);
+check('guard: allowlist miss', !urlAllowed('https://notexample.com', ['example.com']).ok);
+check('guard: allowlist no suffix-confusion', !urlAllowed('https://evilexample.com', ['example.com']).ok);
+
+// ── tracker classification ─────────────────────────────────────────────────
+
+const ga4 = classifyUrl('https://region1.google-analytics.com/g/collect?v=2&tid=G-123&gcs=G111&en=page_view');
+check('classify: ga4 collect', ga4.ids.includes('ga4_collect') && ga4.groups.includes('ga4'));
+const meta = classifyUrl('https://www.facebook.com/tr?id=123&ev=PageView');
+check('classify: meta pixel', meta.groups.includes('meta'));
+const gtm = classifyUrl('https://www.googletagmanager.com/gtm.js?id=GTM-XXX');
+check('classify: gtm loader', gtm.groups.includes('gtm'));
+check('classify: gtm not a measurement group', !MEASUREMENT_GROUPS.has('gtm'));
+const q = parseQuery('https://x.test/g/collect?gcs=G100&en=page_view&dl=https%3A%2F%2Fa.b');
+check('parseQuery decodes', q.gcs === 'G100' && q.dl === 'https://a.b');
+
+// ── CMP registry ────────────────────────────────────────────────────────────
+
+const vendorIds = new Set(CMP_VENDORS.map((v) => v.id));
+check('cmp: vendor ids unique', vendorIds.size === CMP_VENDORS.length);
+check('cmp: every vendor has presence + accept', CMP_VENDORS.every((v) => v.presence.length > 0 && v.accept.length > 0));
+check('cmp: covers major vendors', ['onetrust', 'cookiebot', 'usercentrics', 'didomi', 'quantcast', 'trustarc'].every((id) => vendorIds.has(id)));
+check('cmp: accept text en', ACCEPT_TEXT_RE.test('Accept all cookies'));
+check('cmp: accept text de', ACCEPT_TEXT_RE.test('Alle akzeptieren'));
+check('cmp: accept text fr', ACCEPT_TEXT_RE.test("J'accepte"));
+check('cmp: accept text es', ACCEPT_TEXT_RE.test('Aceptar todo'));
+check('cmp: reject text en', REJECT_TEXT_RE.test('Reject all'));
+check('cmp: reject text only-necessary', REJECT_TEXT_RE.test('Only necessary cookies'));
+check('cmp: reject text de', REJECT_TEXT_RE.test('Nur notwendige Cookies'));
+check('cmp: reject text fr', REJECT_TEXT_RE.test('Continuer sans accepter'));
+check('cmp: accept not matching reject', !REJECT_TEXT_RE.test('Accept all cookies'));
+check('cmp: reject not matching accept', !ACCEPT_TEXT_RE.test('Reject all'));
+check('cmp: privacy-policy link is neither', !ACCEPT_TEXT_RE.test('Privacy policy') && !REJECT_TEXT_RE.test('Privacy policy'));
+
+// ── crawler helpers ─────────────────────────────────────────────────────────
+
+check('crawl: same host', sameSite('https://example.com/a', 'https://example.com'));
+check('crawl: www variant', sameSite('https://www.example.com/a', 'https://example.com'));
+check('crawl: subdomain ok', sameSite('https://shop.example.com', 'https://example.com'));
+check('crawl: other host rejected', !sameSite('https://other.com', 'https://example.com'));
+check('crawl: asset skipped', normalizeUrl('/logo.png', 'https://example.com') === null);
+check('crawl: mailto skipped', normalizeUrl('mailto:x@y.z', 'https://example.com') === null);
+check('crawl: hash stripped', normalizeUrl('https://example.com/a#frag', 'https://example.com') === 'https://example.com/a');
+check('crawl: contact prioritised', urlPriority('https://x.com/contact-us') > urlPriority('https://x.com/blog/post'));
+
+// ── form analysis ───────────────────────────────────────────────────────────
+
+function field(over: Partial<RawFormField>): RawFormField {
+  return { tag: 'input', type: 'text', name: '', id: '', label: '', placeholder: '', autocomplete: '', required: false, ...over };
+}
+function form(over: Partial<RawForm>): RawForm {
+  const fields = over.fields ?? [];
+  return { index: 0, action: 'https://example.com/submit', method: 'post', fieldCount: fields.length, fields, hasPrivacyLink: false, text: '', ...over };
+}
+
+check('pii: email by type', classifyFieldPii(field({ type: 'email' })) === 'email');
+check('pii: phone by name', classifyFieldPii(field({ name: 'phone_number' })) === 'phone');
+check('pii: name by label', classifyFieldPii(field({ label: 'First name' })) === 'name');
+check('pii: dob by label', classifyFieldPii(field({ label: 'Date of birth' })) === 'date_of_birth');
+check('pii: payment by autocomplete', classifyFieldPii(field({ autocomplete: 'cc-number' })) === 'payment');
+check('pii: plain text not pii', classifyFieldPii(field({ name: 'company_size' })) === null);
+
+const contactForm = form({
+  index: 0,
+  fields: [
+    field({ type: 'email', name: 'email' }),
+    field({ name: 'full_name', label: 'Full name' }),
+    field({ tag: 'textarea', type: 'textarea', name: 'message' }),
+  ],
+});
+const contactAnalysis = analyzeForms([contactForm], 'https://example.com/contact')[0];
+check('forms: contact purpose', contactAnalysis.purpose === 'contact');
+check('forms: pii without notice flagged', contactAnalysis.issues.some((i) => i.id.includes('pii_no_notice')));
+
+const noticedForm = form({ index: 1, fields: contactForm.fields, hasPrivacyLink: true });
+check(
+  'forms: privacy link suppresses notice issue',
+  analyzeForms([noticedForm], 'https://example.com')[0].issues.every((i) => !i.id.includes('pii_no_notice')),
+);
+
+const newsletterForm = form({
+  index: 2,
+  fields: [
+    field({ type: 'email', name: 'email' }),
+    field({ type: 'checkbox', name: 'newsletter_optin', label: 'Subscribe to our newsletter', checked: true }),
+  ],
+  text: 'subscribe to our newsletter for updates',
+  hasPrivacyLink: true,
+});
+const newsletterAnalysis = analyzeForms([newsletterForm], 'https://example.com')[0];
+check('forms: prechecked marketing flagged high', newsletterAnalysis.issues.some((i) => i.id.includes('prechecked_marketing') && i.severity === 'high'));
+check('forms: marketing checkbox captured', newsletterAnalysis.marketingCheckboxes.length === 1 && newsletterAnalysis.marketingCheckboxes[0].prechecked);
+
+const loginForm = form({
+  index: 3,
+  fields: [field({ type: 'email', name: 'email' }), field({ type: 'password', name: 'password' })],
+});
+const loginAnalysis = analyzeForms([loginForm], 'https://example.com/login')[0];
+check('forms: login purpose', loginAnalysis.purpose === 'login');
+check('forms: login exempt from notice rule', loginAnalysis.issues.every((i) => !i.id.includes('pii_no_notice')));
+
+const thirdPartyForm = form({ index: 4, action: 'https://lists.mailvendor.io/subscribe', fields: [field({ type: 'email', name: 'email' })], hasPrivacyLink: true });
+check('forms: third-party action flagged', analyzeForms([thirdPartyForm], 'https://example.com')[0].issues.some((i) => i.id.includes('third_party_action')));
+
+const insecureForm = form({ index: 5, action: 'http://example.com/submit', fields: [field({ type: 'email', name: 'email' })], hasPrivacyLink: true });
+check('forms: insecure action flagged', analyzeForms([insecureForm], 'https://example.com')[0].issues.some((i) => i.id.includes('insecure_action') && i.severity === 'high'));
+
+// ── consent event extraction ────────────────────────────────────────────────
+
+const dlLog = [
+  { t: 12, entry: ['consent', 'default', { ad_storage: 'denied', analytics_storage: 'denied', ad_user_data: 'denied', ad_personalization: 'denied' }] },
+  { t: 300, entry: { event: 'gtm.js' } },
+  { t: 4200, entry: ['consent', 'update', { ad_storage: 'granted', analytics_storage: 'granted' }] },
+  { t: 4300, entry: ['event', 'page_view', {}] },
+];
+const consentEvents = extractConsentEvents(dlLog);
+check('dl: consent default extracted', consentEvents[0]?.kind === 'default' && consentEvents[0]?.fields.ad_storage === 'denied' && consentEvents[0]?.tMs === 12);
+check('dl: consent update extracted', consentEvents[1]?.kind === 'update' && consentEvents[1]?.fields.analytics_storage === 'granted');
+check('dl: event names', extractEventNames(dlLog).join(',') === 'gtm.js,page_view');
+
+// ── banner rules over fixture captures ─────────────────────────────────────
+
+function hit(over: Partial<ScenarioCapture['trackerHits'][number]>): ScenarioCapture['trackerHits'][number] {
+  return { url: 'https://region1.google-analytics.com/g/collect?v=2', method: 'POST', ids: ['ga4_collect'], groups: ['ga4'], tMs: 1000, resourceType: 'fetch', ...over };
+}
+function capture(over: Partial<ScenarioCapture>): ScenarioCapture {
+  return {
+    scenario: 'ignore',
+    requestedUrl: 'https://example.com/',
+    finalUrl: 'https://example.com/',
+    httpStatus: 200,
+    cmp: { detected: true, vendorName: 'OneTrust', vendorId: 'onetrust', accept: { selector: '#onetrust-accept-btn-handler' }, rejectOnFirstLayer: false, method: 'vendor' },
+    interaction: null,
+    interactionTMs: null,
+    trackerHits: [],
+    networkRequestCount: 10,
+    consentEvents: [],
+    dataLayerEvents: [],
+    dataLayerKeys: [],
+    cookiesPreInteraction: [],
+    cookiesFinal: [],
+    consoleErrors: [],
+    pageErrors: [],
+    forms: null,
+    notes: [],
+    ...over,
+  };
+}
+
+check('rules: firing hit detection', isFiringHit(hit({})));
+check('rules: gtm.js not firing', !isFiringHit(hit({ url: 'https://www.googletagmanager.com/gtm.js', ids: ['gtm_loader'], groups: ['gtm'] })));
+check('rules: fbevents.js not firing', !isFiringHit(hit({ url: 'https://connect.facebook.net/en_US/fbevents.js', ids: ['meta_pixel'], groups: ['meta'] })));
+check('rules: fb /tr firing', isFiringHit(hit({ url: 'https://www.facebook.com/tr?id=1', ids: ['meta_pixel'], groups: ['meta'] })));
+check('rules: gcs G100 denied', gcsIndicatesDenied(hit({ query: { gcs: 'G100' } })));
+check('rules: gcs G111 not denied', !gcsIndicatesDenied(hit({ query: { gcs: 'G111' } })));
+
+// Pre-consent fire (no gcs) → critical.
+const preConsent = evaluateBannerRules([capture({ trackerHits: [hit({})] })]);
+check('rules: preconsent fire critical', preConsent.some((f) => f.id.startsWith('banner_preconsent_fire') && f.severity === 'critical'));
+check('rules: no reject first layer flagged', preConsent.some((f) => f.id === 'banner_no_reject_first_layer'));
+
+// Pre-consent cookieless ping (gcs=G100) → info, not critical.
+const advanced = evaluateBannerRules([capture({ trackerHits: [hit({ query: { gcs: 'G100' } })] })]);
+check('rules: advanced pings are info', advanced.some((f) => f.id.startsWith('banner_advanced_pings') && f.severity === 'info'));
+check('rules: advanced pings not critical', !advanced.some((f) => f.severity === 'critical'));
+
+// Fires after reject → critical; cookies after reject → high; no update → medium.
+const rejectCapture = capture({
+  scenario: 'reject',
+  cmp: { detected: true, vendorName: 'OneTrust', rejectOnFirstLayer: true, accept: { selector: '#a' }, reject: { selector: '#r' }, method: 'vendor' },
+  interaction: { action: 'reject', clicked: true, selector: '#onetrust-reject-all-handler', tMs: 5000 },
+  interactionTMs: 5000,
+  trackerHits: [hit({ tMs: 6500 })],
+  cookiesFinal: ['_ga', '_fbp', 'session_id'],
+});
+const rejectFindings = evaluateBannerRules([rejectCapture]);
+check('rules: fires after reject critical', rejectFindings.some((f) => f.id.startsWith('banner_fires_after_reject') && f.severity === 'critical'));
+check('rules: cookies after reject high', rejectFindings.some((f) => f.id.startsWith('banner_cookies_after_reject') && f.severity === 'high'));
+check('rules: reject without update flagged', rejectFindings.some((f) => f.id.startsWith('banner_reject_no_update')));
+check('rules: session cookie not flagged as tracking', !rejectFindings.some((f) => f.finding.includes('session_id')));
+
+// Compliant site: banner, no pre-consent firing, update on reject, no cookies.
+const compliantReject = capture({
+  scenario: 'reject',
+  cmp: { detected: true, vendorName: 'Cookiebot (Usercentrics)', rejectOnFirstLayer: true, accept: { selector: '#a' }, reject: { selector: '#r' }, method: 'vendor' },
+  interaction: { action: 'reject', clicked: true, selector: '#r', tMs: 5000 },
+  interactionTMs: 5000,
+  consentEvents: [
+    { kind: 'default', tMs: 10, fields: { ad_storage: 'denied', analytics_storage: 'denied' } },
+    { kind: 'update', tMs: 5100, fields: { ad_storage: 'denied', analytics_storage: 'denied' } },
+  ],
+  trackerHits: [hit({ url: 'https://www.googletagmanager.com/gtm.js', ids: ['gtm_loader'], groups: ['gtm'] })],
+});
+const compliantFindings = evaluateBannerRules([
+  capture({
+    cmp: compliantReject.cmp,
+    consentEvents: [{ kind: 'default', tMs: 10, fields: { ad_storage: 'denied', analytics_storage: 'denied' } }],
+    trackerHits: [hit({ url: 'https://www.googletagmanager.com/gtm.js', ids: ['gtm_loader'], groups: ['gtm'] })],
+  }),
+  compliantReject,
+]);
+check('rules: compliant site has no critical/high', compliantFindings.every((f) => f.severity !== 'critical' && f.severity !== 'high'), JSON.stringify(compliantFindings.map((f) => f.id)));
+
+// No CMP but trackers fire → high.
+const noCmp = evaluateBannerRules([capture({ cmp: { detected: false, rejectOnFirstLayer: false }, trackerHits: [hit({})] })]);
+check('rules: missing cmp flagged', noCmp.some((f) => f.id === 'banner_missing_cmp' && f.severity === 'high'));
+
+// Form findings flow through.
+const formCapture = capture({
+  forms: analyzeForms([newsletterForm], 'https://example.com'),
+});
+check('rules: form findings mapped', evaluateFormFindings([formCapture]).some((f) => f.domain === 'forms' && f.severity === 'high'));
+
+// ── scoring ────────────────────────────────────────────────────────────────
+
+check('score: clean = 100', scoreFindings([]).score === 100 && scoreFindings([]).verdict === 'compliant_looking');
+const scored = scoreFindings(sortFindings(preConsent));
+check('score: violations reduce score', scored.score < 100);
+const sorted = sortFindings([...noCmp, ...advanced]);
+check('sort: severity order', sorted[0].severity === 'high' && sorted[sorted.length - 1].severity === 'info');
+
+// ── engine bridge ───────────────────────────────────────────────────────────
+
+const runtime = buildRuntimeInput([capture({ trackerHits: [hit({})] }), rejectCapture]);
+check('bridge: states mapped', runtime.states.includes('unknown') && runtime.states.includes('default_denied'));
+check('bridge: pages mapped', runtime.pages.length === 2 && runtime.pages[0].trackerHits?.length === 1);
+check('bridge: firstMeasurementTMs', runtime.pages[0].firstMeasurementTMs === 1000);
+check('bridge: ok flag', runtime.ok === true);
+
+const engineFindings = runConsentRuntimeRules(runtime);
+check('bridge: engine accepts runtime input', Array.isArray(engineFindings));
+check('bridge: engine emits consent findings', engineFindings.every((f) => f.domain === 'consent'));
+
+// ── report ──────────────────────────────────────────────────────────────────
+
+console.log(`web-audit tests: ${passed} passed, ${failed} failed`);
+if (failed > 0) {
+  for (const f of failures) console.error(f);
+  process.exit(1);
+}
+if (passed < 60) {
+  console.error(`expected at least 60 checks to run, got ${passed}`);
+  process.exit(1);
+}

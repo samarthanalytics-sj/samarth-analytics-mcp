@@ -1,0 +1,33 @@
+{
+  "name": "samarth-web-audit-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server with a built-in site-audit agent: crawls a website with Playwright, inventories forms, interacts with consent banners (CMP), and runs Consent Mode v2 compliance audits.",
+  "type": "module",
+  "bin": {
+    "samarth-web-audit-mcp": "./dist/web-audit-mcp/src/index.js"
+  },
+  "main": "./dist/web-audit-mcp/src/index.js",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "start": "node dist/web-audit-mcp/src/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "tsx src/__tests__/web-audit.node.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.4",
+    "zod": "^3.23.8"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.48.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

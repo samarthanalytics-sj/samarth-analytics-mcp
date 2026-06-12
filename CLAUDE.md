@@ -18,6 +18,12 @@ Layout:
   Mode v2 engine and its test suite).
 - `apps/runtime-worker/` — read-only headless-Chromium capture worker. **Not
   for Vercel** — needs a real browser host (Render/Fly/Railway/VPS).
+- `apps/web-audit-mcp/` — a second MCP server (stdio) with a built-in site
+  audit agent: Playwright crawl, form inventory, consent-banner (CMP)
+  interaction, Consent Mode v2 compliance findings. Reuses the shared consent
+  engine; SSRF guard mirrors the runtime worker. **Not for Vercel** either.
+  Its only permitted page interaction is clicking consent-banner controls —
+  never submit forms or click anything else from this server.
 
 ## Guardrails — do not violate
 
@@ -85,6 +91,13 @@ Runtime worker (run if you touched `apps/runtime-worker/`):
 
 ```bash
 npm --prefix apps/runtime-worker run check   # node --check on server/capture/cli
+```
+
+Web audit MCP (run if you touched `apps/web-audit-mcp/`):
+
+```bash
+npm run webaudit:check   # tsc --noEmit for the web-audit server
+npm run test:webaudit    # pure-logic suite, no browser needed (also part of npm test)
 ```
 
 ## Releases
