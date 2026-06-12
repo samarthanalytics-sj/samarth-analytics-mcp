@@ -4,7 +4,8 @@
   "description": "Production-ready MCP server for Google Tag Manager API v2 — Samarth Analytics",
   "type": "module",
   "bin": {
-    "samarth-gtm-mcp": "./dist/index.js"
+    "samarth-gtm-mcp": "./dist/index.js",
+    "samarth-gtm-auth": "./dist/scripts/auth-google.js"
   },
   "main": "./dist/index.js",
   "files": [
@@ -22,7 +23,7 @@
     "dev:http": "GTM_MCP_TRANSPORT=http tsx src/index.ts",
     "auth:google": "tsx src/scripts/auth-google.ts",
     "oauth:setup": "tsx src/scripts/oauth-setup.ts",
-    "test": "node src/__tests__/guardrails.node.test.mjs && node src/__tests__/auth.node.test.mjs && node src/__tests__/pagination.node.test.mjs && node src/__tests__/ga4Admin.node.test.mjs && node apps/portal/shared/__tests__/cache-keys.node.test.mjs && node apps/portal/shared/__tests__/cache.node.test.mjs && node apps/portal/shared/__tests__/jobs.node.test.mjs && node apps/portal/shared/__tests__/observability.node.test.mjs && node apps/portal/shared/__tests__/metrics.node.test.mjs && npm run test:consent && npm run test:audit && npm run test:snapshot && npm run test:rbac && npm run test:retention && npm run test:storage",
+    "test": "node src/__tests__/guardrails.node.test.mjs && node src/__tests__/auth.node.test.mjs && node src/__tests__/pagination.node.test.mjs && node src/__tests__/ga4Admin.node.test.mjs && node src/__tests__/apiRetry.node.test.mjs && node apps/portal/shared/__tests__/cache-keys.node.test.mjs && node apps/portal/shared/__tests__/cache.node.test.mjs && node apps/portal/shared/__tests__/jobs.node.test.mjs && node apps/portal/shared/__tests__/observability.node.test.mjs && node apps/portal/shared/__tests__/metrics.node.test.mjs && npm run test:consent && npm run test:audit && npm run test:snapshot && npm run test:rbac && npm run test:retention && npm run test:storage",
     "test:consent": "tsx apps/portal/shared/__tests__/consent-audit.node.test.ts",
     "test:audit": "tsx apps/portal/shared/__tests__/audit-accuracy.node.test.ts",
     "test:snapshot": "tsx apps/portal/shared/__tests__/audit-snapshot.node.test.ts",
@@ -32,6 +33,7 @@
     "test:jest": "node --experimental-vm-modules node_modules/.bin/jest",
     "test:watch": "jest --watch",
     "smoke": "node scripts/smoke-test.mjs",
+    "smoke:all": "node scripts/smoke-all-tools.mjs",
     "inspector": "npx @modelcontextprotocol/inspector dist/index.js",
     "portal:install": "npm --prefix apps/portal install",
     "portal:dev": "npm --prefix apps/portal run dev",
@@ -51,6 +53,19 @@
   ],
   "author": "Samarth Analytics",
   "license": "MIT",
+  "mcpName": "io.github.samarthanalytics-sj/samarth-gtm-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samarthanalytics-sj/samarth-analytics-mcp.git"
+  },
+  "homepage": "https://github.com/samarthanalytics-sj/samarth-analytics-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.4",
     "express": "^4.18.2",

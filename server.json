@@ -1,0 +1,53 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.samarthanalytics-sj/samarth-gtm-mcp",
+  "description": "Google Tag Manager + read-only GA4 MCP server with safety guardrails: read-only by default, gated writes/publish/deletes, dry-run, audits incl. Consent Mode v2",
+  "repository": {
+    "url": "https://github.com/samarthanalytics-sj/samarth-analytics-mcp",
+    "source": "github"
+  },
+  "version": "1.17.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "samarth-gtm-mcp",
+      "version": "1.17.2",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "GOOGLE_OAUTH_CLIENT_ID",
+          "description": "Your Google OAuth 2.0 client ID (Desktop app type)",
+          "isRequired": true,
+          "isSecret": false
+        },
+        {
+          "name": "GOOGLE_OAUTH_CLIENT_SECRET",
+          "description": "Your Google OAuth 2.0 client secret",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "GTM_MCP_ENABLE_WRITES",
+          "description": "Set to 'true' to allow create/update operations (default: read-only)",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "GTM_MCP_ENABLE_PUBLISH",
+          "description": "Set to 'true' to allow publish operations (default: disabled)",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "GTM_MCP_ENABLE_DELETES",
+          "description": "Set to 'true' to allow delete operations (default: disabled)",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
