@@ -1,7 +1,7 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.samarthanalytics-sj/samarth-gtm-mcp",
-  "description": "Google Tag Manager + read-only GA4 MCP server with safety guardrails: read-only by default, gated writes/publish/deletes, dry-run, audits incl. Consent Mode v2",
+  "description": "Google Tag Manager + read-only GA4 MCP server. Read-only by default, gated writes, audits.",
   "repository": {
     "url": "https://github.com/samarthanalytics-sj/samarth-analytics-mcp",
     "source": "github"

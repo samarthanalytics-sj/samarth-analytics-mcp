@@ -14,3 +14,6 @@ coverage/
 
 # Vercel CLI local artifacts
 .vercel/
+
+# local tooling (mcp-publisher binary)
+.tools/
