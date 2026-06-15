@@ -19,6 +19,9 @@ import type { OAuth2Client } from 'google-auth-library';
 import { buildGoogleAuth } from './auth/googleAuth.js';
 import { createGtmMcpServer } from './server.js';
 import { runWithAuth } from './auth/identityContext.js';
+import { createGoogleIdentityResolver, deriveApiBase } from './auth/googleIdentityResolver.js';
+import { createStytchTokenValidator } from './auth/stytchTokenValidator.js';
+import { renderAuthorizePage } from './auth/authorizePage.js';
 
 async function main(): Promise<void> {
   const transport = process.env.GTM_MCP_TRANSPORT ?? 'stdio';
@@ -65,37 +68,104 @@ async function startHttpServer(
   // GTM_MCP_HTTP_PORT takes precedence when explicitly set.
   const port = parseInt(process.env.GTM_MCP_HTTP_PORT ?? process.env.PORT ?? '3001', 10);
 
-  // Bearer-token gate for the /mcp endpoint. When GTM_MCP_HTTP_AUTH_TOKEN is
-  // set, every /mcp request must carry `Authorization: Bearer <token>`. When
-  // unset (local dev), the endpoint is open and a warning is logged — never
-  // expose an ungated /mcp to the public internet.
-  const authToken = process.env.GTM_MCP_HTTP_AUTH_TOKEN ?? '';
-  if (!authToken) {
+  // ── Auth modes ─────────────────────────────────────────────────────────────
+  // Multi-user mode (Stytch Connected Apps) activates when STYTCH_PROJECT_ID is
+  // set: each /mcp request carries a Stytch-issued JWT, which we validate and
+  // resolve to that user's own Google identity (per-request). Otherwise the
+  // server runs in single-identity mode behind the static GTM_MCP_HTTP_AUTH_TOKEN
+  // gate — today's behavior, unchanged. See docs/PHASE3_IMPLEMENTATION_SPEC.md.
+  const stytchProjectId = process.env.STYTCH_PROJECT_ID ?? '';
+  const multiUser = stytchProjectId.length > 0;
+
+  const staticToken = process.env.GTM_MCP_HTTP_AUTH_TOKEN ?? '';
+  if (!multiUser && !staticToken) {
     console.error(
       '[samarth-gtm-mcp] WARNING: GTM_MCP_HTTP_AUTH_TOKEN is not set — /mcp is unauthenticated. ' +
         'Set it before exposing this server beyond localhost.'
     );
   }
-  const requireAuth: import('express').RequestHandler = (req, res, next) => {
-    if (!authToken) {
-      next();
-      return;
+
+  const publicUrl = (
+    process.env.GTM_MCP_PUBLIC_URL ?? `http://localhost:${port}`
+  ).replace(/\/+$/, '');
+  const prmUrl = `${publicUrl}/.well-known/oauth-protected-resource`;
+
+  let validator: ReturnType<typeof createStytchTokenValidator> | undefined;
+  let resolver: ReturnType<typeof createGoogleIdentityResolver> | undefined;
+  let authServerMetadataUrl = '';
+  if (multiUser) {
+    const secret = process.env.STYTCH_SECRET ?? '';
+    if (!secret) {
+      console.error(
+        '[samarth-gtm-mcp] FATAL: STYTCH_PROJECT_ID is set but STYTCH_SECRET is missing.'
+      );
+      process.exit(1);
     }
-    const header = req.headers.authorization ?? '';
-    const expected = Buffer.from(`Bearer ${authToken}`);
-    const actual = Buffer.from(header);
-    const ok = expected.length === actual.length && timingSafeEqual(expected, actual);
-    if (!ok) {
-      res.status(401).json({ error: 'Unauthorized. Provide Authorization: Bearer <token>.' });
-      return;
+    const apiBase = process.env.STYTCH_API_BASE ?? deriveApiBase(stytchProjectId);
+    const jwksUrl =
+      process.env.STYTCH_JWKS_URL ??
+      `${apiBase}/v1/public/${stytchProjectId}/.well-known/jwks.json`;
+    authServerMetadataUrl =
+      process.env.STYTCH_AUTH_SERVER_METADATA_URL ?? `${apiBase}/v1/public/${stytchProjectId}`;
+    validator = createStytchTokenValidator({
+      jwksUrl,
+      issuer: process.env.STYTCH_JWT_ISSUER || undefined,
+      audience: process.env.STYTCH_JWT_AUDIENCE || undefined,
+      debugClaims: process.env.STYTCH_DEBUG_CLAIMS === 'true',
+    });
+    resolver = createGoogleIdentityResolver({ projectId: stytchProjectId, secret, apiBase });
+    console.error(`[samarth-gtm-mcp] Multi-user mode (Stytch) enabled. JWKS: ${jwksUrl}`);
+  }
+
+  function send401(res: import('express').Response, reason: string): void {
+    // In multi-user mode, point MCP clients at the Protected Resource Metadata
+    // so they can discover the authorization server (RFC 9728).
+    if (multiUser) {
+      res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${prmUrl}"`);
     }
-    next();
-  };
+    res.status(401).json({ error: reason });
+  }
+
+  // Resolve the OAuth2Client to use for a request, applying the right gate.
+  // Returns undefined (and sends a 401) when the request is not authorized.
+  async function resolveAuthForRequest(
+    req: import('express').Request,
+    res: import('express').Response
+  ): Promise<OAuth2Client | undefined> {
+    if (multiUser) {
+      const m = /^Bearer (.+)$/.exec(req.headers.authorization ?? '');
+      if (!m) {
+        send401(res, 'Missing bearer token.');
+        return undefined;
+      }
+      try {
+        const claims = await validator!.validate(m[1]);
+        return await resolver!.resolve(claims.organizationId, claims.memberId);
+      } catch {
+        send401(res, 'Invalid or expired token.');
+        return undefined;
+      }
+    }
+    // single-identity mode: static token gate (timing-safe).
+    if (staticToken) {
+      const expected = Buffer.from(`Bearer ${staticToken}`);
+      const actual = Buffer.from(req.headers.authorization ?? '');
+      const ok = expected.length === actual.length && timingSafeEqual(expected, actual);
+      if (!ok) {
+        res.status(401).json({ error: 'Unauthorized. Provide Authorization: Bearer <token>.' });
+        return undefined;
+      }
+    }
+    return auth;
+  }
 
   // Map of session ID → transport (for stateful sessions)
   const transports = new Map<string, InstanceType<typeof StreamableHTTPServerTransport>>();
 
-  app.post('/mcp', requireAuth, async (req, res) => {
+  app.post('/mcp', async (req, res) => {
+    const reqAuth = await resolveAuthForRequest(req, res);
+    if (!reqAuth) return; // 401 already sent
+
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
     let transport: InstanceType<typeof StreamableHTTPServerTransport>;
@@ -125,34 +195,55 @@ async function startHttpServer(
       await server.connect(transport);
     }
 
-    // Run tool dispatch inside the identity context. Phase 1: this carries the
-    // default `auth`, so behavior is unchanged. A later phase resolves the
-    // per-user Google identity from the request's token and passes it here —
-    // this is the single hook point for multi-user mode. See docs/adr/0001.
-    await runWithAuth(auth, () => transport.handleRequest(req, res, req.body));
+    // Run tool dispatch inside the resolved identity context: the per-user
+    // Google client in multi-user mode, or the default identity otherwise.
+    await runWithAuth(reqAuth, () => transport.handleRequest(req, res, req.body));
   });
 
   // SSE stream endpoint (GET /mcp) — for clients that support SSE-style streaming
-  app.get('/mcp', requireAuth, async (req, res) => {
+  app.get('/mcp', async (req, res) => {
+    const reqAuth = await resolveAuthForRequest(req, res);
+    if (!reqAuth) return;
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     if (!sessionId || !transports.has(sessionId)) {
       res.status(400).json({ error: 'Missing or invalid mcp-session-id header.' });
       return;
     }
     const transport = transports.get(sessionId)!;
-    await runWithAuth(auth, () => transport.handleRequest(req, res));
+    await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
   });
 
   // DELETE /mcp — client-initiated session termination
-  app.delete('/mcp', requireAuth, async (req, res) => {
+  app.delete('/mcp', async (req, res) => {
+    const reqAuth = await resolveAuthForRequest(req, res);
+    if (!reqAuth) return;
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     if (sessionId && transports.has(sessionId)) {
       const transport = transports.get(sessionId)!;
-      await runWithAuth(auth, () => transport.handleRequest(req, res));
+      await runWithAuth(reqAuth, () => transport.handleRequest(req, res));
       transports.delete(sessionId);
     } else {
       res.status(404).json({ error: 'Session not found.' });
     }
+  });
+
+  // ── Multi-user OAuth surface (RFC 9728 + Stytch authorize page) ─────────────
+  // Protected Resource Metadata — tells MCP clients where the authorization
+  // server is. Always served; authorization_servers is populated in multi-user
+  // mode. See docs/PHASE3_IMPLEMENTATION_SPEC.md.
+  app.get('/.well-known/oauth-protected-resource', (_req, res) => {
+    res.json({
+      resource: publicUrl,
+      authorization_servers:
+        multiUser && authServerMetadataUrl ? [authServerMetadataUrl] : [],
+    });
+  });
+
+  // Authorization URL configured in the Stytch dashboard — hosts the Stytch B2B
+  // IdentityProvider (login + consent). See src/auth/authorizePage.ts.
+  app.get('/oauth/authorize', (_req, res) => {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderAuthorizePage({ publicToken: process.env.STYTCH_PUBLIC_TOKEN ?? '' }));
   });
 
   // OAuth callback endpoint (used when redirect URI is this server)
