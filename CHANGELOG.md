@@ -1,3 +1,9 @@
+## [1.19.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.0...v1.19.1) (2026-06-15)
+
+### Bug Fixes
+
+* **auth:** point authorize-app login redirect back to /oauth/authorize ([ac75818](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ac758185c6cd57f2adaecea209aa2a253799f7fd))
+
 ## [1.19.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.18.0...v1.19.0) (2026-06-12)
 
 ### Features
