@@ -1,3 +1,9 @@
+## [1.19.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.2...v1.19.3) (2026-06-15)
+
+### Bug Fixes
+
+* **auth:** preserve OAuth authorize params through the login redirect ([42e35eb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/42e35eb7937ea9ac6793b3c27baf28791c305384))
+
 ## [1.19.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.1...v1.19.2) (2026-06-15)
 
 ### Bug Fixes
