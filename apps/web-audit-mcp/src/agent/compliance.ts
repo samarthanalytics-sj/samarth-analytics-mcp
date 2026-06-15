@@ -7,8 +7,10 @@
  *      tracking cookies set pre-consent, missing Reject on the first layer.
  *   2. Form rules (agent/forms.ts) — PII collection without notice, pre-ticked
  *      marketing opt-ins, third-party/insecure form actions.
- *   3. The shared Consent Mode v2 engine (apps/portal/shared/consent-audit.ts,
- *      RUNTIME rules) — the same 170-case-tested engine the portal uses.
+ *   3. The shared Consent Mode v2 engine (apps/portal/shared/consent-audit.ts) —
+ *      the same 170-case-tested engine the portal uses. RUNTIME rules only when
+ *      no GTM container is supplied; the full CONFIG + RUNTIME + reconcile
+ *      engine ("reconciled" coverage) when a container export is passed in.
  *
  * GA4 "advanced consent mode" pings (gcs=G1xx with denied digits) are treated
  * as informational, not violations — they are cookieless by design.
@@ -17,6 +19,7 @@
 import { loadPlaywright, PlaywrightMissingError, type CapturedHit } from './browser.js';
 import { crawlSite, type CrawlResult } from './crawler.js';
 import { captureScenario, type Scenario, type ScenarioCapture } from './capture.js';
+import { parseGtmContainer } from './gtmConfig.js';
 import { loadConfig, clampOpt } from '../utils/config.js';
 import { urlAllowed } from '../utils/urlGuard.js';
 import type {
@@ -25,6 +28,9 @@ import type {
   ConsentFinding,
   ConsentStateLabel,
 } from '../../../portal/shared/consent-audit.js';
+
+/** How much of the consent engine ran, surfaced in the report. */
+export type ConsentCoverage = 'runtime_only' | 'runtime_imported' | 'reconciled';
 
 export type Severity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 
@@ -356,6 +362,38 @@ function mapEngineFinding(f: ConsentFinding): AuditFinding {
   };
 }
 
+/**
+ * Run the shared consent engine over the captures. With a GTM container export
+ * the full CONFIG + RUNTIME + reconcile engine runs ("reconciled" coverage when
+ * the config carries consent intent); without one, only the RUNTIME rules run.
+ * A malformed container never fails the audit — the runtime findings stand and
+ * the reason is surfaced as a note.
+ */
+export async function runConsentEngine(
+  captures: ScenarioCapture[],
+  gtmContainer: unknown,
+): Promise<{ findings: AuditFinding[]; coverage: ConsentCoverage; note?: string }> {
+  const rt = buildRuntimeInput(captures);
+  const mod = await import('../../../portal/shared/consent-audit.js');
+  if (gtmContainer !== undefined && gtmContainer !== null) {
+    try {
+      const cfg = parseGtmContainer(gtmContainer);
+      const result = mod.runConsentAudit(cfg, rt);
+      return {
+        findings: result.findings.map(mapEngineFinding),
+        coverage: result.coverage === 'reconciled' ? 'reconciled' : 'runtime_imported',
+      };
+    } catch (err) {
+      return {
+        findings: mod.runConsentRuntimeRules(rt).map(mapEngineFinding),
+        coverage: 'runtime_only',
+        note: `GTM container ignored: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+  return { findings: mod.runConsentRuntimeRules(rt).map(mapEngineFinding), coverage: 'runtime_only' };
+}
+
 // ── Report + orchestration ──────────────────────────────────────────────────
 
 export interface ComplianceReport {
@@ -369,8 +407,12 @@ export interface ComplianceReport {
     scenariosRun: Scenario[];
     cmp: { detected: boolean; vendor?: string; rejectOnFirstLayer?: boolean };
     formsFound: number;
+    /** How much of the consent engine ran (reconciled requires a GTM container). */
+    consentCoverage: ConsentCoverage;
     findingCounts: Record<Severity, number>;
   };
+  /** Audit-level notes (e.g. a GTM container that could not be used). */
+  notes: string[];
   crawl: CrawlResult;
   captures: {
     scenario: Scenario;
@@ -411,6 +453,12 @@ export interface ComplianceAuditOptions {
   /** Pages (beyond the start URL) that also get a pre-consent capture + form scan. */
   capturePages?: number;
   scenarios?: Scenario[];
+  /**
+   * Parsed GTM container export (export_container, format:"full"). When present,
+   * the consent engine reconciles configured intent against runtime behaviour
+   * ("reconciled" coverage) instead of running runtime-only rules.
+   */
+  gtmContainer?: unknown;
 }
 
 /** Full audit: crawl the site, scan forms, exercise the banner, run all rules. */
@@ -464,13 +512,13 @@ export async function runComplianceAudit(
       captures.push(await captureScenario(browser, entry, scenario, { ...captureOpts, scanForms: false }));
     }
 
-    // Findings from all three sources.
-    const { runConsentRuntimeRules } = await import('../../../portal/shared/consent-audit.js');
-    const engineFindings = runConsentRuntimeRules(buildRuntimeInput(captures)).map(mapEngineFinding);
+    // Findings from all three sources. The consent engine runs reconciled
+    // (CONFIG + RUNTIME) when a GTM container was supplied, runtime-only otherwise.
+    const engine = await runConsentEngine(captures, options.gtmContainer);
     const findings = sortFindings([
       ...evaluateBannerRules(captures),
       ...evaluateFormFindings(captures),
-      ...engineFindings,
+      ...engine.findings,
     ]);
 
     const counts: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
@@ -495,8 +543,10 @@ export async function runComplianceAudit(
             }
           : { detected: false },
         formsFound: captures.reduce((n, c) => n + (c.forms?.length ?? 0), 0),
+        consentCoverage: engine.coverage,
         findingCounts: counts,
       },
+      notes: engine.note ? [engine.note] : [],
       crawl,
       captures: captures.map((c) => ({
         scenario: c.scenario,

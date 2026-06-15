@@ -3,8 +3,9 @@
  * Run: tsx apps/web-audit-mcp/src/__tests__/web-audit.node.test.ts
  *
  * Covers the SSRF guard, CMP registry shape + text heuristics, form PII
- * analysis, the banner compliance rules over fixture captures, and the
- * RuntimeInput bridge into the shared Consent Mode v2 engine.
+ * analysis, the banner compliance rules over fixture captures, the RuntimeInput
+ * bridge into the shared Consent Mode v2 engine, and the GTM container bridge
+ * (parseGtmContainer + reconciled-coverage escalation in runConsentEngine).
  */
 
 import { urlAllowed } from '../utils/urlGuard.js';
@@ -17,11 +18,13 @@ import {
   evaluateBannerRules,
   evaluateFormFindings,
   buildRuntimeInput,
+  runConsentEngine,
   scoreFindings,
   sortFindings,
   isFiringHit,
   gcsIndicatesDenied,
 } from '../agent/compliance.js';
+import { parseGtmContainer, GtmContainerError } from '../agent/gtmConfig.js';
 import { runConsentRuntimeRules } from '../../../portal/shared/consent-audit.js';
 
 let passed = 0;
@@ -292,6 +295,91 @@ check('bridge: ok flag', runtime.ok === true);
 const engineFindings = runConsentRuntimeRules(runtime);
 check('bridge: engine accepts runtime input', Array.isArray(engineFindings));
 check('bridge: engine emits consent findings', engineFindings.every((f) => f.domain === 'consent'));
+
+// ── GTM container bridge (reconciled coverage) ──────────────────────────────
+
+// A "full" export_container payload: raw GTM API objects with parameters and
+// per-tag consentSettings present.
+const fullContainer = {
+  exportedAt: '2026-06-15T00:00:00Z',
+  workspace: { name: 'Default Workspace' },
+  tags: [
+    {
+      tagId: '1',
+      name: 'GA4 Configuration',
+      type: 'gaawc',
+      parameter: [{ key: 'measurementId', value: 'G-ABC123' }],
+      consentSettings: { consentStatus: 'NEEDED' },
+      firingTriggerId: ['2147479553'],
+    },
+    {
+      tagId: '2',
+      name: 'Meta Pixel Base',
+      type: 'html',
+      parameter: [{ key: 'html', value: '<script>fbq("init","123")</script>' }],
+      consentSettings: { consentStatus: 'NOT_SET' },
+    },
+  ],
+  triggers: [{ triggerId: '2147479553', name: 'Consent Initialization All Pages', type: 'consentInit' }],
+  variables: [
+    { variableId: '1', name: 'Consent — ad_storage', type: 'k', parameter: [{ key: 'name', value: 'ad_storage' }] },
+  ],
+};
+
+const parsed = parseGtmContainer(fullContainer);
+check('gtm: tags parsed', parsed.tags.length === 2);
+check('gtm: triggers parsed', parsed.triggers.length === 1);
+check('gtm: variables parsed', parsed.variables.length === 1);
+check('gtm: textBlob lowercased + includes tag name', parsed.textBlob.includes('ga4 configuration'));
+check('gtm: textBlob includes param value', parsed.textBlob.includes('g-abc123'));
+check('gtm: textBlob includes variable param', parsed.textBlob.includes('ad_storage'));
+check('gtm: textBlob excludes trigger names', !parsed.textBlob.includes('consent initialization all pages'));
+check('gtm: usageContexts default empty', parsed.usageContexts.length === 0);
+
+// Nested under a `container` key, with usageContext.
+const nested = parseGtmContainer({ container: { usageContext: ['SERVER'], tags: fullContainer.tags, triggers: [], variables: [] } });
+check('gtm: nested container tags', nested.tags.length === 2);
+check('gtm: usageContexts lowercased', nested.usageContexts.join(',') === 'server');
+
+// Defensive rejections.
+let summaryRejected = false;
+try {
+  parseGtmContainer({ tags: [{ tagId: '1', name: 'GA4', type: 'gaawc', paramCount: 3 }], triggers: [], variables: [] });
+} catch (e) {
+  summaryRejected = e instanceof GtmContainerError;
+}
+check('gtm: summary export rejected', summaryRejected);
+
+let emptyRejected = false;
+try {
+  parseGtmContainer({});
+} catch (e) {
+  emptyRejected = e instanceof GtmContainerError;
+}
+check('gtm: empty object rejected', emptyRejected);
+
+let nullRejected = false;
+try {
+  parseGtmContainer(null);
+} catch (e) {
+  nullRejected = e instanceof GtmContainerError;
+}
+check('gtm: null rejected', nullRejected);
+
+// runConsentEngine: coverage escalation.
+const baseCaptures = [capture({ trackerHits: [hit({})] }), rejectCapture];
+
+const engNone = await runConsentEngine(baseCaptures, undefined);
+check('engine: no container → runtime_only', engNone.coverage === 'runtime_only');
+check('engine: runtime-only findings are consent', engNone.findings.every((f) => f.domain === 'consent'));
+
+const engRecon = await runConsentEngine(baseCaptures, fullContainer);
+check('engine: full container → reconciled', engRecon.coverage === 'reconciled', engRecon.coverage);
+check('engine: reconciled has no note', engRecon.note === undefined);
+
+const engBad = await runConsentEngine(baseCaptures, { tags: [{ name: 'x', paramCount: 2 }], triggers: [], variables: [] });
+check('engine: bad container → runtime_only + note', engBad.coverage === 'runtime_only' && typeof engBad.note === 'string');
+check('engine: bad-container note mentions full', /full/i.test(engBad.note ?? ''));
 
 // ── report ──────────────────────────────────────────────────────────────────
 

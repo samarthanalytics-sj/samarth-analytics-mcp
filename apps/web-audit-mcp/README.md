@@ -35,6 +35,29 @@ scored findings.
   domains or over plain HTTP.
 - Everything the shared Consent Mode v2 **runtime engine** flags on the capture.
 
+### Reconciled coverage (config vs. reality)
+
+`consent_compliance_audit` accepts an optional **`gtmContainer`** — a container
+export from the `samarth-gtm-mcp` server's `export_container` tool with
+`format:"full"`. When supplied, the audit runs the consent engine's full
+**CONFIG + RUNTIME + reconcile** path instead of runtime-only rules, and the
+report's `summary.consentCoverage` escalates:
+
+| `consentCoverage` | Meaning |
+| --- | --- |
+| `runtime_only` | No container supplied — only what the live capture proves. |
+| `runtime_imported` | Container supplied but it declares no consent intent to reconcile against. |
+| `reconciled` | Container **and** capture present — configured intent checked against observed behaviour (strongest). |
+
+This catches mismatches a runtime-only audit can't see — e.g. a tag GTM marks
+"consent NOT_NEEDED" that nonetheless fires a tracker before consent, or a
+configured Consent Mode default that never reaches the wire. A `summary`/
+`names_only` export (parameters stripped) is rejected with a note in
+`report.notes`; the runtime findings still stand. Typical flow:
+
+1. `export_container` (format `full`) on the GTM MCP → parsed JSON.
+2. Pass it as `gtmContainer` to `consent_compliance_audit` here.
+
 ## Safety model
 
 - **Read-only toward the audited site.** Forms are inspected, never filled or

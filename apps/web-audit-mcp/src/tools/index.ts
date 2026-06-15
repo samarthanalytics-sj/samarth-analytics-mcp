@@ -202,7 +202,9 @@ export function registerAllTools(server: McpServer): void {
         'browser contexts, and produces a compliance report with a 0–100 score. Findings combine ' +
         'banner-behaviour rules (tags firing before consent, tags firing after Reject, tracking cookies ' +
         'pre-consent, missing first-layer Reject), form privacy rules, and the shared Consent Mode v2 ' +
-        'runtime engine. This is the recommended one-call entry point; use the focused tools to drill in.',
+        'engine. Pass gtmContainer to reconcile the configured GTM container against observed runtime ' +
+        'behaviour ("reconciled" coverage). This is the recommended one-call entry point; use the focused ' +
+        'tools to drill in.',
       inputSchema: z.object({
         url: urlField,
         maxPages: z.number().int().positive().optional()
@@ -213,14 +215,22 @@ export function registerAllTools(server: McpServer): void {
           .describe('How many crawled pages also get a deep pre-consent capture + form scan (default 3, cap 8).'),
         scenarios: z.array(z.enum(['ignore', 'accept', 'reject'])).optional()
           .describe('Consent scenarios to exercise on the entry page (default: all three).'),
+        gtmContainer: z.record(z.string(), z.unknown()).optional()
+          .describe(
+            'Optional GTM container export from the samarth-gtm-mcp `export_container` tool with ' +
+            'format:"full" (the parsed JSON object, with tags/triggers/variables arrays). When ' +
+            'supplied, the consent engine reconciles configured consent intent against the live ' +
+            'capture — upgrading coverage from runtime-only to "reconciled". A "summary"/"names_only" ' +
+            'export is rejected with a note (parameters are stripped there).',
+          ),
       }),
     },
-    async ({ url, maxPages, maxDepth, capturePages, scenarios }) => {
+    async ({ url, maxPages, maxDepth, capturePages, scenarios, gtmContainer }) => {
       const rejected = admit(url);
       if (rejected) return rejected;
       try {
         const { runComplianceAudit } = await import('../agent/compliance.js');
-        const report = await runComplianceAudit(url, { maxPages, maxDepth, capturePages, scenarios });
+        const report = await runComplianceAudit(url, { maxPages, maxDepth, capturePages, scenarios, gtmContainer });
         return jsonResult(report);
       } catch (err) {
         return errorResult('consent_compliance_audit', err);

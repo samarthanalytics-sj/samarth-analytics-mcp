@@ -53,7 +53,8 @@ function buildInstructions(): string {
       (config.allowlist.length > 0 ? `, allowlist: ${config.allowlist.join(', ')}` : ', no host allowlist') +
       '.',
     '',
-    'TIP: pair with the samarth-gtm-mcp server — export the GTM container there and compare its',
-    'consent settings against the runtime findings here for a config-vs-reality reconciliation.',
+    'TIP: pair with the samarth-gtm-mcp server for config-vs-reality reconciliation. Run its',
+    'export_container tool (format:"full"), then pass the parsed JSON as the gtmContainer argument',
+    'to consent_compliance_audit here — coverage escalates from runtime-only to "reconciled".',
   ].join('\n');
 }
