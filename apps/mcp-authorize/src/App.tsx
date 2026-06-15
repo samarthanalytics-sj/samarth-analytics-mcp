@@ -12,25 +12,34 @@ const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/analytics.readonly',
 ];
 
-const loginConfig: StytchB2BUIConfig = {
-  products: [B2BProducts.oauth],
-  oauthOptions: {
-    providers: [
-      {
-        type: 'google',
-        customScopes: GOOGLE_SCOPES,
-        // Force Google to issue a refresh token (Stytch vaults it). Mirrors the
-        // spike's provider_access_type=offline + provider_prompt=consent.
-        providerParams: { access_type: 'offline', prompt: 'consent' },
-      },
-    ],
-  },
-  authFlowType: AuthFlowType.Discovery,
-  sessionOptions: { sessionDurationMinutes: 60 },
-};
-
 export function App() {
   const { session } = useStytchMemberSession();
+
+  // The login flow must return to THIS authorize page (not a leftover localhost
+  // redirect) so it can finish discovery, establish a session, then render the
+  // consent screen. This URL must also be allow-listed in the Stytch dashboard
+  // (Redirect URLs → Login + Discovery).
+  const authorizeUrl =
+    typeof window !== 'undefined' ? `${window.location.origin}/oauth/authorize` : '';
+
+  const loginConfig: StytchB2BUIConfig = {
+    products: [B2BProducts.oauth],
+    oauthOptions: {
+      providers: [
+        {
+          type: 'google',
+          customScopes: GOOGLE_SCOPES,
+          // Force Google to issue a refresh token (Stytch vaults it). Mirrors
+          // the spike's provider_access_type=offline + provider_prompt=consent.
+          providerParams: { access_type: 'offline', prompt: 'consent' },
+        },
+      ],
+      loginRedirectURL: authorizeUrl,
+      signupRedirectURL: authorizeUrl,
+    },
+    authFlowType: AuthFlowType.Discovery,
+    sessionOptions: { sessionDurationMinutes: 60 },
+  };
 
   return (
     <div className="wrap">
