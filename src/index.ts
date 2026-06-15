@@ -270,7 +270,11 @@ async function startHttpServer(
       grant_types_supported: ['authorization_code', 'refresh_token'],
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
-      scopes_supported: ['openid', 'profile', 'email', 'offline_access', 'full_access'],
+      // Only advertise universally-grantable OIDC scopes. mcp-remote requests
+      // whatever we advertise; full_access/offline_access were rejected by
+      // Stytch ("invalid scope") for the DCR'd connected app. We only need to
+      // identify the member, so openid/email/profile suffices.
+      scopes_supported: ['openid', 'email', 'profile'],
     });
   });
 
