@@ -19,9 +19,9 @@ import type { OAuth2Client } from 'google-auth-library';
 import { buildGoogleAuth } from './auth/googleAuth.js';
 import { createGtmMcpServer } from './server.js';
 import { runWithAuth } from './auth/identityContext.js';
+import { existsSync } from 'node:fs';
 import { createGoogleIdentityResolver, deriveApiBase } from './auth/googleIdentityResolver.js';
 import { createStytchTokenValidator } from './auth/stytchTokenValidator.js';
-import { renderAuthorizePage } from './auth/authorizePage.js';
 
 async function main(): Promise<void> {
   const transport = process.env.GTM_MCP_TRANSPORT ?? 'stdio';
@@ -239,12 +239,27 @@ async function startHttpServer(
     });
   });
 
-  // Authorization URL configured in the Stytch dashboard — hosts the Stytch B2B
-  // IdentityProvider (login + consent). See src/auth/authorizePage.ts.
-  app.get('/oauth/authorize', (_req, res) => {
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderAuthorizePage({ publicToken: process.env.STYTCH_PUBLIC_TOKEN ?? '' }));
+  // Authorization URL configured in the Stytch dashboard — serves the prebuilt
+  // React authorize app (login + consent) from apps/mcp-authorize. The public
+  // token is injected at runtime (token-agnostic bundle). See that app + the
+  // PHASE3 spec. Routes are registered before the static mount so config.js
+  // isn't shadowed.
+  app.get('/oauth/authorize/config.js', (_req, res) => {
+    res.type('application/javascript').send(
+      'window.__MCP_AUTHORIZE_CONFIG__=' +
+        JSON.stringify({ stytchPublicToken: process.env.STYTCH_PUBLIC_TOKEN ?? '' }) +
+        ';'
+    );
   });
+  const authorizeDir = process.env.AUTHORIZE_UI_DIR ?? 'apps/mcp-authorize/dist';
+  if (existsSync(authorizeDir)) {
+    app.use('/oauth/authorize', express.static(authorizeDir));
+  } else {
+    console.error(
+      `[samarth-gtm-mcp] authorize UI not found at ${authorizeDir} — /oauth/authorize will 404. ` +
+        'Build apps/mcp-authorize (or set AUTHORIZE_UI_DIR).'
+    );
+  }
 
   // OAuth callback endpoint (used when redirect URI is this server)
   app.get('/oauth/callback', async (req, res) => {

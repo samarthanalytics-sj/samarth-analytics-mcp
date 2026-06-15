@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Authorize — Samarth GTM MCP</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; background: #0b1220; color: #f4f7fb; }
+      #root { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+      .wrap { width: 100%; max-width: 440px; padding: 24px; }
+      h1 { font-size: 20px; margin: 0 0 16px; }
+      .panel { background: #fff; border-radius: 10px; padding: 8px; }
+      .hint { color: #9aa8c0; font-size: 13px; margin-top: 16px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Runtime config (public token) injected by the MCP server. -->
+    <script src="/oauth/authorize/config.js"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
