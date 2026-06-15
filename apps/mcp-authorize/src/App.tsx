@@ -15,12 +15,19 @@ const GOOGLE_SCOPES = [
 export function App() {
   const { session } = useStytchMemberSession();
 
-  // The login flow must return to THIS authorize page (not a leftover localhost
-  // redirect) so it can finish discovery, establish a session, then render the
-  // consent screen. This URL must also be allow-listed in the Stytch dashboard
-  // (Redirect URLs → Login + Discovery).
-  const authorizeUrl =
-    typeof window !== 'undefined' ? `${window.location.origin}/oauth/authorize` : '';
+  // The login flow must return to THIS authorize page WITH the original OAuth
+  // authorize params (client_id, code_challenge, state, redirect_uri, scope,
+  // resource) preserved — otherwise B2BIdentityProvider has no authorization
+  // request to consent to and errors. We keep the full URL but strip any Stytch
+  // discovery token so a return pass doesn't loop. This base must be allow-listed
+  // in the Stytch dashboard (Redirect URLs → Login + Discovery).
+  let authorizeUrl = '';
+  if (typeof window !== 'undefined') {
+    const u = new URL(window.location.href);
+    u.searchParams.delete('stytch_token_type');
+    u.searchParams.delete('token');
+    authorizeUrl = u.toString();
+  }
 
   const loginConfig: StytchB2BUIConfig = {
     products: [B2BProducts.oauth],
