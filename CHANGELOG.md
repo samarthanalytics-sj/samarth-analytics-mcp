@@ -1,3 +1,9 @@
+## [1.19.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.4...v1.19.5) (2026-06-15)
+
+### Bug Fixes
+
+* **auth:** advertise only grantable OIDC scopes (drop full_access/offline_access) ([ed190e3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ed190e31a7047d0560abbe13928fa7cd1a56ec01))
+
 ## [1.19.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.3...v1.19.4) (2026-06-15)
 
 ### Bug Fixes
