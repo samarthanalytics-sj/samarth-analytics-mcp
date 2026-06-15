@@ -27,17 +27,22 @@ export type Ga4AdminClient = analyticsadmin_v1beta.Analyticsadmin;
 export type Ga4AdminAlphaClient = analyticsadmin_v1alpha.Analyticsadmin;
 export type Ga4DataClient = analyticsdata_v1beta.Analyticsdata;
 
-let _client: Ga4AdminClient | null = null;
-let _alphaClient: Ga4AdminAlphaClient | null = null;
-let _dataClient: Ga4DataClient | null = null;
+// One client per auth identity (not a single global), so the process can serve
+// multiple Google identities — see auth/identityContext.ts and docs/adr/0001.
+// Keyed by the OAuth2Client instance; entries GC'd when the auth goes away.
+let _clients = new WeakMap<OAuth2Client, Ga4AdminClient>();
+let _alphaClients = new WeakMap<OAuth2Client, Ga4AdminAlphaClient>();
+let _dataClients = new WeakMap<OAuth2Client, Ga4DataClient>();
 
 export function getGa4AdminClient(auth: OAuth2Client): Ga4AdminClient {
-  if (!_client) {
+  let client = _clients.get(auth);
+  if (!client) {
     // All GA4 tools are read-only (GET), so retry/backoff applies to every
     // call this client makes. See apiRetry.ts.
-    _client = analyticsadmin({ version: 'v1beta', auth, ...buildRetryOptions() });
+    client = analyticsadmin({ version: 'v1beta', auth, ...buildRetryOptions() });
+    _clients.set(auth, client);
   }
-  return _client;
+  return client;
 }
 
 /**
@@ -45,10 +50,12 @@ export function getGa4AdminClient(auth: OAuth2Client): Ga4AdminClient {
  * (currently: enhanced measurement settings). Same read-only scope applies.
  */
 export function getGa4AdminAlphaClient(auth: OAuth2Client): Ga4AdminAlphaClient {
-  if (!_alphaClient) {
-    _alphaClient = analyticsadmin({ version: 'v1alpha', auth, ...buildRetryOptions() });
+  let client = _alphaClients.get(auth);
+  if (!client) {
+    client = analyticsadmin({ version: 'v1alpha', auth, ...buildRetryOptions() });
+    _alphaClients.set(auth, client);
   }
-  return _alphaClient;
+  return client;
 }
 
 /**
@@ -57,21 +64,23 @@ export function getGa4AdminAlphaClient(auth: OAuth2Client): Ga4AdminAlphaClient 
  * authorizes the Admin client also authorizes Data API reads — no extra scope.
  */
 export function getGa4DataClient(auth: OAuth2Client): Ga4DataClient {
-  if (!_dataClient) {
+  let client = _dataClients.get(auth);
+  if (!client) {
     // runReport/runRealtimeReport are pure reads carried over POST, and this
     // client has no mutating surface, so POST retry is safe here (and only here).
-    _dataClient = analyticsdata({
+    client = analyticsdata({
       version: 'v1beta',
       auth,
       ...buildRetryOptions(process.env, { extraMethodsToRetry: ['POST'] }),
     });
+    _dataClients.set(auth, client);
   }
-  return _dataClient;
+  return client;
 }
 
-/** Reset clients (useful in tests). */
+/** Reset cached clients (useful in tests). */
 export function resetGa4AdminClient(): void {
-  _client = null;
-  _alphaClient = null;
-  _dataClient = null;
+  _clients = new WeakMap();
+  _alphaClients = new WeakMap();
+  _dataClients = new WeakMap();
 }

@@ -13,6 +13,7 @@ import {
 } from './utils/ga4Client.js';
 import { registerAllTools } from './tools/index.js';
 import { getGuardrailConfig } from './utils/guardrails.js';
+import { resolveAuth } from './auth/identityContext.js';
 
 export const SERVER_NAME = 'samarth-gtm-mcp';
 export const SERVER_VERSION = '1.0.0';
@@ -28,11 +29,14 @@ export function createGtmMcpServer(auth: OAuth2Client): McpServer {
     }
   );
 
-  // Lazy client getters — created once auth is available
-  const getClient = () => getGtmClient(auth);
-  const getGa4Client = () => getGa4AdminClient(auth);
-  const getGa4AlphaClient = () => getGa4AdminAlphaClient(auth);
-  const getGa4DataClientFn = () => getGa4DataClient(auth);
+  // Lazy, per-request client getters. `auth` is the default/global identity;
+  // when a request runs inside an identity context (multi-user mode),
+  // resolveAuth() returns that request's identity instead. See
+  // auth/identityContext.ts and docs/adr/0001.
+  const getClient = () => getGtmClient(resolveAuth(auth));
+  const getGa4Client = () => getGa4AdminClient(resolveAuth(auth));
+  const getGa4AlphaClient = () => getGa4AdminAlphaClient(resolveAuth(auth));
+  const getGa4DataClientFn = () => getGa4DataClient(resolveAuth(auth));
 
   registerAllTools(
     server,

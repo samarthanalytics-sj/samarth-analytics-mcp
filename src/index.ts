@@ -15,8 +15,10 @@
  */
 
 import 'dotenv/config';
+import type { OAuth2Client } from 'google-auth-library';
 import { buildGoogleAuth } from './auth/googleAuth.js';
 import { createGtmMcpServer } from './server.js';
+import { runWithAuth } from './auth/identityContext.js';
 
 async function main(): Promise<void> {
   const transport = process.env.GTM_MCP_TRANSPORT ?? 'stdio';
@@ -28,7 +30,7 @@ async function main(): Promise<void> {
   const server = createGtmMcpServer(auth);
 
   if (transport === 'http') {
-    await startHttpServer(server);
+    await startHttpServer(server, auth);
   } else {
     await startStdioServer(server);
   }
@@ -46,7 +48,10 @@ async function startStdioServer(server: Awaited<ReturnType<typeof createGtmMcpSe
     ' dryRun=' + (process.env.DRY_RUN ?? 'false'));
 }
 
-async function startHttpServer(server: Awaited<ReturnType<typeof createGtmMcpServer>>): Promise<void> {
+async function startHttpServer(
+  server: Awaited<ReturnType<typeof createGtmMcpServer>>,
+  auth: OAuth2Client
+): Promise<void> {
   const { StreamableHTTPServerTransport } = await import(
     '@modelcontextprotocol/sdk/server/streamableHttp.js'
   );
@@ -120,7 +125,11 @@ async function startHttpServer(server: Awaited<ReturnType<typeof createGtmMcpSer
       await server.connect(transport);
     }
 
-    await transport.handleRequest(req, res, req.body);
+    // Run tool dispatch inside the identity context. Phase 1: this carries the
+    // default `auth`, so behavior is unchanged. A later phase resolves the
+    // per-user Google identity from the request's token and passes it here —
+    // this is the single hook point for multi-user mode. See docs/adr/0001.
+    await runWithAuth(auth, () => transport.handleRequest(req, res, req.body));
   });
 
   // SSE stream endpoint (GET /mcp) — for clients that support SSE-style streaming
@@ -131,7 +140,7 @@ async function startHttpServer(server: Awaited<ReturnType<typeof createGtmMcpSer
       return;
     }
     const transport = transports.get(sessionId)!;
-    await transport.handleRequest(req, res);
+    await runWithAuth(auth, () => transport.handleRequest(req, res));
   });
 
   // DELETE /mcp — client-initiated session termination
@@ -139,7 +148,7 @@ async function startHttpServer(server: Awaited<ReturnType<typeof createGtmMcpSer
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     if (sessionId && transports.has(sessionId)) {
       const transport = transports.get(sessionId)!;
-      await transport.handleRequest(req, res);
+      await runWithAuth(auth, () => transport.handleRequest(req, res));
       transports.delete(sessionId);
     } else {
       res.status(404).json({ error: 'Session not found.' });

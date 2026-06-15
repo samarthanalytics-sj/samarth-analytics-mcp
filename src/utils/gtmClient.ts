@@ -13,18 +13,24 @@ import { buildRetryOptions } from './apiRetry.js';
 
 export type GtmClient = tagmanager_v2.Tagmanager;
 
-let _client: GtmClient | null = null;
+// Cache one client per auth identity (not a single global) so the same process
+// can serve multiple Google identities — see auth/identityContext.ts and
+// docs/adr/0001. Keyed by the OAuth2Client instance; entries are GC'd when an
+// auth goes out of scope. Same auth → same cached client; new auth → new client.
+let _clients = new WeakMap<OAuth2Client, GtmClient>();
 
 export function getGtmClient(auth: OAuth2Client): GtmClient {
-  if (!_client) {
+  let client = _clients.get(auth);
+  if (!client) {
     // Retry options apply to every request: transient 429/5xx on READ methods
     // back off and retry; mutations are never auto-retried. See apiRetry.ts.
-    _client = tagmanager({ version: 'v2', auth, ...buildRetryOptions() });
+    client = tagmanager({ version: 'v2', auth, ...buildRetryOptions() });
+    _clients.set(auth, client);
   }
-  return _client;
+  return client;
 }
 
-/** Reset client (useful in tests) */
+/** Reset cached clients (useful in tests) */
 export function resetGtmClient(): void {
-  _client = null;
+  _clients = new WeakMap();
 }
