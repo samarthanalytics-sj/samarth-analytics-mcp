@@ -92,7 +92,14 @@ async function startHttpServer(
 
   let validator: ReturnType<typeof createStytchTokenValidator> | undefined;
   let resolver: ReturnType<typeof createGoogleIdentityResolver> | undefined;
-  let authServerMetadataUrl = '';
+  // Authorization-server endpoints. Stytch's own discovery doc omits the DCR
+  // registration_endpoint and doesn't serve RFC 8414 metadata, so we advertise
+  // a complete authorization-server metadata document ourselves (issuer = this
+  // server; authorize = our page; token/register/jwks = Stytch). All confirmed
+  // against the live project. See docs/PHASE3_IMPLEMENTATION_SPEC.md.
+  let jwksUri = '';
+  let tokenEndpoint = '';
+  let registrationEndpoint = '';
   if (multiUser) {
     const secret = process.env.STYTCH_SECRET ?? '';
     if (!secret) {
@@ -102,19 +109,23 @@ async function startHttpServer(
       process.exit(1);
     }
     const apiBase = process.env.STYTCH_API_BASE ?? deriveApiBase(stytchProjectId);
-    const jwksUrl =
+    jwksUri =
       process.env.STYTCH_JWKS_URL ??
       `${apiBase}/v1/public/${stytchProjectId}/.well-known/jwks.json`;
-    authServerMetadataUrl =
-      process.env.STYTCH_AUTH_SERVER_METADATA_URL ?? `${apiBase}/v1/public/${stytchProjectId}`;
+    tokenEndpoint =
+      process.env.STYTCH_TOKEN_ENDPOINT ??
+      `${apiBase}/v1/public/${stytchProjectId}/oauth2/token`;
+    registrationEndpoint =
+      process.env.STYTCH_REGISTRATION_ENDPOINT ??
+      `${apiBase}/v1/public/${stytchProjectId}/oauth2/register`;
     validator = createStytchTokenValidator({
-      jwksUrl,
+      jwksUrl: jwksUri,
       issuer: process.env.STYTCH_JWT_ISSUER || undefined,
       audience: process.env.STYTCH_JWT_AUDIENCE || undefined,
       debugClaims: process.env.STYTCH_DEBUG_CLAIMS === 'true',
     });
     resolver = createGoogleIdentityResolver({ projectId: stytchProjectId, secret, apiBase });
-    console.error(`[samarth-gtm-mcp] Multi-user mode (Stytch) enabled. JWKS: ${jwksUrl}`);
+    console.error(`[samarth-gtm-mcp] Multi-user mode (Stytch) enabled. JWKS: ${jwksUri}`);
   }
 
   function send401(res: import('express').Response, reason: string): void {
@@ -234,8 +245,32 @@ async function startHttpServer(
   app.get('/.well-known/oauth-protected-resource', (_req, res) => {
     res.json({
       resource: publicUrl,
-      authorization_servers:
-        multiUser && authServerMetadataUrl ? [authServerMetadataUrl] : [],
+      // Point clients at OUR authorization-server metadata (below), which fills
+      // the gaps in Stytch's discovery doc (registration_endpoint + RFC 8414).
+      authorization_servers: multiUser ? [publicUrl] : [],
+    });
+  });
+
+  // RFC 8414 authorization-server metadata. Stytch's own openid-configuration
+  // omits registration_endpoint and it serves no oauth-authorization-server
+  // doc, so we advertise a complete one: issuer = this server, authorize = our
+  // page, token/register/jwks = Stytch (all verified against the live project).
+  app.get('/.well-known/oauth-authorization-server', (_req, res) => {
+    if (!multiUser) {
+      res.status(404).json({ error: 'authorization server not configured' });
+      return;
+    }
+    res.json({
+      issuer: publicUrl,
+      authorization_endpoint: `${publicUrl}/oauth/authorize`,
+      token_endpoint: tokenEndpoint,
+      registration_endpoint: registrationEndpoint,
+      jwks_uri: jwksUri,
+      response_types_supported: ['code'],
+      grant_types_supported: ['authorization_code', 'refresh_token'],
+      code_challenge_methods_supported: ['S256'],
+      token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
+      scopes_supported: ['openid', 'profile', 'email', 'offline_access', 'full_access'],
     });
   });
 
