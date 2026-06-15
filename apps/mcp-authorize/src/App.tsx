@@ -12,22 +12,18 @@ const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/analytics.readonly',
 ];
 
+// Key under which we stash the connected-app authorize request across the login
+// round-trip (see main.tsx, which saves it before React mounts).
+const STORE_KEY = 'mcp_authorize_params';
+
 export function App() {
   const { session } = useStytchMemberSession();
 
-  // The login flow must return to THIS authorize page WITH the original OAuth
-  // authorize params (client_id, code_challenge, state, redirect_uri, scope,
-  // resource) preserved — otherwise B2BIdentityProvider has no authorization
-  // request to consent to and errors. We keep the full URL but strip any Stytch
-  // discovery token so a return pass doesn't loop. This base must be allow-listed
-  // in the Stytch dashboard (Redirect URLs → Login + Discovery).
-  let authorizeUrl = '';
-  if (typeof window !== 'undefined') {
-    const u = new URL(window.location.href);
-    u.searchParams.delete('stytch_token_type');
-    u.searchParams.delete('token');
-    authorizeUrl = u.toString();
-  }
+  // The login flow returns to a CLEAN /oauth/authorize (no params). We do NOT
+  // stuff the OAuth params into this URL — a nested encoded redirect_uri breaks
+  // Stytch's URL parser. Param preservation is handled via sessionStorage.
+  const loginRedirectUrl =
+    typeof window !== 'undefined' ? `${window.location.origin}/oauth/authorize` : '';
 
   const loginConfig: StytchB2BUIConfig = {
     products: [B2BProducts.oauth],
@@ -36,29 +32,36 @@ export function App() {
         {
           type: 'google',
           customScopes: GOOGLE_SCOPES,
-          // Force Google to issue a refresh token (Stytch vaults it). Mirrors
-          // the spike's provider_access_type=offline + provider_prompt=consent.
+          // Force Google to issue a refresh token (Stytch vaults it).
           providerParams: { access_type: 'offline', prompt: 'consent' },
         },
       ],
-      loginRedirectURL: authorizeUrl,
-      signupRedirectURL: authorizeUrl,
+      loginRedirectURL: loginRedirectUrl,
+      signupRedirectURL: loginRedirectUrl,
     },
     authFlowType: AuthFlowType.Discovery,
     sessionOptions: { sessionDurationMinutes: 60 },
   };
 
+  // Once the member is logged in, B2BIdentityProvider needs the original
+  // authorize request (client_id, code_challenge, state, redirect_uri, scope,
+  // resource) in the URL. If the login round-trip dropped them, restore from
+  // sessionStorage BEFORE the component mounts and reads window.location.
+  if (session && typeof window !== 'undefined') {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('client_id')) {
+      const saved = sessionStorage.getItem(STORE_KEY);
+      if (saved) {
+        window.history.replaceState({}, '', `/oauth/authorize${saved}`);
+      }
+    }
+  }
+
   return (
     <div className="wrap">
       <h1>Authorize access to your Google Tag Manager</h1>
       <div className="panel">
-        {session ? (
-          // Logged in → show the connected-app consent screen.
-          <B2BIdentityProvider />
-        ) : (
-          // Not logged in yet → Google sign-in (discovery), then consent renders.
-          <StytchB2B config={loginConfig} />
-        )}
+        {session ? <B2BIdentityProvider /> : <StytchB2B config={loginConfig} />}
       </div>
       <p className="hint">
         Sign in to grant an MCP client read access to your GTM &amp; GA4 via Samarth Analytics.

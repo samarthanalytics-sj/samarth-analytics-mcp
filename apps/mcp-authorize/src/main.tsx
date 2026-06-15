@@ -15,6 +15,20 @@ const publicToken =
   runtimeCfg?.stytchPublicToken ?? import.meta.env.VITE_STYTCH_PUBLIC_TOKEN ?? '';
 const stytch = new StytchB2BUIClient(publicToken);
 
+// Stash the connected-app authorize request (client_id, code_challenge, state,
+// redirect_uri, scope, resource) the moment we arrive with it, BEFORE the login
+// round-trip can drop it. App.tsx restores it from here after sign-in so
+// B2BIdentityProvider has its request. sessionStorage survives the
+// Google→Stytch→org-create→back navigation (same origin, same tab).
+try {
+  const incoming = new URL(window.location.href);
+  if (incoming.searchParams.has('client_id')) {
+    sessionStorage.setItem('mcp_authorize_params', incoming.search);
+  }
+} catch {
+  /* non-browser / malformed URL — ignore */
+}
+
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <StytchB2BProvider stytch={stytch}>
