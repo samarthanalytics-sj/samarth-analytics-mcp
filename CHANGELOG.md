@@ -1,3 +1,9 @@
+## [1.19.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.1...v1.19.2) (2026-06-15)
+
+### Bug Fixes
+
+* **auth:** serve complete RFC 8414 authorization-server metadata ([7dcf829](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7dcf829b957ca6e45ccca6797759efc27eecc7a1))
+
 ## [1.19.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.0...v1.19.1) (2026-06-15)
 
 ### Bug Fixes
