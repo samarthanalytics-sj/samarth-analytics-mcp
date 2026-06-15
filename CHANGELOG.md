@@ -1,3 +1,9 @@
+## [1.19.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.3...v1.19.4) (2026-06-15)
+
+### Bug Fixes
+
+* **auth:** preserve authorize request via sessionStorage and use a clean login redirect URL ([3623808](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/362380819e610890732fabe4410b244cc4cd296f))
+
 ## [1.19.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.2...v1.19.3) (2026-06-15)
 
 ### Bug Fixes
