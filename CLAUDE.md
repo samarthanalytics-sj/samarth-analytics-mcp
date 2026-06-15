@@ -18,12 +18,14 @@ Layout:
   Mode v2 engine and its test suite).
 - `apps/runtime-worker/` — read-only headless-Chromium capture worker. **Not
   for Vercel** — needs a real browser host (Render/Fly/Railway/VPS).
-- `apps/web-audit-mcp/` — a second MCP server (stdio) with a built-in site
-  audit agent: Playwright crawl, form inventory, consent-banner (CMP)
-  interaction, Consent Mode v2 compliance findings. Reuses the shared consent
-  engine; SSRF guard mirrors the runtime worker. **Not for Vercel** either.
-  Its only permitted page interaction is clicking consent-banner controls —
-  never submit forms or click anything else from this server.
+- `apps/web-audit-mcp/` — a second MCP server (stdio + Streamable HTTP) with a
+  built-in site audit agent: Playwright crawl, form inventory, consent-banner
+  (CMP) interaction, Consent Mode v2 compliance findings, and optional GTM
+  container reconciliation. Reuses the shared consent engine; SSRF guard mirrors
+  the runtime worker. Ships a Dockerfile (Playwright base image, HTTP transport)
+  for hosted deploys — **not for Vercel** either. Its only permitted page
+  interaction is clicking consent-banner controls — never submit forms or click
+  anything else from this server.
 
 ## Guardrails — do not violate
 

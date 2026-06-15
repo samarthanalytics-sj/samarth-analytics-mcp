@@ -97,6 +97,35 @@ Claude Desktop / CLI config (stdio):
 > Like the runtime worker, this needs a real browser host (local machine,
 > Render/Fly/Railway/VPS). **Not deployable to Vercel serverless.**
 
+## Hosting (HTTP transport + Docker)
+
+For a team/cloud deployment, run the **Streamable HTTP** transport instead of
+stdio (same `/mcp` + `/health` surface as the root `samarth-gtm-mcp` server):
+
+```bash
+WEB_AUDIT_TRANSPORT=http WEB_AUDIT_HTTP_AUTH_TOKEN=$(openssl rand -hex 24) \
+  node dist/web-audit-mcp/src/index.js
+# → POST /mcp  (Authorization: Bearer <token>),  GET /health
+```
+
+Or build the container (the build context **must be the repo root** — the image
+compiles in the shared consent engine from `apps/portal/shared`):
+
+```bash
+docker build -f apps/web-audit-mcp/Dockerfile -t samarth-web-audit-mcp .
+docker run -p 8080:8080 \
+  -e WEB_AUDIT_HTTP_AUTH_TOKEN=your-secret \
+  -e WEB_AUDIT_ALLOWLIST=yourclient.com \
+  samarth-web-audit-mcp
+```
+
+The image is based on `mcr.microsoft.com/playwright` (Chromium + system deps
+preinstalled), defaults to `WEB_AUDIT_TRANSPORT=http` on port 8080, and runs as
+the non-root `pwuser`. `GET /health` reports `playwrightAvailable`, so a
+misconfigured browser host is visible before the first audit. **Always set
+`WEB_AUDIT_HTTP_AUTH_TOKEN`** before exposing `/mcp` beyond localhost — without
+it the endpoint is open (and the server logs a warning).
+
 ## Environment variables
 
 | Variable | Default | Meaning |
@@ -108,6 +137,9 @@ Claude Desktop / CLI config (stdio):
 | `WEB_AUDIT_SETTLE_MS` | `3000` (cap 10000) | Post-load wait for tags to fire (ms). |
 | `WEB_AUDIT_DISABLE_INTERACTION` | `false` | `true` forbids banner clicking (detection still works). |
 | `WEB_AUDIT_HEADED` | `false` | `true` runs a visible browser (local debugging). |
+| `WEB_AUDIT_TRANSPORT` | `stdio` | `http` to run the Streamable HTTP server. |
+| `WEB_AUDIT_HTTP_PORT` / `PORT` | `8080` | HTTP listen port (`WEB_AUDIT_HTTP_PORT` wins). |
+| `WEB_AUDIT_HTTP_AUTH_TOKEN` | *(unset = open)* | Bearer token required on `/mcp`. Set this in any hosted deployment. |
 
 ## Development
 

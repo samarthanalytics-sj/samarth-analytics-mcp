@@ -25,6 +25,8 @@ import {
   gcsIndicatesDenied,
 } from '../agent/compliance.js';
 import { parseGtmContainer, GtmContainerError } from '../agent/gtmConfig.js';
+import { isAuthorized, buildHealthBody } from '../http.js';
+import { loadConfig } from '../utils/config.js';
 import { runConsentRuntimeRules } from '../../../portal/shared/consent-audit.js';
 
 let passed = 0;
@@ -380,6 +382,27 @@ check('engine: reconciled has no note', engRecon.note === undefined);
 const engBad = await runConsentEngine(baseCaptures, { tags: [{ name: 'x', paramCount: 2 }], triggers: [], variables: [] });
 check('engine: bad container → runtime_only + note', engBad.coverage === 'runtime_only' && typeof engBad.note === 'string');
 check('engine: bad-container note mentions full', /full/i.test(engBad.note ?? ''));
+
+// ── HTTP transport helpers ──────────────────────────────────────────────────
+
+check('http: no token → open', isAuthorized(undefined, ''));
+check('http: no token ignores header', isAuthorized('Bearer whatever', ''));
+check('http: correct bearer accepted', isAuthorized('Bearer s3cret', 's3cret'));
+check('http: wrong bearer rejected', !isAuthorized('Bearer nope', 's3cret'));
+check('http: missing header with token rejected', !isAuthorized(undefined, 's3cret'));
+check('http: bare token without scheme rejected', !isAuthorized('s3cret', 's3cret'));
+check('http: length-mismatch rejected', !isAuthorized('Bearer s3cre', 's3cret'));
+
+const health = buildHealthBody({
+  activeSessions: 2,
+  playwrightAvailable: true,
+  authRequired: true,
+  config: loadConfig(),
+});
+check('http: health status ok', health.status === 'ok' && health.transport === 'http');
+check('http: health reports sessions', health.activeSessions === 2);
+check('http: health reports playwright + auth', health.playwrightAvailable === true && health.authRequired === true);
+check('http: health surfaces config', typeof health.config.interactionEnabled === 'boolean' && Array.isArray(health.config.allowlist));
 
 // ── report ──────────────────────────────────────────────────────────────────
 

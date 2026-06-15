@@ -1,17 +1,29 @@
 #!/usr/bin/env node
 /**
- * Entry point — stdio transport. stdout is the JSON-RPC channel, so all
- * logging goes to stderr. Needs a real browser host (local machine or a
- * container with Chromium); not deployable to Vercel serverless.
+ * Entry point. Two transports:
+ *   WEB_AUDIT_TRANSPORT=stdio  (default) — Claude Desktop / CLI / Cursor.
+ *   WEB_AUDIT_TRANSPORT=http             — hosted Streamable HTTP (Render/Fly/
+ *                                          Railway/VPS/Docker).
+ *
+ * Either way this needs a real browser host (Chromium); it cannot run on
+ * Vercel serverless. On stdio, stdout is the JSON-RPC channel — all logging
+ * goes to stderr.
  */
 
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createWebAuditMcpServer, SERVER_NAME, SERVER_VERSION } from './server.js';
 
 async function main(): Promise<void> {
+  const transport = process.env.WEB_AUDIT_TRANSPORT ?? 'stdio';
   const server = createWebAuditMcpServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+
+  if (transport === 'http') {
+    const { startHttpServer } = await import('./http.js');
+    await startHttpServer(server);
+    return;
+  }
+
+  const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js');
+  await server.connect(new StdioServerTransport());
   console.error(`${SERVER_NAME} v${SERVER_VERSION} running on stdio`);
 }
 
