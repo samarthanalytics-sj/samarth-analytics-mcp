@@ -28,6 +28,23 @@ const s = (v: unknown): string => String(v ?? '');
 const obj = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
 
+// Pull the real Google API error out of a googleapis/Gaxios error so the model
+// (and the dev console) sees the true reason — e.g. "Request had insufficient
+// authentication scopes" (403) or a precise field validation message (400).
+function apiErrorMessage(e: unknown): string {
+  const g = e as {
+    response?: { data?: { error?: { message?: string; status?: string } } };
+    errors?: Array<{ message?: string }>;
+    message?: string;
+  };
+  return (
+    g?.response?.data?.error?.message ??
+    g?.errors?.[0]?.message ??
+    g?.message ??
+    String(e)
+  );
+}
+
 /**
  * Read-only tools are always available. Write tools (create/edit tags, triggers,
  * variables in a draft workspace) are included ONLY when `confirm` is supplied,
@@ -152,7 +169,13 @@ export function buildToolRegistry(data: GoogleDataService, confirm?: ConfirmFn):
     {
       name: 'create_gtm_tag',
       description:
-        'Create a tag in a GTM workspace (draft, not published). Requires accountId, containerId, workspaceId, and a tag object {name, type, parameter?} per the GTM API.',
+        'Create a tag in a GTM workspace (draft, not published). `tag` is a GTM API Tag resource ' +
+        '{name, type, parameter?, firingTriggerId?}. Wire it to a trigger via firingTriggerId: ' +
+        '["<triggerId>"] (get the id from create_gtm_trigger or list_gtm_triggers). ' +
+        'GA4 event tag: type "gaawe" with parameter entries {type:"template",key:"measurementId",value:"G-XXXX"} ' +
+        'and {type:"template",key:"eventName",value:"email_click"}. Google Ads conversion: type "awct" ' +
+        'with conversionId + conversionLabel parameters. Facebook: no native template — use type "html" ' +
+        'with an {type:"template",key:"html",value:"<script>…</script>"} parameter.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -209,7 +232,15 @@ export function buildToolRegistry(data: GoogleDataService, confirm?: ConfirmFn):
     },
     {
       name: 'create_gtm_trigger',
-      description: 'Create a trigger in a GTM workspace. Requires accountId, containerId, workspaceId, and a trigger object {name, type, ...}.',
+      description:
+        'Create a trigger in a GTM workspace. `trigger` is a GTM API Trigger resource. ' +
+        'Click-on-links uses type "linkClick"; filter operator types are LOWERCASE ' +
+        '(equals, contains, startsWith, endsWith, matchRegex) and conditions go in `filter` ' +
+        'with arg0/arg1 template parameters. Example (Click URL contains mailto:): ' +
+        '{"name":"Email link click","type":"linkClick","filter":[{"type":"contains",' +
+        '"parameter":[{"type":"template","key":"arg0","value":"{{Click URL}}"},' +
+        '{"type":"template","key":"arg1","value":"mailto:"}]}]}. ' +
+        'The {{Click URL}} built-in variable must be enabled in the container.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -279,7 +310,13 @@ export function buildToolRegistry(data: GoogleDataService, confirm?: ConfirmFn):
           if (!approvedAgain) return declined;
         }
       }
-      return JSON.stringify(await tool.handler(args ?? {}));
+      try {
+        return JSON.stringify(await tool.handler(args ?? {}));
+      } catch (e) {
+        const msg = apiErrorMessage(e);
+        console.error(`[samarth-desktop] tool "${name}" failed: ${msg}`);
+        throw new Error(msg);
+      }
     },
   };
 }
