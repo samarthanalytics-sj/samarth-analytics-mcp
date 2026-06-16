@@ -1,0 +1,12 @@
+node_modules/
+out/
+dist/
+*.log
+.DS_Store
+
+# Local desktop data: SQLite registry + encrypted secrets (added in later phases).
+# Never commit user account data or secrets.
+data/
+*.db
+*.db-wal
+*.db-shm

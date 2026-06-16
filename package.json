@@ -44,6 +44,10 @@
     "portal:build": "npm --prefix apps/portal run build",
     "portal:check": "npm --prefix apps/portal run check",
     "portal:start": "npm --prefix apps/portal start",
+    "desktop:install": "npm --prefix apps/desktop install",
+    "desktop:dev": "npm --prefix apps/desktop run dev",
+    "desktop:build": "npm --prefix apps/desktop run build",
+    "desktop:check": "npm --prefix apps/desktop run typecheck",
     "prepublishOnly": "npm run build",
     "semantic-release": "semantic-release"
   },
