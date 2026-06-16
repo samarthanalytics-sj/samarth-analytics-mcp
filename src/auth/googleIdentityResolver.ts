@@ -31,6 +31,27 @@ export interface ResolverConfig {
   fetchImpl?: typeof fetch;
   /** Seconds of headroom before access-token expiry that triggers a re-pull. */
   refreshBufferSeconds?: number;
+  /**
+   * If set, the member's granted Google scopes must include at least one of
+   * these, or `resolve()` throws {@link GoogleScopeError}. Matched by the last
+   * path segment so a host-prefix difference doesn't cause a false negative.
+   * Leave unset to skip the check (default).
+   */
+  requiredAnyScopes?: string[];
+}
+
+/**
+ * Thrown when the member's Stytch-vaulted Google grant is missing every scope
+ * the server needs. Distinct from a transport/Stytch error so callers can turn
+ * it into a 403 with an actionable "re-consent" message instead of a 502.
+ */
+export class GoogleScopeError extends Error {
+  readonly grantedScopes: string[];
+  constructor(message: string, grantedScopes: string[]) {
+    super(message);
+    this.name = 'GoogleScopeError';
+    this.grantedScopes = grantedScopes;
+  }
 }
 
 export interface GoogleIdentityResolver {
@@ -62,10 +83,25 @@ export function createGoogleIdentityResolver(cfg: ResolverConfig): GoogleIdentit
     'Basic ' + Buffer.from(`${cfg.projectId}:${cfg.secret}`).toString('base64');
   const cache = new Map<string, CacheEntry>();
 
+  const requiredAny = (cfg.requiredAnyScopes ?? []).filter(Boolean);
+  const lastSeg = (s: string): string => s.split('/').pop() || s;
+  function assertScopes(granted: string[]): void {
+    if (requiredAny.length === 0) return;
+    const grantedSegs = new Set(granted.map(lastSeg));
+    if (requiredAny.some((r) => grantedSegs.has(lastSeg(r)))) return;
+    throw new GoogleScopeError(
+      `The signed-in Google account did not grant any scope this server needs ` +
+        `(${requiredAny.map(lastSeg).join(', ')}). Granted: ` +
+        `${granted.length ? granted.join(', ') : '(none)'}. Reconnect and approve ` +
+        `Google Tag Manager / Analytics read access during sign-in.`,
+      granted
+    );
+  }
+
   async function pullGoogleAccessToken(
     org: string,
     member: string
-  ): Promise<{ accessToken: string; expiresInSec: number }> {
+  ): Promise<{ accessToken: string; expiresInSec: number; scopes: string[] }> {
     const url =
       `${apiBase}/v1/b2b/organizations/${encodeURIComponent(org)}` +
       `/members/${encodeURIComponent(member)}/oauth_providers/google`;
@@ -80,6 +116,7 @@ export function createGoogleIdentityResolver(cfg: ResolverConfig): GoogleIdentit
     const json = (await res.json()) as {
       access_token?: unknown;
       access_token_expires_in?: unknown;
+      scopes?: unknown;
     };
     const accessToken = json.access_token;
     if (typeof accessToken !== 'string' || accessToken.length === 0) {
@@ -89,7 +126,10 @@ export function createGoogleIdentityResolver(cfg: ResolverConfig): GoogleIdentit
       typeof json.access_token_expires_in === 'number' && json.access_token_expires_in > 0
         ? json.access_token_expires_in
         : 3600;
-    return { accessToken, expiresInSec };
+    const scopes = Array.isArray(json.scopes)
+      ? json.scopes.filter((s): s is string => typeof s === 'string')
+      : [];
+    return { accessToken, expiresInSec, scopes };
   }
 
   return {
@@ -100,10 +140,13 @@ export function createGoogleIdentityResolver(cfg: ResolverConfig): GoogleIdentit
         return hit.client;
       }
 
-      const { accessToken, expiresInSec } = await pullGoogleAccessToken(
+      const { accessToken, expiresInSec, scopes } = await pullGoogleAccessToken(
         organizationId,
         memberId
       );
+      // Fail fast with an actionable error if the grant lacks every scope we
+      // use, rather than letting a raw Google 403 surface deep in a tool call.
+      assertScopes(scopes);
       const expiresAtMs = now() + expiresInSec * 1000 - bufferMs;
 
       if (hit) {
@@ -115,6 +158,13 @@ export function createGoogleIdentityResolver(cfg: ResolverConfig): GoogleIdentit
         return hit.client;
       }
 
+      // Bring-up aid: log the granted Google scopes once per member (stderr →
+      // Render logs), so a missing tagmanager/analytics scope is visible without
+      // STYTCH_DEBUG_CLAIMS. Member/org ids are identifiers, not secrets.
+      console.error(
+        `[samarth-gtm-mcp] resolved Google identity ${key} — granted scopes: ` +
+          `${scopes.length ? scopes.join(' ') : '(none)'}`
+      );
       const client = new OAuth2Client();
       client.setCredentials({ access_token: accessToken });
       cache.set(key, { client, expiresAtMs });

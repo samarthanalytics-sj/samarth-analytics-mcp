@@ -16,12 +16,17 @@
 
 import 'dotenv/config';
 import type { OAuth2Client } from 'google-auth-library';
-import { buildGoogleAuth } from './auth/googleAuth.js';
+import { buildGoogleAuth, GTM_SCOPES, GA4_ADMIN_READONLY_SCOPE } from './auth/googleAuth.js';
 import { createGtmMcpServer } from './server.js';
 import { runWithAuth } from './auth/identityContext.js';
 import { existsSync } from 'node:fs';
-import { createGoogleIdentityResolver, deriveApiBase } from './auth/googleIdentityResolver.js';
+import {
+  createGoogleIdentityResolver,
+  deriveApiBase,
+  GoogleScopeError,
+} from './auth/googleIdentityResolver.js';
 import { createStytchTokenValidator } from './auth/stytchTokenValidator.js';
+import type { StytchClaims } from './auth/stytchTokenValidator.js';
 
 async function main(): Promise<void> {
   const transport = process.env.GTM_MCP_TRANSPORT ?? 'stdio';
@@ -124,7 +129,23 @@ async function startHttpServer(
       audience: process.env.STYTCH_JWT_AUDIENCE || undefined,
       debugClaims: process.env.STYTCH_DEBUG_CLAIMS === 'true',
     });
-    resolver = createGoogleIdentityResolver({ projectId: stytchProjectId, secret, apiBase });
+    if (!process.env.STYTCH_JWT_ISSUER || !process.env.STYTCH_JWT_AUDIENCE) {
+      console.error(
+        '[samarth-gtm-mcp] WARNING: STYTCH_JWT_ISSUER / STYTCH_JWT_AUDIENCE are not both set — ' +
+          'tokens are accepted on JWKS signature + expiry alone, without issuer/audience pinning. ' +
+          'Read the values from a STYTCH_DEBUG_CLAIMS log once, set both, then disable debug.'
+      );
+    }
+    // Require the grant to carry at least one scope we actually use, so an
+    // incomplete Google consent fails at sign-in resolution with a clear 403
+    // rather than as a raw Google 403 inside a tool call. GTM_SCOPES[0] is
+    // tagmanager.readonly; GA4_ADMIN_READONLY_SCOPE is analytics.readonly.
+    resolver = createGoogleIdentityResolver({
+      projectId: stytchProjectId,
+      secret,
+      apiBase,
+      requiredAnyScopes: [GTM_SCOPES[0], GA4_ADMIN_READONLY_SCOPE],
+    });
     console.error(`[samarth-gtm-mcp] Multi-user mode (Stytch) enabled. JWKS: ${jwksUri}`);
   }
 
@@ -149,11 +170,41 @@ async function startHttpServer(
         send401(res, 'Missing bearer token.');
         return undefined;
       }
+      // Step 1 — validate the Stytch JWT. A failure here is genuinely an
+      // auth problem (bad signature/expiry/issuer), so it stays a 401 challenge.
+      let claims: StytchClaims;
       try {
-        const claims = await validator!.validate(m[1]);
-        return await resolver!.resolve(claims.organizationId, claims.memberId);
-      } catch {
+        claims = await validator!.validate(m[1]);
+      } catch (err) {
+        console.error(
+          '[samarth-gtm-mcp] token validation failed:',
+          err instanceof Error ? err.message : String(err)
+        );
         send401(res, 'Invalid or expired token.');
+        return undefined;
+      }
+      // Step 2 — resolve the member's Google identity via Stytch. The token was
+      // valid, so this is NOT a 401: a missing-scope grant is the user's to fix
+      // (403 + actionable message); anything else is an upstream broker failure
+      // (502). Either way we log the real cause for the Render logs.
+      const who = `${claims.organizationId}:${claims.memberId}`;
+      try {
+        return await resolver!.resolve(claims.organizationId, claims.memberId);
+      } catch (err) {
+        if (err instanceof GoogleScopeError) {
+          console.error(`[samarth-gtm-mcp] Google scope check failed for ${who}: ${err.message}`);
+          res.status(403).json({ error: err.message });
+          return undefined;
+        }
+        console.error(
+          `[samarth-gtm-mcp] Google identity resolution failed for ${who}:`,
+          err instanceof Error ? err.message : String(err)
+        );
+        res.status(502).json({
+          error:
+            'Could not resolve your Google identity from the authorization server. ' +
+            'Try reconnecting; if this persists, the upstream token broker may be unavailable.',
+        });
         return undefined;
       }
     }
