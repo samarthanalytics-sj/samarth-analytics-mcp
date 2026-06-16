@@ -23,7 +23,7 @@ const phases: Array<{ n: number; label: string; done: boolean }> = [
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: 'claude-opus-4-8',
   openai: 'gpt-4o',
-  gemini: 'gemini-1.5-pro',
+  gemini: 'gemini-2.0-flash',
 };
 
 export function App(): JSX.Element {
