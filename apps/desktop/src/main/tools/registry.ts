@@ -206,8 +206,11 @@ export function buildToolRegistry(
         '{"type":"list","key":"eventParameters","list":[' +
         '{"type":"map","map":[{"type":"template","key":"name","value":"link_url"},{"type":"template","key":"value","value":"{{Click URL}}"}]},' +
         '{"type":"map","map":[{"type":"template","key":"name","value":"link_text"},{"type":"template","key":"value","value":"{{Click Text}}"}]}]}]. ' +
-        'Google Ads conversion — type "awct" (conversionId + conversionLabel). ' +
-        'Facebook — type "html" with a {"type":"template","key":"html","value":"<script>…</script>"} parameter.',
+        'Google Ads conversion — type "awct" with {"type":"template","key":"conversionId","value":"AW-XXXX"} ' +
+        'and {"type":"template","key":"conversionLabel","value":"…"}. Google Ads remarketing — type "sp". ' +
+        'Facebook Pixel, LinkedIn Insight, TikTok, Pinterest, or any platform without a native GTM ' +
+        'template — type "html" (Custom HTML) with a {"type":"template","key":"html","value":"<script>…</script>"} ' +
+        'parameter containing that platform\'s snippet. Pick the right type for the platform the user names.',
       inputSchema: {
         type: 'object',
         properties: {

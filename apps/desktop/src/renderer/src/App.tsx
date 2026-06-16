@@ -91,6 +91,28 @@ interface EditField {
   apply: (d: Record<string, unknown>, v: string) => void;
 }
 
+/* Friendly labels for common tag parameter keys across platforms. */
+const PARAM_LABELS: Record<string, string> = {
+  eventName: 'Event name',
+  measurementId: 'Measurement ID',
+  measurementIdOverride: 'Measurement ID',
+  conversionId: 'Conversion ID',
+  conversionLabel: 'Conversion Label',
+  conversionValue: 'Conversion value',
+  currencyCode: 'Currency',
+  orderId: 'Order ID',
+  html: 'Custom HTML',
+  trackingId: 'Tracking ID',
+  pixelId: 'Pixel ID',
+  partnerId: 'Partner ID',
+};
+function prettyParamLabel(key: string): string {
+  return (
+    PARAM_LABELS[key] ??
+    key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim()
+  );
+}
+
 /* Editable fields for a proposed write — names, types, key config. Each apply()
    writes back into a (cloned) copy of the proposal args before it's sent. */
 function buildEditFields(tool: string, details: Record<string, unknown>): EditField[] {
@@ -104,10 +126,22 @@ function buildEditFields(tool: string, details: Record<string, unknown>): EditFi
   if (details.tag) {
     fields.push({ key: 'tagName', label: 'Tag name', initial: String(tag.name ?? ''), apply: (d, v) => { const t = asObj(d.tag); t.name = v; d.tag = t; } });
     fields.push({ key: 'tagType', label: 'Tag type (code)', initial: String(tag.type ?? ''), apply: (d, v) => { const t = asObj(d.tag); t.type = v; d.tag = t; } });
-    const ev = gtmParam(tag, 'eventName');
-    if (ev !== undefined) fields.push({ key: 'eventName', label: 'Event name', initial: ev, apply: (d, v) => { const t = asObj(d.tag); setParam(t, 'eventName', v); d.tag = t; } });
-    const mid = gtmParam(tag, 'measurementId');
-    if (mid !== undefined) fields.push({ key: 'measurementId', label: 'Measurement ID', initial: mid, apply: (d, v) => { const t = asObj(d.tag); setParam(t, 'measurementId', v); d.tag = t; } });
+    // Surface every top-level template parameter, so each platform's config shows:
+    // Google Ads (conversionId/conversionLabel), Facebook/LinkedIn (Custom HTML),
+    // GA4 (eventName/measurementId), etc. List/map params (e.g. GA4 eventParameters)
+    // are preserved untouched on the cloned args.
+    const params = Array.isArray(tag.parameter) ? (tag.parameter as Array<Record<string, unknown>>) : [];
+    for (const p of params) {
+      if (p.type === 'template' && typeof p.key === 'string') {
+        const key = p.key;
+        fields.push({
+          key: `tagParam_${key}`,
+          label: prettyParamLabel(key),
+          initial: String(p.value ?? ''),
+          apply: (d, v) => { const t = asObj(d.tag); setParam(t, key, v); d.tag = t; },
+        });
+      }
+    }
   }
   if (details.trigger) {
     fields.push({ key: 'trigName', label: 'Trigger name', initial: String(trigger.name ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.name = v; d.trigger = t; } });
