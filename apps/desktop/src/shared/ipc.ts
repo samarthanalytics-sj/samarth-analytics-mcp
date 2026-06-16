@@ -38,6 +38,22 @@ export interface SecretSelfTest {
   encryptionAvailable: boolean;
 }
 
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+export interface ChatToolCall {
+  name: string;
+  args: Record<string, unknown>;
+}
+
+export interface ChatReply {
+  text: string;
+  /** Tools the model invoked while answering (for display). */
+  toolCalls: ChatToolCall[];
+}
+
 export interface GtmAccountView {
   accountId: string;
   name: string;

@@ -10,6 +10,8 @@ import { registerGoogleIpc } from './ipc/google-ipc';
 import { AccountClientManager } from './google/account-clients';
 import { GoogleDataService } from './google/data-service';
 import { registerDataIpc } from './ipc/data-ipc';
+import { ChatService } from './services/chat-service';
+import { registerChatIpc } from './ipc/chat-ipc';
 
 // Phase 0 scaffold: boot a window, wire a minimal, secure IPC bridge, and prove
 // renderer <-> main messaging works. Later phases add the account registry,
@@ -119,11 +121,13 @@ app.whenReady().then(() => {
     clientManager.invalidate(id)
   );
   const dataService = new GoogleDataService(registry, clientManager);
+  const chatService = new ChatService(registry, dataService);
 
   registerIpcHandlers();
   registerRegistryIpc(registry);
   registerGoogleIpc(googleAuth);
   registerDataIpc(dataService);
+  registerChatIpc(chatService);
   createWindow();
 
   app.on('activate', () => {

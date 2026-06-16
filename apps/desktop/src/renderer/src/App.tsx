@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AppInfo } from '../../preload';
 import type {
   AccountView,
+  ChatTurn,
   Ga4AccountView,
   GoogleClientStatus,
   GtmAccountView,
@@ -14,7 +15,7 @@ const phases: Array<{ n: number; label: string; done: boolean }> = [
   { n: 1, label: 'Account registry + secret store (safeStorage)', done: true },
   { n: 2, label: 'Per-account Google loopback OAuth', done: true },
   { n: 3, label: 'Per-account API access + GTM/GA4 data fetch', done: true },
-  { n: 4, label: 'Multi-provider LLM gateway', done: false },
+  { n: 4, label: 'LLM chat (Anthropic/OpenAI) + GTM/GA4 tools', done: true },
   { n: 5, label: 'UI: account switcher, GTM/GA4 views, chat', done: false },
   { n: 6, label: 'Windows installer (electron-builder)', done: false },
 ];
@@ -153,6 +154,8 @@ export function App(): JSX.Element {
         )}
       </section>
 
+      <ChatPanel active={accounts.find((a) => a.isActive)} onError={setError} />
+
       <DataPanel active={accounts.find((a) => a.isActive)} onError={setError} />
 
       <section style={styles.card}>
@@ -193,6 +196,106 @@ export function App(): JSX.Element {
         </ul>
       </section>
     </div>
+  );
+}
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  tools?: string[];
+}
+
+function ChatPanel({
+  active,
+  onError,
+}: {
+  active: AccountView | undefined;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const ready = Boolean(active?.hasGoogleToken && active?.llm?.hasApiKey);
+  const hint = !active
+    ? 'Connect a Google account.'
+    : !active.hasGoogleToken
+      ? 'Sign this account into Google.'
+      : !active.llm
+        ? 'Pick an LLM provider + model above.'
+        : !active.llm.hasApiKey
+          ? 'Save an API key for this account above.'
+          : '';
+
+  async function send(): Promise<void> {
+    const text = input.trim();
+    if (!text || busy) return;
+    onError('');
+    const history: ChatTurn[] = messages.map((m) => ({ role: m.role, text: m.text }));
+    setMessages((m) => [...m, { role: 'user', text }]);
+    setInput('');
+    setBusy(true);
+    try {
+      const reply = await window.desktop.llm.chat(history, text);
+      setMessages((m) => [
+        ...m,
+        { role: 'assistant', text: reply.text, tools: reply.toolCalls.map((t) => t.name) },
+      ]);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section style={styles.card}>
+      <div style={styles.cardHead}>
+        <h2 style={styles.h2}>
+          Chat {active?.llm ? `· ${active.llm.provider}/${active.llm.model}` : ''}
+        </h2>
+        {messages.length > 0 && (
+          <button style={styles.linkBtn} onClick={() => setMessages([])}>
+            clear
+          </button>
+        )}
+      </div>
+
+      {messages.length === 0 && (
+        <p style={styles.muted}>
+          Ask about your GTM/GA4 setup, e.g. “list my GTM accounts” or “how many GA4 properties do I
+          have?”
+        </p>
+      )}
+
+      <div style={styles.chatLog}>
+        {messages.map((m, i) => (
+          <div key={i} style={m.role === 'user' ? styles.userMsg : styles.asstMsg}>
+            {m.tools && m.tools.length > 0 && (
+              <div style={styles.toolTrace}>🔧 {m.tools.join(', ')}</div>
+            )}
+            <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
+          </div>
+        ))}
+        {busy && <div style={styles.asstMsg}>Thinking…</div>}
+      </div>
+
+      <div style={styles.addRow}>
+        <input
+          style={styles.input}
+          placeholder={ready ? 'Ask about your GTM / GA4…' : hint}
+          value={input}
+          disabled={!ready || busy}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void send();
+          }}
+        />
+        <button style={styles.button} onClick={send} disabled={!ready || busy}>
+          Send
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -368,6 +471,10 @@ const styles: Record<string, React.CSSProperties> = {
   spacer: { flex: 1 },
   accountMeta: { display: 'flex', gap: 20, color: '#9ca3af', fontSize: 12, margin: '8px 0' },
   dataRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #1f2937' },
+  chatLog: { display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflowY: 'auto', margin: '4px 0 12px' },
+  userMsg: { alignSelf: 'flex-end', background: '#1d4ed8', color: '#fff', padding: '8px 12px', borderRadius: 12, maxWidth: '80%', fontSize: 13 },
+  asstMsg: { alignSelf: 'flex-start', background: '#1f2937', color: '#e5e7eb', padding: '8px 12px', borderRadius: 12, maxWidth: '80%', fontSize: 13 },
+  toolTrace: { color: '#93c5fd', fontSize: 11, marginBottom: 4 },
   llmRow: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' },
   dot: { width: 9, height: 9, borderRadius: 999, display: 'inline-block' },
   muted: { color: '#6b7280', fontSize: 13 },

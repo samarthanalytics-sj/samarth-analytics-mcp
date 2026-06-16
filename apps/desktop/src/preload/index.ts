@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AccountView,
   AddAccountInput,
+  ChatReply,
+  ChatTurn,
   Ga4AccountView,
   GoogleClientStatus,
   GtmAccountView,
@@ -43,6 +45,11 @@ const api = {
   data: {
     listGtmAccounts: (): Promise<GtmAccountView[]> => ipcRenderer.invoke('data:listGtmAccounts'),
     listGa4Accounts: (): Promise<Ga4AccountView[]> => ipcRenderer.invoke('data:listGa4Accounts'),
+  },
+
+  llm: {
+    chat: (history: ChatTurn[], message: string): Promise<ChatReply> =>
+      ipcRenderer.invoke('llm:chat', history, message),
   },
 };
 

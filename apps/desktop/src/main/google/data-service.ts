@@ -5,6 +5,18 @@ import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { Ga4AccountView, GtmAccountView } from '../../shared/ipc';
 
+export interface GtmContainerView {
+  containerId: string;
+  name: string;
+  publicId: string;
+  path: string;
+}
+
+export interface Ga4PropertyView {
+  property: string;
+  displayName: string;
+}
+
 // Read-only GTM/GA4 fetches for the ACTIVE account, using the small per-API
 // @googleapis packages. This proves the vaulted token reaches the real APIs and
 // is the seam the GTM/GA4 UI views read from. (The full MCP tool surface is
@@ -37,6 +49,18 @@ export class GoogleDataService {
     }));
   }
 
+  async listGtmContainers(accountId: string): Promise<GtmContainerView[]> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.list({ parent: `accounts/${accountId}` });
+    return (res.data.container ?? []).map((c) => ({
+      containerId: c.containerId ?? '',
+      name: c.name ?? '(unnamed)',
+      publicId: c.publicId ?? '',
+      path: c.path ?? '',
+    }));
+  }
+
   async listGa4Accounts(): Promise<Ga4AccountView[]> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
     const admin = analyticsadmin({ version: 'v1beta', auth });
@@ -45,6 +69,16 @@ export class GoogleDataService {
       account: s.account ?? '',
       displayName: s.displayName ?? '(unnamed)',
       propertyCount: (s.propertySummaries ?? []).length,
+    }));
+  }
+
+  async listGa4Properties(account: string): Promise<Ga4PropertyView[]> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const res = await admin.properties.list({ filter: `parent:${account}` });
+    return (res.data.properties ?? []).map((p) => ({
+      property: p.name ?? '',
+      displayName: p.displayName ?? '(unnamed)',
     }));
   }
 }

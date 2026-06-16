@@ -117,6 +117,13 @@ export class RegistryService {
     return this.secrets.get(a.googleTokenRef);
   }
 
+  /** Read the decrypted LLM API key for an account (used by the chat service). */
+  getLlmApiKey(id: string): string | null {
+    const a = this.repo.get(id);
+    if (!a?.llm?.apiKeyRef) return null;
+    return this.secrets.get(a.llm.apiKeyRef);
+  }
+
   /**
    * Diagnostics: prove the OS encryption round-trips without exposing any real
    * secret. Stores a throwaway probe, reads it back, and deletes it.
