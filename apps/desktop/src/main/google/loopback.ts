@@ -5,6 +5,7 @@ import {
   buildTokenExchangeBody,
   createPkcePair,
   createState,
+  describeGoogleOAuthError,
   parseTokenResponse,
   parseUserinfo,
   DESKTOP_GOOGLE_SCOPES,
@@ -88,8 +89,13 @@ export async function runLoopbackOAuth(
           }
           const errParam = url.searchParams.get('error');
           if (errParam) {
-            res.end(htmlPage(`Sign-in failed: ${errParam}`));
-            finish(() => reject(new Error(`Google sign-in error: ${errParam}`)));
+            const desc =
+              url.searchParams.get('error_description') ??
+              url.searchParams.get('error_subtype') ??
+              undefined;
+            const message = describeGoogleOAuthError(errParam, desc ?? undefined);
+            res.end(htmlPage(message));
+            finish(() => reject(new Error(message)));
             return;
           }
           const code = url.searchParams.get('code');
@@ -115,11 +121,26 @@ export async function runLoopbackOAuth(
               codeVerifier: verifier,
             }),
           });
-          const token = parseTokenResponse(await tokenRes.json(), now());
+          // Google returns { error, error_description } with a 4xx on failure;
+          // parse the JSON so parseTokenResponse can surface a real reason. Fall
+          // back to the HTTP status only when the body isn't JSON.
+          let tokenJson: unknown;
+          try {
+            tokenJson = await tokenRes.json();
+          } catch {
+            throw new Error(`Google token endpoint returned HTTP ${tokenRes.status}.`);
+          }
+          const token = parseTokenResponse(tokenJson, now());
 
           const userinfoRes = await fetchImpl(GOOGLE_USERINFO_ENDPOINT, {
             headers: { Authorization: `Bearer ${token.access_token}` },
           });
+          if (!userinfoRes.ok) {
+            throw new Error(
+              `Could not read your Google profile (HTTP ${userinfoRes.status}). ` +
+                'The email/profile scope may not have been granted.'
+            );
+          }
           const userinfo = parseUserinfo(await userinfoRes.json());
 
           res.end(htmlPage('Signed in. You can close this tab and return to Samarth Desktop.'));

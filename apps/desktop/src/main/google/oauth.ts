@@ -91,11 +91,66 @@ export interface StoredGoogleToken {
   token_type?: string;
 }
 
+/**
+ * Turn a raw Google OAuth error code into an actionable message. Many of these
+ * are business-account / Workspace-policy situations that look like an opaque
+ * "400" otherwise — surfacing the cause tells the user (or their admin) exactly
+ * what to change.
+ */
+export function describeGoogleOAuthError(code: string, description?: string): string {
+  const tail = description ? ` — ${description}` : '';
+  switch (code) {
+    case 'access_denied':
+      return (
+        `Access was denied (access_denied)${tail}. If this is a Google Workspace ` +
+        '(business) account, your admin may block third-party apps, or — while the app ' +
+        'is unverified — you must be added as a Test user on the OAuth consent screen.'
+      );
+    case 'admin_policy_enforced':
+      return (
+        `Your Google Workspace admin has restricted third-party app access ` +
+        `(admin_policy_enforced)${tail}. Ask your admin to allow this app's client ID ` +
+        'and scopes under Admin console → Security → API controls → App access control.'
+      );
+    case 'org_internal':
+      return (
+        `This OAuth client is set to "Internal" (org_internal)${tail} — only accounts in ` +
+        'its Workspace organization can sign in. Set the consent screen to "External" and ' +
+        'add Test users to allow other accounts.'
+      );
+    case 'redirect_uri_mismatch':
+      return (
+        `Redirect URI rejected (redirect_uri_mismatch)${tail}. The OAuth client must be ` +
+        'type "Desktop app" (it permits the 127.0.0.1 loopback redirect); a ' +
+        '"Web application" client rejects it.'
+      );
+    case 'invalid_client':
+      return (
+        `The OAuth client id/secret is invalid or the wrong type (invalid_client)${tail}. ` +
+        'Use the id and secret from a Google "Desktop app" OAuth client.'
+      );
+    case 'invalid_grant':
+      return (
+        `The authorization expired or was already used (invalid_grant)${tail}. ` +
+        'Try connecting again.'
+      );
+    case 'invalid_scope':
+      return `A requested scope was rejected (invalid_scope)${tail}.`;
+    case 'disallowed_useragent':
+      return (
+        `Google blocked the sign-in user agent (disallowed_useragent)${tail}. Sign-in must ` +
+        'use the system browser, not an embedded webview.'
+      );
+    default:
+      return `Google sign-in failed: ${code}${tail}.`;
+  }
+}
+
 export function parseTokenResponse(json: unknown, nowMs: number): StoredGoogleToken {
   const j = (json ?? {}) as Record<string, unknown>;
   if (typeof j.error === 'string') {
-    const desc = typeof j.error_description === 'string' ? ` - ${j.error_description}` : '';
-    throw new Error(`Google token error: ${j.error}${desc}`);
+    const desc = typeof j.error_description === 'string' ? j.error_description : undefined;
+    throw new Error(describeGoogleOAuthError(j.error, desc));
   }
   if (typeof j.access_token !== 'string' || j.access_token.length === 0) {
     throw new Error('Google token response had no access_token');

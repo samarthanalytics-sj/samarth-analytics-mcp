@@ -8,6 +8,7 @@ import {
   buildTokenExchangeBody,
   createPkcePair,
   createState,
+  describeGoogleOAuthError,
   parseTokenResponse,
   parseUserinfo,
   DESKTOP_GOOGLE_SCOPES,
@@ -97,6 +98,15 @@ test('parseTokenResponse: maps fields + computes expiry', () => {
 test('parseTokenResponse: error + missing access_token throw', () => {
   assert.throws(() => parseTokenResponse({ error: 'invalid_grant' }, 0), /invalid_grant/);
   assert.throws(() => parseTokenResponse({ scope: 'x' }, 0), /no access_token/);
+});
+
+test('describeGoogleOAuthError: business-account codes get actionable text', () => {
+  assert.match(describeGoogleOAuthError('admin_policy_enforced'), /admin/i);
+  assert.match(describeGoogleOAuthError('org_internal'), /Internal/);
+  assert.match(describeGoogleOAuthError('redirect_uri_mismatch'), /Desktop app/);
+  assert.match(describeGoogleOAuthError('access_denied'), /Test user|admin/i);
+  // unknown codes still surface the code + any description
+  assert.match(describeGoogleOAuthError('weird_code', 'extra'), /weird_code.*extra/);
 });
 
 test('parseUserinfo: extracts email, rejects missing email', () => {
