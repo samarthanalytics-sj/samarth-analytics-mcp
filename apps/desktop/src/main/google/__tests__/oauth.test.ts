@@ -13,7 +13,11 @@ import {
   parseUserinfo,
   DESKTOP_GOOGLE_SCOPES,
 } from '../oauth';
-import { loadGoogleOAuthClient, loadGoogleOAuthClientWithSource } from '../oauth-config';
+import {
+  extractClient,
+  loadGoogleOAuthClient,
+  loadGoogleOAuthClientWithSource,
+} from '../oauth-config';
 
 let passed = 0;
 let failed = 0;
@@ -154,6 +158,43 @@ test('loadGoogleOAuthClient: malformed file → null', () => {
   const f = join(dir, 'bad.json');
   writeFileSync(f, '{ not json');
   assert.equal(loadGoogleOAuthClient(f), null);
+});
+
+test('extractClient: accepts our format, snake_case, and Google installed/web wrappers', () => {
+  assert.deepEqual(extractClient({ clientId: 'a', clientSecret: 'b' }), {
+    clientId: 'a',
+    clientSecret: 'b',
+  });
+  assert.deepEqual(extractClient({ client_id: 'a', client_secret: 'b' }), {
+    clientId: 'a',
+    clientSecret: 'b',
+  });
+  assert.deepEqual(extractClient({ installed: { client_id: 'a', client_secret: 'b' } }), {
+    clientId: 'a',
+    clientSecret: 'b',
+  });
+  assert.deepEqual(extractClient({ web: { client_id: 'a', client_secret: 'b' } }), {
+    clientId: 'a',
+    clientSecret: 'b',
+  });
+  assert.equal(extractClient({ nope: 1 }), null);
+});
+
+test("loadGoogleOAuthClientWithSource: reads Google's downloaded installed JSON with BOM", () => {
+  clearEnv();
+  const f = join(dir, 'client_secret_download.json');
+  const googleJson = JSON.stringify({
+    installed: {
+      client_id: '123-abc.apps.googleusercontent.com',
+      client_secret: 'GOCSPX-zzz',
+      redirect_uris: ['http://localhost'],
+    },
+  });
+  writeFileSync(f, '﻿' + googleJson); // leading BOM, like PowerShell/Notepad
+  const res = loadGoogleOAuthClientWithSource(f);
+  assert.equal(res.source, 'file');
+  assert.equal(res.client?.clientId, '123-abc.apps.googleusercontent.com');
+  assert.equal(res.client?.clientSecret, 'GOCSPX-zzz');
 });
 
 test('loadGoogleOAuthClientWithSource: trims whitespace + reports source', () => {
