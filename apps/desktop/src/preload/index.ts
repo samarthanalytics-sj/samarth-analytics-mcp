@@ -2,7 +2,9 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AccountView,
   AddAccountInput,
+  Ga4AccountView,
   GoogleClientStatus,
+  GtmAccountView,
   LlmProvider,
   SecretSelfTest,
 } from '../shared/ipc';
@@ -36,6 +38,11 @@ const api = {
     status: (): Promise<GoogleClientStatus> => ipcRenderer.invoke('google:status'),
     connect: (): Promise<AccountView> => ipcRenderer.invoke('google:connect'),
     disconnect: (id: string): Promise<void> => ipcRenderer.invoke('google:disconnect', id),
+  },
+
+  data: {
+    listGtmAccounts: (): Promise<GtmAccountView[]> => ipcRenderer.invoke('data:listGtmAccounts'),
+    listGa4Accounts: (): Promise<Ga4AccountView[]> => ipcRenderer.invoke('data:listGa4Accounts'),
   },
 };
 

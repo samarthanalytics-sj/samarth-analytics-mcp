@@ -1,12 +1,19 @@
 import { useEffect, useState } from 'react';
 import type { AppInfo } from '../../preload';
-import type { AccountView, GoogleClientStatus, LlmProvider, SecretSelfTest } from '../../shared/ipc';
+import type {
+  AccountView,
+  Ga4AccountView,
+  GoogleClientStatus,
+  GtmAccountView,
+  LlmProvider,
+  SecretSelfTest,
+} from '../../shared/ipc';
 
 const phases: Array<{ n: number; label: string; done: boolean }> = [
   { n: 0, label: 'Shell + IPC bridge', done: true },
   { n: 1, label: 'Account registry + secret store (safeStorage)', done: true },
   { n: 2, label: 'Per-account Google loopback OAuth', done: true },
-  { n: 3, label: 'Embedded MCP server + per-account dispatch', done: false },
+  { n: 3, label: 'Per-account API access + GTM/GA4 data fetch', done: true },
   { n: 4, label: 'Multi-provider LLM gateway', done: false },
   { n: 5, label: 'UI: account switcher, GTM/GA4 views, chat', done: false },
   { n: 6, label: 'Windows installer (electron-builder)', done: false },
@@ -146,6 +153,8 @@ export function App(): JSX.Element {
         )}
       </section>
 
+      <DataPanel active={accounts.find((a) => a.isActive)} onError={setError} />
+
       <section style={styles.card}>
         <h2 style={styles.h2}>Secret store (safeStorage / DPAPI)</h2>
         {selfTest && (
@@ -184,6 +193,83 @@ export function App(): JSX.Element {
         </ul>
       </section>
     </div>
+  );
+}
+
+function DataPanel({
+  active,
+  onError,
+}: {
+  active: AccountView | undefined;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const [product, setProduct] = useState<'gtm' | 'ga4'>('gtm');
+  const [gtm, setGtm] = useState<GtmAccountView[] | null>(null);
+  const [ga4, setGa4] = useState<Ga4AccountView[] | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const ready = Boolean(active?.hasGoogleToken);
+
+  async function fetchData(): Promise<void> {
+    onError('');
+    setLoading(true);
+    setGtm(null);
+    setGa4(null);
+    try {
+      if (product === 'gtm') setGtm(await window.desktop.data.listGtmAccounts());
+      else setGa4(await window.desktop.data.listGa4Accounts());
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section style={styles.card}>
+      <div style={styles.cardHead}>
+        <h2 style={styles.h2}>Data — {active ? active.email : 'no active account'}</h2>
+      </div>
+      <div style={styles.llmRow}>
+        <select
+          style={styles.select}
+          value={product}
+          onChange={(e) => setProduct(e.target.value as 'gtm' | 'ga4')}
+        >
+          <option value="gtm">Google Tag Manager</option>
+          <option value="ga4">Google Analytics 4</option>
+        </select>
+        <button style={styles.button} onClick={fetchData} disabled={!ready || loading}>
+          {loading ? 'Fetching…' : product === 'gtm' ? 'List GTM accounts' : 'List GA4 accounts'}
+        </button>
+        {!ready && <span style={styles.muted}>Connect/activate a Google account first.</span>}
+      </div>
+
+      {gtm && (
+        <ul style={styles.list}>
+          {gtm.length === 0 && <li style={styles.muted}>No GTM accounts for this user.</li>}
+          {gtm.map((a) => (
+            <li key={a.accountId} style={styles.dataRow}>
+              <strong>{a.name}</strong>
+              <span style={styles.muted}>id {a.accountId}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {ga4 && (
+        <ul style={styles.list}>
+          {ga4.length === 0 && <li style={styles.muted}>No GA4 accounts for this user.</li>}
+          {ga4.map((a) => (
+            <li key={a.account} style={styles.dataRow}>
+              <strong>{a.displayName}</strong>
+              <span style={styles.muted}>
+                {a.account} · {a.propertyCount} propert{a.propertyCount === 1 ? 'y' : 'ies'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -281,6 +367,7 @@ const styles: Record<string, React.CSSProperties> = {
   activeTag: { fontSize: 11, color: '#34d399', border: '1px solid #14532d', borderRadius: 999, padding: '1px 8px' },
   spacer: { flex: 1 },
   accountMeta: { display: 'flex', gap: 20, color: '#9ca3af', fontSize: 12, margin: '8px 0' },
+  dataRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #1f2937' },
   llmRow: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' },
   dot: { width: 9, height: 9, borderRadius: 999, display: 'inline-block' },
   muted: { color: '#6b7280', fontSize: 13 },

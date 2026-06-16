@@ -12,7 +12,9 @@ export class GoogleAuthService {
 
   constructor(
     private readonly registry: RegistryService,
-    private readonly configPath: string
+    private readonly configPath: string,
+    /** Called on disconnect so a cached per-account client is dropped. */
+    private readonly onDisconnect?: (accountId: string) => void
   ) {}
 
   status(): GoogleClientStatus {
@@ -56,5 +58,6 @@ export class GoogleAuthService {
 
   disconnect(id: string): void {
     this.registry.clearGoogleToken(id);
+    this.onDisconnect?.(id);
   }
 }

@@ -7,6 +7,9 @@ import { RegistryService } from './services/registry-service';
 import { registerRegistryIpc } from './ipc/registry-ipc';
 import { GoogleAuthService } from './services/google-auth-service';
 import { registerGoogleIpc } from './ipc/google-ipc';
+import { AccountClientManager } from './google/account-clients';
+import { GoogleDataService } from './google/data-service';
+import { registerDataIpc } from './ipc/data-ipc';
 
 // Phase 0 scaffold: boot a window, wire a minimal, secure IPC bridge, and prove
 // renderer <-> main messaging works. Later phases add the account registry,
@@ -107,13 +110,20 @@ app.whenReady().then(() => {
     console.warn('[samarth-desktop] safeStorage encryption unavailable — secret writes will fail.');
   }
 
-  // Per-account Google sign-in (loopback OAuth). Client id/secret come from env
-  // or oauth-client.json in the data dir.
-  const googleAuth = new GoogleAuthService(registry, join(dataDir, 'oauth-client.json'));
+  // Per-account Google sign-in (loopback OAuth) + the auto-refreshing client
+  // manager + read-only GTM/GA4 data fetches. Client id/secret come from env or
+  // oauth-client.json in the data dir.
+  const oauthConfigPath = join(dataDir, 'oauth-client.json');
+  const clientManager = new AccountClientManager(registry, oauthConfigPath);
+  const googleAuth = new GoogleAuthService(registry, oauthConfigPath, (id) =>
+    clientManager.invalidate(id)
+  );
+  const dataService = new GoogleDataService(registry, clientManager);
 
   registerIpcHandlers();
   registerRegistryIpc(registry);
   registerGoogleIpc(googleAuth);
+  registerDataIpc(dataService);
   createWindow();
 
   app.on('activate', () => {

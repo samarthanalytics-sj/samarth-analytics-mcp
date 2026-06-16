@@ -38,6 +38,18 @@ export interface SecretSelfTest {
   encryptionAvailable: boolean;
 }
 
+export interface GtmAccountView {
+  accountId: string;
+  name: string;
+  path: string;
+}
+
+export interface Ga4AccountView {
+  account: string;
+  displayName: string;
+  propertyCount: number;
+}
+
 export interface GoogleClientStatus {
   /** Whether a Google OAuth client (id + secret) is configured. */
   configured: boolean;
