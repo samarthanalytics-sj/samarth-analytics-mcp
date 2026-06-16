@@ -1,5 +1,10 @@
 import { app, shell, BrowserWindow, ipcMain, session } from 'electron';
 import { join } from 'node:path';
+import { AccountRepository } from './storage/account-repository';
+import { SecretStore } from './storage/secret-store';
+import { SafeStorageCryptor } from './storage/safe-storage-cryptor';
+import { RegistryService } from './services/registry-service';
+import { registerRegistryIpc } from './ipc/registry-ipc';
 
 // Phase 0 scaffold: boot a window, wire a minimal, secure IPC bridge, and prove
 // renderer <-> main messaging works. Later phases add the account registry,
@@ -74,7 +79,18 @@ app.whenReady().then(() => {
     });
   }
 
+  // Local data layer: account registry (metadata) + secret store (encrypted via
+  // safeStorage/DPAPI). Lives under the per-user app data dir.
+  const dataDir = join(app.getPath('userData'), 'data');
+  const accounts = new AccountRepository(join(dataDir, 'registry.json'));
+  const secrets = new SecretStore(join(dataDir, 'secrets.json'), new SafeStorageCryptor());
+  const registry = new RegistryService(accounts, secrets);
+  if (!secrets.available()) {
+    console.warn('[samarth-desktop] safeStorage encryption unavailable — secret writes will fail.');
+  }
+
   registerIpcHandlers();
+  registerRegistryIpc(registry);
   createWindow();
 
   app.on('activate', () => {

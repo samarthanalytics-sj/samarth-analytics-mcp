@@ -13,7 +13,8 @@
     "start": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web"
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "tsx src/main/storage/__tests__/secret-store.test.ts && tsx src/main/storage/__tests__/account-repository.test.ts && tsx src/main/services/__tests__/registry-service.test.ts"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -26,6 +27,7 @@
     "@vitejs/plugin-react": "^4.3.1",
     "electron": "^31.3.0",
     "electron-vite": "^2.3.0",
+    "tsx": "^4.7.1",
     "typescript": "^5.4.5",
     "vite": "^5.3.4"
   }

@@ -48,6 +48,7 @@
     "desktop:dev": "npm --prefix apps/desktop run dev",
     "desktop:build": "npm --prefix apps/desktop run build",
     "desktop:check": "npm --prefix apps/desktop run typecheck",
+    "desktop:test": "npm --prefix apps/desktop test",
     "prepublishOnly": "npm run build",
     "semantic-release": "semantic-release"
   },
