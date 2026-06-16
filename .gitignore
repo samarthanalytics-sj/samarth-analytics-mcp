@@ -12,6 +12,11 @@ coverage/
 .gtm-mcp-tokens.json
 *.gtm-mcp-tokens.json
 
+# Samarth Desktop local data (account registry, encrypted secrets, and the
+# Google OAuth client config — contains a client secret). Never commit.
+/data/
+oauth-client.json
+
 # Vercel CLI local artifacts
 .vercel/
 

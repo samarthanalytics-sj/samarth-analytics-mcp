@@ -16,6 +16,7 @@ const OverviewPage = lazy(() => import("@/pages/overview"));
 const ContainersPage = lazy(() => import("@/pages/containers"));
 const AuditPage = lazy(() => import("@/pages/audit"));
 const ConsentV2Page = lazy(() => import("@/pages/consent-v2"));
+const WebAuditPage = lazy(() => import("@/pages/web-audit"));
 const ServerSidePage = lazy(() => import("@/pages/server-side"));
 const RecommendPage = lazy(() => import("@/pages/recommend"));
 const ApprovalsPage = lazy(() => import("@/pages/approvals"));
@@ -43,6 +44,7 @@ function AppRouter() {
           <Route path="/containers" component={ContainersPage} />
           <Route path="/audit" component={AuditPage} />
           <Route path="/consent-v2" component={ConsentV2Page} />
+          <Route path="/web-audit" component={WebAuditPage} />
           <Route path="/server-side" component={ServerSidePage} />
           <Route path="/recommend" component={RecommendPage} />
           <Route path="/approvals" component={ApprovalsPage} />

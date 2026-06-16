@@ -26,7 +26,7 @@ if (!existsSync(distMod)) {
   console.error(`\n✗ resolver test: ${distMod} not found. Run "npm run build" first.`);
   process.exit(1);
 }
-const { createGoogleIdentityResolver, deriveApiBase } = await import(
+const { createGoogleIdentityResolver, deriveApiBase, GoogleScopeError } = await import(
   pathToFileURL(distMod).href
 );
 
@@ -63,7 +63,7 @@ function makeFetch(opts = {}) {
       json: async () => ({
         access_token: `${opts.token ?? "tok"}-${n}`,
         access_token_expires_in: opts.expiresIn ?? 3600,
-        scopes: [
+        scopes: opts.scopes ?? [
           "https://www.googleapis.com/auth/tagmanager.readonly",
           "https://www.googleapis.com/auth/analytics.readonly",
         ],
@@ -153,6 +153,43 @@ await test('throws when access_token is missing', async () => {
   const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ scopes: [] }) });
   const r = createGoogleIdentityResolver({ projectId: 'project-test-x', secret: 's', fetchImpl, now: () => 0 });
   await assert.rejects(() => r.resolve('org1', 'mem1'), /no access_token/);
+});
+
+await test('GoogleScopeError when grant lacks every required scope', async () => {
+  const { fetchImpl } = makeFetch({
+    scopes: ['https://www.googleapis.com/auth/userinfo.email', 'openid'],
+  });
+  const r = createGoogleIdentityResolver({
+    projectId: 'project-test-x',
+    secret: 's',
+    fetchImpl,
+    now: () => 0,
+    requiredAnyScopes: [
+      'https://www.googleapis.com/auth/tagmanager.readonly',
+      'https://www.googleapis.com/auth/analytics.readonly',
+    ],
+  });
+  await assert.rejects(() => r.resolve('org1', 'mem1'), GoogleScopeError);
+  assert.strictEqual(r.cacheSize(), 0, 'a rejected grant must not be cached');
+});
+
+await test('requiredAnyScopes passes when at least one is granted (host-prefix tolerant)', async () => {
+  // Granted only the GTM read scope; required list also names GA4 — one match is enough.
+  const { fetchImpl } = makeFetch({
+    scopes: ['https://www.googleapis.com/auth/tagmanager.readonly'],
+  });
+  const r = createGoogleIdentityResolver({
+    projectId: 'project-test-x',
+    secret: 's',
+    fetchImpl,
+    now: () => 0,
+    requiredAnyScopes: [
+      'https://www.googleapis.com/auth/tagmanager.readonly',
+      'https://www.googleapis.com/auth/analytics.readonly',
+    ],
+  });
+  const client = await r.resolve('org1', 'mem1');
+  assert.ok(client.credentials.access_token, 'resolves a usable client');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
