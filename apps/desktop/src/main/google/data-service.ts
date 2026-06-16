@@ -1,5 +1,6 @@
 import { tagmanager } from '@googleapis/tagmanager';
 import { analyticsadmin } from '@googleapis/analyticsadmin';
+import { analyticsdata } from '@googleapis/analyticsdata';
 import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
@@ -15,6 +16,30 @@ export interface GtmContainerView {
 export interface Ga4PropertyView {
   property: string;
   displayName: string;
+}
+
+export interface GtmWorkspaceView {
+  workspaceId: string;
+  name: string;
+  path: string;
+}
+
+export interface GtmTagView {
+  tagId: string;
+  name: string;
+  type: string;
+}
+
+export interface Ga4DataStreamView {
+  name: string;
+  displayName: string;
+  type: string;
+}
+
+export interface Ga4ReportResult {
+  dimensionHeaders: string[];
+  metricHeaders: string[];
+  rows: Array<{ dimensions: string[]; metrics: string[] }>;
 }
 
 // Read-only GTM/GA4 fetches for the ACTIVE account, using the small per-API
@@ -80,5 +105,74 @@ export class GoogleDataService {
       property: p.name ?? '',
       displayName: p.displayName ?? '(unnamed)',
     }));
+  }
+
+  async listGtmWorkspaces(accountId: string, containerId: string): Promise<GtmWorkspaceView[]> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.list({
+      parent: `accounts/${accountId}/containers/${containerId}`,
+    });
+    return (res.data.workspace ?? []).map((w) => ({
+      workspaceId: w.workspaceId ?? '',
+      name: w.name ?? '(unnamed)',
+      path: w.path ?? '',
+    }));
+  }
+
+  async listGtmTags(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<GtmTagView[]> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.tags.list({
+      parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+    });
+    return (res.data.tag ?? []).map((t) => ({
+      tagId: t.tagId ?? '',
+      name: t.name ?? '(unnamed)',
+      type: t.type ?? '',
+    }));
+  }
+
+  async listGa4DataStreams(property: string): Promise<Ga4DataStreamView[]> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const res = await admin.properties.dataStreams.list({ parent: property });
+    return (res.data.dataStreams ?? []).map((s) => ({
+      name: s.name ?? '',
+      displayName: s.displayName ?? '(unnamed)',
+      type: s.type ?? '',
+    }));
+  }
+
+  async runGa4Report(input: {
+    property: string;
+    startDate: string;
+    endDate: string;
+    dimensions: string[];
+    metrics: string[];
+  }): Promise<Ga4ReportResult> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
+    const data = analyticsdata({ version: 'v1beta', auth });
+    const res = await data.properties.runReport({
+      property: input.property,
+      requestBody: {
+        dateRanges: [{ startDate: input.startDate, endDate: input.endDate }],
+        dimensions: input.dimensions.map((name) => ({ name })),
+        metrics: input.metrics.map((name) => ({ name })),
+        limit: '100',
+      },
+    });
+    return {
+      dimensionHeaders: (res.data.dimensionHeaders ?? []).map((h) => h.name ?? ''),
+      metricHeaders: (res.data.metricHeaders ?? []).map((h) => h.name ?? ''),
+      rows: (res.data.rows ?? []).map((r) => ({
+        dimensions: (r.dimensionValues ?? []).map((v) => v.value ?? ''),
+        metrics: (r.metricValues ?? []).map((v) => v.value ?? ''),
+      })),
+    };
   }
 }

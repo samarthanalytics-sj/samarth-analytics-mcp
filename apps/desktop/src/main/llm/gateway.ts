@@ -1,5 +1,6 @@
 import { anthropicClient } from './anthropic';
 import { openaiClient } from './openai';
+import { geminiClient } from './gemini';
 import type {
   LlmClient,
   LlmProvider,
@@ -16,7 +17,7 @@ export function createProvider(provider: LlmProvider): LlmClient {
     case 'openai':
       return openaiClient;
     case 'gemini':
-      throw new Error('Gemini support is coming next — choose Anthropic or OpenAI for now.');
+      return geminiClient;
     default:
       throw new Error(`Unknown LLM provider: ${provider as string}`);
   }

@@ -35,6 +35,22 @@ function fakeData(): { data: GoogleDataService; calls: string[] } {
       calls.push(`ga4Properties:${account}`);
       return [];
     },
+    listGtmWorkspaces: async (a: string, c: string) => {
+      calls.push(`gtmWorkspaces:${a}:${c}`);
+      return [];
+    },
+    listGtmTags: async (a: string, c: string, w: string) => {
+      calls.push(`gtmTags:${a}:${c}:${w}`);
+      return [];
+    },
+    listGa4DataStreams: async (p: string) => {
+      calls.push(`ga4Streams:${p}`);
+      return [];
+    },
+    runGa4Report: async (input: { property: string; metrics: string[] }) => {
+      calls.push(`ga4Report:${input.property}:${input.metrics.join(',')}`);
+      return { dimensionHeaders: [], metricHeaders: [], rows: [] };
+    },
   } as unknown as GoogleDataService;
   return { data, calls };
 }
@@ -42,14 +58,18 @@ function fakeData(): { data: GoogleDataService; calls: string[] } {
 async function main(): Promise<void> {
 console.log('\nTool registry:');
 
-await test('exposes the four read-only tools with schemas', async () => {
+await test('exposes the read-only tools with schemas', async () => {
   const reg = buildToolRegistry(fakeData().data);
   const names = reg.list().map((t) => t.name).sort();
   assert.deepEqual(names, [
     'list_ga4_accounts',
+    'list_ga4_data_streams',
     'list_ga4_properties',
     'list_gtm_accounts',
     'list_gtm_containers',
+    'list_gtm_tags',
+    'list_gtm_workspaces',
+    'run_ga4_report',
   ]);
   const containers = reg.list().find((t) => t.name === 'list_gtm_containers');
   assert.deepEqual((containers?.inputSchema as { required?: string[] }).required, ['accountId']);
@@ -62,8 +82,17 @@ await test('execute routes args and returns JSON', async () => {
   assert.equal(JSON.parse(out)[0].accountId, '1');
   await reg.execute('list_gtm_containers', { accountId: '9' });
   await reg.execute('list_ga4_properties', { account: 'accounts/7' });
+  await reg.execute('list_gtm_tags', { accountId: '1', containerId: '2', workspaceId: '3' });
+  await reg.execute('run_ga4_report', {
+    property: 'properties/5',
+    startDate: '7daysAgo',
+    endDate: 'today',
+    metrics: ['activeUsers'],
+  });
   assert.ok(calls.includes('gtmContainers:9'));
   assert.ok(calls.includes('ga4Properties:accounts/7'));
+  assert.ok(calls.includes('gtmTags:1:2:3'));
+  assert.ok(calls.includes('ga4Report:properties/5:activeUsers'));
 });
 
 await test('unknown tool rejects', async () => {

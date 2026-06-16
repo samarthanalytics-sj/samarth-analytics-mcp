@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { toOpenAiMessages, parseOpenAiReply } from '../openai';
 import { toAnthropicMessages, parseAnthropicReply } from '../anthropic';
+import { toGeminiContents, parseGeminiReply } from '../gemini';
 import type { LlmTurn } from '../types';
 
 let passed = 0;
@@ -70,6 +71,24 @@ test('Anthropic: parse text + tool_use blocks', () => {
   assert.equal(reply.text, 'hello');
   assert.equal(reply.toolCalls?.[0].name, 't');
   assert.deepEqual(reply.toolCalls?.[0].args, { a: 2 });
+});
+
+test('Gemini: user→user, assistant→model(functionCall), tool→user(functionResponse)', () => {
+  const c = toGeminiContents(convo);
+  assert.equal(c[0].role, 'user');
+  assert.equal(c[1].role, 'model');
+  assert.equal(c[1].parts.some((p) => p.functionCall?.name === 'list_gtm_accounts'), true);
+  assert.equal(c[2].role, 'user');
+  assert.equal(c[2].parts[0].functionResponse?.name, 'list_gtm_accounts');
+});
+
+test('Gemini: parse text + functionCall parts', () => {
+  const reply = parseGeminiReply({
+    candidates: [{ content: { parts: [{ text: 'hi' }, { functionCall: { name: 't', args: { a: 1 } } }] } }],
+  });
+  assert.equal(reply.text, 'hi');
+  assert.equal(reply.toolCalls?.[0].name, 't');
+  assert.deepEqual(reply.toolCalls?.[0].args, { a: 1 });
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
