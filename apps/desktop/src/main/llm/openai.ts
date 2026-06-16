@@ -1,5 +1,5 @@
-import { postJson } from './http';
-import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, LlmTurn } from './types';
+import { sseEvents, startStream } from './sse';
+import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, LlmTurn, StreamAccumulator } from './types';
 
 // OpenAI Chat Completions API. Pure mappers exported for unit tests.
 
@@ -54,9 +54,45 @@ export function parseOpenAiReply(data: unknown): LlmReply {
   return { text, toolCalls: toolCalls.length ? toolCalls : undefined };
 }
 
+// Assembles a streamed completion: text deltas arrive incrementally; tool calls
+// arrive in fragments keyed by index (id/name first, then argument string pieces).
+export function openaiStreamAccumulator(onDelta: (t: string) => void): StreamAccumulator {
+  let text = '';
+  const tools = new Map<number, { id: string; name: string; args: string }>();
+  return {
+    push(chunk: unknown): void {
+      const delta = (chunk as { choices?: Array<{ delta?: OpenAiMessage }> }).choices?.[0]?.delta;
+      if (typeof delta?.content === 'string' && delta.content) {
+        text += delta.content;
+        onDelta(delta.content);
+      }
+      for (const tc of (delta?.tool_calls ?? []) as Array<{ index?: number } & OpenAiToolCall>) {
+        const idx = tc.index ?? 0;
+        const cur = tools.get(idx) ?? { id: '', name: '', args: '' };
+        if (tc.id) cur.id = tc.id;
+        if (tc.function?.name) cur.name = tc.function.name;
+        if (tc.function?.arguments) cur.args += tc.function.arguments;
+        tools.set(idx, cur);
+      }
+    },
+    result(): LlmReply {
+      const toolCalls: LlmToolCall[] = [...tools.values()].map((t) => {
+        let args: Record<string, unknown> = {};
+        try {
+          args = t.args ? (JSON.parse(t.args) as Record<string, unknown>) : {};
+        } catch {
+          args = {};
+        }
+        return { id: t.id, name: t.name, args };
+      });
+      return { text: text || undefined, toolCalls: toolCalls.length ? toolCalls : undefined };
+    },
+  };
+}
+
 export const openaiClient: LlmClient = {
-  async chat(input: LlmChatInput): Promise<LlmReply> {
-    const data = await postJson(
+  async chatStream(input: LlmChatInput, onDelta: (t: string) => void): Promise<LlmReply> {
+    const res = await startStream(
       'https://api.openai.com/v1/chat/completions',
       { authorization: `Bearer ${input.apiKey}` },
       {
@@ -67,9 +103,19 @@ export const openaiClient: LlmClient = {
           function: { name: t.name, description: t.description, parameters: t.inputSchema },
         })),
         tool_choice: 'auto',
+        stream: true,
       },
       'OpenAI'
     );
-    return parseOpenAiReply(data);
+    const acc = openaiStreamAccumulator(onDelta);
+    for await (const data of sseEvents(res)) {
+      if (data === '[DONE]') break;
+      try {
+        acc.push(JSON.parse(data));
+      } catch {
+        // ignore keep-alive / non-JSON lines
+      }
+    }
+    return acc.result();
   },
 };

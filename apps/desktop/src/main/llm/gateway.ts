@@ -35,8 +35,15 @@ export interface RunChatResult {
   steps: number;
 }
 
+export interface RunChatCallbacks {
+  /** Streamed text chunks from the model as they arrive. */
+  onDelta?: (text: string) => void;
+  /** Fired when the model invokes a tool. */
+  onToolCall?: (call: LlmToolCall) => void;
+}
+
 /**
- * Agentic loop: call the model; if it asks for tools, execute them, feed the
+ * Agentic loop: stream a model turn; if it asks for tools, execute them, feed the
  * results back, and repeat until it produces a final text answer (or hits
  * maxSteps). Provider-agnostic — works for any LlmClient.
  */
@@ -44,26 +51,29 @@ export async function runChat(
   client: LlmClient,
   input: RunChatInput,
   executor: ToolExecutor,
-  onToolCall?: (call: LlmToolCall) => void,
+  callbacks: RunChatCallbacks = {},
   maxSteps = 6
 ): Promise<RunChatResult> {
   const messages: LlmTurn[] = [...input.messages];
   const tools = executor.list();
 
   for (let step = 1; step <= maxSteps; step++) {
-    const reply = await client.chat({
-      system: input.system,
-      model: input.model,
-      apiKey: input.apiKey,
-      tools,
-      messages,
-    });
+    const reply = await client.chatStream(
+      {
+        system: input.system,
+        model: input.model,
+        apiKey: input.apiKey,
+        tools,
+        messages,
+      },
+      (delta) => callbacks.onDelta?.(delta)
+    );
 
     if (reply.toolCalls && reply.toolCalls.length > 0) {
       messages.push({ role: 'assistant', text: reply.text, toolCalls: reply.toolCalls });
       const results = [];
       for (const call of reply.toolCalls) {
-        onToolCall?.(call);
+        callbacks.onToolCall?.(call);
         try {
           results.push({ id: call.id, name: call.name, content: await executor.execute(call.name, call.args) });
         } catch (e) {

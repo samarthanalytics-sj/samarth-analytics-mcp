@@ -45,7 +45,17 @@ export interface LlmReply {
 }
 
 export interface LlmClient {
-  chat(input: LlmChatInput): Promise<LlmReply>;
+  /**
+   * Stream a model turn. `onDelta` fires for each text chunk as it arrives; the
+   * resolved LlmReply has the full accumulated text plus any tool calls.
+   */
+  chatStream(input: LlmChatInput, onDelta: (text: string) => void): Promise<LlmReply>;
+}
+
+/** A streaming accumulator: fed parsed SSE chunks, yields the final reply. */
+export interface StreamAccumulator {
+  push(chunk: unknown): void;
+  result(): LlmReply;
 }
 
 export interface ToolExecutor {

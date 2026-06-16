@@ -1,5 +1,5 @@
-import { postJson } from './http';
-import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, LlmTurn } from './types';
+import { sseEvents, startStream } from './sse';
+import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, LlmTurn, StreamAccumulator } from './types';
 
 // Google Gemini (generativelanguage v1beta generateContent). Pure mappers
 // exported for tests. Gemini has no tool-call ids and uses functionCall /
@@ -62,12 +62,37 @@ function geminiFunctionDecl(tool: { name: string; description: string; inputSche
   };
 }
 
+// Each streamed Gemini chunk is a partial GenerateContentResponse with parts;
+// text parts stream incrementally, functionCall parts arrive whole.
+export function geminiStreamAccumulator(onDelta: (t: string) => void): StreamAccumulator {
+  let text = '';
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  return {
+    push(chunk: unknown): void {
+      const parts = ((chunk as { candidates?: Array<{ content?: GeminiContent }> }).candidates?.[0]
+        ?.content?.parts ?? []) as GeminiPart[];
+      for (const p of parts) {
+        if (typeof p.text === 'string' && p.text) {
+          text += p.text;
+          onDelta(p.text);
+        } else if (p.functionCall) {
+          calls.push({ name: p.functionCall.name, args: p.functionCall.args ?? {} });
+        }
+      }
+    },
+    result(): LlmReply {
+      const toolCalls: LlmToolCall[] = calls.map((c, i) => ({ id: `gem_${i}`, name: c.name, args: c.args }));
+      return { text: text || undefined, toolCalls: toolCalls.length ? toolCalls : undefined };
+    },
+  };
+}
+
 export const geminiClient: LlmClient = {
-  async chat(input: LlmChatInput): Promise<LlmReply> {
+  async chatStream(input: LlmChatInput, onDelta: (t: string) => void): Promise<LlmReply> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
       input.model
-    )}:generateContent`;
-    const data = await postJson(
+    )}:streamGenerateContent?alt=sse`;
+    const res = await startStream(
       url,
       { 'x-goog-api-key': input.apiKey },
       {
@@ -79,6 +104,14 @@ export const geminiClient: LlmClient = {
       },
       'Gemini'
     );
-    return parseGeminiReply(data);
+    const acc = geminiStreamAccumulator(onDelta);
+    for await (const data of sseEvents(res)) {
+      try {
+        acc.push(JSON.parse(data));
+      } catch {
+        // ignore non-JSON lines
+      }
+    }
+    return acc.result();
   },
 };

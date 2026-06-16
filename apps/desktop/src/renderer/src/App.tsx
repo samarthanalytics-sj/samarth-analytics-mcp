@@ -232,17 +232,28 @@ function ChatPanel({
     if (!text || busy) return;
     onError('');
     const history: ChatTurn[] = messages.map((m) => ({ role: m.role, text: m.text }));
-    setMessages((m) => [...m, { role: 'user', text }]);
+    // Append the user turn + an empty assistant bubble we stream into.
+    setMessages((m) => [...m, { role: 'user', text }, { role: 'assistant', text: '', tools: [] }]);
     setInput('');
     setBusy(true);
     try {
-      const reply = await window.desktop.llm.chat(history, text);
-      setMessages((m) => [
-        ...m,
-        { role: 'assistant', text: reply.text, tools: reply.toolCalls.map((t) => t.name) },
-      ]);
+      await window.desktop.llm.chatStream(history, text, (ev) => {
+        setMessages((m) => {
+          const copy = [...m];
+          const last = copy[copy.length - 1];
+          if (last?.role !== 'assistant') return copy;
+          if (ev.type === 'text') {
+            copy[copy.length - 1] = { ...last, text: last.text + ev.delta };
+          } else if (ev.type === 'tool') {
+            copy[copy.length - 1] = { ...last, tools: [...(last.tools ?? []), ev.name] };
+          }
+          return copy;
+        });
+      });
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
+      // Drop the empty assistant bubble on error.
+      setMessages((m) => (m[m.length - 1]?.role === 'assistant' && !m[m.length - 1].text ? m.slice(0, -1) : m));
     } finally {
       setBusy(false);
     }

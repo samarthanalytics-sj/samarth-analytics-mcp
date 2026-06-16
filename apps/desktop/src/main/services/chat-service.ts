@@ -2,7 +2,7 @@ import type { RegistryService } from './registry-service';
 import type { GoogleDataService } from '../google/data-service';
 import { buildToolRegistry } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
-import type { ChatReply, ChatToolCall, ChatTurn } from '../../shared/ipc';
+import type { ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn } from '../../shared/ipc';
 import type { LlmTurn } from '../llm/types';
 
 // Ties the active account (provider + model + vaulted key) to the LLM gateway and
@@ -14,7 +14,25 @@ export class ChatService {
     private readonly data: GoogleDataService
   ) {}
 
-  async chat(history: ChatTurn[], message: string): Promise<ChatReply> {
+  /** Non-streaming: returns the final reply only. */
+  chat(history: ChatTurn[], message: string): Promise<ChatReply> {
+    return this.run(history, message);
+  }
+
+  /** Streaming: `emit` fires for text chunks + tool calls; resolves with the final reply. */
+  chatStream(
+    history: ChatTurn[],
+    message: string,
+    emit: (event: ChatStreamEvent) => void
+  ): Promise<ChatReply> {
+    return this.run(history, message, emit);
+  }
+
+  private async run(
+    history: ChatTurn[],
+    message: string,
+    emit?: (event: ChatStreamEvent) => void
+  ): Promise<ChatReply> {
     const active = this.registry.getActiveView();
     if (!active) throw new Error('No active account. Connect and activate a Google account.');
     if (!active.hasGoogleToken) throw new Error('The active account is not signed in to Google.');
@@ -28,8 +46,8 @@ export class ChatService {
     const system =
       `You are an analytics assistant for the Google account ${active.email}. ` +
       'You have read-only tools to inspect this user\'s Google Tag Manager and GA4 setup ' +
-      '(accounts, containers, properties). Call tools when the user asks about their ' +
-      'accounts/containers/properties; never invent ids. Be concise and factual.';
+      '(accounts, containers, workspaces, tags, properties, data streams, and GA4 reports). ' +
+      'Call tools when the user asks about their data; never invent ids. Be concise and factual.';
 
     const messages: LlmTurn[] = [
       ...history.map((h): LlmTurn => ({ role: h.role, text: h.text })),
@@ -37,12 +55,13 @@ export class ChatService {
     ];
 
     const toolCalls: ChatToolCall[] = [];
-    const result = await runChat(
-      client,
-      { system, model: active.llm.model, apiKey, messages },
-      tools,
-      (call) => toolCalls.push({ name: call.name, args: call.args })
-    );
+    const result = await runChat(client, { system, model: active.llm.model, apiKey, messages }, tools, {
+      onDelta: emit ? (delta) => emit({ type: 'text', delta }) : undefined,
+      onToolCall: (call) => {
+        toolCalls.push({ name: call.name, args: call.args });
+        emit?.({ type: 'tool', name: call.name });
+      },
+    });
 
     return { text: result.text, toolCalls };
   }

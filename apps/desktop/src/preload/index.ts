@@ -3,6 +3,7 @@ import type {
   AccountView,
   AddAccountInput,
   ChatReply,
+  ChatStreamEvent,
   ChatTurn,
   Ga4AccountView,
   GoogleClientStatus,
@@ -50,6 +51,28 @@ const api = {
   llm: {
     chat: (history: ChatTurn[], message: string): Promise<ChatReply> =>
       ipcRenderer.invoke('llm:chat', history, message),
+
+    // Streaming chat. `onEvent` fires for text chunks + tool calls as they arrive;
+    // the returned promise resolves with the final reply (or rejects on error).
+    chatStream: (
+      history: ChatTurn[],
+      message: string,
+      onEvent: (event: ChatStreamEvent) => void
+    ): Promise<ChatReply> => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const listener = (
+        _e: unknown,
+        payload: { requestId: string } & ChatStreamEvent
+      ): void => {
+        if (payload?.requestId !== requestId) return;
+        const { requestId: _drop, ...event } = payload;
+        onEvent(event);
+      };
+      ipcRenderer.on('llm:chat:event', listener);
+      return ipcRenderer
+        .invoke('llm:chat:start', requestId, history, message)
+        .finally(() => ipcRenderer.removeListener('llm:chat:event', listener));
+    },
   },
 };
 

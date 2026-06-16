@@ -54,6 +54,11 @@ export interface ChatReply {
   toolCalls: ChatToolCall[];
 }
 
+/** Incremental events pushed during a streaming chat. */
+export type ChatStreamEvent =
+  | { type: 'text'; delta: string }
+  | { type: 'tool'; name: string };
+
 export interface GtmAccountView {
   accountId: string;
   name: string;

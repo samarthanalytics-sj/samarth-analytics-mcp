@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { runChat } from '../gateway';
-import type { LlmClient, LlmReply, LlmToolCall, ToolExecutor } from '../types';
+import type { LlmChatInput, LlmClient, LlmReply, LlmToolCall, ToolExecutor } from '../types';
 
 let passed = 0;
 let failed = 0;
@@ -18,8 +18,10 @@ async function test(name: string, fn: () => Promise<void>): Promise<void> {
 class ScriptedClient implements LlmClient {
   private i = 0;
   constructor(private readonly replies: LlmReply[]) {}
-  async chat(): Promise<LlmReply> {
-    return this.replies[Math.min(this.i++, this.replies.length - 1)];
+  async chatStream(_input: LlmChatInput, onDelta: (t: string) => void): Promise<LlmReply> {
+    const reply = this.replies[Math.min(this.i++, this.replies.length - 1)];
+    if (reply.text) onDelta(reply.text);
+    return reply;
   }
 }
 
@@ -41,7 +43,7 @@ await test('executes a tool call then returns the final answer', async () => {
     client,
     { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }] },
     exec,
-    (c) => calls.push(c)
+    { onToolCall: (c) => calls.push(c) }
   );
   assert.equal(res.text, 'final answer');
   assert.equal(res.steps, 2);
@@ -72,11 +74,25 @@ await test('caps at maxSteps when the model keeps calling tools', async () => {
     client,
     { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }] },
     exec,
-    undefined,
+    {},
     2
   );
   assert.equal(res.steps, 2);
   assert.match(res.text, /Stopped after/);
+});
+
+await test('forwards streamed text deltas via onDelta', async () => {
+  const deltas: string[] = [];
+  const client = new ScriptedClient([{ text: 'streamed reply' }]);
+  const exec = executor(async () => 'ok');
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }] },
+    exec,
+    { onDelta: (d) => deltas.push(d) }
+  );
+  assert.equal(res.text, 'streamed reply');
+  assert.deepEqual(deltas, ['streamed reply']);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

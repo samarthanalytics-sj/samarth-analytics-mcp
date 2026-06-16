@@ -14,7 +14,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "test": "tsx src/main/storage/__tests__/secret-store.test.ts && tsx src/main/storage/__tests__/account-repository.test.ts && tsx src/main/services/__tests__/registry-service.test.ts && tsx src/main/google/__tests__/oauth.test.ts && tsx src/main/google/__tests__/account-clients.test.ts && tsx src/main/llm/__tests__/gateway.test.ts && tsx src/main/llm/__tests__/providers.test.ts && tsx src/main/tools/__tests__/registry.test.ts"
+    "test": "tsx src/main/storage/__tests__/secret-store.test.ts && tsx src/main/storage/__tests__/account-repository.test.ts && tsx src/main/services/__tests__/registry-service.test.ts && tsx src/main/google/__tests__/oauth.test.ts && tsx src/main/google/__tests__/account-clients.test.ts && tsx src/main/llm/__tests__/gateway.test.ts && tsx src/main/llm/__tests__/providers.test.ts && tsx src/main/llm/__tests__/stream.test.ts && tsx src/main/tools/__tests__/registry.test.ts"
   },
   "dependencies": {
     "@googleapis/analyticsadmin": "^17.0.0",
