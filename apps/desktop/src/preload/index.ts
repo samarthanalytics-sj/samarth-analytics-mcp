@@ -84,9 +84,10 @@ const api = {
         .finally(() => ipcRenderer.removeListener('llm:chat:event', listener));
     },
 
-    // Answer a write-confirmation prompt raised during a streaming chat.
-    confirm: (confirmId: string, approved: boolean): Promise<void> =>
-      ipcRenderer.invoke('llm:confirm:respond', confirmId, approved),
+    // Answer a write-confirmation prompt raised during a streaming chat: the
+    // (possibly edited) args to apply, or null to decline.
+    confirm: (confirmId: string, result: Record<string, unknown> | null): Promise<void> =>
+      ipcRenderer.invoke('llm:confirm:respond', confirmId, result),
   },
 };
 

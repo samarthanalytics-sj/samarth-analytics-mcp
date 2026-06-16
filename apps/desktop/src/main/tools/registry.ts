@@ -11,8 +11,12 @@ export interface WriteProposal {
   destructive?: boolean;
 }
 
-/** Asks the user to approve a write. Resolves true to apply, false to decline. */
-export type ConfirmFn = (proposal: WriteProposal) => Promise<boolean>;
+/**
+ * Asks the user to approve a write. Resolves with the (possibly user-edited)
+ * args to apply, or null if the user declined. Lets the approval card edit
+ * names/types/config before the change is made.
+ */
+export type ConfirmFn = (proposal: WriteProposal) => Promise<Record<string, unknown> | null>;
 
 interface Tool extends LlmToolDef {
   /** Mutates GTM — only listed/executed when a confirm function is provided. */
@@ -105,6 +109,21 @@ export function buildToolRegistry(
         additionalProperties: false,
       },
       handler: (a) => data.listGtmTags(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+    },
+    {
+      name: 'list_gtm_triggers',
+      description: 'List the triggers in a GTM workspace. Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGtmTriggers(s(a.accountId), s(a.containerId), s(a.workspaceId)),
     },
     {
       name: 'list_ga4_accounts',
@@ -240,6 +259,102 @@ export function buildToolRegistry(
       handler: (a) => data.deleteGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId)),
     },
     {
+      name: 'enable_gtm_builtin_variables',
+      description:
+        'Enable built-in variables in a GTM workspace (e.g. "clickUrl" for {{Click URL}}, ' +
+        '"clickClasses", "pageUrl"). Requires accountId, containerId, workspaceId, and types (array of built-in variable type keys).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          types: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'types'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Enable built-in variables: ${(Array.isArray(a.types) ? a.types : []).join(', ')}`,
+      handler: (a) =>
+        data.enableGtmBuiltInVariables(
+          s(a.accountId),
+          s(a.containerId),
+          s(a.workspaceId),
+          Array.isArray(a.types) ? a.types.map(String) : []
+        ),
+    },
+    {
+      name: 'create_gtm_tag_with_trigger',
+      description:
+        'PREFERRED one-shot tool: create a tag that fires on a trigger, in a single confirmed step. ' +
+        'Enables any needed built-in variables, REUSES an existing trigger with the same name (no ' +
+        'duplicates) or creates it, then creates the tag linked to that trigger. Requires accountId, ' +
+        'containerId, workspaceId, `tag` (GTM Tag resource {name,type,parameter?}), `trigger` (GTM ' +
+        'Trigger resource {name,type,filter?}), and optional `builtInVariables` (e.g. ["clickUrl"]). ' +
+        'Use this instead of separate create_gtm_trigger + create_gtm_tag calls so the user approves once.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          tag: { type: 'object', description: 'GTM Tag resource {name, type, parameter?}' },
+          trigger: { type: 'object', description: 'GTM Trigger resource {name, type, filter?}' },
+          builtInVariables: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tag', 'trigger'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) =>
+        `Create tag "${s(obj(a.tag).name)}" firing on trigger "${s(obj(a.trigger).name)}" in workspace ${s(a.workspaceId)}`,
+      handler: async (a) => {
+        const accountId = s(a.accountId);
+        const containerId = s(a.containerId);
+        const workspaceId = s(a.workspaceId);
+        const tag = obj(a.tag);
+        const trigger = obj(a.trigger);
+        const builtIns = Array.isArray(a.builtInVariables) ? a.builtInVariables.map(String) : [];
+
+        // 1. Enable needed built-in variables (best-effort: already-enabled is fine).
+        let enabledVariables: string[] = [];
+        if (builtIns.length) {
+          try {
+            enabledVariables = await data.enableGtmBuiltInVariables(accountId, containerId, workspaceId, builtIns);
+          } catch {
+            enabledVariables = builtIns; // likely already enabled
+          }
+        }
+
+        // 2. Reuse an existing trigger with the same name, else create it.
+        const triggerName = s(trigger.name);
+        const existing = (await data.listGtmTriggers(accountId, containerId, workspaceId)).find(
+          (t) => t.name.toLowerCase() === triggerName.toLowerCase()
+        );
+        let triggerId: string;
+        let reusedTrigger = false;
+        if (existing) {
+          triggerId = existing.triggerId;
+          reusedTrigger = true;
+        } else {
+          triggerId = (await data.createGtmTrigger(accountId, containerId, workspaceId, trigger)).triggerId;
+        }
+
+        // 3. Create the tag linked to that trigger.
+        const createdTag = await data.createGtmTag(accountId, containerId, workspaceId, {
+          ...tag,
+          firingTriggerId: [triggerId],
+        });
+
+        return {
+          tag: createdTag,
+          trigger: { triggerId, name: triggerName, reused: reusedTrigger },
+          enabledVariables,
+        };
+      },
+    },
+    {
       name: 'create_gtm_trigger',
       description:
         'Create a trigger in a GTM workspace. `trigger` is a GTM API Trigger resource. ' +
@@ -294,34 +409,38 @@ export function buildToolRegistry(
     execute: async (name, args): Promise<string> => {
       const tool = tools.find((t) => t.name === name);
       if (!tool) throw new Error(`Unknown tool: ${name}`);
+      let effectiveArgs = args ?? {};
       if (tool.write) {
         if (!confirm) {
           return JSON.stringify({ declined: true, message: 'Write tools are disabled.' });
         }
-        const summary = tool.summarize ? tool.summarize(args ?? {}) : tool.name;
+        const summary = tool.summarize ? tool.summarize(effectiveArgs) : tool.name;
         const declined = JSON.stringify({ declined: true, message: 'The user declined this change.' });
 
-        const approved = await confirm({
+        // The user may edit names/types/config in the approval card; the returned
+        // args replace the model's proposal.
+        const edited = await confirm({
           tool: tool.name,
           summary,
-          details: args ?? {},
+          details: effectiveArgs,
           destructive: tool.destructive,
         });
-        if (!approved) return declined;
+        if (!edited) return declined;
+        effectiveArgs = edited;
 
         // Destructive tools (delete) require a SECOND, final confirmation.
         if (tool.destructive) {
-          const approvedAgain = await confirm({
+          const again = await confirm({
             tool: tool.name,
-            summary: `FINAL CONFIRMATION — permanently ${summary}. This cannot be undone.`,
-            details: args ?? {},
+            summary: `FINAL CONFIRMATION — permanently ${tool.summarize ? tool.summarize(effectiveArgs) : summary}. This cannot be undone.`,
+            details: effectiveArgs,
             destructive: true,
           });
-          if (!approvedAgain) return declined;
+          if (!again) return declined;
         }
       }
       try {
-        return JSON.stringify(await tool.handler(args ?? {}));
+        return JSON.stringify(await tool.handler(effectiveArgs));
       } catch (e) {
         const msg = apiErrorMessage(e);
         console.error(`[samarth-desktop] tool "${name}" failed: ${msg}`);

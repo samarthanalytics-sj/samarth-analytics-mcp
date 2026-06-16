@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppInfo } from '../../preload';
 import type {
   AccountView,
@@ -68,6 +68,72 @@ function describeCondition(filter: unknown): string {
     .join(' AND ');
 }
 
+/* ── Editable approval fields ── */
+const asObj = (v: unknown): Record<string, unknown> =>
+  v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+
+function setParam(node: Record<string, unknown>, key: string, value: string): void {
+  const arr = Array.isArray(node.parameter)
+    ? (node.parameter as Array<Record<string, unknown>>)
+    : ((node.parameter = []) as Array<Record<string, unknown>>);
+  const existing = arr.find((p) => p.key === key);
+  if (existing) existing.value = value;
+  else arr.push({ type: 'template', key, value });
+}
+
+interface EditField {
+  key: string;
+  label: string;
+  initial: string;
+  apply: (d: Record<string, unknown>, v: string) => void;
+}
+
+/* Editable fields for a proposed write — names, types, key config. Each apply()
+   writes back into a (cloned) copy of the proposal args before it's sent. */
+function buildEditFields(tool: string, details: Record<string, unknown>): EditField[] {
+  const fields: EditField[] = [];
+  if (tool === 'delete_gtm_tag') return fields; // delete isn't editable
+
+  const tag = asObj(details.tag);
+  const trigger = asObj(details.trigger);
+  const variable = asObj(details.variable);
+
+  if (details.tag) {
+    fields.push({ key: 'tagName', label: 'Tag name', initial: String(tag.name ?? ''), apply: (d, v) => { const t = asObj(d.tag); t.name = v; d.tag = t; } });
+    fields.push({ key: 'tagType', label: 'Tag type (code)', initial: String(tag.type ?? ''), apply: (d, v) => { const t = asObj(d.tag); t.type = v; d.tag = t; } });
+    const ev = gtmParam(tag, 'eventName');
+    if (ev !== undefined) fields.push({ key: 'eventName', label: 'Event name', initial: ev, apply: (d, v) => { const t = asObj(d.tag); setParam(t, 'eventName', v); d.tag = t; } });
+    const mid = gtmParam(tag, 'measurementId');
+    if (mid !== undefined) fields.push({ key: 'measurementId', label: 'Measurement ID', initial: mid, apply: (d, v) => { const t = asObj(d.tag); setParam(t, 'measurementId', v); d.tag = t; } });
+  }
+  if (details.trigger) {
+    fields.push({ key: 'trigName', label: 'Trigger name', initial: String(trigger.name ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.name = v; d.trigger = t; } });
+    fields.push({ key: 'trigType', label: 'Trigger type (code)', initial: String(trigger.type ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.type = v; d.trigger = t; } });
+    const filter = Array.isArray(trigger.filter) ? (trigger.filter as Array<Record<string, unknown>>) : [];
+    const p0 = Array.isArray(filter[0]?.parameter) ? (filter[0].parameter as Array<Record<string, unknown>>) : [];
+    if (p0.find((p) => p.key === 'arg1')) {
+      fields.push({
+        key: 'condValue',
+        label: 'Condition value',
+        initial: String(p0.find((p) => p.key === 'arg1')?.value ?? ''),
+        apply: (d, v) => {
+          const f = (asObj(d.trigger).filter as Array<Record<string, unknown>>)?.[0];
+          const a1 = (f?.parameter as Array<Record<string, unknown>>)?.find((p) => p.key === 'arg1');
+          if (a1) a1.value = v;
+        },
+      });
+    }
+  }
+  if (details.variable) {
+    fields.push({ key: 'varName', label: 'Variable name', initial: String(variable.name ?? ''), apply: (d, v) => { const t = asObj(d.variable); t.name = v; d.variable = t; } });
+    fields.push({ key: 'varType', label: 'Variable type (code)', initial: String(variable.type ?? ''), apply: (d, v) => { const t = asObj(d.variable); t.type = v; d.variable = t; } });
+  }
+  if (tool.includes('workspace') && details.name !== undefined) {
+    fields.push({ key: 'wsName', label: 'Workspace name', initial: String(details.name ?? ''), apply: (d, v) => { d.name = v; } });
+  }
+  return fields;
+}
+
 /* Turn a proposed write's raw args into labeled, human-readable rows. */
 function summarizeProposal(tool: string, details: Record<string, unknown>): Array<{ label: string; value: string }> {
   const rows: Array<{ label: string; value: string }> = [];
@@ -108,6 +174,84 @@ function summarizeProposal(tool: string, details: Record<string, unknown>): Arra
     return rows;
   }
   return rows;
+}
+
+interface PendingConfirm {
+  confirmId: string;
+  tool: string;
+  summary: string;
+  details: Record<string, unknown>;
+  destructive?: boolean;
+}
+
+function ConfirmCard({
+  proposal,
+  onApprove,
+  onReject,
+}: {
+  proposal: PendingConfirm;
+  onApprove: (details: Record<string, unknown>) => void;
+  onReject: () => void;
+}): JSX.Element {
+  const fields = useMemo(() => buildEditFields(proposal.tool, proposal.details), [proposal]);
+  const [vals, setVals] = useState<Record<string, string>>(() =>
+    Object.fromEntries(fields.map((f) => [f.key, f.initial]))
+  );
+
+  function approve(): void {
+    const edited = structuredClone(proposal.details);
+    for (const f of fields) f.apply(edited, vals[f.key] ?? f.initial);
+    onApprove(edited);
+  }
+
+  const rows = summarizeProposal(proposal.tool, proposal.details);
+
+  return (
+    <div style={proposal.destructive ? styles.confirmDanger : styles.confirm}>
+      <div style={styles.confirmHead}>
+        {proposal.destructive ? '🗑 Delete — approve this action?' : '⚠ Approve this change to your GTM?'}
+      </div>
+
+      {fields.length > 0 ? (
+        <div style={styles.proposalRows}>
+          {fields.map((f) => (
+            <div key={f.key} style={styles.editRow}>
+              <span style={styles.proposalLabel}>{f.label}</span>
+              <input
+                style={styles.editInput}
+                value={vals[f.key] ?? ''}
+                onChange={(e) => setVals((s) => ({ ...s, [f.key]: e.target.value }))}
+              />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={styles.proposalRows}>
+          {rows.map((r) => (
+            <div key={r.label} style={styles.proposalRow}>
+              <span style={styles.proposalLabel}>{r.label}</span>
+              <span style={styles.proposalValue}>{r.value}</span>
+            </div>
+          ))}
+          {rows.length === 0 && <div style={{ color: '#9ca3af' }}>{proposal.summary}</div>}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button style={proposal.destructive ? styles.dangerSolid : styles.primaryBtn} onClick={approve}>
+          {proposal.destructive ? 'Yes, delete' : 'Approve & apply'}
+        </button>
+        <button style={styles.ghostBtn} onClick={onReject}>
+          Cancel
+        </button>
+      </div>
+      <div style={styles.confirmNote}>
+        {proposal.destructive
+          ? 'Delete needs two approvals. Applies to a draft workspace — not published.'
+          : 'Edit any field above if needed. Applies to a draft workspace only — not published.'}
+      </div>
+    </div>
+  );
 }
 
 export function App(): JSX.Element {
@@ -380,49 +524,20 @@ function ChatView({
       </div>
 
       {pendingConfirm && (
-        <div style={pendingConfirm.destructive ? styles.confirmDanger : styles.confirm}>
-          <div style={styles.confirmHead}>
-            {pendingConfirm.destructive ? '🗑 Delete — approve this action?' : '⚠ Approve this change to your GTM?'}
-          </div>
-          <div style={styles.proposalRows}>
-            {summarizeProposal(pendingConfirm.tool, pendingConfirm.details).map((r) => (
-              <div key={r.label} style={styles.proposalRow}>
-                <span style={styles.proposalLabel}>{r.label}</span>
-                <span style={styles.proposalValue}>{r.value}</span>
-              </div>
-            ))}
-            {summarizeProposal(pendingConfirm.tool, pendingConfirm.details).length === 0 && (
-              <div style={{ color: '#9ca3af' }}>{pendingConfirm.summary}</div>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              style={pendingConfirm.destructive ? styles.dangerSolid : styles.primaryBtn}
-              onClick={async () => {
-                const pc = pendingConfirm;
-                setPendingConfirm(null);
-                await window.desktop.llm.confirm(pc.confirmId, true);
-              }}
-            >
-              {pendingConfirm.destructive ? 'Yes, delete' : 'Approve & apply'}
-            </button>
-            <button
-              style={styles.ghostBtn}
-              onClick={async () => {
-                const pc = pendingConfirm;
-                setPendingConfirm(null);
-                await window.desktop.llm.confirm(pc.confirmId, false);
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-          <div style={styles.confirmNote}>
-            {pendingConfirm.destructive
-              ? 'Delete needs two approvals. Applies to a draft workspace — not published.'
-              : 'Applies to a draft workspace only — not published.'}
-          </div>
-        </div>
+        <ConfirmCard
+          key={pendingConfirm.confirmId}
+          proposal={pendingConfirm}
+          onApprove={async (details) => {
+            const id = pendingConfirm.confirmId;
+            setPendingConfirm(null);
+            await window.desktop.llm.confirm(id, details);
+          }}
+          onReject={async () => {
+            const id = pendingConfirm.confirmId;
+            setPendingConfirm(null);
+            await window.desktop.llm.confirm(id, null);
+          }}
+        />
       )}
 
       <div style={styles.composer}>
@@ -782,6 +897,8 @@ const styles: Record<string, React.CSSProperties> = {
   proposalRow: { display: 'flex', justifyContent: 'space-between', gap: 16, padding: '7px 0', borderBottom: '1px solid #1f2937', fontSize: 13 },
   proposalLabel: { color: '#9ca3af' },
   proposalValue: { color: '#e5e7eb', fontWeight: 600, textAlign: 'right', wordBreak: 'break-word' },
+  editRow: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #1f2937' },
+  editInput: { flex: 1, maxWidth: 320, background: '#161e2e', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 6, padding: '6px 9px', fontSize: 13 },
   confirmNote: { color: '#9ca3af', fontSize: 11, marginTop: 8 },
 
   settings: { flex: 1, overflowY: 'auto', padding: 24, maxWidth: 720 },

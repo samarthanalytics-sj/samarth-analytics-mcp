@@ -4,8 +4,9 @@ import type { ChatTurn, GoogleProduct } from '../../shared/ipc';
 import type { WriteProposal } from '../tools/registry';
 
 // Pending write-confirmations keyed by confirmId. A write tool registers a
-// resolver here and waits; the renderer answers via 'llm:confirm:respond'.
-const pendingConfirms = new Map<string, (approved: boolean) => void>();
+// resolver here and waits; the renderer answers via 'llm:confirm:respond' with
+// the (possibly user-edited) args, or null to decline.
+const pendingConfirms = new Map<string, (result: Record<string, unknown> | null) => void>();
 let confirmSeq = 0;
 
 export function registerChatIpc(service: ChatService): void {
@@ -32,8 +33,8 @@ export function registerChatIpc(service: ChatService): void {
       const send = (payload: unknown): void => {
         if (!event.sender.isDestroyed()) event.sender.send('llm:chat:event', payload);
       };
-      const confirm = (proposal: WriteProposal): Promise<boolean> =>
-        new Promise<boolean>((resolve) => {
+      const confirm = (proposal: WriteProposal): Promise<Record<string, unknown> | null> =>
+        new Promise<Record<string, unknown> | null>((resolve) => {
           const confirmId = `${requestId}:${confirmSeq++}`;
           pendingConfirms.set(confirmId, resolve);
           send({
@@ -56,12 +57,16 @@ export function registerChatIpc(service: ChatService): void {
     }
   );
 
-  // Renderer's answer to a write-confirmation prompt.
-  ipcMain.handle('llm:confirm:respond', (_event, confirmId: string, approved: boolean) => {
-    const resolve = pendingConfirms.get(confirmId);
-    if (resolve) {
-      pendingConfirms.delete(confirmId);
-      resolve(Boolean(approved));
+  // Renderer's answer to a write-confirmation prompt: the (possibly edited) args
+  // to apply, or null to decline.
+  ipcMain.handle(
+    'llm:confirm:respond',
+    (_event, confirmId: string, result: Record<string, unknown> | null) => {
+      const resolve = pendingConfirms.get(confirmId);
+      if (resolve) {
+        pendingConfirms.delete(confirmId);
+        resolve(result && typeof result === 'object' ? result : null);
+      }
     }
-  });
+  );
 }

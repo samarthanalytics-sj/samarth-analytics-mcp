@@ -200,6 +200,40 @@ export class GoogleDataService {
     return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
+  async listGtmTriggers(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<Array<{ triggerId: string; name: string; type: string }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.triggers.list({
+      parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+    });
+    return (res.data.trigger ?? []).map((t) => ({
+      triggerId: t.triggerId ?? '',
+      name: t.name ?? '(unnamed)',
+      type: t.type ?? '',
+    }));
+  }
+
+  /** Enable built-in variables (e.g. "clickUrl") in a workspace. Idempotent-ish:
+   *  re-enabling an already-enabled one is tolerated by the caller. */
+  async enableGtmBuiltInVariables(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    types: string[]
+  ): Promise<string[]> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.built_in_variables.create({
+      parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+      type: types,
+    });
+    return (res.data.builtInVariable ?? []).map((v) => v.type ?? '');
+  }
+
   async deleteGtmTag(
     accountId: string,
     containerId: string,

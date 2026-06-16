@@ -65,7 +65,12 @@ export class ChatService {
       (product === 'gtm' && confirm
         ? 'You can read the GTM setup and create/edit/delete tags, triggers, and variables in a ' +
           'DRAFT workspace (never published — the user publishes manually in GTM). Always work in a ' +
-          'workspace, and the user must approve each change. '
+          'workspace (create one if needed). When the user wants a tag that fires on some event, ' +
+          'use the ONE-SHOT create_gtm_tag_with_trigger tool (it enables needed built-in variables, ' +
+          'reuses an existing trigger of the same name instead of duplicating, then creates the tag ' +
+          'linked to it) so the user approves the whole thing ONCE — do not split it into separate ' +
+          'create_gtm_trigger then create_gtm_tag calls. Include builtInVariables like ["clickUrl"] ' +
+          'when the trigger needs them. The user must approve each change. '
         : product === 'gtm'
           ? 'You can read the GTM setup (accounts, containers, workspaces, tags). '
           : 'You can read GA4 (accounts, properties, data streams) and run GA4 reports. ') +
