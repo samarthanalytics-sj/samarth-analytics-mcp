@@ -15,6 +15,21 @@ import { registerGoogleIpc } from './ipc/google-ipc';
 
 const isDev = !app.isPackaged;
 
+/**
+ * Where local data lives (registry.json, secrets.json, oauth-client.json).
+ *   - SAMARTH_DESKTOP_DATA_DIR env overrides everything (explicit path).
+ *   - Dev: the repo-root `data/` dir (app.getAppPath() is apps/desktop), so the
+ *     files are easy to find/edit during development — e.g. data/oauth-client.json.
+ *   - Packaged: the per-user app data dir (AppData on Windows).
+ * The repo-root `data/` is gitignored — never commit oauth-client.json/secrets.
+ */
+function resolveDataDir(): string {
+  const override = process.env.SAMARTH_DESKTOP_DATA_DIR?.trim();
+  if (override) return override;
+  if (!app.isPackaged) return join(app.getAppPath(), '..', '..', 'data');
+  return join(app.getPath('userData'), 'data');
+}
+
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1280,
@@ -82,8 +97,9 @@ app.whenReady().then(() => {
   }
 
   // Local data layer: account registry (metadata) + secret store (encrypted via
-  // safeStorage/DPAPI). Lives under the per-user app data dir.
-  const dataDir = join(app.getPath('userData'), 'data');
+  // safeStorage/DPAPI). Dev uses the repo-root data/ dir; packaged uses AppData.
+  const dataDir = resolveDataDir();
+  console.error(`[samarth-desktop] data dir: ${dataDir}`);
   const accounts = new AccountRepository(join(dataDir, 'registry.json'));
   const secrets = new SecretStore(join(dataDir, 'secrets.json'), new SafeStorageCryptor());
   const registry = new RegistryService(accounts, secrets);
