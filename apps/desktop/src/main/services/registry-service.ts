@@ -87,6 +87,29 @@ export class RegistryService {
     this.repo.update(id, { googleTokenRef: ref });
   }
 
+  /**
+   * Create-or-find an account by email (from a completed Google sign-in), refresh
+   * its display name, vault the token, and make it the active account. The single
+   * entry point the Google OAuth flow calls on success.
+   */
+  upsertGoogleAccount(email: string, displayName: string | undefined, tokenJson: string): AccountView {
+    const acct = this.repo.add({ email, displayName });
+    if (displayName && acct.displayName !== displayName) {
+      this.repo.update(acct.id, { displayName });
+    }
+    this.setGoogleToken(acct.id, tokenJson);
+    this.repo.setActive(acct.id);
+    return this.toView(this.repo.get(acct.id)!);
+  }
+
+  /** Remove the vaulted Google token for an account (disconnect, keep the record). */
+  clearGoogleToken(id: string): void {
+    const a = this.repo.get(id);
+    if (!a?.googleTokenRef) return;
+    this.secrets.delete(a.googleTokenRef);
+    this.repo.update(id, { googleTokenRef: undefined });
+  }
+
   /** Read the vaulted Google token JSON for an account (used by Phase 2/3). */
   getGoogleToken(id: string): string | null {
     const a = this.repo.get(id);

@@ -37,3 +37,10 @@ export interface SecretSelfTest {
   detail: string;
   encryptionAvailable: boolean;
 }
+
+export interface GoogleClientStatus {
+  /** Whether a Google OAuth client (id + secret) is configured. */
+  configured: boolean;
+  /** Where to drop the oauth-client.json if it isn't (shown to the user). */
+  configPath: string;
+}

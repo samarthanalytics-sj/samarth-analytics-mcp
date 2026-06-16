@@ -5,6 +5,8 @@ import { SecretStore } from './storage/secret-store';
 import { SafeStorageCryptor } from './storage/safe-storage-cryptor';
 import { RegistryService } from './services/registry-service';
 import { registerRegistryIpc } from './ipc/registry-ipc';
+import { GoogleAuthService } from './services/google-auth-service';
+import { registerGoogleIpc } from './ipc/google-ipc';
 
 // Phase 0 scaffold: boot a window, wire a minimal, secure IPC bridge, and prove
 // renderer <-> main messaging works. Later phases add the account registry,
@@ -89,8 +91,13 @@ app.whenReady().then(() => {
     console.warn('[samarth-desktop] safeStorage encryption unavailable — secret writes will fail.');
   }
 
+  // Per-account Google sign-in (loopback OAuth). Client id/secret come from env
+  // or oauth-client.json in the data dir.
+  const googleAuth = new GoogleAuthService(registry, join(dataDir, 'oauth-client.json'));
+
   registerIpcHandlers();
   registerRegistryIpc(registry);
+  registerGoogleIpc(googleAuth);
   createWindow();
 
   app.on('activate', () => {

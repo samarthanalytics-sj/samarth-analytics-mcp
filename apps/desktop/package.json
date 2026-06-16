@@ -14,7 +14,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "test": "tsx src/main/storage/__tests__/secret-store.test.ts && tsx src/main/storage/__tests__/account-repository.test.ts && tsx src/main/services/__tests__/registry-service.test.ts"
+    "test": "tsx src/main/storage/__tests__/secret-store.test.ts && tsx src/main/storage/__tests__/account-repository.test.ts && tsx src/main/services/__tests__/registry-service.test.ts && tsx src/main/google/__tests__/oauth.test.ts"
   },
   "dependencies": {
     "react": "^18.3.1",

@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AccountView, AddAccountInput, LlmProvider, SecretSelfTest } from '../shared/ipc';
+import type {
+  AccountView,
+  AddAccountInput,
+  GoogleClientStatus,
+  LlmProvider,
+  SecretSelfTest,
+} from '../shared/ipc';
 
 // The ONLY surface the renderer can reach in the main process. Every capability
 // is an explicit, typed method — never raw ipcRenderer. Each phase adds a
@@ -24,6 +30,12 @@ const api = {
   secrets: {
     available: (): Promise<boolean> => ipcRenderer.invoke('secrets:available'),
     selfTest: (): Promise<SecretSelfTest> => ipcRenderer.invoke('secrets:selfTest'),
+  },
+
+  google: {
+    status: (): Promise<GoogleClientStatus> => ipcRenderer.invoke('google:status'),
+    connect: (): Promise<AccountView> => ipcRenderer.invoke('google:connect'),
+    disconnect: (id: string): Promise<void> => ipcRenderer.invoke('google:disconnect', id),
   },
 };
 
