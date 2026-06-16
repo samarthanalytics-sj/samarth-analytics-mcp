@@ -13,7 +13,7 @@ import {
   parseUserinfo,
   DESKTOP_GOOGLE_SCOPES,
 } from '../oauth';
-import { loadGoogleOAuthClient } from '../oauth-config';
+import { loadGoogleOAuthClient, loadGoogleOAuthClientWithSource } from '../oauth-config';
 
 let passed = 0;
 let failed = 0;
@@ -154,6 +154,21 @@ test('loadGoogleOAuthClient: malformed file → null', () => {
   const f = join(dir, 'bad.json');
   writeFileSync(f, '{ not json');
   assert.equal(loadGoogleOAuthClient(f), null);
+});
+
+test('loadGoogleOAuthClientWithSource: trims whitespace + reports source', () => {
+  clearEnv();
+  process.env.GOOGLE_DESKTOP_CLIENT_ID = '  abc.apps.googleusercontent.com\n';
+  process.env.GOOGLE_DESKTOP_CLIENT_SECRET = ' sec ';
+  const env = loadGoogleOAuthClientWithSource(join(dir, 'nope.json'));
+  assert.equal(env.source, 'env');
+  assert.equal(env.client?.clientId, 'abc.apps.googleusercontent.com', 'trimmed');
+  assert.equal(env.client?.clientSecret, 'sec');
+
+  clearEnv();
+  const none = loadGoogleOAuthClientWithSource(join(dir, 'nope.json'));
+  assert.equal(none.source, 'none');
+  assert.equal(none.client, null);
 });
 
 // restore env + cleanup

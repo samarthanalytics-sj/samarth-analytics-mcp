@@ -43,4 +43,10 @@ export interface GoogleClientStatus {
   configured: boolean;
   /** Where to drop the oauth-client.json if it isn't (shown to the user). */
   configPath: string;
+  /** Where the client was loaded from. */
+  source: 'env' | 'file' | 'none';
+  /** The loaded client_id (public — appears in the auth URL). For diagnostics. */
+  clientId?: string;
+  /** Whether the client_id has the expected …apps.googleusercontent.com shape. */
+  clientIdLooksValid?: boolean;
 }

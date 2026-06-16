@@ -1,7 +1,7 @@
 import { shell } from 'electron';
 import type { RegistryService } from './registry-service';
 import { runLoopbackOAuth } from '../google/loopback';
-import { loadGoogleOAuthClient } from '../google/oauth-config';
+import { loadGoogleOAuthClient, loadGoogleOAuthClientWithSource } from '../google/oauth-config';
 import type { AccountView, GoogleClientStatus } from '../../shared/ipc';
 
 // Orchestrates per-account Google sign-in: resolve the OAuth client, run the
@@ -16,7 +16,16 @@ export class GoogleAuthService {
   ) {}
 
   status(): GoogleClientStatus {
-    return { configured: loadGoogleOAuthClient(this.configPath) !== null, configPath: this.configPath };
+    const { client, source } = loadGoogleOAuthClientWithSource(this.configPath);
+    return {
+      configured: client !== null,
+      configPath: this.configPath,
+      source,
+      clientId: client?.clientId,
+      clientIdLooksValid: client
+        ? client.clientId.endsWith('.apps.googleusercontent.com')
+        : undefined,
+    };
   }
 
   async connect(): Promise<AccountView> {

@@ -83,6 +83,21 @@ export function App(): JSX.Element {
         </div>
       )}
 
+      {google && google.configured && (
+        <div style={google.clientIdLooksValid ? styles.diag : styles.warn}>
+          OAuth client loaded from <strong>{google.source}</strong> · id:{' '}
+          <code>{google.clientId}</code>
+          {!google.clientIdLooksValid && (
+            <div style={{ marginTop: 6 }}>
+              ⚠ This client_id doesn’t end with <code>.apps.googleusercontent.com</code> — that’s
+              why Google returns <code>invalid_client</code> / “OAuth client was not found”. Paste
+              the <strong>Client ID</strong> (not the secret/project number) from a Desktop-app
+              client.
+            </div>
+          )}
+        </div>
+      )}
+
       <section style={styles.card}>
         <div style={styles.cardHead}>
           <h2 style={styles.h2}>Accounts</h2>
@@ -251,6 +266,7 @@ const styles: Record<string, React.CSSProperties> = {
   cardHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 },
   h2: { fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, color: '#9ca3af', margin: '0 0 12px' },
   warn: { background: '#251c10', border: '1px solid #92651a', borderRadius: 10, padding: 14, marginTop: 16, maxWidth: 760, color: '#fcd9a5', lineHeight: 1.5 },
+  diag: { background: '#0f1722', border: '1px solid #1f2937', borderRadius: 10, padding: '10px 14px', marginTop: 16, maxWidth: 760, color: '#9ca3af', fontSize: 12, lineHeight: 1.5 },
   path: { background: '#0b0f17', padding: '6px 8px', borderRadius: 6, color: '#e5e7eb', overflowX: 'auto' },
   input: { flex: 1, minWidth: 80, background: '#0b0f17', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '7px 10px', fontSize: 13 },
   select: { background: '#0b0f17', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '7px 8px', fontSize: 13 },
