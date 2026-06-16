@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   UserCircle2,
   ServerCog,
+  Globe,
 } from "lucide-react";
 import { BrandLogo } from "./brand-logo";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +41,7 @@ const NAV: NavItem[] = [
   { href: "/containers", label: "Containers", icon: Boxes },
   { href: "/audit", label: "Audit", icon: ClipboardCheck },
   { href: "/consent-v2", label: "Consent v2", icon: BadgeCheck },
+  { href: "/web-audit", label: "Web audit", icon: Globe },
   { href: "/server-side", label: "Server-side", icon: ServerCog },
   { href: "/recommend", label: "Recommendations", icon: Sparkles },
   { href: "/approvals", label: "Approvals", icon: GitPullRequest },
