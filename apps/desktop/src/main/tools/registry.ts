@@ -1,17 +1,37 @@
 import type { GoogleDataService } from '../google/data-service';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
 
-// Read-only GTM/GA4 tools the LLM can call. Each handler runs against the ACTIVE
-// account (GoogleDataService resolves it), so the model only ever sees the
-// signed-in user's own data. Results are returned as JSON strings to the model.
+// A change a write-tool wants to make, surfaced to the user for approval.
+export interface WriteProposal {
+  tool: string;
+  summary: string;
+  details: Record<string, unknown>;
+}
+
+/** Asks the user to approve a write. Resolves true to apply, false to decline. */
+export type ConfirmFn = (proposal: WriteProposal) => Promise<boolean>;
+
 interface Tool extends LlmToolDef {
+  /** Mutates GTM — only listed/executed when a confirm function is provided. */
+  write?: boolean;
+  /** Human-readable one-liner shown in the approval prompt. */
+  summarize?: (args: Record<string, unknown>) => string;
   handler: (args: Record<string, unknown>) => Promise<unknown>;
 }
 
 const EMPTY_SCHEMA = { type: 'object', properties: {}, additionalProperties: false } as const;
+const s = (v: unknown): string => String(v ?? '');
+const obj = (v: unknown): Record<string, unknown> =>
+  v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
 
-export function buildToolRegistry(data: GoogleDataService): ToolExecutor {
-  const tools: Tool[] = [
+/**
+ * Read-only tools are always available. Write tools (create/edit tags, triggers,
+ * variables in a draft workspace) are included ONLY when `confirm` is supplied,
+ * and each one calls `confirm` first — if the user declines, nothing is applied.
+ * Writes never publish; changes stay in the workspace until published in GTM.
+ */
+export function buildToolRegistry(data: GoogleDataService, confirm?: ConfirmFn): ToolExecutor {
+  const readTools: Tool[] = [
     {
       name: 'list_gtm_accounts',
       description: 'List the Google Tag Manager accounts the signed-in user can access.',
@@ -23,48 +43,27 @@ export function buildToolRegistry(data: GoogleDataService): ToolExecutor {
       description: 'List the GTM containers within a GTM account. Requires the numeric accountId.',
       inputSchema: {
         type: 'object',
-        properties: { accountId: { type: 'string', description: 'GTM account id, e.g. "6004123456"' } },
+        properties: { accountId: { type: 'string', description: 'GTM account id' } },
         required: ['accountId'],
         additionalProperties: false,
       },
-      handler: (args) => data.listGtmContainers(String(args.accountId ?? '')),
-    },
-    {
-      name: 'list_ga4_accounts',
-      description: 'List the Google Analytics 4 account summaries the signed-in user can access.',
-      inputSchema: { ...EMPTY_SCHEMA },
-      handler: () => data.listGa4Accounts(),
-    },
-    {
-      name: 'list_ga4_properties',
-      description: 'List GA4 properties under an account. Requires account resource name like "accounts/123456".',
-      inputSchema: {
-        type: 'object',
-        properties: { account: { type: 'string', description: 'GA4 account resource name, e.g. "accounts/123456"' } },
-        required: ['account'],
-        additionalProperties: false,
-      },
-      handler: (args) => data.listGa4Properties(String(args.account ?? '')),
+      handler: (a) => data.listGtmContainers(s(a.accountId)),
     },
     {
       name: 'list_gtm_workspaces',
-      description: 'List the workspaces in a GTM container. Requires the numeric accountId and containerId.',
+      description: 'List the workspaces in a GTM container. Requires accountId and containerId.',
       inputSchema: {
         type: 'object',
-        properties: {
-          accountId: { type: 'string', description: 'GTM account id' },
-          containerId: { type: 'string', description: 'GTM container id' },
-        },
+        properties: { accountId: { type: 'string' }, containerId: { type: 'string' } },
         required: ['accountId', 'containerId'],
         additionalProperties: false,
       },
-      handler: (args) =>
-        data.listGtmWorkspaces(String(args.accountId ?? ''), String(args.containerId ?? '')),
+      handler: (a) => data.listGtmWorkspaces(s(a.accountId), s(a.containerId)),
     },
     {
       name: 'list_gtm_tags',
       description:
-        'List the tags in a GTM workspace. Requires numeric accountId, containerId, and workspaceId (get workspaceId from list_gtm_workspaces).',
+        'List the tags in a GTM workspace. Requires accountId, containerId, workspaceId.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -75,56 +74,174 @@ export function buildToolRegistry(data: GoogleDataService): ToolExecutor {
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
       },
-      handler: (args) =>
-        data.listGtmTags(
-          String(args.accountId ?? ''),
-          String(args.containerId ?? ''),
-          String(args.workspaceId ?? '')
-        ),
+      handler: (a) => data.listGtmTags(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+    },
+    {
+      name: 'list_ga4_accounts',
+      description: 'List the Google Analytics 4 account summaries the signed-in user can access.',
+      inputSchema: { ...EMPTY_SCHEMA },
+      handler: () => data.listGa4Accounts(),
+    },
+    {
+      name: 'list_ga4_properties',
+      description: 'List GA4 properties under an account. Requires account like "accounts/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { account: { type: 'string' } },
+        required: ['account'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGa4Properties(s(a.account)),
     },
     {
       name: 'list_ga4_data_streams',
-      description: 'List the data streams of a GA4 property. Requires property resource name like "properties/123456".',
+      description: 'List the data streams of a GA4 property. Requires property like "properties/123456".',
       inputSchema: {
         type: 'object',
-        properties: { property: { type: 'string', description: 'GA4 property, e.g. "properties/123456"' } },
+        properties: { property: { type: 'string' } },
         required: ['property'],
         additionalProperties: false,
       },
-      handler: (args) => data.listGa4DataStreams(String(args.property ?? '')),
+      handler: (a) => data.listGa4DataStreams(s(a.property)),
     },
     {
       name: 'run_ga4_report',
       description:
-        'Run a GA4 report for a property. dimensions/metrics are GA4 API names (e.g. dimensions ["date","country"], metrics ["activeUsers","sessions"]). Dates accept "NdaysAgo", "today", "yesterday", or YYYY-MM-DD.',
+        'Run a GA4 report. dimensions/metrics are GA4 API names (e.g. ["date"], ["activeUsers","sessions"]). Dates accept "NdaysAgo", "today", "yesterday", or YYYY-MM-DD.',
       inputSchema: {
         type: 'object',
         properties: {
-          property: { type: 'string', description: 'GA4 property, e.g. "properties/123456"' },
-          startDate: { type: 'string', description: 'e.g. "28daysAgo" or "2024-01-01"' },
-          endDate: { type: 'string', description: 'e.g. "today"' },
+          property: { type: 'string' },
+          startDate: { type: 'string' },
+          endDate: { type: 'string' },
           dimensions: { type: 'array', items: { type: 'string' } },
           metrics: { type: 'array', items: { type: 'string' } },
         },
         required: ['property', 'startDate', 'endDate', 'metrics'],
         additionalProperties: false,
       },
-      handler: (args) =>
+      handler: (a) =>
         data.runGa4Report({
-          property: String(args.property ?? ''),
-          startDate: String(args.startDate ?? '28daysAgo'),
-          endDate: String(args.endDate ?? 'today'),
-          dimensions: Array.isArray(args.dimensions) ? args.dimensions.map(String) : [],
-          metrics: Array.isArray(args.metrics) ? args.metrics.map(String) : [],
+          property: s(a.property),
+          startDate: s(a.startDate) || '28daysAgo',
+          endDate: s(a.endDate) || 'today',
+          dimensions: Array.isArray(a.dimensions) ? a.dimensions.map(String) : [],
+          metrics: Array.isArray(a.metrics) ? a.metrics.map(String) : [],
         }),
     },
   ];
 
+  const writeTools: Tool[] = [
+    {
+      name: 'create_gtm_workspace',
+      description: 'Create a new draft workspace in a GTM container to make changes in. Requires accountId, containerId, name.',
+      inputSchema: {
+        type: 'object',
+        properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, name: { type: 'string' } },
+        required: ['accountId', 'containerId', 'name'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create GTM workspace "${s(a.name)}" in container ${s(a.containerId)}`,
+      handler: (a) => data.createGtmWorkspace(s(a.accountId), s(a.containerId), s(a.name)),
+    },
+    {
+      name: 'create_gtm_tag',
+      description:
+        'Create a tag in a GTM workspace (draft, not published). Requires accountId, containerId, workspaceId, and a tag object {name, type, parameter?} per the GTM API.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          tag: { type: 'object', description: 'GTM Tag resource: { name, type, parameter? }' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tag'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create tag "${s(obj(a.tag).name)}" (type ${s(obj(a.tag).type)}) in workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), obj(a.tag)),
+    },
+    {
+      name: 'update_gtm_tag',
+      description: 'Update an existing tag in a GTM workspace. Requires accountId, containerId, workspaceId, tagId, and the full tag object.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          tagId: { type: 'string' },
+          tag: { type: 'object' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tagId', 'tag'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Update tag ${s(a.tagId)} ("${s(obj(a.tag).name)}") in workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.updateGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId), obj(a.tag)),
+    },
+    {
+      name: 'create_gtm_trigger',
+      description: 'Create a trigger in a GTM workspace. Requires accountId, containerId, workspaceId, and a trigger object {name, type, ...}.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          trigger: { type: 'object', description: 'GTM Trigger resource' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'trigger'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create trigger "${s(obj(a.trigger).name)}" (type ${s(obj(a.trigger).type)}) in workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.createGtmTrigger(s(a.accountId), s(a.containerId), s(a.workspaceId), obj(a.trigger)),
+    },
+    {
+      name: 'create_gtm_variable',
+      description: 'Create a variable in a GTM workspace. Requires accountId, containerId, workspaceId, and a variable object {name, type, ...}.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          variable: { type: 'object', description: 'GTM Variable resource' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'variable'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create variable "${s(obj(a.variable).name)}" (type ${s(obj(a.variable).type)}) in workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.createGtmVariable(s(a.accountId), s(a.containerId), s(a.workspaceId), obj(a.variable)),
+    },
+  ];
+
+  const tools = confirm ? [...readTools, ...writeTools] : readTools;
+
   return {
-    list: (): LlmToolDef[] => tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+    list: (): LlmToolDef[] =>
+      tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
     execute: async (name, args): Promise<string> => {
       const tool = tools.find((t) => t.name === name);
       if (!tool) throw new Error(`Unknown tool: ${name}`);
+      if (tool.write) {
+        if (!confirm) {
+          return JSON.stringify({ declined: true, message: 'Write tools are disabled.' });
+        }
+        const approved = await confirm({
+          tool: tool.name,
+          summary: tool.summarize ? tool.summarize(args ?? {}) : tool.name,
+          details: args ?? {},
+        });
+        if (!approved) {
+          return JSON.stringify({ declined: true, message: 'The user declined this change.' });
+        }
+      }
       return JSON.stringify(await tool.handler(args ?? {}));
     },
   };

@@ -148,6 +148,88 @@ export class GoogleDataService {
     }));
   }
 
+  // ── Writes (workspace-scoped drafts; never published) ──────────────────────
+  // Each is gated upstream by per-change user confirmation in the chat loop.
+
+  async createGtmWorkspace(
+    accountId: string,
+    containerId: string,
+    name: string
+  ): Promise<GtmWorkspaceView> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.create({
+      parent: `accounts/${accountId}/containers/${containerId}`,
+      requestBody: { name },
+    });
+    return {
+      workspaceId: res.data.workspaceId ?? '',
+      name: res.data.name ?? name,
+      path: res.data.path ?? '',
+    };
+  }
+
+  async createGtmTag(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    tag: Record<string, unknown>
+  ): Promise<GtmTagView> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.tags.create({
+      parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+      requestBody: tag,
+    });
+    return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  async updateGtmTag(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    tagId: string,
+    tag: Record<string, unknown>
+  ): Promise<GtmTagView> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.tags.update({
+      path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`,
+      requestBody: tag,
+    });
+    return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  async createGtmTrigger(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    trigger: Record<string, unknown>
+  ): Promise<{ triggerId: string; name: string; type: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.triggers.create({
+      parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+      requestBody: trigger,
+    });
+    return { triggerId: res.data.triggerId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  async createGtmVariable(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    variable: Record<string, unknown>
+  ): Promise<{ variableId: string; name: string; type: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.variables.create({
+      parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+      requestBody: variable,
+    });
+    return { variableId: res.data.variableId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
   async runGa4Report(input: {
     property: string;
     startDate: string;

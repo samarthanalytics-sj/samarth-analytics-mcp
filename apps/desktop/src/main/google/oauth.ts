@@ -8,14 +8,17 @@ export const GOOGLE_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/aut
 export const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 export const GOOGLE_USERINFO_ENDPOINT = 'https://openidconnect.googleapis.com/v1/userinfo';
 
-// Read-only by default, matching the MCP server's guardrails. openid/email/profile
-// identify the account; tagmanager.readonly + analytics.readonly authorize reads.
-// (Enabling GTM writes later would require adding the edit/publish scopes here.)
+// openid/email/profile identify the account; tagmanager.readonly + analytics.readonly
+// authorize reads. tagmanager.edit.containers authorizes creating/editing tags,
+// triggers, and variables IN A WORKSPACE (draft) — it does NOT allow publishing
+// (that needs edit.containerversions + publish, deliberately excluded). Actual
+// writes are still gated at runtime behind per-change user confirmation.
 export const DESKTOP_GOOGLE_SCOPES = [
   'openid',
   'email',
   'profile',
   'https://www.googleapis.com/auth/tagmanager.readonly',
+  'https://www.googleapis.com/auth/tagmanager.edit.containers',
   'https://www.googleapis.com/auth/analytics.readonly',
 ];
 

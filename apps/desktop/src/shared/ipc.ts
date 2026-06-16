@@ -57,7 +57,8 @@ export interface ChatReply {
 /** Incremental events pushed during a streaming chat. */
 export type ChatStreamEvent =
   | { type: 'text'; delta: string }
-  | { type: 'tool'; name: string };
+  | { type: 'tool'; name: string }
+  | { type: 'confirm'; confirmId: string; tool: string; summary: string; details: Record<string, unknown> };
 
 export interface GtmAccountView {
   accountId: string;

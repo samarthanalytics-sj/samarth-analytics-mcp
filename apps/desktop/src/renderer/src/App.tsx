@@ -215,6 +215,9 @@ function ChatPanel({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<
+    { confirmId: string; tool: string; summary: string; details: Record<string, unknown> } | null
+  >(null);
 
   const ready = Boolean(active?.hasGoogleToken && active?.llm?.hasApiKey);
   const hint = !active
@@ -249,6 +252,14 @@ function ChatPanel({
           }
           return copy;
         });
+        if (ev.type === 'confirm') {
+          setPendingConfirm({
+            confirmId: ev.confirmId,
+            tool: ev.tool,
+            summary: ev.summary,
+            details: ev.details,
+          });
+        }
       });
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -288,8 +299,39 @@ function ChatPanel({
             <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
           </div>
         ))}
-        {busy && <div style={styles.asstMsg}>Thinking…</div>}
+        {busy && !pendingConfirm && <div style={styles.asstMsg}>Thinking…</div>}
       </div>
+
+      {pendingConfirm && (
+        <div style={styles.confirm}>
+          <div style={styles.confirmHead}>⚠ Approve this change to your GTM?</div>
+          <div style={{ margin: '4px 0 8px' }}>{pendingConfirm.summary}</div>
+          <pre style={styles.confirmJson}>{JSON.stringify(pendingConfirm.details, null, 2)}</pre>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              style={styles.button}
+              onClick={async () => {
+                const pc = pendingConfirm;
+                setPendingConfirm(null);
+                await window.desktop.llm.confirm(pc.confirmId, true);
+              }}
+            >
+              Approve &amp; apply
+            </button>
+            <button
+              style={styles.smallBtn}
+              onClick={async () => {
+                const pc = pendingConfirm;
+                setPendingConfirm(null);
+                await window.desktop.llm.confirm(pc.confirmId, false);
+              }}
+            >
+              Reject
+            </button>
+          </div>
+          <div style={styles.confirmNote}>Applies to a draft workspace only — not published.</div>
+        </div>
+      )}
 
       <div style={styles.addRow}>
         <input
@@ -486,6 +528,10 @@ const styles: Record<string, React.CSSProperties> = {
   userMsg: { alignSelf: 'flex-end', background: '#1d4ed8', color: '#fff', padding: '8px 12px', borderRadius: 12, maxWidth: '80%', fontSize: 13 },
   asstMsg: { alignSelf: 'flex-start', background: '#1f2937', color: '#e5e7eb', padding: '8px 12px', borderRadius: 12, maxWidth: '80%', fontSize: 13 },
   toolTrace: { color: '#93c5fd', fontSize: 11, marginBottom: 4 },
+  confirm: { background: '#251c10', border: '1px solid #92651a', borderRadius: 10, padding: 12, margin: '4px 0 12px', color: '#fcd9a5' },
+  confirmHead: { fontWeight: 700 },
+  confirmJson: { background: '#0b0f17', color: '#e5e7eb', padding: 8, borderRadius: 6, maxHeight: 160, overflow: 'auto', fontSize: 11, margin: '0 0 8px' },
+  confirmNote: { color: '#9ca3af', fontSize: 11, marginTop: 8 },
   llmRow: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' },
   dot: { width: 9, height: 9, borderRadius: 999, display: 'inline-block' },
   muted: { color: '#6b7280', fontSize: 13 },

@@ -51,6 +51,10 @@ function fakeData(): { data: GoogleDataService; calls: string[] } {
       calls.push(`ga4Report:${input.property}:${input.metrics.join(',')}`);
       return { dimensionHeaders: [], metricHeaders: [], rows: [] };
     },
+    createGtmWorkspace: async (a: string, c: string, name: string) => {
+      calls.push(`createWorkspace:${a}:${c}:${name}`);
+      return { workspaceId: 'w9', name, path: 'p' };
+    },
   } as unknown as GoogleDataService;
   return { data, calls };
 }
@@ -98,6 +102,39 @@ await test('execute routes args and returns JSON', async () => {
 await test('unknown tool rejects', async () => {
   const reg = buildToolRegistry(fakeData().data);
   await assert.rejects(() => reg.execute('nope', {}), /Unknown tool/);
+});
+
+await test('write tools appear ONLY when a confirm function is provided', async () => {
+  const readOnly = buildToolRegistry(fakeData().data);
+  assert.equal(readOnly.list().length, 8, 'read-only registry has 8 tools');
+  assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
+
+  const withWrites = buildToolRegistry(fakeData().data, async () => true);
+  assert.equal(withWrites.list().length, 13, 'read + write registry has 13 tools');
+  assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tag'), true);
+});
+
+await test('write executes on approval, declines (no API call) on rejection', async () => {
+  const approve = fakeData();
+  const regYes = buildToolRegistry(approve.data, async () => true);
+  await regYes.execute('create_gtm_workspace', { accountId: '1', containerId: '2', name: 'Draft' });
+  assert.ok(approve.calls.includes('createWorkspace:1:2:Draft'), 'applied on approval');
+
+  const reject = fakeData();
+  const regNo = buildToolRegistry(reject.data, async () => false);
+  const out = await regNo.execute('create_gtm_workspace', { accountId: '1', containerId: '2', name: 'Draft' });
+  assert.equal(JSON.parse(out).declined, true);
+  assert.equal(reject.calls.length, 0, 'no API call when the user declines');
+});
+
+await test('write tool is unavailable without confirm (not registered, no API call)', async () => {
+  const fd = fakeData();
+  const reg = buildToolRegistry(fd.data);
+  await assert.rejects(
+    () => reg.execute('create_gtm_workspace', { accountId: '1', containerId: '2', name: 'X' }),
+    /Unknown tool/
+  );
+  assert.equal(fd.calls.length, 0);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

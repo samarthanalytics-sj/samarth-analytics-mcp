@@ -69,6 +69,7 @@ test('buildAuthUrl carries PKCE + offline + chooser params', () => {
   assert.equal(url.searchParams.get('state'), 'st8');
   assert.ok(url.searchParams.get('prompt')?.includes('select_account'));
   assert.ok(url.searchParams.get('scope')?.includes('tagmanager.readonly'));
+  assert.ok(url.searchParams.get('scope')?.includes('tagmanager.edit.containers'));
   assert.ok(url.searchParams.get('scope')?.includes('analytics.readonly'));
 });
 
