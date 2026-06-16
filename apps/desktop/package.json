@@ -14,15 +14,18 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "pack:dir": "electron-vite build && electron-builder --dir",
+    "dist": "electron-vite build && electron-builder",
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist:win": "electron-vite build && electron-builder --win",
+    "dist:linux": "electron-vite build && electron-builder --linux",
     "test": "tsx src/main/storage/__tests__/secret-store.test.ts && tsx src/main/storage/__tests__/account-repository.test.ts && tsx src/main/storage/__tests__/provider-keys.test.ts && tsx src/main/services/__tests__/registry-service.test.ts && tsx src/main/google/__tests__/oauth.test.ts && tsx src/main/google/__tests__/account-clients.test.ts && tsx src/main/llm/__tests__/gateway.test.ts && tsx src/main/llm/__tests__/providers.test.ts && tsx src/main/llm/__tests__/stream.test.ts && tsx src/main/tools/__tests__/registry.test.ts"
   },
   "dependencies": {
     "@googleapis/analyticsadmin": "^17.0.0",
     "@googleapis/analyticsdata": "^5.0.1",
     "@googleapis/tagmanager": "^15.0.0",
-    "google-auth-library": "10.5.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "google-auth-library": "10.5.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
@@ -30,7 +33,10 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "electron": "^31.3.0",
+    "electron-builder": "^24.13.3",
     "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "tsx": "^4.7.1",
     "typescript": "^5.4.5",
     "vite": "^5.3.4"

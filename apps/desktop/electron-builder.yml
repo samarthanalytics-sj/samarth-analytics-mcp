@@ -1,0 +1,61 @@
+# electron-builder packaging config. The app is built by electron-vite into
+# `out/`; electron-builder wraps that + the production node_modules (the
+# externalized google libs) into installers.
+#
+# Build on the TARGET OS: macOS .dmg must be built on a Mac; Windows .exe on
+# Windows. No native modules, so no rebuild is needed (npmRebuild: false).
+appId: com.samarthanalytics.desktop
+productName: Samarth Desktop
+copyright: Copyright © 2026 Samarth Analytics
+
+directories:
+  output: dist
+  buildResources: build
+
+# All-negative list: include everything (out/ + production node_modules) EXCEPT
+# source/config. electron-builder auto-prunes devDependencies from node_modules.
+files:
+  - '!src/**/*'
+  - '!build/**/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!electron-builder.yml'
+  - '!tsconfig*.json'
+  - '!**/*.map'
+  - '!**/*.ts'
+
+asar: true
+npmRebuild: false
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  category: public.app-category.developer-tools
+  # Unsigned build. First launch shows a Gatekeeper warning — right-click → Open,
+  # or run: xattr -dr com.apple.quarantine "/Applications/Samarth Desktop.app".
+  # For seamless launch + distribution, add an Apple Developer identity + notarize.
+  identity: null
+  hardenedRuntime: false
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-setup.${ext}
+
+linux:
+  target:
+    - AppImage
+  category: Development
+  artifactName: ${productName}-${version}.${ext}
