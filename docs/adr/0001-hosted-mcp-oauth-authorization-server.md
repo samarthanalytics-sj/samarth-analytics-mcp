@@ -43,9 +43,9 @@ Forces at play:
    singletons; resolve a per-session user → per-user `OAuth2Client` → per-user
    GTM/GA4 client; inject identity into tool execution. This is required no
    matter which AS we choose. *(Est: ~3–5 days.)*
-2. **Token vault (in-house).** Wire the Postgres store, persist each user's
-   Google refresh token **encrypted at rest** (app-level AES-GCM at minimum;
-   KMS-backed `tokenRef` ideal), per-user CRUD + revocation. *(Est: ~3–4 days.)*
+2. ~~**Token vault (in-house).**~~ **CANCELLED (spike, 2026-06-15)** — Stytch
+   vaults and refreshes the Google refresh token; we only pull short-lived
+   access tokens via get-google-access-token. No in-house vault needed.
 3. **Google OAuth verification.** `tagmanager.*` and `analytics.readonly` are
    Google **sensitive** scopes (not *restricted* like Gmail/Drive). The path is
    the standard sensitive-scope review: verified brand, privacy policy, domain
@@ -68,10 +68,23 @@ for agents/MCP, native DCR), and its free tier — **10,000 MAU/month + 1,000 M2
 tokens + 5 SSO connections, no feature gating** — covers launch and validation
 at $0. A "MAU" is a user/agent authorizing in a given month (not per request),
 so a small user base stays free regardless of usage volume. Connected Apps draws
-from the standard MAU pool (no separate billing). Open question for the spike:
-whether Stytch vaults the upstream Google refresh token and vends fresh Google
-access tokens to us — if so, our own token vault (fixed-cost item #2 below)
-becomes unnecessary.
+from the standard MAU pool (no separate billing).
+
+**Spike result (2026-06-15): RESOLVED — Stytch vaults the Google refresh token
+and vends fresh, correctly-scoped Google access tokens.** Verified end to end
+via scripts/stytch-spike.mjs: a B2B Google discovery login with
+`custom_scopes=tagmanager.readonly analytics.readonly`,
+`provider_access_type=offline`, `provider_prompt=consent` → the
+get-google-access-token endpoint returned `access_token` + `refresh_token`
+(stored) + the two GTM/GA scopes, and that access token returned HTTP 200 from
+`GET tagmanager.googleapis.com/tagmanager/v2/accounts`. **Consequence: our own
+token vault (fixed-cost item #2) is CANCELLED** — Stytch holds and refreshes the
+Google refresh token; our server only ever pulls short-lived access tokens, so
+the refresh token never touches our infra.
+
+Response shape to build Phase 3 against: `{ access_token,
+access_token_expires_in, id_token, scopes[], refresh_token, provider_subject,
+provider_type }`.
 
 ## Options Considered
 
