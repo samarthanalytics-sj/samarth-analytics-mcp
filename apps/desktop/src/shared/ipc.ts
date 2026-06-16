@@ -25,6 +25,8 @@ export interface AccountView {
   hasGoogleToken: boolean;
   lastProduct?: GoogleProduct;
   llm?: LlmConfigView;
+  /** Remembered GTM account/container/workspace selection. */
+  gtmContext?: GtmContext;
 }
 
 export interface AddAccountInput {
@@ -74,6 +76,29 @@ export interface GtmAccountView {
   accountId: string;
   name: string;
   path: string;
+}
+
+export interface GtmContainerView {
+  containerId: string;
+  name: string;
+  publicId: string;
+  path: string;
+}
+
+export interface GtmWorkspaceView {
+  workspaceId: string;
+  name: string;
+  path: string;
+}
+
+/** The GTM account/container/workspace the user is currently working in. */
+export interface GtmContext {
+  accountId?: string;
+  accountName?: string;
+  containerId?: string;
+  containerName?: string;
+  workspaceId?: string;
+  workspaceName?: string;
 }
 
 export interface Ga4AccountView {

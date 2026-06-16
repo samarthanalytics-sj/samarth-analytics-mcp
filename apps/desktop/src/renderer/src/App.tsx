@@ -6,6 +6,9 @@ import type {
   Ga4AccountView,
   GoogleClientStatus,
   GtmAccountView,
+  GtmContainerView,
+  GtmContext,
+  GtmWorkspaceView,
   LlmProvider,
   SecretSelfTest,
 } from '../../shared/ipc';
@@ -365,7 +368,7 @@ export function App(): JSX.Element {
         )}
 
         {view === 'chat' ? (
-          <ChatView key={active?.id ?? 'none'} active={active} onError={setError} />
+          <ChatView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
         ) : (
           <SettingsView
             active={active}
@@ -393,9 +396,11 @@ interface ChatMessage {
 function ChatView({
   active,
   onError,
+  refresh,
 }: {
   active: AccountView | undefined;
   onError: (m: string) => void;
+  refresh: () => Promise<void>;
 }): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -507,6 +512,8 @@ function ChatView({
         </div>
       </div>
 
+      {product === 'gtm' && active && <GtmContextBar active={active} refresh={refresh} onError={onError} />}
+
       <div style={styles.chatLog}>
         {messages.length === 0 && (
           <div style={styles.empty}>
@@ -560,6 +567,120 @@ function ChatView({
           Send
         </button>
       </div>
+    </div>
+  );
+}
+
+function GtmContextBar({
+  active,
+  refresh,
+  onError,
+}: {
+  active: AccountView;
+  refresh: () => Promise<void>;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const ctx = active.gtmContext;
+  const [editing, setEditing] = useState(!ctx?.containerId);
+  const [accounts, setAccounts] = useState<GtmAccountView[]>([]);
+  const [containers, setContainers] = useState<GtmContainerView[]>([]);
+  const [workspaces, setWorkspaces] = useState<GtmWorkspaceView[]>([]);
+  const [sel, setSel] = useState<GtmContext>(ctx ?? {});
+  const [loading, setLoading] = useState('');
+
+  useEffect(() => {
+    if (editing && accounts.length === 0) {
+      window.desktop.data.listGtmAccounts().then(setAccounts).catch((e) => onError(String(e)));
+    }
+  }, [editing]);
+
+  async function pickAccount(accountId: string): Promise<void> {
+    const acc = accounts.find((a) => a.accountId === accountId);
+    setSel({ accountId, accountName: acc?.name });
+    setContainers([]);
+    setWorkspaces([]);
+    if (!accountId) return;
+    setLoading('containers');
+    try {
+      setContainers(await window.desktop.data.listGtmContainers(accountId));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading('');
+    }
+  }
+
+  async function pickContainer(containerId: string): Promise<void> {
+    const c = containers.find((x) => x.containerId === containerId);
+    setSel((s) => ({ ...s, containerId, containerName: c?.name, workspaceId: undefined, workspaceName: undefined }));
+    setWorkspaces([]);
+    if (!containerId || !sel.accountId) return;
+    setLoading('workspaces');
+    try {
+      setWorkspaces(await window.desktop.data.listGtmWorkspaces(sel.accountId, containerId));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading('');
+    }
+  }
+
+  function pickWorkspace(workspaceId: string): void {
+    const w = workspaces.find((x) => x.workspaceId === workspaceId);
+    setSel((s) => ({ ...s, workspaceId, workspaceName: w?.name }));
+  }
+
+  async function save(): Promise<void> {
+    try {
+      await window.desktop.accounts.setGtmContext(active.id, sel);
+      await refresh();
+      setEditing(false);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  if (!editing && ctx?.containerId) {
+    return (
+      <div style={styles.ctxBar}>
+        <span>
+          📁 {ctx.accountName} › {ctx.containerName} ›{' '}
+          <b style={{ color: '#e5e7eb' }}>{ctx.workspaceName ?? 'workspace?'}</b>
+        </span>
+        <button style={styles.linkBtn} onClick={() => { setSel(ctx); setEditing(true); }}>
+          change
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.ctxBarEdit}>
+      <span style={styles.muted}>Working in:</span>
+      <select style={styles.ctxSelect} value={sel.accountId ?? ''} onChange={(e) => void pickAccount(e.target.value)}>
+        <option value="">Account…</option>
+        {accounts.map((a) => (
+          <option key={a.accountId} value={a.accountId}>{a.name}</option>
+        ))}
+      </select>
+      <select style={styles.ctxSelect} value={sel.containerId ?? ''} disabled={!sel.accountId || loading === 'containers'} onChange={(e) => void pickContainer(e.target.value)}>
+        <option value="">{loading === 'containers' ? 'Loading…' : 'Container…'}</option>
+        {containers.map((c) => (
+          <option key={c.containerId} value={c.containerId}>{c.name}</option>
+        ))}
+      </select>
+      <select style={styles.ctxSelect} value={sel.workspaceId ?? ''} disabled={!sel.containerId || loading === 'workspaces'} onChange={(e) => pickWorkspace(e.target.value)}>
+        <option value="">{loading === 'workspaces' ? 'Loading…' : 'Workspace…'}</option>
+        {workspaces.map((w) => (
+          <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
+        ))}
+      </select>
+      <button style={styles.ghostBtn} onClick={save} disabled={!sel.containerId}>
+        Use
+      </button>
+      {ctx?.containerId && (
+        <button style={styles.linkBtn} onClick={() => setEditing(false)}>cancel</button>
+      )}
     </div>
   );
 }
@@ -867,6 +988,9 @@ const styles: Record<string, React.CSSProperties> = {
   toggleActive: { background: '#2563eb', color: '#fff', border: 'none', padding: '6px 14px', fontSize: 12, cursor: 'pointer' },
   chatTitle: { fontWeight: 600 },
   chatSub: { fontSize: 12, color: '#6b7280', marginTop: 2 },
+  ctxBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 20px', background: '#0d1320', borderBottom: '1px solid #1f2937', fontSize: 13, color: '#9ca3af' },
+  ctxBarEdit: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: '#0d1320', borderBottom: '1px solid #1f2937', flexWrap: 'wrap' },
+  ctxSelect: { background: '#161e2e', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 6, padding: '6px 8px', fontSize: 13, maxWidth: 200 },
   chatLog: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 10 },
   empty: { color: '#6b7280', textAlign: 'center', maxWidth: 420, margin: '60px auto', lineHeight: 1.6 },
   userMsg: { alignSelf: 'flex-end', background: '#2563eb', color: '#fff', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14 },

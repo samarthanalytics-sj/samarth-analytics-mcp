@@ -74,6 +74,16 @@ export class ChatService {
         : product === 'gtm'
           ? 'You can read the GTM setup (accounts, containers, workspaces, tags). '
           : 'You can read GA4 (accounts, properties, data streams) and run GA4 reports. ') +
+      (product === 'gtm' && active.gtmContext?.containerId
+        ? `The user is working in GTM account ${active.gtmContext.accountId} ` +
+          `(${active.gtmContext.accountName ?? ''}), container ${active.gtmContext.containerId} ` +
+          `(${active.gtmContext.containerName ?? ''})` +
+          (active.gtmContext.workspaceId
+            ? `, workspace ${active.gtmContext.workspaceId} (${active.gtmContext.workspaceName ?? ''})`
+            : '') +
+          '. Use THESE ids for all GTM operations — do not ask which account/container/workspace and ' +
+          'do not re-list them unless the user asks to switch. '
+        : '') +
       'Call tools when asked; never invent ids. Be concise and factual.';
 
     const messages: LlmTurn[] = [

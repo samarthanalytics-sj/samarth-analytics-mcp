@@ -9,6 +9,9 @@ import type {
   GoogleClientStatus,
   GoogleProduct,
   GtmAccountView,
+  GtmContainerView,
+  GtmContext,
+  GtmWorkspaceView,
   LlmProvider,
   ProviderStatus,
   SecretSelfTest,
@@ -30,6 +33,8 @@ const api = {
     setActive: (id: string): Promise<void> => ipcRenderer.invoke('accounts:setActive', id),
     setLlmConfig: (id: string, provider: LlmProvider, model: string): Promise<AccountView> =>
       ipcRenderer.invoke('accounts:setLlmConfig', id, provider, model),
+    setGtmContext: (id: string, ctx: GtmContext): Promise<AccountView> =>
+      ipcRenderer.invoke('accounts:setGtmContext', id, ctx),
   },
 
   // App-level LLM API keys (one per provider, shared by all accounts).
@@ -54,6 +59,10 @@ const api = {
 
   data: {
     listGtmAccounts: (): Promise<GtmAccountView[]> => ipcRenderer.invoke('data:listGtmAccounts'),
+    listGtmContainers: (accountId: string): Promise<GtmContainerView[]> =>
+      ipcRenderer.invoke('data:listGtmContainers', accountId),
+    listGtmWorkspaces: (accountId: string, containerId: string): Promise<GtmWorkspaceView[]> =>
+      ipcRenderer.invoke('data:listGtmWorkspaces', accountId, containerId),
     listGa4Accounts: (): Promise<Ga4AccountView[]> => ipcRenderer.invoke('data:listGa4Accounts'),
   },
 

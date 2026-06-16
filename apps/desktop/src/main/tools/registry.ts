@@ -197,13 +197,17 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_tag',
       description:
-        'Create a tag in a GTM workspace (draft, not published). `tag` is a GTM API Tag resource ' +
-        '{name, type, parameter?, firingTriggerId?}. Wire it to a trigger via firingTriggerId: ' +
-        '["<triggerId>"] (get the id from create_gtm_trigger or list_gtm_triggers). ' +
-        'GA4 event tag: type "gaawe" with parameter entries {type:"template",key:"measurementId",value:"G-XXXX"} ' +
-        'and {type:"template",key:"eventName",value:"email_click"}. Google Ads conversion: type "awct" ' +
-        'with conversionId + conversionLabel parameters. Facebook: no native template — use type "html" ' +
-        'with an {type:"template",key:"html",value:"<script>…</script>"} parameter.',
+        'Create a tag in a GTM workspace (draft). `tag` is a GTM API Tag resource ' +
+        '{name, type, parameter?, firingTriggerId?}; link to a trigger via firingTriggerId:["<id>"]. ' +
+        'GA4 EVENT tag — type "gaawe"; `parameter` MUST be exactly this shape (eventParameters is a ' +
+        'LIST of MAP entries, each with name+value, NOT a flat object): ' +
+        '[{"type":"template","key":"eventName","value":"email_click"},' +
+        '{"type":"template","key":"measurementIdOverride","value":"G-XXXXXXX or {{GA4 Variable}}"},' +
+        '{"type":"list","key":"eventParameters","list":[' +
+        '{"type":"map","map":[{"type":"template","key":"name","value":"link_url"},{"type":"template","key":"value","value":"{{Click URL}}"}]},' +
+        '{"type":"map","map":[{"type":"template","key":"name","value":"link_text"},{"type":"template","key":"value","value":"{{Click Text}}"}]}]}]. ' +
+        'Google Ads conversion — type "awct" (conversionId + conversionLabel). ' +
+        'Facebook — type "html" with a {"type":"template","key":"html","value":"<script>…</script>"} parameter.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -261,8 +265,12 @@ export function buildToolRegistry(
     {
       name: 'enable_gtm_builtin_variables',
       description:
-        'Enable built-in variables in a GTM workspace (e.g. "clickUrl" for {{Click URL}}, ' +
-        '"clickClasses", "pageUrl"). Requires accountId, containerId, workspaceId, and types (array of built-in variable type keys).',
+        'Enable built-in variables in a GTM workspace. Requires accountId, containerId, workspaceId, ' +
+        'and types (array of built-in variable TYPE KEYS). Valid keys include: clickUrl ({{Click URL}}), ' +
+        'clickText ({{Click Text}}), clickClasses, clickId, clickElement, pageUrl ({{Page URL}}), ' +
+        'pageHostname, pagePath, referrer. NOTE: there is NO built-in for "Page Title" — to use page ' +
+        'title, create a Custom JavaScript variable returning document.title (GA4 also auto-collects ' +
+        'page_title and page_location, so you usually do not need to send them as event parameters).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -291,7 +299,9 @@ export function buildToolRegistry(
         'Enables any needed built-in variables, REUSES an existing trigger with the same name (no ' +
         'duplicates) or creates it, then creates the tag linked to that trigger. Requires accountId, ' +
         'containerId, workspaceId, `tag` (GTM Tag resource {name,type,parameter?}), `trigger` (GTM ' +
-        'Trigger resource {name,type,filter?}), and optional `builtInVariables` (e.g. ["clickUrl"]). ' +
+        'Trigger resource {name,type,filter?}), and optional `builtInVariables` (TYPE KEYS, e.g. ' +
+        '["clickUrl","clickText","pageUrl"] — there is NO built-in for Page Title). For a GA4 event ' +
+        '`tag`, use type "gaawe" with the eventParameters LIST-of-MAP shape described in create_gtm_tag. ' +
         'Use this instead of separate create_gtm_trigger + create_gtm_tag calls so the user approves once.',
       inputSchema: {
         type: 'object',

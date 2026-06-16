@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AccountRepository, StoredAccount } from '../storage/account-repository';
 import type { SecretStore } from '../storage/secret-store';
 import type { ProviderKeyStore } from '../storage/provider-keys';
-import type { AccountView, LlmProvider, SecretSelfTest } from '../../shared/ipc';
+import type { AccountView, GtmContext, LlmProvider, SecretSelfTest } from '../../shared/ipc';
 
 // Facade the IPC layer talks to. Combines the account registry (metadata) with
 // the secret store (encrypted bytes), and is the ONLY place that converts an
@@ -24,6 +24,7 @@ export class RegistryService {
       isActive: this.repo.activeId() === a.id,
       hasGoogleToken: Boolean(a.googleTokenRef && this.secrets.has(a.googleTokenRef)),
       lastProduct: a.lastProduct,
+      gtmContext: a.gtmContext,
       llm: a.llm
         ? {
             provider: a.llm.provider,
@@ -60,6 +61,13 @@ export class RegistryService {
 
   setActive(id: string): void {
     this.repo.setActive(id);
+  }
+
+  /** Remember the GTM account/container/workspace the user is working in. */
+  setGtmContext(id: string, gtmContext: GtmContext): AccountView {
+    const a = this.repo.get(id);
+    if (!a) throw new Error(`account not found: ${id}`);
+    return this.toView(this.repo.update(id, { gtmContext }));
   }
 
   /** Set the account's LLM provider + model. The API key is app-level (per provider). */

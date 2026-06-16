@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readJsonFile, writeJsonFileAtomic } from './json-file';
-import type { GoogleProduct, LlmProvider } from '../../shared/ipc';
+import type { GoogleProduct, GtmContext, LlmProvider } from '../../shared/ipc';
 
 // The persisted, INTERNAL account shape. Unlike AccountView (the renderer DTO),
 // this holds opaque secret refs (googleTokenRef / llm.apiKeyRef) that point into
@@ -19,6 +19,7 @@ export interface StoredAccount {
     apiKeyRef?: string;
   };
   lastProduct?: GoogleProduct;
+  gtmContext?: GtmContext;
 }
 
 interface RegistryFile {
