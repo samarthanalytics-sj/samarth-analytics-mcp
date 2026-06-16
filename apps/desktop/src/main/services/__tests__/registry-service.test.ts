@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { AccountRepository } from '../../storage/account-repository';
 import { SecretStore } from '../../storage/secret-store';
 import type { Cryptor } from '../../storage/secret-store';
+import { ProviderKeyStore } from '../../storage/provider-keys';
 import { RegistryService } from '../registry-service';
 
 class FakeCryptor implements Cryptor {
@@ -39,11 +40,13 @@ function makeService(cryptor: Cryptor = new FakeCryptor()): {
   service: RegistryService;
   secrets: SecretStore;
   repo: AccountRepository;
+  providerKeys: ProviderKeyStore;
 } {
   const repo = new AccountRepository(join(dir, `reg-${n}.json`));
   const secrets = new SecretStore(join(dir, `sec-${n}.json`), cryptor);
+  const providerKeys = new ProviderKeyStore(join(dir, `app-${n}.json`), secrets);
   n++;
-  return { service: new RegistryService(repo, secrets), secrets, repo };
+  return { service: new RegistryService(repo, secrets, providerKeys), secrets, repo, providerKeys };
 }
 
 console.log('\nRegistryService:');
@@ -58,24 +61,20 @@ test('addAccount → view: active, no token, no llm, no secret leakage', () => {
   assert.equal(JSON.stringify(v).includes('Ref'), false, 'view must not expose secret refs');
 });
 
-test('setLlmConfig then setLlmApiKey vaults the key (encrypted) and flips hasApiKey', () => {
-  const { service, secrets, repo } = makeService();
+test('hasApiKey reflects the app-level provider key, not a per-account key', () => {
+  const { service, providerKeys } = makeService();
   const a = service.addAccount({ email: 'b@example.com' });
-  service.setLlmConfig(a.id, 'anthropic', 'claude-opus-4-8');
-  const v = service.setLlmApiKey(a.id, 'sk-secret-123');
+  let v = service.setLlmConfig(a.id, 'anthropic', 'claude-opus-4-8');
   assert.equal(v.llm?.provider, 'anthropic');
-  assert.equal(v.llm?.model, 'claude-opus-4-8');
-  assert.equal(v.llm?.hasApiKey, true);
-  // The key is retrievable via the stored ref and was actually encrypted.
-  const ref = repo.get(a.id)?.llm?.apiKeyRef;
-  assert.ok(ref);
-  assert.equal(secrets.get(ref), 'sk-secret-123');
-});
+  assert.equal(v.llm?.hasApiKey, false, 'no app key for anthropic yet');
 
-test('setLlmApiKey before config throws', () => {
-  const { service } = makeService();
-  const a = service.addAccount({ email: 'c@example.com' });
-  assert.throws(() => service.setLlmApiKey(a.id, 'k'), /provider\/model/);
+  providerKeys.setKey('anthropic', 'sk-secret-123');
+  v = service.listViews().find((x) => x.id === a.id)!;
+  assert.equal(v.llm?.hasApiKey, true, 'app-level anthropic key now present');
+
+  // Switching to a provider without a key flips it back to false.
+  v = service.setLlmConfig(a.id, 'openai', 'gpt-4o');
+  assert.equal(v.llm?.hasApiKey, false);
 });
 
 test('setGoogleToken vaults token and flips hasGoogleToken', () => {
@@ -87,17 +86,13 @@ test('setGoogleToken vaults token and flips hasGoogleToken', () => {
   assert.equal(service.getGoogleToken(a.id), '{"refresh_token":"rt"}');
 });
 
-test('removeAccount deletes its secrets', () => {
+test('removeAccount deletes its Google token secret', () => {
   const { service, secrets, repo } = makeService();
   const a = service.addAccount({ email: 'e@example.com' });
   service.setLlmConfig(a.id, 'openai', 'gpt-4o');
-  service.setLlmApiKey(a.id, 'sk-x');
   service.setGoogleToken(a.id, '{}');
-  const stored = repo.get(a.id);
-  const apiRef = stored?.llm?.apiKeyRef as string;
-  const tokRef = stored?.googleTokenRef as string;
+  const tokRef = repo.get(a.id)?.googleTokenRef as string;
   service.removeAccount(a.id);
-  assert.equal(secrets.has(apiRef), false, 'llm key secret deleted');
   assert.equal(secrets.has(tokRef), false, 'google token secret deleted');
   assert.equal(service.listViews().length, 0);
 });

@@ -1,5 +1,6 @@
 import type { GoogleDataService } from '../google/data-service';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
+import type { GoogleProduct } from '../../shared/ipc';
 
 // A change a write-tool wants to make, surfaced to the user for approval.
 export interface WriteProposal {
@@ -51,7 +52,15 @@ function apiErrorMessage(e: unknown): string {
  * and each one calls `confirm` first — if the user declines, nothing is applied.
  * Writes never publish; changes stay in the workspace until published in GTM.
  */
-export function buildToolRegistry(data: GoogleDataService, confirm?: ConfirmFn): ToolExecutor {
+// Tool product is derived from its name (every GA4 tool contains "ga4", every
+// GTM tool contains "gtm") — used to hard-scope the registry to one product.
+const productOf = (name: string): GoogleProduct => (name.includes('ga4') ? 'ga4' : 'gtm');
+
+export function buildToolRegistry(
+  data: GoogleDataService,
+  confirm?: ConfirmFn,
+  product?: GoogleProduct
+): ToolExecutor {
   const readTools: Tool[] = [
     {
       name: 'list_gtm_accounts',
@@ -276,7 +285,8 @@ export function buildToolRegistry(data: GoogleDataService, confirm?: ConfirmFn):
     },
   ];
 
-  const tools = confirm ? [...readTools, ...writeTools] : readTools;
+  const all = confirm ? [...readTools, ...writeTools] : readTools;
+  const tools = product ? all.filter((t) => productOf(t.name) === product) : all;
 
   return {
     list: (): LlmToolDef[] =>

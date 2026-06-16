@@ -135,6 +135,19 @@ await test('write tools appear ONLY when a confirm function is provided', async 
   assert.equal(withWrites.list().some((t) => t.name === 'delete_gtm_tag'), true);
 });
 
+await test('product scopes the toolset (gtm vs ga4)', async () => {
+  const gtm = buildToolRegistry(fakeData().data, async () => true, 'gtm');
+  const gtmNames = gtm.list().map((t) => t.name);
+  assert.ok(gtmNames.every((n) => n.includes('gtm')), 'gtm mode lists only gtm tools');
+  assert.ok(gtmNames.includes('create_gtm_tag'));
+  assert.ok(!gtmNames.some((n) => n.includes('ga4')));
+
+  const ga4 = buildToolRegistry(fakeData().data, undefined, 'ga4');
+  const ga4Names = ga4.list().map((t) => t.name);
+  assert.ok(ga4Names.every((n) => n.includes('ga4')), 'ga4 mode lists only ga4 tools');
+  assert.ok(!ga4Names.some((n) => n.includes('gtm')));
+});
+
 await test('delete_gtm_tag requires TWO confirmations; applies only after both', async () => {
   const fd = fakeData();
   const c = seqConfirm(true, true);

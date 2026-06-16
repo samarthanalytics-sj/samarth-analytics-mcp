@@ -38,13 +38,6 @@ export function registerRegistryIpc(service: RegistryService): void {
     }
   );
 
-  ipcMain.handle('accounts:setLlmApiKey', (_event, id: string, apiKey: string) => {
-    if (typeof apiKey !== 'string' || apiKey.length === 0) {
-      throw new Error('an API key is required');
-    }
-    return service.setLlmApiKey(id, apiKey);
-  });
-
   ipcMain.handle('secrets:available', () => service.secretSelfTest().encryptionAvailable);
 
   ipcMain.handle('secrets:selfTest', () => service.secretSelfTest());

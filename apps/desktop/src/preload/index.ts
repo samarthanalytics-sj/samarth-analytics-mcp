@@ -7,8 +7,10 @@ import type {
   ChatTurn,
   Ga4AccountView,
   GoogleClientStatus,
+  GoogleProduct,
   GtmAccountView,
   LlmProvider,
+  ProviderStatus,
   SecretSelfTest,
 } from '../shared/ipc';
 
@@ -28,8 +30,15 @@ const api = {
     setActive: (id: string): Promise<void> => ipcRenderer.invoke('accounts:setActive', id),
     setLlmConfig: (id: string, provider: LlmProvider, model: string): Promise<AccountView> =>
       ipcRenderer.invoke('accounts:setLlmConfig', id, provider, model),
-    setLlmApiKey: (id: string, apiKey: string): Promise<AccountView> =>
-      ipcRenderer.invoke('accounts:setLlmApiKey', id, apiKey),
+  },
+
+  // App-level LLM API keys (one per provider, shared by all accounts).
+  providers: {
+    status: (): Promise<ProviderStatus> => ipcRenderer.invoke('providers:status'),
+    setKey: (provider: LlmProvider, key: string): Promise<ProviderStatus> =>
+      ipcRenderer.invoke('providers:setKey', provider, key),
+    clearKey: (provider: LlmProvider): Promise<ProviderStatus> =>
+      ipcRenderer.invoke('providers:clearKey', provider),
   },
 
   secrets: {
@@ -49,14 +58,15 @@ const api = {
   },
 
   llm: {
-    chat: (history: ChatTurn[], message: string): Promise<ChatReply> =>
-      ipcRenderer.invoke('llm:chat', history, message),
+    chat: (history: ChatTurn[], message: string, product: GoogleProduct): Promise<ChatReply> =>
+      ipcRenderer.invoke('llm:chat', history, message, product),
 
     // Streaming chat. `onEvent` fires for text chunks + tool calls as they arrive;
     // the returned promise resolves with the final reply (or rejects on error).
     chatStream: (
       history: ChatTurn[],
       message: string,
+      product: GoogleProduct,
       onEvent: (event: ChatStreamEvent) => void
     ): Promise<ChatReply> => {
       const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -70,7 +80,7 @@ const api = {
       };
       ipcRenderer.on('llm:chat:event', listener);
       return ipcRenderer
-        .invoke('llm:chat:start', requestId, history, message)
+        .invoke('llm:chat:start', requestId, history, message, product)
         .finally(() => ipcRenderer.removeListener('llm:chat:event', listener));
     },
 

@@ -138,6 +138,7 @@ export function App(): JSX.Element {
             selfTest={selfTest}
             onError={setError}
             run={run}
+            refresh={refresh}
           />
         )}
       </main>
@@ -163,6 +164,7 @@ function ChatView({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [product, setProduct] = useState<'gtm' | 'ga4'>('gtm');
   const [pendingConfirm, setPendingConfirm] = useState<
     {
       confirmId: string;
@@ -193,7 +195,7 @@ function ChatView({
     setInput('');
     setBusy(true);
     try {
-      await window.desktop.llm.chatStream(history, text, (ev) => {
+      await window.desktop.llm.chatStream(history, text, product, (ev) => {
         setMessages((m) => {
           const copy = [...m];
           const last = copy[copy.length - 1];
@@ -231,11 +233,33 @@ function ChatView({
             {active?.hasGoogleToken ? ' · Google ✓' : ' · not signed in'}
           </div>
         </div>
-        {messages.length > 0 && (
-          <button style={styles.ghostBtn} onClick={() => setMessages([])}>
-            Clear
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div style={styles.toggle}>
+            <button
+              style={product === 'gtm' ? styles.toggleActive : styles.toggleBtn}
+              onClick={() => {
+                setProduct('gtm');
+                setMessages([]);
+              }}
+            >
+              GTM
+            </button>
+            <button
+              style={product === 'ga4' ? styles.toggleActive : styles.toggleBtn}
+              onClick={() => {
+                setProduct('ga4');
+                setMessages([]);
+              }}
+            >
+              GA4
+            </button>
+          </div>
+          {messages.length > 0 && (
+            <button style={styles.ghostBtn} onClick={() => setMessages([])}>
+              Clear
+            </button>
+          )}
+        </div>
       </div>
 
       <div style={styles.chatLog}>
@@ -320,6 +344,7 @@ function SettingsView({
   selfTest,
   onError,
   run,
+  refresh,
 }: {
   active: AccountView | undefined;
   google: GoogleClientStatus | null;
@@ -327,6 +352,7 @@ function SettingsView({
   selfTest: SecretSelfTest | null;
   onError: (m: string) => void;
   run: (fn: () => Promise<unknown>) => Promise<void>;
+  refresh: () => Promise<void>;
 }): JSX.Element {
   return (
     <div style={styles.settings}>
@@ -360,7 +386,7 @@ function SettingsView({
 
           <section style={styles.card}>
             <h2 style={styles.h2}>Language model</h2>
-            <LlmEditor account={active} onError={onError} />
+            <LlmEditor account={active} onChange={refresh} onError={onError} />
           </section>
 
           <section style={styles.card}>
@@ -373,6 +399,11 @@ function SettingsView({
           <p style={styles.muted}>Connect a Google account to configure it.</p>
         </section>
       )}
+
+      <section style={styles.card}>
+        <h2 style={styles.h2}>Providers (API keys)</h2>
+        <ProvidersEditor onChange={refresh} onError={onError} />
+      </section>
 
       <section style={styles.card}>
         <h2 style={styles.h2}>Diagnostics</h2>
@@ -393,20 +424,22 @@ function SettingsView({
 
 function LlmEditor({
   account,
+  onChange,
   onError,
 }: {
   account: AccountView;
+  onChange: () => Promise<void>;
   onError: (m: string) => void;
 }): JSX.Element {
   const [provider, setProvider] = useState<LlmProvider>(account.llm?.provider ?? 'openai');
   const [model, setModel] = useState(account.llm?.model ?? DEFAULT_MODEL.openai);
-  const [apiKey, setApiKey] = useState('');
   const [saved, setSaved] = useState('');
 
-  async function guard(fn: () => Promise<unknown>, msg: string): Promise<void> {
+  async function save(): Promise<void> {
     try {
-      await fn();
-      setSaved(msg);
+      await window.desktop.accounts.setLlmConfig(account.id, provider, model);
+      await onChange();
+      setSaved('Saved');
       setTimeout(() => setSaved(''), 1500);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -430,29 +463,78 @@ function LlmEditor({
           <option value="gemini">Gemini</option>
         </select>
         <input style={styles.input} value={model} onChange={(e) => setModel(e.target.value)} placeholder="model" />
-        <button style={styles.ghostBtn} onClick={() => guard(() => window.desktop.accounts.setLlmConfig(account.id, provider, model), 'Model saved')}>
-          Save model
+        <button style={styles.ghostBtn} onClick={save}>
+          Save
         </button>
       </div>
-      <div style={styles.formRow}>
-        <input
-          style={styles.input}
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder={account.llm?.hasApiKey ? 'API key saved — enter to replace' : 'API key (stored encrypted)'}
-        />
-        <button
-          style={styles.ghostBtn}
-          onClick={() => guard(async () => {
-            await window.desktop.accounts.setLlmApiKey(account.id, apiKey);
-            setApiKey('');
-          }, 'Key saved')}
-        >
-          Save key
-        </button>
+      <div style={styles.muted}>
+        API key: {account.llm?.hasApiKey ? `✓ using the app-level ${account.llm.provider} key` : '✗ not set — add it under Providers below'}
+        {saved && <span style={{ color: '#34d399' }}> · {saved}</span>}
       </div>
-      {saved && <div style={{ color: '#34d399', fontSize: 12 }}>{saved}</div>}
+    </div>
+  );
+}
+
+function ProvidersEditor({
+  onChange,
+  onError,
+}: {
+  onChange: () => Promise<void>;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const providers: LlmProvider[] = ['openai', 'anthropic', 'gemini'];
+  const [status, setStatus] = useState<Record<string, boolean>>({});
+  const [keys, setKeys] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    window.desktop.providers.status().then(setStatus).catch((e) => onError(String(e)));
+  }, []);
+
+  async function save(p: LlmProvider): Promise<void> {
+    try {
+      const next = await window.desktop.providers.setKey(p, keys[p] ?? '');
+      setStatus(next);
+      setKeys((k) => ({ ...k, [p]: '' }));
+      await onChange();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function clear(p: LlmProvider): Promise<void> {
+    try {
+      setStatus(await window.desktop.providers.clearKey(p));
+      await onChange();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div>
+      <p style={styles.muted}>One key per provider, shared by all accounts. Stored encrypted (DPAPI).</p>
+      {providers.map((p) => (
+        <div key={p} style={styles.formRow}>
+          <span style={{ width: 90, fontSize: 13, alignSelf: 'center', textTransform: 'capitalize' }}>
+            {p} {status[p] ? '✓' : ''}
+          </span>
+          <input
+            style={styles.input}
+            type="password"
+            value={keys[p] ?? ''}
+            onChange={(e) => setKeys((k) => ({ ...k, [p]: e.target.value }))}
+            placeholder={status[p] ? 'key saved — enter to replace' : 'API key'}
+          />
+          <button style={styles.ghostBtn} onClick={() => save(p)}>
+            Save
+          </button>
+          {status[p] && (
+            <button style={styles.dangerGhost} onClick={() => clear(p)}>
+              Clear
+            </button>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -551,6 +633,9 @@ const styles: Record<string, React.CSSProperties> = {
 
   chatWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   chatHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid #1f2937' },
+  toggle: { display: 'flex', background: '#0d1320', border: '1px solid #334155', borderRadius: 8, overflow: 'hidden' },
+  toggleBtn: { background: 'transparent', color: '#9ca3af', border: 'none', padding: '6px 14px', fontSize: 12, cursor: 'pointer' },
+  toggleActive: { background: '#2563eb', color: '#fff', border: 'none', padding: '6px 14px', fontSize: 12, cursor: 'pointer' },
   chatTitle: { fontWeight: 600 },
   chatSub: { fontSize: 12, color: '#6b7280', marginTop: 2 },
   chatLog: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 10 },

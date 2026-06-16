@@ -32,6 +32,9 @@ export interface AddAccountInput {
   displayName?: string;
 }
 
+/** Which app-level LLM providers have an API key stored. */
+export type ProviderStatus = Record<LlmProvider, boolean>;
+
 export interface SecretSelfTest {
   ok: boolean;
   detail: string;

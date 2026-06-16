@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AccountRepository, StoredAccount } from '../storage/account-repository';
 import type { SecretStore } from '../storage/secret-store';
+import type { ProviderKeyStore } from '../storage/provider-keys';
 import type { AccountView, LlmProvider, SecretSelfTest } from '../../shared/ipc';
 
 // Facade the IPC layer talks to. Combines the account registry (metadata) with
@@ -10,7 +11,8 @@ import type { AccountView, LlmProvider, SecretSelfTest } from '../../shared/ipc'
 export class RegistryService {
   constructor(
     private readonly repo: AccountRepository,
-    private readonly secrets: SecretStore
+    private readonly secrets: SecretStore,
+    private readonly providerKeys: ProviderKeyStore
   ) {}
 
   private toView(a: StoredAccount): AccountView {
@@ -26,7 +28,8 @@ export class RegistryService {
         ? {
             provider: a.llm.provider,
             model: a.llm.model,
-            hasApiKey: Boolean(a.llm.apiKeyRef && this.secrets.has(a.llm.apiKeyRef)),
+            // App-level: the key belongs to the provider, shared across accounts.
+            hasApiKey: this.providerKeys.hasKey(a.llm.provider),
           }
         : undefined,
     };
@@ -59,23 +62,11 @@ export class RegistryService {
     this.repo.setActive(id);
   }
 
-  /** Set the (non-secret) LLM provider + model, preserving any stored key. */
+  /** Set the account's LLM provider + model. The API key is app-level (per provider). */
   setLlmConfig(id: string, provider: LlmProvider, model: string): AccountView {
     const a = this.repo.get(id);
     if (!a) throw new Error(`account not found: ${id}`);
-    return this.toView(
-      this.repo.update(id, { llm: { provider, model, apiKeyRef: a.llm?.apiKeyRef } })
-    );
-  }
-
-  /** Vault the LLM API key (encrypted), creating a ref if needed. */
-  setLlmApiKey(id: string, apiKey: string): AccountView {
-    const a = this.repo.get(id);
-    if (!a) throw new Error(`account not found: ${id}`);
-    if (!a.llm) throw new Error('set the LLM provider/model before the API key');
-    const apiKeyRef = a.llm.apiKeyRef ?? `llm_${randomUUID()}`;
-    this.secrets.set(apiKeyRef, apiKey);
-    return this.toView(this.repo.update(id, { llm: { ...a.llm, apiKeyRef } }));
+    return this.toView(this.repo.update(id, { llm: { provider, model } }));
   }
 
   /** Vault the Google OAuth token JSON for an account (used by Phase 2). */
@@ -115,13 +106,6 @@ export class RegistryService {
     const a = this.repo.get(id);
     if (!a?.googleTokenRef) return null;
     return this.secrets.get(a.googleTokenRef);
-  }
-
-  /** Read the decrypted LLM API key for an account (used by the chat service). */
-  getLlmApiKey(id: string): string | null {
-    const a = this.repo.get(id);
-    if (!a?.llm?.apiKeyRef) return null;
-    return this.secrets.get(a.llm.apiKeyRef);
   }
 
   /**

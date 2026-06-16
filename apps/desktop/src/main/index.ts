@@ -3,8 +3,10 @@ import { join } from 'node:path';
 import { AccountRepository } from './storage/account-repository';
 import { SecretStore } from './storage/secret-store';
 import { SafeStorageCryptor } from './storage/safe-storage-cryptor';
+import { ProviderKeyStore } from './storage/provider-keys';
 import { RegistryService } from './services/registry-service';
 import { registerRegistryIpc } from './ipc/registry-ipc';
+import { registerProvidersIpc } from './ipc/providers-ipc';
 import { GoogleAuthService } from './services/google-auth-service';
 import { registerGoogleIpc } from './ipc/google-ipc';
 import { AccountClientManager } from './google/account-clients';
@@ -107,7 +109,8 @@ app.whenReady().then(() => {
   console.error(`[samarth-desktop] data dir: ${dataDir}`);
   const accounts = new AccountRepository(join(dataDir, 'registry.json'));
   const secrets = new SecretStore(join(dataDir, 'secrets.json'), new SafeStorageCryptor());
-  const registry = new RegistryService(accounts, secrets);
+  const providerKeys = new ProviderKeyStore(join(dataDir, 'app-settings.json'), secrets);
+  const registry = new RegistryService(accounts, secrets, providerKeys);
   if (!secrets.available()) {
     console.warn('[samarth-desktop] safeStorage encryption unavailable — secret writes will fail.');
   }
@@ -121,10 +124,11 @@ app.whenReady().then(() => {
     clientManager.invalidate(id)
   );
   const dataService = new GoogleDataService(registry, clientManager);
-  const chatService = new ChatService(registry, dataService);
+  const chatService = new ChatService(registry, dataService, providerKeys);
 
   registerIpcHandlers();
   registerRegistryIpc(registry);
+  registerProvidersIpc(providerKeys);
   registerGoogleIpc(googleAuth);
   registerDataIpc(dataService);
   registerChatIpc(chatService);

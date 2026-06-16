@@ -1,9 +1,10 @@
 import type { RegistryService } from './registry-service';
 import type { GoogleDataService } from '../google/data-service';
+import type { ProviderKeyStore } from '../storage/provider-keys';
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
-import type { ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn } from '../../shared/ipc';
+import type { ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct } from '../../shared/ipc';
 import type { LlmTurn } from '../llm/types';
 
 // Ties the active account (provider + model + vaulted key) to the LLM gateway and
@@ -12,55 +13,63 @@ import type { LlmTurn } from '../llm/types';
 export class ChatService {
   constructor(
     private readonly registry: RegistryService,
-    private readonly data: GoogleDataService
+    private readonly data: GoogleDataService,
+    private readonly providerKeys: ProviderKeyStore
   ) {}
 
   /** Non-streaming: returns the final reply only. */
-  chat(history: ChatTurn[], message: string): Promise<ChatReply> {
-    return this.run(history, message);
+  chat(history: ChatTurn[], message: string, product: GoogleProduct): Promise<ChatReply> {
+    return this.run(history, message, product);
   }
 
   /**
    * Streaming: `emit` fires for text chunks + tool calls; resolves with the final
-   * reply. When `confirm` is provided, write tools (create/edit GTM in a draft
-   * workspace) become available and each one calls `confirm` before applying.
+   * reply. `product` scopes the available tools to GTM or GA4. When `confirm` is
+   * provided (GTM only), write tools become available and each calls `confirm`.
    */
   chatStream(
     history: ChatTurn[],
     message: string,
+    product: GoogleProduct,
     emit: (event: ChatStreamEvent) => void,
     confirm?: ConfirmFn
   ): Promise<ChatReply> {
-    return this.run(history, message, emit, confirm);
+    return this.run(history, message, product, emit, confirm);
   }
 
   private async run(
     history: ChatTurn[],
     message: string,
+    product: GoogleProduct,
     emit?: (event: ChatStreamEvent) => void,
     confirm?: ConfirmFn
   ): Promise<ChatReply> {
     const active = this.registry.getActiveView();
     if (!active) throw new Error('No active account. Connect and activate a Google account.');
     if (!active.hasGoogleToken) throw new Error('The active account is not signed in to Google.');
-    if (!active.llm) throw new Error('Choose an LLM provider and model for this account first.');
-    const apiKey = this.registry.getLlmApiKey(active.id);
-    if (!apiKey) throw new Error('Save an API key for this account before chatting.');
+    if (!active.llm) throw new Error('Choose an LLM provider and model in Settings first.');
+    const apiKey = this.providerKeys.getKey(active.llm.provider);
+    if (!apiKey) {
+      throw new Error(`Add an API key for ${active.llm.provider} in Settings → Providers.`);
+    }
 
     const client = createProvider(active.llm.provider);
-    const tools = buildToolRegistry(this.data, confirm);
+    // GA4 is read-only; only GTM gets write tools (and thus the confirm flow).
+    const tools = buildToolRegistry(this.data, product === 'gtm' ? confirm : undefined, product);
 
+    const productLabel = product === 'gtm' ? 'Google Tag Manager (GTM)' : 'Google Analytics 4 (GA4)';
     const system =
-      `You are an analytics assistant for the Google account ${active.email}. ` +
-      "You have read tools to inspect this user's Google Tag Manager and GA4 setup " +
-      '(accounts, containers, workspaces, tags, properties, data streams, GA4 reports)' +
-      (confirm
-        ? ', plus write tools to create/edit GTM tags, triggers, and variables in a DRAFT ' +
-          'workspace. Writes are never published — they stay in the workspace until the user ' +
-          'publishes in GTM. Always work in a workspace (create one if needed), and the user ' +
-          'must approve each change before it is applied. '
-        : '. ') +
-      'Call tools when the user asks; never invent ids. Be concise and factual.';
+      `You are a ${productLabel} assistant for the Google account ${active.email}. ` +
+      `Only help with ${productLabel}; if asked about the other product, say to switch the ` +
+      'GTM/GA4 selector. ' +
+      (product === 'gtm' && confirm
+        ? 'You can read the GTM setup and create/edit/delete tags, triggers, and variables in a ' +
+          'DRAFT workspace (never published — the user publishes manually in GTM). Always work in a ' +
+          'workspace, and the user must approve each change. '
+        : product === 'gtm'
+          ? 'You can read the GTM setup (accounts, containers, workspaces, tags). '
+          : 'You can read GA4 (accounts, properties, data streams) and run GA4 reports. ') +
+      'Call tools when asked; never invent ids. Be concise and factual.';
 
     const messages: LlmTurn[] = [
       ...history.map((h): LlmTurn => ({ role: h.role, text: h.text })),
