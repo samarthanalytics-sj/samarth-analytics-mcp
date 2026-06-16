@@ -1,3 +1,9 @@
+## [1.19.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.5...v1.19.6) (2026-06-16)
+
+### Bug Fixes
+
+* **auth:** surface identity-resolution errors and gate on Google scopes ([a448d78](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a448d783bab7398749c2ed7a8a2d25c80ed08f5c))
+
 ## [1.19.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.4...v1.19.5) (2026-06-15)
 
 ### Bug Fixes
