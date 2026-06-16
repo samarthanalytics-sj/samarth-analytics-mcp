@@ -216,7 +216,13 @@ function ChatPanel({
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<
-    { confirmId: string; tool: string; summary: string; details: Record<string, unknown> } | null
+    {
+      confirmId: string;
+      tool: string;
+      summary: string;
+      details: Record<string, unknown>;
+      destructive?: boolean;
+    } | null
   >(null);
 
   const ready = Boolean(active?.hasGoogleToken && active?.llm?.hasApiKey);
@@ -258,6 +264,7 @@ function ChatPanel({
             tool: ev.tool,
             summary: ev.summary,
             details: ev.details,
+            destructive: ev.destructive,
           });
         }
       });
@@ -303,20 +310,22 @@ function ChatPanel({
       </div>
 
       {pendingConfirm && (
-        <div style={styles.confirm}>
-          <div style={styles.confirmHead}>⚠ Approve this change to your GTM?</div>
+        <div style={pendingConfirm.destructive ? styles.confirmDanger : styles.confirm}>
+          <div style={styles.confirmHead}>
+            {pendingConfirm.destructive ? '🗑 Delete — approve this action?' : '⚠ Approve this change to your GTM?'}
+          </div>
           <div style={{ margin: '4px 0 8px' }}>{pendingConfirm.summary}</div>
           <pre style={styles.confirmJson}>{JSON.stringify(pendingConfirm.details, null, 2)}</pre>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
-              style={styles.button}
+              style={pendingConfirm.destructive ? styles.dangerSolid : styles.button}
               onClick={async () => {
                 const pc = pendingConfirm;
                 setPendingConfirm(null);
                 await window.desktop.llm.confirm(pc.confirmId, true);
               }}
             >
-              Approve &amp; apply
+              {pendingConfirm.destructive ? 'Yes, delete' : 'Approve & apply'}
             </button>
             <button
               style={styles.smallBtn}
@@ -326,10 +335,14 @@ function ChatPanel({
                 await window.desktop.llm.confirm(pc.confirmId, false);
               }}
             >
-              Reject
+              Cancel
             </button>
           </div>
-          <div style={styles.confirmNote}>Applies to a draft workspace only — not published.</div>
+          <div style={styles.confirmNote}>
+            {pendingConfirm.destructive
+              ? 'Delete needs two approvals. Applies to a draft workspace — not published.'
+              : 'Applies to a draft workspace only — not published.'}
+          </div>
         </div>
       )}
 
@@ -529,6 +542,8 @@ const styles: Record<string, React.CSSProperties> = {
   asstMsg: { alignSelf: 'flex-start', background: '#1f2937', color: '#e5e7eb', padding: '8px 12px', borderRadius: 12, maxWidth: '80%', fontSize: 13 },
   toolTrace: { color: '#93c5fd', fontSize: 11, marginBottom: 4 },
   confirm: { background: '#251c10', border: '1px solid #92651a', borderRadius: 10, padding: 12, margin: '4px 0 12px', color: '#fcd9a5' },
+  confirmDanger: { background: '#2a1416', border: '1px solid #b91c1c', borderRadius: 10, padding: 12, margin: '4px 0 12px', color: '#fca5a5' },
+  dangerSolid: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, cursor: 'pointer' },
   confirmHead: { fontWeight: 700 },
   confirmJson: { background: '#0b0f17', color: '#e5e7eb', padding: 8, borderRadius: 6, maxHeight: 160, overflow: 'auto', fontSize: 11, margin: '0 0 8px' },
   confirmNote: { color: '#9ca3af', fontSize: 11, marginTop: 8 },

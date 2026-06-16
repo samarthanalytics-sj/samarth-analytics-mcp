@@ -200,6 +200,20 @@ export class GoogleDataService {
     return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
+  async deleteGtmTag(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    tagId: string
+  ): Promise<{ deleted: boolean; tagId: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    await gtm.accounts.containers.workspaces.tags.delete({
+      path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`,
+    });
+    return { deleted: true, tagId };
+  }
+
   async createGtmTrigger(
     accountId: string,
     containerId: string,

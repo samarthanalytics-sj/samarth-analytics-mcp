@@ -39,6 +39,7 @@ export function registerChatIpc(service: ChatService): void {
             tool: proposal.tool,
             summary: proposal.summary,
             details: proposal.details,
+            destructive: proposal.destructive,
           });
         });
       return service.chatStream(

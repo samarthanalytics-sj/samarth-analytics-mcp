@@ -55,8 +55,28 @@ function fakeData(): { data: GoogleDataService; calls: string[] } {
       calls.push(`createWorkspace:${a}:${c}:${name}`);
       return { workspaceId: 'w9', name, path: 'p' };
     },
+    deleteGtmTag: async (a: string, c: string, w: string, t: string) => {
+      calls.push(`deleteTag:${a}:${c}:${w}:${t}`);
+      return { deleted: true, tagId: t };
+    },
   } as unknown as GoogleDataService;
   return { data, calls };
+}
+
+// A confirm() that answers a fixed sequence and records each proposal.
+function seqConfirm(...answers: boolean[]): {
+  fn: (p: { destructive?: boolean }) => Promise<boolean>;
+  calls: Array<{ destructive?: boolean }>;
+} {
+  let i = 0;
+  const seen: Array<{ destructive?: boolean }> = [];
+  return {
+    calls: seen,
+    fn: async (p) => {
+      seen.push(p);
+      return answers[Math.min(i++, answers.length - 1)];
+    },
+  };
 }
 
 async function main(): Promise<void> {
@@ -110,8 +130,38 @@ await test('write tools appear ONLY when a confirm function is provided', async 
   assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
   const withWrites = buildToolRegistry(fakeData().data, async () => true);
-  assert.equal(withWrites.list().length, 13, 'read + write registry has 13 tools');
+  assert.equal(withWrites.list().length, 14, 'read + write registry has 14 tools');
   assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tag'), true);
+  assert.equal(withWrites.list().some((t) => t.name === 'delete_gtm_tag'), true);
+});
+
+await test('delete_gtm_tag requires TWO confirmations; applies only after both', async () => {
+  const fd = fakeData();
+  const c = seqConfirm(true, true);
+  const reg = buildToolRegistry(fd.data, c.fn);
+  await reg.execute('delete_gtm_tag', { accountId: '1', containerId: '2', workspaceId: '3', tagId: '9' });
+  assert.equal(c.calls.length, 2, 'asked twice');
+  assert.equal(c.calls[1].destructive, true, 'second prompt is the destructive final confirm');
+  assert.ok(fd.calls.includes('deleteTag:1:2:3:9'), 'deleted after both approvals');
+});
+
+await test('delete declines on the 2nd confirmation → no API call', async () => {
+  const fd = fakeData();
+  const c = seqConfirm(true, false);
+  const reg = buildToolRegistry(fd.data, c.fn);
+  const out = await reg.execute('delete_gtm_tag', { accountId: '1', containerId: '2', workspaceId: '3', tagId: '9' });
+  assert.equal(JSON.parse(out).declined, true);
+  assert.equal(c.calls.length, 2);
+  assert.equal(fd.calls.length, 0, 'nothing deleted');
+});
+
+await test('delete declines on the 1st confirmation → only one prompt, no API call', async () => {
+  const fd = fakeData();
+  const c = seqConfirm(false);
+  const reg = buildToolRegistry(fd.data, c.fn);
+  await reg.execute('delete_gtm_tag', { accountId: '1', containerId: '2', workspaceId: '3', tagId: '9' });
+  assert.equal(c.calls.length, 1, 'no second prompt after first rejection');
+  assert.equal(fd.calls.length, 0);
 });
 
 await test('write executes on approval, declines (no API call) on rejection', async () => {

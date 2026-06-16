@@ -58,7 +58,14 @@ export interface ChatReply {
 export type ChatStreamEvent =
   | { type: 'text'; delta: string }
   | { type: 'tool'; name: string }
-  | { type: 'confirm'; confirmId: string; tool: string; summary: string; details: Record<string, unknown> };
+  | {
+      type: 'confirm';
+      confirmId: string;
+      tool: string;
+      summary: string;
+      details: Record<string, unknown>;
+      destructive?: boolean;
+    };
 
 export interface GtmAccountView {
   accountId: string;

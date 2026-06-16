@@ -6,6 +6,8 @@ export interface WriteProposal {
   tool: string;
   summary: string;
   details: Record<string, unknown>;
+  /** Destructive (delete) — the UI emphasizes this and it requires a 2nd confirm. */
+  destructive?: boolean;
 }
 
 /** Asks the user to approve a write. Resolves true to apply, false to decline. */
@@ -14,6 +16,8 @@ export type ConfirmFn = (proposal: WriteProposal) => Promise<boolean>;
 interface Tool extends LlmToolDef {
   /** Mutates GTM — only listed/executed when a confirm function is provided. */
   write?: boolean;
+  /** Deletes data — requires a SECOND confirmation before applying. */
+  destructive?: boolean;
   /** Human-readable one-liner shown in the approval prompt. */
   summarize?: (args: Record<string, unknown>) => string;
   handler: (args: Record<string, unknown>) => Promise<unknown>;
@@ -184,6 +188,26 @@ export function buildToolRegistry(data: GoogleDataService, confirm?: ConfirmFn):
       handler: (a) => data.updateGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId), obj(a.tag)),
     },
     {
+      name: 'delete_gtm_tag',
+      description:
+        'Delete a tag from a GTM workspace (draft, not published). Requires accountId, containerId, workspaceId, tagId. Destructive — requires the user to confirm twice.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          tagId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tagId'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => `Delete tag ${s(a.tagId)} from workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.deleteGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId)),
+    },
+    {
       name: 'create_gtm_trigger',
       description: 'Create a trigger in a GTM workspace. Requires accountId, containerId, workspaceId, and a trigger object {name, type, ...}.',
       inputSchema: {
@@ -233,13 +257,26 @@ export function buildToolRegistry(data: GoogleDataService, confirm?: ConfirmFn):
         if (!confirm) {
           return JSON.stringify({ declined: true, message: 'Write tools are disabled.' });
         }
+        const summary = tool.summarize ? tool.summarize(args ?? {}) : tool.name;
+        const declined = JSON.stringify({ declined: true, message: 'The user declined this change.' });
+
         const approved = await confirm({
           tool: tool.name,
-          summary: tool.summarize ? tool.summarize(args ?? {}) : tool.name,
+          summary,
           details: args ?? {},
+          destructive: tool.destructive,
         });
-        if (!approved) {
-          return JSON.stringify({ declined: true, message: 'The user declined this change.' });
+        if (!approved) return declined;
+
+        // Destructive tools (delete) require a SECOND, final confirmation.
+        if (tool.destructive) {
+          const approvedAgain = await confirm({
+            tool: tool.name,
+            summary: `FINAL CONFIRMATION — permanently ${summary}. This cannot be undone.`,
+            details: args ?? {},
+            destructive: true,
+          });
+          if (!approvedAgain) return declined;
         }
       }
       return JSON.stringify(await tool.handler(args ?? {}));
