@@ -340,16 +340,6 @@ function SettingsView({
           <code>{'{ "clientId": "…apps.googleusercontent.com", "clientSecret": "…" }'}</code>
         </section>
       )}
-      {google && google.configured && (
-        <div style={styles.diag}>
-          OAuth client: <strong>{google.source}</strong> ·{' '}
-          <code>{google.clientId}</code>
-          {!google.clientIdLooksValid && (
-            <span style={{ color: '#fca5a5' }}> — client_id looks malformed</span>
-          )}
-        </div>
-      )}
-
       {active ? (
         <>
           <section style={styles.card}>
