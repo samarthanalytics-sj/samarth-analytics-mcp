@@ -6,6 +6,25 @@ import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { Ga4AccountView, GtmAccountView } from '../../shared/ipc';
 
+// Follows nextPageToken so large containers/accounts return EVERY item, not just
+// the first API page. Without this, big workspaces silently truncate (and audits
+// under-count).
+async function collectPages<P, T>(
+  fetchPage: (pageToken?: string) => Promise<P>,
+  getItems: (page: P) => T[] | undefined,
+  getToken: (page: P) => string | null | undefined
+): Promise<T[]> {
+  const out: T[] = [];
+  let token: string | undefined;
+  do {
+    const page = await fetchPage(token);
+    out.push(...(getItems(page) ?? []));
+    const next = getToken(page);
+    token = next ? next : undefined;
+  } while (token);
+  return out;
+}
+
 export interface GtmContainerView {
   containerId: string;
   name: string;
@@ -66,8 +85,12 @@ export class GoogleDataService {
     // types, so our OAuth2Client is a structural-but-not-nominal match.
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const res = await gtm.accounts.list();
-    return (res.data.account ?? []).map((a) => ({
+    const accounts = await collectPages(
+      (pageToken) => gtm.accounts.list({ pageToken }),
+      (r) => r.data.account,
+      (r) => r.data.nextPageToken
+    );
+    return accounts.map((a) => ({
       accountId: a.accountId ?? '',
       name: a.name ?? '(unnamed)',
       path: a.path ?? '',
@@ -77,8 +100,12 @@ export class GoogleDataService {
   async listGtmContainers(accountId: string): Promise<GtmContainerView[]> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const res = await gtm.accounts.containers.list({ parent: `accounts/${accountId}` });
-    return (res.data.container ?? []).map((c) => ({
+    const containers = await collectPages(
+      (pageToken) => gtm.accounts.containers.list({ parent: `accounts/${accountId}`, pageToken }),
+      (r) => r.data.container,
+      (r) => r.data.nextPageToken
+    );
+    return containers.map((c) => ({
       containerId: c.containerId ?? '',
       name: c.name ?? '(unnamed)',
       publicId: c.publicId ?? '',
@@ -89,8 +116,12 @@ export class GoogleDataService {
   async listGa4Accounts(): Promise<Ga4AccountView[]> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
     const admin = analyticsadmin({ version: 'v1beta', auth });
-    const res = await admin.accountSummaries.list({ pageSize: 200 });
-    return (res.data.accountSummaries ?? []).map((s) => ({
+    const summaries = await collectPages(
+      (pageToken) => admin.accountSummaries.list({ pageSize: 200, pageToken }),
+      (r) => r.data.accountSummaries,
+      (r) => r.data.nextPageToken
+    );
+    return summaries.map((s) => ({
       account: s.account ?? '',
       displayName: s.displayName ?? '(unnamed)',
       propertyCount: (s.propertySummaries ?? []).length,
@@ -100,8 +131,12 @@ export class GoogleDataService {
   async listGa4Properties(account: string): Promise<Ga4PropertyView[]> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
     const admin = analyticsadmin({ version: 'v1beta', auth });
-    const res = await admin.properties.list({ filter: `parent:${account}` });
-    return (res.data.properties ?? []).map((p) => ({
+    const properties = await collectPages(
+      (pageToken) => admin.properties.list({ filter: `parent:${account}`, pageToken }),
+      (r) => r.data.properties,
+      (r) => r.data.nextPageToken
+    );
+    return properties.map((p) => ({
       property: p.name ?? '',
       displayName: p.displayName ?? '(unnamed)',
     }));
@@ -110,10 +145,13 @@ export class GoogleDataService {
   async listGtmWorkspaces(accountId: string, containerId: string): Promise<GtmWorkspaceView[]> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const res = await gtm.accounts.containers.workspaces.list({
-      parent: `accounts/${accountId}/containers/${containerId}`,
-    });
-    return (res.data.workspace ?? []).map((w) => ({
+    const parent = `accounts/${accountId}/containers/${containerId}`;
+    const workspaces = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.list({ parent, pageToken }),
+      (r) => r.data.workspace,
+      (r) => r.data.nextPageToken
+    );
+    return workspaces.map((w) => ({
       workspaceId: w.workspaceId ?? '',
       name: w.name ?? '(unnamed)',
       path: w.path ?? '',
@@ -127,10 +165,13 @@ export class GoogleDataService {
   ): Promise<GtmTagView[]> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const res = await gtm.accounts.containers.workspaces.tags.list({
-      parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
-    });
-    return (res.data.tag ?? []).map((t) => ({
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const tags = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.tags.list({ parent, pageToken }),
+      (r) => r.data.tag,
+      (r) => r.data.nextPageToken
+    );
+    return tags.map((t) => ({
       tagId: t.tagId ?? '',
       name: t.name ?? '(unnamed)',
       type: t.type ?? '',
@@ -140,8 +181,12 @@ export class GoogleDataService {
   async listGa4DataStreams(property: string): Promise<Ga4DataStreamView[]> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
     const admin = analyticsadmin({ version: 'v1beta', auth });
-    const res = await admin.properties.dataStreams.list({ parent: property });
-    return (res.data.dataStreams ?? []).map((s) => ({
+    const streams = await collectPages(
+      (pageToken) => admin.properties.dataStreams.list({ parent: property, pageToken }),
+      (r) => r.data.dataStreams,
+      (r) => r.data.nextPageToken
+    );
+    return streams.map((s) => ({
       name: s.name ?? '',
       displayName: s.displayName ?? '(unnamed)',
       type: s.type ?? '',
@@ -214,13 +259,25 @@ export class GoogleDataService {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
-    const [tagsRes, trigRes, varRes] = await Promise.all([
-      gtm.accounts.containers.workspaces.tags.list({ parent }),
-      gtm.accounts.containers.workspaces.triggers.list({ parent }),
-      gtm.accounts.containers.workspaces.variables.list({ parent }),
+    const [tags, triggers, variables] = await Promise.all([
+      collectPages(
+        (pageToken) => gtm.accounts.containers.workspaces.tags.list({ parent, pageToken }),
+        (r) => r.data.tag,
+        (r) => r.data.nextPageToken
+      ),
+      collectPages(
+        (pageToken) => gtm.accounts.containers.workspaces.triggers.list({ parent, pageToken }),
+        (r) => r.data.trigger,
+        (r) => r.data.nextPageToken
+      ),
+      collectPages(
+        (pageToken) => gtm.accounts.containers.workspaces.variables.list({ parent, pageToken }),
+        (r) => r.data.variable,
+        (r) => r.data.nextPageToken
+      ),
     ]);
     return {
-      tags: (tagsRes.data.tag ?? []).map((t) => ({
+      tags: tags.map((t) => ({
         tagId: t.tagId ?? '',
         name: t.name ?? '(unnamed)',
         type: t.type ?? '',
@@ -228,12 +285,12 @@ export class GoogleDataService {
         paused: t.paused ?? false,
         parameter: (t.parameter ?? []) as Array<Record<string, unknown>>,
       })),
-      triggers: (trigRes.data.trigger ?? []).map((t) => ({
+      triggers: triggers.map((t) => ({
         triggerId: t.triggerId ?? '',
         name: t.name ?? '(unnamed)',
         type: t.type ?? '',
       })),
-      variables: (varRes.data.variable ?? []).map((v) => ({
+      variables: variables.map((v) => ({
         variableId: v.variableId ?? '',
         name: v.name ?? '(unnamed)',
         type: v.type ?? '',
@@ -248,10 +305,13 @@ export class GoogleDataService {
   ): Promise<Array<{ triggerId: string; name: string; type: string }>> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const res = await gtm.accounts.containers.workspaces.triggers.list({
-      parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
-    });
-    return (res.data.trigger ?? []).map((t) => ({
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const triggers = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.triggers.list({ parent, pageToken }),
+      (r) => r.data.trigger,
+      (r) => r.data.nextPageToken
+    );
+    return triggers.map((t) => ({
       triggerId: t.triggerId ?? '',
       name: t.name ?? '(unnamed)',
       type: t.type ?? '',

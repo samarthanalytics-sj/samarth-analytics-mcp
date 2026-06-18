@@ -85,7 +85,11 @@ export class ChatService {
           '. Use THESE ids for all GTM operations — do not ask which account/container/workspace and ' +
           'do not re-list them unless the user asks to switch. '
         : '') +
-      'Call tools when asked; never invent ids. Be concise and factual.';
+      'Call tools when asked; never invent ids. When the user asks to list or count ' +
+      'tags, triggers, variables, accounts, containers, or workspaces, the tools already ' +
+      'return the COMPLETE paginated set — present EVERY item (a compact table is ideal) and ' +
+      'never truncate, sample, or say "and more"; if a count is asked, count the full list. ' +
+      'Be concise and factual.';
 
     const messages: LlmTurn[] = [
       ...history.map((h): LlmTurn => ({ role: h.role, text: h.text })),
