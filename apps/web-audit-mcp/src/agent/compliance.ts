@@ -20,6 +20,7 @@ import { loadPlaywright, PlaywrightMissingError, type CapturedHit } from './brow
 import { crawlSite, type CrawlResult } from './crawler.js';
 import { captureScenario, type Scenario, type ScenarioCapture } from './capture.js';
 import { parseGtmContainer } from './gtmConfig.js';
+import { reconcile, type ReconcileFinding, type VendorReconcile } from './reconcile.js';
 import { loadConfig, clampOpt } from '../utils/config.js';
 import { urlAllowed } from '../utils/urlGuard.js';
 import type {
@@ -36,7 +37,7 @@ export type Severity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 
 export interface AuditFinding {
   id: string;
-  domain: 'consent' | 'banner' | 'forms';
+  domain: 'consent' | 'banner' | 'forms' | 'reconcile';
   severity: Severity;
   confidence: 'high' | 'medium' | 'low';
   finding: string;
@@ -362,6 +363,19 @@ function mapEngineFinding(f: ConsentFinding): AuditFinding {
   };
 }
 
+function mapReconcileFinding(f: ReconcileFinding): AuditFinding {
+  return {
+    id: `reconcile_${f.id}`,
+    domain: 'reconcile',
+    severity: f.severity as Severity,
+    confidence: f.confidence,
+    finding: f.finding,
+    whyItMatters: f.whyItMatters,
+    suggestedFix: f.suggestedFix,
+    ...(f.evidence && f.evidence.length > 0 ? { evidence: f.evidence } : {}),
+  };
+}
+
 /**
  * Run the shared consent engine over the captures. With a GTM container export
  * the full CONFIG + RUNTIME + reconcile engine runs ("reconciled" coverage when
@@ -372,7 +386,7 @@ function mapEngineFinding(f: ConsentFinding): AuditFinding {
 export async function runConsentEngine(
   captures: ScenarioCapture[],
   gtmContainer: unknown,
-): Promise<{ findings: AuditFinding[]; coverage: ConsentCoverage; note?: string }> {
+): Promise<{ findings: AuditFinding[]; coverage: ConsentCoverage; note?: string; configUsable: boolean }> {
   const rt = buildRuntimeInput(captures);
   const mod = await import('../../../portal/shared/consent-audit.js');
   if (gtmContainer !== undefined && gtmContainer !== null) {
@@ -382,16 +396,20 @@ export async function runConsentEngine(
       return {
         findings: result.findings.map(mapEngineFinding),
         coverage: result.coverage === 'reconciled' ? 'reconciled' : 'runtime_imported',
+        configUsable: true,
       };
     } catch (err) {
+      // A malformed/summary container is ignored by the consent engine — and
+      // must NOT be reconciled either (parameters are stripped/absent).
       return {
         findings: mod.runConsentRuntimeRules(rt).map(mapEngineFinding),
         coverage: 'runtime_only',
         note: `GTM container ignored: ${err instanceof Error ? err.message : String(err)}`,
+        configUsable: false,
       };
     }
   }
-  return { findings: mod.runConsentRuntimeRules(rt).map(mapEngineFinding), coverage: 'runtime_only' };
+  return { findings: mod.runConsentRuntimeRules(rt).map(mapEngineFinding), coverage: 'runtime_only', configUsable: false };
 }
 
 // ── Report + orchestration ──────────────────────────────────────────────────
@@ -413,6 +431,9 @@ export interface ComplianceReport {
   };
   /** Audit-level notes (e.g. a GTM container that could not be used). */
   notes: string[];
+  /** Per-vendor configured-vs-fired reconciliation (present only when a GTM
+   *  container was supplied). */
+  reconciliation?: VendorReconcile[];
   crawl: CrawlResult;
   captures: {
     scenario: Scenario;
@@ -430,6 +451,9 @@ export interface ComplianceReport {
 export function scoreFindings(findings: AuditFinding[]): { score: number; verdict: ComplianceReport['verdict'] } {
   let score = 100;
   for (const f of findings) {
+    // Tag-presence reconciliation is diagnostic (and sample-based), not a
+    // privacy-compliance violation — it informs but does not dock the score.
+    if (f.domain === 'reconcile') continue;
     if (f.severity === 'critical') score -= 25;
     else if (f.severity === 'high') score -= 15;
     else if (f.severity === 'medium') score -= 7;
@@ -512,13 +536,21 @@ export async function runComplianceAudit(
       captures.push(await captureScenario(browser, entry, scenario, { ...captureOpts, scanForms: false }));
     }
 
-    // Findings from all three sources. The consent engine runs reconciled
-    // (CONFIG + RUNTIME) when a GTM container was supplied, runtime-only otherwise.
+    // Findings from all sources. The consent engine runs reconciled (CONFIG +
+    // RUNTIME) when a GTM container was supplied, runtime-only otherwise. With a
+    // container we also reconcile tag PRESENCE: configured-but-never-fired,
+    // fired-but-not-configured, GA4 id mismatch.
     const engine = await runConsentEngine(captures, options.gtmContainer);
+    // Reconcile only when the container actually parsed (not a summary/empty
+    // export the consent engine rejected). Suppress "configured but never fired"
+    // unless a consent-GRANTED capture ran, so consent-gated tags aren't flagged.
+    const consentGranted = captures.some((c) => c.scenario === 'accept' && c.interaction?.clicked === true);
+    const recon = engine.configUsable ? reconcile(options.gtmContainer, captures, { consentGranted }) : null;
     const findings = sortFindings([
       ...evaluateBannerRules(captures),
       ...evaluateFormFindings(captures),
       ...engine.findings,
+      ...(recon ? recon.findings.map(mapReconcileFinding) : []),
     ]);
 
     const counts: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
@@ -547,6 +579,7 @@ export async function runComplianceAudit(
         findingCounts: counts,
       },
       notes: engine.note ? [engine.note] : [],
+      ...(recon ? { reconciliation: recon.byVendor } : {}),
       crawl,
       captures: captures.map((c) => ({
         scenario: c.scenario,

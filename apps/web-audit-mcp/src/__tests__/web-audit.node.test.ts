@@ -25,6 +25,11 @@ import {
   gcsIndicatesDenied,
 } from '../agent/compliance.js';
 import { parseGtmContainer, GtmContainerError } from '../agent/gtmConfig.js';
+import {
+  extractConfiguredDestinations,
+  extractObservedDestinations,
+  reconcile,
+} from '../agent/reconcile.js';
 import { isAuthorized, buildHealthBody } from '../http.js';
 import { loadConfig } from '../utils/config.js';
 import { runConsentRuntimeRules } from '../../../portal/shared/consent-audit.js';
@@ -403,6 +408,80 @@ check('http: health status ok', health.status === 'ok' && health.transport === '
 check('http: health reports sessions', health.activeSessions === 2);
 check('http: health reports playwright + auth', health.playwrightAvailable === true && health.authRequired === true);
 check('http: health surfaces config', typeof health.config.interactionEnabled === 'boolean' && Array.isArray(health.config.allowlist));
+
+// ── tag-presence reconciliation (configured vs fired) ───────────────────────
+
+const reconContainer = {
+  tags: [
+    { name: 'GA4 Config', type: 'gaawc', parameter: [{ key: 'measurementId', value: 'G-ABC123' }] },
+    { name: 'Ads Conversion', type: 'awct', parameter: [{ key: 'conversionId', value: 'AW-123456789/AbCdEf' }] },
+    { name: 'Paused Meta', type: 'html', paused: true, parameter: [{ key: 'html', value: "<script>fbq('init','111222333')</script>" }] },
+  ],
+  triggers: [],
+  variables: [],
+};
+
+const cfgDests = extractConfiguredDestinations(reconContainer);
+check('reconcile: extracts GA4 measurement id', cfgDests.some((d) => d.vendor === 'ga4' && d.id === 'G-ABC123'));
+check('reconcile: normalizes Ads id (drops /label)', cfgDests.some((d) => d.vendor === 'google_ads' && d.id === 'AW-123456789'));
+check('reconcile: skips a paused tag', !cfgDests.some((d) => d.vendor === 'meta'));
+
+// Real capture shapes: GA4 carries query.tid; the Meta pixel id is ONLY in the
+// /tr url (the pipeline keeps query for GA4 hits only); the gtm.js loader is not
+// a firing destination.
+const reconCaptures = [
+  capture({
+    trackerHits: [
+      hit({ url: 'https://region1.google-analytics.com/g/collect?v=2&tid=G-XYZ999', query: { tid: 'G-XYZ999' } }),
+      hit({ url: 'https://www.facebook.com/tr?id=111222333&ev=PageView', ids: ['meta_pixel'], groups: ['meta'] }),
+      hit({ url: 'https://www.googletagmanager.com/gtm.js?id=GTM-XXXX', ids: ['gtm_loader'], groups: ['gtm'] }),
+    ],
+  }),
+];
+const obsDests = extractObservedDestinations(reconCaptures);
+check('reconcile: observes GA4 tid', obsDests.some((d) => d.vendor === 'ga4' && d.id === 'G-XYZ999'));
+check('reconcile: observes Meta pixel id from the /tr url', obsDests.some((d) => d.vendor === 'meta' && d.id === '111222333'));
+check('reconcile: gtm.js loader is not an observed destination', !obsDests.some((d) => d.source.includes('gtm.js')));
+
+// Consent was granted (an accept capture ran) → configured-but-never-fired is meaningful.
+const rec = reconcile(reconContainer, reconCaptures, { consentGranted: true });
+const reconIds = rec.findings.map((f) => f.id);
+check('reconcile: GA4 measurement id mismatch flagged', reconIds.includes('ga4_measurement_id_mismatch'));
+check('reconcile: Ads configured-but-not-fired flagged', reconIds.includes('configured_not_fired_google_ads'));
+check('reconcile: Meta fired-but-not-configured flagged', reconIds.includes('fired_not_configured_meta'));
+check('reconcile: configured_not_fired is low severity', rec.findings.find((f) => f.id === 'configured_not_fired_google_ads')?.severity === 'low');
+check('reconcile: per-vendor summary records GA4 configured+fired', rec.byVendor.some((v) => v.vendor === 'ga4' && v.configured && v.fired));
+
+// Without a consent-granted capture, a non-firing configured vendor is NOT flagged (it may be consent-gated).
+const recNoConsent = reconcile(reconContainer, reconCaptures, { consentGranted: false });
+check('reconcile: configured_not_fired suppressed without a consent grant', !recNoConsent.findings.some((f) => f.id.startsWith('configured_not_fired')));
+
+// A googtag carrying an AW- id is Google Ads, not GA4.
+const googtagDests = extractConfiguredDestinations({ tags: [{ name: 'GTag', type: 'googtag', parameter: [{ key: 'tagId', value: 'AW-555' }] }], triggers: [], variables: [] });
+check('reconcile: googtag with AW- id is google_ads', googtagDests.some((d) => d.vendor === 'google_ads' && d.id === 'AW-555'));
+check('reconcile: googtag with AW- id is not GA4', !googtagDests.some((d) => d.vendor === 'ga4'));
+
+// GA4 id is matched only in a real gtag context, not arbitrary "G-FORCE" text.
+const noiseHtml = extractConfiguredDestinations({ tags: [{ name: 'Promo', type: 'html', parameter: [{ key: 'html', value: '<div class="G-FORCE">G-WAGON sale</div>' }] }], triggers: [], variables: [] });
+check('reconcile: arbitrary G-XXXX text in HTML is not a GA4 destination', !noiseHtml.some((d) => d.vendor === 'ga4'));
+const realHtml = extractConfiguredDestinations({ tags: [{ name: 'gtag', type: 'html', parameter: [{ key: 'html', value: "gtag('config','G-REALID1234')" }] }], triggers: [], variables: [] });
+check('reconcile: gtag config G- id in HTML is detected', realHtml.some((d) => d.vendor === 'ga4' && d.id === 'G-REALID1234'));
+
+// A GA4 Google-signals / remarketing ping (no conversion id) is not an Ads destination.
+const signalsObs = extractObservedDestinations([
+  capture({ trackerHits: [hit({ url: 'https://googleads.g.doubleclick.net/pagead/viewthroughconversion/123/?', ids: ['google_ads'], groups: ['google_ads'] })] }),
+]);
+check('reconcile: google-signals remarketing ping is not an Ads destination', !signalsObs.some((d) => d.vendor === 'google_ads'));
+
+// Malformed captures don't throw (matches the module's tolerant posture).
+check('reconcile: tolerates malformed captures', extractObservedDestinations([{}, { trackerHits: null }] as unknown as ScenarioCapture[]).length === 0);
+
+// A matched container (same GA4 id fired, nothing else) produces no reconcile findings.
+const cleanRec = reconcile(
+  { tags: [{ name: 'GA4', type: 'gaawc', parameter: [{ key: 'measurementId', value: 'G-ABC123' }] }], triggers: [], variables: [] },
+  [capture({ trackerHits: [hit({ url: 'https://r.google-analytics.com/g/collect?tid=G-ABC123', query: { tid: 'G-ABC123' } })] })],
+);
+check('reconcile: matched GA4 yields no reconcile findings', cleanRec.findings.length === 0);
 
 // ── report ──────────────────────────────────────────────────────────────────
 

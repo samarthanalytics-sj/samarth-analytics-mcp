@@ -203,8 +203,9 @@ export function registerAllTools(server: McpServer): void {
         'banner-behaviour rules (tags firing before consent, tags firing after Reject, tracking cookies ' +
         'pre-consent, missing first-layer Reject), form privacy rules, and the shared Consent Mode v2 ' +
         'engine. Pass gtmContainer to reconcile the configured GTM container against observed runtime ' +
-        'behaviour ("reconciled" coverage). This is the recommended one-call entry point; use the focused ' +
-        'tools to drill in.',
+        'behaviour ("reconciled" coverage) AND get tag-presence reconciliation — configured-but-never-fired, ' +
+        'fired-but-not-configured, and GA4 measurement-id mismatches — in report.reconciliation + findings. ' +
+        'This is the recommended one-call entry point; use the focused tools to drill in.',
       inputSchema: z.object({
         url: urlField,
         maxPages: z.number().int().positive().optional()
