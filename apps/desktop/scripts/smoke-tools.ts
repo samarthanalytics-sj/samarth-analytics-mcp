@@ -17,8 +17,12 @@
 // Run: npm --prefix apps/desktop run smoke   (tsx scripts/smoke-tools.ts)
 
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildToolRegistry } from '../src/main/tools/registry';
 import type { ConfirmFn } from '../src/main/tools/registry';
+import { AuditHistoryStore } from '../src/main/storage/audit-history';
 import type { GoogleDataService } from '../src/main/google/data-service';
 
 let ok = 0;
@@ -78,6 +82,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     listGa4Properties: () => r('listGa4Properties', []),
     listGa4DataStreams: () => r('listGa4DataStreams', []),
     runGa4Report: () => r('runGa4Report', { dimensionHeaders: [], metricHeaders: [], rows: [] }),
+    getGtmLiveVersionSnapshot: () => r('getGtmLiveVersionSnapshot', structuredClone(SNAPSHOT)),
     // writes (each records a mutation)
     createGtmWorkspace: () => r('createGtmWorkspace', { workspaceId: 'w9', name: 'WS', path: '' }),
     createGtmTag: () => r('createGtmTag', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
@@ -146,7 +151,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 10 read tools', readOnlyNames.size === 10, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 12 read tools', readOnlyNames.size === 12, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────
@@ -169,7 +174,9 @@ async function main(): Promise<void> {
   // ── C. Liveness: invoke every tool once under an approving confirm. ─────────
   {
     const fd = makeFakeData();
-    const reg = buildToolRegistry(fd.data, approve); // both products, all tools
+    const histDir = mkdtempSync(join(tmpdir(), 'samarth-smoke-hist-'));
+    const history = new AuditHistoryStore(join(histDir, 'h.json'));
+    const reg = buildToolRegistry(fd.data, approve, undefined, history); // all tools, monitoring enabled
     const tools = reg.list();
     let responded = 0;
     for (const t of tools) {
@@ -186,6 +193,7 @@ async function main(): Promise<void> {
       responded === tools.length,
       `${responded}/${tools.length} tools responded`
     );
+    rmSync(histDir, { recursive: true, force: true });
   }
 
   // ── D. Audit: structured, actionable, ids-injected, variable-delete advisory. ─

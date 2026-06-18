@@ -1,6 +1,7 @@
 import type { RegistryService } from './registry-service';
 import type { GoogleDataService } from '../google/data-service';
 import type { ProviderKeyStore } from '../storage/provider-keys';
+import type { AuditHistoryStore } from '../storage/audit-history';
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
@@ -14,7 +15,8 @@ export class ChatService {
   constructor(
     private readonly registry: RegistryService,
     private readonly data: GoogleDataService,
-    private readonly providerKeys: ProviderKeyStore
+    private readonly providerKeys: ProviderKeyStore,
+    private readonly history?: AuditHistoryStore
   ) {}
 
   /** Non-streaming: returns the final reply only. */
@@ -55,7 +57,7 @@ export class ChatService {
 
     const client = createProvider(active.llm.provider);
     // GA4 is read-only; only GTM gets write tools (and thus the confirm flow).
-    const tools = buildToolRegistry(this.data, product === 'gtm' ? confirm : undefined, product);
+    const tools = buildToolRegistry(this.data, product === 'gtm' ? confirm : undefined, product, this.history);
 
     const productLabel = product === 'gtm' ? 'Google Tag Manager (GTM)' : 'Google Analytics 4 (GA4)';
     const system =
@@ -80,7 +82,12 @@ export class ChatService {
           '({tool, args} with ids already filled in); for those, OFFER to apply it and — once the user ' +
           'approves — CALL that exact tool to fix it. Do NOT tell the user to go fix it manually in the ' +
           'GTM UI when a fix tool exists. You may offer to apply several fixes; each still needs approval ' +
-          '(deletes need two). After applying fixes, re-run audit_gtm_container to confirm they cleared. '
+          '(deletes need two). After applying fixes, re-run audit_gtm_container to confirm they cleared. ' +
+          'MONITORING / DRIFT: when the user asks what CHANGED, about regressions, or to monitor the ' +
+          'container over time, call audit_gtm_container_changes — it reports NEW vs RESOLVED issues since ' +
+          'the last audit (lead with the new ones and offer their fixes). When the user asks what a publish ' +
+          'would change, or how the draft differs from what is live, call diff_gtm_workspace_vs_live and ' +
+          'summarize the added/removed/modified tags, triggers, and variables. '
         : product === 'gtm'
           ? 'You can read the GTM setup (accounts, containers, workspaces, tags). '
           : 'You can read GA4 (accounts, properties, data streams) and run GA4 reports. ') +

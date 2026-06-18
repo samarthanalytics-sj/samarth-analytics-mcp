@@ -1,6 +1,7 @@
 import type { GoogleDataService } from '../google/data-service';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
 import type { GoogleProduct } from '../../shared/ipc';
+import type { AuditHistoryStore } from '../storage/audit-history';
 import {
   buildGa4EventTag,
   buildGoogleAdsConversionTag,
@@ -8,10 +9,11 @@ import {
   buildTrigger,
   triggerBuiltInVars,
   buildVariable,
-  auditContainer,
   type TriggerInput,
   type VariableKind,
 } from '../google/gtm-builders';
+import { auditWorkspace, auditChanges } from '../google/audit-runner';
+import { diffSnapshots } from '../google/gtm-monitor';
 
 // A change a write-tool wants to make, surfaced to the user for approval.
 export interface WriteProposal {
@@ -74,7 +76,8 @@ const productOf = (name: string): GoogleProduct => (name.includes('ga4') ? 'ga4'
 export function buildToolRegistry(
   data: GoogleDataService,
   confirm?: ConfirmFn,
-  product?: GoogleProduct
+  product?: GoogleProduct,
+  history?: AuditHistoryStore
 ): ToolExecutor {
   const readTools: Tool[] = [
     {
@@ -152,21 +155,75 @@ export function buildToolRegistry(
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
       },
+      handler: (a) =>
+        auditWorkspace(data, {
+          accountId: s(a.accountId),
+          containerId: s(a.containerId),
+          workspaceId: s(a.workspaceId),
+        }),
+    },
+    {
+      name: 'audit_gtm_container_changes',
+      description:
+        'Re-audit the workspace AND report what CHANGED since the last audit of it: NEW issues (regressions) and RESOLVED issues, plus the full current report. Records this run so the next call can diff against it — the basis for continuous monitoring. New findings carry the same ready-to-run fixes (apply on approval). Use when the user asks "what changed", "any regressions", or to monitor over time. Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        if (!history) {
+          return { error: 'Monitoring history is unavailable in this context — use audit_gtm_container instead.' };
+        }
+        return auditChanges(
+          data,
+          history,
+          { accountId: s(a.accountId), containerId: s(a.containerId), workspaceId: s(a.workspaceId) },
+          Date.now()
+        );
+      },
+    },
+    {
+      name: 'diff_gtm_workspace_vs_live',
+      description:
+        'Show CONFIG DRIFT between the draft workspace and the PUBLISHED (live) container version: which tags/triggers/variables were added, removed, or modified in the draft relative to what is live — i.e. exactly what publishing this workspace would change. Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
       handler: async (a) => {
         const accountId = s(a.accountId);
         const containerId = s(a.containerId);
         const workspaceId = s(a.workspaceId);
-        const report = auditContainer(
-          await data.getGtmContainerSnapshot(accountId, containerId, workspaceId)
-        );
-        // Make each fix directly callable: fill in the workspace coordinates so
-        // the model can apply it in one approved call without re-deriving ids.
-        // Spread the audit's args FIRST and write the validated workspace ids
-        // LAST so a fix can never retarget the write at another container.
-        for (const f of report.findings) {
-          if (f.fix) f.fix.args = { ...f.fix.args, accountId, containerId, workspaceId };
+        const [live, workspace] = await Promise.all([
+          data.getGtmLiveVersionSnapshot(accountId, containerId),
+          data.getGtmContainerSnapshot(accountId, containerId, workspaceId),
+        ]);
+        if (!live) {
+          return {
+            publishedVersion: null,
+            note: 'No published version yet — everything in this workspace is pending its first publish.',
+            workspaceCounts: {
+              tags: workspace.tags.length,
+              triggers: workspace.triggers.length,
+              variables: workspace.variables.length,
+            },
+          };
         }
-        return report;
+        // base = live, target = workspace → added/removed/modified are framed as
+        // "what a publish of this workspace would change in the live container".
+        return { publishedVersion: 'live', drift: diffSnapshots(live, workspace) };
       },
     },
     {

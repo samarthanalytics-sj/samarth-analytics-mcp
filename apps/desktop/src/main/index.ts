@@ -4,6 +4,7 @@ import { AccountRepository } from './storage/account-repository';
 import { SecretStore } from './storage/secret-store';
 import { SafeStorageCryptor } from './storage/safe-storage-cryptor';
 import { ProviderKeyStore } from './storage/provider-keys';
+import { AuditHistoryStore } from './storage/audit-history';
 import { RegistryService } from './services/registry-service';
 import { registerRegistryIpc } from './ipc/registry-ipc';
 import { registerProvidersIpc } from './ipc/providers-ipc';
@@ -14,6 +15,9 @@ import { GoogleDataService } from './google/data-service';
 import { registerDataIpc } from './ipc/data-ipc';
 import { ChatService } from './services/chat-service';
 import { registerChatIpc } from './ipc/chat-ipc';
+import { MonitorService } from './services/monitor-service';
+import { registerMonitorIpc } from './ipc/monitor-ipc';
+import type { MonitorAlert } from '../shared/ipc';
 
 // Phase 0 scaffold: boot a window, wire a minimal, secure IPC bridge, and prove
 // renderer <-> main messaging works. Later phases add the account registry,
@@ -124,7 +128,23 @@ app.whenReady().then(() => {
     clientManager.invalidate(id)
   );
   const dataService = new GoogleDataService(registry, clientManager);
-  const chatService = new ChatService(registry, dataService, providerKeys);
+  const auditHistory = new AuditHistoryStore(join(dataDir, 'audit-history.json'));
+  const chatService = new ChatService(registry, dataService, providerKeys, auditHistory);
+
+  // Continuous monitoring: re-audits the active container on a timer and pushes
+  // a 'monitor:alert' to every open window when NEW issues appear.
+  const broadcastAlert = (alert: MonitorAlert): void => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('monitor:alert', alert);
+    }
+  };
+  const monitor = new MonitorService({
+    registry,
+    data: dataService,
+    history: auditHistory,
+    emit: broadcastAlert,
+    configPath: join(dataDir, 'monitor-config.json'),
+  });
 
   registerIpcHandlers();
   registerRegistryIpc(registry);
@@ -132,6 +152,7 @@ app.whenReady().then(() => {
   registerGoogleIpc(googleAuth);
   registerDataIpc(dataService);
   registerChatIpc(chatService);
+  registerMonitorIpc(monitor);
   createWindow();
 
   app.on('activate', () => {

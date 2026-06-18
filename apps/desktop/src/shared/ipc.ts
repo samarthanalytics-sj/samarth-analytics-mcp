@@ -107,6 +107,40 @@ export interface Ga4AccountView {
   propertyCount: number;
 }
 
+/** Continuous-monitoring config: auto re-audit the active container on a timer. */
+export interface MonitorConfig {
+  enabled: boolean;
+  /** Minutes between automatic audits (clamped to a sane minimum in main). */
+  intervalMinutes: number;
+}
+
+export interface MonitorStatus extends MonitorConfig {
+  running: boolean;
+  lastRunAt: number | null;
+  lastError: string | null;
+  /** The most recent alert this session, so a view can show it on mount even if
+   *  it wasn't open when the alert fired. */
+  lastAlert: MonitorAlert | null;
+}
+
+/** A renderer-safe finding (no machine fix args) for the monitoring banner. */
+export interface MonitorFinding {
+  severity: 'high' | 'medium' | 'low' | 'info';
+  category: string;
+  message: string;
+}
+
+/** Pushed to the renderer when a scheduled audit finds NEW issues (regressions). */
+export interface MonitorAlert {
+  at: number;
+  accountId?: string;
+  containerId?: string;
+  containerName?: string;
+  workspaceId?: string;
+  newFindings: MonitorFinding[];
+  resolvedCount: number;
+}
+
 export interface GoogleClientStatus {
   /** Whether a Google OAuth client (id + secret) is configured. */
   configured: boolean;
