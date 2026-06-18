@@ -79,6 +79,18 @@ function fakeData(
       calls.push(`enableVars:${a}:${c}:${w}:${types.join(',')}`);
       return types;
     },
+    createGtmVariable: async (a: string, c: string, w: string, v: Record<string, unknown>) => {
+      calls.push(`createVar:${a}:${c}:${w}:${String(v.type)}:${String(v.name)}`);
+      return { variableId: 'V1', name: String(v.name ?? ''), type: String(v.type ?? '') };
+    },
+    getGtmContainerSnapshot: async (a: string, c: string, w: string) => {
+      calls.push(`snapshot:${a}:${c}:${w}`);
+      return {
+        tags: [{ tagId: '1', name: 'Orphan', type: 'html', firingTriggerId: [], paused: false, parameter: [] }],
+        triggers: [],
+        variables: [],
+      };
+    },
   } as unknown as GoogleDataService;
   return { data, calls };
 }
@@ -110,6 +122,7 @@ async function main(): Promise<void> {
     const reg = buildToolRegistry(fakeData().data);
     const names = reg.list().map((t) => t.name).sort();
     assert.deepEqual(names, [
+      'audit_gtm_container',
       'list_ga4_accounts',
       'list_ga4_data_streams',
       'list_ga4_properties',
@@ -139,12 +152,47 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 9, 'read-only registry has 9 tools');
+    assert.equal(readOnly.list().length, 10, 'read-only registry has 10 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 17, 'read + write registry has 17 tools');
-    assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tag_with_trigger'), true);
+    assert.equal(withWrites.list().length, 20, 'read + write registry has 20 tools');
+    assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
+    assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
+  });
+
+  await test('audit_gtm_container returns counts + findings', async () => {
+    const reg = buildToolRegistry(fakeData().data);
+    const out = JSON.parse(await reg.execute('audit_gtm_container', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(out.counts.tags, 1);
+    assert.ok(out.findings.some((f: { message: string }) => f.message.includes('no firing trigger')));
+  });
+
+  await test('create_tracking_tag (ga4_event) builds correct tag + reuses trigger', async () => {
+    const fd = fakeData({ existingTriggers: [{ triggerId: 'T9', name: 'Email link click', type: 'linkClick' }] });
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'ga4_event', tagName: 'GA4 - email', measurementId: 'G-XYZ', eventName: 'email_click',
+        eventParameters: [{ name: 'link_url', value: '{{Click URL}}' }],
+        trigger: { name: 'Email link click', kind: 'link_click', clickUrlValue: 'mailto:' },
+      })
+    );
+    assert.equal(out.trigger.reused, true);
+    assert.ok(fd.calls.includes('enableVars:1:2:3:clickUrl'), 'auto-enabled clickUrl');
+    assert.ok(!fd.calls.some((c) => c.startsWith('createTrigger')), 'reused, did not create trigger');
+    assert.ok(fd.calls.some((c) => c.startsWith('createTag') && c.includes('T9')), 'tag linked to existing trigger');
+  });
+
+  await test('create_gtm_variable_typed builds a Custom JS variable', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    await reg.execute('create_gtm_variable_typed', {
+      accountId: '1', containerId: '2', workspaceId: '3',
+      kind: 'javascript', name: 'JS - Page Title', javascript: 'function(){return document.title;}',
+    });
+    assert.ok(fd.calls.some((c) => c.startsWith('createVar:1:2:3:jsm:JS - Page Title')), 'created a jsm variable');
   });
 
   await test('product scopes the toolset (gtm vs ga4)', async () => {

@@ -1,6 +1,17 @@
 import type { GoogleDataService } from '../google/data-service';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
 import type { GoogleProduct } from '../../shared/ipc';
+import {
+  buildGa4EventTag,
+  buildGoogleAdsConversionTag,
+  buildCustomHtmlTag,
+  buildTrigger,
+  triggerBuiltInVars,
+  buildVariable,
+  auditContainer,
+  type TriggerInput,
+  type VariableKind,
+} from '../google/gtm-builders';
 
 // A change a write-tool wants to make, surfaced to the user for approval.
 export interface WriteProposal {
@@ -126,6 +137,23 @@ export function buildToolRegistry(
       handler: (a) => data.listGtmTriggers(s(a.accountId), s(a.containerId), s(a.workspaceId)),
     },
     {
+      name: 'audit_gtm_container',
+      description:
+        'Audit a GTM workspace and report issues: counts of tags/triggers/variables, tags with no firing trigger, paused tags, GA4 event tags missing a measurement ID, unused triggers, Custom HTML tags to review, and duplicate names. Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: async (a) =>
+        auditContainer(await data.getGtmContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId))),
+    },
+    {
       name: 'list_ga4_accounts',
       description: 'List the Google Analytics 4 account summaries the signed-in user can access.',
       inputSchema: { ...EMPTY_SCHEMA },
@@ -181,6 +209,149 @@ export function buildToolRegistry(
   ];
 
   const writeTools: Tool[] = [
+    {
+      name: 'create_gtm_tracking_tag',
+      description:
+        'PREFERRED way to create a tag that fires on an event — builds a CORRECT GTM resource from simple fields (you do not write raw GTM JSON). One confirmed step: enables needed built-in variables, reuses an existing same-named trigger or creates it, and creates the tag linked to it. ' +
+        'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for Facebook/LinkedIn/TikTok/other pixels). ' +
+        'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue + clickUrlOperator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event), "pageview", "form_submit".',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          platform: { type: 'string', enum: ['ga4_event', 'google_ads_conversion', 'custom_html'] },
+          tagName: { type: 'string' },
+          measurementId: { type: 'string' },
+          eventName: { type: 'string' },
+          eventParameters: {
+            type: 'array',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } } },
+          },
+          conversionId: { type: 'string' },
+          conversionLabel: { type: 'string' },
+          html: { type: 'string' },
+          trigger: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              kind: { type: 'string', enum: ['link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit'] },
+              clickUrlValue: { type: 'string' },
+              clickUrlOperator: { type: 'string' },
+              eventName: { type: 'string' },
+            },
+            required: ['name', 'kind'],
+          },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'platform', 'tagName', 'trigger'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) =>
+        `Create ${s(a.platform)} tag "${s(a.tagName)}" firing on "${s(obj(a.trigger).name)}" trigger`,
+      handler: async (a) => {
+        const accountId = s(a.accountId);
+        const containerId = s(a.containerId);
+        const workspaceId = s(a.workspaceId);
+        const platform = s(a.platform);
+
+        let tag;
+        if (platform === 'ga4_event') {
+          tag = buildGa4EventTag({
+            name: s(a.tagName),
+            measurementId: s(a.measurementId),
+            eventName: s(a.eventName),
+            eventParameters: Array.isArray(a.eventParameters)
+              ? a.eventParameters.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) }))
+              : [],
+          });
+        } else if (platform === 'google_ads_conversion') {
+          tag = buildGoogleAdsConversionTag({ name: s(a.tagName), conversionId: s(a.conversionId), conversionLabel: s(a.conversionLabel) });
+        } else if (platform === 'custom_html') {
+          tag = buildCustomHtmlTag({ name: s(a.tagName), html: s(a.html) });
+        } else {
+          throw new Error(`unknown platform: ${platform}`);
+        }
+
+        const ts = obj(a.trigger);
+        const triggerInput: TriggerInput = {
+          name: s(ts.name),
+          kind: (s(ts.kind) || 'pageview') as TriggerInput['kind'],
+          clickUrlValue: ts.clickUrlValue != null ? s(ts.clickUrlValue) : undefined,
+          clickUrlOperator: ts.clickUrlOperator != null ? s(ts.clickUrlOperator) : undefined,
+          eventName: ts.eventName != null ? s(ts.eventName) : undefined,
+        };
+
+        const vars = Array.from(
+          new Set([...triggerBuiltInVars(triggerInput), ...(Array.isArray(a.builtInVariables) ? a.builtInVariables.map(String) : [])])
+        );
+        let enabledVariables: string[] = [];
+        if (vars.length) {
+          try {
+            enabledVariables = await data.enableGtmBuiltInVariables(accountId, containerId, workspaceId, vars);
+          } catch {
+            enabledVariables = vars;
+          }
+        }
+
+        const existing = (await data.listGtmTriggers(accountId, containerId, workspaceId)).find(
+          (t) => t.name.toLowerCase() === triggerInput.name.toLowerCase()
+        );
+        let triggerId: string;
+        let reusedTrigger = false;
+        if (existing) {
+          triggerId = existing.triggerId;
+          reusedTrigger = true;
+        } else {
+          triggerId = (
+            await data.createGtmTrigger(accountId, containerId, workspaceId, buildTrigger(triggerInput) as unknown as Record<string, unknown>)
+          ).triggerId;
+        }
+
+        const createdTag = await data.createGtmTag(accountId, containerId, workspaceId, {
+          ...tag,
+          firingTriggerId: [triggerId],
+        } as unknown as Record<string, unknown>);
+
+        return { tag: createdTag, trigger: { triggerId, name: triggerInput.name, reused: reusedTrigger }, enabledVariables };
+      },
+    },
+    {
+      name: 'create_gtm_variable_typed',
+      description:
+        'Create a GTM variable with the correct structure (you do not write raw JSON). kind: "constant" (value), "data_layer" (dataLayerName), "javascript" (javascript — a Custom JavaScript variable, e.g. "function(){return document.title;}" for page title). Requires accountId, containerId, workspaceId, kind, name.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          kind: { type: 'string', enum: ['constant', 'data_layer', 'javascript'] },
+          name: { type: 'string' },
+          value: { type: 'string' },
+          dataLayerName: { type: 'string' },
+          javascript: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'kind', 'name'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create ${s(a.kind)} variable "${s(a.name)}"`,
+      handler: (a) =>
+        data.createGtmVariable(
+          s(a.accountId),
+          s(a.containerId),
+          s(a.workspaceId),
+          buildVariable({
+            name: s(a.name),
+            kind: s(a.kind) as VariableKind,
+            value: a.value != null ? s(a.value) : undefined,
+            dataLayerName: a.dataLayerName != null ? s(a.dataLayerName) : undefined,
+            javascript: a.javascript != null ? s(a.javascript) : undefined,
+          }) as unknown as Record<string, unknown>
+        ),
+    },
     {
       name: 'create_gtm_workspace',
       description: 'Create a new draft workspace in a GTM container to make changes in. Requires accountId, containerId, name.',
