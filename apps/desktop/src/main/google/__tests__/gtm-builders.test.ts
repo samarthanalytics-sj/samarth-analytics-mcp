@@ -37,6 +37,9 @@ test('GA4 event tag: gaawe + eventParameters as list-of-maps', () => {
   assert.equal(t.type, 'gaawe');
   assert.equal(findParam(t.parameter, 'eventName')?.value, 'email_click');
   assert.equal(findParam(t.parameter, 'measurementIdOverride')?.value, 'G-ABC');
+  // empty tagReference measurementId is required alongside the override
+  const mid = findParam(t.parameter, 'measurementId');
+  assert.equal(mid?.type, 'tagReference');
   const ep = findParam(t.parameter, 'eventParameters') as { type: string; list: Array<{ type: string; map: Array<Record<string, unknown>> }> };
   assert.equal(ep.type, 'list');
   assert.equal(ep.list[0].type, 'map');
@@ -58,10 +61,11 @@ test('Custom HTML tag: html type + snippet', () => {
   assert.equal(findParam(t.parameter, 'html')?.value, '<script>fbq()</script>');
 });
 
-test('link_click trigger: linkClick + {{Click URL}} filter, needs clickUrl var', () => {
+test('link_click trigger: linkClick + {{Click URL}} autoEventFilter, needs clickUrl var', () => {
   const tr = buildTrigger({ name: 'Email link click', kind: 'link_click', clickUrlValue: 'mailto:' });
   assert.equal(tr.type, 'linkClick');
-  const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(tr.filter, undefined, 'click conditions go in autoEventFilter, not filter');
+  const f = (tr.autoEventFilter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
   assert.equal(f.type, 'contains');
   assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Click URL}}');
   assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, 'mailto:');

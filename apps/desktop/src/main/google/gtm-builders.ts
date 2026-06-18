@@ -18,6 +18,7 @@ export interface GtmTriggerResource {
   name: string;
   type: string;
   filter?: Param[];
+  autoEventFilter?: Param[];
   customEventFilter?: Param[];
 }
 export interface GtmVariableResource {
@@ -36,7 +37,14 @@ export interface Ga4EventInput {
   firingTriggerId?: string[];
 }
 export function buildGa4EventTag(o: Ga4EventInput): GtmTagResource {
-  const parameter: Param[] = [tpl('eventName', o.eventName), tpl('measurementIdOverride', o.measurementId)];
+  // GTM requires an (empty) measurementId tagReference plus measurementIdOverride
+  // holding the actual G-XXXX / {{variable}}. Verified against a reference GTM
+  // MCP server's templates.
+  const parameter: Param[] = [
+    { type: 'tagReference', key: 'measurementId', value: '' },
+    tpl('measurementIdOverride', o.measurementId),
+    tpl('eventName', o.eventName),
+  ];
   if (o.eventParameters?.length) {
     parameter.push({
       type: 'list',
@@ -100,8 +108,10 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
   switch (o.kind) {
     case 'link_click':
     case 'all_clicks': {
+      // Click/auto-event triggers filter the clicked element via autoEventFilter
+      // (NOT `filter`). Verified against the reference GTM MCP server.
       const t: GtmTriggerResource = { name: o.name, type: o.kind === 'link_click' ? 'linkClick' : 'click' };
-      if (o.clickUrlValue) t.filter = [condition('{{Click URL}}', o.clickUrlOperator ?? 'contains', o.clickUrlValue)];
+      if (o.clickUrlValue) t.autoEventFilter = [condition('{{Click URL}}', o.clickUrlOperator ?? 'contains', o.clickUrlValue)];
       return t;
     }
     case 'custom_event':
