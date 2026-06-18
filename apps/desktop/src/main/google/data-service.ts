@@ -200,6 +200,47 @@ export class GoogleDataService {
     return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
+  /** Full tags + triggers + variables for an audit (tags include firingTriggerId,
+   *  paused, and parameters). */
+  async getGtmContainerSnapshot(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<{
+    tags: Array<{ tagId: string; name: string; type: string; firingTriggerId: string[]; paused: boolean; parameter: Array<Record<string, unknown>> }>;
+    triggers: Array<{ triggerId: string; name: string; type: string }>;
+    variables: Array<{ variableId: string; name: string; type: string }>;
+  }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const [tagsRes, trigRes, varRes] = await Promise.all([
+      gtm.accounts.containers.workspaces.tags.list({ parent }),
+      gtm.accounts.containers.workspaces.triggers.list({ parent }),
+      gtm.accounts.containers.workspaces.variables.list({ parent }),
+    ]);
+    return {
+      tags: (tagsRes.data.tag ?? []).map((t) => ({
+        tagId: t.tagId ?? '',
+        name: t.name ?? '(unnamed)',
+        type: t.type ?? '',
+        firingTriggerId: t.firingTriggerId ?? [],
+        paused: t.paused ?? false,
+        parameter: (t.parameter ?? []) as Array<Record<string, unknown>>,
+      })),
+      triggers: (trigRes.data.trigger ?? []).map((t) => ({
+        triggerId: t.triggerId ?? '',
+        name: t.name ?? '(unnamed)',
+        type: t.type ?? '',
+      })),
+      variables: (varRes.data.variable ?? []).map((v) => ({
+        variableId: v.variableId ?? '',
+        name: v.name ?? '(unnamed)',
+        type: v.type ?? '',
+      })),
+    };
+  }
+
   async listGtmTriggers(
     accountId: string,
     containerId: string,

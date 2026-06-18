@@ -119,6 +119,40 @@ function buildEditFields(tool: string, details: Record<string, unknown>): EditFi
   const fields: EditField[] = [];
   if (tool === 'delete_gtm_tag') return fields; // delete isn't editable
 
+  // Structured composite tag (flat fields + a nested trigger).
+  if (tool === 'create_gtm_tracking_tag') {
+    const flat = (key: string, label: string): void => {
+      if (details[key] !== undefined) {
+        fields.push({ key, label, initial: String(details[key] ?? ''), apply: (d, v) => { d[key] = v; } });
+      }
+    };
+    flat('tagName', 'Tag name');
+    flat('measurementId', 'Measurement ID');
+    flat('eventName', 'Event name');
+    flat('conversionId', 'Conversion ID');
+    flat('conversionLabel', 'Conversion Label');
+    flat('html', 'Custom HTML');
+    const trig = asObj(details.trigger);
+    if (trig.name !== undefined) fields.push({ key: 'trigName', label: 'Trigger name', initial: String(trig.name ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.name = v; d.trigger = t; } });
+    if (trig.clickUrlValue !== undefined) fields.push({ key: 'trigCond', label: 'Click URL value', initial: String(trig.clickUrlValue ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.clickUrlValue = v; d.trigger = t; } });
+    if (trig.eventName !== undefined) fields.push({ key: 'trigEvent', label: 'Trigger event name', initial: String(trig.eventName ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.eventName = v; d.trigger = t; } });
+    return fields;
+  }
+
+  // Structured typed variable (flat fields).
+  if (tool === 'create_gtm_variable_typed') {
+    const flat = (key: string, label: string): void => {
+      if (details[key] !== undefined) {
+        fields.push({ key, label, initial: String(details[key] ?? ''), apply: (d, v) => { d[key] = v; } });
+      }
+    };
+    flat('name', 'Variable name');
+    flat('value', 'Value');
+    flat('dataLayerName', 'Data layer name');
+    flat('javascript', 'JavaScript');
+    return fields;
+  }
+
   const tag = asObj(details.tag);
   const trigger = asObj(details.trigger);
   const variable = asObj(details.variable);

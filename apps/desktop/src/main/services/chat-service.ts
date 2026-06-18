@@ -63,14 +63,15 @@ export class ChatService {
       `Only help with ${productLabel}; if asked about the other product, say to switch the ` +
       'GTM/GA4 selector. ' +
       (product === 'gtm' && confirm
-        ? 'You can read the GTM setup and create/edit/delete tags, triggers, and variables in a ' +
-          'DRAFT workspace (never published — the user publishes manually in GTM). Always work in a ' +
-          'workspace (create one if needed). When the user wants a tag that fires on some event, ' +
-          'use the ONE-SHOT create_gtm_tag_with_trigger tool (it enables needed built-in variables, ' +
-          'reuses an existing trigger of the same name instead of duplicating, then creates the tag ' +
-          'linked to it) so the user approves the whole thing ONCE — do not split it into separate ' +
-          'create_gtm_trigger then create_gtm_tag calls. Include builtInVariables like ["clickUrl"] ' +
-          'when the trigger needs them. The user must approve each change. '
+        ? 'You can read the GTM setup and create/edit tags, triggers, and variables in a DRAFT ' +
+          'workspace (never published — the user publishes manually in GTM). Always work in a workspace. ' +
+          'PREFER the STRUCTURED tools that build correct GTM resources from simple fields, so you ' +
+          'never hand-write GTM JSON: use create_gtm_tracking_tag for any tag that fires on an event' +
+          '(platform ga4_event / google_ads_conversion / custom_html, with a trigger spec — it enables ' +
+          'needed built-in variables, reuses a same-named trigger instead of duplicating, and links the ' +
+          'tag, all in ONE approval), and create_gtm_variable_typed for variables (constant / data_layer ' +
+          '/ javascript). Use audit_gtm_container to review a workspace. Only fall back to the raw ' +
+          'create_gtm_tag/trigger/variable tools for advanced cases. The user must approve each change. '
         : product === 'gtm'
           ? 'You can read the GTM setup (accounts, containers, workspaces, tags). '
           : 'You can read GA4 (accounts, properties, data streams) and run GA4 reports. ') +
