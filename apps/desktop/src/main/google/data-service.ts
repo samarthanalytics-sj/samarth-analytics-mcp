@@ -4,6 +4,7 @@ import { analyticsdata } from '@googleapis/analyticsdata';
 import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
+import type { ContainerSnapshot } from './gtm-builders';
 import type { Ga4AccountView, GtmAccountView } from '../../shared/ipc';
 
 // Follows nextPageToken so large containers/accounts return EVERY item, not just
@@ -245,17 +246,36 @@ export class GoogleDataService {
     return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
-  /** Full tags + triggers + variables for an audit (tags include firingTriggerId,
-   *  paused, and parameters). */
+  /** Pause or unpause a tag WITHOUT losing its config: GTM update replaces the
+   *  whole resource, so we fetch the current tag, flip `paused`, and write it
+   *  back — preserving parameters, triggers, consent settings, etc. */
+  async setGtmTagPaused(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    tagId: string,
+    paused: boolean
+  ): Promise<GtmTagView> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
+    const current = await gtm.accounts.containers.workspaces.tags.get({ path });
+    const res = await gtm.accounts.containers.workspaces.tags.update({
+      path,
+      requestBody: { ...current.data, paused },
+    });
+    return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  /** Full tags + triggers + variables for an audit. Tags carry firingTriggerId,
+   *  paused, parameters and consentSettings; triggers carry their filters and
+   *  variables their parameters, so the audit can detect consent gaps and which
+   *  variables are actually referenced. */
   async getGtmContainerSnapshot(
     accountId: string,
     containerId: string,
     workspaceId: string
-  ): Promise<{
-    tags: Array<{ tagId: string; name: string; type: string; firingTriggerId: string[]; paused: boolean; parameter: Array<Record<string, unknown>> }>;
-    triggers: Array<{ triggerId: string; name: string; type: string }>;
-    variables: Array<{ variableId: string; name: string; type: string }>;
-  }> {
+  ): Promise<ContainerSnapshot> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
@@ -282,18 +302,28 @@ export class GoogleDataService {
         name: t.name ?? '(unnamed)',
         type: t.type ?? '',
         firingTriggerId: t.firingTriggerId ?? [],
+        blockingTriggerId: t.blockingTriggerId ?? [],
         paused: t.paused ?? false,
         parameter: (t.parameter ?? []) as Array<Record<string, unknown>>,
+        consentSettings: (t.consentSettings ?? null) as {
+          consentStatus?: string;
+          consentType?: unknown;
+        } | null,
       })),
       triggers: triggers.map((t) => ({
         triggerId: t.triggerId ?? '',
         name: t.name ?? '(unnamed)',
         type: t.type ?? '',
+        filter: (t.filter ?? []) as Array<Record<string, unknown>>,
+        autoEventFilter: (t.autoEventFilter ?? []) as Array<Record<string, unknown>>,
+        customEventFilter: (t.customEventFilter ?? []) as Array<Record<string, unknown>>,
+        parameter: (t.parameter ?? []) as Array<Record<string, unknown>>,
       })),
       variables: variables.map((v) => ({
         variableId: v.variableId ?? '',
         name: v.name ?? '(unnamed)',
         type: v.type ?? '',
+        parameter: (v.parameter ?? []) as Array<Record<string, unknown>>,
       })),
     };
   }
@@ -347,6 +377,34 @@ export class GoogleDataService {
       path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`,
     });
     return { deleted: true, tagId };
+  }
+
+  async deleteGtmTrigger(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    triggerId: string
+  ): Promise<{ deleted: boolean; triggerId: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    await gtm.accounts.containers.workspaces.triggers.delete({
+      path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/triggers/${triggerId}`,
+    });
+    return { deleted: true, triggerId };
+  }
+
+  async deleteGtmVariable(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    variableId: string
+  ): Promise<{ deleted: boolean; variableId: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    await gtm.accounts.containers.workspaces.variables.delete({
+      path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/variables/${variableId}`,
+    });
+    return { deleted: true, variableId };
   }
 
   async createGtmTrigger(

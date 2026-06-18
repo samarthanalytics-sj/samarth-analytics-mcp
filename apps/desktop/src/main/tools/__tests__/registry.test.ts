@@ -19,7 +19,14 @@ const rec = (v: unknown): Record<string, unknown> => v as Record<string, unknown
 
 // Records calls so we can assert the registry routes args correctly.
 function fakeData(
-  opts: { existingTriggers?: Array<{ triggerId: string; name: string; type: string }> } = {}
+  opts: {
+    existingTriggers?: Array<{ triggerId: string; name: string; type: string }>;
+    snapshot?: {
+      tags: Array<Record<string, unknown>>;
+      triggers: Array<Record<string, unknown>>;
+      variables: Array<Record<string, unknown>>;
+    };
+  } = {}
 ): { data: GoogleDataService; calls: string[] } {
   const calls: string[] = [];
   const data = {
@@ -67,6 +74,18 @@ function fakeData(
       calls.push(`deleteTag:${a}:${c}:${w}:${t}`);
       return { deleted: true, tagId: t };
     },
+    setGtmTagPaused: async (a: string, c: string, w: string, t: string, paused: boolean) => {
+      calls.push(`setPaused:${a}:${c}:${w}:${t}:${paused}`);
+      return { tagId: t, name: '', type: '' };
+    },
+    deleteGtmTrigger: async (a: string, c: string, w: string, t: string) => {
+      calls.push(`deleteTrigger:${a}:${c}:${w}:${t}`);
+      return { deleted: true, triggerId: t };
+    },
+    deleteGtmVariable: async (a: string, c: string, w: string, v: string) => {
+      calls.push(`deleteVar:${a}:${c}:${w}:${v}`);
+      return { deleted: true, variableId: v };
+    },
     createGtmTrigger: async (a: string, c: string, w: string, trig: Record<string, unknown>) => {
       calls.push(`createTrigger:${a}:${c}:${w}:${String(trig.name ?? '')}`);
       return { triggerId: 'NEW1', name: String(trig.name ?? ''), type: String(trig.type ?? '') };
@@ -85,11 +104,13 @@ function fakeData(
     },
     getGtmContainerSnapshot: async (a: string, c: string, w: string) => {
       calls.push(`snapshot:${a}:${c}:${w}`);
-      return {
-        tags: [{ tagId: '1', name: 'Orphan', type: 'html', firingTriggerId: [], paused: false, parameter: [] }],
-        triggers: [],
-        variables: [],
-      };
+      return (
+        opts.snapshot ?? {
+          tags: [{ tagId: '1', name: 'Orphan', type: 'html', firingTriggerId: [], paused: false, parameter: [] }],
+          triggers: [],
+          variables: [],
+        }
+      );
     },
   } as unknown as GoogleDataService;
   return { data, calls };
@@ -156,9 +177,12 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 20, 'read + write registry has 20 tools');
+    assert.equal(withWrites.list().length, 23, 'read + write registry has 23 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
+    for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
+      assert.equal(withWrites.list().some((t) => t.name === fixTool), true, `${fixTool} is registered`);
+    }
   });
 
   await test('audit_gtm_container returns counts + findings', async () => {
@@ -166,6 +190,57 @@ async function main(): Promise<void> {
     const out = JSON.parse(await reg.execute('audit_gtm_container', { accountId: '1', containerId: '2', workspaceId: '3' }));
     assert.equal(out.counts.tags, 1);
     assert.ok(out.findings.some((f: { message: string }) => f.message.includes('no firing trigger')));
+  });
+
+  await test('audit injects workspace ids into auto-fixes (paused + unused trigger)', async () => {
+    const fd = fakeData({
+      snapshot: {
+        tags: [
+          {
+            tagId: '7', name: 'Paused GA4', type: 'gaawe', firingTriggerId: ['T1'], paused: true,
+            parameter: [{ key: 'measurementIdOverride', value: 'G-1' }, { key: 'eventName', value: 'purchase' }],
+            consentSettings: { consentStatus: 'needed' },
+          },
+        ],
+        triggers: [
+          { triggerId: 'T1', name: 'Used', type: 'pageview' },
+          { triggerId: 'T2', name: 'Lonely', type: 'pageview' },
+        ],
+        variables: [],
+      },
+    });
+    const reg = buildToolRegistry(fd.data); // audit is read-only
+    const out = JSON.parse(await reg.execute('audit_gtm_container', { accountId: '1', containerId: '2', workspaceId: '3' }));
+
+    const paused = out.findings.find((f: { category: string }) => f.category === 'paused');
+    assert.ok(paused?.fix, 'paused finding carries a fix');
+    assert.equal(paused.fix.tool, 'set_gtm_tag_paused');
+    assert.deepEqual(paused.fix.args, { accountId: '1', containerId: '2', workspaceId: '3', tagId: '7', paused: false, name: 'Paused GA4' });
+
+    const unused = out.findings.find(
+      (f: { category: string; resource?: { kind: string } }) => f.category === 'unused' && f.resource?.kind === 'trigger'
+    );
+    assert.equal(unused.fix.tool, 'delete_gtm_trigger');
+    assert.deepEqual(unused.fix.args, { accountId: '1', containerId: '2', workspaceId: '3', triggerId: 'T2', name: 'Lonely' });
+    // The healthy GA4 tag (mid + eventName + consent needed) raises no GA4/consent finding.
+    assert.equal(out.findings.some((f: { category: string }) => f.category === 'ga4' || f.category === 'consent'), false);
+  });
+
+  await test('fix tools apply: unpause (one confirm), delete trigger/variable (two confirms)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    await reg.execute('set_gtm_tag_paused', { accountId: '1', containerId: '2', workspaceId: '3', tagId: '7', paused: false });
+    assert.ok(fd.calls.includes('setPaused:1:2:3:7:false'), 'unpaused the tag');
+
+    const ct = seqConfirm(true, true);
+    await buildToolRegistry(fd.data, ct.fn).execute('delete_gtm_trigger', { accountId: '1', containerId: '2', workspaceId: '3', triggerId: 'T2' });
+    assert.equal(ct.calls.length, 2, 'delete trigger asked twice');
+    assert.ok(fd.calls.includes('deleteTrigger:1:2:3:T2'), 'deleted the trigger after both approvals');
+
+    const cv = seqConfirm(true, false);
+    const out = await buildToolRegistry(fd.data, cv.fn).execute('delete_gtm_variable', { accountId: '1', containerId: '2', workspaceId: '3', variableId: 'V5' });
+    assert.equal(JSON.parse(out).declined, true, 'declining the 2nd confirm cancels the variable delete');
+    assert.ok(!fd.calls.includes('deleteVar:1:2:3:V5'), 'variable NOT deleted when 2nd confirm declined');
   });
 
   await test('create_tracking_tag (ga4_event) builds correct tag + reuses trigger', async () => {
