@@ -26,6 +26,71 @@ async function collectPages<P, T>(
   return out;
 }
 
+// Minimal structural shapes of the GTM v2 resource fields the snapshot reads.
+// Schema$Tag/Trigger/Variable are structural supertypes of these, so the raw
+// API arrays (from list pages OR a published version) assign here directly.
+interface RawTag {
+  tagId?: string | null;
+  name?: string | null;
+  type?: string | null;
+  firingTriggerId?: string[] | null;
+  blockingTriggerId?: string[] | null;
+  paused?: boolean | null;
+  parameter?: unknown;
+  consentSettings?: unknown;
+}
+interface RawTrigger {
+  triggerId?: string | null;
+  name?: string | null;
+  type?: string | null;
+  filter?: unknown;
+  autoEventFilter?: unknown;
+  customEventFilter?: unknown;
+  parameter?: unknown;
+}
+interface RawVariable {
+  variableId?: string | null;
+  name?: string | null;
+  type?: string | null;
+  parameter?: unknown;
+}
+
+const asList = (v: unknown): Array<Record<string, unknown>> =>
+  Array.isArray(v) ? (v as Array<Record<string, unknown>>) : [];
+
+// Single source of truth for the audit/monitor snapshot shape, so the draft
+// workspace and the published live version map IDENTICALLY (the drift diff
+// depends on byte-for-byte comparable fingerprints).
+function toSnapshot(tags: RawTag[], triggers: RawTrigger[], variables: RawVariable[]): ContainerSnapshot {
+  return {
+    tags: tags.map((t) => ({
+      tagId: t.tagId ?? '',
+      name: t.name ?? '(unnamed)',
+      type: t.type ?? '',
+      firingTriggerId: t.firingTriggerId ?? [],
+      blockingTriggerId: t.blockingTriggerId ?? [],
+      paused: t.paused ?? false,
+      parameter: asList(t.parameter),
+      consentSettings: (t.consentSettings ?? null) as { consentStatus?: string; consentType?: unknown } | null,
+    })),
+    triggers: triggers.map((t) => ({
+      triggerId: t.triggerId ?? '',
+      name: t.name ?? '(unnamed)',
+      type: t.type ?? '',
+      filter: asList(t.filter),
+      autoEventFilter: asList(t.autoEventFilter),
+      customEventFilter: asList(t.customEventFilter),
+      parameter: asList(t.parameter),
+    })),
+    variables: variables.map((v) => ({
+      variableId: v.variableId ?? '',
+      name: v.name ?? '(unnamed)',
+      type: v.type ?? '',
+      parameter: asList(v.parameter),
+    })),
+  };
+}
+
 export interface GtmContainerView {
   containerId: string;
   name: string;
@@ -296,36 +361,31 @@ export class GoogleDataService {
         (r) => r.data.nextPageToken
       ),
     ]);
-    return {
-      tags: tags.map((t) => ({
-        tagId: t.tagId ?? '',
-        name: t.name ?? '(unnamed)',
-        type: t.type ?? '',
-        firingTriggerId: t.firingTriggerId ?? [],
-        blockingTriggerId: t.blockingTriggerId ?? [],
-        paused: t.paused ?? false,
-        parameter: (t.parameter ?? []) as Array<Record<string, unknown>>,
-        consentSettings: (t.consentSettings ?? null) as {
-          consentStatus?: string;
-          consentType?: unknown;
-        } | null,
-      })),
-      triggers: triggers.map((t) => ({
-        triggerId: t.triggerId ?? '',
-        name: t.name ?? '(unnamed)',
-        type: t.type ?? '',
-        filter: (t.filter ?? []) as Array<Record<string, unknown>>,
-        autoEventFilter: (t.autoEventFilter ?? []) as Array<Record<string, unknown>>,
-        customEventFilter: (t.customEventFilter ?? []) as Array<Record<string, unknown>>,
-        parameter: (t.parameter ?? []) as Array<Record<string, unknown>>,
-      })),
-      variables: variables.map((v) => ({
-        variableId: v.variableId ?? '',
-        name: v.name ?? '(unnamed)',
-        type: v.type ?? '',
-        parameter: (v.parameter ?? []) as Array<Record<string, unknown>>,
-      })),
-    };
+    return toSnapshot(tags, triggers, variables);
+  }
+
+  /** The PUBLISHED (live) container version as a snapshot, for drift detection
+   *  against the draft workspace. Returns null when the container has no
+   *  published version yet (a fresh container) — callers treat that as "nothing
+   *  live, everything in the workspace is pending". Auth/other errors propagate. */
+  async getGtmLiveVersionSnapshot(
+    accountId: string,
+    containerId: string
+  ): Promise<ContainerSnapshot | null> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    try {
+      const res = await gtm.accounts.containers.versions.live({
+        parent: `accounts/${accountId}/containers/${containerId}`,
+      });
+      // A live version contains every resource inline (no pagination).
+      return toSnapshot(res.data.tag ?? [], res.data.trigger ?? [], res.data.variable ?? []);
+    } catch (e) {
+      const code = (e as { code?: number; response?: { status?: number } }).code ??
+        (e as { response?: { status?: number } }).response?.status;
+      if (code === 404) return null; // no published version yet
+      throw e;
+    }
   }
 
   async listGtmTriggers(

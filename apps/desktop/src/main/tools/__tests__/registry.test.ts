@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildToolRegistry } from '../registry';
+import { AuditHistoryStore } from '../../storage/audit-history';
 import type { GoogleDataService } from '../../google/data-service';
 
 let passed = 0;
@@ -26,6 +30,11 @@ function fakeData(
       triggers: Array<Record<string, unknown>>;
       variables: Array<Record<string, unknown>>;
     };
+    liveSnapshot?: {
+      tags: Array<Record<string, unknown>>;
+      triggers: Array<Record<string, unknown>>;
+      variables: Array<Record<string, unknown>>;
+    } | null;
   } = {}
 ): { data: GoogleDataService; calls: string[] } {
   const calls: string[] = [];
@@ -112,6 +121,10 @@ function fakeData(
         }
       );
     },
+    getGtmLiveVersionSnapshot: async (a: string, c: string) => {
+      calls.push(`live:${a}:${c}`);
+      return opts.liveSnapshot === undefined ? null : opts.liveSnapshot;
+    },
   } as unknown as GoogleDataService;
   return { data, calls };
 }
@@ -144,6 +157,8 @@ async function main(): Promise<void> {
     const names = reg.list().map((t) => t.name).sort();
     assert.deepEqual(names, [
       'audit_gtm_container',
+      'audit_gtm_container_changes',
+      'diff_gtm_workspace_vs_live',
       'list_ga4_accounts',
       'list_ga4_data_streams',
       'list_ga4_properties',
@@ -173,11 +188,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 10, 'read-only registry has 10 tools');
+    assert.equal(readOnly.list().length, 12, 'read-only registry has 12 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 23, 'read + write registry has 23 tools');
+    assert.equal(withWrites.list().length, 25, 'read + write registry has 25 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
@@ -241,6 +256,51 @@ async function main(): Promise<void> {
     const out = await buildToolRegistry(fd.data, cv.fn).execute('delete_gtm_variable', { accountId: '1', containerId: '2', workspaceId: '3', variableId: 'V5' });
     assert.equal(JSON.parse(out).declined, true, 'declining the 2nd confirm cancels the variable delete');
     assert.ok(!fd.calls.includes('deleteVar:1:2:3:V5'), 'variable NOT deleted when 2nd confirm declined');
+  });
+
+  await test('diff_gtm_workspace_vs_live: no published version → pending note', async () => {
+    const fd = fakeData(); // liveSnapshot undefined → getGtmLiveVersionSnapshot returns null
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('diff_gtm_workspace_vs_live', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(out.publishedVersion, null);
+    assert.ok(String(out.note).includes('No published version'));
+    assert.ok(fd.calls.includes('live:1:2'), 'fetched the live version');
+  });
+
+  await test('diff_gtm_workspace_vs_live: reports config drift vs the live version', async () => {
+    const fd = fakeData({
+      liveSnapshot: { tags: [{ tagId: '1', name: 'A', type: 'html', firingTriggerId: ['T1'], paused: false, parameter: [] }], triggers: [], variables: [] },
+      snapshot: { tags: [{ tagId: '1', name: 'A', type: 'html', firingTriggerId: ['T1'], paused: true, parameter: [] }], triggers: [], variables: [] }, // paused flipped
+    });
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('diff_gtm_workspace_vs_live', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(out.publishedVersion, 'live');
+    assert.deepEqual(out.drift.tags.modified.map((t: { id: string }) => t.id), ['1']);
+    assert.equal(out.drift.changeCount, 1);
+  });
+
+  await test('audit_gtm_container_changes: baseline first, NEW issues on second run', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'samarth-reg-hist-'));
+    const history = new AuditHistoryStore(join(dir, 'h.json'));
+    let snap: { tags: Array<Record<string, unknown>>; triggers: never[]; variables: never[] } = { tags: [], triggers: [], variables: [] };
+    const data = { getGtmContainerSnapshot: async () => snap } as unknown as GoogleDataService;
+    const reg = buildToolRegistry(data, undefined, undefined, history);
+
+    const first = JSON.parse(await reg.execute('audit_gtm_container_changes', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(first.firstRun, true);
+    assert.equal(first.since, null);
+
+    snap = { tags: [{ tagId: '9', name: 'Orphan', type: 'html', firingTriggerId: [], paused: false, parameter: [] }], triggers: [], variables: [] };
+    const second = JSON.parse(await reg.execute('audit_gtm_container_changes', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(second.firstRun, false);
+    assert.ok(second.drift.newFindings.some((f: { message: string }) => f.message.includes('no firing trigger')), 'reports the new orphan-tag issue');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  await test('audit_gtm_container_changes without history degrades gracefully', async () => {
+    const reg = buildToolRegistry(fakeData().data); // no history store
+    const out = JSON.parse(await reg.execute('audit_gtm_container_changes', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.ok(String(out.error).includes('unavailable'));
   });
 
   await test('create_tracking_tag (ga4_event) builds correct tag + reuses trigger', async () => {

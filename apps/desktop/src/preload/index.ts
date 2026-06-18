@@ -13,6 +13,9 @@ import type {
   GtmContext,
   GtmWorkspaceView,
   LlmProvider,
+  MonitorAlert,
+  MonitorConfig,
+  MonitorStatus,
   ProviderStatus,
   SecretSelfTest,
 } from '../shared/ipc';
@@ -97,6 +100,21 @@ const api = {
     // (possibly edited) args to apply, or null to decline.
     confirm: (confirmId: string, result: Record<string, unknown> | null): Promise<void> =>
       ipcRenderer.invoke('llm:confirm:respond', confirmId, result),
+  },
+
+  // Continuous monitoring: schedule auto re-audits of the active container and
+  // receive an alert when NEW issues appear.
+  monitor: {
+    status: (): Promise<MonitorStatus> => ipcRenderer.invoke('monitor:status'),
+    configure: (patch: Partial<MonitorConfig>): Promise<MonitorStatus> =>
+      ipcRenderer.invoke('monitor:configure', patch),
+    runNow: (): Promise<MonitorAlert | null> => ipcRenderer.invoke('monitor:runNow'),
+    // Subscribe to pushed alerts; returns an unsubscribe function.
+    onAlert: (cb: (alert: MonitorAlert) => void): (() => void) => {
+      const listener = (_e: unknown, alert: MonitorAlert): void => cb(alert);
+      ipcRenderer.on('monitor:alert', listener);
+      return () => ipcRenderer.removeListener('monitor:alert', listener);
+    },
   },
 };
 

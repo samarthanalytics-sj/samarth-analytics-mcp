@@ -10,6 +10,9 @@ import type {
   GtmContext,
   GtmWorkspaceView,
   LlmProvider,
+  MonitorAlert,
+  MonitorConfig,
+  MonitorStatus,
   SecretSelfTest,
 } from '../../shared/ipc';
 
@@ -831,6 +834,11 @@ function SettingsView({
             <h2 style={styles.h2}>Data tools (read-only)</h2>
             <DataTools active={active} onError={onError} />
           </section>
+
+          <section style={styles.card}>
+            <h2 style={styles.h2}>Continuous monitoring (GTM)</h2>
+            <MonitoringEditor active={active} onError={onError} />
+          </section>
         </>
       ) : (
         <section style={styles.card}>
@@ -856,6 +864,128 @@ function SettingsView({
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+/* Continuous-monitoring control: enable/interval + Audit now + latest alert. */
+function MonitoringEditor({
+  active,
+  onError,
+}: {
+  active: AccountView;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const [status, setStatus] = useState<MonitorStatus | null>(null);
+  const [alert, setAlert] = useState<MonitorAlert | null>(null);
+  const [intervalDraft, setIntervalDraft] = useState<string>('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    window.desktop.monitor
+      .status()
+      .then((s) => {
+        setStatus(s);
+        setIntervalDraft(String(s.intervalMinutes));
+        // Show the most recent alert even if it fired while this view was closed.
+        if (s.lastAlert) setAlert(s.lastAlert);
+      })
+      .catch((e) => onError(String(e)));
+    const off = window.desktop.monitor.onAlert(setAlert);
+    return off;
+  }, [onError]);
+
+  const update = async (patch: Partial<MonitorConfig>): Promise<void> => {
+    try {
+      const s = await window.desktop.monitor.configure(patch);
+      setStatus(s);
+      setIntervalDraft(String(s.intervalMinutes));
+    } catch (e) {
+      onError(String(e));
+    }
+  };
+
+  const auditNow = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      const a = await window.desktop.monitor.runNow();
+      if (a) setAlert(a);
+      setStatus(await window.desktop.monitor.status());
+    } catch (e) {
+      onError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const ctx = active.gtmContext;
+  const ready = Boolean(active.hasGoogleToken && ctx?.containerId && ctx?.workspaceId);
+
+  if (!ready) {
+    return (
+      <p style={styles.muted}>
+        Pick a GTM container and workspace (in chat or Data tools) to enable monitoring.
+      </p>
+    );
+  }
+
+  return (
+    <div>
+      <p style={styles.muted}>
+        Re-audits {ctx?.containerName ? `“${ctx.containerName}”` : 'the selected container'} on a timer and
+        alerts you when NEW issues appear since the last check.
+      </p>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <input
+          type="checkbox"
+          checked={status?.enabled ?? false}
+          onChange={(e) => void update({ enabled: e.target.checked })}
+        />
+        <span>Enable automatic monitoring</span>
+      </label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+        <span style={styles.muted}>Every</span>
+        <input
+          type="number"
+          min={5}
+          value={intervalDraft}
+          // Commit on blur / Enter (not every keystroke) so changing the interval
+          // doesn't trigger a live audit per digit.
+          onChange={(e) => setIntervalDraft(e.target.value)}
+          onBlur={() => {
+            const n = Number(intervalDraft);
+            if (Number.isFinite(n) && n !== status?.intervalMinutes) void update({ intervalMinutes: n });
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          }}
+          style={{ width: 70 }}
+        />
+        <span style={styles.muted}>minutes (min 5)</span>
+        <button style={styles.ghostBtn} disabled={busy} onClick={() => void auditNow()}>
+          {busy ? 'Auditing…' : 'Audit now'}
+        </button>
+      </div>
+      {status?.lastRunAt ? (
+        <div style={styles.muted}>Last check: {new Date(status.lastRunAt).toLocaleString()}</div>
+      ) : null}
+      {status?.lastError ? <div style={{ color: '#fca5a5' }}>Last error: {status.lastError}</div> : null}
+      {alert ? (
+        <div style={{ ...styles.warn, marginTop: 10 }}>
+          <strong>
+            {alert.newFindings.length} new issue{alert.newFindings.length === 1 ? '' : 's'}
+          </strong>
+          {alert.resolvedCount > 0 ? <span> · {alert.resolvedCount} resolved</span> : null}
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {alert.newFindings.slice(0, 6).map((f, i) => (
+              <li key={i}>
+                <b>{f.severity}</b> — {f.message}
+              </li>
+            ))}
+          </ul>
+          <div style={styles.muted}>Ask in chat to fix these.</div>
+        </div>
+      ) : null}
     </div>
   );
 }
