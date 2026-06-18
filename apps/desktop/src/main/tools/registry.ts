@@ -139,7 +139,9 @@ export function buildToolRegistry(
     {
       name: 'audit_gtm_container',
       description:
-        'Audit a GTM workspace and report issues: counts of tags/triggers/variables, tags with no firing trigger, paused tags, GA4 event tags missing a measurement ID, unused triggers, Custom HTML tags to review, and duplicate names. Requires accountId, containerId, workspaceId.',
+        'Audit a GTM workspace and return ACTIONABLE findings. Returns counts, a severity summary, and an array of findings — each with severity, category, the affected resource, a recommendation, and (for auto-fixable issues) a ready-to-run `fix` { tool, args } you can call directly to resolve it (the workspace ids are already filled in). ' +
+        'Checks: tags with no firing trigger, paused tags, GA4 event tags missing a measurement ID or event name, multiple/inconsistent GA4 measurement IDs, Custom HTML (security + document.write), missing Consent Mode v2 settings on ad/analytics tags, unused triggers, unused variables, and duplicate names. ' +
+        'Requires accountId, containerId, workspaceId.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -150,8 +152,22 @@ export function buildToolRegistry(
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
       },
-      handler: async (a) =>
-        auditContainer(await data.getGtmContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId))),
+      handler: async (a) => {
+        const accountId = s(a.accountId);
+        const containerId = s(a.containerId);
+        const workspaceId = s(a.workspaceId);
+        const report = auditContainer(
+          await data.getGtmContainerSnapshot(accountId, containerId, workspaceId)
+        );
+        // Make each fix directly callable: fill in the workspace coordinates so
+        // the model can apply it in one approved call without re-deriving ids.
+        // Spread the audit's args FIRST and write the validated workspace ids
+        // LAST so a fix can never retarget the write at another container.
+        for (const f of report.findings) {
+          if (f.fix) f.fix.args = { ...f.fix.args, accountId, containerId, workspaceId };
+        }
+        return report;
+      },
     },
     {
       name: 'list_ga4_accounts',
@@ -417,6 +433,38 @@ export function buildToolRegistry(
       handler: (a) => data.updateGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId), obj(a.tag)),
     },
     {
+      name: 'set_gtm_tag_paused',
+      description:
+        'Pause or unpause a tag in a GTM workspace, preserving all its other settings. Use this to apply the audit fix for a paused tag. Requires accountId, containerId, workspaceId, tagId, and paused (boolean — false to unpause/enable, true to pause). Optional name is shown in the approval prompt.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          tagId: { type: 'string' },
+          paused: { type: 'boolean' },
+          name: { type: 'string', description: 'Tag name, for display only.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tagId', 'paused'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => {
+        const verb = a.paused === true || s(a.paused) === 'true' ? 'Pause' : 'Unpause';
+        const who = a.name ? `"${s(a.name)}" (${s(a.tagId)})` : `tag ${s(a.tagId)}`;
+        return `${verb} ${who} in workspace ${s(a.workspaceId)}`;
+      },
+      handler: (a) =>
+        data.setGtmTagPaused(
+          s(a.accountId),
+          s(a.containerId),
+          s(a.workspaceId),
+          s(a.tagId),
+          a.paused === true || s(a.paused) === 'true'
+        ),
+    },
+    {
       name: 'delete_gtm_tag',
       description:
         'Delete a tag from a GTM workspace (draft, not published). Requires accountId, containerId, workspaceId, tagId. Destructive — requires the user to confirm twice.',
@@ -435,6 +483,50 @@ export function buildToolRegistry(
       destructive: true,
       summarize: (a) => `Delete tag ${s(a.tagId)} from workspace ${s(a.workspaceId)}`,
       handler: (a) => data.deleteGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId)),
+    },
+    {
+      name: 'delete_gtm_trigger',
+      description:
+        'Delete a trigger from a GTM workspace (draft, not published). Use this to apply the audit fix for an unused trigger. Requires accountId, containerId, workspaceId, triggerId. Destructive — requires the user to confirm twice. Optional name is shown in the approval prompt.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          triggerId: { type: 'string' },
+          name: { type: 'string', description: 'Trigger name, for display only.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'triggerId'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) =>
+        `Delete trigger ${a.name ? `"${s(a.name)}" (${s(a.triggerId)})` : s(a.triggerId)} from workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.deleteGtmTrigger(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.triggerId)),
+    },
+    {
+      name: 'delete_gtm_variable',
+      description:
+        'Delete a variable from a GTM workspace (draft, not published). Requires accountId, containerId, workspaceId, variableId. Destructive — requires the user to confirm twice; verify the variable is not used by a published version first. Optional name is shown in the approval prompt.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          variableId: { type: 'string' },
+          name: { type: 'string', description: 'Variable name, for display only.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'variableId'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) =>
+        `Delete variable ${a.name ? `"${s(a.name)}" (${s(a.variableId)})` : s(a.variableId)} from workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.deleteGtmVariable(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.variableId)),
     },
     {
       name: 'enable_gtm_builtin_variables',

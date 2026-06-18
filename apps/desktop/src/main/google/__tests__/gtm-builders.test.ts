@@ -118,5 +118,124 @@ test('audit flags no-trigger, paused, GA4-no-mid, unused trigger, custom HTML, d
   assert.ok(msgs.includes('Duplicate tag name "Dup"'));
 });
 
+test('audit: structured findings carry resource + recommendation + machine fix', () => {
+  const r = auditContainer({
+    tags: [
+      {
+        tagId: '2', name: 'Paused', type: 'gaawe', firingTriggerId: ['T1'], paused: true,
+        // references {{Referenced}} so that variable is NOT flagged unused
+        parameter: [
+          { key: 'measurementIdOverride', value: 'G-1' },
+          { key: 'eventName', value: 'purchase' },
+          { type: 'template', key: 'x', value: '{{Referenced}}' },
+        ],
+        consentSettings: { consentStatus: 'needed' },
+      },
+    ],
+    triggers: [
+      { triggerId: 'T1', name: 'Used', type: 'pageview' },
+      { triggerId: 'T2', name: 'Unused', type: 'pageview' },
+    ],
+    variables: [
+      { variableId: 'V1', name: 'Referenced', type: 'c' },
+      { variableId: 'V2', name: 'Lonely', type: 'c' },
+    ],
+  });
+
+  // counts gained a findings tally; severity summary is present.
+  assert.equal(r.counts.findings, r.findings.length);
+  assert.equal(r.summary.high + r.summary.medium + r.summary.low + r.summary.info, r.findings.length);
+
+  const paused = r.findings.find((f) => f.category === 'paused');
+  assert.equal(paused?.severity, 'medium');
+  assert.equal(paused?.resource?.id, '2');
+  assert.ok(paused?.recommendation.length, 'recommendation present');
+  assert.equal(paused?.autoFixable, true);
+  assert.equal(paused?.fix?.tool, 'set_gtm_tag_paused');
+  assert.deepEqual(paused?.fix?.args, { tagId: '2', paused: false, name: 'Paused' });
+
+  const unusedTrigger = r.findings.find((f) => f.category === 'unused' && f.resource?.kind === 'trigger');
+  assert.equal(unusedTrigger?.fix?.tool, 'delete_gtm_trigger');
+  assert.deepEqual(unusedTrigger?.fix?.args, { triggerId: 'T2', name: 'Unused' });
+
+  // Variable reference scan: "Lonely" is unused; "Referenced" (used by the tag) is not.
+  const unusedVars = r.findings.filter((f) => f.category === 'unused' && f.resource?.kind === 'variable');
+  assert.deepEqual(unusedVars.map((f) => f.resource?.name), ['Lonely']);
+  // Unused-variable is ADVISORY ONLY — no destructive auto-fix (the workspace
+  // snapshot can't see published versions or every variable-bearing field).
+  assert.equal(unusedVars[0]?.autoFixable, false);
+  assert.equal(unusedVars[0]?.fix, undefined);
+
+  // Healthy GA4 tag (mid + eventName + consent needed) raises no ga4/consent finding.
+  assert.equal(r.findings.some((f) => f.category === 'ga4' || f.category === 'consent'), false);
+});
+
+test('audit: Consent Mode v2 + missing event name flagged on bare GA4/Ads tags', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'Bare GA4', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: 'G-9' }] },
+      { tagId: '2', name: 'Ads', type: 'awct', firingTriggerId: ['T1'], paused: false, parameter: [] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  const cats = r.findings.map((f) => f.category);
+  assert.ok(cats.includes('consent'), 'consent finding for tags without consentSettings');
+  assert.ok(r.findings.some((f) => f.message.includes('has no event name')), 'GA4 missing event name flagged');
+  // Both consent-relevant tags should be flagged for consent.
+  assert.equal(r.findings.filter((f) => f.category === 'consent').length, 2);
+});
+
+test('audit: consent flags only notSet — needed and notNeeded are valid, NOT flagged', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'Needed', type: 'awct', firingTriggerId: ['T1'], paused: false, parameter: [], consentSettings: { consentStatus: 'needed' } },
+      { tagId: '2', name: 'NotNeeded', type: 'awct', firingTriggerId: ['T1'], paused: false, parameter: [], consentSettings: { consentStatus: 'notNeeded' } },
+      { tagId: '3', name: 'NotSet', type: 'awct', firingTriggerId: ['T1'], paused: false, parameter: [], consentSettings: { consentStatus: 'notSet' } },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  const consent = r.findings.filter((f) => f.category === 'consent');
+  // Only the explicitly-unset tag is flagged; "needed" and "notNeeded" are deliberate, valid choices.
+  assert.deepEqual(consent.map((f) => f.resource?.name), ['NotSet']);
+});
+
+test('audit: a trigger used only as a BLOCKING trigger is not reported unused', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'Tag', type: 'html', firingTriggerId: ['T1'], blockingTriggerId: ['T2'], paused: false, parameter: [] },
+    ],
+    triggers: [
+      { triggerId: 'T1', name: 'Fires', type: 'pageview' },
+      { triggerId: 'T2', name: 'Blocks', type: 'pageview' },
+    ],
+    variables: [],
+  });
+  const unusedTriggers = r.findings.filter((f) => f.category === 'unused' && f.resource?.kind === 'trigger');
+  assert.equal(unusedTriggers.length, 0, 'blocking trigger T2 counts as used');
+});
+
+test('audit: variable referenced only via consentType / trigger parameter is NOT flagged unused', () => {
+  const r = auditContainer({
+    tags: [
+      {
+        tagId: '1', name: 'GA4', type: 'gaawe', firingTriggerId: ['T1'], paused: false,
+        parameter: [{ key: 'measurementIdOverride', value: 'G-1' }, { key: 'eventName', value: 'x' }],
+        consentSettings: { consentStatus: 'needed', consentType: { type: 'list', list: [{ type: 'template', value: '{{Consent Var}}' }] } },
+      },
+    ],
+    triggers: [
+      { triggerId: 'T1', name: 'CE', type: 'customEvent', parameter: [{ type: 'template', key: 'eventName', value: '{{Trigger Var}}' }] },
+    ],
+    variables: [
+      { variableId: 'V1', name: 'Consent Var', type: 'c' },
+      { variableId: 'V2', name: 'Trigger Var', type: 'c' },
+    ],
+  });
+  const unusedVars = r.findings.filter((f) => f.category === 'unused' && f.resource?.kind === 'variable');
+  assert.equal(unusedVars.length, 0, 'references inside consentType and trigger parameter are detected');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -215,6 +215,26 @@ function summarizeProposal(tool: string, details: Record<string, unknown>): Arra
     if (details.tagId) rows.push({ label: 'Tag ID', value: String(details.tagId) });
     return rows;
   }
+  // Audit auto-fixes: identify the exact action + the affected resource by name.
+  if (tool === 'set_gtm_tag_paused') {
+    const pause = details.paused === true || String(details.paused) === 'true';
+    rows.push({ label: 'Action', value: pause ? 'Pause tag' : 'Unpause tag (enable)' });
+    if (details.name) rows.push({ label: 'Tag', value: String(details.name) });
+    if (details.tagId) rows.push({ label: 'Tag ID', value: String(details.tagId) });
+    return rows;
+  }
+  if (tool === 'delete_gtm_trigger') {
+    rows.push({ label: 'Action', value: 'Delete trigger' });
+    if (details.name) rows.push({ label: 'Trigger', value: String(details.name) });
+    if (details.triggerId) rows.push({ label: 'Trigger ID', value: String(details.triggerId) });
+    return rows;
+  }
+  if (tool === 'delete_gtm_variable') {
+    rows.push({ label: 'Action', value: 'Delete variable' });
+    if (details.name) rows.push({ label: 'Variable', value: String(details.name) });
+    if (details.variableId) rows.push({ label: 'Variable ID', value: String(details.variableId) });
+    return rows;
+  }
   if (tool.includes('tag')) {
     const tag = obj(details.tag);
     if (details.tagId) rows.push({ label: 'Tag ID', value: String(details.tagId) });

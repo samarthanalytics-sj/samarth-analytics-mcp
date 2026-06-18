@@ -70,8 +70,17 @@ export class ChatService {
           '(platform ga4_event / google_ads_conversion / custom_html, with a trigger spec — it enables ' +
           'needed built-in variables, reuses a same-named trigger instead of duplicating, and links the ' +
           'tag, all in ONE approval), and create_gtm_variable_typed for variables (constant / data_layer ' +
-          '/ javascript). Use audit_gtm_container to review a workspace. Only fall back to the raw ' +
-          'create_gtm_tag/trigger/variable tools for advanced cases. The user must approve each change. '
+          '/ javascript). Only fall back to the raw create_gtm_tag/trigger/variable tools for advanced ' +
+          'cases. The user must approve each change. ' +
+          'AUDITING: when the user asks to audit, check, review, or "health-check" the container, its ' +
+          'tags/triggers/variables, or its setup, ALWAYS call audit_gtm_container FIRST — never reply ' +
+          'with a manual checklist or from memory. Then report the counts and severity summary, and list ' +
+          'EVERY finding grouped by severity (high → info) as a table: severity, the issue, the affected ' +
+          'tag/trigger/variable, and the recommended fix. Each finding may include a ready-to-run `fix` ' +
+          '({tool, args} with ids already filled in); for those, OFFER to apply it and — once the user ' +
+          'approves — CALL that exact tool to fix it. Do NOT tell the user to go fix it manually in the ' +
+          'GTM UI when a fix tool exists. You may offer to apply several fixes; each still needs approval ' +
+          '(deletes need two). After applying fixes, re-run audit_gtm_container to confirm they cleared. '
         : product === 'gtm'
           ? 'You can read the GTM setup (accounts, containers, workspaces, tags). '
           : 'You can read GA4 (accounts, properties, data streams) and run GA4 reports. ') +
