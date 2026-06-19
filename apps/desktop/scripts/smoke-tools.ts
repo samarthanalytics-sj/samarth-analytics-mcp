@@ -83,6 +83,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     listGa4DataStreams: () => r('listGa4DataStreams', []),
     runGa4Report: () => r('runGa4Report', { dimensionHeaders: [], metricHeaders: [], rows: [] }),
     getGa4DataQuality: () => r('getGa4DataQuality', { totalSessions: 0, channelGroups: [], sourceMediums: [], windowDays: 28 }),
+    listGa4Audiences: () => r('listGa4Audiences', []),
     getGtmLiveVersionSnapshot: () => r('getGtmLiveVersionSnapshot', structuredClone(SNAPSHOT)),
     listGtmVersions: () => r('listGtmVersions', []),
     getGtmVersionSnapshot: () => r('getGtmVersionSnapshot', structuredClone(SNAPSHOT)),
@@ -168,7 +169,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 28 read tools', readOnlyNames.size === 28, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 29 read tools', readOnlyNames.size === 29, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────

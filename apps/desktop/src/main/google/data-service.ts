@@ -800,6 +800,38 @@ export class GoogleDataService {
     }));
   }
 
+  /** Configured audiences (remarketing / segmentation): display name, description,
+   *  membership window, ads-personalization flag, and filter-clause count.
+   *  Audiences live only on the v1alpha Admin surface. */
+  async listGa4Audiences(
+    property: string
+  ): Promise<
+    Array<{
+      name: string;
+      displayName: string;
+      description: string;
+      membershipDurationDays: number;
+      adsPersonalizationEnabled: boolean;
+      filterClauseCount: number;
+    }>
+  > {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const adminAlpha = analyticsadmin({ version: 'v1alpha', auth });
+    const items = await collectPages(
+      (pageToken) => adminAlpha.properties.audiences.list({ parent: property, pageToken }),
+      (r) => r.data.audiences,
+      (r) => r.data.nextPageToken
+    );
+    return items.map((a) => ({
+      name: a.name ?? '',
+      displayName: a.displayName ?? '(unnamed)',
+      description: a.description ?? '',
+      membershipDurationDays: Number(a.membershipDurationDays ?? 0),
+      adsPersonalizationEnabled: a.adsPersonalizationEnabled ?? false,
+      filterClauseCount: (a.filterClauses ?? []).length,
+    }));
+  }
+
   /** Custom dimensions: parameter name, display name, scope. */
   async listGa4CustomDimensions(
     property: string

@@ -105,7 +105,8 @@ export class ChatService {
             'health score with analytics_scorecard (optionally folding in a GA4 property). '
           : 'You can read GA4 (accounts, properties, data streams), run GA4 reports (run_ga4_report + ' +
             'run_ga4_realtime_report), and inspect a property\'s configuration BY NAME: ' +
-            'list_ga4_key_events (conversions), list_ga4_custom_dimensions, list_ga4_custom_metrics, ' +
+            'list_ga4_key_events (conversions), list_ga4_audiences (remarketing/segmentation), ' +
+            'list_ga4_custom_dimensions, list_ga4_custom_metrics, ' +
             'list_ga4_google_ads_links, get_ga4_property_details, get_ga4_data_retention, and ' +
             'get_ga4_enhanced_measurement (per web data stream). Use these to answer "what are my key ' +
             'events / custom dimensions / …" — never say you cannot list them. ' +

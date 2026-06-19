@@ -101,6 +101,10 @@ function fakeData(
       calls.push(`ga4KeyEvents:${p}`);
       return [{ eventName: 'purchase', countingMethod: 'ONCE_PER_EVENT', custom: false }];
     },
+    listGa4Audiences: async (p: string) => {
+      calls.push(`ga4Audiences:${p}`);
+      return [{ name: `${p}/audiences/1`, displayName: 'Purchasers', description: 'Bought something', membershipDurationDays: 540, adsPersonalizationEnabled: true, filterClauseCount: 1 }];
+    },
     listGa4CustomDimensions: async (p: string) => {
       calls.push(`ga4Dims:${p}`);
       return [{ parameterName: 'plan', displayName: 'Plan', scope: 'EVENT', description: '' }];
@@ -239,6 +243,7 @@ async function main(): Promise<void> {
       'get_ga4_enhanced_measurement',
       'get_ga4_property_details',
       'list_ga4_accounts',
+      'list_ga4_audiences',
       'list_ga4_custom_dimensions',
       'list_ga4_custom_metrics',
       'list_ga4_data_streams',
@@ -274,11 +279,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 28, 'read-only registry has 28 tools');
+    assert.equal(readOnly.list().length, 29, 'read-only registry has 29 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 41, 'read + write registry has 41 tools');
+    assert.equal(withWrites.list().length, 42, 'read + write registry has 42 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
@@ -313,6 +318,12 @@ async function main(): Promise<void> {
     const keyEvents = JSON.parse(await reg.execute('list_ga4_key_events', { property: 'properties/9' }));
     assert.deepEqual(keyEvents.map((k: { eventName: string }) => k.eventName), ['purchase']);
     assert.ok(fd.calls.includes('ga4KeyEvents:properties/9'));
+
+    const audiences = JSON.parse(await reg.execute('list_ga4_audiences', { property: 'properties/9' }));
+    assert.equal(audiences[0].displayName, 'Purchasers');
+    assert.equal(audiences[0].membershipDurationDays, 540);
+    assert.equal(audiences[0].adsPersonalizationEnabled, true);
+    assert.ok(fd.calls.includes('ga4Audiences:properties/9'));
 
     const dims = JSON.parse(await reg.execute('list_ga4_custom_dimensions', { property: 'properties/9' }));
     assert.equal(dims[0].parameterName, 'plan');
@@ -586,6 +597,7 @@ async function main(): Promise<void> {
       'get_ga4_enhanced_measurement',
       'get_ga4_property_details',
       'list_ga4_accounts',
+      'list_ga4_audiences',
       'list_ga4_custom_dimensions',
       'list_ga4_custom_metrics',
       'list_ga4_data_streams',
