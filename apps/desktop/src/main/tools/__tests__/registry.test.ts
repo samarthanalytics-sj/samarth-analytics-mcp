@@ -371,17 +371,30 @@ async function main(): Promise<void> {
   });
 
   await test('product scopes the toolset (gtm vs ga4)', async () => {
-    const gtm = buildToolRegistry(fakeData().data, approveAsIs, 'gtm');
-    const gtmNames = gtm.list().map((t) => t.name);
-    // gtm mode must not leak any ga4-only tool. analytics_scorecard is the one
-    // cross-cutting tool — it lives in gtm mode (its name has no 'ga4').
-    assert.ok(!gtmNames.some((n) => n.includes('ga4')), 'gtm mode has no ga4 tools');
-    assert.ok(gtmNames.includes('create_gtm_tag_with_trigger'));
-    assert.ok(gtmNames.includes('analytics_scorecard'));
+    // Assert EXACT per-product membership against an explicit expected set, not
+    // the registry's own name-substring rule (re-deriving that rule is
+    // tautological — it would pass even if a GA4-data tool were mis-scoped).
+    // GA4 = the 5 tools that read GA4 data; everything else is GTM.
+    const GA4_TOOLS = [
+      'audit_ga4_property',
+      'list_ga4_accounts',
+      'list_ga4_data_streams',
+      'list_ga4_properties',
+      'run_ga4_report',
+    ];
 
-    const ga4 = buildToolRegistry(fakeData().data, undefined, 'ga4');
-    const ga4Names = ga4.list().map((t) => t.name);
-    assert.ok(ga4Names.every((n) => n.includes('ga4')), 'ga4 mode lists only ga4 tools');
+    const gtmNames = buildToolRegistry(fakeData().data, approveAsIs, 'gtm').list().map((t) => t.name);
+    // No GA4 tool may appear in gtm mode (checked by explicit name, not substring).
+    for (const t of GA4_TOOLS) {
+      assert.ok(!gtmNames.includes(t), `${t} must not appear in gtm mode`);
+    }
+    // The cross-cutting scorecard (reads GA4 data but is gtm-anchored) + a GTM-only tool are present.
+    assert.ok(gtmNames.includes('analytics_scorecard'));
+    assert.ok(gtmNames.includes('create_gtm_tag_with_trigger'));
+
+    // ga4 mode is EXACTLY the GA4 tool set (no confirm → no write tools, all of which are GTM anyway).
+    const ga4Names = buildToolRegistry(fakeData().data, undefined, 'ga4').list().map((t) => t.name);
+    assert.deepEqual([...ga4Names].sort(), [...GA4_TOOLS].sort(), 'ga4 mode = exactly the GA4 tools');
   });
 
   await test('confirm can edit args before they are applied', async () => {
