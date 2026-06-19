@@ -16,6 +16,7 @@ import { auditWorkspace, auditChanges } from '../google/audit-runner';
 import { diffSnapshots } from '../google/gtm-monitor';
 import { auditGa4 } from '../google/ga4-audit';
 import { buildScorecard, type ScorecardSection } from '../google/scorecard';
+import { extractConfiguredGa4Ids, crossCheckMeasurementIds } from '../google/gtm-ga4-check';
 
 // A change a write-tool wants to make, surfaced to the user for approval.
 export interface WriteProposal {
@@ -226,6 +227,31 @@ export function buildToolRegistry(
         // base = live, target = workspace → added/removed/modified are framed as
         // "what a publish of this workspace would change in the live container".
         return { publishedVersion: 'live', drift: diffSnapshots(live, workspace) };
+      },
+    },
+    {
+      name: 'check_gtm_measurement_ids',
+      description:
+        'Cross-check the GA4 measurement ids configured in this GTM container against the GA4 properties the signed-in user can access — flags ids set on GTM tags that match NO accessible GA4 web stream (a typo, a wrong id, or a property on another GA4 account/login), and resolves matched ids to their property. Requires accountId, containerId, workspaceId; optional ga4Account (e.g. "accounts/123") to limit the GA4 scan.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          ga4Account: { type: 'string', description: 'Optional GA4 account (accounts/123) to bound the scan.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const snapshot = await data.getGtmContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId));
+        const configured = extractConfiguredGa4Ids(snapshot);
+        const accessible = await data.listGa4MeasurementIds(a.ga4Account != null && s(a.ga4Account) ? s(a.ga4Account) : undefined);
+        return crossCheckMeasurementIds(
+          configured,
+          accessible.map((x) => ({ measurementId: x.measurementId, property: x.property, propertyDisplayName: x.propertyDisplayName }))
+        );
       },
     },
     {

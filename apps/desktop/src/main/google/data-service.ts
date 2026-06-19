@@ -621,6 +621,65 @@ export class GoogleDataService {
     };
   }
 
+  /** Every GA4 WEB-stream measurement id (G-XXXX) the user can access, with its
+   *  property — walks accounts → properties → data streams. Scope to one GA4
+   *  account with `account` (e.g. "accounts/123") to bound the calls. Used to
+   *  cross-check the ids configured in a GTM container. Read-only. */
+  async listGa4MeasurementIds(
+    account?: string
+  ): Promise<Array<{ measurementId: string; property: string; propertyDisplayName: string; streamDisplayName: string }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+
+    // Paginate the account walk (accountSummaries.list caps at pageSize 200) so
+    // a user with many GA4 accounts doesn't get a truncated set — which would
+    // make valid measurement ids on dropped accounts cross-check as "not found".
+    const accounts = account
+      ? [account]
+      : (
+          await collectPages(
+            (pageToken) => admin.accountSummaries.list({ pageSize: 200, pageToken }),
+            (r) => r.data.accountSummaries,
+            (r) => r.data.nextPageToken
+          )
+        )
+          .map((sx) => sx.account ?? '')
+          .filter(Boolean);
+
+    const out: Array<{ measurementId: string; property: string; propertyDisplayName: string; streamDisplayName: string }> = [];
+    for (const acct of accounts) {
+      const properties = await collectPages(
+        (pageToken) => admin.properties.list({ filter: `parent:${acct}`, pageToken }),
+        (r) => r.data.properties,
+        (r) => r.data.nextPageToken
+      );
+      for (const p of properties) {
+        const propertyName = p.name ?? '';
+        if (!propertyName) continue;
+        // Per-property isolation: a property the user can list but can't read
+        // streams on (or a transient error) skips that property instead of
+        // sinking the whole multi-property cross-check.
+        const streams = await collectPages(
+          (pageToken) => admin.properties.dataStreams.list({ parent: propertyName, pageToken }),
+          (r) => r.data.dataStreams,
+          (r) => r.data.nextPageToken
+        ).catch(() => []);
+        for (const stream of streams) {
+          const mid = stream.webStreamData?.measurementId;
+          if (mid) {
+            out.push({
+              measurementId: mid,
+              property: propertyName,
+              propertyDisplayName: p.displayName ?? '(unnamed)',
+              streamDisplayName: stream.displayName ?? '(unnamed)',
+            });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   // ── GA4 read-only config inspection (analytics.readonly scope) ─────────────
 
   /** Property details: name, time zone, currency, industry, service level. */

@@ -90,7 +90,10 @@ export class ChatService {
           'summarize the added/removed/modified tags, triggers, and variables. ' +
           'SCORECARD: when the user wants an overall health score, grade, or a client-ready summary, call ' +
           'analytics_scorecard (pass ga4Property to fold GA4 into the score); report the overall score + ' +
-          'letter grade, the per-section grades, and the ranked top issues. '
+          'letter grade, the per-section grades, and the ranked top issues. ' +
+          'MEASUREMENT-ID CHECK: when the user asks whether the container\'s GA4 ids are correct / point to a ' +
+          'real property, call check_gtm_measurement_ids — it flags GA4 ids on tags that match no GA4 stream ' +
+          'the user can access (typo / wrong id / different account) and resolves matched ids to their property. '
         : product === 'gtm'
           ? 'You can read the GTM setup (accounts, containers, workspaces, tags), and produce an overall ' +
             'health score with analytics_scorecard (optionally folding in a GA4 property). '
