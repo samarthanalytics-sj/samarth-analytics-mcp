@@ -77,8 +77,28 @@ function fakeData(
         property: p, displayName: 'Site', timeZone: 'UTC', currencyCode: 'USD', industryCategory: 'TECHNOLOGY',
         dataRetention: { eventDataRetention: 'TWO_MONTHS', resetOnNewActivity: true },
         keyEvents: [], customDimensions: [], customMetrics: [],
-        dataStreams: [], googleAdsLinks: 0,
+        dataStreams: [], googleAdsLinks: 0, googleSignals: 'GOOGLE_SIGNALS_ENABLED',
       };
+    },
+    getGa4AttributionSettings: async (p: string) => {
+      calls.push(`ga4Attribution:${p}`);
+      return { reportingAttributionModel: 'PAID_AND_ORGANIC_CHANNELS_DATA_DRIVEN', acquisitionConversionEventLookbackWindow: 'ACQUISITION_CONVERSION_EVENT_LOOKBACK_WINDOW_30_DAYS', otherConversionEventLookbackWindow: 'CONVERSION_EVENT_LOOKBACK_WINDOW_90_DAYS', adsWebConversionDataExportScope: 'CROSS_CHANNEL' };
+    },
+    getGa4GoogleSignals: async (p: string) => {
+      calls.push(`ga4Signals:${p}`);
+      return { state: 'GOOGLE_SIGNALS_ENABLED', consent: 'GOOGLE_SIGNALS_CONSENT_CONSENTED' };
+    },
+    listGa4MeasurementProtocolSecrets: async (p: string) => {
+      calls.push(`ga4MpSecrets:${p}`);
+      return [{ stream: `${p}/dataStreams/5`, streamDisplayName: 'Web', secrets: [{ displayName: 'Server MP' }] }];
+    },
+    listGa4BigQueryLinks: async (p: string) => {
+      calls.push(`ga4Bq:${p}`);
+      return [{ name: `${p}/bigQueryLinks/1`, project: 'projects/my-gcp', dailyExportEnabled: true, streamingExportEnabled: false }];
+    },
+    listGa4FirebaseLinks: async (p: string) => {
+      calls.push(`ga4Firebase:${p}`);
+      return [{ name: `${p}/firebaseLinks/1`, project: 'projects/my-firebase' }];
     },
     runGa4Report: async (input: { property: string; metrics: string[] }) => {
       calls.push(`ga4Report:${input.property}:${input.metrics.join(',')}`);
@@ -239,16 +259,22 @@ async function main(): Promise<void> {
       'diff_gtm_versions',
       'diff_gtm_workspace_vs_live',
       'generate_analytics_report',
+      'generate_ga4_report',
+      'get_ga4_attribution_settings',
       'get_ga4_data_retention',
       'get_ga4_enhanced_measurement',
+      'get_ga4_google_signals',
       'get_ga4_property_details',
       'list_ga4_accounts',
       'list_ga4_audiences',
+      'list_ga4_bigquery_links',
       'list_ga4_custom_dimensions',
       'list_ga4_custom_metrics',
       'list_ga4_data_streams',
+      'list_ga4_firebase_links',
       'list_ga4_google_ads_links',
       'list_ga4_key_events',
+      'list_ga4_measurement_protocol_secrets',
       'list_ga4_properties',
       'list_gtm_accounts',
       'list_gtm_containers',
@@ -279,11 +305,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 29, 'read-only registry has 29 tools');
+    assert.equal(readOnly.list().length, 35, 'read-only registry has 35 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 42, 'read + write registry has 42 tools');
+    assert.equal(withWrites.list().length, 48, 'read + write registry has 48 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
@@ -422,6 +448,39 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.includes('ga4DataQuality:properties/9:28'), 'non-numeric → default 28 (no "NaNdaysAgo")');
     assert.ok(fd.calls.includes('ga4DataQuality:properties/9:365'), 'huge → clamped to 365');
     assert.ok(fd.calls.includes('ga4DataQuality:properties/9:1'), 'negative → clamped to 1');
+  });
+
+  await test('GA4 config-completeness read tools (attribution, signals, MP secrets, BQ/Firebase links)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+
+    const attr = JSON.parse(await reg.execute('get_ga4_attribution_settings', { property: 'properties/9' }));
+    assert.equal(attr.reportingAttributionModel, 'PAID_AND_ORGANIC_CHANNELS_DATA_DRIVEN');
+    assert.ok(fd.calls.includes('ga4Attribution:properties/9'));
+
+    const signals = JSON.parse(await reg.execute('get_ga4_google_signals', { property: 'properties/9' }));
+    assert.equal(signals.state, 'GOOGLE_SIGNALS_ENABLED');
+
+    const mp = JSON.parse(await reg.execute('list_ga4_measurement_protocol_secrets', { property: 'properties/9' }));
+    assert.equal(mp[0].secrets[0].displayName, 'Server MP');
+    // secret VALUE must never be surfaced.
+    assert.ok(!JSON.stringify(mp).toLowerCase().includes('secretvalue'));
+
+    const bq = JSON.parse(await reg.execute('list_ga4_bigquery_links', { property: 'properties/9' }));
+    assert.equal(bq[0].dailyExportEnabled, true);
+
+    const fb = JSON.parse(await reg.execute('list_ga4_firebase_links', { property: 'properties/9' }));
+    assert.equal(fb[0].project, 'projects/my-firebase');
+  });
+
+  await test('generate_ga4_report combines the property + data-quality audits into one Markdown report', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('generate_ga4_report', { property: 'properties/9', days: 30 }));
+    assert.ok(typeof out.report === 'string');
+    assert.ok(out.report.includes('# GA4 Health Report'));
+    assert.ok(out.report.includes('GA4 property') && out.report.includes('GA4 data quality'));
+    assert.ok(fd.calls.includes('ga4Snapshot:properties/9') && fd.calls.includes('ga4DataQuality:properties/9:30'));
   });
 
   await test('generate_analytics_report returns a Markdown report (GTM + optional GA4)', async () => {
@@ -593,16 +652,22 @@ async function main(): Promise<void> {
     const GA4_TOOLS = [
       'audit_ga4_data_quality',
       'audit_ga4_property',
+      'generate_ga4_report',
+      'get_ga4_attribution_settings',
       'get_ga4_data_retention',
       'get_ga4_enhanced_measurement',
+      'get_ga4_google_signals',
       'get_ga4_property_details',
       'list_ga4_accounts',
       'list_ga4_audiences',
+      'list_ga4_bigquery_links',
       'list_ga4_custom_dimensions',
       'list_ga4_custom_metrics',
       'list_ga4_data_streams',
+      'list_ga4_firebase_links',
       'list_ga4_google_ads_links',
       'list_ga4_key_events',
+      'list_ga4_measurement_protocol_secrets',
       'list_ga4_properties',
       'run_ga4_realtime_report',
       'run_ga4_report',

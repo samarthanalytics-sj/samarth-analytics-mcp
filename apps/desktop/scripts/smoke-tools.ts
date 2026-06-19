@@ -84,13 +84,18 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     runGa4Report: () => r('runGa4Report', { dimensionHeaders: [], metricHeaders: [], rows: [] }),
     getGa4DataQuality: () => r('getGa4DataQuality', { totalSessions: 0, channelGroups: [], sourceMediums: [], windowDays: 28 }),
     listGa4Audiences: () => r('listGa4Audiences', []),
+    getGa4AttributionSettings: () => r('getGa4AttributionSettings', { reportingAttributionModel: '', acquisitionConversionEventLookbackWindow: '', otherConversionEventLookbackWindow: '', adsWebConversionDataExportScope: '' }),
+    getGa4GoogleSignals: () => r('getGa4GoogleSignals', { state: '', consent: '' }),
+    listGa4MeasurementProtocolSecrets: () => r('listGa4MeasurementProtocolSecrets', []),
+    listGa4BigQueryLinks: () => r('listGa4BigQueryLinks', []),
+    listGa4FirebaseLinks: () => r('listGa4FirebaseLinks', []),
     getGtmLiveVersionSnapshot: () => r('getGtmLiveVersionSnapshot', structuredClone(SNAPSHOT)),
     listGtmVersions: () => r('listGtmVersions', []),
     getGtmVersionSnapshot: () => r('getGtmVersionSnapshot', structuredClone(SNAPSHOT)),
     getGa4PropertySnapshot: () => r('getGa4PropertySnapshot', {
       property: 'properties/1', displayName: 'Site', timeZone: 'UTC', currencyCode: 'USD', industryCategory: '',
       dataRetention: { eventDataRetention: 'TWO_MONTHS', resetOnNewActivity: true },
-      keyEvents: [], customDimensions: [], customMetrics: [], dataStreams: [], googleAdsLinks: 0,
+      keyEvents: [], customDimensions: [], customMetrics: [], dataStreams: [], googleAdsLinks: 0, googleSignals: 'GOOGLE_SIGNALS_ENABLED',
     }),
     getGa4PropertyDetails: () => r('getGa4PropertyDetails', { property: 'properties/1', displayName: 'Site', timeZone: 'UTC', currencyCode: 'USD', industryCategory: '', serviceLevel: '', parent: 'accounts/1', createTime: '' }),
     listGa4KeyEvents: () => r('listGa4KeyEvents', []),
@@ -169,7 +174,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 29 read tools', readOnlyNames.size === 29, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 35 read tools', readOnlyNames.size === 35, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────

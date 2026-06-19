@@ -60,6 +60,13 @@ interface RawVariable {
 const asList = (v: unknown): Array<Record<string, unknown>> =>
   Array.isArray(v) ? (v as Array<Record<string, unknown>>) : [];
 
+/** Project a Measurement Protocol secret to the SAFE shape — displayName ONLY.
+ *  Exported + pure so the "never return the secret value" guarantee is locked by
+ *  a unit test at the layer where it actually executes, not just via a fake. */
+export function toSafeMpSecret(s: { displayName?: string | null }): { displayName: string } {
+  return { displayName: s.displayName ?? '(unnamed)' };
+}
+
 // Single source of truth for the audit/monitor snapshot shape, so the draft
 // workspace and the published live version map IDENTICALLY (the drift diff
 // depends on byte-for-byte comparable fingerprints).
@@ -304,6 +311,11 @@ export class GoogleDataService {
     // Enhanced measurement settings live only on the v1alpha Admin surface, and
     // are a per-web-stream child resource (app streams 404). Same read scope.
     const adminAlpha = analyticsadmin({ version: 'v1alpha', auth });
+    // Google Signals state (best-effort; v1alpha). null = couldn't read.
+    const googleSignals = await adminAlpha.properties
+      .getGoogleSignalsSettings({ name: `${property}/googleSignalsSettings` })
+      .then((r) => r.data.state ?? null)
+      .catch(() => null);
     const dataStreams = await Promise.all(
       streams.map(async (s) => {
         let enhancedMeasurementEnabled: boolean | null = null;
@@ -353,6 +365,7 @@ export class GoogleDataService {
       })),
       dataStreams,
       googleAdsLinks: adsLinks === null ? null : adsLinks.length,
+      googleSignals,
     };
   }
 
@@ -830,6 +843,95 @@ export class GoogleDataService {
       adsPersonalizationEnabled: a.adsPersonalizationEnabled ?? false,
       filterClauseCount: (a.filterClauses ?? []).length,
     }));
+  }
+
+  /** Reporting attribution model + conversion/Ads lookback windows. v1alpha. */
+  async getGa4AttributionSettings(property: string): Promise<{
+    reportingAttributionModel: string;
+    acquisitionConversionEventLookbackWindow: string;
+    otherConversionEventLookbackWindow: string;
+    adsWebConversionDataExportScope: string;
+  }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const adminAlpha = analyticsadmin({ version: 'v1alpha', auth });
+    const res = await adminAlpha.properties.getAttributionSettings({ name: `${property}/attributionSettings` });
+    return {
+      reportingAttributionModel: res.data.reportingAttributionModel ?? '',
+      acquisitionConversionEventLookbackWindow: res.data.acquisitionConversionEventLookbackWindow ?? '',
+      otherConversionEventLookbackWindow: res.data.otherConversionEventLookbackWindow ?? '',
+      adsWebConversionDataExportScope: res.data.adsWebConversionDataExportScope ?? '',
+    };
+  }
+
+  /** Google Signals state + consent (ads personalization / cross-device). v1alpha. */
+  async getGa4GoogleSignals(property: string): Promise<{ state: string; consent: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const adminAlpha = analyticsadmin({ version: 'v1alpha', auth });
+    const res = await adminAlpha.properties.getGoogleSignalsSettings({ name: `${property}/googleSignalsSettings` });
+    return { state: res.data.state ?? '', consent: res.data.consent ?? '' };
+  }
+
+  /** Measurement Protocol secrets per data stream — display names ONLY. The
+   *  secret VALUE is never read or returned. Best-effort per stream. */
+  async listGa4MeasurementProtocolSecrets(
+    property: string
+  ): Promise<Array<{ stream: string; streamDisplayName: string; secrets: Array<{ displayName: string }> }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const streams = await collectPages(
+      (pageToken) => admin.properties.dataStreams.list({ parent: property, pageToken }),
+      (r) => r.data.dataStreams,
+      (r) => r.data.nextPageToken
+    );
+    const out: Array<{ stream: string; streamDisplayName: string; secrets: Array<{ displayName: string }> }> = [];
+    for (const stream of streams) {
+      if (!stream.name) continue;
+      // Per-stream isolation so one unreadable stream doesn't sink the list.
+      const secrets = await collectPages(
+        (pageToken) => admin.properties.dataStreams.measurementProtocolSecrets.list({ parent: stream.name as string, pageToken }),
+        (r) => r.data.measurementProtocolSecrets,
+        (r) => r.data.nextPageToken
+      ).catch(() => []);
+      if (secrets.length === 0) continue;
+      out.push({
+        stream: stream.name,
+        streamDisplayName: stream.displayName ?? '(unnamed)',
+        // displayName only — secretValue is deliberately omitted (toSafeMpSecret).
+        secrets: secrets.map(toSafeMpSecret),
+      });
+    }
+    return out;
+  }
+
+  /** BigQuery export links: project + which exports are enabled. v1alpha. */
+  async listGa4BigQueryLinks(
+    property: string
+  ): Promise<Array<{ name: string; project: string; dailyExportEnabled: boolean; streamingExportEnabled: boolean }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const adminAlpha = analyticsadmin({ version: 'v1alpha', auth });
+    const items = await collectPages(
+      (pageToken) => adminAlpha.properties.bigQueryLinks.list({ parent: property, pageToken }),
+      (r) => r.data.bigqueryLinks,
+      (r) => r.data.nextPageToken
+    );
+    return items.map((l) => ({
+      name: l.name ?? '',
+      project: l.project ?? '',
+      dailyExportEnabled: l.dailyExportEnabled ?? false,
+      streamingExportEnabled: l.streamingExportEnabled ?? false,
+    }));
+  }
+
+  /** Firebase project links. v1beta. */
+  async listGa4FirebaseLinks(property: string): Promise<Array<{ name: string; project: string }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const items = await collectPages(
+      (pageToken) => admin.properties.firebaseLinks.list({ parent: property, pageToken }),
+      (r) => r.data.firebaseLinks,
+      (r) => r.data.nextPageToken
+    );
+    return items.map((l) => ({ name: l.name ?? '', project: l.project ?? '' }));
   }
 
   /** Custom dimensions: parameter name, display name, scope. */

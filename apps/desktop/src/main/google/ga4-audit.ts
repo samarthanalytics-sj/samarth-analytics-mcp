@@ -29,6 +29,8 @@ export interface Ga4PropertySnapshot {
   customMetrics: Array<{ parameterName: string; displayName: string }>;
   dataStreams: Ga4DataStreamConfig[];
   googleAdsLinks: number | null;
+  /** Google Signals state (e.g. GOOGLE_SIGNALS_ENABLED / _DISABLED); null = unread. */
+  googleSignals: string | null;
 }
 
 export interface Ga4Finding {
@@ -123,6 +125,18 @@ export function auditGa4(s: Ga4PropertySnapshot): Ga4AuditReport {
       category: 'integrations',
       message: 'No Google Ads links — GA4 conversions are not imported to Ads and remarketing audiences cannot be built.',
       recommendation: 'Link Google Ads in Admin → Product links → Google Ads links if you run paid campaigns.',
+    });
+  }
+
+  // Google Signals disabled while Ads is linked: a missed cross-device /
+  // remarketing integration. Info + neutral — enabling Signals is a
+  // consent-gated, privacy-sensitive choice, not a clear-cut fix.
+  if (s.googleSignals === 'GOOGLE_SIGNALS_DISABLED' && (s.googleAdsLinks ?? 0) > 0) {
+    findings.push({
+      severity: 'info',
+      category: 'integrations',
+      message: 'Google Signals is disabled while Google Ads is linked — cross-device conversions and remarketing/demographics from signed-in Google users are unavailable.',
+      recommendation: 'Consider enabling Google Signals in Admin → Data settings → Data collection, with appropriate user consent. Not required.',
     });
   }
 

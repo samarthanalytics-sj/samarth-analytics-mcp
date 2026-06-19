@@ -107,11 +107,14 @@ export class ChatService {
             'run_ga4_realtime_report), and inspect a property\'s configuration BY NAME: ' +
             'list_ga4_key_events (conversions), list_ga4_audiences (remarketing/segmentation), ' +
             'list_ga4_custom_dimensions, list_ga4_custom_metrics, ' +
-            'list_ga4_google_ads_links, get_ga4_property_details, get_ga4_data_retention, and ' +
+            'list_ga4_google_ads_links, get_ga4_attribution_settings, get_ga4_google_signals, ' +
+            'list_ga4_measurement_protocol_secrets (names only), list_ga4_bigquery_links, ' +
+            'list_ga4_firebase_links, get_ga4_property_details, get_ga4_data_retention, and ' +
             'get_ga4_enhanced_measurement (per web data stream). Use these to answer "what are my key ' +
             'events / custom dimensions / …" — never say you cannot list them. ' +
             'For an overall health score or grade of a GA4 property, call score_ga4_property (0–100 + ' +
-            'letter grade). ' +
+            'letter grade). For a shareable / client-ready GA4 report (config + data-quality combined), ' +
+            'call generate_ga4_report and present the returned Markdown verbatim. ' +
             'When the user asks to audit, check, review, or "health-check" a GA4 property or its setup, ' +
             'ALWAYS call audit_ga4_property FIRST (never a manual checklist), then present the counts and ' +
             'severity summary and list every finding by severity (high → info) as a table: severity, the ' +
