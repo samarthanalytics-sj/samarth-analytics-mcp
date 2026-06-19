@@ -116,6 +116,10 @@ function fakeData(
       calls.push(`ga4Realtime:${input.property}:${input.metrics.join(',')}`);
       return { dimensionHeaders: [], metricHeaders: ['activeUsers'], rows: [] };
     },
+    listGa4MeasurementIds: async (account?: string) => {
+      calls.push(`ga4MeasIds:${account ?? 'all'}`);
+      return [{ measurementId: 'G-LIVE111', property: 'properties/1', propertyDisplayName: 'Main', streamDisplayName: 'Web' }];
+    },
     createGtmWorkspace: async (a: string, c: string, name: string) => {
       calls.push(`createWorkspace:${a}:${c}:${name}`);
       return { workspaceId: 'w9', name, path: 'p' };
@@ -201,6 +205,7 @@ async function main(): Promise<void> {
       'audit_ga4_property',
       'audit_gtm_container',
       'audit_gtm_container_changes',
+      'check_gtm_measurement_ids',
       'diff_gtm_workspace_vs_live',
       'get_ga4_data_retention',
       'get_ga4_enhanced_measurement',
@@ -240,11 +245,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 23, 'read-only registry has 23 tools');
+    assert.equal(readOnly.list().length, 24, 'read-only registry has 24 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 36, 'read + write registry has 36 tools');
+    assert.equal(withWrites.list().length, 37, 'read + write registry has 37 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
@@ -303,6 +308,25 @@ async function main(): Promise<void> {
     const rt = JSON.parse(await reg.execute('run_ga4_realtime_report', { property: 'properties/9', metrics: ['activeUsers'] }));
     assert.deepEqual(rt.metricHeaders, ['activeUsers']);
     assert.ok(fd.calls.includes('ga4Realtime:properties/9:activeUsers'));
+  });
+
+  await test('check_gtm_measurement_ids flags container GA4 ids missing from accessible properties', async () => {
+    const fd = fakeData({
+      snapshot: {
+        tags: [
+          { tagId: '1', name: 'GA4 Config', type: 'gaawc', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementId', value: 'G-LIVE111' }] },
+          { tagId: '2', name: 'Typo', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementIdOverride', value: 'G-WRONG99' }] },
+        ],
+        triggers: [],
+        variables: [],
+      },
+    });
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('check_gtm_measurement_ids', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.deepEqual(out.matched.map((m: { id: string }) => m.id), ['G-LIVE111']);
+    assert.equal(out.matched[0].propertyDisplayName, 'Main');
+    assert.deepEqual(out.notFound.map((n: { id: string }) => n.id), ['G-WRONG99']);
+    assert.ok(fd.calls.includes('ga4MeasIds:all'), 'scanned all GA4 accounts when none given');
   });
 
   await test('score_ga4_property grades a GA4 property (GA4-mode scorecard)', async () => {
