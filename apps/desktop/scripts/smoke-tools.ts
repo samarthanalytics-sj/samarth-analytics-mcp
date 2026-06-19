@@ -83,6 +83,11 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     listGa4DataStreams: () => r('listGa4DataStreams', []),
     runGa4Report: () => r('runGa4Report', { dimensionHeaders: [], metricHeaders: [], rows: [] }),
     getGtmLiveVersionSnapshot: () => r('getGtmLiveVersionSnapshot', structuredClone(SNAPSHOT)),
+    getGa4PropertySnapshot: () => r('getGa4PropertySnapshot', {
+      property: 'properties/1', displayName: 'Site', timeZone: 'UTC', currencyCode: 'USD', industryCategory: '',
+      dataRetention: { eventDataRetention: 'TWO_MONTHS', resetOnNewActivity: true },
+      keyEvents: [], customDimensions: [], customMetrics: [], dataStreams: [], googleAdsLinks: 0,
+    }),
     // writes (each records a mutation)
     createGtmWorkspace: () => r('createGtmWorkspace', { workspaceId: 'w9', name: 'WS', path: '' }),
     createGtmTag: () => r('createGtmTag', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
@@ -151,7 +156,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 12 read tools', readOnlyNames.size === 12, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 13 read tools', readOnlyNames.size === 13, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────
