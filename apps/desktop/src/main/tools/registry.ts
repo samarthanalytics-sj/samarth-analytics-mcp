@@ -17,6 +17,7 @@ import { diffSnapshots } from '../google/gtm-monitor';
 import { auditGa4 } from '../google/ga4-audit';
 import { buildScorecard, type ScorecardSection } from '../google/scorecard';
 import { buildReport } from '../google/report';
+import { consentReportToSection } from '../google/consent-section';
 import { extractConfiguredGa4Ids, crossCheckMeasurementIds } from '../google/gtm-ga4-check';
 
 // A change a write-tool wants to make, surfaced to the user for approval.
@@ -499,6 +500,7 @@ export function buildToolRegistry(
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
           ga4Property: { type: 'string', description: 'Optional GA4 property (e.g. "properties/123") to include in the score.' },
+          consentReport: { type: 'object', description: 'Optional web-audit consent_compliance_audit report (parsed JSON) to fold a Consent Mode v2 section into the score.' },
         },
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
@@ -533,6 +535,10 @@ export function buildToolRegistry(
             })),
           });
         }
+        if (a.consentReport != null) {
+          const consent = consentReportToSection(a.consentReport);
+          if (consent) sections.push(consent);
+        }
         return buildScorecard(sections);
       },
     },
@@ -547,6 +553,7 @@ export function buildToolRegistry(
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
           ga4Property: { type: 'string', description: 'Optional GA4 property to include in the report.' },
+          consentReport: { type: 'object', description: 'Optional web-audit consent_compliance_audit report (parsed JSON) to add a Consent Mode v2 section to the report.' },
         },
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
@@ -580,6 +587,10 @@ export function buildToolRegistry(
               recommendation: f.recommendation,
             })),
           });
+        }
+        if (a.consentReport != null) {
+          const consent = consentReportToSection(a.consentReport);
+          if (consent) sections.push(consent);
         }
         return { report: buildReport(sections, { generatedAt: new Date().toISOString() }) };
       },

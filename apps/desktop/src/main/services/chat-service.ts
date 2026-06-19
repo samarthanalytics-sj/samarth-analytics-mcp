@@ -97,7 +97,9 @@ export class ChatService {
           'real property, call check_gtm_measurement_ids — it flags GA4 ids on tags that match no GA4 stream ' +
           'the user can access (typo / wrong id / different account) and resolves matched ids to their property. ' +
           'REPORT: for a shareable / client-ready report, call generate_analytics_report (pass ga4Property to ' +
-          'include GA4) and present the returned Markdown verbatim. '
+          'include GA4) and present the returned Markdown verbatim. Both analytics_scorecard and ' +
+          'generate_analytics_report also accept an optional consentReport (a web-audit ' +
+          'consent_compliance_audit JSON the user provides) to add a Consent Mode v2 section. '
         : product === 'gtm'
           ? 'You can read the GTM setup (accounts, containers, workspaces, tags), and produce an overall ' +
             'health score with analytics_scorecard (optionally folding in a GA4 property). '

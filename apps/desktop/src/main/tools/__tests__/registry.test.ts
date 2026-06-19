@@ -363,6 +363,16 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.includes('versionSnap:1:2:6') && fd.calls.includes('versionSnap:1:2:7'));
   });
 
+  await test('analytics_scorecard folds a web-audit consent report in as a third section', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+    const consentReport = { findings: [{ domain: 'consent', severity: 'critical', finding: 'Tag fires before consent', suggestedFix: 'Gate it' }] };
+    const out = JSON.parse(await reg.execute('analytics_scorecard', { accountId: '1', containerId: '2', workspaceId: '3', ga4Property: 'properties/9', consentReport }));
+    assert.deepEqual(out.sections.map((s: { key: string }) => s.key), ['gtm', 'ga4', 'consent']);
+    const consent = out.sections.find((s: { key: string }) => s.key === 'consent');
+    assert.equal(consent.label, 'Consent Mode v2');
+  });
+
   await test('generate_analytics_report returns a Markdown report (GTM + optional GA4)', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data);
