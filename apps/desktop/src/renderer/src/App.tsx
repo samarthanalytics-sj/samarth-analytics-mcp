@@ -270,6 +270,154 @@ function summarizeProposal(tool: string, details: Record<string, unknown>): Arra
   return rows;
 }
 
+/* ───────── Minimal Markdown renderer (dependency-free, XSS-safe) ─────────
+   Renders what the assistant emits — GFM tables, headings, bold/italic, inline
+   code, fenced code blocks, and bullet/ordered lists — as real elements so
+   tables show as proper bordered tables instead of raw `|` text. All text is
+   placed via React children (escaped), so there is no raw-HTML injection. */
+const mdStyles: Record<string, React.CSSProperties> = {
+  tableWrap: { overflowX: 'auto', margin: '8px 0' },
+  table: { borderCollapse: 'collapse', width: '100%', fontSize: 13 },
+  th: { border: '1px solid rgba(255,255,255,0.18)', padding: '6px 10px', textAlign: 'left', verticalAlign: 'top', background: 'rgba(255,255,255,0.06)', fontWeight: 600 },
+  td: { border: '1px solid rgba(255,255,255,0.18)', padding: '6px 10px', textAlign: 'left', verticalAlign: 'top' },
+  code: { background: 'rgba(255,255,255,0.10)', borderRadius: 4, padding: '1px 5px', fontFamily: 'ui-monospace, monospace', fontSize: 12 },
+  pre: { background: 'rgba(0,0,0,0.30)', borderRadius: 6, padding: 10, overflowX: 'auto', margin: '8px 0', fontFamily: 'ui-monospace, monospace', fontSize: 12 },
+  h: { margin: '10px 0 4px', fontWeight: 600, lineHeight: 1.3 },
+  p: { margin: '4px 0', whiteSpace: 'pre-wrap' },
+  list: { margin: '4px 0', paddingLeft: 20 },
+  li: { margin: '2px 0' },
+};
+
+function renderInline(text: string, kp: string): Array<string | JSX.Element> {
+  const out: Array<string | JSX.Element> = [];
+  // **bold** | `code` | *italic* | [label](url) — bold is tried before italic.
+  const re = /\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*|\[([^\]]+)\]\(([^)]+)\)/g;
+  let last = 0;
+  let k = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1] != null) out.push(<strong key={`${kp}b${k}`}>{m[1]}</strong>);
+    else if (m[2] != null) out.push(<code key={`${kp}c${k}`} style={mdStyles.code}>{m[2]}</code>);
+    else if (m[3] != null) out.push(<em key={`${kp}i${k}`}>{m[3]}</em>);
+    else if (m[4] != null) out.push(<span key={`${kp}l${k}`}>{m[4]}</span>); // link label only — no in-app navigation
+    last = re.lastIndex;
+    k++;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+function splitTableRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map((c) => c.trim());
+}
+function isTableSeparator(line: string): boolean {
+  const s = line.trim();
+  return s.length > 0 && /^[|\s:-]+$/.test(s) && s.includes('-');
+}
+function isHeading(line: string): boolean {
+  return /^#{1,6}\s+/.test(line);
+}
+function isListItem(line: string): boolean {
+  return /^\s*([-*]|\d+\.)\s+/.test(line);
+}
+
+function Markdown({ text }: { text: string }): JSX.Element {
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const blocks: JSX.Element[] = [];
+  let i = 0;
+  let key = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.trim() === '') { i++; continue; }
+
+    // Fenced code block.
+    if (line.trim().startsWith('```')) {
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) { buf.push(lines[i]); i++; }
+      i++; // closing fence (if present)
+      blocks.push(<pre key={key++} style={mdStyles.pre}><code>{buf.join('\n')}</code></pre>);
+      continue;
+    }
+
+    // GFM table: a header row followed by a |---|---| separator.
+    if (line.includes('|') && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      const header = splitTableRow(line);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].trim() !== '' && lines[i].includes('|')) {
+        rows.push(splitTableRow(lines[i]));
+        i++;
+      }
+      const tk = key++;
+      blocks.push(
+        <div key={tk} style={mdStyles.tableWrap}>
+          <table style={mdStyles.table}>
+            <thead>
+              <tr>{header.map((c, j) => <th key={j} style={mdStyles.th}>{renderInline(c, `t${tk}h${j}`)}</th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.map((r, ri) => (
+                <tr key={ri}>{header.map((_, j) => <td key={j} style={mdStyles.td}>{renderInline(r[j] ?? '', `t${tk}r${ri}c${j}`)}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+
+    // Heading.
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      const size = [20, 18, 16, 15, 14, 13][h[1].length - 1];
+      blocks.push(<div key={key++} style={{ ...mdStyles.h, fontSize: size }}>{renderInline(h[2], `h${key}`)}</div>);
+      i++;
+      continue;
+    }
+
+    // List (consecutive items).
+    if (isListItem(line)) {
+      const ordered = /^\s*\d+\.\s+/.test(line);
+      const items: string[] = [];
+      while (i < lines.length && isListItem(lines[i])) {
+        items.push(lines[i].replace(/^\s*([-*]|\d+\.)\s+/, ''));
+        i++;
+      }
+      const ListTag: 'ol' | 'ul' = ordered ? 'ol' : 'ul';
+      const lk = key++;
+      blocks.push(
+        <ListTag key={lk} style={mdStyles.list}>
+          {items.map((it, li) => <li key={li} style={mdStyles.li}>{renderInline(it, `l${lk}i${li}`)}</li>)}
+        </ListTag>
+      );
+      continue;
+    }
+
+    // Paragraph: gather consecutive plain lines.
+    const para: string[] = [];
+    while (
+      i < lines.length &&
+      lines[i].trim() !== '' &&
+      !lines[i].trim().startsWith('```') &&
+      !isHeading(lines[i]) &&
+      !isListItem(lines[i]) &&
+      !(lines[i].includes('|') && i + 1 < lines.length && isTableSeparator(lines[i + 1]))
+    ) {
+      para.push(lines[i]);
+      i++;
+    }
+    blocks.push(<div key={key++} style={mdStyles.p}>{renderInline(para.join('\n'), `p${key}`)}</div>);
+  }
+
+  return <div>{blocks}</div>;
+}
+
 interface PendingConfirm {
   confirmId: string;
   tool: string;
@@ -615,7 +763,11 @@ function ChatView({
         )}
         {messages.map((m, i) => (
           <div key={i} style={m.role === 'user' ? styles.userMsg : styles.asstMsg}>
-            <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
+            {m.role === 'assistant' ? (
+              m.text ? <Markdown text={m.text} /> : <span style={{ opacity: 0.6 }}>…</span>
+            ) : (
+              <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
+            )}
           </div>
         ))}
         {busy && !pendingConfirm && <div style={styles.asstMsg}>Thinking…</div>}
