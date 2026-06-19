@@ -84,6 +84,15 @@ function fakeData(
       calls.push(`ga4Report:${input.property}:${input.metrics.join(',')}`);
       return { dimensionHeaders: [], metricHeaders: [], rows: [] };
     },
+    getGa4DataQuality: async (p: string, days: number) => {
+      calls.push(`ga4DataQuality:${p}:${days}`);
+      return {
+        totalSessions: 1000,
+        channelGroups: [{ name: 'Direct', sessions: 700 }, { name: 'Unassigned', sessions: 300 }],
+        sourceMediums: [{ name: '(direct) / (none)', sessions: 700 }, { name: '(not set)', sessions: 300 }],
+        windowDays: days,
+      };
+    },
     getGa4PropertyDetails: async (p: string) => {
       calls.push(`ga4Details:${p}`);
       return { property: p, displayName: 'Site', timeZone: 'UTC', currencyCode: 'USD', industryCategory: 'TECHNOLOGY', serviceLevel: 'GOOGLE_ANALYTICS_STANDARD', parent: 'accounts/1', createTime: '' };
@@ -218,6 +227,7 @@ async function main(): Promise<void> {
     const names = reg.list().map((t) => t.name).sort();
     assert.deepEqual(names, [
       'analytics_scorecard',
+      'audit_ga4_data_quality',
       'audit_ga4_property',
       'audit_gtm_container',
       'audit_gtm_container_changes',
@@ -264,11 +274,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 27, 'read-only registry has 27 tools');
+    assert.equal(readOnly.list().length, 28, 'read-only registry has 28 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 40, 'read + write registry has 40 tools');
+    assert.equal(withWrites.list().length, 41, 'read + write registry has 41 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
@@ -371,6 +381,36 @@ async function main(): Promise<void> {
     assert.deepEqual(out.sections.map((s: { key: string }) => s.key), ['gtm', 'ga4', 'consent']);
     const consent = out.sections.find((s: { key: string }) => s.key === 'consent');
     assert.equal(consent.label, 'Consent Mode v2');
+  });
+
+  await test('audit_ga4_data_quality flags Unassigned + (not set) from the reporting data', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('audit_ga4_data_quality', { property: 'properties/9', days: 14 }));
+    assert.equal(out.totalSessions, 1000);
+    assert.equal(out.windowDays, 14);
+    const sev = out.findings.map((f: { severity: string }) => f.severity);
+    assert.ok(sev.includes('high'), '30% Unassigned → high');
+    assert.ok(out.findings.every((f: { category: string }) => f.category === 'data_quality'));
+    assert.ok(fd.calls.includes('ga4DataQuality:properties/9:14'));
+  });
+
+  await test('audit_ga4_data_quality defaults to a 28-day window when days is omitted', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+    await reg.execute('audit_ga4_data_quality', { property: 'properties/9' });
+    assert.ok(fd.calls.includes('ga4DataQuality:properties/9:28'), 'defaults to 28 days');
+  });
+
+  await test('audit_ga4_data_quality coerces days safely (non-numeric → 28, huge → 365, neg → 1)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+    await reg.execute('audit_ga4_data_quality', { property: 'properties/9', days: 'abc' });
+    await reg.execute('audit_ga4_data_quality', { property: 'properties/9', days: 100000 });
+    await reg.execute('audit_ga4_data_quality', { property: 'properties/9', days: -5 });
+    assert.ok(fd.calls.includes('ga4DataQuality:properties/9:28'), 'non-numeric → default 28 (no "NaNdaysAgo")');
+    assert.ok(fd.calls.includes('ga4DataQuality:properties/9:365'), 'huge → clamped to 365');
+    assert.ok(fd.calls.includes('ga4DataQuality:properties/9:1'), 'negative → clamped to 1');
   });
 
   await test('generate_analytics_report returns a Markdown report (GTM + optional GA4)', async () => {
@@ -540,6 +580,7 @@ async function main(): Promise<void> {
     // tautological — it would pass even if a GA4-data tool were mis-scoped).
     // GA4 = the tools that read GA4 data; everything else is GTM.
     const GA4_TOOLS = [
+      'audit_ga4_data_quality',
       'audit_ga4_property',
       'get_ga4_data_retention',
       'get_ga4_enhanced_measurement',

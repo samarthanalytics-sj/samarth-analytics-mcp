@@ -6,6 +6,7 @@ import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot } from './gtm-builders';
 import type { Ga4PropertySnapshot } from './ga4-audit';
+import type { DataQualityCounts } from './ga4-data-quality';
 import type { Ga4AccountView, GtmAccountView } from '../../shared/ipc';
 
 // Follows nextPageToken so large containers/accounts return EVERY item, not just
@@ -660,6 +661,38 @@ export class GoogleDataService {
         metrics: (r.metricValues ?? []).map((v) => v.value ?? ''),
       })),
     };
+  }
+
+  /** Session counts by channel group and by source/medium over the last `days`,
+   *  for the pure data-quality engine. Read-only (analytics.readonly via the
+   *  Data API). */
+  async getGa4DataQuality(property: string, days = 28): Promise<DataQualityCounts> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
+    const data = analyticsdata({ version: 'v1beta', auth });
+    const startDate = `${days}daysAgo`;
+    const run = async (dimension: string, ordered: boolean) => {
+      const res = await data.properties.runReport({
+        property,
+        requestBody: {
+          dateRanges: [{ startDate, endDate: 'today' }],
+          dimensions: [{ name: dimension }],
+          metrics: [{ name: 'sessions' }],
+          // Source/medium can have a long tail — order by sessions so the top
+          // (incl. any large "(not set)" bucket) is captured within the limit.
+          ...(ordered ? { orderBys: [{ metric: { metricName: 'sessions' }, desc: true }] } : {}),
+          limit: '250',
+        },
+      });
+      return (res.data.rows ?? []).map((r) => ({
+        name: r.dimensionValues?.[0]?.value ?? '',
+        sessions: Number(r.metricValues?.[0]?.value ?? 0),
+      }));
+    };
+    // Channel groups partition all sessions, so their sum is the true total.
+    const channelGroups = await run('sessionDefaultChannelGroup', false);
+    const sourceMediums = await run('sessionSourceMedium', true);
+    const totalSessions = channelGroups.reduce((s, c) => s + c.sessions, 0);
+    return { totalSessions, channelGroups, sourceMediums, windowDays: days };
   }
 
   /** Every GA4 WEB-stream measurement id (G-XXXX) the user can access, with its
