@@ -28,6 +28,7 @@ const base = (over: Partial<Ga4PropertySnapshot> = {}): Ga4PropertySnapshot => (
   customMetrics: [],
   dataStreams: [{ name: 'properties/1/dataStreams/9', displayName: 'Web', type: 'WEB_DATA_STREAM', enhancedMeasurementEnabled: true }],
   googleAdsLinks: 1,
+  googleSignals: 'GOOGLE_SIGNALS_ENABLED',
   ...over,
 });
 
@@ -112,6 +113,15 @@ test('unreadable sub-resources (null) are not reported as "zero" misconfiguratio
 test('no Google Ads links → info integrations finding', () => {
   assert.ok(cats(base({ googleAdsLinks: 0 })).includes('integrations'));
   assert.ok(!cats(base({ googleAdsLinks: 2 })).includes('integrations'));
+});
+
+test('Google Signals disabled + Ads linked → info integrations finding (only when both hold)', () => {
+  const msgs = (over = {}) => auditGa4(base(over)).findings.filter((f) => /Google Signals is disabled/.test(f.message));
+  assert.equal(msgs({ googleSignals: 'GOOGLE_SIGNALS_DISABLED', googleAdsLinks: 2 }).length, 1, 'disabled + Ads → flagged');
+  assert.equal(msgs({ googleSignals: 'GOOGLE_SIGNALS_DISABLED', googleAdsLinks: 0 }).length, 0, 'disabled but no Ads → not flagged');
+  assert.equal(msgs({ googleSignals: 'GOOGLE_SIGNALS_ENABLED', googleAdsLinks: 2 }).length, 0, 'enabled → not flagged');
+  assert.equal(msgs({ googleSignals: null, googleAdsLinks: 2 }).length, 0, 'unreadable signals → not flagged');
+  assert.equal(msgs({ googleSignals: 'GOOGLE_SIGNALS_DISABLED', googleAdsLinks: null }).length, 0, 'unreadable ads → not flagged');
 });
 
 test('industry category unset → info benchmarking finding', () => {

@@ -405,6 +405,104 @@ export function buildToolRegistry(
       handler: (a) => data.listGa4Audiences(s(a.property)),
     },
     {
+      name: 'get_ga4_attribution_settings',
+      description:
+        'Get a GA4 property\'s attribution settings: the reporting attribution model and the acquisition/other conversion lookback windows, plus the Ads web conversion export scope. Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.getGa4AttributionSettings(s(a.property)),
+    },
+    {
+      name: 'get_ga4_google_signals',
+      description:
+        'Get a GA4 property\'s Google Signals state (enabled/disabled) and consent setting — controls cross-device reporting, demographics, and remarketing from signed-in Google users. Read-only. Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.getGa4GoogleSignals(s(a.property)),
+    },
+    {
+      name: 'list_ga4_measurement_protocol_secrets',
+      description:
+        'List Measurement Protocol secrets on a GA4 property, grouped by data stream — by DISPLAY NAME only (the secret value is never returned). Use to see which server-side / MP integrations exist. Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGa4MeasurementProtocolSecrets(s(a.property)),
+    },
+    {
+      name: 'list_ga4_bigquery_links',
+      description:
+        'List a GA4 property\'s BigQuery export links: the linked Google Cloud project and whether daily and/or streaming export is enabled. Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGa4BigQueryLinks(s(a.property)),
+    },
+    {
+      name: 'list_ga4_firebase_links',
+      description:
+        'List a GA4 property\'s Firebase project links. Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGa4FirebaseLinks(s(a.property)),
+    },
+    {
+      name: 'generate_ga4_report',
+      description:
+        'Generate a shareable, client-ready Markdown health report for a GA4 property: an overall score + grade combining the property CONFIG audit and the DATA-quality audit (last N days, default 28), with per-section grades and full findings tables. Present the returned Markdown verbatim. Requires property like "properties/123456"; optional days.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          property: { type: 'string' },
+          days: { type: 'number', description: 'Data-quality lookback window in days (default 28).' },
+        },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const n = Math.floor(Number(a.days));
+        const days = a.days != null && Number.isFinite(n) ? Math.min(365, Math.max(1, n)) : 28;
+        const property = s(a.property);
+        const [snap, dq] = await Promise.all([
+          data.getGa4PropertySnapshot(property),
+          data.getGa4DataQuality(property, days),
+        ]);
+        const ga4 = auditGa4(snap);
+        const sections: ScorecardSection[] = [
+          {
+            key: 'ga4',
+            label: 'GA4 property',
+            findings: ga4.findings.map((f) => ({
+              severity: f.severity,
+              category: f.category,
+              message: f.message,
+              recommendation: f.recommendation,
+            })),
+          },
+          { key: 'data_quality', label: 'GA4 data quality', findings: auditGa4DataQuality(dq).findings },
+        ];
+        return { report: buildReport(sections, { title: 'GA4 Health Report', generatedAt: new Date().toISOString() }) };
+      },
+    },
+    {
       name: 'list_ga4_custom_dimensions',
       description:
         'List a GA4 property\'s custom dimensions: parameter name, display name, scope (EVENT/USER/ITEM), and description. Requires property like "properties/123456".',
