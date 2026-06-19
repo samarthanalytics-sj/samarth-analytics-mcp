@@ -35,7 +35,13 @@ mac:
   category: public.app-category.developer-tools
   # Unsigned build. First launch shows a Gatekeeper warning — right-click → Open,
   # or run: xattr -dr com.apple.quarantine "/Applications/Samarth Desktop.app".
-  # For seamless launch + distribution, add an Apple Developer identity + notarize.
+  #
+  # To SIGN + NOTARIZE for distribution (see docs/RELEASE.md):
+  #   1. Remove `identity: null` (or set it to your "Developer ID Application: …").
+  #   2. Set `hardenedRuntime: true` and `notarize: true` (below).
+  #   3. Export CSC_LINK / CSC_KEY_PASSWORD (the Developer ID cert) and
+  #      APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID in the build shell.
+  # notarize: true
   identity: null
   hardenedRuntime: false
 
@@ -47,6 +53,11 @@ win:
     - target: nsis
       arch:
         - x64
+  # Unsigned by default → SmartScreen warning. To SIGN (see docs/RELEASE.md),
+  # export the cert via env vars (NEVER commit them) and rebuild:
+  #   CSC_LINK=path-or-base64-of.pfx  CSC_KEY_PASSWORD=…   npm run dist:win
+  # For cloud/HSM (Azure Trusted Signing, DigiCert KeyLocker) certs that can't be
+  # a .pfx, sign dist/*.exe as a post-build step with the provider's signtool.
 
 nsis:
   oneClick: false
