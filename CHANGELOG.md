@@ -1,3 +1,9 @@
+## [1.19.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.6...v1.19.7) (2026-06-19)
+
+### Bug Fixes
+
+* **desktop:** give the chat assistant the current date (was assuming its training cutoff) ([5957109](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/59571094b15195538ff9da1af5eccd72fc92e781))
+
 ## [1.19.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.5...v1.19.6) (2026-06-16)
 
 ### Bug Fixes
