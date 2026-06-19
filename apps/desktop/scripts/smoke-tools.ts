@@ -165,7 +165,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 24 read tools', readOnlyNames.size === 24, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 25 read tools', readOnlyNames.size === 25, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────

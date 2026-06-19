@@ -93,7 +93,9 @@ export class ChatService {
           'letter grade, the per-section grades, and the ranked top issues. ' +
           'MEASUREMENT-ID CHECK: when the user asks whether the container\'s GA4 ids are correct / point to a ' +
           'real property, call check_gtm_measurement_ids — it flags GA4 ids on tags that match no GA4 stream ' +
-          'the user can access (typo / wrong id / different account) and resolves matched ids to their property. '
+          'the user can access (typo / wrong id / different account) and resolves matched ids to their property. ' +
+          'REPORT: for a shareable / client-ready report, call generate_analytics_report (pass ga4Property to ' +
+          'include GA4) and present the returned Markdown verbatim. '
         : product === 'gtm'
           ? 'You can read the GTM setup (accounts, containers, workspaces, tags), and produce an overall ' +
             'health score with analytics_scorecard (optionally folding in a GA4 property). '
