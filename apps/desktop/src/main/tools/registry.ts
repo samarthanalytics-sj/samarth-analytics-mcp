@@ -231,6 +231,43 @@ export function buildToolRegistry(
       },
     },
     {
+      name: 'list_gtm_versions',
+      description:
+        'List the container\'s published version history (newest first): version id, name, and tag/trigger/variable counts. Use to find versions to diff. Requires accountId, containerId.',
+      inputSchema: {
+        type: 'object',
+        properties: { accountId: { type: 'string' }, containerId: { type: 'string' } },
+        required: ['accountId', 'containerId'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGtmVersions(s(a.accountId), s(a.containerId)),
+    },
+    {
+      name: 'diff_gtm_versions',
+      description:
+        'Diff two PUBLISHED container versions — which tags/triggers/variables were added, removed, or modified between version A (base) and version B. Use to answer "what changed between version N and M / when did this break". Requires accountId, containerId, versionA, versionB (version ids from list_gtm_versions).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          versionA: { type: 'string', description: 'Base version id (the older one).' },
+          versionB: { type: 'string', description: 'Target version id (the newer one).' },
+        },
+        required: ['accountId', 'containerId', 'versionA', 'versionB'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const accountId = s(a.accountId);
+        const containerId = s(a.containerId);
+        const [base, target] = await Promise.all([
+          data.getGtmVersionSnapshot(accountId, containerId, s(a.versionA)),
+          data.getGtmVersionSnapshot(accountId, containerId, s(a.versionB)),
+        ]);
+        return { versionA: s(a.versionA), versionB: s(a.versionB), drift: diffSnapshots(base, target) };
+      },
+    },
+    {
       name: 'check_gtm_measurement_ids',
       description:
         'Cross-check the GA4 measurement ids configured in this GTM container against the GA4 properties the signed-in user can access — flags ids set on GTM tags that match NO accessible GA4 web stream (a typo, a wrong id, or a property on another GA4 account/login), and resolves matched ids to their property. Requires accountId, containerId, workspaceId; optional ga4Account (e.g. "accounts/123") to limit the GA4 scan.',
