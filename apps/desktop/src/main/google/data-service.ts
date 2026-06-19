@@ -5,6 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot } from './gtm-builders';
+import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { Ga4AccountView, GtmAccountView } from '../../shared/ipc';
 
 // Follows nextPageToken so large containers/accounts return EVERY item, not just
@@ -257,6 +258,101 @@ export class GoogleDataService {
       displayName: s.displayName ?? '(unnamed)',
       type: s.type ?? '',
     }));
+  }
+
+  /** Full GA4 property configuration for an audit (read-only): property details,
+   *  data-retention, key events, custom dimensions/metrics, data streams (with
+   *  per-web-stream enhanced-measurement state), and Google Ads link count.
+   *  Optional sub-resources are best-effort so one missing scope/permission
+   *  doesn't sink the whole audit; the core property + streams reads propagate. */
+  async getGa4PropertySnapshot(property: string): Promise<Ga4PropertySnapshot> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+
+    const [prop, retention, keyEvents, customDimensions, customMetrics, streams, adsLinks] = await Promise.all([
+      admin.properties.get({ name: property }),
+      admin.properties.getDataRetentionSettings({ name: `${property}/dataRetentionSettings` }).catch(() => null),
+      // null on catch (not []) so the audit can tell "unreadable" from "zero".
+      collectPages(
+        (pageToken) => admin.properties.keyEvents.list({ parent: property, pageToken }),
+        (r) => r.data.keyEvents,
+        (r) => r.data.nextPageToken
+      ).catch((): Array<{ eventName?: string | null }> | null => null),
+      collectPages(
+        (pageToken) => admin.properties.customDimensions.list({ parent: property, pageToken }),
+        (r) => r.data.customDimensions,
+        (r) => r.data.nextPageToken
+      ).catch((): Array<{ parameterName?: string | null; displayName?: string | null; scope?: string | null }> | null => null),
+      collectPages(
+        (pageToken) => admin.properties.customMetrics.list({ parent: property, pageToken }),
+        (r) => r.data.customMetrics,
+        (r) => r.data.nextPageToken
+      ).catch((): Array<{ parameterName?: string | null; displayName?: string | null }> => []),
+      collectPages(
+        (pageToken) => admin.properties.dataStreams.list({ parent: property, pageToken }),
+        (r) => r.data.dataStreams,
+        (r) => r.data.nextPageToken
+      ),
+      collectPages(
+        (pageToken) => admin.properties.googleAdsLinks.list({ parent: property, pageToken }),
+        (r) => r.data.googleAdsLinks,
+        (r) => r.data.nextPageToken
+      ).catch((): unknown[] | null => null),
+    ]);
+
+    // Enhanced measurement settings live only on the v1alpha Admin surface, and
+    // are a per-web-stream child resource (app streams 404). Same read scope.
+    const adminAlpha = analyticsadmin({ version: 'v1alpha', auth });
+    const dataStreams = await Promise.all(
+      streams.map(async (s) => {
+        let enhancedMeasurementEnabled: boolean | null = null;
+        if (s.type === 'WEB_DATA_STREAM' && s.name) {
+          try {
+            const em = await adminAlpha.properties.dataStreams.getEnhancedMeasurementSettings({
+              name: `${s.name}/enhancedMeasurementSettings`,
+            });
+            enhancedMeasurementEnabled = em.data.streamEnabled ?? null;
+          } catch {
+            enhancedMeasurementEnabled = null;
+          }
+        }
+        return {
+          name: s.name ?? '',
+          displayName: s.displayName ?? '(unnamed)',
+          type: s.type ?? '',
+          enhancedMeasurementEnabled,
+        };
+      })
+    );
+
+    return {
+      property,
+      displayName: prop.data.displayName ?? '',
+      timeZone: prop.data.timeZone ?? '',
+      currencyCode: prop.data.currencyCode ?? '',
+      industryCategory: prop.data.industryCategory ?? '',
+      dataRetention: retention
+        ? {
+            eventDataRetention: retention.data.eventDataRetention ?? '',
+            resetOnNewActivity: retention.data.resetUserDataOnNewActivity ?? false,
+          }
+        : null,
+      keyEvents: keyEvents === null ? null : keyEvents.map((k) => ({ eventName: k.eventName ?? '' })),
+      customDimensions:
+        customDimensions === null
+          ? null
+          : customDimensions.map((d) => ({
+              parameterName: d.parameterName ?? '',
+              displayName: d.displayName ?? '',
+              scope: d.scope ?? '',
+            })),
+      customMetrics: customMetrics.map((m) => ({
+        parameterName: m.parameterName ?? '',
+        displayName: m.displayName ?? '',
+      })),
+      dataStreams,
+      googleAdsLinks: adsLinks === null ? null : adsLinks.length,
+    };
   }
 
   // ── Writes (workspace-scoped drafts; never published) ──────────────────────

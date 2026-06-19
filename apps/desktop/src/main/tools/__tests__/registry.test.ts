@@ -71,6 +71,15 @@ function fakeData(
       calls.push(`ga4Streams:${p}`);
       return [];
     },
+    getGa4PropertySnapshot: async (p: string) => {
+      calls.push(`ga4Snapshot:${p}`);
+      return {
+        property: p, displayName: 'Site', timeZone: 'UTC', currencyCode: 'USD', industryCategory: 'TECHNOLOGY',
+        dataRetention: { eventDataRetention: 'TWO_MONTHS', resetOnNewActivity: true },
+        keyEvents: [], customDimensions: [], customMetrics: [],
+        dataStreams: [], googleAdsLinks: 0,
+      };
+    },
     runGa4Report: async (input: { property: string; metrics: string[] }) => {
       calls.push(`ga4Report:${input.property}:${input.metrics.join(',')}`);
       return { dimensionHeaders: [], metricHeaders: [], rows: [] };
@@ -156,6 +165,7 @@ async function main(): Promise<void> {
     const reg = buildToolRegistry(fakeData().data);
     const names = reg.list().map((t) => t.name).sort();
     assert.deepEqual(names, [
+      'audit_ga4_property',
       'audit_gtm_container',
       'audit_gtm_container_changes',
       'diff_gtm_workspace_vs_live',
@@ -188,11 +198,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 12, 'read-only registry has 12 tools');
+    assert.equal(readOnly.list().length, 13, 'read-only registry has 13 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 25, 'read + write registry has 25 tools');
+    assert.equal(withWrites.list().length, 26, 'read + write registry has 26 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
@@ -205,6 +215,19 @@ async function main(): Promise<void> {
     const out = JSON.parse(await reg.execute('audit_gtm_container', { accountId: '1', containerId: '2', workspaceId: '3' }));
     assert.equal(out.counts.tags, 1);
     assert.ok(out.findings.some((f: { message: string }) => f.message.includes('no firing trigger')));
+  });
+
+  await test('audit_ga4_property returns counts + severity findings (read-only)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('audit_ga4_property', { property: 'properties/123' }));
+    assert.ok(fd.calls.includes('ga4Snapshot:properties/123'));
+    assert.ok(out.counts && out.summary && Array.isArray(out.findings));
+    // The fake snapshot has 2-month retention + no key events + no streams + no ads links → findings.
+    assert.ok(out.findings.some((f: { category: string }) => f.category === 'retention'));
+    assert.ok(out.findings.some((f: { category: string }) => f.category === 'conversions'));
+    // GA4 audit is advisory — no machine fixes.
+    assert.ok(out.findings.every((f: { fix?: unknown }) => f.fix === undefined));
   });
 
   await test('audit injects workspace ids into auto-fixes (paused + unused trigger)', async () => {

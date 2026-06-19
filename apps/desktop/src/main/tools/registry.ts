@@ -14,6 +14,7 @@ import {
 } from '../google/gtm-builders';
 import { auditWorkspace, auditChanges } from '../google/audit-runner';
 import { diffSnapshots } from '../google/gtm-monitor';
+import { auditGa4 } from '../google/ga4-audit';
 
 // A change a write-tool wants to make, surfaced to the user for approval.
 export interface WriteProposal {
@@ -278,6 +279,18 @@ export function buildToolRegistry(
           dimensions: Array.isArray(a.dimensions) ? a.dimensions.map(String) : [],
           metrics: Array.isArray(a.metrics) ? a.metrics.map(String) : [],
         }),
+    },
+    {
+      name: 'audit_ga4_property',
+      description:
+        'Audit a GA4 property configuration and return findings with a severity summary: no data streams, 2-month (default) data retention, no key events/conversions, enhanced measurement off on a web stream, custom dimensions that may capture PII, no Google Ads links, and missing industry category. GA4 is READ-ONLY — findings are advisory (recommend changes for the user to make in the GA4 UI). Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: async (a) => auditGa4(await data.getGa4PropertySnapshot(s(a.property))),
     },
   ];
 
