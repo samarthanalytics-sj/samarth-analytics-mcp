@@ -484,6 +484,47 @@ export class GoogleDataService {
     }
   }
 
+  /** The container's published version history (newest first), for diffing. */
+  async listGtmVersions(
+    accountId: string,
+    containerId: string
+  ): Promise<Array<{ versionId: string; name: string; numTags: number; numTriggers: number; numVariables: number; deleted: boolean }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const headers = await collectPages(
+      (pageToken) =>
+        gtm.accounts.containers.version_headers.list({
+          parent: `accounts/${accountId}/containers/${containerId}`,
+          pageToken,
+        }),
+      (r) => r.data.containerVersionHeader,
+      (r) => r.data.nextPageToken
+    );
+    return headers.map((h) => ({
+      versionId: h.containerVersionId ?? '',
+      name: h.name ?? '(unnamed)',
+      numTags: Number(h.numTags ?? 0),
+      numTriggers: Number(h.numTriggers ?? 0),
+      numVariables: Number(h.numVariables ?? 0),
+      deleted: h.deleted ?? false,
+    }));
+  }
+
+  /** A specific published container version as a snapshot, for version diffing. */
+  async getGtmVersionSnapshot(
+    accountId: string,
+    containerId: string,
+    versionId: string
+  ): Promise<ContainerSnapshot> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.versions.get({
+      path: `accounts/${accountId}/containers/${containerId}/versions/${versionId}`,
+    });
+    // A version contains every resource inline (no pagination).
+    return toSnapshot(res.data.tag ?? [], res.data.trigger ?? [], res.data.variable ?? []);
+  }
+
   async listGtmTriggers(
     accountId: string,
     containerId: string,

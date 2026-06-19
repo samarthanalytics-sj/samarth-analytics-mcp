@@ -87,7 +87,9 @@ export class ChatService {
           'container over time, call audit_gtm_container_changes — it reports NEW vs RESOLVED issues since ' +
           'the last audit (lead with the new ones and offer their fixes). When the user asks what a publish ' +
           'would change, or how the draft differs from what is live, call diff_gtm_workspace_vs_live and ' +
-          'summarize the added/removed/modified tags, triggers, and variables. ' +
+          'summarize the added/removed/modified tags, triggers, and variables. When the user asks what ' +
+          'changed between PUBLISHED versions (or "when did X break"), use list_gtm_versions to find the ' +
+          'version ids then diff_gtm_versions to compare two of them. ' +
           'SCORECARD: when the user wants an overall health score, grade, or a client-ready summary, call ' +
           'analytics_scorecard (pass ga4Property to fold GA4 into the score); report the overall score + ' +
           'letter grade, the per-section grades, and the ranked top issues. ' +

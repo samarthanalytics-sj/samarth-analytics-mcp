@@ -170,6 +170,22 @@ function fakeData(
       calls.push(`live:${a}:${c}`);
       return opts.liveSnapshot === undefined ? null : opts.liveSnapshot;
     },
+    listGtmVersions: async (a: string, c: string) => {
+      calls.push(`versions:${a}:${c}`);
+      return [
+        { versionId: '7', name: 'June', numTags: 5, numTriggers: 3, numVariables: 2, deleted: false },
+        { versionId: '6', name: 'May', numTags: 4, numTriggers: 3, numVariables: 2, deleted: false },
+      ];
+    },
+    getGtmVersionSnapshot: async (a: string, c: string, v: string) => {
+      calls.push(`versionSnap:${a}:${c}:${v}`);
+      // v=7 has an extra tag vs v=6 → a diff.
+      const base = [{ tagId: '1', name: 'A', type: 'html', firingTriggerId: ['T1'], paused: false, parameter: [] }];
+      const tags = v === '7'
+        ? [...base, { tagId: '2', name: 'New', type: 'html', firingTriggerId: ['T1'], paused: false, parameter: [] }]
+        : base;
+      return { tags, triggers: [], variables: [] };
+    },
   } as unknown as GoogleDataService;
   return { data, calls };
 }
@@ -206,6 +222,7 @@ async function main(): Promise<void> {
       'audit_gtm_container',
       'audit_gtm_container_changes',
       'check_gtm_measurement_ids',
+      'diff_gtm_versions',
       'diff_gtm_workspace_vs_live',
       'generate_analytics_report',
       'get_ga4_data_retention',
@@ -222,6 +239,7 @@ async function main(): Promise<void> {
       'list_gtm_containers',
       'list_gtm_tags',
       'list_gtm_triggers',
+      'list_gtm_versions',
       'list_gtm_workspaces',
       'run_ga4_realtime_report',
       'run_ga4_report',
@@ -246,11 +264,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 25, 'read-only registry has 25 tools');
+    assert.equal(readOnly.list().length, 27, 'read-only registry has 27 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 38, 'read + write registry has 38 tools');
+    assert.equal(withWrites.list().length, 40, 'read + write registry has 40 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
@@ -328,6 +346,21 @@ async function main(): Promise<void> {
     assert.equal(out.matched[0].propertyDisplayName, 'Main');
     assert.deepEqual(out.notFound.map((n: { id: string }) => n.id), ['G-WRONG99']);
     assert.ok(fd.calls.includes('ga4MeasIds:all'), 'scanned all GA4 accounts when none given');
+  });
+
+  await test('list_gtm_versions + diff_gtm_versions report the publish history and what changed', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+    const versions = JSON.parse(await reg.execute('list_gtm_versions', { accountId: '1', containerId: '2' }));
+    assert.deepEqual(versions.map((v: { versionId: string }) => v.versionId), ['7', '6']);
+    assert.ok(fd.calls.includes('versions:1:2'));
+
+    const diff = JSON.parse(await reg.execute('diff_gtm_versions', { accountId: '1', containerId: '2', versionA: '6', versionB: '7' }));
+    assert.equal(diff.versionA, '6');
+    assert.equal(diff.versionB, '7');
+    assert.deepEqual(diff.drift.tags.added.map((t: { id: string }) => t.id), ['2'], 'tag added in v7');
+    assert.equal(diff.drift.changeCount, 1);
+    assert.ok(fd.calls.includes('versionSnap:1:2:6') && fd.calls.includes('versionSnap:1:2:7'));
   });
 
   await test('generate_analytics_report returns a Markdown report (GTM + optional GA4)', async () => {
