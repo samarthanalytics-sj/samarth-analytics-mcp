@@ -219,11 +219,18 @@ app), so updating doesn't lose them.
    `oauth-client.json` (step 4 above). No redirect URIs to register — desktop
    clients allow the `127.0.0.1` loopback automatically.
 
+> **Getting `access_denied`, or want anyone (not just test users) to sign in?**
+> See [docs/OAUTH_VERIFICATION.md](docs/OAUTH_VERIFICATION.md) — it covers test
+> users, the Testing→Production switch, and Google's (sensitive-scope)
+> verification.
+
 ---
 
 ## Appendix B — Signed builds (optional)
 
 To distribute without the Gatekeeper/SmartScreen warnings you need a code-signing
 certificate (Apple Developer ID for macOS, an Authenticode cert for Windows) and,
-on macOS, notarization. Not required for personal/internal use. See
-`electron-builder.yml` to wire in an identity.
+on macOS, notarization. Not required for personal/internal use. The full
+build → sign → notarize → distribute process is in
+[docs/RELEASE.md](docs/RELEASE.md); `electron-builder.yml` has the commented
+signing blocks to wire in.
