@@ -207,6 +207,7 @@ async function main(): Promise<void> {
       'audit_gtm_container_changes',
       'check_gtm_measurement_ids',
       'diff_gtm_workspace_vs_live',
+      'generate_analytics_report',
       'get_ga4_data_retention',
       'get_ga4_enhanced_measurement',
       'get_ga4_property_details',
@@ -245,11 +246,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 24, 'read-only registry has 24 tools');
+    assert.equal(readOnly.list().length, 25, 'read-only registry has 25 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 37, 'read + write registry has 37 tools');
+    assert.equal(withWrites.list().length, 38, 'read + write registry has 38 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
@@ -327,6 +328,18 @@ async function main(): Promise<void> {
     assert.equal(out.matched[0].propertyDisplayName, 'Main');
     assert.deepEqual(out.notFound.map((n: { id: string }) => n.id), ['G-WRONG99']);
     assert.ok(fd.calls.includes('ga4MeasIds:all'), 'scanned all GA4 accounts when none given');
+  });
+
+  await test('generate_analytics_report returns a Markdown report (GTM + optional GA4)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('generate_analytics_report', { accountId: '1', containerId: '2', workspaceId: '3', ga4Property: 'properties/9' }));
+    assert.ok(typeof out.report === 'string', 'returns a report string');
+    assert.ok(out.report.includes('# Analytics Health Report'));
+    assert.ok(/\*\*Overall: \d+\/100 \([A-F]\)\*\*/.test(out.report));
+    assert.ok(out.report.includes('GTM container'));
+    assert.ok(out.report.includes('GA4 property'), 'GA4 section included when ga4Property given');
+    assert.ok(fd.calls.includes('ga4Snapshot:properties/9'));
   });
 
   await test('score_ga4_property grades a GA4 property (GA4-mode scorecard)', async () => {
