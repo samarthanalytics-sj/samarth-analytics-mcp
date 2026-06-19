@@ -87,9 +87,13 @@ export class ChatService {
           'container over time, call audit_gtm_container_changes — it reports NEW vs RESOLVED issues since ' +
           'the last audit (lead with the new ones and offer their fixes). When the user asks what a publish ' +
           'would change, or how the draft differs from what is live, call diff_gtm_workspace_vs_live and ' +
-          'summarize the added/removed/modified tags, triggers, and variables. '
+          'summarize the added/removed/modified tags, triggers, and variables. ' +
+          'SCORECARD: when the user wants an overall health score, grade, or a client-ready summary, call ' +
+          'analytics_scorecard (pass ga4Property to fold GA4 into the score); report the overall score + ' +
+          'letter grade, the per-section grades, and the ranked top issues. '
         : product === 'gtm'
-          ? 'You can read the GTM setup (accounts, containers, workspaces, tags). '
+          ? 'You can read the GTM setup (accounts, containers, workspaces, tags), and produce an overall ' +
+            'health score with analytics_scorecard (optionally folding in a GA4 property). '
           : 'You can read GA4 (accounts, properties, data streams) and run GA4 reports. ' +
             'When the user asks to audit, check, review, or "health-check" a GA4 property or its setup, ' +
             'ALWAYS call audit_ga4_property FIRST (never a manual checklist), then present the counts and ' +
