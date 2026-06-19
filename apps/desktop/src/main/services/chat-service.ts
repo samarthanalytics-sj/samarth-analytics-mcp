@@ -140,7 +140,8 @@ export class ChatService {
             'issue, and the recommended change. When the user asks about DATA QUALITY, "(not set)", ' +
             'Unassigned traffic, or whether the data looks healthy/accurate, call audit_ga4_data_quality ' +
             '(it inspects the last N days of reporting data — default 28, pass days for another window — not ' +
-            'config) and present its findings the same way. ' +
+            'config); lead with the window it reports (its dateRange, e.g. "last 28 days (Jan 1 – Jan 28, ' +
+            '2026)") and then present its findings the same way. ' +
             'For metrics over a time range, call run_ga4_report with GA4 relative dates ' +
             '(today, yesterday, NdaysAgo) or explicit YYYY-MM-DD computed from the current date above — ' +
             'never assume the year. GA4 has NO data for dates after today, and the most recent 1–2 days ' +

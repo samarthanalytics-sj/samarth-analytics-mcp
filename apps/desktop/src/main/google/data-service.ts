@@ -7,6 +7,7 @@ import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot } from './gtm-builders';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
+import { windowDates } from './ga4-data-quality';
 import type { Ga4AccountView, GtmAccountView } from '../../shared/ipc';
 
 // Follows nextPageToken so large containers/accounts return EVERY item, not just
@@ -682,12 +683,28 @@ export class GoogleDataService {
   async getGa4DataQuality(property: string, days = 28): Promise<DataQualityCounts> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
     const data = analyticsdata({ version: 'v1beta', auth });
-    const startDate = `${days}daysAgo`;
+    // Resolve the window in the PROPERTY's timezone (UTC fallback) so "today"
+    // matches GA4's day boundaries, then query EXPLICIT dates for exactly `days`
+    // inclusive days. Explicit bounds mean the displayed range == the queried
+    // range (no relative-token / local-clock drift).
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const tz = await admin.properties
+      .get({ name: property })
+      .then((r) => r.data.timeZone || 'UTC')
+      .catch(() => 'UTC');
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const part = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+    const { startDate, endDate } = windowDates(`${part('year')}-${part('month')}-${part('day')}`, days);
     const run = async (dimension: string, ordered: boolean) => {
       const res = await data.properties.runReport({
         property,
         requestBody: {
-          dateRanges: [{ startDate, endDate: 'today' }],
+          dateRanges: [{ startDate, endDate }],
           dimensions: [{ name: dimension }],
           metrics: [{ name: 'sessions' }],
           // Source/medium can have a long tail — order by sessions so the top
@@ -705,7 +722,7 @@ export class GoogleDataService {
     const channelGroups = await run('sessionDefaultChannelGroup', false);
     const sourceMediums = await run('sessionSourceMedium', true);
     const totalSessions = channelGroups.reduce((s, c) => s + c.sessions, 0);
-    return { totalSessions, channelGroups, sourceMediums, windowDays: days };
+    return { totalSessions, channelGroups, sourceMediums, windowDays: days, startDate, endDate };
   }
 
   /** Every GA4 WEB-stream measurement id (G-XXXX) the user can access, with its
