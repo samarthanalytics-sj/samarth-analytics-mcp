@@ -393,6 +393,18 @@ export function buildToolRegistry(
       handler: (a) => data.listGa4KeyEvents(s(a.property)),
     },
     {
+      name: 'list_ga4_audiences',
+      description:
+        'List the audiences (remarketing / segmentation) configured on a GA4 property — by display name, with description, membership window in days, whether ads personalization is enabled, and the number of filter clauses. Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGa4Audiences(s(a.property)),
+    },
+    {
       name: 'list_ga4_custom_dimensions',
       description:
         'List a GA4 property\'s custom dimensions: parameter name, display name, scope (EVENT/USER/ITEM), and description. Requires property like "properties/123456".',
