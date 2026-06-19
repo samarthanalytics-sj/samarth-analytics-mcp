@@ -399,6 +399,32 @@ export function buildToolRegistry(
         }),
     },
     {
+      name: 'score_ga4_property',
+      description:
+        'Produce a GA4 property health SCORECARD: an overall 0–100 score + letter grade (A–F) and a severity-ranked top-issues list, from the GA4 property audit. The GA4-mode counterpart to analytics_scorecard. Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const ga4 = auditGa4(await data.getGa4PropertySnapshot(s(a.property)));
+        return buildScorecard([
+          {
+            key: 'ga4',
+            label: 'GA4 property',
+            findings: ga4.findings.map((f) => ({
+              severity: f.severity,
+              category: f.category,
+              message: f.message,
+              recommendation: f.recommendation,
+            })),
+          },
+        ]);
+      },
+    },
+    {
       name: 'analytics_scorecard',
       description:
         'Produce a unified analytics health SCORECARD: an overall 0–100 score + letter grade (A–F) with a per-section breakdown and a ranked top-issues list, combining the GTM container audit and (when a GA4 property is supplied) the GA4 property audit. Requires accountId, containerId, workspaceId; optional ga4Property like "properties/123456" to fold GA4 into the score.',

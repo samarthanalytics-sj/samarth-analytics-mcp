@@ -100,6 +100,8 @@ export class ChatService {
             'list_ga4_google_ads_links, get_ga4_property_details, get_ga4_data_retention, and ' +
             'get_ga4_enhanced_measurement (per web data stream). Use these to answer "what are my key ' +
             'events / custom dimensions / …" — never say you cannot list them. ' +
+            'For an overall health score or grade of a GA4 property, call score_ga4_property (0–100 + ' +
+            'letter grade). ' +
             'When the user asks to audit, check, review, or "health-check" a GA4 property or its setup, ' +
             'ALWAYS call audit_ga4_property FIRST (never a manual checklist), then present the counts and ' +
             'severity summary and list every finding by severity (high → info) as a table: severity, the ' +

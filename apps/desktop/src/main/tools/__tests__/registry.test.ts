@@ -219,6 +219,7 @@ async function main(): Promise<void> {
       'list_gtm_workspaces',
       'run_ga4_realtime_report',
       'run_ga4_report',
+      'score_ga4_property',
     ]);
   });
 
@@ -239,11 +240,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 22, 'read-only registry has 22 tools');
+    assert.equal(readOnly.list().length, 23, 'read-only registry has 23 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 35, 'read + write registry has 35 tools');
+    assert.equal(withWrites.list().length, 36, 'read + write registry has 36 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
@@ -302,6 +303,16 @@ async function main(): Promise<void> {
     const rt = JSON.parse(await reg.execute('run_ga4_realtime_report', { property: 'properties/9', metrics: ['activeUsers'] }));
     assert.deepEqual(rt.metricHeaders, ['activeUsers']);
     assert.ok(fd.calls.includes('ga4Realtime:properties/9:activeUsers'));
+  });
+
+  await test('score_ga4_property grades a GA4 property (GA4-mode scorecard)', async () => {
+    const fd = fakeData(); // fake snapshot has 2-month retention + no key events/streams → findings
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('score_ga4_property', { property: 'properties/9' }));
+    assert.ok(typeof out.score === 'number' && out.grade, 'overall score + grade');
+    assert.deepEqual(out.sections.map((s: { key: string }) => s.key), ['ga4'], 'a single GA4 section');
+    assert.ok(out.score < 100, 'the fake property has findings, so not a perfect score');
+    assert.ok(fd.calls.includes('ga4Snapshot:properties/9'));
   });
 
   await test('analytics_scorecard scores GTM alone, and GTM+GA4 when a property is given', async () => {
@@ -462,6 +473,7 @@ async function main(): Promise<void> {
       'list_ga4_properties',
       'run_ga4_realtime_report',
       'run_ga4_report',
+      'score_ga4_property',
     ];
 
     const gtmNames = buildToolRegistry(fakeData().data, approveAsIs, 'gtm').list().map((t) => t.name);
