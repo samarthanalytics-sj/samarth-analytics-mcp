@@ -46,17 +46,46 @@ npm install
 npm run dev
 ```
 
-**If you see `Error: Electron uninstall`** — npm didn't download the Electron
-binary. Fix it:
+**If you see `Error: Electron uninstall`** when running `npm run dev`: the
+Electron binary downloaded but never finished **extracting** into
+`node_modules/electron/dist` — that folder ends up with only a `locales/`
+subfolder (no `electron.exe`) and `path.txt` is missing. Reinstalling usually
+does **not** fix it, because the cached `.zip` is already present so the
+installer reports a "cache hit" and skips re-extracting.
 
-```bash
-npm config set ignore-scripts false
-# remove node_modules then reinstall:
-#   macOS/Linux:  rm -rf node_modules && npm install
-#   Windows:      rmdir /s /q node_modules && npm install
-node node_modules/electron/install.js   # force-fetch the Electron binary
+**Reliable fix — re-extract the cached binary straight into `dist`** (run from
+`apps/desktop`):
+
+**Windows (PowerShell):**
+```powershell
+$e = ".\node_modules\electron"
+$zip = Get-ChildItem "$env:LOCALAPPDATA\electron\Cache" -Recurse -Filter "electron-v*-win32-*.zip" | Select-Object -First 1
+Remove-Item -Recurse -Force "$e\dist" -ErrorAction SilentlyContinue
+Expand-Archive $zip.FullName "$e\dist" -Force
+[IO.File]::WriteAllText("$e\path.txt", "electron.exe")
+node -p "require('electron')"   # should print ...\node_modules\electron\dist\electron.exe
 npm run dev
 ```
+
+**macOS / Linux:**
+```bash
+rm -rf node_modules/electron/dist
+node node_modules/electron/install.js   # re-extracts from the cache (or re-downloads)
+node -p "require('electron')"           # should print a path ending in .../dist/electron
+npm run dev
+```
+
+If the cache is empty/corrupt (no `electron-v*.zip` under the cache folder, or
+the fix above still fails), force a clean re-download, then re-run `npm install`:
+```bash
+# Windows:  Remove-Item -Recurse -Force "$env:LOCALAPPDATA\electron\Cache"
+# macOS:    rm -rf ~/Library/Caches/electron
+# Linux:    rm -rf ~/.cache/electron
+```
+
+> **Install into your home folder** (`C:\Users\<you>\…` or `~`), never a
+> protected/system directory like `C:\Windows\System32` — Windows can block
+> Electron from writing `electron.exe` there, which causes this same error.
 
 ### One-line setup + launch
 
@@ -149,7 +178,7 @@ delete this folder.
 
 | Symptom | Fix |
 |---|---|
-| `Error: Electron uninstall` | Binary didn't download — see [3A](#3a-run-from-source-any-os) (ignore-scripts off → reinstall → `node node_modules/electron/install.js`) |
+| `Error: Electron uninstall` | Binary downloaded but didn't extract into `node_modules/electron/dist` (only `locales/` present) — see [3A](#3a-run-from-source-any-os): re-extract the cached `.zip` into `dist` and write `path.txt`. Reinstalling alone won't fix it (cache hit). |
 | Doubled path like `…/apps/desktop/samarth-analytics-mcp/apps/desktop/…` | You cloned inside an existing copy — delete it and clone into `~` |
 | macOS "unidentified developer" | Right-click → **Open**, or `xattr -dr com.apple.quarantine "/Applications/Samarth Desktop.app"` |
 | Windows `winCodeSign` "privilege not held" during build | Enable **Developer Mode** or run the terminal as **Administrator** |
