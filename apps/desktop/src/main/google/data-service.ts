@@ -620,4 +620,177 @@ export class GoogleDataService {
       })),
     };
   }
+
+  // ── GA4 read-only config inspection (analytics.readonly scope) ─────────────
+
+  /** Property details: name, time zone, currency, industry, service level. */
+  async getGa4PropertyDetails(property: string): Promise<{
+    property: string;
+    displayName: string;
+    timeZone: string;
+    currencyCode: string;
+    industryCategory: string;
+    serviceLevel: string;
+    parent: string;
+    createTime: string;
+  }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const res = await admin.properties.get({ name: property });
+    return {
+      property,
+      displayName: res.data.displayName ?? '',
+      timeZone: res.data.timeZone ?? '',
+      currencyCode: res.data.currencyCode ?? '',
+      industryCategory: res.data.industryCategory ?? '',
+      serviceLevel: res.data.serviceLevel ?? '',
+      parent: res.data.parent ?? '',
+      createTime: res.data.createTime ?? '',
+    };
+  }
+
+  /** The key events (conversions) configured on a property, by name. */
+  async listGa4KeyEvents(
+    property: string
+  ): Promise<Array<{ eventName: string; countingMethod: string; custom: boolean }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const items = await collectPages(
+      (pageToken) => admin.properties.keyEvents.list({ parent: property, pageToken }),
+      (r) => r.data.keyEvents,
+      (r) => r.data.nextPageToken
+    );
+    return items.map((k) => ({
+      eventName: k.eventName ?? '',
+      countingMethod: k.countingMethod ?? '',
+      custom: k.custom ?? false,
+    }));
+  }
+
+  /** Custom dimensions: parameter name, display name, scope. */
+  async listGa4CustomDimensions(
+    property: string
+  ): Promise<Array<{ parameterName: string; displayName: string; scope: string; description: string }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const items = await collectPages(
+      (pageToken) => admin.properties.customDimensions.list({ parent: property, pageToken }),
+      (r) => r.data.customDimensions,
+      (r) => r.data.nextPageToken
+    );
+    return items.map((d) => ({
+      parameterName: d.parameterName ?? '',
+      displayName: d.displayName ?? '',
+      scope: d.scope ?? '',
+      description: d.description ?? '',
+    }));
+  }
+
+  /** Custom metrics: parameter name, display name, measurement unit, scope. */
+  async listGa4CustomMetrics(
+    property: string
+  ): Promise<Array<{ parameterName: string; displayName: string; measurementUnit: string; scope: string; description: string }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const items = await collectPages(
+      (pageToken) => admin.properties.customMetrics.list({ parent: property, pageToken }),
+      (r) => r.data.customMetrics,
+      (r) => r.data.nextPageToken
+    );
+    return items.map((m) => ({
+      parameterName: m.parameterName ?? '',
+      displayName: m.displayName ?? '',
+      measurementUnit: m.measurementUnit ?? '',
+      scope: m.scope ?? '',
+      description: m.description ?? '',
+    }));
+  }
+
+  /** Linked Google Ads accounts. */
+  async listGa4GoogleAdsLinks(
+    property: string
+  ): Promise<Array<{ name: string; customerId: string; adsPersonalizationEnabled: boolean | null; canManageClients: boolean | null }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const items = await collectPages(
+      (pageToken) => admin.properties.googleAdsLinks.list({ parent: property, pageToken }),
+      (r) => r.data.googleAdsLinks,
+      (r) => r.data.nextPageToken
+    );
+    return items.map((l) => ({
+      name: l.name ?? '',
+      customerId: l.customerId ?? '',
+      adsPersonalizationEnabled: l.adsPersonalizationEnabled ?? null,
+      canManageClients: l.canManageClients ?? null,
+    }));
+  }
+
+  /** Data-retention settings (event retention + reset-on-activity). */
+  async getGa4DataRetention(
+    property: string
+  ): Promise<{ eventDataRetention: string; resetUserDataOnNewActivity: boolean }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const res = await admin.properties.getDataRetentionSettings({ name: `${property}/dataRetentionSettings` });
+    return {
+      eventDataRetention: res.data.eventDataRetention ?? '',
+      resetUserDataOnNewActivity: res.data.resetUserDataOnNewActivity ?? false,
+    };
+  }
+
+  /** Enhanced-measurement settings for ONE web data stream. dataStream is the
+   *  full stream resource name (properties/123/dataStreams/456). v1alpha-only. */
+  async getGa4EnhancedMeasurement(dataStream: string): Promise<{
+    streamEnabled: boolean;
+    scrollsEnabled: boolean;
+    outboundClicksEnabled: boolean;
+    siteSearchEnabled: boolean;
+    videoEngagementEnabled: boolean;
+    fileDownloadsEnabled: boolean;
+    pageChangesEnabled: boolean;
+    formInteractionsEnabled: boolean;
+  }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const adminAlpha = analyticsadmin({ version: 'v1alpha', auth });
+    const res = await adminAlpha.properties.dataStreams.getEnhancedMeasurementSettings({
+      name: `${dataStream}/enhancedMeasurementSettings`,
+    });
+    const d = res.data;
+    return {
+      streamEnabled: d.streamEnabled ?? false,
+      scrollsEnabled: d.scrollsEnabled ?? false,
+      outboundClicksEnabled: d.outboundClicksEnabled ?? false,
+      siteSearchEnabled: d.siteSearchEnabled ?? false,
+      videoEngagementEnabled: d.videoEngagementEnabled ?? false,
+      fileDownloadsEnabled: d.fileDownloadsEnabled ?? false,
+      pageChangesEnabled: d.pageChangesEnabled ?? false,
+      formInteractionsEnabled: d.formInteractionsEnabled ?? false,
+    };
+  }
+
+  /** Real-time GA4 report (last 30 minutes). */
+  async runGa4RealtimeReport(input: {
+    property: string;
+    dimensions: string[];
+    metrics: string[];
+  }): Promise<Ga4ReportResult> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
+    const data = analyticsdata({ version: 'v1beta', auth });
+    const res = await data.properties.runRealtimeReport({
+      property: input.property,
+      requestBody: {
+        dimensions: input.dimensions.map((name) => ({ name })),
+        metrics: input.metrics.map((name) => ({ name })),
+        limit: '100',
+      },
+    });
+    return {
+      dimensionHeaders: (res.data.dimensionHeaders ?? []).map((h) => h.name ?? ''),
+      metricHeaders: (res.data.metricHeaders ?? []).map((h) => h.name ?? ''),
+      rows: (res.data.rows ?? []).map((r) => ({
+        dimensions: (r.dimensionValues ?? []).map((v) => v.value ?? ''),
+        metrics: (r.metricValues ?? []).map((v) => v.value ?? ''),
+      })),
+    };
+  }
 }

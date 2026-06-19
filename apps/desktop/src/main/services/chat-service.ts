@@ -94,7 +94,12 @@ export class ChatService {
         : product === 'gtm'
           ? 'You can read the GTM setup (accounts, containers, workspaces, tags), and produce an overall ' +
             'health score with analytics_scorecard (optionally folding in a GA4 property). '
-          : 'You can read GA4 (accounts, properties, data streams) and run GA4 reports. ' +
+          : 'You can read GA4 (accounts, properties, data streams), run GA4 reports (run_ga4_report + ' +
+            'run_ga4_realtime_report), and inspect a property\'s configuration BY NAME: ' +
+            'list_ga4_key_events (conversions), list_ga4_custom_dimensions, list_ga4_custom_metrics, ' +
+            'list_ga4_google_ads_links, get_ga4_property_details, get_ga4_data_retention, and ' +
+            'get_ga4_enhanced_measurement (per web data stream). Use these to answer "what are my key ' +
+            'events / custom dimensions / …" — never say you cannot list them. ' +
             'When the user asks to audit, check, review, or "health-check" a GA4 property or its setup, ' +
             'ALWAYS call audit_ga4_property FIRST (never a manual checklist), then present the counts and ' +
             'severity summary and list every finding by severity (high → info) as a table: severity, the ' +

@@ -84,6 +84,38 @@ function fakeData(
       calls.push(`ga4Report:${input.property}:${input.metrics.join(',')}`);
       return { dimensionHeaders: [], metricHeaders: [], rows: [] };
     },
+    getGa4PropertyDetails: async (p: string) => {
+      calls.push(`ga4Details:${p}`);
+      return { property: p, displayName: 'Site', timeZone: 'UTC', currencyCode: 'USD', industryCategory: 'TECHNOLOGY', serviceLevel: 'GOOGLE_ANALYTICS_STANDARD', parent: 'accounts/1', createTime: '' };
+    },
+    listGa4KeyEvents: async (p: string) => {
+      calls.push(`ga4KeyEvents:${p}`);
+      return [{ eventName: 'purchase', countingMethod: 'ONCE_PER_EVENT', custom: false }];
+    },
+    listGa4CustomDimensions: async (p: string) => {
+      calls.push(`ga4Dims:${p}`);
+      return [{ parameterName: 'plan', displayName: 'Plan', scope: 'EVENT', description: '' }];
+    },
+    listGa4CustomMetrics: async (p: string) => {
+      calls.push(`ga4Metrics:${p}`);
+      return [{ parameterName: 'score', displayName: 'Score', measurementUnit: 'STANDARD', scope: 'EVENT', description: '' }];
+    },
+    listGa4GoogleAdsLinks: async (p: string) => {
+      calls.push(`ga4AdsLinks:${p}`);
+      return [{ name: 'properties/1/googleAdsLinks/9', customerId: '123', adsPersonalizationEnabled: true, canManageClients: false }];
+    },
+    getGa4DataRetention: async (p: string) => {
+      calls.push(`ga4Retention:${p}`);
+      return { eventDataRetention: 'TWO_MONTHS', resetUserDataOnNewActivity: true };
+    },
+    getGa4EnhancedMeasurement: async (ds: string) => {
+      calls.push(`ga4Enhanced:${ds}`);
+      return { streamEnabled: true, scrollsEnabled: true, outboundClicksEnabled: true, siteSearchEnabled: false, videoEngagementEnabled: false, fileDownloadsEnabled: true, pageChangesEnabled: true, formInteractionsEnabled: false };
+    },
+    runGa4RealtimeReport: async (input: { property: string; metrics: string[] }) => {
+      calls.push(`ga4Realtime:${input.property}:${input.metrics.join(',')}`);
+      return { dimensionHeaders: [], metricHeaders: ['activeUsers'], rows: [] };
+    },
     createGtmWorkspace: async (a: string, c: string, name: string) => {
       calls.push(`createWorkspace:${a}:${c}:${name}`);
       return { workspaceId: 'w9', name, path: 'p' };
@@ -170,14 +202,22 @@ async function main(): Promise<void> {
       'audit_gtm_container',
       'audit_gtm_container_changes',
       'diff_gtm_workspace_vs_live',
+      'get_ga4_data_retention',
+      'get_ga4_enhanced_measurement',
+      'get_ga4_property_details',
       'list_ga4_accounts',
+      'list_ga4_custom_dimensions',
+      'list_ga4_custom_metrics',
       'list_ga4_data_streams',
+      'list_ga4_google_ads_links',
+      'list_ga4_key_events',
       'list_ga4_properties',
       'list_gtm_accounts',
       'list_gtm_containers',
       'list_gtm_tags',
       'list_gtm_triggers',
       'list_gtm_workspaces',
+      'run_ga4_realtime_report',
       'run_ga4_report',
     ]);
   });
@@ -199,11 +239,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 14, 'read-only registry has 14 tools');
+    assert.equal(readOnly.list().length, 22, 'read-only registry has 22 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 27, 'read + write registry has 27 tools');
+    assert.equal(withWrites.list().length, 35, 'read + write registry has 35 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
@@ -229,6 +269,39 @@ async function main(): Promise<void> {
     assert.ok(out.findings.some((f: { category: string }) => f.category === 'conversions'));
     // GA4 audit is advisory — no machine fixes.
     assert.ok(out.findings.every((f: { fix?: unknown }) => f.fix === undefined));
+  });
+
+  await test('GA4 read tools surface config BY NAME (key events, dimensions, retention, enhanced, realtime)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+
+    const keyEvents = JSON.parse(await reg.execute('list_ga4_key_events', { property: 'properties/9' }));
+    assert.deepEqual(keyEvents.map((k: { eventName: string }) => k.eventName), ['purchase']);
+    assert.ok(fd.calls.includes('ga4KeyEvents:properties/9'));
+
+    const dims = JSON.parse(await reg.execute('list_ga4_custom_dimensions', { property: 'properties/9' }));
+    assert.equal(dims[0].parameterName, 'plan');
+    assert.equal(dims[0].scope, 'EVENT');
+
+    const metrics = JSON.parse(await reg.execute('list_ga4_custom_metrics', { property: 'properties/9' }));
+    assert.equal(metrics[0].measurementUnit, 'STANDARD');
+
+    const links = JSON.parse(await reg.execute('list_ga4_google_ads_links', { property: 'properties/9' }));
+    assert.equal(links[0].customerId, '123');
+
+    const details = JSON.parse(await reg.execute('get_ga4_property_details', { property: 'properties/9' }));
+    assert.equal(details.timeZone, 'UTC');
+
+    const retention = JSON.parse(await reg.execute('get_ga4_data_retention', { property: 'properties/9' }));
+    assert.equal(retention.eventDataRetention, 'TWO_MONTHS');
+
+    const em = JSON.parse(await reg.execute('get_ga4_enhanced_measurement', { dataStream: 'properties/9/dataStreams/5' }));
+    assert.equal(em.streamEnabled, true);
+    assert.ok(fd.calls.includes('ga4Enhanced:properties/9/dataStreams/5'));
+
+    const rt = JSON.parse(await reg.execute('run_ga4_realtime_report', { property: 'properties/9', metrics: ['activeUsers'] }));
+    assert.deepEqual(rt.metricHeaders, ['activeUsers']);
+    assert.ok(fd.calls.includes('ga4Realtime:properties/9:activeUsers'));
   });
 
   await test('analytics_scorecard scores GTM alone, and GTM+GA4 when a property is given', async () => {
@@ -374,12 +447,20 @@ async function main(): Promise<void> {
     // Assert EXACT per-product membership against an explicit expected set, not
     // the registry's own name-substring rule (re-deriving that rule is
     // tautological — it would pass even if a GA4-data tool were mis-scoped).
-    // GA4 = the 5 tools that read GA4 data; everything else is GTM.
+    // GA4 = the tools that read GA4 data; everything else is GTM.
     const GA4_TOOLS = [
       'audit_ga4_property',
+      'get_ga4_data_retention',
+      'get_ga4_enhanced_measurement',
+      'get_ga4_property_details',
       'list_ga4_accounts',
+      'list_ga4_custom_dimensions',
+      'list_ga4_custom_metrics',
       'list_ga4_data_streams',
+      'list_ga4_google_ads_links',
+      'list_ga4_key_events',
       'list_ga4_properties',
+      'run_ga4_realtime_report',
       'run_ga4_report',
     ];
 

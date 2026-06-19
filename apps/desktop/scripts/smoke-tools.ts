@@ -88,6 +88,14 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
       dataRetention: { eventDataRetention: 'TWO_MONTHS', resetOnNewActivity: true },
       keyEvents: [], customDimensions: [], customMetrics: [], dataStreams: [], googleAdsLinks: 0,
     }),
+    getGa4PropertyDetails: () => r('getGa4PropertyDetails', { property: 'properties/1', displayName: 'Site', timeZone: 'UTC', currencyCode: 'USD', industryCategory: '', serviceLevel: '', parent: 'accounts/1', createTime: '' }),
+    listGa4KeyEvents: () => r('listGa4KeyEvents', []),
+    listGa4CustomDimensions: () => r('listGa4CustomDimensions', []),
+    listGa4CustomMetrics: () => r('listGa4CustomMetrics', []),
+    listGa4GoogleAdsLinks: () => r('listGa4GoogleAdsLinks', []),
+    getGa4DataRetention: () => r('getGa4DataRetention', { eventDataRetention: 'TWO_MONTHS', resetUserDataOnNewActivity: true }),
+    getGa4EnhancedMeasurement: () => r('getGa4EnhancedMeasurement', { streamEnabled: true, scrollsEnabled: true, outboundClicksEnabled: true, siteSearchEnabled: false, videoEngagementEnabled: false, fileDownloadsEnabled: true, pageChangesEnabled: true, formInteractionsEnabled: false }),
+    runGa4RealtimeReport: () => r('runGa4RealtimeReport', { dimensionHeaders: [], metricHeaders: [], rows: [] }),
     // writes (each records a mutation)
     createGtmWorkspace: () => r('createGtmWorkspace', { workspaceId: 'w9', name: 'WS', path: '' }),
     createGtmTag: () => r('createGtmTag', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
@@ -156,7 +164,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 14 read tools', readOnlyNames.size === 14, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 22 read tools', readOnlyNames.size === 22, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────
