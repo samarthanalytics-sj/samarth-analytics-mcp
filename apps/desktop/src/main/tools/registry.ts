@@ -15,6 +15,7 @@ import {
 import { auditWorkspace, auditChanges } from '../google/audit-runner';
 import { diffSnapshots } from '../google/gtm-monitor';
 import { auditGa4 } from '../google/ga4-audit';
+import { buildScorecard, type ScorecardSection } from '../google/scorecard';
 
 // A change a write-tool wants to make, surfaced to the user for approval.
 export interface WriteProposal {
@@ -291,6 +292,54 @@ export function buildToolRegistry(
         additionalProperties: false,
       },
       handler: async (a) => auditGa4(await data.getGa4PropertySnapshot(s(a.property))),
+    },
+    {
+      name: 'analytics_scorecard',
+      description:
+        'Produce a unified analytics health SCORECARD: an overall 0–100 score + letter grade (A–F) with a per-section breakdown and a ranked top-issues list, combining the GTM container audit and (when a GA4 property is supplied) the GA4 property audit. Requires accountId, containerId, workspaceId; optional ga4Property like "properties/123456" to fold GA4 into the score.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          ga4Property: { type: 'string', description: 'Optional GA4 property (e.g. "properties/123") to include in the score.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const sections: ScorecardSection[] = [];
+        const gtm = await auditWorkspace(data, {
+          accountId: s(a.accountId),
+          containerId: s(a.containerId),
+          workspaceId: s(a.workspaceId),
+        });
+        sections.push({
+          key: 'gtm',
+          label: 'GTM container',
+          findings: gtm.findings.map((f) => ({
+            severity: f.severity,
+            category: f.category,
+            message: f.message,
+            recommendation: f.recommendation,
+          })),
+        });
+        if (a.ga4Property != null && s(a.ga4Property)) {
+          const ga4 = auditGa4(await data.getGa4PropertySnapshot(s(a.ga4Property)));
+          sections.push({
+            key: 'ga4',
+            label: 'GA4 property',
+            findings: ga4.findings.map((f) => ({
+              severity: f.severity,
+              category: f.category,
+              message: f.message,
+              recommendation: f.recommendation,
+            })),
+          });
+        }
+        return buildScorecard(sections);
+      },
     },
   ];
 

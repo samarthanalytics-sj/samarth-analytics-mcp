@@ -165,6 +165,7 @@ async function main(): Promise<void> {
     const reg = buildToolRegistry(fakeData().data);
     const names = reg.list().map((t) => t.name).sort();
     assert.deepEqual(names, [
+      'analytics_scorecard',
       'audit_ga4_property',
       'audit_gtm_container',
       'audit_gtm_container_changes',
@@ -198,11 +199,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 13, 'read-only registry has 13 tools');
+    assert.equal(readOnly.list().length, 14, 'read-only registry has 14 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 26, 'read + write registry has 26 tools');
+    assert.equal(withWrites.list().length, 27, 'read + write registry has 27 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
@@ -228,6 +229,22 @@ async function main(): Promise<void> {
     assert.ok(out.findings.some((f: { category: string }) => f.category === 'conversions'));
     // GA4 audit is advisory — no machine fixes.
     assert.ok(out.findings.every((f: { fix?: unknown }) => f.fix === undefined));
+  });
+
+  await test('analytics_scorecard scores GTM alone, and GTM+GA4 when a property is given', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+    // GTM only (default snapshot has an orphan tag → at least one finding).
+    const gtmOnly = JSON.parse(await reg.execute('analytics_scorecard', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.ok(typeof gtmOnly.score === 'number' && gtmOnly.grade, 'has overall score + grade');
+    assert.deepEqual(gtmOnly.sections.map((s: { key: string }) => s.key), ['gtm'], 'GTM section only');
+    assert.ok(Array.isArray(gtmOnly.topIssues));
+
+    // With a GA4 property → both sections (the fake GA4 snapshot has findings).
+    const both = JSON.parse(await reg.execute('analytics_scorecard', { accountId: '1', containerId: '2', workspaceId: '3', ga4Property: 'properties/123' }));
+    assert.deepEqual(both.sections.map((s: { key: string }) => s.key), ['gtm', 'ga4']);
+    assert.ok(fd.calls.includes('ga4Snapshot:properties/123'), 'fetched the GA4 property');
+    assert.ok(both.score <= gtmOnly.score, 'adding GA4 findings cannot raise the score');
   });
 
   await test('audit injects workspace ids into auto-fixes (paused + unused trigger)', async () => {
@@ -356,9 +373,11 @@ async function main(): Promise<void> {
   await test('product scopes the toolset (gtm vs ga4)', async () => {
     const gtm = buildToolRegistry(fakeData().data, approveAsIs, 'gtm');
     const gtmNames = gtm.list().map((t) => t.name);
-    assert.ok(gtmNames.every((n) => n.includes('gtm')), 'gtm mode lists only gtm tools');
+    // gtm mode must not leak any ga4-only tool. analytics_scorecard is the one
+    // cross-cutting tool — it lives in gtm mode (its name has no 'ga4').
+    assert.ok(!gtmNames.some((n) => n.includes('ga4')), 'gtm mode has no ga4 tools');
     assert.ok(gtmNames.includes('create_gtm_tag_with_trigger'));
-    assert.ok(!gtmNames.some((n) => n.includes('ga4')));
+    assert.ok(gtmNames.includes('analytics_scorecard'));
 
     const ga4 = buildToolRegistry(fakeData().data, undefined, 'ga4');
     const ga4Names = ga4.list().map((t) => t.name);
