@@ -23,6 +23,9 @@ export interface LoopbackDeps {
   now?: () => number;
   scopes?: string[];
   timeoutMs?: number;
+  /** Abort a pending flow (e.g. the user restarted sign-in after a blocked
+   *  consent screen that never redirected back). Closes the server + rejects. */
+  signal?: AbortSignal;
 }
 
 export interface LoopbackResult {
@@ -70,13 +73,26 @@ export async function runLoopbackOAuth(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      server.close();
+      if (deps.signal) deps.signal.removeEventListener('abort', onAbort);
+      if (server.listening) server.close();
       action();
     };
     const timer = setTimeout(
       () => finish(() => reject(new Error('Google sign-in timed out.'))),
       timeoutMs
     );
+
+    // Allow the caller to cancel a pending flow (a denied/blocked consent screen
+    // may never redirect back, so the server would otherwise wait the full
+    // timeout and block any retry).
+    const onAbort = (): void => finish(() => reject(new Error('Google sign-in cancelled.')));
+    if (deps.signal) {
+      if (deps.signal.aborted) {
+        onAbort();
+        return;
+      }
+      deps.signal.addEventListener('abort', onAbort);
+    }
 
     server.on('request', (req, res) => {
       void (async () => {

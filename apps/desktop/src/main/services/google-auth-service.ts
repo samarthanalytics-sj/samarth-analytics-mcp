@@ -8,7 +8,10 @@ import type { AccountView, GoogleClientStatus } from '../../shared/ipc';
 // loopback flow (opens the system browser → account chooser), then upsert the
 // account + vault the token via the registry. One flow at a time.
 export class GoogleAuthService {
-  private connecting = false;
+  /** The in-flight sign-in, if any. A new connect() cancels it (rather than
+   *  refusing) so a blocked/denied consent screen that never redirected back
+   *  can't wedge sign-in until an app restart. */
+  private current: AbortController | null = null;
 
   constructor(
     private readonly registry: RegistryService,
@@ -31,7 +34,6 @@ export class GoogleAuthService {
   }
 
   async connect(): Promise<AccountView> {
-    if (this.connecting) throw new Error('A Google sign-in is already in progress.');
     const client = loadGoogleOAuthClient(this.configPath);
     if (!client) {
       throw new Error(
@@ -41,10 +43,15 @@ export class GoogleAuthService {
       );
     }
 
-    this.connecting = true;
+    // Cancel any prior in-flight sign-in (e.g. one stuck on a denied/blocked
+    // consent screen that never redirected back) and start a fresh one.
+    this.current?.abort();
+    const controller = new AbortController();
+    this.current = controller;
     try {
       const { token, userinfo } = await runLoopbackOAuth(client, {
         openBrowser: (url) => shell.openExternal(url),
+        signal: controller.signal,
       });
       return this.registry.upsertGoogleAccount(
         userinfo.email,
@@ -52,7 +59,8 @@ export class GoogleAuthService {
         JSON.stringify(token)
       );
     } finally {
-      this.connecting = false;
+      // Only clear if a later connect() hasn't already replaced us.
+      if (this.current === controller) this.current = null;
     }
   }
 
