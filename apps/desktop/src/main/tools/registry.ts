@@ -15,6 +15,7 @@ import {
 import { auditWorkspace, auditChanges } from '../google/audit-runner';
 import { diffSnapshots } from '../google/gtm-monitor';
 import { auditGa4 } from '../google/ga4-audit';
+import { auditGa4DataQuality } from '../google/ga4-data-quality';
 import { buildScorecard, type ScorecardSection } from '../google/scorecard';
 import { buildReport } from '../google/report';
 import { consentReportToSection } from '../google/consent-section';
@@ -357,6 +358,27 @@ export function buildToolRegistry(
         additionalProperties: false,
       },
       handler: async (a) => auditGa4(await data.getGa4PropertySnapshot(s(a.property))),
+    },
+    {
+      name: 'audit_ga4_data_quality',
+      description:
+        'Audit the actual GA4 reporting DATA over the last N days (default 28) and flag data-quality problems that silently corrupt analytics: a high share of "Unassigned" channel sessions, a high share of "(not set)" source/medium, or no data at all. Returns severity-tagged findings with the change to make. Complements audit_ga4_property (which checks config). Requires property like "properties/123456"; optional days.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          property: { type: 'string' },
+          days: { type: 'number', description: 'Lookback window in days (default 28).' },
+        },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        // Coerce defensively: a non-numeric days would otherwise become
+        // "NaNdaysAgo" and 400 at the Data API. Clamp to [1, 365].
+        const n = Math.floor(Number(a.days));
+        const days = a.days != null && Number.isFinite(n) ? Math.min(365, Math.max(1, n)) : 28;
+        return auditGa4DataQuality(await data.getGa4DataQuality(s(a.property), days));
+      },
     },
     {
       name: 'list_ga4_key_events',

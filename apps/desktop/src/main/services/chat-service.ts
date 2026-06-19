@@ -114,7 +114,11 @@ export class ChatService {
             'When the user asks to audit, check, review, or "health-check" a GA4 property or its setup, ' +
             'ALWAYS call audit_ga4_property FIRST (never a manual checklist), then present the counts and ' +
             'severity summary and list every finding by severity (high → info) as a table: severity, the ' +
-            'issue, and the recommended change. GA4 is READ-ONLY — you cannot apply fixes; give the user ' +
+            'issue, and the recommended change. When the user asks about DATA QUALITY, "(not set)", ' +
+            'Unassigned traffic, or whether the data looks healthy/accurate, call audit_ga4_data_quality ' +
+            '(it inspects the last N days of reporting data — default 28, pass days for another window — not ' +
+            'config) and present its findings the same way. ' +
+            'GA4 is READ-ONLY — you cannot apply fixes; give the user ' +
             'the exact change to make in the GA4 Admin UI. ') +
       (product === 'gtm' && active.gtmContext?.containerId
         ? `The user is working in GTM account ${active.gtmContext.accountId} ` +
