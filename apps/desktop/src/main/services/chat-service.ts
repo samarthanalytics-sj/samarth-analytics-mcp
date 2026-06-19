@@ -121,7 +121,8 @@ export class ChatService {
             'issue, and the recommended change. When the user asks about DATA QUALITY, "(not set)", ' +
             'Unassigned traffic, or whether the data looks healthy/accurate, call audit_ga4_data_quality ' +
             '(it inspects the last N days of reporting data — default 28, pass days for another window — not ' +
-            'config) and present its findings the same way. ' +
+            'config); lead with the window it reports (its dateRange, e.g. "last 28 days (Jan 1 – Jan 28, ' +
+            '2026)") and then present its findings the same way. ' +
             'GA4 is READ-ONLY — you cannot apply fixes; give the user ' +
             'the exact change to make in the GA4 Admin UI. ') +
       (product === 'gtm' && active.gtmContext?.containerId

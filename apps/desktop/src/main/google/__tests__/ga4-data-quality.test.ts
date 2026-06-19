@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { auditGa4DataQuality } from '../ga4-data-quality';
+import { auditGa4DataQuality, formatDateRange, windowDates } from '../ga4-data-quality';
 
 let passed = 0;
 let failed = 0;
@@ -71,6 +71,47 @@ test('threshold boundaries: 5% → low, 10% → medium, 25% → high', () => {
   assert.equal(at(100), 'medium'); // 10%
   assert.equal(at(250), 'high'); // 25%
   assert.equal(at(49), undefined); // 4.9% → not flagged
+});
+
+test('windowDates returns exactly `days` INCLUSIVE days ending today (DST-immune, cross-month/year)', () => {
+  assert.deepEqual(windowDates('2026-01-28', 28), { startDate: '2026-01-01', endDate: '2026-01-28' });
+  assert.deepEqual(windowDates('2026-03-01', 7), { startDate: '2026-02-23', endDate: '2026-03-01' }); // crosses Feb (28d)
+  assert.deepEqual(windowDates('2026-01-03', 7), { startDate: '2025-12-28', endDate: '2026-01-03' }); // crosses year
+  assert.deepEqual(windowDates('2026-01-15', 1), { startDate: '2026-01-15', endDate: '2026-01-15' }); // single day
+});
+
+test('formatDateRange renders a clean span and tolerates missing/cross-year bounds', () => {
+  assert.equal(formatDateRange('2026-01-01', '2026-01-28'), 'Jan 1 – Jan 28, 2026');
+  assert.equal(formatDateRange('2025-12-05', '2026-01-01'), 'Dec 5, 2025 – Jan 1, 2026');
+  assert.equal(formatDateRange(undefined, '2026-01-28'), null);
+  assert.equal(formatDateRange('2026-01-01', undefined), null);
+  assert.equal(formatDateRange('garbage', '2026-01-28'), null);
+});
+
+test('the date range, when supplied, is shown in findings and echoed on the result', () => {
+  const withDates = auditGa4DataQuality({
+    totalSessions: 1000,
+    channelGroups: [{ name: 'Unassigned', sessions: 300 }, { name: 'Direct', sessions: 700 }],
+    sourceMediums: [],
+    windowDays: 28,
+    startDate: '2026-01-01',
+    endDate: '2026-01-28',
+  });
+  assert.equal(withDates.dateRange, 'Jan 1 – Jan 28, 2026');
+  assert.equal(withDates.startDate, '2026-01-01');
+  // no-data path also carries the range
+  const noData = auditGa4DataQuality({ totalSessions: 0, channelGroups: [], sourceMediums: [], windowDays: 28, startDate: '2026-01-01', endDate: '2026-01-28' });
+  assert.match(noData.findings[0].message, /the last 28 days \(Jan 1 – Jan 28, 2026\)/);
+  // healthy-summary path also carries the range
+  const healthy = auditGa4DataQuality({ totalSessions: 1000, channelGroups: [{ name: 'Direct', sessions: 1000 }], sourceMediums: [], windowDays: 7, startDate: '2026-01-22', endDate: '2026-01-28' });
+  assert.match(healthy.findings[0].message, /\(Jan 22 – Jan 28, 2026\)/);
+});
+
+test('without dates, findings fall back to "the last N days" and dateRange is null', () => {
+  const r = auditGa4DataQuality({ totalSessions: 0, channelGroups: [], sourceMediums: [], windowDays: 28 });
+  assert.equal(r.dateRange, null);
+  assert.match(r.findings[0].message, /the last 28 days —/);
+  assert.ok(!r.findings[0].message.includes('('), 'no empty parens');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
