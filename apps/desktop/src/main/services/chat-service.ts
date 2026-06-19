@@ -8,6 +8,25 @@ import { createProvider, runChat } from '../llm/gateway';
 import type { ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct } from '../../shared/ipc';
 import type { LlmTurn } from '../llm/types';
 
+/**
+ * A system-prompt line telling the model the ACTUAL current date. Without this
+ * the model assumes its training-cutoff date (e.g. "October 2023"), which breaks
+ * all date reasoning: it mis-years relative dates like "May 1", rejects valid
+ * recent dates as "in the future", and answers "what's today" wrong. Pure +
+ * exported so it's unit-testable.
+ */
+export function dateContextLine(now: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const iso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const human = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  return (
+    `CURRENT DATE: today is ${human} (${iso}). Treat this as "today" for ALL date reasoning and ` +
+    `IGNORE any date from your training data. Resolve relative dates ("yesterday", "last month", ` +
+    `"May 1", "last 28 days") against this date — e.g. a bare "May 1" means the most recent past May 1. ` +
+    `Dates up to today are historical (queryable); only dates AFTER today are "in the future". `
+  );
+}
+
 // Ties the active account (provider + model + vaulted key) to the LLM gateway and
 // the read-only GTM/GA4 tool registry. The model can call tools, which run as the
 // active account against Google, to answer questions about that account's setup.
@@ -122,6 +141,10 @@ export class ChatService {
             'Unassigned traffic, or whether the data looks healthy/accurate, call audit_ga4_data_quality ' +
             '(it inspects the last N days of reporting data — default 28, pass days for another window — not ' +
             'config) and present its findings the same way. ' +
+            'For metrics over a time range, call run_ga4_report with GA4 relative dates ' +
+            '(today, yesterday, NdaysAgo) or explicit YYYY-MM-DD computed from the current date above — ' +
+            'never assume the year. GA4 has NO data for dates after today, and the most recent 1–2 days ' +
+            'may still be processing (partial); report dates resolve in the property\'s timezone. ' +
             'GA4 is READ-ONLY — you cannot apply fixes; give the user ' +
             'the exact change to make in the GA4 Admin UI. ') +
       (product === 'gtm' && active.gtmContext?.containerId
@@ -134,6 +157,7 @@ export class ChatService {
           '. Use THESE ids for all GTM operations — do not ask which account/container/workspace and ' +
           'do not re-list them unless the user asks to switch. '
         : '') +
+      dateContextLine(new Date()) +
       'Call tools when asked; never invent ids. When the user asks to list or count ' +
       'tags, triggers, variables, accounts, containers, or workspaces, the tools already ' +
       'return the COMPLETE paginated set — present EVERY item (a compact table is ideal) and ' +
