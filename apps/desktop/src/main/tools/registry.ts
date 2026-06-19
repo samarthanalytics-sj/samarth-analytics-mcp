@@ -486,6 +486,7 @@ export function buildToolRegistry(
           data.getGa4DataQuality(property, days),
         ]);
         const ga4 = auditGa4(snap);
+        const dqResult = auditGa4DataQuality(dq);
         const sections: ScorecardSection[] = [
           {
             key: 'ga4',
@@ -497,7 +498,11 @@ export function buildToolRegistry(
               recommendation: f.recommendation,
             })),
           },
-          { key: 'data_quality', label: 'GA4 data quality', findings: auditGa4DataQuality(dq).findings },
+          {
+            key: 'data_quality',
+            label: dqResult.dateRange ? `GA4 data quality (${dqResult.dateRange})` : 'GA4 data quality',
+            findings: dqResult.findings,
+          },
         ];
         return { report: buildReport(sections, { title: 'GA4 Health Report', generatedAt: new Date().toISOString() }) };
       },

@@ -111,6 +111,8 @@ function fakeData(
         channelGroups: [{ name: 'Direct', sessions: 700 }, { name: 'Unassigned', sessions: 300 }],
         sourceMediums: [{ name: '(direct) / (none)', sessions: 700 }, { name: '(not set)', sessions: 300 }],
         windowDays: days,
+        startDate: '2026-01-01',
+        endDate: '2026-01-28',
       };
     },
     getGa4PropertyDetails: async (p: string) => {
@@ -429,6 +431,8 @@ async function main(): Promise<void> {
     const sev = out.findings.map((f: { severity: string }) => f.severity);
     assert.ok(sev.includes('high'), '30% Unassigned → high');
     assert.ok(out.findings.every((f: { category: string }) => f.category === 'data_quality'));
+    assert.equal(out.dateRange, 'Jan 1 – Jan 28, 2026', 'result echoes the calendar window');
+    assert.equal(out.startDate, '2026-01-01');
     assert.ok(fd.calls.includes('ga4DataQuality:properties/9:14'));
   });
 
@@ -480,6 +484,7 @@ async function main(): Promise<void> {
     assert.ok(typeof out.report === 'string');
     assert.ok(out.report.includes('# GA4 Health Report'));
     assert.ok(out.report.includes('GA4 property') && out.report.includes('GA4 data quality'));
+    assert.ok(out.report.includes('GA4 data quality (Jan 1 – Jan 28, 2026)'), 'report shows the data-quality window');
     assert.ok(fd.calls.includes('ga4Snapshot:properties/9') && fd.calls.includes('ga4DataQuality:properties/9:30'));
   });
 
