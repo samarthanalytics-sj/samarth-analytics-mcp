@@ -294,6 +294,111 @@ export function buildToolRegistry(
       handler: async (a) => auditGa4(await data.getGa4PropertySnapshot(s(a.property))),
     },
     {
+      name: 'list_ga4_key_events',
+      description:
+        'List the key events (conversions) configured on a GA4 property — by event NAME, with counting method and whether it is a custom event. Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGa4KeyEvents(s(a.property)),
+    },
+    {
+      name: 'list_ga4_custom_dimensions',
+      description:
+        'List a GA4 property\'s custom dimensions: parameter name, display name, scope (EVENT/USER/ITEM), and description. Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGa4CustomDimensions(s(a.property)),
+    },
+    {
+      name: 'list_ga4_custom_metrics',
+      description:
+        'List a GA4 property\'s custom metrics: parameter name, display name, measurement unit, scope, and description. Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGa4CustomMetrics(s(a.property)),
+    },
+    {
+      name: 'list_ga4_google_ads_links',
+      description:
+        'List the Google Ads accounts linked to a GA4 property (customerId, ads-personalization flag). Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGa4GoogleAdsLinks(s(a.property)),
+    },
+    {
+      name: 'get_ga4_property_details',
+      description:
+        'Get a GA4 property\'s details: display name, time zone, currency, industry category, service level, parent account, create time. Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.getGa4PropertyDetails(s(a.property)),
+    },
+    {
+      name: 'get_ga4_data_retention',
+      description:
+        'Get a GA4 property\'s data-retention settings: event data retention (e.g. TWO_MONTHS / FOURTEEN_MONTHS) and whether user data resets on new activity. Requires property like "properties/123456".',
+      inputSchema: {
+        type: 'object',
+        properties: { property: { type: 'string' } },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.getGa4DataRetention(s(a.property)),
+    },
+    {
+      name: 'get_ga4_enhanced_measurement',
+      description:
+        'Get the enhanced-measurement settings of ONE GA4 WEB data stream (page views, scrolls, outbound clicks, site search, video, file downloads, etc.). Requires dataStream — the full stream resource name like "properties/123/dataStreams/456" (from list_ga4_data_streams).',
+      inputSchema: {
+        type: 'object',
+        properties: { dataStream: { type: 'string' } },
+        required: ['dataStream'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.getGa4EnhancedMeasurement(s(a.dataStream)),
+    },
+    {
+      name: 'run_ga4_realtime_report',
+      description:
+        'Run a GA4 REAL-TIME report (events in the last 30 minutes). dimensions/metrics are GA4 realtime API names (e.g. dimensions ["unifiedScreenName","country"], metrics ["activeUsers"]). Requires property like "properties/123456" and metrics.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          property: { type: 'string' },
+          dimensions: { type: 'array', items: { type: 'string' } },
+          metrics: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['property', 'metrics'],
+        additionalProperties: false,
+      },
+      handler: (a) =>
+        data.runGa4RealtimeReport({
+          property: s(a.property),
+          dimensions: Array.isArray(a.dimensions) ? a.dimensions.map(String) : [],
+          metrics: Array.isArray(a.metrics) ? a.metrics.map(String) : [],
+        }),
+    },
+    {
       name: 'analytics_scorecard',
       description:
         'Produce a unified analytics health SCORECARD: an overall 0–100 score + letter grade (A–F) with a per-section breakdown and a ranked top-issues list, combining the GTM container audit and (when a GA4 property is supplied) the GA4 property audit. Requires accountId, containerId, workspaceId; optional ga4Property like "properties/123456" to fold GA4 into the score.',
