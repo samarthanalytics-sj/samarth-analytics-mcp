@@ -91,15 +91,22 @@ export function buildGoogleTag(o: GoogleTagInput): GtmTagResource {
 
 export interface GoogleAdsConversionInput {
   name: string;
-  conversionId: string; // AW-XXXX
+  conversionId: string; // "AW-123456789" or the bare numeric id
   conversionLabel: string;
   firingTriggerId?: string[];
+}
+// GTM's awct conversionId is the NUMERIC id only — GTM rejects the "AW-" prefix
+// (and a {{variable}} reference is left as-is). Normalize so callers can pass
+// either "AW-123456789" or "123456789" and the tag still validates.
+export function normalizeAdsConversionId(id: string): string {
+  const t = id.trim();
+  return t.includes('{{') ? t : t.replace(/^AW-/i, '');
 }
 export function buildGoogleAdsConversionTag(o: GoogleAdsConversionInput): GtmTagResource {
   return {
     name: o.name,
     type: 'awct',
-    parameter: [tpl('conversionId', o.conversionId), tpl('conversionLabel', o.conversionLabel)],
+    parameter: [tpl('conversionId', normalizeAdsConversionId(o.conversionId)), tpl('conversionLabel', o.conversionLabel)],
     ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}),
   };
 }
