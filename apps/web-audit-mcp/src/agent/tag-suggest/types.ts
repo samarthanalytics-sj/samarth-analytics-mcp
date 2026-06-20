@@ -86,6 +86,9 @@ export interface SuggestedTag {
     kind: TriggerKind;
     clickUrlValue?: string;
     clickUrlOperator?: FilterOp;
+    /** For all_clicks/link_click: also filter on {{Click Text}} (e.g. a CTA). */
+    clickTextValue?: string;
+    clickTextOperator?: FilterOp;
     eventName?: string;
   };
 }

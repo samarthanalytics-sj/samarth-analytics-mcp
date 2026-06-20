@@ -6,6 +6,7 @@ import {
   buildCustomHtmlTag,
   buildTrigger,
   triggerBuiltInVars,
+  builtInVarsForTemplates,
   buildVariable,
   auditContainer,
 } from '../gtm-builders';
@@ -101,6 +102,30 @@ test('link_click trigger: linkClick + {{Click URL}} autoEventFilter, needs click
   assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Click URL}}');
   assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, 'mailto:');
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'link_click', clickUrlValue: 'mailto:' }), ['clickUrl']);
+});
+
+test('all_clicks trigger: {{Click Text}} filter (CTA) + needs clickText var', () => {
+  const tr = buildTrigger({ name: 'CTA click - Book a demo', kind: 'all_clicks', clickTextValue: 'Book a demo', clickTextOperator: 'contains' });
+  assert.equal(tr.type, 'click');
+  const f = (tr.autoEventFilter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(f.type, 'contains');
+  assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Click Text}}');
+  assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, 'Book a demo');
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'all_clicks', clickTextValue: 'Book a demo' }), ['clickText']);
+});
+
+test('click trigger: clickUrl AND clickText conditions are both emitted (AND-ed)', () => {
+  const tr = buildTrigger({ name: 'x', kind: 'all_clicks', clickUrlValue: '/buy', clickTextValue: 'Buy' });
+  assert.equal((tr.autoEventFilter ?? []).length, 2);
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'all_clicks', clickUrlValue: '/buy', clickTextValue: 'Buy' }), ['clickUrl', 'clickText']);
+});
+
+test('builtInVarsForTemplates: maps built-in var refs, ignores user variables', () => {
+  const keys = builtInVarsForTemplates(['{{Click URL}}', '{{Click Text}}', '{{Form ID}}', '{{Form URL}}', '{{GA4 Measurement ID}}', 'static']);
+  assert.deepEqual(new Set(keys), new Set(['clickUrl', 'clickText', 'formId', 'formUrl']));
+  // {{GA4 Measurement ID}} is a USER variable, not a built-in → not enabled.
+  assert.ok(!keys.includes('measurementId' as never) && !keys.some((k) => /measurement/i.test(k)));
+  assert.deepEqual(builtInVarsForTemplates([undefined, '', 'no refs']), []);
 });
 
 test('custom_event trigger: customEvent + {{_event}} filter', () => {

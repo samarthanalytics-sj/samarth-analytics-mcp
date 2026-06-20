@@ -9,6 +9,7 @@ import {
   buildCustomHtmlTag,
   buildTrigger,
   triggerBuiltInVars,
+  builtInVarsForTemplates,
   buildVariable,
   type TriggerInput,
   type VariableKind,
@@ -741,7 +742,8 @@ export function buildToolRegistry(
       description:
         'PREFERRED way to create a tag that fires on an event — builds a CORRECT GTM resource from simple fields (you do not write raw GTM JSON). One confirmed step: enables needed built-in variables, reuses an existing same-named trigger or creates it, and creates the tag linked to it. ' +
         'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for Facebook/LinkedIn/TikTok/other pixels). ' +
-        'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue + clickUrlOperator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event), "pageview", "form_submit".',
+        'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event), "pageview", "form_submit". ' +
+        'eventParameters values may be GTM built-in variables (e.g. {{Click URL}}, {{Click Text}}, {{Form ID}}, {{Form URL}}) — the needed built-in variables are auto-enabled.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -771,6 +773,8 @@ export function buildToolRegistry(
               kind: { type: 'string', enum: ['link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit'] },
               clickUrlValue: { type: 'string' },
               clickUrlOperator: { type: 'string' },
+              clickTextValue: { type: 'string' },
+              clickTextOperator: { type: 'string' },
               eventName: { type: 'string' },
             },
             required: ['name', 'kind'],
@@ -820,11 +824,25 @@ export function buildToolRegistry(
           kind: (s(ts.kind) || 'pageview') as TriggerInput['kind'],
           clickUrlValue: ts.clickUrlValue != null ? s(ts.clickUrlValue) : undefined,
           clickUrlOperator: ts.clickUrlOperator != null ? s(ts.clickUrlOperator) : undefined,
+          clickTextValue: ts.clickTextValue != null ? s(ts.clickTextValue) : undefined,
+          clickTextOperator: ts.clickTextOperator != null ? s(ts.clickTextOperator) : undefined,
           eventName: ts.eventName != null ? s(ts.eventName) : undefined,
         };
 
+        // Enable EXACTLY the built-in variables this tag needs: the trigger's,
+        // plus any referenced by the event/config parameter VALUES (e.g. an
+        // eventSettingsTable value of "{{Click Text}}" needs the Click Text
+        // built-in variable enabled, or it resolves to nothing).
+        const templateVals = [
+          ...(Array.isArray(a.eventParameters) ? a.eventParameters.map((p) => s(obj(p).value)) : []),
+          ...(Array.isArray(a.configSettings) ? a.configSettings.map((p) => s(obj(p).value)) : []),
+        ];
         const vars = Array.from(
-          new Set([...triggerBuiltInVars(triggerInput), ...(Array.isArray(a.builtInVariables) ? a.builtInVariables.map(String) : [])])
+          new Set([
+            ...triggerBuiltInVars(triggerInput),
+            ...builtInVarsForTemplates(templateVals),
+            ...(Array.isArray(a.builtInVariables) ? a.builtInVariables.map(String) : []),
+          ])
         );
         let enabledVariables: string[] = [];
         if (vars.length) {

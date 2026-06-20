@@ -956,10 +956,11 @@ const CONF_BADGE: Record<'high' | 'medium' | 'low', React.CSSProperties> = {
 
 function triggerSummary(s: SuggestedTagView): string {
   const t = s.trigger;
+  const txt = t.clickTextValue ? ` · text ${t.clickTextOperator ?? 'contains'} "${t.clickTextValue}"` : '';
   if (t.kind === 'link_click')
-    return `link click${t.clickUrlValue ? ` · URL ${t.clickUrlOperator ?? 'contains'} "${t.clickUrlValue}"` : ''}`;
+    return `link click${t.clickUrlValue ? ` · URL ${t.clickUrlOperator ?? 'contains'} "${t.clickUrlValue}"` : ''}${txt}`;
   if (t.kind === 'form_submit') return 'form submit';
-  if (t.kind === 'all_clicks') return 'all clicks';
+  if (t.kind === 'all_clicks') return `${t.clickTextValue ? 'click' : 'all clicks'}${txt}`;
   if (t.kind === 'custom_event') return `custom event${t.eventName ? ` "${t.eventName}"` : ''}`;
   if (t.kind === 'pageview') return 'page view';
   return t.kind;

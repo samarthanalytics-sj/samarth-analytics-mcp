@@ -142,6 +142,9 @@ export interface TriggerInput {
   /** For link_click/all_clicks: filter on {{Click URL}}. */
   clickUrlValue?: string;
   clickUrlOperator?: string;
+  /** For link_click/all_clicks: also filter on {{Click Text}} (e.g. a CTA). */
+  clickTextValue?: string;
+  clickTextOperator?: string;
   /** For custom_event: the dataLayer event name. */
   eventName?: string;
 }
@@ -150,9 +153,13 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
     case 'link_click':
     case 'all_clicks': {
       // Click/auto-event triggers filter the clicked element via autoEventFilter
-      // (NOT `filter`). Verified against the reference GTM MCP server.
+      // (NOT `filter`). Verified against the reference GTM MCP server. Multiple
+      // conditions are AND-ed (e.g. a CTA filtered by its {{Click Text}}).
       const t: GtmTriggerResource = { name: o.name, type: o.kind === 'link_click' ? 'linkClick' : 'click' };
-      if (o.clickUrlValue) t.autoEventFilter = [condition('{{Click URL}}', o.clickUrlOperator ?? 'contains', o.clickUrlValue)];
+      const filters: Param[] = [];
+      if (o.clickUrlValue) filters.push(condition('{{Click URL}}', o.clickUrlOperator ?? 'contains', o.clickUrlValue));
+      if (o.clickTextValue) filters.push(condition('{{Click Text}}', o.clickTextOperator ?? 'contains', o.clickTextValue));
+      if (filters.length) t.autoEventFilter = filters;
       return t;
     }
     case 'custom_event':
@@ -171,8 +178,39 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
 
 /** Built-in variables a trigger needs (so we can auto-enable them). */
 export function triggerBuiltInVars(o: TriggerInput): string[] {
-  if ((o.kind === 'link_click' || o.kind === 'all_clicks') && o.clickUrlValue) return ['clickUrl'];
-  return [];
+  const vars: string[] = [];
+  if (o.kind === 'link_click' || o.kind === 'all_clicks') {
+    if (o.clickUrlValue) vars.push('clickUrl');
+    if (o.clickTextValue) vars.push('clickText');
+  }
+  return vars;
+}
+
+// GTM built-in variable DISPLAY NAME → API `type` key, for the ones a tag's
+// event/config parameters commonly reference. Used to auto-enable exactly the
+// built-in variables a tag's {{...}} values need (user variables like
+// {{GA4 Measurement ID}} are not built-in and are intentionally absent here).
+const BUILT_IN_VAR_KEYS: Record<string, string> = {
+  'page url': 'pageUrl', 'page hostname': 'pageHostname', 'page path': 'pagePath', 'referrer': 'referrer',
+  'click element': 'clickElement', 'click classes': 'clickClasses', 'click id': 'clickId',
+  'click target': 'clickTarget', 'click url': 'clickUrl', 'click text': 'clickText',
+  'form element': 'formElement', 'form classes': 'formClasses', 'form id': 'formId',
+  'form target': 'formTarget', 'form url': 'formUrl', 'form text': 'formText',
+};
+
+/** Built-in variable type keys referenced by {{Name}} tokens in the given values
+ *  (e.g. an event parameter value "{{Click Text}}" → "clickText"). Unknown names
+ *  (user-defined variables) are skipped. */
+export function builtInVarsForTemplates(values: Array<string | undefined>): string[] {
+  const out = new Set<string>();
+  for (const v of values) {
+    if (typeof v !== 'string') continue;
+    for (const m of v.matchAll(/\{\{([^}]+)\}\}/g)) {
+      const key = BUILT_IN_VAR_KEYS[m[1].trim().toLowerCase()];
+      if (key) out.add(key);
+    }
+  }
+  return [...out];
 }
 
 /* ───────────── Variables ───────────── */

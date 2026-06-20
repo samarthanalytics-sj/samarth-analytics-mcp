@@ -51,6 +51,18 @@ const els = buildSuggestions(elInput);
 const byEvent = (e: string) => els.find((s) => s.eventName === e);
 check('email: mailto → email_click, startsWith mailto:', byEvent('email_click')?.trigger.clickUrlValue === 'mailto:' && byEvent('email_click')?.trigger.clickUrlOperator === 'startsWith');
 check('phone: tel → phone_click', byEvent('phone_click')?.trigger.clickUrlValue === 'tel:');
+
+// ── event parameters: GA4-standard, valued by GTM built-in variables ─────────
+const emailParams = byEvent('email_click')?.eventParameters ?? [];
+check('email: carries link_url={{Click URL}} + link_text={{Click Text}}',
+  emailParams.some((p) => p.name === 'link_url' && p.value === '{{Click URL}}') &&
+  emailParams.some((p) => p.name === 'link_text' && p.value === '{{Click Text}}'));
+check('download/outbound also carry link_url/link_text params',
+  (byEvent('file_download')?.eventParameters?.length ?? 0) >= 2 && (byEvent('outbound_click')?.eventParameters?.length ?? 0) >= 2);
+const leadParams = out1[0].eventParameters ?? [];
+check('form: generate_lead carries form_id={{Form ID}} + form_destination={{Form URL}}',
+  leadParams.some((p) => p.name === 'form_id' && p.value === '{{Form ID}}') &&
+  leadParams.some((p) => p.name === 'form_destination' && p.value === '{{Form URL}}'));
 check('download: flagged as Enhanced-Measurement overlap', byEvent('file_download')?.enhancedMeasurementOverlap === true);
 check('outbound: flagged as Enhanced-Measurement overlap', byEvent('outbound_click')?.enhancedMeasurementOverlap === true);
 check('email/phone are NOT EM overlap (real gaps)', byEvent('email_click')?.enhancedMeasurementOverlap === false && byEvent('phone_click')?.enhancedMeasurementOverlap === false);
@@ -89,8 +101,9 @@ const ctas = buildSuggestions({
 });
 const ctaSugs = ctas.filter((s) => s.eventName === 'cta_click');
 check('dedup: distinct CTAs stay distinct (2), same-text CTA collapses', ctaSugs.length === 2);
-check('dedup: each CTA keeps its own cta_text', new Set(ctaSugs.map((s) => s.eventParameters?.[0]?.value)).size === 2);
-check('dedup: same-text CTA across pages → site-wide', ctaSugs.find((s) => s.eventParameters?.[0]?.value === 'Buy now')?.page === 'site-wide');
+check('cta: fires for its own text via a {{Click Text}} filter', new Set(ctaSugs.map((s) => s.trigger.clickTextValue)).size === 2 && ctaSugs.every((s) => s.trigger.clickTextOperator === 'contains'));
+check('cta: cta_text param is DYNAMIC {{Click Text}} (not the scraped text)', ctaSugs.every((s) => s.eventParameters?.some((p) => p.name === 'cta_text' && p.value === '{{Click Text}}')));
+check('dedup: same-text CTA across pages → site-wide', ctaSugs.find((s) => s.trigger.clickTextValue === 'Buy now')?.page === 'site-wide');
 
 console.log(`\nTag-suggest: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
