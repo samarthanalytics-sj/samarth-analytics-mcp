@@ -15,10 +15,19 @@ const CLICK_URL = '{{Click URL}}';
 const CLICK_TEXT = '{{Click Text}}';
 const FORM_ID = '{{Form ID}}';
 const FORM_URL = '{{Form URL}}';
-/** Standard GA4 click params — what was clicked + its visible text. */
-const LINK_PARAMS = [
+const FORM_TEXT = '{{Form Text}}'; // the submit-button text ≈ GA4 form_submit_text
+// Page context on every suggested event. GA4 ALREADY auto-collects the full
+// page_location + page_title on every event, so we add the path and the referrer
+// ("previous page") rather than duplicating those.
+const PAGE_PARAMS = [
+  { name: 'page_path', value: '{{Page Path}}' },
+  { name: 'page_referrer', value: '{{Referrer}}' },
+];
+/** Standard GA4 click params — what was clicked, its text, and page context. */
+const CLICK_PARAMS = [
   { name: 'link_url', value: CLICK_URL },
   { name: 'link_text', value: CLICK_TEXT },
+  ...PAGE_PARAMS,
 ];
 // Single source of truth for "what's a downloadable file" — the collector's
 // detection regex and this GTM trigger filter are both built from it, so a
@@ -63,9 +72,13 @@ function formSuggestion(f: DetectedForm): SuggestedTag | null {
     measurementId: GA4_VAR,
     eventName,
     // Capture which form + where it submits, via the form built-in variables.
+    // (GTM has no built-in "Form Name" variable — form_text is the submit-button
+    // text; a true form_name would need a Custom JS variable.)
     eventParameters: [
       { name: 'form_id', value: FORM_ID },
       { name: 'form_destination', value: FORM_URL },
+      { name: 'form_text', value: FORM_TEXT },
+      ...PAGE_PARAMS,
     ],
     trigger: { name: `Form submit - ${f.purpose}`, kind: 'form_submit' },
   };
@@ -88,7 +101,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         ...base('email_click', 'high', false),
         label: 'Email link (mailto) → GA4 "email_click"',
         evidence: `mailto link${el.region ? ' in ' + el.region : ''}`,
-        eventParameters: LINK_PARAMS,
+        eventParameters: CLICK_PARAMS,
         trigger: { name: 'Email link click', kind: 'link_click', clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' },
       };
     case 'phone':
@@ -96,7 +109,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         ...base('phone_click', 'high', false),
         label: 'Phone link (tel) → GA4 "phone_click"',
         evidence: `tel link${el.region ? ' in ' + el.region : ''}`,
-        eventParameters: LINK_PARAMS,
+        eventParameters: CLICK_PARAMS,
         trigger: { name: 'Phone link click', kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
       };
     case 'download':
@@ -104,7 +117,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         ...base('file_download', 'medium', true), // EM already auto-tracks downloads
         label: 'File download → GA4 "file_download"  ⚠ Enhanced Measurement already covers this',
         evidence: `download link ${el.href ?? ''}`.trim(),
-        eventParameters: LINK_PARAMS,
+        eventParameters: CLICK_PARAMS,
         trigger: { name: 'File download click', kind: 'link_click', clickUrlValue: `\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
       };
     case 'outbound':
@@ -112,7 +125,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         ...base('outbound_click', 'medium', true), // EM already auto-tracks outbound
         label: 'Outbound link → GA4 "outbound_click"  ⚠ Enhanced Measurement already covers this',
         evidence: `outbound link ${el.href ?? ''}`.trim(),
-        eventParameters: LINK_PARAMS,
+        eventParameters: CLICK_PARAMS,
         trigger: { name: 'Outbound link click', kind: 'link_click' },
       };
     case 'cta':
@@ -125,6 +138,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         eventParameters: [
           { name: 'cta_text', value: CLICK_TEXT },
           { name: 'link_url', value: CLICK_URL },
+          ...PAGE_PARAMS,
         ],
         // Fire only for THIS CTA (its text), not on every click — and capture the
         // text dynamically. all_clicks covers both <button> and <a> CTAs.

@@ -1004,6 +1004,10 @@ function TagReviewPanel({
   const [confirming, setConfirming] = useState(false);
   const [creating, setCreating] = useState(false);
   const [done, setDone] = useState<{ created: number; failed: number } | null>(null);
+  const [maxPages, setMaxPages] = useState('10');
+  const [maxDepth, setMaxDepth] = useState('2');
+  const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned'] } | null>(null);
+  const [showLog, setShowLog] = useState(false);
 
   const ctx = active?.gtmContext;
   const targetReady = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -1026,9 +1030,10 @@ function TagReviewPanel({
     onError('');
     setScanning(true);
     try {
-      const res = await window.desktop.tags.scan(target);
+      const res = await window.desktop.tags.scan(target, Number(maxPages) || undefined, Number(maxDepth) || undefined);
       setMeta(res.summary);
       setWarnings(res.warnings);
+      setScanLog({ pages: res.pages, notScanned: res.notScanned });
       loadSuggestions(res.suggestions);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -1043,6 +1048,7 @@ function TagReviewPanel({
       const res = await window.desktop.tags.fromJson(pasteText);
       setMeta(null);
       setWarnings(res.warnings);
+      setScanLog(null);
       loadSuggestions(res.suggestions);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -1141,6 +1147,14 @@ function TagReviewPanel({
                 if (e.key === 'Enter') void doScan();
               }}
             />
+            <label style={styles.scanNum} title="How many pages to scan (max 25)">
+              pages
+              <input style={styles.scanNumInput} type="number" min={1} max={25} value={maxPages} disabled={scanning} onChange={(e) => setMaxPages(e.target.value)} />
+            </label>
+            <label style={styles.scanNum} title="How deep to crawl from the start URL (max 4)">
+              depth
+              <input style={styles.scanNumInput} type="number" min={1} max={4} value={maxDepth} disabled={scanning} onChange={(e) => setMaxDepth(e.target.value)} />
+            </label>
             <button style={styles.primaryBtn} onClick={doScan} disabled={!url.trim() || scanning}>
               {scanning ? 'Scanning…' : 'Scan site'}
             </button>
@@ -1187,12 +1201,62 @@ function TagReviewPanel({
           </div>
         </div>
 
+        {/* Warnings (scan or paste) */}
+        {warnings.map((w, i) => (
+          <div key={i} style={{ ...styles.muted, color: '#fcd9a5' }}>
+            ⚠ {w}
+          </div>
+        ))}
+
+        {/* Scan log: what was scanned + what wasn't, so coverage is visible */}
+        {scanLog && (
+          <div style={styles.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={styles.muted}>
+                {meta
+                  ? `Scanned ${meta.pagesScanned} of ${meta.pagesCrawled} page(s) · found ${meta.formsFound} form(s), ${meta.trackableElements} trackable element(s) → ${meta.suggestions} suggestion(s)`
+                  : ''}
+              </div>
+              <button style={styles.linkBtn} onClick={() => setShowLog((o) => !o)}>
+                {showLog ? 'hide scan log' : 'show scan log'}
+              </button>
+            </div>
+            {showLog && (
+              <div style={{ marginTop: 10 }}>
+                <div style={styles.h2}>Pages scanned ({scanLog.pages.length})</div>
+                <ul style={styles.resultList}>
+                  {scanLog.pages.map((p, i) => (
+                    <li key={i} style={styles.resultRow}>
+                      {p.page} — {p.forms} form(s), {p.elements} element(s)
+                    </li>
+                  ))}
+                  {scanLog.pages.length === 0 && <li style={styles.resultRow}>none</li>}
+                </ul>
+                {scanLog.notScanned.length > 0 && (
+                  <>
+                    <div style={{ ...styles.h2, marginTop: 12 }}>Not scanned ({scanLog.notScanned.length})</div>
+                    <ul style={styles.resultList}>
+                      {scanLog.notScanned.slice(0, 40).map((n, i) => (
+                        <li key={i} style={styles.resultRow}>
+                          {n.url} — {n.reason}
+                        </li>
+                      ))}
+                      {scanLog.notScanned.length > 40 && <li style={styles.resultRow}>…and {scanLog.notScanned.length - 40} more</li>}
+                    </ul>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Results */}
         {suggestions.length === 0 ? (
           <div style={styles.empty}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>🏷</div>
-            Scan a website to see the GA4 event tags worth creating — form submissions (with the form provider), email
-            &amp; phone clicks, file downloads, outbound links and CTAs.
+            {scanLog
+              ? 'No trackable forms or clicks were found on the scanned pages. Try increasing pages/depth, or open the scan log above to see what was covered.'
+              : 'Scan a website to see the GA4 event tags worth creating — form submissions (with the form provider), email & phone clicks, file downloads, outbound links and CTAs.'}
           </div>
         ) : (
           <>
@@ -1214,12 +1278,6 @@ function TagReviewPanel({
                 </button>
               </div>
             </div>
-
-            {warnings.map((w, i) => (
-              <div key={i} style={{ ...styles.muted, color: '#fcd9a5' }}>
-                ⚠ {w}
-              </div>
-            ))}
 
             <div style={styles.reviewList}>
               {suggestions.map((s) => {
@@ -1846,6 +1904,8 @@ const styles: Record<string, React.CSSProperties> = {
     resize: 'vertical',
     marginBottom: 8,
   },
+  scanNum: { display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#9ca3af', flex: '0 0 auto' },
+  scanNumInput: { width: 52, background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 8px', fontSize: 13 },
   reviewToolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
   reviewList: { display: 'flex', flexDirection: 'column', border: '1px solid #1f2937', borderRadius: 12, overflow: 'hidden' },
   reviewRow: { display: 'flex', gap: 12, alignItems: 'flex-start', padding: '12px 14px', borderBottom: '1px solid #1f2937', background: '#111827' },
