@@ -63,6 +63,11 @@ const leadParams = out1[0].eventParameters ?? [];
 check('form: generate_lead carries form_id={{Form ID}} + form_destination={{Form URL}}',
   leadParams.some((p) => p.name === 'form_id' && p.value === '{{Form ID}}') &&
   leadParams.some((p) => p.name === 'form_destination' && p.value === '{{Form URL}}'));
+check('form: also carries form_text={{Form Text}}', leadParams.some((p) => p.name === 'form_text' && p.value === '{{Form Text}}'));
+check('page context: every event carries page_path={{Page Path}} + page_referrer={{Referrer}}',
+  [byEvent('email_click'), out1[0]].every((s) =>
+    (s?.eventParameters ?? []).some((p) => p.name === 'page_path' && p.value === '{{Page Path}}') &&
+    (s?.eventParameters ?? []).some((p) => p.name === 'page_referrer' && p.value === '{{Referrer}}')));
 check('download: flagged as Enhanced-Measurement overlap', byEvent('file_download')?.enhancedMeasurementOverlap === true);
 check('outbound: flagged as Enhanced-Measurement overlap', byEvent('outbound_click')?.enhancedMeasurementOverlap === true);
 check('email/phone are NOT EM overlap (real gaps)', byEvent('email_click')?.enhancedMeasurementOverlap === false && byEvent('phone_click')?.enhancedMeasurementOverlap === false);

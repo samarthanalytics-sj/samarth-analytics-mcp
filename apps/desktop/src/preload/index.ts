@@ -21,6 +21,7 @@ import type {
   ProviderStatus,
   SecretSelfTest,
   SuggestedTagView,
+  TagScanOptions,
   TagScanResult,
 } from '../shared/ipc';
 
@@ -110,8 +111,8 @@ const api = {
   // gtm_tag_suggestions report) for review, then create the approved ones as
   // GTM drafts via the existing create_gtm_tracking_tag path.
   tags: {
-    scan: (url: string, maxPages?: number, maxDepth?: number): Promise<TagScanResult> =>
-      ipcRenderer.invoke('suggestions:scan', url, maxPages, maxDepth),
+    scan: (url: string, opts?: TagScanOptions): Promise<TagScanResult> =>
+      ipcRenderer.invoke('suggestions:scan', url, opts),
     fromJson: (json: string): Promise<ParsedSuggestionsResult> =>
       ipcRenderer.invoke('suggestions:fromJson', json),
     createTags: (

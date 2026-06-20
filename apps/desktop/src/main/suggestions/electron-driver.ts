@@ -17,10 +17,9 @@
 // sandbox + contextIsolation + nodeIntegration:false + no preload, not CSP.
 
 import { BrowserWindow, session } from 'electron';
-import { lookup as dnsLookup } from 'node:dns/promises';
 import { collectPageInBrowser, type PageScanRaw } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import { extractFormsInPage, type RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
-import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
+import { requestAllowed } from './ssrf';
 import type { PageDriver, DrivenPage } from './scan-core';
 
 export interface ElectronDriverOptions {
@@ -60,32 +59,6 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string, onTimeou
 // only DOM globals, so `(fn)()` runs standalone in the page's main world.
 function inPage(fn: () => unknown): string {
   return `(${fn.toString()})()`;
-}
-
-const isIpLiteral = (hostname: string): boolean => /^[\d.]+$/.test(hostname) || hostname.includes(':');
-
-/** Reject a request unless its URL is allowed AND (for named hosts) every IP it
- *  resolves to is public. Fails closed on resolution error. */
-async function requestAllowed(rawUrl: string): Promise<boolean> {
-  // String check first: scheme, allowlist, and IP-LITERAL private ranges.
-  if (!urlAllowed(rawUrl, []).ok) return false;
-  let hostname: string;
-  try {
-    hostname = new URL(rawUrl).hostname;
-  } catch {
-    return false;
-  }
-  if (isIpLiteral(hostname)) return true; // already covered by urlAllowed above
-  try {
-    const addrs = await dnsLookup(hostname, { all: true });
-    for (const { address, family } of addrs) {
-      const probe = family === 6 ? `http://[${address}]` : `http://${address}`;
-      if (!urlAllowed(probe, []).ok) return false; // resolves to a private IP → block
-    }
-    return addrs.length > 0;
-  } catch {
-    return false; // fail closed — never let an unresolvable/erroring host through
-  }
 }
 
 export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriver {
