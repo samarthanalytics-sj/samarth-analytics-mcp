@@ -32,60 +32,128 @@ export interface RawForm {
   text: string;
 }
 
-/** Serialized by Playwright and executed in the page. */
+/** Serialized by Playwright/Electron and executed in the page. Self-contained.
+ *  Finds real <form> elements AND "div/JS forms" (a container with input fields
+ *  + a submit-like control but no <form> tag — common in React/JS widgets), and
+ *  scans same-origin iframes (embedded provider forms). */
 export function extractFormsInPage(): RawForm[] {
   const MAX_FORMS = 25;
   const MAX_FIELDS = 50;
+  // High-precision submit-intent vocabulary (kept tight to avoid matching
+  // pagination/filter buttons). Anchored on the button so we find the right box.
+  const SUBMIT_RE = /\b(submit|send|subscribe|sign\s*up|sign\s*me\s*up|get\s+started|register|join\b|request\s+(a\s+)?(quote|demo|info|callback)|contact\s+us|book\s+(a\s+)?(demo|call|meeting)|get\s+(a\s+)?quote)\b/i;
+  const TEXTISH = new Set(['text', 'email', 'tel', 'url', 'search', 'password', 'number', 'textarea']);
   const out: RawForm[] = [];
-  const forms = Array.from(document.querySelectorAll('form')).slice(0, MAX_FORMS);
-  forms.forEach((form, index) => {
-    const fields: RawFormField[] = [];
-    const elements = Array.from(form.querySelectorAll('input, select, textarea')).slice(0, MAX_FIELDS);
-    for (const el of elements) {
-      const input = el as HTMLInputElement;
-      const type = (input.type || el.tagName).toLowerCase();
-      if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'image' || type === 'reset') continue;
-      let label = '';
-      if (input.id) {
-        const lab = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
+
+  const fieldOf = (el: Element): RawFormField | null => {
+    const input = el as HTMLInputElement;
+    const type = (input.type || el.tagName).toLowerCase();
+    if (type === 'hidden' || type === 'submit' || type === 'button' || type === 'image' || type === 'reset') return null;
+    let label = '';
+    const doc = el.ownerDocument || document;
+    if (input.id) {
+      try {
+        const lab = doc.querySelector(`label[for="${CSS.escape(input.id)}"]`);
         if (lab) label = (lab.textContent || '').trim();
+      } catch {
+        /* invalid id */
       }
-      if (!label) {
-        const closest = el.closest('label');
-        if (closest) label = (closest.textContent || '').trim();
+    }
+    if (!label) {
+      const closest = el.closest('label');
+      if (closest) label = (closest.textContent || '').trim();
+    }
+    if (!label) label = el.getAttribute('aria-label') || '';
+    return {
+      tag: el.tagName.toLowerCase(),
+      type,
+      name: input.name || '',
+      id: input.id || '',
+      label: label.slice(0, 160),
+      placeholder: (input.placeholder || '').slice(0, 160),
+      autocomplete: input.autocomplete || '',
+      required: input.required === true,
+      ...(type === 'checkbox' || type === 'radio' ? { checked: input.checked === true } : {}),
+    };
+  };
+  const fieldsIn = (root: Element): RawFormField[] => {
+    const fields: RawFormField[] = [];
+    for (const el of Array.from(root.querySelectorAll('input, select, textarea')).slice(0, MAX_FIELDS)) {
+      const f = fieldOf(el);
+      if (f) fields.push(f);
+    }
+    return fields;
+  };
+  const privacyIn = (root: Element): boolean =>
+    Boolean(root.querySelector('a[href*="privacy"], a[href*="datenschutz"], a[href*="confidentialite"], a[href*="privacidad"], a[href*="cookie-policy"]'));
+
+  const scanDoc = (doc: Document): void => {
+    // 1. Real <form> elements.
+    for (const form of Array.from(doc.querySelectorAll('form')).slice(0, MAX_FORMS)) {
+      if (out.length >= MAX_FORMS) break;
+      const fields = fieldsIn(form);
+      let action = '';
+      try {
+        action = new URL(form.getAttribute('action') || '', (doc.location || location).href).href;
+      } catch {
+        action = form.getAttribute('action') || '';
       }
-      if (!label) label = el.getAttribute('aria-label') || '';
-      fields.push({
-        tag: el.tagName.toLowerCase(),
-        type,
-        name: input.name || '',
-        id: input.id || '',
-        label: label.slice(0, 160),
-        placeholder: (input.placeholder || '').slice(0, 160),
-        autocomplete: input.autocomplete || '',
-        required: input.required === true,
-        ...(type === 'checkbox' || type === 'radio' ? { checked: input.checked === true } : {}),
+      out.push({
+        index: out.length,
+        action,
+        method: (form.getAttribute('method') || 'get').toLowerCase(),
+        fieldCount: fields.length,
+        fields,
+        hasPrivacyLink: privacyIn(form),
+        text: (form.textContent || '').toLowerCase().replace(/\s+/g, ' ').slice(0, 1500),
       });
     }
-    let action = '';
-    try {
-      action = new URL(form.getAttribute('action') || '', location.href).href;
-    } catch {
-      action = form.getAttribute('action') || '';
+    // 2. div/JS "forms": a non-<form> container with input field(s) + a submit-
+    //    like control. Anchored on the submit button → climb to the smallest
+    //    ancestor that also holds a text-ish field. Requires a real text input
+    //    (not just selects) so filter/search widgets aren't mistaken for forms.
+    const seen: Element[] = [];
+    for (const btn of Array.from(doc.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]'))) {
+      if (out.length >= MAX_FORMS) break;
+      if (btn.closest('form')) continue;
+      const label = ((btn.textContent || '') + ' ' + ((btn as HTMLInputElement).value || '')).trim();
+      if (!SUBMIT_RE.test(label)) continue;
+      let host: Element | null = null;
+      let node: Element | null = btn.parentElement;
+      for (let i = 0; node && i < 6; i++, node = node.parentElement) {
+        if (node.tagName === 'FORM') break;
+        if (fieldsIn(node).length >= 1) {
+          host = node;
+          break;
+        }
+      }
+      if (!host || host.closest('form')) continue;
+      // Skip overlapping hosts (nested clusters resolving to the same widget).
+      if (seen.some((h) => h.contains(host!) || host!.contains(h))) continue;
+      const fields = fieldsIn(host);
+      if (!fields.some((f) => TEXTISH.has(f.type))) continue;
+      seen.push(host);
+      out.push({
+        index: out.length,
+        action: '', // div/JS forms submit via JS — no element action to read
+        method: 'js',
+        fieldCount: fields.length,
+        fields,
+        hasPrivacyLink: privacyIn(host),
+        text: ((host.textContent || '') + ' ' + label).toLowerCase().replace(/\s+/g, ' ').slice(0, 1500),
+      });
     }
-    const privacyLink = form.querySelector(
-      'a[href*="privacy"], a[href*="datenschutz"], a[href*="confidentialite"], a[href*="privacidad"], a[href*="cookie-policy"]',
-    );
-    out.push({
-      index,
-      action,
-      method: (form.getAttribute('method') || 'get').toLowerCase(),
-      fieldCount: fields.length,
-      fields,
-      hasPrivacyLink: Boolean(privacyLink),
-      text: (form.textContent || '').toLowerCase().replace(/\s+/g, ' ').slice(0, 1500),
-    });
-  });
+  };
+
+  scanDoc(document);
+  for (const fr of Array.from(document.querySelectorAll('iframe')).slice(0, 12)) {
+    try {
+      const d = (fr as HTMLIFrameElement).contentDocument;
+      if (d && d.body) scanDoc(d);
+    } catch {
+      /* cross-origin iframe — inaccessible */
+    }
+  }
   return out;
 }
 

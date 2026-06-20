@@ -13,21 +13,40 @@
 import { ipcMain } from 'electron';
 import type { GoogleDataService } from '../google/data-service';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
-import type { CreateTagOutcome, SuggestedTagView } from '../../shared/ipc';
-import { crawlAndSuggest } from './scan-core';
+import type { CreateTagOutcome, SuggestedTagView, TagScanOptions } from '../../shared/ipc';
+import { crawlAndSuggest, type PageDriver } from './scan-core';
 import { createElectronDriver } from './electron-driver';
+import { createCheerioDriver } from './cheerio-driver';
+import { createPlaywrightDriver } from './playwright-driver';
 import { parseSuggestions, createSuggestedTags } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
+
+const clampSettle = (ms: number | undefined): number | undefined =>
+  ms === undefined || !Number.isFinite(ms) || ms <= 0 ? undefined : Math.min(Math.floor(ms), 10_000);
+
+async function makeDriver(opts: TagScanOptions): Promise<PageDriver> {
+  const settleMs = clampSettle(opts.settleMs);
+  switch (opts.engine) {
+    case 'cheerio':
+      return createCheerioDriver();
+    case 'playwright':
+      return createPlaywrightDriver({ settleMs }); // throws PlaywrightUnavailableError if not installed
+    case 'electron':
+    default:
+      return createElectronDriver(settleMs !== undefined ? { settleMs } : {});
+  }
+}
 
 export function registerSuggestionsIpc(data: GoogleDataService): void {
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
 
-  ipcMain.handle('suggestions:scan', async (_e, url: unknown, maxPages?: number, maxDepth?: number) => {
+  ipcMain.handle('suggestions:scan', async (_e, url: unknown, opts?: TagScanOptions) => {
     const target = String(url ?? '').trim();
     const verdict = urlAllowed(target, []);
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
-    const driver = createElectronDriver();
-    return crawlAndSuggest(driver, target, { maxPages, maxDepth });
+    const o = opts ?? {};
+    const driver = await makeDriver(o);
+    return crawlAndSuggest(driver, target, { maxPages: o.maxPages, maxDepth: o.maxDepth });
   });
 
   ipcMain.handle(

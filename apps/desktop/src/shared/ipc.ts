@@ -136,6 +136,19 @@ export interface SuggestedTagView {
   };
 }
 
+/** Which scraping engine the desktop uses for a scan. */
+export type ScanEngine = 'electron' | 'cheerio' | 'playwright';
+
+/** Options for a URL scan (suggestions:scan). */
+export interface TagScanOptions {
+  maxPages?: number;
+  maxDepth?: number;
+  /** Post-load settle (ms) for the browser engines — lets JS-rendered forms appear. */
+  settleMs?: number;
+  /** electron (default, no install) · cheerio (no browser) · playwright (optional). */
+  engine?: ScanEngine;
+}
+
 /** Result of crawling a URL for tag suggestions (suggestions:scan). */
 export interface TagScanResult {
   site: string;

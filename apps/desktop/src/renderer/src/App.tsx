@@ -14,6 +14,7 @@ import type {
   MonitorAlert,
   MonitorConfig,
   MonitorStatus,
+  ScanEngine,
   SecretSelfTest,
   SuggestedTagView,
   TagScanResult,
@@ -1006,6 +1007,8 @@ function TagReviewPanel({
   const [done, setDone] = useState<{ created: number; failed: number } | null>(null);
   const [maxPages, setMaxPages] = useState('10');
   const [maxDepth, setMaxDepth] = useState('2');
+  const [engine, setEngine] = useState<ScanEngine>('electron');
+  const [settleMs, setSettleMs] = useState('2500');
   const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned'] } | null>(null);
   const [showLog, setShowLog] = useState(false);
 
@@ -1030,7 +1033,12 @@ function TagReviewPanel({
     onError('');
     setScanning(true);
     try {
-      const res = await window.desktop.tags.scan(target, Number(maxPages) || undefined, Number(maxDepth) || undefined);
+      const res = await window.desktop.tags.scan(target, {
+        maxPages: Number(maxPages) || undefined,
+        maxDepth: Number(maxDepth) || undefined,
+        settleMs: Number(settleMs) || undefined,
+        engine,
+      });
       setMeta(res.summary);
       setWarnings(res.warnings);
       setScanLog({ pages: res.pages, notScanned: res.notScanned });
@@ -1159,9 +1167,29 @@ function TagReviewPanel({
               {scanning ? 'Scanning…' : 'Scan site'}
             </button>
           </div>
+          <div style={{ ...styles.formRow, marginTop: 2 }}>
+            <label style={styles.scanNum} title="Browser = Electron's Chromium (default). Static = Cheerio, no JS (fast). Playwright = optional.">
+              engine
+              <select style={styles.scanSelect} value={engine} disabled={scanning} onChange={(e) => setEngine(e.target.value as ScanEngine)}>
+                <option value="electron">Browser (Electron)</option>
+                <option value="cheerio">Static (Cheerio · no JS)</option>
+                <option value="playwright">Playwright (optional)</option>
+              </select>
+            </label>
+            {engine !== 'cheerio' && (
+              <label style={styles.scanNum} title="Wait after load for JS-rendered forms/embeds (ms, max 10000)">
+                settle ms
+                <input style={styles.scanNumInput} type="number" min={0} max={10000} step={500} value={settleMs} disabled={scanning} onChange={(e) => setSettleMs(e.target.value)} />
+              </label>
+            )}
+          </div>
           <div style={styles.muted}>
-            Crawls same-site pages in a hidden browser (read-only — nothing is clicked or submitted). Nothing is created
-            until you approve.{' '}
+            {engine === 'cheerio'
+              ? 'Static fetch + parse (no browser, no JavaScript) — fast, best for server-rendered pages.'
+              : engine === 'playwright'
+                ? 'Playwright (optional — requires installing it in apps/desktop). Read-only; nothing is clicked or submitted.'
+                : "Crawls same-site pages in Electron's built-in browser (read-only — nothing is clicked or submitted)."}{' '}
+            Nothing is created until you approve.{' '}
             <button style={styles.linkBtn} onClick={() => setPasteOpen((o) => !o)}>
               {pasteOpen ? 'hide paste' : 'or paste a gtm_tag_suggestions report'}
             </button>
@@ -1906,6 +1934,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   scanNum: { display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#9ca3af', flex: '0 0 auto' },
   scanNumInput: { width: 52, background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 8px', fontSize: 13 },
+  scanSelect: { background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 8px', fontSize: 13 },
   reviewToolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
   reviewList: { display: 'flex', flexDirection: 'column', border: '1px solid #1f2937', borderRadius: 12, overflow: 'hidden' },
   reviewRow: { display: 'flex', gap: 12, alignItems: 'flex-start', padding: '12px 14px', borderBottom: '1px solid #1f2937', background: '#111827' },

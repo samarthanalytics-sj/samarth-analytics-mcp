@@ -24,44 +24,64 @@ export interface PageScanRaw {
   signals: PageSignals;
 }
 
-/** Serialized by Playwright and executed IN the page (DOM globals). */
+/** Serialized by Playwright/Electron and executed IN the page (DOM globals).
+ *  Self-contained (no outer refs) so .toString()-injection works. Scans the top
+ *  document AND same-origin iframes (embedded forms/widgets often live in one). */
 export function collectPageInBrowser(): PageScanRaw {
   const MAX = 400;
+  const elements: RawElement[] = [];
+  const scriptSrcs: string[] = [];
+  const classNames = new Set<string>();
+  const selectorsPresent = new Set<string>();
+  const PROVIDER_SELECTORS = ['.hs-form', '[data-tf-widget]', '#mce-EMAIL', '#mc-embedded-subscribe', '.gform_wrapper', '.wpcf7', '.wpforms-form', '.wpforms-container'];
+
   const regionOf = (el: Element): RawElement['region'] => {
     const t = el.closest('header,footer,nav,main')?.tagName.toLowerCase();
     return t === 'header' || t === 'footer' || t === 'nav' || t === 'main' ? t : '';
   };
   const txt = (el: Element): string => (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120);
-  const elements: RawElement[] = [];
-  for (const a of Array.from(document.querySelectorAll('a[href]')).slice(0, MAX)) {
-    const el = a as HTMLAnchorElement;
-    elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el) });
-  }
-  // :not(a) — an <a href role="button"> is already captured (with its href) by the
-  // anchor query above; without this it would be emitted a second time as a hrefless
-  // "button" and double-classified.
-  for (const b of Array.from(document.querySelectorAll('button, [role="button"]:not(a)')).slice(0, MAX)) {
-    elements.push({ tag: 'button', href: '', text: txt(b), hasDownload: false, region: regionOf(b) });
-  }
-  const scriptSrcs = Array.from(document.querySelectorAll('script[src]'))
-    .map((s) => (s as HTMLScriptElement).src)
-    .slice(0, 200);
-  const classNames = new Set<string>();
-  for (const el of Array.from(document.querySelectorAll('[class]')).slice(0, 1000)) {
-    for (const c of (el as HTMLElement).classList) classNames.add(c);
-    if (classNames.size > 600) break;
-  }
-  const selectorsPresent: string[] = [];
-  for (const sel of ['.hs-form', '[data-tf-widget]', '#mce-EMAIL', '#mc-embedded-subscribe', '.gform_wrapper', '.wpcf7', '.wpforms-form', '.wpforms-container']) {
+
+  const scanDoc = (doc: Document): void => {
+    for (const a of Array.from(doc.querySelectorAll('a[href]')).slice(0, MAX)) {
+      if (elements.length >= MAX * 2) break;
+      const el = a as HTMLAnchorElement;
+      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el) });
+    }
+    // :not(a) — an <a href role="button"> is already captured (with its href) by
+    // the anchor query above; without this it would be emitted again as a hrefless
+    // "button" and double-classified.
+    for (const b of Array.from(doc.querySelectorAll('button, [role="button"]:not(a)')).slice(0, MAX)) {
+      if (elements.length >= MAX * 2) break;
+      elements.push({ tag: 'button', href: '', text: txt(b), hasDownload: false, region: regionOf(b) });
+    }
+    for (const s of Array.from(doc.querySelectorAll('script[src]')).slice(0, 200)) scriptSrcs.push((s as HTMLScriptElement).src);
+    for (const el of Array.from(doc.querySelectorAll('[class]')).slice(0, 1000)) {
+      for (const c of (el as HTMLElement).classList) classNames.add(c);
+      if (classNames.size > 600) break;
+    }
+    for (const sel of PROVIDER_SELECTORS) {
+      try {
+        if (doc.querySelector(sel)) selectorsPresent.add(sel);
+      } catch {
+        /* invalid selector */
+      }
+    }
+    const mkto = doc.querySelector('[id^="mktoForm_"]') as HTMLElement | null;
+    if (mkto?.id) selectorsPresent.add('#' + mkto.id);
+  };
+
+  scanDoc(document);
+  // Same-origin iframes (HubSpot/Typeform/Marketo often render the form in one).
+  // Cross-origin frames throw on contentDocument access → skipped by design.
+  for (const fr of Array.from(document.querySelectorAll('iframe')).slice(0, 12)) {
     try {
-      if (document.querySelector(sel)) selectorsPresent.push(sel);
+      const d = (fr as HTMLIFrameElement).contentDocument;
+      if (d && d.body) scanDoc(d);
     } catch {
-      /* invalid selector */
+      /* cross-origin iframe — inaccessible */
     }
   }
-  const mkto = document.querySelector('[id^="mktoForm_"]') as HTMLElement | null;
-  if (mkto?.id) selectorsPresent.push('#' + mkto.id);
-  return { elements, signals: { scriptSrcs, classNames: Array.from(classNames), selectorsPresent } };
+  return { elements, signals: { scriptSrcs: scriptSrcs.slice(0, 300), classNames: Array.from(classNames), selectorsPresent: Array.from(selectorsPresent) } };
 }
 
 /* ── PURE classification (unit-tested, no browser) ── */
