@@ -1,3 +1,9 @@
+## [1.19.8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.7...v1.19.8) (2026-06-20)
+
+### Bug Fixes
+
+* **desktop:** strip the AW- prefix from Google Ads conversion ids ([8858387](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8858387a0f9e5f4355a9ca8545edfc1e9c03fca9))
+
 ## [1.19.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.6...v1.19.7) (2026-06-19)
 
 ### Bug Fixes
