@@ -20,6 +20,7 @@ scored findings.
 | `forms_scan` | Per-page form inventory: fields + labels, PII categories (email/phone/name/address/DOB/gov-ID/payment), marketing opt-ins and their default state, privacy issues. |
 | `consent_banner_detect` | Identify the CMP (OneTrust, Cookiebot, Usercentrics, Didomi, Quantcast/TCF, TrustArc, Complianz, CookieYes, Iubenda, Osano, Termly, consentmanager, Borlabs, Klaro, tarteaucitron + generic heuristic) and its accept/reject/settings controls — without clicking. |
 | `consent_scenario_capture` | Load one page under `ignore` / `accept` / `reject` and capture tracker hits (ms-timed vs. the banner click), Consent Mode v2 events, cookies before/after, console errors. |
+| `gtm_tag_suggestions` | **Measurement plan from a URL.** Crawl → per-page form + element scan → suggest the GA4 event tags worth creating: contact/signup/newsletter forms (with provider — HubSpot, Typeform, Mailchimp, Marketo, Pardot, Gravity Forms, CF7, WPForms) → `generate_lead`/`sign_up`/`newsletter_signup`; mailto → `email_click`, tel → `phone_click`, downloads, outbound, CTAs. Deduped + ranked; what GA4 Enhanced Measurement already auto-tracks is flagged, not pushed. Each suggestion is in the `create_gtm_tracking_tag` payload shape. Read-only — DOM is read, never clicked or submitted. |
 
 ### What the findings catch
 

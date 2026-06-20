@@ -192,6 +192,45 @@ export function registerAllTools(server: McpServer): void {
     },
   );
 
+  // ── gtm_tag_suggestions ───────────────────────────────────────────────────
+  server.registerTool(
+    'gtm_tag_suggestions',
+    {
+      description:
+        'Scan a website and suggest the GA4 event tags worth creating in GTM — a "measurement plan from a URL". ' +
+        'Crawls same-site pages (read-only), then on each page inventories forms (contact/signup/newsletter → ' +
+        'generate_lead/sign_up/newsletter_signup, with the form provider detected: HubSpot, Typeform, Mailchimp, ' +
+        'Marketo, Pardot, Gravity Forms, Contact Form 7, WPForms) and trackable elements (mailto → email_click, ' +
+        'tel → phone_click, file downloads, outbound links, CTA buttons). Suggestions are deduped site-wide and ' +
+        'ranked; each is returned in the tag-payload shape the GTM create_gtm_tracking_tag tool accepts (the caller ' +
+        'supplies accountId/containerId/workspaceId), so it can be created draft-only behind approval. Anything GA4 ' +
+        'Enhanced Measurement ALREADY auto-tracks (file ' +
+        'downloads, outbound clicks) is flagged enhancedMeasurementOverlap:true rather than pushed, so you do not ' +
+        'double-track. Read-only and bounded by maxPages/scanPages and a private-network guard; forms are ' +
+        'inventoried, never filled or submitted, and no element other than the page itself is ever interacted with.',
+      inputSchema: z.object({
+        url: urlField,
+        maxPages: z.number().int().positive().optional()
+          .describe('Crawl page budget (default 10, hard cap 25).'),
+        maxDepth: z.number().int().positive().optional()
+          .describe('Crawl depth from the start URL (default 2, hard cap 4).'),
+        scanPages: z.number().int().positive().optional()
+          .describe('How many crawled pages to deep-scan for tags (default = pages crawled, cap 25). Entry page + most form-heavy first.'),
+      }),
+    },
+    async ({ url, maxPages, maxDepth, scanPages }) => {
+      const rejected = admit(url);
+      if (rejected) return rejected;
+      try {
+        const { scanSiteForTagSuggestions } = await import('../agent/tag-suggest/scan.js');
+        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages });
+        return jsonResult(report);
+      } catch (err) {
+        return errorResult('gtm_tag_suggestions', err);
+      }
+    },
+  );
+
   // ── consent_compliance_audit ──────────────────────────────────────────────
   server.registerTool(
     'consent_compliance_audit',
