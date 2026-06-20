@@ -17,6 +17,7 @@ import { ChatService } from './services/chat-service';
 import { registerChatIpc } from './ipc/chat-ipc';
 import { MonitorService } from './services/monitor-service';
 import { registerMonitorIpc } from './ipc/monitor-ipc';
+import { registerSuggestionsIpc } from './suggestions/suggestion-ipc';
 import type { MonitorAlert } from '../shared/ipc';
 
 // Phase 0 scaffold: boot a window, wire a minimal, secure IPC bridge, and prove
@@ -153,6 +154,7 @@ app.whenReady().then(() => {
   registerDataIpc(dataService);
   registerChatIpc(chatService);
   registerMonitorIpc(monitor);
+  registerSuggestionsIpc(dataService);
   createWindow();
 
   app.on('activate', () => {

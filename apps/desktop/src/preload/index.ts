@@ -5,6 +5,7 @@ import type {
   ChatReply,
   ChatStreamEvent,
   ChatTurn,
+  CreateTagOutcome,
   Ga4AccountView,
   GoogleClientStatus,
   GoogleProduct,
@@ -16,8 +17,11 @@ import type {
   MonitorAlert,
   MonitorConfig,
   MonitorStatus,
+  ParsedSuggestionsResult,
   ProviderStatus,
   SecretSelfTest,
+  SuggestedTagView,
+  TagScanResult,
 } from '../shared/ipc';
 
 // The ONLY surface the renderer can reach in the main process. Every capability
@@ -100,6 +104,23 @@ const api = {
     // (possibly edited) args to apply, or null to decline.
     confirm: (confirmId: string, result: Record<string, unknown> | null): Promise<void> =>
       ipcRenderer.invoke('llm:confirm:respond', confirmId, result),
+  },
+
+  // Tag suggestions ("measurement plan from a URL"): scan a site (or paste a
+  // gtm_tag_suggestions report) for review, then create the approved ones as
+  // GTM drafts via the existing create_gtm_tracking_tag path.
+  tags: {
+    scan: (url: string, maxPages?: number, maxDepth?: number): Promise<TagScanResult> =>
+      ipcRenderer.invoke('suggestions:scan', url, maxPages, maxDepth),
+    fromJson: (json: string): Promise<ParsedSuggestionsResult> =>
+      ipcRenderer.invoke('suggestions:fromJson', json),
+    createTags: (
+      accountId: string,
+      containerId: string,
+      workspaceId: string,
+      suggestions: SuggestedTagView[]
+    ): Promise<CreateTagOutcome[]> =>
+      ipcRenderer.invoke('suggestions:createTags', accountId, containerId, workspaceId, suggestions),
   },
 
   // Continuous monitoring: schedule auto re-audits of the active container and

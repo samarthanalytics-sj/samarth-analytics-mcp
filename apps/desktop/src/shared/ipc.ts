@@ -107,6 +107,69 @@ export interface Ga4AccountView {
   propertyCount: number;
 }
 
+/* ── Tag suggestions (the "measurement plan from a URL" review/approve panel) ──
+   SuggestedTagView mirrors web-audit's SuggestedTag, declared locally so the
+   renderer/shared layer stays dependency-free. It is the create_gtm_tracking_tag
+   payload shape plus review metadata (label/evidence/confidence/EM-overlap). */
+export interface SuggestedTagView {
+  id: string;
+  /** "/contact" or "site-wide" once deduped across pages. */
+  page: string;
+  label: string;
+  evidence: string;
+  confidence: 'high' | 'medium' | 'low';
+  /** GA4 Enhanced Measurement already auto-tracks this — flagged, not pushed. */
+  enhancedMeasurementOverlap: boolean;
+  platform: 'ga4_event';
+  tagName: string;
+  measurementId: string;
+  eventName: string;
+  eventParameters?: Array<{ name: string; value: string }>;
+  trigger: {
+    name: string;
+    kind: string;
+    clickUrlValue?: string;
+    clickUrlOperator?: string;
+    eventName?: string;
+  };
+}
+
+/** Result of crawling a URL for tag suggestions (suggestions:scan). */
+export interface TagScanResult {
+  site: string;
+  siteHost: string;
+  scannedAt: string;
+  summary: {
+    pagesCrawled: number;
+    pagesScanned: number;
+    formsFound: number;
+    trackableElements: number;
+    suggestions: number;
+    byConfidence: { high: number; medium: number; low: number };
+    enhancedMeasurementOverlap: number;
+    newTracking: number;
+  };
+  suggestions: SuggestedTagView[];
+  pages: Array<{ page: string; forms: number; elements: number }>;
+  notScanned: Array<{ url: string; reason: string }>;
+  warnings: string[];
+}
+
+/** Result of parsing a pasted plan (suggestions:fromJson). */
+export interface ParsedSuggestionsResult {
+  suggestions: SuggestedTagView[];
+  warnings: string[];
+}
+
+/** Per-tag outcome of creating approved suggestions (suggestions:createTags). */
+export interface CreateTagOutcome {
+  id: string;
+  ok: boolean;
+  tagName?: string;
+  triggerReused?: boolean;
+  error?: string;
+}
+
 /** Continuous-monitoring config: auto re-audit the active container on a timer. */
 export interface MonitorConfig {
   enabled: boolean;
