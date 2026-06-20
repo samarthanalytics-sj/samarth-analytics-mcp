@@ -8,6 +8,10 @@
 import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag } from './types.js';
 
 const GA4_VAR = '{{GA4 Measurement ID}}';
+// Single source of truth for "what's a downloadable file" — the collector's
+// detection regex and this GTM trigger filter are both built from it, so a
+// detected download always matches the tag we suggest for it.
+export const DOWNLOAD_EXT = 'pdf|zip|docx?|xlsx?|pptx?|csv|dmg|exe|rar|7z|mp4|mp3|pkg|apk';
 const cap = (s: string): string => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 // djb2 → base36; stable, no crypto dependency.
@@ -81,7 +85,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         ...base('file_download', 'medium', true), // EM already auto-tracks downloads
         label: 'File download → GA4 "file_download"  ⚠ Enhanced Measurement already covers this',
         evidence: `download link ${el.href ?? ''}`.trim(),
-        trigger: { name: 'File download click', kind: 'link_click', clickUrlValue: '\\.(pdf|zip|docx?|xlsx?|pptx?|csv|dmg|exe)(\\?|$)', clickUrlOperator: 'matchRegex' },
+        trigger: { name: 'File download click', kind: 'link_click', clickUrlValue: `\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
       };
     case 'outbound':
       return {
