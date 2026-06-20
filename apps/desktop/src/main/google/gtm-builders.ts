@@ -1,7 +1,7 @@
 // Pure builders that construct valid Google Tag Manager API v2 resources from
 // simple inputs, so the LLM supplies fields and OUR code guarantees the correct
-// shape (type codes, parameter keys, the eventParameters list-of-maps, etc.).
-// No I/O — fully unit-testable.
+// shape (type codes, parameter keys, the eventSettingsTable list-of-maps keyed
+// parameter/parameterValue, etc.). No I/O — fully unit-testable.
 
 type Param = Record<string, unknown>;
 const tpl = (key: string, value: string): Param => ({ type: 'template', key, value });
@@ -44,15 +44,49 @@ export function buildGa4EventTag(o: Ga4EventInput): GtmTagResource {
     { type: 'tagReference', key: 'measurementId', value: '' },
     tpl('measurementIdOverride', o.measurementId),
     tpl('eventName', o.eventName),
+    // Off by default — present on 99% of real GA4 event tags (corpus of 562).
+    boolean('sendEcommerceData', false),
   ];
   if (o.eventParameters?.length) {
+    // Event parameters live in `eventSettingsTable` as a list of maps keyed
+    // `parameter`/`parameterValue` — NOT an `eventParameters` list of name/value
+    // maps (0 of 8,148 real GA4 tags use that; 5,127 use eventSettingsTable).
+    // The old shape was silently ignored by GTM, dropping every parameter.
     parameter.push({
       type: 'list',
-      key: 'eventParameters',
-      list: o.eventParameters.map((p) => ({ type: 'map', map: [tpl('name', p.name), tpl('value', p.value)] })),
+      key: 'eventSettingsTable',
+      list: o.eventParameters.map((p) => ({
+        type: 'map',
+        map: [tpl('parameter', p.name), tpl('parameterValue', p.value)],
+      })),
     });
   }
   return { name: o.name, type: 'gaawe', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
+}
+
+export interface GoogleTagInput {
+  name: string;
+  tagId: string; // G-XXXX / AW-XXXX / GT-XXXX (or {{Variable}})
+  /** Optional config settings (key/value), e.g. send_page_view=false. */
+  configSettings?: Array<{ name: string; value: string }>;
+  firingTriggerId?: string[];
+}
+// The "Google tag" (googtag) — the modern base tag that loads gtag.js and
+// configures GA4/Ads. 4th-most-common tag type in the corpus (826). Config
+// settings use configSettingsTable with parameter/parameterValue maps.
+export function buildGoogleTag(o: GoogleTagInput): GtmTagResource {
+  const parameter: Param[] = [tpl('tagId', o.tagId)];
+  if (o.configSettings?.length) {
+    parameter.push({
+      type: 'list',
+      key: 'configSettingsTable',
+      list: o.configSettings.map((p) => ({
+        type: 'map',
+        map: [tpl('parameter', p.name), tpl('parameterValue', p.value)],
+      })),
+    });
+  }
+  return { name: o.name, type: 'googtag', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
 }
 
 export interface GoogleAdsConversionInput {
