@@ -15,9 +15,11 @@ import type { GoogleDataService } from '../google/data-service';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions } from '../../shared/ipc';
 import { crawlAndSuggest, type PageDriver } from './scan-core';
+// Electron is the default, zero-install engine — imported eagerly. The OPTIONAL
+// engines (Cheerio / Playwright) are imported LAZILY so a missing optional
+// package never crashes the app at startup; it only fails (with a clear hint) if
+// that engine is actually selected.
 import { createElectronDriver } from './electron-driver';
-import { createCheerioDriver } from './cheerio-driver';
-import { createPlaywrightDriver } from './playwright-driver';
 import { parseSuggestions, createSuggestedTags } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 
@@ -26,15 +28,20 @@ const clampSettle = (ms: number | undefined): number | undefined =>
 
 async function makeDriver(opts: TagScanOptions): Promise<PageDriver> {
   const settleMs = clampSettle(opts.settleMs);
-  switch (opts.engine) {
-    case 'cheerio':
-      return createCheerioDriver();
-    case 'playwright':
-      return createPlaywrightDriver({ settleMs }); // throws PlaywrightUnavailableError if not installed
-    case 'electron':
-    default:
-      return createElectronDriver(settleMs !== undefined ? { settleMs } : {});
+  if (opts.engine === 'cheerio') {
+    let mod: typeof import('./cheerio-driver');
+    try {
+      mod = await import('./cheerio-driver');
+    } catch {
+      throw new Error('The Static (Cheerio) engine needs the "cheerio" package. Run `npm install` in apps/desktop, then restart — or use the Browser engine.');
+    }
+    return mod.createCheerioDriver();
   }
+  if (opts.engine === 'playwright') {
+    const mod = await import('./playwright-driver');
+    return mod.createPlaywrightDriver({ settleMs }); // throws PlaywrightUnavailableError if not installed
+  }
+  return createElectronDriver(settleMs !== undefined ? { settleMs } : {});
 }
 
 export function registerSuggestionsIpc(data: GoogleDataService): void {
