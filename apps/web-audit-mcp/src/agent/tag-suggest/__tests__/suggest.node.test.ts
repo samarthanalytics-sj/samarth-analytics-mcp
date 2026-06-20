@@ -34,6 +34,7 @@ const out1 = buildSuggestions({ siteHost: 'acme.com', forms: [contactForm], elem
 check('form: contact → generate_lead on form_submit', out1.length === 1 && out1[0].eventName === 'generate_lead' && out1[0].trigger.kind === 'form_submit');
 check('form: label names the provider', out1[0].label.includes('hubspot'));
 check('form: directly creatable (platform + measurementId)', out1[0].platform === 'ga4_event' && out1[0].measurementId === '{{GA4 Measurement ID}}');
+check('naming: tag "GA4 Event - Generate Lead", trigger "Form Submit - Contact"', out1[0].tagName === 'GA4 Event - Generate Lead' && out1[0].trigger.name === 'Form Submit - Contact');
 check('form: search/login produce NO suggestion', buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'search', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] }).length === 0);
 
 // ── element → suggestion + Enhanced Measurement flagging ─────────────────────
@@ -51,6 +52,7 @@ const els = buildSuggestions(elInput);
 const byEvent = (e: string) => els.find((s) => s.eventName === e);
 check('email: mailto → email_click, startsWith mailto:', byEvent('email_click')?.trigger.clickUrlValue === 'mailto:' && byEvent('email_click')?.trigger.clickUrlOperator === 'startsWith');
 check('phone: tel → phone_click', byEvent('phone_click')?.trigger.clickUrlValue === 'tel:');
+check('naming: email tag "GA4 Event - Email Click", trigger "Link Click - Email"', byEvent('email_click')?.tagName === 'GA4 Event - Email Click' && byEvent('email_click')?.trigger.name === 'Link Click - Email');
 
 // ── event parameters: GA4-standard, valued by GTM built-in variables ─────────
 const emailParams = byEvent('email_click')?.eventParameters ?? [];

@@ -35,6 +35,20 @@ const CLICK_PARAMS = [
 export const DOWNLOAD_EXT = 'pdf|zip|docx?|xlsx?|pptx?|csv|dmg|exe|rar|7z|mp4|mp3|pkg|apk';
 const cap = (s: string): string => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
+// Human-readable label for a GA4 event name, used in tag names.
+const EVENT_LABEL: Record<string, string> = {
+  email_click: 'Email Click',
+  phone_click: 'Phone Click',
+  file_download: 'File Download',
+  outbound_click: 'Outbound Click',
+  cta_click: 'CTA Click',
+  generate_lead: 'Generate Lead',
+  sign_up: 'Sign Up',
+  newsletter_signup: 'Newsletter Signup',
+  form_submission: 'Form Submission',
+};
+const eventLabel = (e: string): string => EVENT_LABEL[e] ?? e.split('_').map(cap).join(' ');
+
 // djb2 → base36; stable, no crypto dependency.
 function hashId(s: string): string {
   let h = 5381;
@@ -68,7 +82,7 @@ function formSuggestion(f: DetectedForm): SuggestedTag | null {
     // GA4 EM "form interactions" is limited/generic; a dedicated lead event is valuable.
     enhancedMeasurementOverlap: false,
     platform: 'ga4_event',
-    tagName: `GA4 - ${eventName}`,
+    tagName: `GA4 Event - ${eventLabel(eventName)}`,
     measurementId: GA4_VAR,
     eventName,
     // Capture which form + where it submits, via the form built-in variables.
@@ -80,7 +94,7 @@ function formSuggestion(f: DetectedForm): SuggestedTag | null {
       { name: 'form_text', value: FORM_TEXT },
       ...PAGE_PARAMS,
     ],
-    trigger: { name: `Form submit - ${f.purpose}`, kind: 'form_submit' },
+    trigger: { name: `Form Submit - ${cap(f.purpose)}`, kind: 'form_submit' },
   };
 }
 
@@ -91,7 +105,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
     confidence: conf,
     enhancedMeasurementOverlap: em,
     platform: 'ga4_event' as const,
-    tagName: `GA4 - ${eventName}`,
+    tagName: `GA4 Event - ${eventLabel(eventName)}`,
     measurementId: GA4_VAR,
     eventName,
   });
@@ -102,7 +116,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         label: 'Email link (mailto) → GA4 "email_click"',
         evidence: `mailto link${el.region ? ' in ' + el.region : ''}`,
         eventParameters: CLICK_PARAMS,
-        trigger: { name: 'Email link click', kind: 'link_click', clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' },
+        trigger: { name: 'Link Click - Email', kind: 'link_click', clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' },
       };
     case 'phone':
       return {
@@ -110,7 +124,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         label: 'Phone link (tel) → GA4 "phone_click"',
         evidence: `tel link${el.region ? ' in ' + el.region : ''}`,
         eventParameters: CLICK_PARAMS,
-        trigger: { name: 'Phone link click', kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
+        trigger: { name: 'Link Click - Phone', kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
       };
     case 'download':
       return {
@@ -118,7 +132,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         label: 'File download → GA4 "file_download"  ⚠ Enhanced Measurement already covers this',
         evidence: `download link ${el.href ?? ''}`.trim(),
         eventParameters: CLICK_PARAMS,
-        trigger: { name: 'File download click', kind: 'link_click', clickUrlValue: `\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
+        trigger: { name: 'Link Click - File Download', kind: 'link_click', clickUrlValue: `\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
       };
     case 'outbound':
       return {
@@ -126,7 +140,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         label: 'Outbound link → GA4 "outbound_click"  ⚠ Enhanced Measurement already covers this',
         evidence: `outbound link ${el.href ?? ''}`.trim(),
         eventParameters: CLICK_PARAMS,
-        trigger: { name: 'Outbound link click', kind: 'link_click' },
+        trigger: { name: 'Link Click - Outbound', kind: 'link_click' },
       };
     case 'cta':
       return {
@@ -142,7 +156,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         ],
         // Fire only for THIS CTA (its text), not on every click — and capture the
         // text dynamically. all_clicks covers both <button> and <a> CTAs.
-        trigger: { name: `CTA click - ${el.text}`, kind: 'all_clicks', clickTextValue: el.text, clickTextOperator: 'contains' },
+        trigger: { name: `All Clicks - CTA: ${el.text.slice(0, 40)}`, kind: 'all_clicks', clickTextValue: el.text, clickTextOperator: 'contains' },
       };
   }
 }
