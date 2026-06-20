@@ -88,7 +88,7 @@ export class ChatService {
           'workspace (never published — the user publishes manually in GTM). Always work in a workspace. ' +
           'PREFER the STRUCTURED tools that build correct GTM resources from simple fields, so you ' +
           'never hand-write GTM JSON: use create_gtm_tracking_tag for any tag that fires on an event' +
-          '(platform ga4_event / google_ads_conversion / custom_html, with a trigger spec — it enables ' +
+          '(platform ga4_event / google_tag / google_ads_conversion / custom_html, with a trigger spec — it enables ' +
           'needed built-in variables, reuses a same-named trigger instead of duplicating, and links the ' +
           'tag, all in ONE approval), and create_gtm_variable_typed for variables (constant / data_layer ' +
           '/ javascript). Only fall back to the raw create_gtm_tag/trigger/variable tools for advanced ' +

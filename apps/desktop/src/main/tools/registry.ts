@@ -4,6 +4,7 @@ import type { GoogleProduct } from '../../shared/ipc';
 import type { AuditHistoryStore } from '../storage/audit-history';
 import {
   buildGa4EventTag,
+  buildGoogleTag,
   buildGoogleAdsConversionTag,
   buildCustomHtmlTag,
   buildTrigger,
@@ -739,7 +740,7 @@ export function buildToolRegistry(
       name: 'create_gtm_tracking_tag',
       description:
         'PREFERRED way to create a tag that fires on an event — builds a CORRECT GTM resource from simple fields (you do not write raw GTM JSON). One confirmed step: enables needed built-in variables, reuses an existing same-named trigger or creates it, and creates the tag linked to it. ' +
-        'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for Facebook/LinkedIn/TikTok/other pixels). ' +
+        'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for Facebook/LinkedIn/TikTok/other pixels). ' +
         'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue + clickUrlOperator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event), "pageview", "form_submit".',
       inputSchema: {
         type: 'object',
@@ -747,11 +748,16 @@ export function buildToolRegistry(
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          platform: { type: 'string', enum: ['ga4_event', 'google_ads_conversion', 'custom_html'] },
+          platform: { type: 'string', enum: ['ga4_event', 'google_tag', 'google_ads_conversion', 'custom_html'] },
           tagName: { type: 'string' },
           measurementId: { type: 'string' },
           eventName: { type: 'string' },
           eventParameters: {
+            type: 'array',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } } },
+          },
+          tagId: { type: 'string' },
+          configSettings: {
             type: 'array',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } } },
           },
@@ -790,6 +796,14 @@ export function buildToolRegistry(
             eventName: s(a.eventName),
             eventParameters: Array.isArray(a.eventParameters)
               ? a.eventParameters.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) }))
+              : [],
+          });
+        } else if (platform === 'google_tag') {
+          tag = buildGoogleTag({
+            name: s(a.tagName),
+            tagId: s(a.tagId),
+            configSettings: Array.isArray(a.configSettings)
+              ? a.configSettings.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) }))
               : [],
           });
         } else if (platform === 'google_ads_conversion') {
@@ -896,13 +910,17 @@ export function buildToolRegistry(
       description:
         'Create a tag in a GTM workspace (draft). `tag` is a GTM API Tag resource ' +
         '{name, type, parameter?, firingTriggerId?}; link to a trigger via firingTriggerId:["<id>"]. ' +
-        'GA4 EVENT tag — type "gaawe"; `parameter` MUST be exactly this shape (eventParameters is a ' +
-        'LIST of MAP entries, each with name+value, NOT a flat object): ' +
-        '[{"type":"template","key":"eventName","value":"email_click"},' +
+        'GA4 EVENT tag — type "gaawe". PREFER create_gtm_tracking_tag, which builds this correctly. If ' +
+        'using this raw tool, `parameter` MUST be exactly this shape — event parameters go in ' +
+        'eventSettingsTable as a LIST of MAP entries keyed parameter/parameterValue (NOT an ' +
+        '"eventParameters" list of name/value, which GTM silently ignores): ' +
+        '[{"type":"tagReference","key":"measurementId","value":""},' +
         '{"type":"template","key":"measurementIdOverride","value":"G-XXXXXXX or {{GA4 Variable}}"},' +
-        '{"type":"list","key":"eventParameters","list":[' +
-        '{"type":"map","map":[{"type":"template","key":"name","value":"link_url"},{"type":"template","key":"value","value":"{{Click URL}}"}]},' +
-        '{"type":"map","map":[{"type":"template","key":"name","value":"link_text"},{"type":"template","key":"value","value":"{{Click Text}}"}]}]}]. ' +
+        '{"type":"template","key":"eventName","value":"email_click"},' +
+        '{"type":"list","key":"eventSettingsTable","list":[' +
+        '{"type":"map","map":[{"type":"template","key":"parameter","value":"link_url"},{"type":"template","key":"parameterValue","value":"{{Click URL}}"}]},' +
+        '{"type":"map","map":[{"type":"template","key":"parameter","value":"link_text"},{"type":"template","key":"parameterValue","value":"{{Click Text}}"}]}]}]. ' +
+        'The Google tag — type "googtag" with [{"type":"template","key":"tagId","value":"G-XXXX/AW-XXXX/GT-XXXX"}]. ' +
         'Google Ads conversion — type "awct" with {"type":"template","key":"conversionId","value":"AW-XXXX"} ' +
         'and {"type":"template","key":"conversionLabel","value":"…"}. Google Ads remarketing — type "sp". ' +
         'Facebook Pixel, LinkedIn Insight, TikTok, Pinterest, or any platform without a native GTM ' +
@@ -1077,7 +1095,7 @@ export function buildToolRegistry(
         'containerId, workspaceId, `tag` (GTM Tag resource {name,type,parameter?}), `trigger` (GTM ' +
         'Trigger resource {name,type,filter?}), and optional `builtInVariables` (TYPE KEYS, e.g. ' +
         '["clickUrl","clickText","pageUrl"] — there is NO built-in for Page Title). For a GA4 event ' +
-        '`tag`, use type "gaawe" with the eventParameters LIST-of-MAP shape described in create_gtm_tag. ' +
+        '`tag`, use type "gaawe" with the eventSettingsTable (parameter/parameterValue) shape described in create_gtm_tag. ' +
         'Use this instead of separate create_gtm_trigger + create_gtm_tag calls so the user approves once.',
       inputSchema: {
         type: 'object',

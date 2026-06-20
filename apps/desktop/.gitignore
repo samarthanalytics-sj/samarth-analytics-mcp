@@ -10,3 +10,6 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# Fine-tuning datasets are derived from the user's private GTM exports — local only.
+*.jsonl

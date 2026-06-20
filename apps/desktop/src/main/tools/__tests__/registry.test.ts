@@ -639,6 +639,22 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.some((c) => c.startsWith('createTag') && c.includes('T9')), 'tag linked to existing trigger');
   });
 
+  await test('create_tracking_tag (google_tag) builds a googtag and creates its trigger', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'google_tag', tagName: 'Google tag - GA4', tagId: 'G-XYZ',
+        configSettings: [{ name: 'send_page_view', value: 'false' }],
+        trigger: { name: 'Initialization - All Pages', kind: 'pageview' },
+      })
+    );
+    assert.equal(out.tag.type, 'googtag', 'built a Google tag');
+    assert.ok(fd.calls.some((c) => c.startsWith('createTag')), 'created the tag');
+    assert.ok(fd.calls.some((c) => c.startsWith('createTrigger')), 'created its trigger');
+  });
+
   await test('create_gtm_variable_typed builds a Custom JS variable', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, approveAsIs);

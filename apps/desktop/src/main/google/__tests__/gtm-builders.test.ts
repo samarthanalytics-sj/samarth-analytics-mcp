@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   buildGa4EventTag,
+  buildGoogleTag,
   buildGoogleAdsConversionTag,
   buildCustomHtmlTag,
   buildTrigger,
@@ -26,7 +27,7 @@ const findParam = (params: Array<Record<string, unknown>>, key: string) => param
 
 console.log('\nGTM builders:');
 
-test('GA4 event tag: gaawe + eventParameters as list-of-maps', () => {
+test('GA4 event tag: gaawe event params use eventSettingsTable (parameter/parameterValue), not eventParameters', () => {
   const t = buildGa4EventTag({
     name: 'GA4 - email',
     measurementId: 'G-ABC',
@@ -38,14 +39,40 @@ test('GA4 event tag: gaawe + eventParameters as list-of-maps', () => {
   assert.equal(findParam(t.parameter, 'eventName')?.value, 'email_click');
   assert.equal(findParam(t.parameter, 'measurementIdOverride')?.value, 'G-ABC');
   // empty tagReference measurementId is required alongside the override
-  const mid = findParam(t.parameter, 'measurementId');
-  assert.equal(mid?.type, 'tagReference');
-  const ep = findParam(t.parameter, 'eventParameters') as { type: string; list: Array<{ type: string; map: Array<Record<string, unknown>> }> };
-  assert.equal(ep.type, 'list');
-  assert.equal(ep.list[0].type, 'map');
-  assert.equal(ep.list[0].map.find((m) => m.key === 'name')?.value, 'link_url');
-  assert.equal(ep.list[0].map.find((m) => m.key === 'value')?.value, '{{Click URL}}');
+  assert.equal(findParam(t.parameter, 'measurementId')?.type, 'tagReference');
+  // Corpus-correct: the OLD `eventParameters` key (0 of 8,148 real tags) is gone.
+  assert.equal(findParam(t.parameter, 'eventParameters'), undefined, 'no eventParameters key');
+  const est = findParam(t.parameter, 'eventSettingsTable') as { type: string; list: Array<{ type: string; map: Array<Record<string, unknown>> }> };
+  assert.equal(est.type, 'list');
+  assert.equal(est.list[0].type, 'map');
+  // Inner maps are keyed parameter/parameterValue, not name/value.
+  assert.equal(est.list[0].map.find((m) => m.key === 'parameter')?.value, 'link_url');
+  assert.equal(est.list[0].map.find((m) => m.key === 'parameterValue')?.value, '{{Click URL}}');
+  assert.equal(est.list[0].map.find((m) => m.key === 'name'), undefined);
   assert.deepEqual(t.firingTriggerId, ['T1']);
+});
+
+test('Google tag: googtag carries tagId, and config settings use configSettingsTable maps', () => {
+  const t = buildGoogleTag({
+    name: 'Google tag - GA4',
+    tagId: 'G-XYZ',
+    configSettings: [{ name: 'send_page_view', value: 'false' }],
+    firingTriggerId: ['T1'],
+  });
+  assert.equal(t.type, 'googtag');
+  assert.equal(findParam(t.parameter, 'tagId')?.value, 'G-XYZ');
+  const cfg = findParam(t.parameter, 'configSettingsTable') as { type: string; list: Array<{ map: Array<Record<string, unknown>> }> };
+  assert.equal(cfg.type, 'list');
+  assert.equal(cfg.list[0].map.find((m) => m.key === 'parameter')?.value, 'send_page_view');
+  assert.equal(cfg.list[0].map.find((m) => m.key === 'parameterValue')?.value, 'false');
+  assert.deepEqual(t.firingTriggerId, ['T1']);
+});
+
+test('Google tag: no config settings → just the tagId param', () => {
+  const t = buildGoogleTag({ name: 'GT', tagId: '{{Measurement ID}}' });
+  assert.equal(t.type, 'googtag');
+  assert.equal(t.parameter.length, 1);
+  assert.equal(findParam(t.parameter, 'tagId')?.value, '{{Measurement ID}}');
 });
 
 test('Google Ads conversion tag: awct + conversionId/Label', () => {
