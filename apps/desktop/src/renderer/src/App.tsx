@@ -955,16 +955,24 @@ const CONF_BADGE: Record<'high' | 'medium' | 'low', React.CSSProperties> = {
   low: { background: '#1b2433', color: '#9ca3af', border: '1px solid #334155' },
 };
 
-function triggerSummary(s: SuggestedTagView): string {
+const TRIGGER_TYPE_LABEL: Record<string, string> = {
+  link_click: 'Link Click (linkClick)',
+  all_clicks: 'All Elements Click (click)',
+  form_submit: 'Form Submission (formSubmission)',
+  custom_event: 'Custom Event (customEvent)',
+  pageview: 'Page View (pageview)',
+};
+const triggerTypeLabel = (kind: string): string => TRIGGER_TYPE_LABEL[kind] ?? kind;
+
+/** Human-readable trigger condition (the filter GTM will apply). */
+function triggerCondition(s: SuggestedTagView): string {
   const t = s.trigger;
-  const txt = t.clickTextValue ? ` · text ${t.clickTextOperator ?? 'contains'} "${t.clickTextValue}"` : '';
-  if (t.kind === 'link_click')
-    return `link click${t.clickUrlValue ? ` · URL ${t.clickUrlOperator ?? 'contains'} "${t.clickUrlValue}"` : ''}${txt}`;
-  if (t.kind === 'form_submit') return 'form submit';
-  if (t.kind === 'all_clicks') return `${t.clickTextValue ? 'click' : 'all clicks'}${txt}`;
-  if (t.kind === 'custom_event') return `custom event${t.eventName ? ` "${t.eventName}"` : ''}`;
-  if (t.kind === 'pageview') return 'page view';
-  return t.kind;
+  const parts: string[] = [];
+  if (t.clickUrlValue) parts.push(`{{Click URL}} ${t.clickUrlOperator ?? 'contains'} "${t.clickUrlValue}"`);
+  if (t.clickTextValue) parts.push(`{{Click Text}} ${t.clickTextOperator ?? 'contains'} "${t.clickTextValue}"`);
+  if (t.eventName) parts.push(`event = "${t.eventName}"`);
+  if (parts.length === 0) return t.kind === 'all_clicks' ? 'fires on every click' : t.kind === 'form_submit' ? 'fires on every form submit' : '—';
+  return parts.join(' AND ');
 }
 
 function EditLine({
@@ -1339,8 +1347,30 @@ function TagReviewPanel({
                           <span style={styles.emChip}>⚠ Enhanced Measurement already tracks this</span>
                         )}
                       </div>
-                      <div style={styles.reviewMetaLine}>
-                        {s.page} · <code style={mdStyles.code}>{eff.eventName}</code> · {triggerSummary(s)}
+                      <div style={styles.detailGrid}>
+                        <span style={styles.detailKey}>Event</span>
+                        <span><code style={mdStyles.code}>{eff.eventName}</code></span>
+                        <span style={styles.detailKey}>Page</span>
+                        <span>{s.page}</span>
+                        <span style={styles.detailKey}>Tag type</span>
+                        <span>GA4 Event (gaawe)</span>
+                        <span style={styles.detailKey}>Trigger</span>
+                        <span>
+                          <b style={{ color: '#e5e7eb' }}>{s.trigger.name}</b> · {triggerTypeLabel(s.trigger.kind)}
+                        </span>
+                        <span style={styles.detailKey}>Condition</span>
+                        <span>{triggerCondition(s)}</span>
+                        <span style={styles.detailKey}>Parameters</span>
+                        <span>
+                          {(eff.eventParameters ?? []).length > 0
+                            ? (eff.eventParameters ?? []).map((p, i) => (
+                                <span key={i}>
+                                  {i > 0 ? '  ·  ' : ''}
+                                  <code style={mdStyles.code}>{p.name}</code>={p.value}
+                                </span>
+                              ))
+                            : '—'}
+                        </span>
                       </div>
                       <div style={styles.reviewEvidence}>{s.evidence}</div>
                       {st && st.state !== 'idle' && (
@@ -1946,4 +1976,6 @@ const styles: Record<string, React.CSSProperties> = {
   typeChip: { fontSize: 11, color: '#93c5fd', background: '#10233f', border: '1px solid #1e3a5f', borderRadius: 6, padding: '1px 7px' },
   emChip: { fontSize: 11, color: '#fcd34d', background: '#3a2c0a', border: '1px solid #92651a', borderRadius: 6, padding: '1px 7px' },
   editGrid: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8, background: '#0b0f17', borderRadius: 8, padding: '4px 12px' },
+  detailGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 12, rowGap: 3, marginTop: 5, fontSize: 12.5, color: '#cbd5e1', alignItems: 'start' },
+  detailKey: { color: '#6b7280', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, paddingTop: 1 },
 };
