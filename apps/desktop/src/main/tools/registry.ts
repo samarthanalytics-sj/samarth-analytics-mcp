@@ -921,8 +921,9 @@ export function buildToolRegistry(
         '{"type":"map","map":[{"type":"template","key":"parameter","value":"link_url"},{"type":"template","key":"parameterValue","value":"{{Click URL}}"}]},' +
         '{"type":"map","map":[{"type":"template","key":"parameter","value":"link_text"},{"type":"template","key":"parameterValue","value":"{{Click Text}}"}]}]}]. ' +
         'The Google tag — type "googtag" with [{"type":"template","key":"tagId","value":"G-XXXX/AW-XXXX/GT-XXXX"}]. ' +
-        'Google Ads conversion — type "awct" with {"type":"template","key":"conversionId","value":"AW-XXXX"} ' +
-        'and {"type":"template","key":"conversionLabel","value":"…"}. Google Ads remarketing — type "sp". ' +
+        'Google Ads conversion — type "awct" with {"type":"template","key":"conversionId","value":"123456789"} ' +
+        '(the NUMERIC id only — GTM rejects an "AW-" prefix) and ' +
+        '{"type":"template","key":"conversionLabel","value":"…"}. Google Ads remarketing — type "sp". ' +
         'Facebook Pixel, LinkedIn Insight, TikTok, Pinterest, or any platform without a native GTM ' +
         'template — type "html" (Custom HTML) with a {"type":"template","key":"html","value":"<script>…</script>"} ' +
         'parameter containing that platform\'s snippet. Pick the right type for the platform the user names.',

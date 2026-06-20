@@ -75,11 +75,15 @@ test('Google tag: no config settings → just the tagId param', () => {
   assert.equal(findParam(t.parameter, 'tagId')?.value, '{{Measurement ID}}');
 });
 
-test('Google Ads conversion tag: awct + conversionId/Label', () => {
-  const t = buildGoogleAdsConversionTag({ name: 'Ads', conversionId: 'AW-1', conversionLabel: 'L1' });
+test('Google Ads conversion tag: awct strips the AW- prefix (GTM wants the numeric id)', () => {
+  const t = buildGoogleAdsConversionTag({ name: 'Ads', conversionId: 'AW-123456789', conversionLabel: 'L1' });
   assert.equal(t.type, 'awct');
-  assert.equal(findParam(t.parameter, 'conversionId')?.value, 'AW-1');
+  // GTM rejects "AW-123456789" — the conversionId must be the bare number.
+  assert.equal(findParam(t.parameter, 'conversionId')?.value, '123456789');
   assert.equal(findParam(t.parameter, 'conversionLabel')?.value, 'L1');
+  // A bare numeric id and a {{variable}} ref pass through unchanged.
+  assert.equal(findParam(buildGoogleAdsConversionTag({ name: 'A', conversionId: '  987 ', conversionLabel: 'x' }).parameter, 'conversionId')?.value, '987');
+  assert.equal(findParam(buildGoogleAdsConversionTag({ name: 'A', conversionId: '{{AW Conversion ID}}', conversionLabel: 'x' }).parameter, 'conversionId')?.value, '{{AW Conversion ID}}');
 });
 
 test('Custom HTML tag: html type + snippet', () => {
