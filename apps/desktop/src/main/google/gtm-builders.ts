@@ -205,7 +205,7 @@ export interface AuditFix {
 }
 export interface AuditFinding {
   severity: 'high' | 'medium' | 'low' | 'info';
-  /** Coarse grouping: firing | paused | ga4 | consent | security | performance | unused | naming. */
+  /** Coarse grouping: firing | paused | ga4 | deprecated | consent | security | performance | unused | naming. */
   category: string;
   message: string;
   /** The GTM resource the finding is about, when it targets one. */
@@ -228,9 +228,21 @@ export interface AuditReport {
 }
 
 // GTM tag types that send data to ad/analytics platforms and therefore should
-// declare Consent Mode v2 settings: GA4 event, Google Ads conversion/remarketing,
-// Conversion Linker, Floodlight counter/sales.
-const CONSENT_RELEVANT_TYPES = new Set(['gaawe', 'awct', 'sp', 'gclidw', 'flc', 'fls']);
+// declare Consent Mode v2 settings: GA4 event, the Google tag, Google Ads
+// conversion/remarketing, Conversion Linker, Floodlight counter/sales, plus the
+// major third-party trackers (Microsoft Ads UET, LinkedIn Insight, Hotjar).
+// (Grounded in a corpus of 562 real containers — googtag (826) and baut (448)
+// were common data-senders the set previously missed.)
+const CONSENT_RELEVANT_TYPES = new Set([
+  'gaawe', 'googtag', 'awct', 'sp', 'gclidw', 'flc', 'fls', 'baut', 'bzi', 'hjtc',
+]);
+
+// consentStatus arrives UPPER_SNAKE in container EXPORT JSON ("NOT_SET") but
+// camelCase from the live API ("notSet") — normalize so the audit is identical
+// on both. → 'notset' | 'needed' | 'notneeded' | '' (absent/unknown).
+export function normConsent(status: unknown): string {
+  return typeof status === 'string' ? status.replace(/_/g, '').toLowerCase() : '';
+}
 
 // Pull every {{Variable Name}} token out of any nested value into `into`.
 const VAR_REF = /\{\{([^}]+)\}\}/g;
@@ -301,6 +313,32 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
         });
       }
     }
+    if (t.type === 'googtag') {
+      // The Google tag loads gtag.js and configures GA4/Ads — it needs a tag ID
+      // (G-/AW-/GT-…). (Corpus: googtag is the 4th-most-common tag type, 826.)
+      const hasTagId = t.parameter.some((p) => (p.key === 'tagId' || p.key === 'tag_id') && p.value);
+      if (!hasTagId) {
+        findings.push({
+          severity: 'high',
+          category: 'ga4',
+          resource,
+          message: `Google tag "${t.name}" has no tag ID — it can't configure GA4/Ads.`,
+          recommendation: 'Set its Tag ID (a G-XXXXXXX / AW-XXXXXX / GT-XXXXXX value or a {{variable}}).',
+          autoFixable: false,
+        });
+      }
+    }
+    if (t.type === 'ua') {
+      // Universal Analytics: 758 such tags in the corpus, all now inert.
+      findings.push({
+        severity: 'medium',
+        category: 'deprecated',
+        resource,
+        message: `Tag "${t.name}" is a Universal Analytics tag — UA stopped collecting data on 1 July 2023, so it reports nothing and only adds page weight.`,
+        recommendation: 'Remove it, or migrate the measurement to a GA4 event tag (gaawe) or the Google tag (googtag).',
+        autoFixable: false,
+      });
+    }
     if (t.type === 'html') {
       findings.push({
         severity: 'info',
@@ -326,8 +364,8 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
     // 'notSet' (or absent) state is unconfigured — 'needed' and the deliberate
     // 'notNeeded' are both valid, configured choices and must NOT be flagged.
     if (CONSENT_RELEVANT_TYPES.has(t.type)) {
-      const status = t.consentSettings?.consentStatus;
-      if (!status || status === 'notSet') {
+      const status = normConsent(t.consentSettings?.consentStatus);
+      if (!status || status === 'notset') {
         findings.push({
           severity: 'medium',
           category: 'consent',

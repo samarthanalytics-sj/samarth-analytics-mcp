@@ -201,6 +201,50 @@ test('audit: consent flags only notSet — needed and notNeeded are valid, NOT f
   assert.deepEqual(consent.map((f) => f.resource?.name), ['NotSet']);
 });
 
+test('audit: consentStatus is normalized — EXPORT casing (NOT_SET/NOT_NEEDED) matches API casing', () => {
+  const r = auditContainer({
+    tags: [
+      // Container-export JSON uses UPPER_SNAKE; the audit must treat it like the API's camelCase.
+      { tagId: '1', name: 'ExportNotSet', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementId', value: 'G-1' }, { key: 'eventName', value: 'x' }], consentSettings: { consentStatus: 'NOT_SET' } },
+      { tagId: '2', name: 'ExportNotNeeded', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementId', value: 'G-1' }, { key: 'eventName', value: 'x' }], consentSettings: { consentStatus: 'NOT_NEEDED' } },
+      { tagId: '3', name: 'ExportNeeded', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'measurementId', value: 'G-1' }, { key: 'eventName', value: 'x' }], consentSettings: { consentStatus: 'NEEDED' } },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  // Only NOT_SET (≡ notSet) is flagged; NOT_NEEDED / NEEDED are deliberate choices.
+  assert.deepEqual(r.findings.filter((f) => f.category === 'consent').map((f) => f.resource?.name), ['ExportNotSet']);
+});
+
+test('audit: googtag (Google tag) is consent-relevant, and a missing tag ID is flagged', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'No ID', type: 'googtag', firingTriggerId: ['T1'], paused: false, parameter: [], consentSettings: { consentStatus: 'needed' } },
+      { tagId: '2', name: 'Has ID NotSet', type: 'googtag', firingTriggerId: ['T1'], paused: false, parameter: [{ key: 'tagId', value: 'G-XYZ' }], consentSettings: { consentStatus: 'notSet' } },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'Init', type: 'pageview' }],
+    variables: [],
+  });
+  assert.ok(r.findings.some((f) => f.category === 'ga4' && /no tag ID/.test(f.message) && f.resource?.name === 'No ID'), 'missing tag ID flagged');
+  assert.ok(!r.findings.some((f) => f.category === 'ga4' && f.resource?.name === 'Has ID NotSet'), 'tag with an ID not flagged for ga4');
+  // googtag is now consent-relevant → the notSet one is flagged for consent.
+  assert.ok(r.findings.some((f) => f.category === 'consent' && f.resource?.name === 'Has ID NotSet'));
+});
+
+test('audit: Universal Analytics tags are flagged as deprecated; Microsoft Ads (baut) is consent-relevant', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'Old UA', type: 'ua', firingTriggerId: ['T1'], paused: false, parameter: [] },
+      { tagId: '2', name: 'Bing UET', type: 'baut', firingTriggerId: ['T1'], paused: false, parameter: [], consentSettings: { consentStatus: 'NOT_SET' } },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  const ua = r.findings.find((f) => f.category === 'deprecated');
+  assert.ok(ua && /Universal Analytics/.test(ua.message) && ua.severity === 'medium', 'UA flagged deprecated');
+  assert.ok(r.findings.some((f) => f.category === 'consent' && f.resource?.name === 'Bing UET'), 'baut flagged for consent');
+});
+
 test('audit: a trigger used only as a BLOCKING trigger is not reported unused', () => {
   const r = auditContainer({
     tags: [
