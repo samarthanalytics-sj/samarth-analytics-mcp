@@ -24,6 +24,8 @@ import { buildToolRegistry } from '../src/main/tools/registry';
 import type { ConfirmFn } from '../src/main/tools/registry';
 import { AuditHistoryStore } from '../src/main/storage/audit-history';
 import type { GoogleDataService } from '../src/main/google/data-service';
+import { createSuggestedTags } from '../src/main/suggestions/suggestion-service';
+import type { SuggestedTagView } from '../src/shared/ipc';
 
 let ok = 0;
 let fail = 0;
@@ -246,6 +248,41 @@ async function main(): Promise<void> {
     record(
       'unused variable is advisory (no destructive auto-fix)',
       Boolean(unusedVar) && !unusedVar.fix && unusedVar.autoFixable === false
+    );
+  }
+
+  // ── E. Tag-suggestion create path: approved suggestions become draft tags via
+  //       the SAME create_gtm_tracking_tag tool, sequentially, fail-isolated. ───
+  {
+    const fd = makeFakeData();
+    const reg = buildToolRegistry(fd.data, approve, 'gtm');
+    const sug = (id: string, tagName: string): SuggestedTagView => ({
+      id, page: '/', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
+      platform: 'ga4_event', tagName, measurementId: '{{GA4 Measurement ID}}', eventName: 'email_click',
+      trigger: { name: `Trig ${id}`, kind: 'link_click', clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' },
+    });
+    const ids = { accountId: '1', containerId: '2', workspaceId: '3' };
+    const outcomes = await createSuggestedTags((n, a) => reg.execute(n, a), ids, [sug('a', 'Email A'), sug('b', 'Phone B')]);
+    record(
+      'tag-suggest create: approved suggestions create draft tags',
+      outcomes.length === 2 && outcomes.every((o) => o.ok) && fd.mutations() > 0,
+      `${outcomes.filter((o) => o.ok).length}/2 ok, ${fd.mutations()} mutations`
+    );
+
+    // Empty selection mutates nothing.
+    const fd2 = makeFakeData();
+    const reg2 = buildToolRegistry(fd2.data, approve, 'gtm');
+    const none = await createSuggestedTags((n, a) => reg2.execute(n, a), ids, []);
+    record('tag-suggest create: empty selection creates nothing', none.length === 0 && fd2.mutations() === 0);
+
+    // Read-only registry (no confirm) → create path is refused, nothing mutates.
+    const fd3 = makeFakeData();
+    const reg3 = buildToolRegistry(fd3.data); // no confirm fn → no write tools
+    const blocked = await createSuggestedTags((n, a) => reg3.execute(n, a), ids, [sug('a', 'Email A')]);
+    record(
+      'tag-suggest create: without a confirm fn the write is refused, nothing mutates',
+      blocked.length === 1 && blocked[0].ok === false && fd3.mutations() === 0,
+      blocked[0]?.error ?? ''
     );
   }
 

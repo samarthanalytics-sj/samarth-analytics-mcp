@@ -3,6 +3,7 @@ import type { AppInfo } from '../../preload';
 import type {
   AccountView,
   ChatTurn,
+  CreateTagOutcome,
   Ga4AccountView,
   GoogleClientStatus,
   GtmAccountView,
@@ -14,6 +15,8 @@ import type {
   MonitorConfig,
   MonitorStatus,
   SecretSelfTest,
+  SuggestedTagView,
+  TagScanResult,
 } from '../../shared/ipc';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
@@ -22,7 +25,7 @@ const DEFAULT_MODEL: Record<LlmProvider, string> = {
   gemini: 'gemini-2.0-flash',
 };
 
-type View = 'chat' | 'settings';
+type View = 'chat' | 'review' | 'settings';
 
 /* Friendly labels for GTM type codes, so approvals read in plain English. */
 const GTM_TYPE_LABELS: Record<string, string> = {
@@ -587,6 +590,12 @@ export function App(): JSX.Element {
             💬 Chat
           </button>
           <button
+            style={{ ...styles.navItem, ...(view === 'review' ? styles.navActive : {}) }}
+            onClick={() => setView('review')}
+          >
+            🏷 Tag suggestions
+          </button>
+          <button
             style={{ ...styles.navItem, ...(view === 'settings' ? styles.navActive : {}) }}
             onClick={() => setView('settings')}
           >
@@ -608,6 +617,8 @@ export function App(): JSX.Element {
 
         {view === 'chat' ? (
           <ChatView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
+        ) : view === 'review' ? (
+          <TagReviewPanel key={active?.id ?? 'none'} active={active} onError={setError} />
         ) : (
           <SettingsView
             active={active}
@@ -924,6 +935,407 @@ function GtmContextBar({
       {ctx?.containerId && (
         <button style={styles.linkBtn} onClick={() => setEditing(false)}>cancel</button>
       )}
+    </div>
+  );
+}
+
+/* ───────────────────── Tag suggestions (review & approve) ───────────────────── */
+
+type RowStatus = { state: 'idle' | 'creating' | 'ok' | 'err'; msg?: string };
+interface TagEdit {
+  tagName?: string;
+  eventName?: string;
+  measurementId?: string;
+}
+
+const CONF_BADGE: Record<'high' | 'medium' | 'low', React.CSSProperties> = {
+  high: { background: '#064e3b', color: '#6ee7b7', border: '1px solid #065f46' },
+  medium: { background: '#3a2c0a', color: '#fcd34d', border: '1px solid #92651a' },
+  low: { background: '#1b2433', color: '#9ca3af', border: '1px solid #334155' },
+};
+
+function triggerSummary(s: SuggestedTagView): string {
+  const t = s.trigger;
+  if (t.kind === 'link_click')
+    return `link click${t.clickUrlValue ? ` · URL ${t.clickUrlOperator ?? 'contains'} "${t.clickUrlValue}"` : ''}`;
+  if (t.kind === 'form_submit') return 'form submit';
+  if (t.kind === 'all_clicks') return 'all clicks';
+  if (t.kind === 'custom_event') return `custom event${t.eventName ? ` "${t.eventName}"` : ''}`;
+  if (t.kind === 'pageview') return 'page view';
+  return t.kind;
+}
+
+function EditLine({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}): JSX.Element {
+  return (
+    <label style={styles.editRow}>
+      <span style={styles.proposalLabel}>{label}</span>
+      <input style={styles.editInput} value={value} onChange={(e) => onChange(e.target.value)} />
+    </label>
+  );
+}
+
+function TagReviewPanel({
+  active,
+  onError,
+}: {
+  active: AccountView | undefined;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const [url, setUrl] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [suggestions, setSuggestions] = useState<SuggestedTagView[]>([]);
+  const [meta, setMeta] = useState<TagScanResult['summary'] | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [edits, setEdits] = useState<Record<string, TagEdit>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [statuses, setStatuses] = useState<Record<string, RowStatus>>({});
+  const [confirming, setConfirming] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [done, setDone] = useState<{ created: number; failed: number } | null>(null);
+
+  const ctx = active?.gtmContext;
+  const targetReady = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
+
+  function loadSuggestions(list: SuggestedTagView[]): void {
+    setSuggestions(list);
+    // Default-select the real gaps; leave what GA4 Enhanced Measurement already
+    // tracks unticked so the user opts in deliberately.
+    setSelected(Object.fromEntries(list.map((s) => [s.id, !s.enhancedMeasurementOverlap])));
+    setEdits({});
+    setExpanded({});
+    setStatuses({});
+    setConfirming(false);
+    setDone(null);
+  }
+
+  async function doScan(): Promise<void> {
+    const target = url.trim();
+    if (!target || scanning) return;
+    onError('');
+    setScanning(true);
+    try {
+      const res = await window.desktop.tags.scan(target);
+      setMeta(res.summary);
+      setWarnings(res.warnings);
+      loadSuggestions(res.suggestions);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  async function doLoadPaste(): Promise<void> {
+    onError('');
+    try {
+      const res = await window.desktop.tags.fromJson(pasteText);
+      setMeta(null);
+      setWarnings(res.warnings);
+      loadSuggestions(res.suggestions);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  const selectedIds = suggestions.filter((s) => selected[s.id]).map((s) => s.id);
+  const setAll = (pred: (s: SuggestedTagView) => boolean): void =>
+    setSelected(Object.fromEntries(suggestions.map((s) => [s.id, pred(s)])));
+
+  function effective(s: SuggestedTagView): SuggestedTagView {
+    const e = edits[s.id];
+    if (!e) return s;
+    return {
+      ...s,
+      tagName: e.tagName ?? s.tagName,
+      eventName: e.eventName ?? s.eventName,
+      measurementId: e.measurementId ?? s.measurementId,
+    };
+  }
+
+  async function confirmCreate(): Promise<void> {
+    if (!targetReady || !ctx) return;
+    setCreating(true);
+    onError('');
+    const chosen = suggestions.filter((s) => selected[s.id]).map(effective);
+    setStatuses((st) => {
+      const n = { ...st };
+      for (const s of chosen) n[s.id] = { state: 'creating' };
+      return n;
+    });
+    try {
+      const outcomes: CreateTagOutcome[] = await window.desktop.tags.createTags(
+        ctx.accountId!,
+        ctx.containerId!,
+        ctx.workspaceId!,
+        chosen
+      );
+      const byId = new Map(outcomes.map((o) => [o.id, o]));
+      setStatuses((st) => {
+        const n = { ...st };
+        for (const s of chosen) {
+          const o = byId.get(s.id);
+          if (!o) n[s.id] = { state: 'err', msg: 'no result' };
+          else if (o.ok) n[s.id] = { state: 'ok', msg: o.triggerReused ? 'created · trigger reused' : 'created · trigger created' };
+          else n[s.id] = { state: 'err', msg: o.error ?? 'failed' };
+        }
+        return n;
+      });
+      const created = outcomes.filter((o) => o.ok).length;
+      setDone({ created, failed: outcomes.length - created });
+      // Succeeded rows: deselect (and they become read-only). Failures stay selected to retry.
+      setSelected((sel) => {
+        const n = { ...sel };
+        for (const o of outcomes) if (o.ok) n[o.id] = false;
+        return n;
+      });
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+      setStatuses((st) => {
+        const n = { ...st };
+        for (const s of chosen) if (n[s.id]?.state === 'creating') n[s.id] = { state: 'err', msg: 'failed' };
+        return n;
+      });
+    } finally {
+      setCreating(false);
+      setConfirming(false);
+    }
+  }
+
+  const newCount = suggestions.filter((s) => !s.enhancedMeasurementOverlap).length;
+  const emCount = suggestions.length - newCount;
+  const selectedHasEmOverlap = suggestions.some((s) => selected[s.id] && s.enhancedMeasurementOverlap);
+  const selectedUsesVar = suggestions.some((s) => selected[s.id] && effective(s).measurementId.includes('{{'));
+
+  return (
+    <div style={styles.reviewWrap}>
+      <div style={styles.chatHeader}>
+        <div>
+          <div style={styles.chatTitle}>Tag suggestions</div>
+          <div style={styles.chatSub}>Scan a site for GA4 tags worth creating, review, then create them as drafts.</div>
+        </div>
+      </div>
+
+      <div style={styles.reviewBody}>
+        {/* Source */}
+        <div style={styles.card}>
+          <div style={styles.formRow}>
+            <input
+              style={styles.input}
+              placeholder="https://example.com"
+              value={url}
+              disabled={scanning}
+              onChange={(e) => setUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void doScan();
+              }}
+            />
+            <button style={styles.primaryBtn} onClick={doScan} disabled={!url.trim() || scanning}>
+              {scanning ? 'Scanning…' : 'Scan site'}
+            </button>
+          </div>
+          <div style={styles.muted}>
+            Crawls same-site pages in a hidden browser (read-only — nothing is clicked or submitted). Nothing is created
+            until you approve.{' '}
+            <button style={styles.linkBtn} onClick={() => setPasteOpen((o) => !o)}>
+              {pasteOpen ? 'hide paste' : 'or paste a gtm_tag_suggestions report'}
+            </button>
+          </div>
+          {pasteOpen && (
+            <div style={{ marginTop: 8 }}>
+              <textarea
+                style={styles.pasteArea}
+                placeholder={'Paste the JSON output of the web-audit "gtm_tag_suggestions" tool…'}
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+              />
+              <button style={styles.ghostBtn} onClick={doLoadPaste} disabled={!pasteText.trim()}>
+                Load suggestions
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Target */}
+        <div style={styles.card}>
+          <div style={styles.h2}>Create into</div>
+          {targetReady && ctx ? (
+            <div style={styles.muted}>
+              📁 {ctx.accountName} › {ctx.containerName} › <b style={{ color: '#e5e7eb' }}>{ctx.workspaceName}</b>
+              &nbsp;·&nbsp; {active?.email}
+            </div>
+          ) : (
+            <div style={{ color: '#fcd9a5', fontSize: 13 }}>
+              Pick a GTM account, container and draft workspace in <b>Chat</b> (the bar above the messages) first, then
+              return here.
+            </div>
+          )}
+          <div style={{ ...styles.muted, marginTop: 6 }}>
+            measurementId defaults to the <code style={mdStyles.code}>{'{{GA4 Measurement ID}}'}</code> variable — make
+            sure it exists in this container, or edit a row to a real G-XXXX id.
+          </div>
+        </div>
+
+        {/* Results */}
+        {suggestions.length === 0 ? (
+          <div style={styles.empty}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>🏷</div>
+            Scan a website to see the GA4 event tags worth creating — form submissions (with the form provider), email
+            &amp; phone clicks, file downloads, outbound links and CTAs.
+          </div>
+        ) : (
+          <>
+            <div style={styles.reviewToolbar}>
+              <div style={styles.muted}>
+                {meta ? `${meta.pagesScanned} page(s) scanned · ` : ''}
+                {suggestions.length} suggestion(s) · {newCount} new, {emCount} already auto-tracked · {selectedIds.length}{' '}
+                selected
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button style={styles.linkBtn} onClick={() => setAll(() => true)}>
+                  Select all
+                </button>
+                <button style={styles.linkBtn} onClick={() => setAll(() => false)}>
+                  Select none
+                </button>
+                <button style={styles.linkBtn} onClick={() => setAll((s) => !s.enhancedMeasurementOverlap)}>
+                  Select new only
+                </button>
+              </div>
+            </div>
+
+            {warnings.map((w, i) => (
+              <div key={i} style={{ ...styles.muted, color: '#fcd9a5' }}>
+                ⚠ {w}
+              </div>
+            ))}
+
+            <div style={styles.reviewList}>
+              {suggestions.map((s) => {
+                const st = statuses[s.id];
+                const isSel = !!selected[s.id];
+                const ed = edits[s.id] ?? {};
+                const eff = effective(s);
+                const okRow = st?.state === 'ok';
+                return (
+                  <div
+                    key={s.id}
+                    style={{
+                      ...styles.reviewRow,
+                      ...(okRow ? styles.reviewRowOk : {}),
+                      opacity: s.enhancedMeasurementOverlap && !isSel && !okRow ? 0.72 : 1,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSel}
+                      disabled={okRow || creating}
+                      onChange={(e) => setSelected((sel) => ({ ...sel, [s.id]: e.target.checked }))}
+                      style={{ marginTop: 4 }}
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={styles.reviewRowHead}>
+                        <span style={{ fontWeight: 600 }}>{eff.tagName}</span>
+                        <span style={{ ...styles.badge, ...CONF_BADGE[s.confidence] }}>{s.confidence}</span>
+                        <span style={styles.typeChip}>GA4 event</span>
+                        {s.enhancedMeasurementOverlap && (
+                          <span style={styles.emChip}>⚠ Enhanced Measurement already tracks this</span>
+                        )}
+                      </div>
+                      <div style={styles.reviewMetaLine}>
+                        {s.page} · <code style={mdStyles.code}>{eff.eventName}</code> · {triggerSummary(s)}
+                      </div>
+                      <div style={styles.reviewEvidence}>{s.evidence}</div>
+                      {st && st.state !== 'idle' && (
+                        <div
+                          style={{
+                            fontSize: 12,
+                            marginTop: 4,
+                            color: st.state === 'ok' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : '#9ca3af',
+                          }}
+                        >
+                          {st.state === 'creating' ? 'Creating…' : st.state === 'ok' ? `✓ ${st.msg}` : `✗ ${st.msg}`}
+                        </div>
+                      )}
+                      {expanded[s.id] && (
+                        <div style={styles.editGrid}>
+                          <EditLine
+                            label="Tag name"
+                            value={ed.tagName ?? s.tagName}
+                            onChange={(v) => setEdits((m) => ({ ...m, [s.id]: { ...m[s.id], tagName: v } }))}
+                          />
+                          <EditLine
+                            label="Event name"
+                            value={ed.eventName ?? s.eventName}
+                            onChange={(v) => setEdits((m) => ({ ...m, [s.id]: { ...m[s.id], eventName: v } }))}
+                          />
+                          <EditLine
+                            label="Measurement ID"
+                            value={ed.measurementId ?? s.measurementId}
+                            onChange={(v) => setEdits((m) => ({ ...m, [s.id]: { ...m[s.id], measurementId: v } }))}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    {!okRow && (
+                      <button style={styles.linkBtn} onClick={() => setExpanded((x) => ({ ...x, [s.id]: !x[s.id] }))}>
+                        {expanded[s.id] ? 'done' : '✎ edit'}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {confirming ? (
+              <div style={styles.confirm}>
+                <div style={styles.confirmHead}>Create {selectedIds.length} draft tag(s)?</div>
+                <div style={{ ...styles.muted, margin: '6px 0', color: '#fcd9a5' }}>
+                  Into {ctx?.containerName} › {ctx?.workspaceName}. Applies to a DRAFT workspace only — not published. You
+                  publish in GTM yourself.
+                  {selectedHasEmOverlap && ' Some selected tags duplicate GA4 Enhanced Measurement auto-tracking.'}
+                  {selectedUsesVar && ' Some tags use the {{GA4 Measurement ID}} variable — verify it exists in this container.'}
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button style={styles.primaryBtn} onClick={confirmCreate} disabled={creating}>
+                    {creating ? 'Creating…' : `Create ${selectedIds.length} tag(s)`}
+                  </button>
+                  <button style={styles.ghostBtn} onClick={() => setConfirming(false)} disabled={creating}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
+                <button
+                  style={styles.primaryBtn}
+                  disabled={!targetReady || selectedIds.length === 0}
+                  onClick={() => setConfirming(true)}
+                >
+                  Approve &amp; create selected ({selectedIds.length})
+                </button>
+                {!targetReady && <span style={{ color: '#fcd9a5', fontSize: 13 }}>Pick a draft workspace first.</span>}
+                {done && (
+                  <span style={{ color: done.failed ? '#fcd9a5' : '#6ee7b7', fontSize: 13 }}>
+                    {done.created} created{done.failed ? `, ${done.failed} failed` : ''} — open GTM to review &amp;
+                    publish.
+                  </span>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -1391,7 +1803,7 @@ const styles: Record<string, React.CSSProperties> = {
   proposalRow: { display: 'flex', justifyContent: 'space-between', gap: 16, padding: '7px 0', borderBottom: '1px solid #1f2937', fontSize: 13 },
   proposalLabel: { color: '#9ca3af' },
   proposalValue: { color: '#e5e7eb', fontWeight: 600, textAlign: 'right', wordBreak: 'break-word' },
-  editRow: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #1f2937' },
+  editRow: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #1f2937', flexWrap: 'wrap' },
   editInput: { flex: 1, maxWidth: 320, background: '#161e2e', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 6, padding: '6px 9px', fontSize: 13 },
   confirmNote: { color: '#9ca3af', fontSize: 11, marginTop: 8 },
 
@@ -1414,4 +1826,34 @@ const styles: Record<string, React.CSSProperties> = {
   resultRow: { padding: '6px 0', borderBottom: '1px solid #1f2937', fontSize: 13, fontFamily: 'ui-monospace, monospace' },
   muted: { color: '#6b7280', fontSize: 13 },
   dot: { width: 9, height: 9, borderRadius: 999, display: 'inline-block', flexShrink: 0 },
+  linkBtn: { background: 'transparent', border: 'none', color: '#93c5fd', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' },
+
+  // Tag-suggestion review panel.
+  reviewWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
+  reviewBody: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 12 },
+  pasteArea: {
+    width: '100%',
+    boxSizing: 'border-box',
+    minHeight: 120,
+    background: '#0d1320',
+    color: '#e5e7eb',
+    border: '1px solid #334155',
+    borderRadius: 10,
+    padding: '10px 12px',
+    fontSize: 12,
+    fontFamily: 'ui-monospace, monospace',
+    resize: 'vertical',
+    marginBottom: 8,
+  },
+  reviewToolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  reviewList: { display: 'flex', flexDirection: 'column', border: '1px solid #1f2937', borderRadius: 12, overflow: 'hidden' },
+  reviewRow: { display: 'flex', gap: 12, alignItems: 'flex-start', padding: '12px 14px', borderBottom: '1px solid #1f2937', background: '#111827' },
+  reviewRowOk: { borderLeft: '3px solid #34d399', background: '#0f1b16' },
+  reviewRowHead: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  reviewMetaLine: { color: '#9ca3af', fontSize: 12, marginTop: 3 },
+  reviewEvidence: { color: '#6b7280', fontSize: 12, marginTop: 3, fontStyle: 'italic' },
+  badge: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, borderRadius: 6, padding: '1px 7px' },
+  typeChip: { fontSize: 11, color: '#93c5fd', background: '#10233f', border: '1px solid #1e3a5f', borderRadius: 6, padding: '1px 7px' },
+  emChip: { fontSize: 11, color: '#fcd34d', background: '#3a2c0a', border: '1px solid #92651a', borderRadius: 6, padding: '1px 7px' },
+  editGrid: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8, background: '#0b0f17', borderRadius: 8, padding: '4px 12px' },
 };
