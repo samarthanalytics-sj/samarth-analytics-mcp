@@ -8,6 +8,18 @@
 import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag } from './types.js';
 
 const GA4_VAR = '{{GA4 Measurement ID}}';
+// Event-parameter VALUES are GTM built-in variables, so the tag captures the
+// actual clicked link / submitted form at runtime (not a value baked in at scan
+// time). The create flow enables whichever of these the parameters reference.
+const CLICK_URL = '{{Click URL}}';
+const CLICK_TEXT = '{{Click Text}}';
+const FORM_ID = '{{Form ID}}';
+const FORM_URL = '{{Form URL}}';
+/** Standard GA4 click params — what was clicked + its visible text. */
+const LINK_PARAMS = [
+  { name: 'link_url', value: CLICK_URL },
+  { name: 'link_text', value: CLICK_TEXT },
+];
 // Single source of truth for "what's a downloadable file" — the collector's
 // detection regex and this GTM trigger filter are both built from it, so a
 // detected download always matches the tag we suggest for it.
@@ -50,6 +62,11 @@ function formSuggestion(f: DetectedForm): SuggestedTag | null {
     tagName: `GA4 - ${eventName}`,
     measurementId: GA4_VAR,
     eventName,
+    // Capture which form + where it submits, via the form built-in variables.
+    eventParameters: [
+      { name: 'form_id', value: FORM_ID },
+      { name: 'form_destination', value: FORM_URL },
+    ],
     trigger: { name: `Form submit - ${f.purpose}`, kind: 'form_submit' },
   };
 }
@@ -71,6 +88,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         ...base('email_click', 'high', false),
         label: 'Email link (mailto) → GA4 "email_click"',
         evidence: `mailto link${el.region ? ' in ' + el.region : ''}`,
+        eventParameters: LINK_PARAMS,
         trigger: { name: 'Email link click', kind: 'link_click', clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' },
       };
     case 'phone':
@@ -78,6 +96,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         ...base('phone_click', 'high', false),
         label: 'Phone link (tel) → GA4 "phone_click"',
         evidence: `tel link${el.region ? ' in ' + el.region : ''}`,
+        eventParameters: LINK_PARAMS,
         trigger: { name: 'Phone link click', kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
       };
     case 'download':
@@ -85,6 +104,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         ...base('file_download', 'medium', true), // EM already auto-tracks downloads
         label: 'File download → GA4 "file_download"  ⚠ Enhanced Measurement already covers this',
         evidence: `download link ${el.href ?? ''}`.trim(),
+        eventParameters: LINK_PARAMS,
         trigger: { name: 'File download click', kind: 'link_click', clickUrlValue: `\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
       };
     case 'outbound':
@@ -92,6 +112,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         ...base('outbound_click', 'medium', true), // EM already auto-tracks outbound
         label: 'Outbound link → GA4 "outbound_click"  ⚠ Enhanced Measurement already covers this',
         evidence: `outbound link ${el.href ?? ''}`.trim(),
+        eventParameters: LINK_PARAMS,
         trigger: { name: 'Outbound link click', kind: 'link_click' },
       };
     case 'cta':
@@ -99,8 +120,15 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         ...base('cta_click', 'low', false),
         label: `CTA "${el.text}" → GA4 "cta_click"`,
         evidence: `button/link text "${el.text}"`,
-        eventParameters: [{ name: 'cta_text', value: el.text }],
-        trigger: { name: 'CTA click', kind: 'all_clicks' },
+        // cta_text is the DYNAMIC clicked text ({{Click Text}}), not the value
+        // baked in at scan time; link_url captures the href when the CTA is a link.
+        eventParameters: [
+          { name: 'cta_text', value: CLICK_TEXT },
+          { name: 'link_url', value: CLICK_URL },
+        ],
+        // Fire only for THIS CTA (its text), not on every click — and capture the
+        // text dynamically. all_clicks covers both <button> and <a> CTAs.
+        trigger: { name: `CTA click - ${el.text}`, kind: 'all_clicks', clickTextValue: el.text, clickTextOperator: 'contains' },
       };
   }
 }
@@ -118,11 +146,12 @@ export function buildSuggestions(input: SuggestInput): SuggestedTag[] {
   // marked "site-wide", instead of N copies.
   const byKey = new Map<string, SuggestedTag>();
   for (const s of raw) {
-    // CTAs are distinguished only by their text — keep distinct CTAs distinct;
-    // every other kind genuinely collapses to one tag (one mailto:, one regex
-    // file_download, one outbound, etc.).
-    const disc = s.eventName === 'cta_click' ? (s.eventParameters?.[0]?.value ?? s.label) : '';
-    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${disc}`;
+    // CTAs are distinguished by their click-text filter — keep distinct CTAs
+    // distinct; every other kind genuinely collapses to one tag (one mailto:,
+    // one regex file_download, one outbound, etc.). The eventParameters are now
+    // all GTM-variable refs (identical across instances), so the trigger filter
+    // is the discriminator, not the parameter value.
+    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}`;
     const seen = byKey.get(key);
     if (!seen) byKey.set(key, { ...s });
     else if (seen.page !== s.page) seen.page = 'site-wide';

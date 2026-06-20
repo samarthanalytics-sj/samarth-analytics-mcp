@@ -130,6 +130,8 @@ export interface SuggestedTagView {
     kind: string;
     clickUrlValue?: string;
     clickUrlOperator?: string;
+    clickTextValue?: string;
+    clickTextOperator?: string;
     eventName?: string;
   };
 }
