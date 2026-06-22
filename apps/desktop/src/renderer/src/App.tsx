@@ -975,6 +975,16 @@ function triggerCondition(s: SuggestedTagView): string {
   return parts.join(' AND ');
 }
 
+/** "outbound 40 · cta 30 · download 25 · phone 2 · email 1" for the inventory header. */
+function kindCountsLabel(elements: Array<{ kind: string }>): string {
+  const counts: Record<string, number> = {};
+  for (const e of elements) counts[e.kind] = (counts[e.kind] ?? 0) + 1;
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, n]) => `${k} ${n}`)
+    .join(' · ');
+}
+
 function EditLine({
   label,
   value,
@@ -1017,7 +1027,7 @@ function TagReviewPanel({
   const [maxDepth, setMaxDepth] = useState('2');
   const [engine, setEngine] = useState<ScanEngine>('electron');
   const [settleMs, setSettleMs] = useState('2500');
-  const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned'] } | null>(null);
+  const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned']; inventory: TagScanResult['inventory'] } | null>(null);
   const [showLog, setShowLog] = useState(false);
 
   const ctx = active?.gtmContext;
@@ -1049,7 +1059,7 @@ function TagReviewPanel({
       });
       setMeta(res.summary);
       setWarnings(res.warnings);
-      setScanLog({ pages: res.pages, notScanned: res.notScanned });
+      setScanLog({ pages: res.pages, notScanned: res.notScanned, inventory: res.inventory });
       loadSuggestions(res.suggestions);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -1259,7 +1269,76 @@ function TagReviewPanel({
             </div>
             {showLog && (
               <div style={{ marginTop: 10 }}>
-                <div style={styles.h2}>Pages scanned ({scanLog.pages.length})</div>
+                {/* Forms detected (before dedup) */}
+                <div style={styles.h2}>Forms detected ({scanLog.inventory.forms.length})</div>
+                <table style={styles.invTable}>
+                  <thead>
+                    <tr>
+                      <th style={styles.invTh}>Page</th>
+                      <th style={styles.invTh}>Purpose</th>
+                      <th style={styles.invTh}>Provider</th>
+                      <th style={styles.invTh}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scanLog.inventory.forms.map((f, i) => (
+                      <tr key={i}>
+                        <td style={styles.invTd}>{f.page}</td>
+                        <td style={styles.invTd}>{f.purpose}</td>
+                        <td style={styles.invTd}>{f.provider}</td>
+                        <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{f.action || '—'}</td>
+                      </tr>
+                    ))}
+                    {scanLog.inventory.forms.length === 0 && (
+                      <tr>
+                        <td style={styles.invTd} colSpan={4}>
+                          none
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+
+                {/* Every trackable element (before dedup into suggestions) */}
+                <div style={{ ...styles.h2, marginTop: 14 }}>
+                  All trackable elements ({scanLog.inventory.elements.length})
+                  {scanLog.inventory.elements.length > 0 && (
+                    <span style={{ textTransform: 'none', color: '#6b7280', fontWeight: 400, letterSpacing: 0 }}>
+                      {' '}— {kindCountsLabel(scanLog.inventory.elements)}
+                    </span>
+                  )}
+                </div>
+                <div style={styles.invScroll}>
+                  <table style={styles.invTable}>
+                    <thead>
+                      <tr>
+                        <th style={styles.invTh}>Page</th>
+                        <th style={styles.invTh}>Kind</th>
+                        <th style={styles.invTh}>Text</th>
+                        <th style={styles.invTh}>Href</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scanLog.inventory.elements.map((e, i) => (
+                        <tr key={i}>
+                          <td style={styles.invTd}>{e.page}</td>
+                          <td style={styles.invTd}>{e.kind}</td>
+                          <td style={styles.invTd}>{(e.text || '—').slice(0, 80)}</td>
+                          <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{e.href || '—'}</td>
+                        </tr>
+                      ))}
+                      {scanLog.inventory.elements.length === 0 && (
+                        <tr>
+                          <td style={styles.invTd} colSpan={4}>
+                            none
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ ...styles.h2, marginTop: 14 }}>Pages scanned ({scanLog.pages.length})</div>
                 <ul style={styles.resultList}>
                   {scanLog.pages.map((p, i) => (
                     <li key={i} style={styles.resultRow}>
@@ -1978,4 +2057,8 @@ const styles: Record<string, React.CSSProperties> = {
   editGrid: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8, background: '#0b0f17', borderRadius: 8, padding: '4px 12px' },
   detailGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 12, rowGap: 3, marginTop: 5, fontSize: 12.5, color: '#cbd5e1', alignItems: 'start' },
   detailKey: { color: '#6b7280', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, paddingTop: 1 },
+  invScroll: { maxHeight: 320, overflowY: 'auto', border: '1px solid #1f2937', borderRadius: 8 },
+  invTable: { width: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' },
+  invTh: { textAlign: 'left', padding: '5px 8px', color: '#6b7280', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.4, borderBottom: '1px solid #1f2937', position: 'sticky', top: 0, background: '#111827' },
+  invTd: { padding: '4px 8px', borderBottom: '1px solid #161e2e', color: '#cbd5e1', verticalAlign: 'top', overflow: 'hidden', textOverflow: 'ellipsis' },
 };

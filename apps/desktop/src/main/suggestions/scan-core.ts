@@ -115,6 +115,7 @@ function emptyResult(site: string, siteHost: string, warnings: string[]): TagSca
     },
     suggestions: [],
     pages: [],
+    inventory: { elements: [], forms: [] },
     notScanned: [],
     warnings,
   };
@@ -237,6 +238,12 @@ export async function crawlAndSuggest(
     },
     suggestions,
     pages: pageScans.map((p) => ({ page: p.page, forms: p.forms.length, elements: p.elements.length })),
+    // The full inventory: every detected element/form (before the engine dedups
+    // them into suggestions), so the user can see ALL trackable elements.
+    inventory: {
+      elements: input.elements.slice(0, 1000).map((e) => ({ page: e.page, kind: e.kind, text: e.text, href: e.href, region: e.region })),
+      forms: input.forms.map((f) => ({ page: f.page, purpose: f.purpose, action: f.action, provider: f.provider.vendor })),
+    },
     notScanned,
     warnings,
   };

@@ -126,6 +126,9 @@ async function main(): Promise<void> {
     check('crawl: every suggestion is a ga4_event payload', res.suggestions.every((s) => s.platform === 'ga4_event' && !!s.tagName && !!s.trigger.kind));
     check('crawl: siteHost derived from start', res.siteHost === 'acme.com');
     check('crawl: driver.close() called exactly once', fd.closes() === 1, `${fd.closes()}`);
+    check('crawl: inventory lists ALL detected elements (5) + forms (1), pre-dedup', res.inventory.elements.length === 5 && res.inventory.forms.length === 1,
+      `${res.inventory.elements.length} els, ${res.inventory.forms.length} forms`);
+    check('crawl: inventory element carries page/kind/text/href', res.inventory.elements.every((e) => typeof e.page === 'string' && typeof e.kind === 'string'));
   }
 
   // ── maxDepth clamps to a minimum of 1, so a linked page is still reached ────

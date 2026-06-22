@@ -149,6 +149,23 @@ export interface TagScanOptions {
   engine?: ScanEngine;
 }
 
+/** One detected clickable element (before dedup) — the raw inventory. */
+export interface DetectedElementView {
+  page: string;
+  /** email | phone | download | outbound | cta */
+  kind: string;
+  text: string;
+  href?: string;
+  region?: string;
+}
+/** One detected form (before dedup). */
+export interface DetectedFormView {
+  page: string;
+  purpose: string;
+  action: string;
+  provider: string;
+}
+
 /** Result of crawling a URL for tag suggestions (suggestions:scan). */
 export interface TagScanResult {
   site: string;
@@ -166,6 +183,8 @@ export interface TagScanResult {
   };
   suggestions: SuggestedTagView[];
   pages: Array<{ page: string; forms: number; elements: number }>;
+  /** Every trackable element + form detected (before dedup) — the full inventory. */
+  inventory: { elements: DetectedElementView[]; forms: DetectedFormView[] };
   notScanned: Array<{ url: string; reason: string }>;
   warnings: string[];
 }
