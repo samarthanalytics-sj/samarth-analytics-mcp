@@ -64,17 +64,20 @@ check('siteHost passed with a scheme still matches internal links', classifyElem
 check('collector detects .apk / .mp3 / #fragment as download', kindOf('https://acme.com/app.apk') === 'download' && kindOf('https://acme.com/t.mp3') === 'download' && kindOf('https://acme.com/a.pdf#s') === 'download');
 const dl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: classifyPageElements([a('https://a.com/app.apk')], 'a.com', '/d') }).find((s) => s.eventName === 'file_download');
 check('engine file_download trigger regex covers the same extensions (apk, #)', !!dl && /apk/.test(dl.trigger.clickUrlValue ?? '') && /#/.test(dl.trigger.clickUrlValue ?? ''));
-// CTA tightening: bare "register" no longer matches header auth links
-check('CTA: "Login / Register" no longer a false-positive CTA', classifyElement({ tag: 'button', href: '', text: 'Login / Register', hasDownload: false, region: '' }, 'a.com') === null);
+// "Login / Register" is now a tracked login CTA (was excluded); bare "register"
+// still stays out of the generic bucket.
+check('CTA: "Login / Register" → login CTA (tracked)', (() => { const d = classifyElement({ tag: 'button', href: '', text: 'Login / Register', hasDownload: false, region: '' }, 'a.com'); return d?.kind === 'cta' && d?.intent === 'login'; })());
 
 // ── CTA intent classification ────────────────────────────────────────────────
 check('cta intent: "Add to cart" button → add_to_cart', (() => { const d = classifyElement({ tag: 'button', href: '', text: 'Add to cart', hasDownload: false, region: '' }, 'a.com'); return d?.kind === 'cta' && d?.intent === 'add_to_cart'; })());
 check('cta intent: "Learn more" same-site link → learn_more', (() => { const d = classifyElement(a('https://a.com/x', { text: 'Learn more' }), 'a.com'); return d?.kind === 'cta' && d?.intent === 'learn_more'; })());
 check('cta intent: Subscribe / Buy now / FAQ / Get started recognized', classifyCtaIntent('Subscribe') === 'subscribe' && classifyCtaIntent('Buy now') === 'generic' && classifyCtaIntent('FAQ') === 'faq' && classifyCtaIntent('Get started') === 'get_started');
-check('cta intent: "Login / Register" stays null (auth nav, not a CTA)', classifyCtaIntent('Login / Register') === null);
+check('cta intent: "Login"/"Sign in"/"Login / Register" → login', classifyCtaIntent('Login') === 'login' && classifyCtaIntent('Sign in') === 'login' && classifyCtaIntent('Login / Register') === 'login');
+check('cta intent: "Search" → search, "Research papers" stays null (word-bounded)', classifyCtaIntent('Search') === 'search' && classifyCtaIntent('Research papers') === null);
+check('cta intent: "See all case studies"/"View all"/"See more"/"Case studies" → view_more', ['See all case studies', 'View all', 'See more', 'Browse all', 'Case studies', 'Read more'].every((t) => classifyCtaIntent(t) === 'view_more'));
 check('cta intent: plain text "Our team" stays null', classifyCtaIntent('Our team') === null);
-// learn_more tightened: pagination/affordance text is NOT a Learn More CTA.
-check('cta intent: "See more"/"View more"/"View details"/"Read more" are NOT learn_more', ['See more', 'View more', 'View details', 'Read more'].every((t) => classifyCtaIntent(t) === null));
+// "View details" is still NOT a tracked CTA (too generic); genuine learn-more stays.
+check('cta intent: "View details" stays null (not view_more, not learn_more)', classifyCtaIntent('View details') === null);
 check('cta intent: genuine "Learn more"/"Find out more"/"Discover more" still learn_more', ['Learn more', 'Find out more', 'Discover more'].every((t) => classifyCtaIntent(t) === 'learn_more'));
 // quote/demo recall: an adjective between the verb and the noun still matches.
 check('cta intent: "Get a free quote"/"Request your quote" → request_quote', classifyCtaIntent('Get a free quote') === 'request_quote' && classifyCtaIntent('Request your quote') === 'request_quote');
