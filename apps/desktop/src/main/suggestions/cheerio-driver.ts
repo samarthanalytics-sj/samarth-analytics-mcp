@@ -56,6 +56,17 @@ export function extractWithCheerio(html: string, baseUrl: string): { raw: PageSc
     const s = $(el).attr('src');
     if (s) iframeSrcs.push(abs(s));
   });
+  // Lazy iframes (data-src) + click-to-load YouTube facades (lite-youtube-embed,
+  // the .youtube-player[data-id] pattern) — present in the server HTML even though
+  // the real <iframe src> only appears after scroll/click.
+  $('iframe[data-src], iframe[data-lazy-src]').slice(0, 50).each((_i, el) => {
+    const s = $(el).attr('data-src') || $(el).attr('data-lazy-src');
+    if (s) iframeSrcs.push(abs(s));
+  });
+  $('lite-youtube[videoid], .youtube-player[data-id], [data-youtube-id], [data-yt-id]').slice(0, 30).each((_i, el) => {
+    const id = $(el).attr('videoid') || $(el).attr('data-id') || $(el).attr('data-youtube-id') || $(el).attr('data-yt-id') || '';
+    if (/^[\w-]{6,15}$/.test(id)) iframeSrcs.push('https://www.youtube.com/embed/' + id);
+  });
   const classNames = new Set<string>();
   $('[class]').slice(0, 1000).each((_i, el) => {
     const c = $(el).attr('class');

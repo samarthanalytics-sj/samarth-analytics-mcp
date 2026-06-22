@@ -66,6 +66,17 @@ export function collectPageInBrowser(): PageScanRaw {
       const src = (fr as HTMLIFrameElement).src;
       if (src) iframeSrcs.push(src);
     }
+    // Lazy iframes (real URL parked in data-src until scroll) + click-to-load
+    // YouTube facades (lite-youtube-embed; the .youtube-player[data-id] pattern):
+    // surface their embed URL so a player that hasn't upgraded yet is still seen.
+    for (const fr of Array.from(doc.querySelectorAll('iframe[data-src], iframe[data-lazy-src]')).slice(0, 50)) {
+      const src = fr.getAttribute('data-src') || fr.getAttribute('data-lazy-src') || '';
+      if (src) iframeSrcs.push(src);
+    }
+    for (const fe of Array.from(doc.querySelectorAll('lite-youtube[videoid], .youtube-player[data-id], [data-youtube-id], [data-yt-id]')).slice(0, 30)) {
+      const id = fe.getAttribute('videoid') || fe.getAttribute('data-id') || fe.getAttribute('data-youtube-id') || fe.getAttribute('data-yt-id') || '';
+      if (/^[\w-]{6,15}$/.test(id)) iframeSrcs.push('https://www.youtube.com/embed/' + id);
+    }
     for (const el of Array.from(doc.querySelectorAll('[class]')).slice(0, 1000)) {
       for (const c of (el as HTMLElement).classList) classNames.add(c);
       if (classNames.size > 600) break;
