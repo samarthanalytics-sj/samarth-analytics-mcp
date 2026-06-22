@@ -15,7 +15,7 @@ import { ipcMain } from 'electron';
 import type { GoogleDataService } from '../google/data-service';
 import { auditWorkspace } from '../google/audit-runner';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
-import { buildVariable, buildGoogleTag, findGa4BaseTag, ga4VariablePlan, BUILTIN_ALL_PAGES_TRIGGER_ID } from '../google/gtm-builders';
+import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-builders';
 
 export function registerGtmAuditIpc(data: GoogleDataService): void {
   ipcMain.handle('gtm:audit', (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
@@ -76,14 +76,20 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
         variable: buildVariable({ kind: 'constant', name: variableName, value: measurementId }),
       });
     }
+    // Use the create_gtm_tracking_tag path so the firing trigger is a real, created
+    // Page View "All Pages" trigger (reused by name) — not the built-in id, which
+    // the API may not accept on tag creation.
     const tagRes = JSON.parse(
-      await reg.execute('create_gtm_tag', {
+      await reg.execute('create_gtm_tracking_tag', {
         accountId,
         containerId,
         workspaceId,
-        tag: buildGoogleTag({ name: tagName, tagId: `{{${variableName}}}`, firingTriggerId: [BUILTIN_ALL_PAGES_TRIGGER_ID] }),
+        platform: 'google_tag',
+        tagName,
+        tagId: `{{${variableName}}}`,
+        trigger: { name: 'All Pages', kind: 'pageview' },
       }),
-    ) as { name?: string };
-    return { created: true, present: false, variableCreated, variableName, measurementId, tagName: tagRes?.name ?? tagName };
+    ) as { tag?: { name?: string } };
+    return { created: true, present: false, variableCreated, variableName, measurementId, tagName: tagRes?.tag?.name ?? tagName };
   });
 }

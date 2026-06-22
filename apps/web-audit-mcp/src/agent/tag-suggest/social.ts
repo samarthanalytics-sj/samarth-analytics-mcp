@@ -1,65 +1,58 @@
-// Single source of truth for social networks — used BOTH to detect a social link
-// (by host) AND to build the GTM {{Click URL}} trigger regex, so the two can never
-// diverge. The trigger is built from ONLY the networks actually found on the site
-// (buildSocialUrlPattern(present)), so it doesn't fire on networks the site
-// doesn't link to. PURE — no browser, no GTM.
+// Single source of truth for social networks — used to detect a social link (by
+// host) AND to build the GTM {{Click URL}} trigger regex. The trigger uses a SHORT
+// domain-alternation (e.g. "facebook\.com|linkedin\.com") matching how real
+// containers do it (the corpus: short matchRegex like "facebook.com|instagram.com"),
+// built from ONLY the networks the site actually links to. PURE.
 
 export interface SocialNetwork {
   name: string;
-  /** Brand labels matched as the registrable host label (facebook.com, m.facebook.co.uk). */
-  longs: string[];
-  /** Whole short/share hosts (fb.me, lnkd.in, youtu.be). RE2 source, dots escaped. */
-  shorts: string[];
+  /** Registrable domains for this network (host match + the trigger regex). */
+  domains: string[];
 }
 
 export const SOCIAL_NETWORKS: SocialNetwork[] = [
-  { name: 'facebook', longs: ['facebook'], shorts: ['fb\\.(com|me)', 'm\\.me'] },
-  { name: 'instagram', longs: ['instagram'], shorts: ['instagr\\.am'] },
-  { name: 'linkedin', longs: ['linkedin'], shorts: ['lnkd\\.in'] },
-  { name: 'youtube', longs: ['youtube'], shorts: ['youtu\\.be'] },
-  { name: 'twitter', longs: ['twitter'], shorts: ['x\\.com', 't\\.co'] },
-  { name: 'tiktok', longs: ['tiktok'], shorts: [] },
-  { name: 'pinterest', longs: ['pinterest'], shorts: ['pin\\.it'] },
-  { name: 'snapchat', longs: ['snapchat'], shorts: [] },
-  { name: 'reddit', longs: ['reddit'], shorts: [] },
-  { name: 'threads', longs: ['threads'], shorts: [] },
-  { name: 'tumblr', longs: ['tumblr'], shorts: [] },
-  { name: 'whatsapp', longs: ['whatsapp'], shorts: ['wa\\.me'] },
-  { name: 'telegram', longs: ['telegram'], shorts: ['t\\.me'] },
-  { name: 'discord', longs: ['discord'], shorts: [] },
-  { name: 'vimeo', longs: ['vimeo'], shorts: [] },
-  { name: 'twitch', longs: ['twitch'], shorts: [] },
-  { name: 'mastodon', longs: ['mastodon'], shorts: [] },
+  { name: 'facebook', domains: ['facebook.com', 'fb.com', 'fb.me'] },
+  { name: 'instagram', domains: ['instagram.com'] },
+  { name: 'linkedin', domains: ['linkedin.com', 'lnkd.in'] },
+  { name: 'youtube', domains: ['youtube.com', 'youtu.be'] },
+  { name: 'twitter', domains: ['twitter.com', 'x.com'] },
+  { name: 'tiktok', domains: ['tiktok.com'] },
+  { name: 'pinterest', domains: ['pinterest.com'] },
+  { name: 'snapchat', domains: ['snapchat.com'] },
+  { name: 'reddit', domains: ['reddit.com'] },
+  { name: 'threads', domains: ['threads.net'] },
+  { name: 'tumblr', domains: ['tumblr.com'] },
+  { name: 'whatsapp', domains: ['whatsapp.com', 'wa.me'] },
+  { name: 'telegram', domains: ['telegram.org', 't.me'] },
+  { name: 'discord', domains: ['discord.com', 'discord.gg'] },
+  { name: 'vimeo', domains: ['vimeo.com'] },
+  { name: 'twitch', domains: ['twitch.tv'] },
+  { name: 'mastodon', domains: ['mastodon.social'] },
 ];
 
-const longRe = (net: SocialNetwork): RegExp =>
-  new RegExp(`(?:^|\\.)(${net.longs.join('|')})\\.[a-z]{2,}(?:\\.[a-z]{2,})?$`, 'i');
-const shortRe = (net: SocialNetwork): RegExp | null =>
-  net.shorts.length ? new RegExp(`^(www\\.)?(${net.shorts.join('|')})$`, 'i') : null;
+const escapeDots = (s: string): string => s.replace(/\./g, '\\.');
 
-/** The social network this host belongs to (registrable-label match), or null. */
+/** The social network this host belongs to (the host equals or is a subdomain of
+ *  one of its registrable domains), or null. PRECISE — host-based. */
 export function socialNetworkOf(host: string): string | null {
+  const h = host.toLowerCase();
   for (const net of SOCIAL_NETWORKS) {
-    if (net.longs.length && longRe(net).test(host)) return net.name;
-    const sr = shortRe(net);
-    if (sr && sr.test(host)) return net.name;
+    for (const d of net.domains) {
+      if (h === d || h.endsWith(`.${d}`)) return net.name;
+    }
   }
   return null;
 }
 
-/** True if the host is any social network (registrable-label / whole-short-host). */
+/** True if the host belongs to any social network. */
 export function isSocialHost(host: string): boolean {
   return socialNetworkOf(host) !== null;
 }
 
-/** Build the {{Click URL}} matchRegex for the social trigger from ONLY the given
- *  networks (by name). Host-anchored + (?i). Empty/undefined → all networks. */
+/** A SHORT {{Click URL}} matchRegex (corpus-style) for ONLY the given networks —
+ *  their domains alternated, e.g. "facebook\.com|linkedin\.com". Empty/undefined →
+ *  all networks. */
 export function buildSocialUrlPattern(present?: Set<string>): string {
   const nets = present && present.size ? SOCIAL_NETWORKS.filter((n) => present.has(n.name)) : SOCIAL_NETWORKS;
-  const longs = nets.flatMap((n) => n.longs);
-  const shorts = nets.flatMap((n) => n.shorts);
-  const parts: string[] = [];
-  if (longs.length) parts.push(`://([a-z0-9-]+\\.)*(${longs.join('|')})\\.[a-z]{2,}(\\.[a-z]{2,})?([/:?#]|$)`);
-  if (shorts.length) parts.push(`://(www\\.)?(${shorts.join('|')})([/:?#]|$)`);
-  return `(?i)${parts.join('|')}`;
+  return nets.flatMap((n) => n.domains).map(escapeDots).join('|');
 }
