@@ -12,7 +12,7 @@ import type { AnyNode } from 'domhandler';
 import type { PageScanRaw, RawElement } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm, RawFormField } from '../../../../web-audit-mcp/src/agent/forms.js';
 import type { PageDriver, DrivenPage } from './scan-core';
-import { requestAllowed } from './ssrf';
+import { safeFetch } from './ssrf';
 
 const PROVIDER_SELECTORS = ['.hs-form', '[data-tf-widget]', '#mce-EMAIL', '#mc-embedded-subscribe', '.gform_wrapper', '.wpcf7', '.wpforms-form', '.wpforms-container'];
 const SUBMIT_RE = /\b(submit|send|subscribe|sign\s*up|sign\s*me\s*up|get\s+started|register|join\b|request\s+(a\s+)?(quote|demo|info|callback)|contact\s+us|book\s+(a\s+)?(demo|call|meeting)|get\s+(a\s+)?quote)\b/i;
@@ -172,35 +172,15 @@ export interface CheerioDriverOptions {
   navTimeoutMs?: number;
 }
 
-const UA = 'Mozilla/5.0 (compatible; SamarthTagSuggest/1.0; +read-only static scan)';
-
 export function createCheerioDriver(opts: CheerioDriverOptions = {}): PageDriver {
   const navTimeoutMs = opts.navTimeoutMs ?? 15_000;
   return {
     async open(url: string): Promise<DrivenPage> {
-      // SSRF: check each hop ourselves (manual redirects) so a public host can't
-      // redirect the fetch at a private/loopback/metadata address.
-      let current = url;
       try {
-        for (let hop = 0; hop <= 5; hop++) {
-          if (!(await requestAllowed(current))) return { ok: false, httpStatus: null, finalUrl: null, error: 'blocked by SSRF guard' };
-          const res = await fetch(current, {
-            redirect: 'manual',
-            headers: { 'user-agent': UA, accept: 'text/html,application/xhtml+xml' },
-            signal: AbortSignal.timeout(navTimeoutMs),
-          });
-          if (res.status >= 300 && res.status < 400) {
-            const loc = res.headers.get('location');
-            if (!loc) return { ok: true, httpStatus: res.status, finalUrl: current };
-            current = new URL(loc, current).href;
-            continue;
-          }
-          if (res.status >= 400) return { ok: true, httpStatus: res.status, finalUrl: current };
-          const html = await res.text();
-          const { raw, rawForms } = extractWithCheerio(html, current);
-          return { ok: true, httpStatus: res.status, finalUrl: current, raw, rawForms };
-        }
-        return { ok: false, httpStatus: null, finalUrl: null, error: 'too many redirects' };
+        const { status, finalUrl, body } = await safeFetch(url, navTimeoutMs);
+        if (status >= 400 || !body) return { ok: true, httpStatus: status, finalUrl };
+        const { raw, rawForms } = extractWithCheerio(body, finalUrl);
+        return { ok: true, httpStatus: status, finalUrl, raw, rawForms };
       } catch (e) {
         return { ok: false, httpStatus: null, finalUrl: null, error: (e instanceof Error ? e.message : String(e)).slice(0, 200) };
       }

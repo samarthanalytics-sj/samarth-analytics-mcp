@@ -121,11 +121,81 @@ function emptyResult(site: string, siteHost: string, warnings: string[]): TagSca
   };
 }
 
+/** Scan ONE already-admitted URL → a PageScan (+ its same-site links), or a
+ *  not-scanned reason. Read-only DOM read via the driver. */
+async function scanTarget(
+  driver: PageDriver,
+  url: string,
+  siteHost: string,
+  base: string,
+): Promise<{ page?: PageScan; links?: string[]; reason?: string }> {
+  const driven = await driver.open(url);
+  if (!driven.ok) return { reason: driven.error ? `scan failed: ${driven.error}`.slice(0, 200) : 'navigation failed' };
+  if (driven.httpStatus !== null && driven.httpStatus >= 400) return { reason: `http ${driven.httpStatus}` };
+  if (!driven.raw) return { reason: 'no page content' };
+  const path = pagePath(url);
+  const elements = classifyPageElements(driven.raw.elements, siteHost, path);
+  const forms = (driven.rawForms ? analyzeForms(driven.rawForms, driven.finalUrl ?? url) : []).map((f) => ({
+    purpose: f.purpose,
+    action: f.action,
+  }));
+  const links: string[] = [];
+  for (const el of driven.raw.elements) {
+    if (el.tag !== 'a' || !el.href) continue;
+    const norm = normalizeUrl(el.href, url);
+    if (norm && sameSite(norm, base)) links.push(norm);
+  }
+  return { page: { page: path, elements, forms, signals: driven.raw.signals }, links };
+}
+
+/** Build the final report from collected page scans (pure assembly + dedup). */
+function assembleResult(
+  site: string,
+  siteHost: string,
+  pageScans: PageScan[],
+  notScanned: TagScanResult['notScanned'],
+  warnings: string[],
+  opened: number,
+): TagScanResult {
+  const input = buildSuggestInput(pageScans, siteHost);
+  const suggestions: SuggestedTag[] = buildSuggestions(input);
+  const byConfidence = { high: 0, medium: 0, low: 0 };
+  let em = 0;
+  for (const sug of suggestions) {
+    byConfidence[sug.confidence] += 1;
+    if (sug.enhancedMeasurementOverlap) em += 1;
+  }
+  return {
+    site,
+    siteHost,
+    scannedAt: new Date().toISOString(),
+    summary: {
+      pagesCrawled: opened,
+      pagesScanned: pageScans.length,
+      formsFound: input.forms.length,
+      trackableElements: input.elements.length,
+      suggestions: suggestions.length,
+      byConfidence,
+      enhancedMeasurementOverlap: em,
+      newTracking: suggestions.length - em,
+    },
+    suggestions,
+    pages: pageScans.map((p) => ({ page: p.page, forms: p.forms.length, elements: p.elements.length })),
+    // The full inventory: every detected element/form (before the engine dedups
+    // them into suggestions), so the user can see ALL trackable elements.
+    inventory: {
+      elements: input.elements.slice(0, 1000).map((e) => ({ page: e.page, kind: e.kind, text: e.text, href: e.href, region: e.region })),
+      forms: input.forms.map((f) => ({ page: f.page, purpose: f.purpose, action: f.action, provider: f.provider.vendor })),
+    },
+    notScanned,
+    warnings,
+  };
+}
+
 /**
  * Crawl a site (same-site BFS, form-heavy pages first) via the injected driver
  * and return ranked, deduped GA4 tag suggestions. READ-ONLY: the driver only
- * navigates + reads the DOM — it never clicks or submits. Each suggestion is in
- * the create_gtm_tracking_tag payload shape.
+ * navigates + reads the DOM — it never clicks or submits.
  */
 export async function crawlAndSuggest(
   driver: PageDriver,
@@ -157,7 +227,6 @@ export async function crawlAndSuggest(
 
   try {
     while (queue.length > 0 && opened < maxPages) {
-      // BFS by depth; form-looking URLs first within a depth level.
       queue.sort((a, b) => a.depth - b.depth || urlPriority(b.url) - urlPriority(a.url));
       const { url, depth } = queue.shift()!;
       const key = url.replace(/\/$/, '');
@@ -171,34 +240,14 @@ export async function crawlAndSuggest(
       }
 
       opened += 1;
-      const driven = await driver.open(url);
-      if (!driven.ok) {
-        notScanned.push({ url, reason: driven.error ? `scan failed: ${driven.error}`.slice(0, 200) : 'navigation failed' });
+      const r = await scanTarget(driver, url, siteHost, start);
+      if (!r.page) {
+        notScanned.push({ url, reason: r.reason ?? 'not scanned' });
         continue;
       }
-      if (driven.httpStatus !== null && driven.httpStatus >= 400) {
-        notScanned.push({ url, reason: `http ${driven.httpStatus}` });
-        continue;
-      }
-      if (!driven.raw) {
-        notScanned.push({ url, reason: 'no page content' });
-        continue;
-      }
-
-      const path = pagePath(url);
-      const elements = classifyPageElements(driven.raw.elements, siteHost, path);
-      const forms = (driven.rawForms ? analyzeForms(driven.rawForms, driven.finalUrl ?? url) : []).map((f) => ({
-        purpose: f.purpose,
-        action: f.action,
-      }));
-      pageScans.push({ page: path, elements, forms, signals: driven.raw.signals });
-
-      // Enqueue same-site links from the anchors the collector already gathered.
+      pageScans.push(r.page);
       if (depth < maxDepth) {
-        for (const el of driven.raw.elements) {
-          if (el.tag !== 'a' || !el.href) continue;
-          const norm = normalizeUrl(el.href, url);
-          if (!norm || !sameSite(norm, start)) continue;
+        for (const norm of r.links ?? []) {
           const k = norm.replace(/\/$/, '');
           if (visited.has(k) || discovered.has(norm)) continue;
           discovered.add(norm);
@@ -210,41 +259,61 @@ export async function crawlAndSuggest(
     await driver.close();
   }
 
-  const input = buildSuggestInput(pageScans, siteHost);
-  const suggestions: SuggestedTag[] = buildSuggestions(input);
-  const byConfidence = { high: 0, medium: 0, low: 0 };
-  let em = 0;
-  for (const sug of suggestions) {
-    byConfidence[sug.confidence] += 1;
-    if (sug.enhancedMeasurementOverlap) em += 1;
-  }
   if (queue.length > 0) {
     warnings.push(`${queue.length} more same-site page(s) were discovered but not scanned (page budget ${maxPages}).`);
   }
+  return assembleResult(start, siteHost, pageScans, notScanned, warnings, opened);
+}
 
-  return {
-    site: start,
-    siteHost,
-    scannedAt: new Date().toISOString(),
-    summary: {
-      pagesCrawled: opened,
-      pagesScanned: pageScans.length,
-      formsFound: input.forms.length,
-      trackableElements: input.elements.length,
-      suggestions: suggestions.length,
-      byConfidence,
-      enhancedMeasurementOverlap: em,
-      newTracking: suggestions.length - em,
-    },
-    suggestions,
-    pages: pageScans.map((p) => ({ page: p.page, forms: p.forms.length, elements: p.elements.length })),
-    // The full inventory: every detected element/form (before the engine dedups
-    // them into suggestions), so the user can see ALL trackable elements.
-    inventory: {
-      elements: input.elements.slice(0, 1000).map((e) => ({ page: e.page, kind: e.kind, text: e.text, href: e.href, region: e.region })),
-      forms: input.forms.map((f) => ({ page: f.page, purpose: f.purpose, action: f.action, provider: f.provider.vendor })),
-    },
-    notScanned,
-    warnings,
-  };
+/** Max pages a single "scan selected" run will deep-scan. */
+export const SCAN_URLS_CAP = 60;
+
+/**
+ * Deep-scan a SPECIFIC list of URLs (no BFS) — used after the discover step,
+ * where the user picked which pages to scan. READ-ONLY.
+ */
+export async function scanUrls(driver: PageDriver, urls: string[], siteHostHint?: string): Promise<TagScanResult> {
+  const list = urls.filter(Boolean);
+  const start = list[0] ? normalizeUrl(list[0], list[0]) : null;
+  let siteHost = siteHostHint ?? '';
+  if (!siteHost) {
+    try {
+      siteHost = new URL(start ?? list[0] ?? '').hostname;
+    } catch {
+      /* leave empty */
+    }
+  }
+  const warnings: string[] = [];
+  const targets = list.slice(0, SCAN_URLS_CAP);
+  if (list.length > SCAN_URLS_CAP) {
+    warnings.push(`Selected ${list.length} pages; scanning the first ${SCAN_URLS_CAP} (cap).`);
+  }
+
+  const notScanned: TagScanResult['notScanned'] = [];
+  const pageScans: PageScan[] = [];
+  const seen = new Set<string>();
+  let opened = 0;
+  try {
+    for (const raw of targets) {
+      const url = normalizeUrl(raw, raw) ?? raw;
+      const key = url.replace(/\/$/, '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const verdict = urlAllowed(url, []);
+      if (!verdict.ok) {
+        notScanned.push({ url, reason: verdict.reason });
+        continue;
+      }
+      opened += 1;
+      const r = await scanTarget(driver, url, siteHost, url);
+      if (!r.page) {
+        notScanned.push({ url, reason: r.reason ?? 'not scanned' });
+        continue;
+      }
+      pageScans.push(r.page);
+    }
+  } finally {
+    await driver.close();
+  }
+  return assembleResult(start ?? list[0] ?? '', siteHost, pageScans, notScanned, warnings, opened);
 }

@@ -4,6 +4,7 @@ import type {
   AccountView,
   ChatTurn,
   CreateTagOutcome,
+  DiscoverResult,
   Ga4AccountView,
   GoogleClientStatus,
   GtmAccountView,
@@ -974,6 +975,16 @@ function triggerCondition(s: SuggestedTagView): string {
   return parts.join(' AND ');
 }
 
+/** A discovered URL → a short, readable label (its path, "/" for the homepage). */
+function pagePathLabel(u: string): string {
+  try {
+    const x = new URL(u);
+    return (x.pathname || '/') + (x.search || '');
+  } catch {
+    return u;
+  }
+}
+
 /** "outbound 40 · cta 30 · download 25 · phone 2 · email 1" for the inventory header. */
 function kindCountsLabel(elements: Array<{ kind: string }>): string {
   const counts: Record<string, number> = {};
@@ -1022,11 +1033,12 @@ function TagReviewPanel({
   const [confirming, setConfirming] = useState(false);
   const [creating, setCreating] = useState(false);
   const [done, setDone] = useState<{ created: number; failed: number } | null>(null);
-  const [maxPages, setMaxPages] = useState('10');
-  const [maxDepth, setMaxDepth] = useState('2');
   const [settleMs, setSettleMs] = useState('2500');
   const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned']; inventory: TagScanResult['inventory'] } | null>(null);
   const [showLog, setShowLog] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
+  const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
+  const [selectedPages, setSelectedPages] = useState<Record<string, boolean>>({});
 
   const ctx = active?.gtmContext;
   const targetReady = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -1043,21 +1055,55 @@ function TagReviewPanel({
     setDone(null);
   }
 
-  async function doScan(): Promise<void> {
+  function applyScanResult(res: TagScanResult): void {
+    setMeta(res.summary);
+    setWarnings(res.warnings);
+    setScanLog({ pages: res.pages, notScanned: res.notScanned, inventory: res.inventory });
+    loadSuggestions(res.suggestions);
+  }
+
+  // Step 1: enumerate the site's pages (sitemap/crawl), then the user picks which to scan.
+  async function doDiscover(): Promise<void> {
+    const target = url.trim();
+    if (!target || discovering || scanning) return;
+    onError('');
+    setDiscovering(true);
+    setDiscovered(null);
+    try {
+      const res = await window.desktop.tags.discover(target);
+      setDiscovered(res);
+      // Pre-select the first 25 so a click-to-scan is immediate but bounded.
+      setSelectedPages(Object.fromEntries(res.urls.map((u, i) => [u, i < 25])));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
+  // Step 2: deep-scan the selected pages with the merged engines.
+  async function doScanSelected(): Promise<void> {
+    const urls = (discovered?.urls ?? []).filter((u) => selectedPages[u]);
+    if (urls.length === 0 || scanning) return;
+    onError('');
+    setScanning(true);
+    try {
+      applyScanResult(await window.desktop.tags.scanUrls(urls, { settleMs: Number(settleMs) || undefined }));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  // Quick path: crawl + scan up to ~25 pages without the discover step.
+  async function doQuickScan(): Promise<void> {
     const target = url.trim();
     if (!target || scanning) return;
     onError('');
     setScanning(true);
     try {
-      const res = await window.desktop.tags.scan(target, {
-        maxPages: Number(maxPages) || undefined,
-        maxDepth: Number(maxDepth) || undefined,
-        settleMs: Number(settleMs) || undefined,
-      });
-      setMeta(res.summary);
-      setWarnings(res.warnings);
-      setScanLog({ pages: res.pages, notScanned: res.notScanned, inventory: res.inventory });
-      loadSuggestions(res.suggestions);
+      applyScanResult(await window.desktop.tags.scan(target, { maxPages: 25, maxDepth: 2, settleMs: Number(settleMs) || undefined }));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1142,6 +1188,10 @@ function TagReviewPanel({
     }
   }
 
+  const selectedPageCount = (discovered?.urls ?? []).filter((u) => selectedPages[u]).length;
+  const setAllPages = (pred: (u: string, i: number) => boolean): void =>
+    setSelectedPages(Object.fromEntries((discovered?.urls ?? []).map((u, i) => [u, pred(u, i)])));
+
   const newCount = suggestions.filter((s) => !s.enhancedMeasurementOverlap).length;
   const emCount = suggestions.length - newCount;
   const selectedHasEmOverlap = suggestions.some((s) => selected[s.id] && s.enhancedMeasurementOverlap);
@@ -1164,39 +1214,30 @@ function TagReviewPanel({
               style={styles.input}
               placeholder="https://example.com"
               value={url}
-              disabled={scanning}
+              disabled={scanning || discovering}
               onChange={(e) => setUrl(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') void doScan();
+                if (e.key === 'Enter') void doDiscover();
               }}
             />
-            <label style={styles.scanNum} title="How many pages to scan">
-              pages
-              <select style={styles.scanSelect} value={maxPages} disabled={scanning} onChange={(e) => setMaxPages(e.target.value)}>
-                <option value="10">10</option>
-                <option value="25">25</option>
-                <option value="50">50</option>
-              </select>
-            </label>
-            <label style={styles.scanNum} title="How deep to crawl from the start URL (max 4)">
-              depth
-              <input style={styles.scanNumInput} type="number" min={1} max={4} value={maxDepth} disabled={scanning} onChange={(e) => setMaxDepth(e.target.value)} />
-            </label>
-            <button style={styles.primaryBtn} onClick={doScan} disabled={!url.trim() || scanning}>
-              {scanning ? 'Scanning…' : 'Scan site'}
-            </button>
-          </div>
-          <div style={{ ...styles.formRow, marginTop: 2 }}>
             <label style={styles.scanNum} title="Wait after load for JS-rendered forms/embeds (ms, max 10000)">
               settle ms
               <input style={styles.scanNumInput} type="number" min={0} max={10000} step={500} value={settleMs} disabled={scanning} onChange={(e) => setSettleMs(e.target.value)} />
             </label>
+            <button style={styles.primaryBtn} onClick={doDiscover} disabled={!url.trim() || discovering || scanning}>
+              {discovering ? 'Discovering…' : 'Discover pages'}
+            </button>
           </div>
           <div style={styles.muted}>
-            Crawls same-site pages with Electron's browser <i>and</i> a static parse (Cheerio), merging what each
-            finds — read-only, nothing is clicked or submitted. Nothing is created until you approve.{' '}
+            First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan —
+            then merges Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
+            approve.{' '}
+            <button style={styles.linkBtn} onClick={doQuickScan} disabled={!url.trim() || scanning || discovering}>
+              quick scan (~25 pages)
+            </button>{' '}
+            ·{' '}
             <button style={styles.linkBtn} onClick={() => setPasteOpen((o) => !o)}>
-              {pasteOpen ? 'hide paste' : 'or paste a gtm_tag_suggestions report'}
+              {pasteOpen ? 'hide paste' : 'paste a report'}
             </button>
           </div>
           {pasteOpen && (
@@ -1213,6 +1254,48 @@ function TagReviewPanel({
             </div>
           )}
         </div>
+
+        {/* Discovered pages → pick which to deep-scan */}
+        {discovered && (
+          <div style={styles.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={styles.muted}>
+                Found <b style={{ color: '#e5e7eb' }}>{discovered.total}</b> page(s){' '}
+                {discovered.viaSitemap ? 'via sitemap' : 'via link-crawl'} · {selectedPageCount} selected
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button style={styles.linkBtn} onClick={() => setAllPages(() => true)}>Select all</button>
+                <button style={styles.linkBtn} onClick={() => setAllPages(() => false)}>Select none</button>
+                <button style={styles.linkBtn} onClick={() => setAllPages((_u, i) => i < 25)}>First 25</button>
+                <button style={styles.linkBtn} onClick={() => setAllPages((_u, i) => i < 50)}>First 50</button>
+              </div>
+            </div>
+            {discovered.note && <div style={{ ...styles.muted, marginTop: 4 }}>{discovered.note}</div>}
+            {discovered.urls.length > 0 ? (
+              <div style={styles.pageListScroll}>
+                {discovered.urls.map((u, i) => (
+                  <label key={i} style={styles.pageRow} title={u}>
+                    <input
+                      type="checkbox"
+                      checked={!!selectedPages[u]}
+                      disabled={scanning}
+                      onChange={(e) => setSelectedPages((s) => ({ ...s, [u]: e.target.checked }))}
+                    />
+                    <span style={styles.pagePath}>{pagePathLabel(u)}</span>
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <div style={{ ...styles.muted, marginTop: 6 }}>No pages found — try the quick scan above, or check the URL.</div>
+            )}
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+              <button style={styles.primaryBtn} onClick={doScanSelected} disabled={selectedPageCount === 0 || scanning}>
+                {scanning ? 'Scanning…' : `Scan selected (${selectedPageCount})`}
+              </button>
+              {selectedPageCount > 60 && <span style={{ color: '#fcd9a5', fontSize: 13 }}>Up to 60 pages are scanned per run.</span>}
+            </div>
+          </div>
+        )}
 
         {/* Target */}
         <div style={styles.card}>
@@ -2048,4 +2131,7 @@ const styles: Record<string, React.CSSProperties> = {
   invTable: { width: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' },
   invTh: { textAlign: 'left', padding: '5px 8px', color: '#6b7280', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.4, borderBottom: '1px solid #1f2937', position: 'sticky', top: 0, background: '#111827' },
   invTd: { padding: '4px 8px', borderBottom: '1px solid #161e2e', color: '#cbd5e1', verticalAlign: 'top', overflow: 'hidden', textOverflow: 'ellipsis' },
+  pageListScroll: { maxHeight: 300, overflowY: 'auto', border: '1px solid #1f2937', borderRadius: 8, marginTop: 8, padding: '4px 0' },
+  pageRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', fontSize: 12.5, cursor: 'pointer' },
+  pagePath: { fontFamily: 'ui-monospace, monospace', color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 };

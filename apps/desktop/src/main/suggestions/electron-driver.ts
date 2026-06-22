@@ -68,9 +68,20 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
   // Ephemeral, in-memory session (no 'persist:' prefix) — cleared on close.
   const partition = `tagsuggest-scan-${process.pid}-${Date.now()}`;
   const ses = session.fromPartition(partition, { cache: false });
-  // Block any request to a private/loopback/metadata host — even via redirect,
-  // and even when a public-looking name resolves to a private IP.
+  // Analytics / ad / service-worker noise we don't need for DOM scanning —
+  // blocking it cuts the console spam (e.g. a server-side-GTM sw_iframe retry
+  // storm) and speeds the crawl. NOTE: form-provider CDNs (HubSpot, Typeform,
+  // Marketo, Pardot, Mailchimp) are deliberately NOT blocked — their scripts
+  // render the very forms we want to detect.
+  const NOISE_RE =
+    /(?:\/sw_iframe|\/service_worker\/)|googletagmanager\.com|google-analytics\.com|analytics\.google\.com|\.doubleclick\.net|googleadservices\.com|connect\.facebook\.net|facebook\.com\/tr|\.hotjar\.com|\.clarity\.ms|static\.ads-twitter\.com|snap\.licdn\.com|analytics\.tiktok\.com/i;
+  // Block private/loopback/metadata hosts (incl. via redirect / DNS-rebind) and
+  // the analytics noise above.
   ses.webRequest.onBeforeRequest((details, cb) => {
+    if (NOISE_RE.test(details.url)) {
+      cb({ cancel: true });
+      return;
+    }
     void requestAllowed(details.url).then(
       (ok) => cb({ cancel: !ok }),
       () => cb({ cancel: true }),

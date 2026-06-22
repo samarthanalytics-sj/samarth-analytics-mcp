@@ -14,7 +14,8 @@ import { ipcMain } from 'electron';
 import type { GoogleDataService } from '../google/data-service';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions } from '../../shared/ipc';
-import { crawlAndSuggest, type PageDriver } from './scan-core';
+import { crawlAndSuggest, scanUrls, type PageDriver } from './scan-core';
+import { discoverSite } from './discover';
 // Electron is the always-on, zero-install engine. Cheerio is added when present
 // (lazy-imported so a missing optional package never crashes startup). The two
 // run together per page and their results are MERGED — Electron renders JS +
@@ -51,6 +52,28 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     const o = opts ?? {};
     const driver = await makeDriver(o);
     return crawlAndSuggest(driver, target, { maxPages: o.maxPages, maxDepth: o.maxDepth });
+  });
+
+  // Enumerate same-site pages (sitemap/crawl) so the user can pick which to scan.
+  ipcMain.handle('suggestions:discover', async (_e, url: unknown) => {
+    const target = String(url ?? '').trim();
+    const verdict = urlAllowed(target, []);
+    if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
+    return discoverSite(target);
+  });
+
+  // Deep-scan a SPECIFIC list of pages the user selected after discovery.
+  ipcMain.handle('suggestions:scanUrls', async (_e, urls: unknown, opts?: TagScanOptions) => {
+    const list = Array.isArray(urls) ? urls.map((u) => String(u)).filter(Boolean) : [];
+    if (list.length === 0) throw new Error('No pages selected to scan.');
+    const driver = await makeDriver(opts ?? {});
+    let siteHost: string | undefined;
+    try {
+      siteHost = new URL(list[0]).hostname;
+    } catch {
+      /* per-URL admission still applies in scanUrls */
+    }
+    return scanUrls(driver, list, siteHost);
   });
 
   ipcMain.handle(

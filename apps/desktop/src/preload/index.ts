@@ -17,6 +17,7 @@ import type {
   MonitorAlert,
   MonitorConfig,
   MonitorStatus,
+  DiscoverResult,
   ParsedSuggestionsResult,
   ProviderStatus,
   SecretSelfTest,
@@ -111,6 +112,9 @@ const api = {
   // gtm_tag_suggestions report) for review, then create the approved ones as
   // GTM drafts via the existing create_gtm_tracking_tag path.
   tags: {
+    discover: (url: string): Promise<DiscoverResult> => ipcRenderer.invoke('suggestions:discover', url),
+    scanUrls: (urls: string[], opts?: TagScanOptions): Promise<TagScanResult> =>
+      ipcRenderer.invoke('suggestions:scanUrls', urls, opts),
     scan: (url: string, opts?: TagScanOptions): Promise<TagScanResult> =>
       ipcRenderer.invoke('suggestions:scan', url, opts),
     fromJson: (json: string): Promise<ParsedSuggestionsResult> =>

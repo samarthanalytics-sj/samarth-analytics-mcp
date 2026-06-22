@@ -185,6 +185,16 @@ export interface TagScanResult {
   warnings: string[];
 }
 
+/** Result of discovering a site's pages (suggestions:discover). */
+export interface DiscoverResult {
+  /** Same-site page URLs found (sitemap or link-crawl). */
+  urls: string[];
+  /** True if a sitemap was used (complete); false if a link-crawl fallback. */
+  viaSitemap: boolean;
+  total: number;
+  note?: string;
+}
+
 /** Result of parsing a pasted plan (suggestions:fromJson). */
 export interface ParsedSuggestionsResult {
   suggestions: SuggestedTagView[];
