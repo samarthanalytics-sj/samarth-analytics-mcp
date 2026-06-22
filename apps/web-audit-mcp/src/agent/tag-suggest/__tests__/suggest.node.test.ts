@@ -242,8 +242,11 @@ const moreCtas = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
 ] });
 const loginCta = moreCtas.find((s) => s.eventName === 'login_click');
 check('cta: login → "GA4 Event - Login Click Tag" + fires on "Login"/"Sign In"', loginCta?.tagName === 'GA4 Event - Login Click Tag' && reTest(loginCta?.trigger.clickTextValue ?? '', 'Login') && reTest(loginCta?.trigger.clickTextValue ?? '', 'Sign In'));
-const searchCta = moreCtas.find((s) => s.eventName === 'search');
-check('cta: search button → "GA4 Event - Search Tag" + fires on "Search"', searchCta?.tagName === 'GA4 Event - Search Tag' && reTest(searchCta?.trigger.clickTextValue ?? '', 'Search'));
+const searchCta = moreCtas.find((s) => s.eventName === 'search_click');
+// search CTA uses 'search_click' (NOT bare 'search') so a "Search" submit button
+// can't double-count with the search FORM tag (which keeps the GA4 'search' event).
+check('cta: search button → "GA4 Event - Search Tag", event search_click, fires on "Search"', searchCta?.tagName === 'GA4 Event - Search Tag' && searchCta?.eventName === 'search_click' && reTest(searchCta?.trigger.clickTextValue ?? '', 'Search'));
+check('cta: search button event (search_click) is DISTINCT from search FORM event (search) — no double-count', searchForm[0].eventName === 'search' && searchCta?.eventName === 'search_click');
 const viewCta = moreCtas.find((s) => s.eventName === 'view_all_click');
 check('cta: "See all case studies" → "GA4 Event - View All Click Tag" + fires on "View all"/"Case studies"', viewCta?.tagName === 'GA4 Event - View All Click Tag' && reTest(viewCta?.trigger.clickTextValue ?? '', 'View all') && reTest(viewCta?.trigger.clickTextValue ?? '', 'Case studies'));
 
