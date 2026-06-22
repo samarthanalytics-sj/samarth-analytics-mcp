@@ -1,3 +1,9 @@
+## [1.19.9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.8...v1.19.9) (2026-06-22)
+
+### Bug Fixes
+
+* **desktop:** tag-suggestion rows clipped to zero height (flexbox shrink) ([c681382](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c681382fb0a2e74132b0ea66d058bf8301e20370))
+
 ## [1.19.8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.7...v1.19.8) (2026-06-20)
 
 ### Bug Fixes
