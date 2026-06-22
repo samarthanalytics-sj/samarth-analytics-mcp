@@ -1,3 +1,10 @@
+## [1.24.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.23.0...v1.24.0) (2026-06-22)
+
+### Features
+
+* **tag-suggest:** name form tags by the form's heading (e.g. "Get a Free Consultation Form") ([8e76a6b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8e76a6b8f9232137407d83181e336dae83e6c089))
+* **tag-suggest:** show the container NAME (not just GTM-id) in "Live on this site" ([d62033b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d62033bde3d3cd03996205b5574784f2d12a10eb))
+
 ## [1.23.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.22.0...v1.23.0) (2026-06-22)
 
 ### Features
