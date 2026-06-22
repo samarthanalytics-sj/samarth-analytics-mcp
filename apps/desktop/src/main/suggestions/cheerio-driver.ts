@@ -122,6 +122,30 @@ function privacyIn(root: Cheerio<AnyNode>): boolean {
 
 function extractFormsCheerio($: CheerioAPI, abs: (href: string) => string): RawForm[] {
   const out: RawForm[] = [];
+  // The form's visible heading/label (mirrors forms.ts titleOf): aria-label →
+  // aria-labelledby → a legend/heading inside → the nearest heading in its card.
+  const headingIn = ($root: Cheerio<AnyNode>): string => {
+    const h = $root.find('legend, h1, h2, h3, h4, h5, h6').first();
+    return h.length ? h.text().replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+  };
+  const titleOf = ($el: Cheerio<AnyNode>): string => {
+    const al = ($el.attr('aria-label') || '').replace(/\s+/g, ' ').trim();
+    if (al) return al.slice(0, 60);
+    const lb = $el.attr('aria-labelledby');
+    if (lb) {
+      const t = $(`[id="${lb}"]`).first();
+      const s = t.length ? t.text().replace(/\s+/g, ' ').trim() : '';
+      if (s) return s.slice(0, 60);
+    }
+    const inside = headingIn($el);
+    if (inside) return inside;
+    let $node = $el.parent();
+    for (let i = 0; i < 3 && $node.length; i++, $node = $node.parent()) {
+      const h = headingIn($node);
+      if (h) return h;
+    }
+    return '';
+  };
   // 1. Real <form> elements.
   $('form').slice(0, 25).each((_i, el) => {
     const form = $(el);
@@ -133,6 +157,7 @@ function extractFormsCheerio($: CheerioAPI, abs: (href: string) => string): RawF
       formId: form.attr('id') || '',
       formName: form.attr('name') || '',
       formClasses: form.attr('class') || '',
+      title: titleOf(form),
       fieldCount: fields.length,
       fields,
       hasPrivacyLink: privacyIn(form),
@@ -170,6 +195,7 @@ function extractFormsCheerio($: CheerioAPI, abs: (href: string) => string): RawF
       formId: host.attr('id') || '',
       formName: '',
       formClasses: host.attr('class') || '',
+      title: titleOf(host),
       fieldCount: fields.length,
       fields,
       hasPrivacyLink: privacyIn(host),

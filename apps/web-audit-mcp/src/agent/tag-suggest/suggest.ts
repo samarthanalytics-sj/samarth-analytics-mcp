@@ -137,10 +137,16 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   const formLabel = FORM_LABEL[f.purpose] ?? 'Form Submission';
   const prov = f.provider.vendor !== 'unknown' ? ` (${f.provider.vendor})` : '';
 
+  // Name the tag for the form's actual heading when we captured one — e.g.
+  // "Get a Free Consultation" → "Get a Free Consultation Form Tag" — falling back
+  // to the purpose label. (Don't double up "Form" if the title already says it.)
+  const titleText = (f.title ?? '').replace(/\s+/g, ' ').trim();
+  const displayLabel = titleText ? (/\bforms?\b/i.test(titleText) ? titleText : `${titleText} Form`) : formLabel;
+
   // Scope the trigger to THIS form via its id (preferred) or an instance-unique
   // class — but ONLY if that id/class isn't shared with another form (else it
   // would fire for both). Otherwise it stays unscoped (fires on every form).
-  const trigger: SuggestedTag['trigger'] = { name: trigNameOf(formLabel), kind: 'form_submit' };
+  const trigger: SuggestedTag['trigger'] = { name: trigNameOf(displayLabel), kind: 'form_submit' };
   const rawClass = pickFormClass(f.formClasses);
   const idUnique = !!f.formId && !ctx.nonUniqueIds.has(f.formId);
   const classUnique = !!rawClass && !ctx.nonUniqueClasses.has(rawClass);
@@ -192,7 +198,7 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     // GA4 EM "form interactions" is limited/generic; a dedicated lead event is valuable.
     enhancedMeasurementOverlap: false,
     platform: 'ga4_event',
-    tagName: tagNameOf(formLabel),
+    tagName: tagNameOf(displayLabel),
     measurementId: GA4_VAR,
     eventName,
     // Capture which form + where it submits, via the form built-in variables.

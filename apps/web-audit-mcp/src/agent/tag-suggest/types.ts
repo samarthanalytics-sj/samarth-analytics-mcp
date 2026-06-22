@@ -53,6 +53,9 @@ export interface DetectedForm {
    *  form. Empty for cross-origin embedded forms (no readable element). */
   formId?: string;
   formClasses?: string;
+  /** The form's visible heading (e.g. "Get a Free Consultation") — used to name
+   *  the tag for what the user sees, falling back to the purpose. */
+  title?: string;
   /** The form's input fields (type/name/required only) — drives the field-based
    *  signature shown to the user. */
   fields?: FormFieldSummary[];

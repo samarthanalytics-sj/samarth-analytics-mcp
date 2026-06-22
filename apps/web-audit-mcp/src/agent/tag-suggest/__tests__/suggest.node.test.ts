@@ -57,6 +57,17 @@ check('form: "other" → "GA4 Event - Form Submission Tag" + form_submission', o
 const prov0 = { vendor: 'unknown' as const, confidence: 'low' as const, evidence: '' };
 const formWithId = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/contact', purpose: 'contact', action: 'https://a.com/x', provider: prov0, method: 'post', formId: 'contact-form', formClasses: 'contact-form', fields: [{ type: 'email', name: 'email', required: true }, { type: 'textarea', name: 'message', required: false }] }], elements: [] });
 check('form: scoped to its id → {{Form ID}} equals, no caveat', formWithId[0].trigger.formIdValue === 'contact-form' && formWithId[0].trigger.formIdOperator === 'equals' && !formWithId[0].note);
+
+// ── form NAME from its heading/title (not just the purpose) ──────────────────
+const titled = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'lead', title: 'Get a Free Consultation', fields: [{ type: 'email', name: 'email', required: true }] }], elements: [] });
+check('form: titled form → tag "GA4 Event - Get a Free Consultation Form Tag" + matching trigger',
+  titled[0].tagName === 'GA4 Event - Get a Free Consultation Form Tag' && titled[0].trigger.name === 'Get a Free Consultation Form Trigger');
+check('form: titled form keeps its purpose event (contact_form)', titled[0].eventName === 'contact_form');
+// A title that already says "Form" isn't doubled up; no title → purpose label.
+const titledForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'newsletter', action: '', provider: prov0, method: 'post', formId: 'n1', title: 'Newsletter Form' }], elements: [] });
+check('form: title already ending "Form" is not doubled ("Newsletter Form", not "Newsletter Form Form")', titledForm[0].tagName === 'GA4 Event - Newsletter Form Tag');
+const untitled = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'c2' }], elements: [] });
+check('form: no title → falls back to the purpose label ("Contact Form")', untitled[0].tagName === 'GA4 Event - Contact Form Tag');
 check('form: evidence lists the field signature', /fields: email, message/.test(formWithId[0].evidence) && /id=#contact-form/.test(formWithId[0].evidence));
 
 // Instance-unique class (numeric instance, e.g. gform_1) → {{Form Classes}} contains.

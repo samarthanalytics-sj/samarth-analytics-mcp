@@ -160,6 +160,7 @@ async function scanTarget(
     method: f.method,
     formId: f.formId,
     formClasses: f.formClasses,
+    title: f.title,
     fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })),
   }));
   const links: string[] = [];

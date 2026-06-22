@@ -246,7 +246,7 @@ export async function scanSiteForTagSuggestions(
           const raw = await collectPageRaw(page);
           const forms = await scanForms(page, page.url());
           pageScans.push(
-            toPageScan(target.url, raw, forms.map((f) => ({ purpose: f.purpose, action: f.action, method: f.method, formId: f.formId, formClasses: f.formClasses, fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })) })), siteHost),
+            toPageScan(target.url, raw, forms.map((f) => ({ purpose: f.purpose, action: f.action, method: f.method, formId: f.formId, formClasses: f.formClasses, title: f.title, fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })) })), siteHost),
           );
         } catch (err) {
           collectFailures.push({

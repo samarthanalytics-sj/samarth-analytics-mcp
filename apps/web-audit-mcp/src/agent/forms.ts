@@ -30,6 +30,10 @@ export interface RawForm {
   formId: string;
   formName: string;
   formClasses: string;
+  /** The form's visible heading/label (aria-label, a heading/legend inside it, or
+   *  the nearest heading in its card) — e.g. "Get a Free Consultation". Used to
+   *  NAME the tag for what the user sees, falling back to the form's purpose. */
+  title: string;
   fieldCount: number;
   fields: RawFormField[];
   hasPrivacyLink: boolean;
@@ -92,6 +96,37 @@ export function extractFormsInPage(): RawForm[] {
   const privacyIn = (root: Element): boolean =>
     Boolean(root.querySelector('a[href*="privacy"], a[href*="datenschutz"], a[href*="confidentialite"], a[href*="privacidad"], a[href*="cookie-policy"]'));
 
+  const headingIn = (root: Element): string => {
+    const h = root.querySelector('legend, h1, h2, h3, h4, h5, h6');
+    return h ? (h.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+  };
+  // The form's visible name: aria-label → a heading/legend inside it → the nearest
+  // heading in an ancestor "card" (≤3 levels up; the closest wins, so we get the
+  // form's own card heading, not the page <h1>).
+  const titleOf = (el: Element): string => {
+    const doc = el.ownerDocument || document;
+    const al = (el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+    if (al) return al.slice(0, 60);
+    const lbId = el.getAttribute('aria-labelledby');
+    if (lbId) {
+      try {
+        const t = doc.getElementById(lbId);
+        const s = t ? (t.textContent || '').replace(/\s+/g, ' ').trim() : '';
+        if (s) return s.slice(0, 60);
+      } catch {
+        /* invalid id */
+      }
+    }
+    const inside = headingIn(el);
+    if (inside) return inside;
+    let node: Element | null = el.parentElement;
+    for (let i = 0; node && i < 3; i++, node = node.parentElement) {
+      const h = headingIn(node);
+      if (h) return h;
+    }
+    return '';
+  };
+
   const scanDoc = (doc: Document): void => {
     // 1. Real <form> elements.
     for (const form of Array.from(doc.querySelectorAll('form')).slice(0, MAX_FORMS)) {
@@ -110,6 +145,7 @@ export function extractFormsInPage(): RawForm[] {
         formId: form.getAttribute('id') || '',
         formName: form.getAttribute('name') || '',
         formClasses: form.getAttribute('class') || '',
+        title: titleOf(form),
         fieldCount: fields.length,
         fields,
         hasPrivacyLink: privacyIn(form),
@@ -148,6 +184,7 @@ export function extractFormsInPage(): RawForm[] {
         formId: host.getAttribute('id') || '',
         formName: '',
         formClasses: host.getAttribute('class') || '',
+        title: titleOf(host),
         fieldCount: fields.length,
         fields,
         hasPrivacyLink: privacyIn(host),
@@ -220,6 +257,7 @@ export interface FormAnalysis {
   method: string;
   formId: string;
   formClasses: string;
+  title: string;
   purpose: FormPurpose;
   fieldCount: number;
   fields: Pick<RawFormField, 'type' | 'name' | 'label' | 'required'>[];
@@ -348,6 +386,7 @@ export function analyzeForms(rawForms: RawForm[], pageUrl: string): FormAnalysis
       method: form.method,
       formId: form.formId,
       formClasses: form.formClasses,
+      title: form.title,
       purpose,
       fieldCount: form.fieldCount,
       fields: form.fields.map((f) => ({ type: f.type, name: f.name, label: f.label, required: f.required })),
