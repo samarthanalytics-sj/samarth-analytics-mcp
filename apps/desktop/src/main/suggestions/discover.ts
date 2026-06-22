@@ -67,7 +67,9 @@ async function collectSitemap(sitemapUrl: string, base: string, out: Set<string>
   if (isIndex) {
     for (const loc of locs) {
       if (out.size >= MAX_URLS || sitemapsLeft.n <= 0) break;
-      await collectSitemap(loc, base, out, sitemapsLeft, depth + 1);
+      // Only follow SAME-SITE sub-sitemaps — never let a sitemapindex point our
+      // fetch at an arbitrary host.
+      if (sameSite(loc, base)) await collectSitemap(loc, base, out, sitemapsLeft, depth + 1);
     }
   } else {
     for (const loc of locs) {

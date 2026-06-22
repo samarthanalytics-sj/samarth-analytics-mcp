@@ -32,6 +32,7 @@ export async function requestAllowed(rawUrl: string): Promise<boolean> {
 }
 
 const UA = 'Mozilla/5.0 (compatible; SamarthTagSuggest/1.0; +read-only scan)';
+const MAX_BODY_BYTES = 8_000_000; // cap response bodies (sitemaps/HTML) to bound memory
 
 export interface SafeFetchResult {
   status: number;
@@ -60,7 +61,10 @@ export async function safeFetch(url: string, timeoutMs = 15_000, accept = 'text/
       current = new URL(loc, current).href;
       continue;
     }
-    const body = res.status >= 400 ? '' : await res.text();
+    // Bound memory: reject a declared-huge body, and cap what we keep/parse.
+    const declared = Number(res.headers.get('content-length') || 0);
+    if (declared > MAX_BODY_BYTES) throw new Error('response too large');
+    const body = res.status >= 400 ? '' : (await res.text()).slice(0, MAX_BODY_BYTES);
     return { status: res.status, finalUrl: current, body };
   }
   throw new Error('too many redirects');
