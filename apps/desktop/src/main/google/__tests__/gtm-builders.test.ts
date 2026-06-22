@@ -165,6 +165,28 @@ test('form_submit trigger: scoped to one form by {{Form ID}} in filter, needs fo
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'form_submit', formIdValue: 'contact-form' }), ['formId']);
 });
 
+test('youtube_video trigger: youTubeVideo type, capture params in parameter[], enables Video built-ins', () => {
+  const tr = buildTrigger({ name: 'YouTube Video Trigger', kind: 'youtube_video' });
+  assert.equal(tr.type, 'youTubeVideo');
+  const p = ((tr as { parameter?: Array<Record<string, unknown>> }).parameter ?? []);
+  assert.equal(p.find((x) => x.key === 'captureStart')?.value, 'true');
+  assert.equal(p.find((x) => x.key === 'captureComplete')?.value, 'true');
+  assert.equal(p.find((x) => x.key === 'captureProgress')?.value, 'true');
+  assert.equal(p.find((x) => x.key === 'capturePause')?.value, 'false', 'Pause off — not a GA4 recommended video event');
+  assert.equal(p.find((x) => x.key === 'progressThresholdsPercent')?.value, '25,50,75,90');
+  assert.equal(p.find((x) => x.key === 'radioButtonGroup1')?.value, 'PERCENTAGE');
+  // No form fields here (those are a different trigger type).
+  assert.equal((tr as { waitForTags?: unknown }).waitForTags, undefined);
+  // The Video built-in variables are auto-enabled so the tag's {{Video …}} resolve.
+  const vars = triggerBuiltInVars({ name: 'x', kind: 'youtube_video' });
+  assert.ok(vars.includes('videoTitle') && vars.includes('videoStatus') && vars.includes('videoPercent') && vars.includes('videoProvider'));
+});
+
+test('builtInVarsForTemplates: maps {{Video …}} display names (incl. in an event name) to keys', () => {
+  const keys = builtInVarsForTemplates(['{{Video Title}}', 'video_{{Video Status}}', '{{Video Percent}}', '{{Page Path}}']);
+  assert.deepEqual(new Set(keys), new Set(['videoTitle', 'videoStatus', 'videoPercent', 'pagePath']));
+});
+
 test('form_submit trigger: no form filter → fires on ALL forms (no filter)', () => {
   const tr = buildTrigger({ name: 'All Forms Trigger', kind: 'form_submit' });
   assert.equal(tr.type, 'formSubmission');

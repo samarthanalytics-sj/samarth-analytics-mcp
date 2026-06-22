@@ -4,6 +4,7 @@
  */
 import { detectFormProvider, detectEmbeddedForm } from '../providers.js';
 import { buildSuggestions } from '../suggest.js';
+import { isYouTubeEmbed } from '../video.js';
 import type { PageSignals, SuggestInput, DetectedForm } from '../types.js';
 
 let passed = 0;
@@ -249,6 +250,18 @@ check('cta: search button → "GA4 Event - Search Tag", event search_click, fire
 check('cta: search button event (search_click) is DISTINCT from search FORM event (search) — no double-count', searchForm[0].eventName === 'search' && searchCta?.eventName === 'search_click');
 const viewCta = moreCtas.find((s) => s.eventName === 'view_all_click');
 check('cta: "See all case studies" → "GA4 Event - View All Click Tag" + fires on "View all"/"Case studies"', viewCta?.tagName === 'GA4 Event - View All Click Tag' && reTest(viewCta?.trigger.clickTextValue ?? '', 'View all') && reTest(viewCta?.trigger.clickTextValue ?? '', 'Case studies'));
+
+// ── YouTube video → GA4 video tag (built-in YouTube Video trigger) ───────────
+check('video: isYouTubeEmbed matches /embed/ players, not watch/share/vimeo',
+  isYouTubeEmbed('https://www.youtube.com/embed/abc123') && isYouTubeEmbed('https://www.youtube-nocookie.com/embed/xyz') &&
+  !isYouTubeEmbed('https://www.youtube.com/watch?v=abc') && !isYouTubeEmbed('https://youtu.be/abc') && !isYouTubeEmbed('https://player.vimeo.com/video/1'));
+const vid = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [], videoEmbeds: [{ page: '/', provider: 'youtube' }] });
+const ytTag = vid.find((s) => s.trigger.kind === 'youtube_video');
+check('video: YouTube embed → ONE "GA4 Event - YouTube Video Tag" on a "YouTube Video Trigger"', vid.length === 1 && ytTag?.tagName === 'GA4 Event - YouTube Video Tag' && ytTag?.trigger.name === 'YouTube Video Trigger');
+check('video: event resolves to GA4 video_start/_progress/_complete via {{Video Status}}', ytTag?.eventName === 'video_{{Video Status}}');
+check('video: carries the standard video_* params valued by the Video built-ins', ['video_title', 'video_url', 'video_provider', 'video_percent', 'video_duration', 'video_current_time'].every((n) => ytTag?.eventParameters?.some((p) => p.name === n && /^\{\{Video /.test(p.value))));
+check('video: flagged as EM-overlap (GA4 Video engagement) but still suggested', ytTag?.enhancedMeasurementOverlap === true);
+check('video: no embed → no video tag', buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }).length === 0);
 
 // REGRESSION (image bug): no generated tag/trigger name may contain ":" (GTM rejects it).
 const colonCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Apply Now: Today', intent: 'generic' }] });

@@ -112,5 +112,16 @@ check('social: internal "discord.acme.com" subdomain → null (internal nav)', c
   check('embed: a readable form suppresses synthesis (no duplicate)', buildSuggestInput([realPlusEmbed], 'acme.com').forms.length === 1);
 }
 
+// ── YouTube embed detection → video suggestion (end-to-end) ──────────────────
+{
+  const vsig = (iframeSrcs: string[]): PageSignals => ({ scriptSrcs: [], classNames: [], selectorsPresent: [], iframeSrcs });
+  const vpage: PageScan = { page: '/watch', signals: vsig(['https://www.youtube.com/embed/dQw4w9']), forms: [], elements: [] };
+  const vinput = buildSuggestInput([vpage], 'acme.com');
+  check('video: buildSuggestInput records a YouTube embed', (vinput.videoEmbeds ?? []).length === 1 && vinput.videoEmbeds?.[0].provider === 'youtube' && vinput.videoEmbeds?.[0].page === '/watch');
+  check('video: → a youtube_video suggestion end-to-end', buildSuggestions(vinput).some((s) => s.trigger.kind === 'youtube_video'));
+  const watchOnly: PageScan = { page: '/', signals: vsig(['https://www.youtube.com/watch?v=x', 'https://maps.google.com/embed?pb=1']), forms: [], elements: [] };
+  check('video: a youtube WATCH link (not /embed/) and a non-YT iframe are NOT video embeds', (buildSuggestInput([watchOnly], 'acme.com').videoEmbeds ?? []).length === 0);
+}
+
 console.log(`\nTag-collect: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

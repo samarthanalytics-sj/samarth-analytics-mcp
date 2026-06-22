@@ -5,7 +5,7 @@
 // we don't suggest redundant tags. Output is directly creatable via the existing
 // create_gtm_tracking_tag tool.
 
-import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, FormProvider } from './types.js';
+import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, FormProvider, VideoEmbed } from './types.js';
 import { CTA_BY_INTENT } from './cta-intents.js';
 import { buildSocialUrlPattern } from './social.js';
 
@@ -33,6 +33,23 @@ const CLICK_PARAMS = [
   { name: 'click_text', value: CLICK_TEXT },
   ...PAGE_PARAMS,
 ];
+// Standard GA4 video params, valued by GTM's "Video" built-in variables (the
+// YouTube Video trigger surfaces them). Corpus-dominant names + refs (video_title/
+// _url/_provider/_percent/_duration/_current_time = {{Video …}}). The create flow
+// auto-enables the built-ins the trigger declares.
+const VIDEO_PARAMS = [
+  { name: 'video_title', value: '{{Video Title}}' },
+  { name: 'video_url', value: '{{Video URL}}' },
+  { name: 'video_provider', value: '{{Video Provider}}' },
+  { name: 'video_percent', value: '{{Video Percent}}' },
+  { name: 'video_duration', value: '{{Video Duration}}' },
+  { name: 'video_current_time', value: '{{Video Current Time}}' },
+  ...PAGE_PARAMS,
+];
+// One event whose name resolves at runtime to GA4's recommended video_start /
+// video_progress / video_complete via the {{Video Status}} built-in (start /
+// progress / complete) — corpus-idiomatic (video_{{…status}} appears 60+×).
+const YT_VIDEO_EVENT = 'video_{{Video Status}}';
 // Single source of truth for "what's a downloadable file" — the collector's
 // detection regex and this GTM trigger filter are both built from it, so a
 // detected download always matches the tag we suggest for it.
@@ -333,6 +350,29 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
   }
 }
 
+// An embedded YouTube player → one GA4 video tag firing on GTM's built-in YouTube
+// Video trigger. EM "Video engagement" can also auto-track YouTube, so it's FLAGGED
+// (like downloads/outbound) — the explicit tag adds the standard video_* params and
+// works even when EM video is off.
+function videoSuggestion(embeds: VideoEmbed[]): SuggestedTag | null {
+  const pages = [...new Set(embeds.filter((e) => e.provider === 'youtube').map((e) => e.page))];
+  if (!pages.length) return null;
+  return {
+    id: hashId('video|youtube'),
+    page: pages.length === 1 ? pages[0] : 'site-wide',
+    confidence: 'medium',
+    enhancedMeasurementOverlap: true,
+    platform: 'ga4_event',
+    tagName: tagNameOf('YouTube Video'),
+    measurementId: GA4_VAR,
+    eventName: YT_VIDEO_EVENT,
+    label: 'YouTube video → GA4 "video_start / video_progress / video_complete"  ⚠ Enhanced Measurement may already cover this',
+    evidence: `embedded YouTube player on ${pages.join(', ')} (note: GA4 EM "Video engagement" also tracks this when enabled)`,
+    eventParameters: VIDEO_PARAMS,
+    trigger: { name: trigNameOf('YouTube Video'), kind: 'youtube_video' },
+  };
+}
+
 const CONF = { high: 0, medium: 1, low: 2 } as const;
 
 export function buildSuggestions(input: SuggestInput): SuggestedTag[] {
@@ -345,6 +385,7 @@ export function buildSuggestions(input: SuggestInput): SuggestedTag[] {
   const raw: SuggestedTag[] = [
     ...input.forms.map((f) => formSuggestion(f, scopeCtx)),
     ...input.elements.map((e) => elementSuggestion(e, socialPattern)),
+    videoSuggestion(input.videoEmbeds ?? []),
   ].filter((x): x is SuggestedTag => x !== null);
 
   // Site-wide dedup: the same tag (event + trigger filter + kind) seen on multiple

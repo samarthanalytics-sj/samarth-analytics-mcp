@@ -94,5 +94,23 @@ const BASE = 'https://acme.com/';
   check('end-to-end: every suggestion carries event parameters', sugs.every((s) => (s.eventParameters?.length ?? 0) > 0));
 }
 
+// ── lazy / facade YouTube embeds → surfaced + suggested ──────────────────────
+{
+  const html = `<html><body>
+    <iframe data-src="https://www.youtube.com/embed/abc123DEF" loading="lazy"></iframe>
+    <lite-youtube videoid="xyz789ABC"></lite-youtube>
+    <div class="youtube-player" data-id="def456GHI"></div>
+    <div data-id="not-a-video-but-has-data-id-and-is-too-long-anyway"></div>
+  </body></html>`;
+  const { raw } = extractWithCheerio(html, BASE);
+  const ifr = raw.signals.iframeSrcs ?? [];
+  check('lazy/facade: data-src iframe + lite-youtube + .youtube-player[data-id] all become youtube /embed/ URLs',
+    ifr.includes('https://www.youtube.com/embed/abc123DEF') && ifr.includes('https://www.youtube.com/embed/xyz789ABC') && ifr.includes('https://www.youtube.com/embed/def456GHI'));
+  check('lazy/facade: a generic [data-id] (not a YouTube facade, non-id value) is NOT turned into an embed',
+    !ifr.some((s) => /not-a-video/.test(s)));
+  const page: PageScan = { page: '/v', signals: raw.signals, forms: [], elements: [] };
+  check('lazy/facade: → a youtube_video suggestion end-to-end', buildSuggestions(buildSuggestInput([page], 'acme.com')).some((s) => s.trigger.kind === 'youtube_video'));
+}
+
 console.log(`\ncheerio-driver: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

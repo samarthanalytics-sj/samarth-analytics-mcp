@@ -34,6 +34,11 @@ export interface GtmTriggerResource {
    *  `key`), per the GTM API v2 Trigger schema; NOT entries in a `parameter[]`. */
   waitForTags?: Param;
   checkValidation?: Param;
+  /** Generic "Additional parameters" array — used by trigger types whose settings
+   *  legitimately live here, e.g. the YouTube Video trigger's capture options
+   *  (corpus: 69/69 youTubeVideo triggers store them in `parameter`). NOT for
+   *  form waitForTags/checkValidation (those are the top-level fields above). */
+  parameter?: Param[];
 }
 export interface GtmVariableResource {
   name: string;
@@ -193,7 +198,12 @@ function condition(variable: string, op: string, value: string): Param {
   };
 }
 
-export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit';
+export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video';
+
+/** The standard GTM "Video" built-in variables a YouTube Video tag reports. */
+export const VIDEO_BUILT_IN_VARS = [
+  'videoProvider', 'videoUrl', 'videoTitle', 'videoDuration', 'videoCurrentTime', 'videoPercent', 'videoStatus', 'videoVisible',
+] as const;
 export interface TriggerInput {
   name: string;
   kind: TriggerKind;
@@ -253,6 +263,26 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       if (filters.length) t.filter = filters;
       return t;
     }
+    case 'youtube_video':
+      // Built-in YouTube Video trigger (GTM type 'youTubeVideo'). It fires on the
+      // YouTube iframe-player events; its settings live in `parameter[]` (corpus:
+      // 69/69 store them there). Capture Start/Complete/Progress (not Pause), with
+      // the standard percentage milestones — matches GA4's video_start/_progress/
+      // _complete recommended events when the tag's eventName is video_{{Video Status}}.
+      return {
+        name: sanitizeName(o.name),
+        type: 'youTubeVideo',
+        parameter: [
+          boolean('captureStart', true),
+          boolean('captureComplete', true),
+          boolean('captureProgress', true),
+          boolean('capturePause', false),
+          tpl('radioButtonGroup1', 'PERCENTAGE'),
+          tpl('progressThresholdsPercent', '25,50,75,90'),
+          tpl('triggerStartOption', 'DOM_READY'),
+          boolean('fixMissingApi', true),
+        ],
+      };
     case 'pageview':
     default:
       return { name: sanitizeName(o.name), type: 'pageview' };
@@ -270,6 +300,10 @@ export function triggerBuiltInVars(o: TriggerInput): string[] {
     if (o.formIdValue) vars.push('formId');
     if (o.formClassesValue) vars.push('formClasses');
   }
+  // The YouTube Video trigger surfaces the "Video" built-in variables — enable them
+  // all so the tag's {{Video Title}}/{{Video Percent}}/… and event-name {{Video
+  // Status}} resolve.
+  if (o.kind === 'youtube_video') vars.push(...VIDEO_BUILT_IN_VARS);
   return vars;
 }
 
@@ -283,6 +317,9 @@ const BUILT_IN_VAR_KEYS: Record<string, string> = {
   'click target': 'clickTarget', 'click url': 'clickUrl', 'click text': 'clickText',
   'form element': 'formElement', 'form classes': 'formClasses', 'form id': 'formId',
   'form target': 'formTarget', 'form url': 'formUrl', 'form text': 'formText',
+  'video provider': 'videoProvider', 'video url': 'videoUrl', 'video title': 'videoTitle',
+  'video duration': 'videoDuration', 'video current time': 'videoCurrentTime',
+  'video percent': 'videoPercent', 'video status': 'videoStatus', 'video visible': 'videoVisible',
 };
 
 /** Built-in variable type keys referenced by {{Name}} tokens in the given values

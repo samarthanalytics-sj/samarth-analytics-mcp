@@ -770,7 +770,7 @@ export function buildToolRegistry(
             type: 'object',
             properties: {
               name: { type: 'string' },
-              kind: { type: 'string', enum: ['link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit'] },
+              kind: { type: 'string', enum: ['link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit', 'youtube_video'] },
               clickUrlValue: { type: 'string' },
               clickUrlOperator: { type: 'string' },
               clickTextValue: { type: 'string' },
@@ -842,6 +842,7 @@ export function buildToolRegistry(
         // eventSettingsTable value of "{{Click Text}}" needs the Click Text
         // built-in variable enabled, or it resolves to nothing).
         const templateVals = [
+          a.eventName != null ? s(a.eventName) : undefined, // e.g. "video_{{Video Status}}" → enable Video Status
           ...(Array.isArray(a.eventParameters) ? a.eventParameters.map((p) => s(obj(p).value)) : []),
           ...(Array.isArray(a.configSettings) ? a.configSettings.map((p) => s(obj(p).value)) : []),
         ];
