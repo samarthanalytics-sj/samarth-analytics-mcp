@@ -971,6 +971,7 @@ const TRIGGER_TYPE_LABEL: Record<string, string> = {
   form_submit: 'Form Submission (formSubmission)',
   custom_event: 'Custom Event (customEvent)',
   pageview: 'Page View (pageview)',
+  youtube_video: 'YouTube Video (youTubeVideo)',
 };
 const triggerTypeLabel = (kind: string): string => TRIGGER_TYPE_LABEL[kind] ?? kind;
 
@@ -983,7 +984,11 @@ function triggerCondition(s: SuggestedTagView): string {
   if (t.formIdValue) parts.push(`{{Form ID}} ${t.formIdOperator ?? 'equals'} "${t.formIdValue}"`);
   if (t.formClassesValue) parts.push(`{{Form Classes}} ${t.formClassesOperator ?? 'contains'} "${t.formClassesValue}"`);
   if (t.eventName) parts.push(`event = "${t.eventName}"`);
-  if (parts.length === 0) return t.kind === 'all_clicks' ? 'fires on every click' : t.kind === 'form_submit' ? 'fires on every form submit' : '—';
+  if (parts.length === 0)
+    return t.kind === 'all_clicks' ? 'fires on every click'
+      : t.kind === 'form_submit' ? 'fires on every form submit'
+      : t.kind === 'youtube_video' ? 'fires on YouTube video start / progress (25/50/75/90%) / complete'
+      : '—';
   return parts.join(' AND ');
 }
 

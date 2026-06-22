@@ -89,14 +89,24 @@ export interface DetectedElement {
   socialDomain?: string;
 }
 
+/** An embedded video player detected on a page (drives a video-tracking tag).
+ *  Only 'youtube' is directly trackable via GTM's built-in YouTube Video trigger;
+ *  other providers (vimeo, html5) would need a custom-JS setup. */
+export interface VideoEmbed {
+  page: string;
+  provider: 'youtube';
+}
+
 export interface SuggestInput {
   /** The audited site's host, used to classify outbound links. */
   siteHost: string;
   forms: DetectedForm[];
   elements: DetectedElement[];
+  /** Embedded video players found across the scanned pages (YouTube → one tag). */
+  videoEmbeds?: VideoEmbed[];
 }
 
-export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit';
+export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video';
 export type FilterOp = 'equals' | 'contains' | 'startsWith' | 'matchRegex';
 
 /** SAME shape as the desktop create_gtm_tracking_tag input → directly creatable. */

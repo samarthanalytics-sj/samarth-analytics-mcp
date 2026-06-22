@@ -6,10 +6,11 @@
 // classifier.
 
 import type { PwPage } from '../browser.js';
-import type { PageSignals, DetectedElement, DetectedForm, SuggestInput, FormPurpose, FormFieldSummary } from './types.js';
+import type { PageSignals, DetectedElement, DetectedForm, SuggestInput, FormPurpose, FormFieldSummary, VideoEmbed } from './types.js';
 import { detectFormProvider, detectEmbeddedForm } from './providers.js';
 import { classifyCtaIntent } from './cta-intents.js';
 import { socialNetworkOf, socialDomainOf } from './social.js';
+import { hasYouTubeEmbed } from './video.js';
 import { DOWNLOAD_EXT } from './suggest.js';
 
 // Re-exported so callers/tests have one import site for the classifier.
@@ -181,8 +182,11 @@ export interface PageScan {
 export function buildSuggestInput(pages: PageScan[], siteHost: string): SuggestInput {
   const forms: DetectedForm[] = [];
   const elements: DetectedElement[] = [];
+  const videoEmbeds: VideoEmbed[] = [];
   for (const p of pages) {
     elements.push(...p.elements);
+    // An embedded YouTube player → one site-wide YouTube Video tag suggestion.
+    if (hasYouTubeEmbed(p.signals.iframeSrcs)) videoEmbeds.push({ page: p.page, provider: 'youtube' });
     for (const f of p.forms) {
       forms.push({
         page: p.page,
@@ -204,7 +208,7 @@ export function buildSuggestInput(pages: PageScan[], siteHost: string): SuggestI
       if (embed) forms.push({ page: p.page, purpose: 'contact', action: '', provider: embed });
     }
   }
-  return { siteHost, forms, elements };
+  return { siteHost, forms, elements, ...(videoEmbeds.length ? { videoEmbeds } : {}) };
 }
 
 /** Playwright wrapper: run the in-page collector on an already-navigated page. */
