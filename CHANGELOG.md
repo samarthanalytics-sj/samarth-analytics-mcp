@@ -1,3 +1,9 @@
+## [1.21.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.20.1...v1.21.0) (2026-06-22)
+
+### Features
+
+* **tag-suggest:** field/provider-aware form tracking — scope by {{Form ID}}, flag embedded providers (+ fix: trigger scope was in the wrong array) ([1e2264d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1e2264d91abe35bdd35eb5e3a3bab9001eb2d626))
+
 ## [1.20.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.20.0...v1.20.1) (2026-06-22)
 
 ### Bug Fixes
