@@ -7,6 +7,7 @@
 
 import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, FormProvider } from './types.js';
 import { CTA_BY_INTENT } from './cta-intents.js';
+import { buildSocialUrlPattern } from './social.js';
 
 const GA4_VAR = '{{GA4 Measurement ID}}';
 // Event-parameter VALUES are GTM built-in variables, so the tag captures the
@@ -65,14 +66,6 @@ const FORM_LABEL: Record<string, string> = {
   newsletter: 'Newsletter Form',
   other: 'Form Submission',
 };
-
-// {{Click URL}} regex for the social-link trigger — HOST-anchored so it mirrors
-// collect.ts isSocialHost and fires ONLY on real social hosts (not on a path like
-// /facebook.html, a ?ref=facebook.com query, or "microsof[t.co]m"). (?i) makes
-// GTM's RE2 matchRegex case-insensitive. Long hosts: the brand must be the
-// registrable label before a TLD that ends the host (boundary [/:?#] or end).
-const SOCIAL_URL_PATTERN =
-  '(?i)://([a-z0-9-]+\\.)*(facebook|instagram|linkedin|youtube|twitter|tiktok|pinterest|snapchat|reddit|threads|tumblr|whatsapp|telegram|discord|vimeo|twitch|mastodon)\\.[a-z]{2,}(\\.[a-z]{2,})?([/:?#]|$)|://(www\\.)?(x\\.com|t\\.co|fb\\.(com|me)|m\\.me|lnkd\\.in|youtu\\.be|wa\\.me|t\\.me|instagr\\.am|pin\\.it)([/:?#]|$)';
 
 // djb2 → base36; stable, no crypto dependency.
 function hashId(s: string): string {
@@ -238,7 +231,7 @@ function nonUniqueFormScopes(forms: DetectedForm[]): FormScopeCtx {
   };
 }
 
-function elementSuggestion(el: DetectedElement): SuggestedTag | null {
+function elementSuggestion(el: DetectedElement, socialPattern: string): SuggestedTag | null {
   const base = (eventName: string, conf: SuggestedTag['confidence'], em: boolean) => ({
     id: hashId(el.kind + '|' + el.page + '|' + (el.href ?? el.text ?? '')),
     page: el.page,
@@ -290,7 +283,8 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         // dedicated, named event (with the link captured) is what's usually wanted.
         evidence: `social media link ${el.href ?? ''}`.trim() + ' (note: EM also tracks this as an outbound click)',
         eventParameters: CLICK_PARAMS,
-        trigger: { name: trigNameOf('Social Media'), kind: 'link_click', clickUrlValue: SOCIAL_URL_PATTERN, clickUrlOperator: 'matchRegex' },
+        // Fires ONLY on the social networks actually found on the site.
+        trigger: { name: trigNameOf('Social Media'), kind: 'link_click', clickUrlValue: socialPattern, clickUrlOperator: 'matchRegex' },
       };
     case 'cta': {
       const def = CTA_BY_INTENT[el.intent ?? 'generic'];
@@ -328,9 +322,14 @@ const CONF = { high: 0, medium: 1, low: 2 } as const;
 
 export function buildSuggestions(input: SuggestInput): SuggestedTag[] {
   const scopeCtx = nonUniqueFormScopes(input.forms);
+  // Social trigger fires on ONLY the networks actually linked from the site.
+  const presentNetworks = new Set(
+    input.elements.filter((e) => e.kind === 'social' && e.socialNetwork).map((e) => e.socialNetwork as string),
+  );
+  const socialPattern = buildSocialUrlPattern(presentNetworks);
   const raw: SuggestedTag[] = [
     ...input.forms.map((f) => formSuggestion(f, scopeCtx)),
-    ...input.elements.map(elementSuggestion),
+    ...input.elements.map((e) => elementSuggestion(e, socialPattern)),
   ].filter((x): x is SuggestedTag => x !== null);
 
   // Site-wide dedup: the same tag (event + trigger filter + kind) seen on multiple

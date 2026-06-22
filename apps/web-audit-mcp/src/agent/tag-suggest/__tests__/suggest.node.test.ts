@@ -108,6 +108,17 @@ check('social trigger: matches real social hosts (facebook.com, m.youtube.com, x
 check('social trigger: does NOT fire on non-social URLs (microsoft.com, /facebook.html, ?ref=facebook.com, spoof facebook.com.evil.com, retext.com)',
   ['https://www.microsoft.com/', 'https://mysite.com/facebook.html', 'https://example.com/?ref=facebook.com', 'https://facebook.com.evil.com/x', 'https://retext.com/', 'https://contact.company.com/x'].every((u) => !reTest(socialPat, u)));
 
+// PRESENT-ONLY: the trigger matches ONLY the networks the site actually links to.
+const fbOnly = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [{ page: '/', kind: 'social', text: 'Facebook', href: 'https://facebook.com/acme', socialNetwork: 'facebook' }] });
+const fbPat = fbOnly[0].trigger.clickUrlValue ?? '';
+check('social present-only: facebook-only site → matches facebook, NOT linkedin/youtube/x',
+  reTest(fbPat, 'https://facebook.com/acme') && !reTest(fbPat, 'https://linkedin.com/x') && !reTest(fbPat, 'https://youtube.com/x') && !reTest(fbPat, 'https://x.com/a'));
+const fbLi = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [
+  { page: '/', kind: 'social', text: 'Fb', href: 'https://facebook.com/a', socialNetwork: 'facebook' },
+  { page: '/', kind: 'social', text: 'Li', href: 'https://lnkd.in/x', socialNetwork: 'linkedin' },
+] });
+check('social present-only: fb+linkedin site → ONE tag matching both, not twitter', fbLi.filter((s) => s.eventName === 'social_click').length === 1 && (() => { const p = fbLi[0].trigger.clickUrlValue ?? ''; return reTest(p, 'https://facebook.com/a') && reTest(p, 'https://lnkd.in/x') && !reTest(p, 'https://twitter.com/a'); })());
+
 // ── element → suggestion + Enhanced Measurement flagging ─────────────────────
 const elInput: SuggestInput = {
   siteHost: 'acme.com',

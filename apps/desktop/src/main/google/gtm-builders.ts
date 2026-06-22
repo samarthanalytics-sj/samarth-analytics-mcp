@@ -99,6 +99,41 @@ export function buildGoogleTag(o: GoogleTagInput): GtmTagResource {
   return { name: o.name, type: 'googtag', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
 }
 
+/** The GTM built-in "All Pages" trigger — a reserved id present in every web
+ *  container, so the base Google Tag can fire on it without creating a trigger.
+ *  (Corpus: the most common firing trigger for googtag base tags.) */
+export const BUILTIN_ALL_PAGES_TRIGGER_ID = '2147479553';
+
+/** Find an existing, LIVE GA4 base/config tag in a container snapshot: a legacy
+ *  GA4 Configuration (gaawc), OR a Google Tag (googtag) whose Tag ID is a G-/GT-
+ *  id or a {{variable}} reference (configured for GA4 — not an Ads-only AW-
+ *  googtag). Paused tags fire nothing, so they're treated as absent. Returns the
+ *  tag name, or null when none is present. PURE. */
+export function findGa4BaseTag(snap: ContainerSnapshot): { name: string } | null {
+  for (const t of snap.tags) {
+    if (t.paused) continue; // a paused base tag fires nothing → effectively absent
+    if (t.type === 'gaawc') return { name: t.name };
+    if (t.type === 'googtag') {
+      // G-XXXX (GA4) and GT-XXXX (Google-tag destination group, also configures
+      // GA4) both qualify; a {{variable}} tagId is assumed GA4-configuring.
+      const tagId = String(t.parameter.find((p) => (p as { key?: string }).key === 'tagId')?.value ?? '');
+      if (/^G[T]?-/i.test(tagId) || tagId.includes('{{')) return { name: t.name };
+    }
+  }
+  return null;
+}
+
+/** Decide how the GA4 Measurement-ID variable should be handled before binding a
+ *  base tag to {{name}}: 'create' (no such variable), 'reuse' (a Constant of that
+ *  name already exists), or 'conflict' (a NON-constant owns the name — binding to
+ *  it would misconfigure the tag, so the caller must not proceed silently). PURE. */
+export function ga4VariablePlan(snap: ContainerSnapshot, variableName: string): { action: 'create' | 'reuse' | 'conflict'; existingType?: string } {
+  const v = snap.variables.find((x) => x.name === variableName);
+  if (!v) return { action: 'create' };
+  if (v.type === 'c') return { action: 'reuse' };
+  return { action: 'conflict', existingType: v.type };
+}
+
 export interface GoogleAdsConversionInput {
   name: string;
   conversionId: string; // "AW-123456789" or the bare numeric id

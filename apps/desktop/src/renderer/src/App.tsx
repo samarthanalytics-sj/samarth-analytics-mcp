@@ -1046,10 +1046,13 @@ function TagReviewPanel({
   const [creating, setCreating] = useState(false);
   const [done, setDone] = useState<{ created: number; failed: number } | null>(null);
   const [settleMs, setSettleMs] = useState('2500');
+  const [settleAuto, setSettleAuto] = useState(true);
+  const effSettleMs = (): number | undefined => (settleAuto ? undefined : Number(settleMs) || undefined);
   const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned']; inventory: TagScanResult['inventory']; installed: TagScanResult['installed'] } | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
+  const [discoverMode, setDiscoverMode] = useState<'site' | 'sitemap'>('site');
   const [selectedPages, setSelectedPages] = useState<Record<string, boolean>>({});
 
   const ctx = active?.gtmContext;
@@ -1082,7 +1085,7 @@ function TagReviewPanel({
     setDiscovering(true);
     setDiscovered(null);
     try {
-      const res = await window.desktop.tags.discover(target);
+      const res = discoverMode === 'sitemap' ? await window.desktop.tags.discoverSitemap(target) : await window.desktop.tags.discover(target);
       setDiscovered(res);
       // Pre-select the first 25 so a click-to-scan is immediate but bounded.
       setSelectedPages(Object.fromEntries(res.urls.map((u, i) => [u, i < 25])));
@@ -1100,7 +1103,7 @@ function TagReviewPanel({
     onError('');
     setScanning(true);
     try {
-      applyScanResult(await window.desktop.tags.scanUrls(urls, { settleMs: Number(settleMs) || undefined }));
+      applyScanResult(await window.desktop.tags.scanUrls(urls, { settleMs: effSettleMs() }));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1115,7 +1118,7 @@ function TagReviewPanel({
     onError('');
     setScanning(true);
     try {
-      applyScanResult(await window.desktop.tags.scan(target, { maxPages: 25, maxDepth: 2, settleMs: Number(settleMs) || undefined }));
+      applyScanResult(await window.desktop.tags.scan(target, { maxPages: 25, maxDepth: 2, settleMs: effSettleMs() }));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1221,10 +1224,22 @@ function TagReviewPanel({
       <div style={styles.reviewBody}>
         {/* Source */}
         <div style={styles.card}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+            {(['site', 'sitemap'] as const).map((m) => (
+              <button
+                key={m}
+                style={discoverMode === m ? styles.toggleOn : styles.toggleOff}
+                onClick={() => setDiscoverMode(m)}
+                disabled={scanning || discovering}
+              >
+                {m === 'site' ? 'Main website' : 'Sitemap URL'}
+              </button>
+            ))}
+          </div>
           <div style={styles.formRow}>
             <input
               style={styles.input}
-              placeholder="https://example.com"
+              placeholder={discoverMode === 'sitemap' ? 'https://example.com/sitemap.xml' : 'https://example.com'}
               value={url}
               disabled={scanning || discovering}
               onChange={(e) => setUrl(e.target.value)}
@@ -1232,17 +1247,22 @@ function TagReviewPanel({
                 if (e.key === 'Enter') void doDiscover();
               }}
             />
-            <label style={styles.scanNum} title="Wait after load for JS-rendered forms/embeds (ms, max 10000)">
-              settle ms
-              <input style={styles.scanNumInput} type="number" min={0} max={10000} step={500} value={settleMs} disabled={scanning} onChange={(e) => setSettleMs(e.target.value)} />
+            <label style={styles.scanNum} title="Auto = wait until the page's network goes quiet (adapts per page). Untick to force a fixed wait in ms.">
+              <input type="checkbox" checked={settleAuto} disabled={scanning} onChange={(e) => setSettleAuto(e.target.checked)} />
+              settle: auto
+              {!settleAuto && (
+                <input style={styles.scanNumInput} type="number" min={0} max={10000} step={500} value={settleMs} disabled={scanning} onChange={(e) => setSettleMs(e.target.value)} title="Fixed wait after load (ms)" />
+              )}
             </label>
             <button style={styles.primaryBtn} onClick={doDiscover} disabled={!url.trim() || discovering || scanning}>
               {discovering ? 'Discovering…' : 'Discover pages'}
             </button>
           </div>
           <div style={styles.muted}>
-            First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan —
-            then merges Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
+            {discoverMode === 'sitemap'
+              ? 'Pastes a sitemap.xml (or sitemapindex) URL and lists its pages directly — handy when auto-discovery misses pages.'
+              : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan'}
+            {' '}— then merges Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
             approve.{' '}
             <button style={styles.linkBtn} onClick={doQuickScan} disabled={!url.trim() || scanning || discovering}>
               quick scan (~25 pages)
@@ -1662,6 +1682,8 @@ function ContainerAuditPanel({
   const [report, setReport] = useState<AuditReportView | null>(null);
   const [running, setRunning] = useState(false);
   const [fix, setFix] = useState<Record<number, { state: 'idle' | 'confirm' | 'fixing' | 'done' | 'err'; msg?: string }>>({});
+  const [ga4Mid, setGa4Mid] = useState('G-123456789');
+  const [ga4, setGa4] = useState<{ state: 'idle' | 'confirm' | 'working' | 'done' | 'err'; msg?: string }>({ state: 'idle' });
 
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -1694,6 +1716,34 @@ function ContainerAuditPanel({
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setFix((s) => ({ ...s, [i]: { state: 'err', msg } }));
+      onError(msg);
+    }
+  }
+
+  async function ensureGa4Config(): Promise<void> {
+    if (!ready || !ctx) return;
+    if (ga4.state === 'idle' || ga4.state === 'err') {
+      setGa4({ state: 'confirm' });
+      return;
+    }
+    setGa4({ state: 'working' });
+    onError('');
+    try {
+      const r = await window.desktop.gtm.ensureGa4Config({
+        accountId: ctx.accountId!,
+        containerId: ctx.containerId!,
+        workspaceId: ctx.workspaceId!,
+        measurementId: ga4Mid.trim() || undefined,
+      });
+      setGa4({
+        state: 'done',
+        msg: r.present
+          ? `Already present — GA4 base tag "${r.existingTag}" exists; nothing created.`
+          : `Created Google Tag "${r.tagName}" using {{${r.variableName}}}${r.variableCreated ? ` + the "${r.variableName}" variable (= ${r.measurementId})` : ''}. Draft only — publish in GTM.`,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setGa4({ state: 'err', msg });
       onError(msg);
     }
   }
@@ -1735,6 +1785,54 @@ function ContainerAuditPanel({
               {running ? 'Auditing…' : report ? 'Re-run audit' : 'Run audit'}
             </button>
           </div>
+        </div>
+
+        {/* GA4 base/config tag bootstrap */}
+        <div style={styles.card}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>GA4 base (Configuration) tag</div>
+          <div style={styles.muted}>
+            Adds a Google Tag <b>only if the container has none</b> — storing the Measurement ID in a{' '}
+            <code style={mdStyles.code}>GA4 - Variable</code> constant and referencing{' '}
+            <code style={mdStyles.code}>{'{{GA4 - Variable}}'}</code>, firing on All Pages. Draft only.
+          </div>
+          <div style={{ ...styles.formRow, marginTop: 8, alignItems: 'center' }}>
+            <label style={styles.scanNum}>
+              Measurement ID
+              <input
+                style={{ ...styles.scanNumInput, width: 130 }}
+                value={ga4Mid}
+                disabled={ga4.state === 'working'}
+                onChange={(e) => setGa4Mid(e.target.value)}
+                placeholder="G-123456789"
+              />
+            </label>
+            {ga4.state === 'confirm' ? (
+              <>
+                <button style={styles.primaryBtn} onClick={ensureGa4Config} disabled={!ready}>
+                  Create it (draft)
+                </button>
+                <button style={styles.ghostBtn} onClick={() => setGa4({ state: 'idle' })}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button style={styles.primaryBtn} onClick={ensureGa4Config} disabled={!ready || ga4.state === 'working'}>
+                {ga4.state === 'working' ? 'Working…' : 'Add GA4 base tag if missing'}
+              </button>
+            )}
+          </div>
+          {ga4.state === 'confirm' && (
+            <div style={{ ...styles.muted, marginTop: 6, color: '#fcd9a5' }}>
+              Will create a <b>GA4 - Variable</b> constant (= {ga4Mid || 'G-123456789'}) and a <b>GA4 Configuration</b> Google
+              Tag into the DRAFT workspace — only if no GA4 base tag already exists. Not published.
+            </div>
+          )}
+          {ga4.msg && (
+            <div style={{ marginTop: 6, fontSize: 13, color: ga4.state === 'err' ? '#fca5a5' : '#6ee7b7' }}>
+              {ga4.state === 'err' ? '✗ ' : '✓ '}
+              {ga4.msg}
+            </div>
+          )}
         </div>
 
         {report && (
@@ -2285,6 +2383,8 @@ const styles: Record<string, React.CSSProperties> = {
   input: { flex: 1, minWidth: 120, background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
   primaryBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
   ghostBtn: { background: '#1f2937', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
+  toggleOn: { background: '#1d4ed8', color: '#fff', border: '1px solid #2563eb', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
+  toggleOff: { background: 'transparent', color: '#9ca3af', border: '1px solid #334155', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
   dangerGhost: { background: 'transparent', color: '#fca5a5', border: '1px solid #7f1d1d', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
   dangerSolid: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
   resultList: { listStyle: 'none', margin: '12px 0 0', padding: 0 },

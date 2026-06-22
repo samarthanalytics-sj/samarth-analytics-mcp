@@ -27,7 +27,9 @@ export interface ElectronDriverOptions {
   /** Hard cap on each in-page DOM read, so a page that wedges its main thread
    *  cannot hang the crawl. */
   evalTimeoutMs?: number;
-  /** Post-load settle so JS-rendered forms/embeds (HubSpot, etc.) appear. */
+  /** Post-load settle so JS-rendered forms/embeds (HubSpot, etc.) appear.
+   *  undefined = AUTO: wait until the page's network goes quiet (adaptive),
+   *  instead of a fixed wait. A number forces that exact fixed wait. */
   settleMs?: number;
 }
 
@@ -64,7 +66,9 @@ function inPage(fn: () => unknown): string {
 export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriver {
   const navTimeoutMs = opts.navTimeoutMs ?? 20_000;
   const evalTimeoutMs = opts.evalTimeoutMs ?? 5_000;
-  const settleMs = opts.settleMs ?? 2_500;
+  // undefined → AUTO (network-idle); a number → that fixed wait.
+  const autoSettle = opts.settleMs === undefined;
+  const fixedSettleMs = opts.settleMs ?? 0;
   // Ephemeral, in-memory session (no 'persist:' prefix) — cleared on close.
   const partition = `tagsuggest-scan-${process.pid}-${Date.now()}`;
   const ses = session.fromPartition(partition, { cache: false });
@@ -75,9 +79,17 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
   // render the very forms we want to detect.
   const NOISE_RE =
     /(?:\/sw_iframe|\/service_worker\/)|googletagmanager\.com|google-analytics\.com|analytics\.google\.com|\.doubleclick\.net|googleadservices\.com|connect\.facebook\.net|facebook\.com\/tr|\.hotjar\.com|\.clarity\.ms|static\.ads-twitter\.com|snap\.licdn\.com|analytics\.tiktok\.com/i;
+  // Track in-flight requests so AUTO settle can wait for the network to go quiet.
+  let inFlight = 0;
+  let lastActivity = Date.now();
+  const touch = (): void => {
+    lastActivity = Date.now();
+  };
   // Block private/loopback/metadata hosts (incl. via redirect / DNS-rebind) and
   // the analytics noise above.
   ses.webRequest.onBeforeRequest((details, cb) => {
+    inFlight += 1;
+    touch();
     if (NOISE_RE.test(details.url)) {
       cb({ cancel: true });
       return;
@@ -87,6 +99,26 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
       () => cb({ cancel: true }),
     );
   });
+  ses.webRequest.onCompleted(() => {
+    inFlight = Math.max(0, inFlight - 1);
+    touch();
+  });
+  ses.webRequest.onErrorOccurred(() => {
+    inFlight = Math.max(0, inFlight - 1);
+    touch();
+  });
+
+  // AUTO settle: resolve once no request has been in flight for `quietMs`, with a
+  // floor (let initial JS kick off) and a hard cap (never hang a slow/polling page).
+  async function waitNetworkIdle(minMs: number, quietMs: number, maxMs: number): Promise<void> {
+    const start = Date.now();
+    await delay(minMs);
+    for (;;) {
+      if (Date.now() - start >= maxMs) return;
+      if (inFlight <= 0 && Date.now() - lastActivity >= quietMs) return;
+      await delay(150);
+    }
+  }
 
   let win: BrowserWindow | null = new BrowserWindow({
     show: false,
@@ -130,7 +162,8 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
         return { ok: true, httpStatus: lastStatus, finalUrl: wc.getURL() || url };
       }
 
-      await delay(settleMs);
+      if (autoSettle) await waitNetworkIdle(600, 700, Math.min(navTimeoutMs, 9_000));
+      else await delay(fixedSettleMs);
       if (!win || win.isDestroyed()) return { ok: false, httpStatus: lastStatus, finalUrl: null, error: 'driver closed' };
       try {
         const raw = (await withTimeout(

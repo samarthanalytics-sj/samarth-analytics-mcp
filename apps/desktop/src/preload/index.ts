@@ -114,6 +114,7 @@ const api = {
   // GTM drafts via the existing create_gtm_tracking_tag path.
   tags: {
     discover: (url: string): Promise<DiscoverResult> => ipcRenderer.invoke('suggestions:discover', url),
+    discoverSitemap: (url: string): Promise<DiscoverResult> => ipcRenderer.invoke('suggestions:discoverSitemap', url),
     scanUrls: (urls: string[], opts?: TagScanOptions): Promise<TagScanResult> =>
       ipcRenderer.invoke('suggestions:scanUrls', urls, opts),
     scan: (url: string, opts?: TagScanOptions): Promise<TagScanResult> =>
@@ -135,6 +136,15 @@ const api = {
       ipcRenderer.invoke('gtm:audit', accountId, containerId, workspaceId),
     applyFix: (fix: { tool: string; args: Record<string, unknown> }): Promise<unknown> =>
       ipcRenderer.invoke('gtm:applyFix', fix),
+    ensureGa4Config: (ctx: {
+      accountId: string;
+      containerId: string;
+      workspaceId: string;
+      measurementId?: string;
+      variableName?: string;
+      tagName?: string;
+    }): Promise<{ created: boolean; present: boolean; existingTag?: string; variableCreated?: boolean; variableName: string; measurementId: string; tagName: string }> =>
+      ipcRenderer.invoke('gtm:ensureGa4Config', ctx),
   },
 
   // Continuous monitoring: schedule auto re-audits of the active container and
