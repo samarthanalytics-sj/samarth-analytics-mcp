@@ -1170,9 +1170,13 @@ function TagReviewPanel({
                 if (e.key === 'Enter') void doScan();
               }}
             />
-            <label style={styles.scanNum} title="How many pages to scan (max 25)">
+            <label style={styles.scanNum} title="How many pages to scan">
               pages
-              <input style={styles.scanNumInput} type="number" min={1} max={25} value={maxPages} disabled={scanning} onChange={(e) => setMaxPages(e.target.value)} />
+              <select style={styles.scanSelect} value={maxPages} disabled={scanning} onChange={(e) => setMaxPages(e.target.value)}>
+                <option value="10">10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+              </select>
             </label>
             <label style={styles.scanNum} title="How deep to crawl from the start URL (max 4)">
               depth

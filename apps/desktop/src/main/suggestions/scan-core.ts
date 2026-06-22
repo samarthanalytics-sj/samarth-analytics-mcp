@@ -132,7 +132,7 @@ export async function crawlAndSuggest(
   startUrl: string,
   opts: ScanOptions = {},
 ): Promise<TagScanResult> {
-  const maxPages = clamp(opts.maxPages, 10, 25);
+  const maxPages = clamp(opts.maxPages, 10, 50);
   const maxDepth = clamp(opts.maxDepth, 2, 4);
 
   const warnings: string[] = [];
