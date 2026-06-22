@@ -1,0 +1,73 @@
+// Pure tests for the "GTM Structure - GA4 Events" template mapping (the table view
+// + CSV download share this). Run: tsx src/shared/__tests__/tag-template.test.ts
+
+import { suggestionToGroup, suggestionsToTemplateCsv, triggerWhens, TEMPLATE_HEADERS } from '../tag-template';
+import type { SuggestedTagView } from '../ipc';
+
+let passed = 0;
+let failed = 0;
+const failures: string[] = [];
+function check(name: string, cond: boolean, detail?: string): void {
+  if (cond) passed += 1;
+  else { failed += 1; failures.push(`✗ ${name}${detail ? ' — ' + detail : ''}`); }
+}
+
+const base = (over: Partial<SuggestedTagView>): SuggestedTagView => ({
+  id: over.id ?? 'x', page: 'site-wide', label: '', evidence: '', confidence: 'high',
+  enhancedMeasurementOverlap: false, platform: 'ga4_event', measurementId: '{{GA4 Measurement ID}}',
+  tagName: 'GA4 Event - X Tag', eventName: 'x', trigger: { name: 'X Trigger', kind: 'all_clicks' }, ...over,
+});
+
+// ── trigger filter → "when" rows ─────────────────────────────────────────────
+const phone = base({
+  id: 'p', tagName: 'GA4 Event - Phone Click Tag', eventName: 'phone_click',
+  eventParameters: [{ name: 'click_text', value: '{{Click Text}}' }, { name: 'click_url', value: '{{Click URL}}' }, { name: 'page_path', value: '{{Page Path}}' }],
+  trigger: { name: 'Phone Click Trigger', kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
+});
+const pw = triggerWhens(phone);
+check('when: link_click clickUrl startsWith → {{Click URL}} / "Starts with" / value', pw.length === 1 && pw[0].variable === '{{Click URL}}' && pw[0].condition === 'Starts with' && pw[0].value === 'tel:');
+
+const form = base({
+  id: 'f', tagName: 'GA4 Event - Search Form Tag', eventName: 'search',
+  eventParameters: [{ name: 'form_id', value: '{{Form ID}}' }],
+  trigger: { name: 'Search Form Trigger', kind: 'form_submit', formIdValue: 'searchForm', formIdOperator: 'equals' },
+});
+check('when: form_submit formId equals → {{Form ID}} / "equals to" / value', triggerWhens(form)[0].condition === 'equals to' && triggerWhens(form)[0].variable === '{{Form ID}}');
+
+// ── group shape ──────────────────────────────────────────────────────────────
+const gp = suggestionToGroup(phone);
+check('group: tagType + triggerType mapped (Click - Just Links)', gp.tagType === 'GA4 Event Tag' && gp.triggerType === 'Click - Just Links');
+check('group: rowCount = max(params, whens, 1)', gp.rowCount === 3);
+
+const yt = base({
+  id: 'y', tagName: 'GA4 Event - YouTube Video Tag', eventName: 'video_{{Video Status}}',
+  eventParameters: [
+    { name: 'video_title', value: '{{Video Title}}' }, { name: 'video_url', value: '{{Video URL}}' },
+    { name: 'video_provider', value: '{{Video Provider}}' }, { name: 'video_percent', value: '{{Video Percent}}' },
+  ],
+  trigger: { name: 'YouTube Video Trigger', kind: 'youtube_video' },
+});
+const gyt = suggestionToGroup(yt);
+check('group: youtube_video → "YouTube Video" type, no when conditions', gyt.triggerType === 'YouTube Video' && gyt.whens.length === 0 && gyt.rowCount === 4);
+
+// ── CSV layout ───────────────────────────────────────────────────────────────
+const csv = suggestionsToTemplateCsv([phone]);
+const rows = csv.split('\r\n');
+check('csv: header is the template columns', rows[0] === TEMPLATE_HEADERS.join(','));
+check('csv: ends with a trailing CRLF', csv.endsWith('\r\n'));
+check('csv: tag block first row carries tag + trigger + param[0] + when[0]',
+  rows[1] === 'GA4 Event Tag,GA4 Event - Phone Click Tag,phone_click,click_text,{{Click Text}},Phone Click Trigger,Click - Just Links,{{Click URL}},Starts with,tel:');
+check('csv: subsequent param rows leave tag/trigger/when columns blank', rows[2] === ',,,click_url,{{Click URL}},,,,,' && rows[3] === ',,,page_path,{{Page Path}},,,,,');
+check('csv: every data row has exactly 10 columns', rows.slice(1).filter(Boolean).every((r) => r.split(',').length === TEMPLATE_HEADERS.length));
+
+// ── RFC-4180 escaping (comma / quote in a value) ─────────────────────────────
+const comma = base({ id: 'c', trigger: { name: 'T', kind: 'all_clicks', clickTextValue: 'play, pause', clickTextOperator: 'equals' }, eventParameters: [{ name: 'a', value: 'b' }] });
+const crows = suggestionsToTemplateCsv([comma]).split('\r\n');
+check('csv: a value containing a comma is quoted', crows[1].includes('"play, pause"'));
+
+// ── multiple tags → multiple blocks, YouTube event name with {{}} preserved ──
+const multi = suggestionsToTemplateCsv([phone, yt]);
+check('csv: multiple suggestions produce multiple blocks', multi.includes('GA4 Event - Phone Click Tag') && multi.includes('GA4 Event - YouTube Video Tag') && multi.includes('video_{{Video Status}}'));
+
+console.log(`\ntag-template: ${passed} passed, ${failed} failed`);
+if (failed) { console.error(failures.join('\n')); process.exit(1); }
