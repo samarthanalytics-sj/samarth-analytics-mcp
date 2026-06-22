@@ -169,6 +169,7 @@ export interface PageScan {
     method?: string;
     formId?: string;
     formClasses?: string;
+    title?: string;
     fields?: FormFieldSummary[];
   }>;
   signals: PageSignals;
@@ -191,6 +192,7 @@ export function buildSuggestInput(pages: PageScan[], siteHost: string): SuggestI
         method: f.method,
         formId: f.formId,
         formClasses: f.formClasses,
+        title: f.title,
         fields: f.fields,
       });
     }
