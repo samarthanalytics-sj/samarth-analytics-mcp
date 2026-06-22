@@ -79,6 +79,9 @@ export interface DetectedElement {
   selector?: string;
   /** Set when kind==='cta' — drives the tag/trigger name + the trigger filter. */
   intent?: CtaIntent;
+  /** Set when kind==='social' — which network (facebook, linkedin, …), so the
+   *  trigger can match ONLY the networks the site actually links to. */
+  socialNetwork?: string;
 }
 
 export interface SuggestInput {

@@ -1050,6 +1050,7 @@ function TagReviewPanel({
   const [showLog, setShowLog] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
+  const [discoverMode, setDiscoverMode] = useState<'site' | 'sitemap'>('site');
   const [selectedPages, setSelectedPages] = useState<Record<string, boolean>>({});
 
   const ctx = active?.gtmContext;
@@ -1082,7 +1083,7 @@ function TagReviewPanel({
     setDiscovering(true);
     setDiscovered(null);
     try {
-      const res = await window.desktop.tags.discover(target);
+      const res = discoverMode === 'sitemap' ? await window.desktop.tags.discoverSitemap(target) : await window.desktop.tags.discover(target);
       setDiscovered(res);
       // Pre-select the first 25 so a click-to-scan is immediate but bounded.
       setSelectedPages(Object.fromEntries(res.urls.map((u, i) => [u, i < 25])));
@@ -1221,10 +1222,22 @@ function TagReviewPanel({
       <div style={styles.reviewBody}>
         {/* Source */}
         <div style={styles.card}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+            {(['site', 'sitemap'] as const).map((m) => (
+              <button
+                key={m}
+                style={discoverMode === m ? styles.toggleOn : styles.toggleOff}
+                onClick={() => setDiscoverMode(m)}
+                disabled={scanning || discovering}
+              >
+                {m === 'site' ? 'Main website' : 'Sitemap URL'}
+              </button>
+            ))}
+          </div>
           <div style={styles.formRow}>
             <input
               style={styles.input}
-              placeholder="https://example.com"
+              placeholder={discoverMode === 'sitemap' ? 'https://example.com/sitemap.xml' : 'https://example.com'}
               value={url}
               disabled={scanning || discovering}
               onChange={(e) => setUrl(e.target.value)}
@@ -1241,8 +1254,10 @@ function TagReviewPanel({
             </button>
           </div>
           <div style={styles.muted}>
-            First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan —
-            then merges Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
+            {discoverMode === 'sitemap'
+              ? 'Pastes a sitemap.xml (or sitemapindex) URL and lists its pages directly — handy when auto-discovery misses pages.'
+              : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan'}
+            {' '}— then merges Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
             approve.{' '}
             <button style={styles.linkBtn} onClick={doQuickScan} disabled={!url.trim() || scanning || discovering}>
               quick scan (~25 pages)
@@ -2285,6 +2300,8 @@ const styles: Record<string, React.CSSProperties> = {
   input: { flex: 1, minWidth: 120, background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
   primaryBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
   ghostBtn: { background: '#1f2937', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
+  toggleOn: { background: '#1d4ed8', color: '#fff', border: '1px solid #2563eb', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
+  toggleOff: { background: 'transparent', color: '#9ca3af', border: '1px solid #334155', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
   dangerGhost: { background: 'transparent', color: '#fca5a5', border: '1px solid #7f1d1d', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
   dangerSolid: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
   resultList: { listStyle: 'none', margin: '12px 0 0', padding: 0 },

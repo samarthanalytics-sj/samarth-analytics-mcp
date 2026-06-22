@@ -86,6 +86,7 @@ check('cta intent: "View demo reel"/"View demo gallery" are NOT book_demo (produ
 check('social: facebook link → social', classifyElement(a('https://facebook.com/acme', { text: 'Facebook' }), 'acme.com')?.kind === 'social');
 check('social: x.com + lnkd.in short hosts → social', classifyElement(a('https://x.com/acme'), 'acme.com')?.kind === 'social' && classifyElement(a('https://lnkd.in/abc'), 'acme.com')?.kind === 'social');
 check('social: non-social outbound link is still outbound', classifyElement(a('https://partner.com/x'), 'acme.com')?.kind === 'outbound');
+check('social: classify records WHICH network (facebook, linkedin via lnkd.in)', classifyElement(a('https://facebook.com/acme'), 'acme.com')?.socialNetwork === 'facebook' && classifyElement(a('https://lnkd.in/abc'), 'acme.com')?.socialNetwork === 'linkedin');
 // Spoof host: social brand as an interior (non-registrable) label → NOT social.
 check('social: spoof "facebook.com.evil.com" → outbound (not social)', classifyElement(a('https://facebook.com.evil.com/x'), 'acme.com')?.kind === 'outbound');
 // The site's OWN social-named subdomain is internal nav, not a social click.

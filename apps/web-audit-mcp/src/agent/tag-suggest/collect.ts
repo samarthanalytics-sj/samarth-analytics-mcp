@@ -9,6 +9,7 @@ import type { PwPage } from '../browser.js';
 import type { PageSignals, DetectedElement, DetectedForm, SuggestInput, FormPurpose, FormFieldSummary } from './types.js';
 import { detectFormProvider, detectEmbeddedForm } from './providers.js';
 import { classifyCtaIntent } from './cta-intents.js';
+import { socialNetworkOf } from './social.js';
 import { DOWNLOAD_EXT } from './suggest.js';
 
 // Re-exported so callers/tests have one import site for the classifier.
@@ -98,16 +99,8 @@ export function collectPageInBrowser(): PageScanRaw {
 // Built from the engine's shared extension list so detection ⇔ the suggested
 // tag's trigger filter can never diverge.
 const DOWNLOAD_RE = new RegExp(`\\.(${DOWNLOAD_EXT})(\\?|#|$)`, 'i');
-// Links to social networks → a dedicated "Social Media Click" tag. The social
-// brand must be the REGISTRABLE label (immediately before the TLD that ends the
-// host), not just any interior label — so "facebook.com" matches but the spoof
-// host "facebook.com.evil.com" does NOT. Short share/link forms match the whole
-// host. (Mirrors SOCIAL_URL_PATTERN in suggest.ts, which the GTM trigger uses.)
-const SOCIAL_LONG = /(?:^|\.)(facebook|instagram|linkedin|youtube|twitter|tiktok|pinterest|snapchat|reddit|threads|tumblr|whatsapp|telegram|discord|vimeo|twitch|mastodon)\.[a-z]{2,}(?:\.[a-z]{2,})?$/i;
-const SOCIAL_SHORT = /^(www\.)?(x\.com|t\.co|fb\.(com|me)|m\.me|lnkd\.in|youtu\.be|wa\.me|t\.me|instagr\.am|pin\.it)$/i;
-function isSocialHost(host: string): boolean {
-  return SOCIAL_LONG.test(host) || SOCIAL_SHORT.test(host);
-}
+// Social-link detection (which network a host belongs to) lives in social.ts —
+// shared with the GTM trigger builder so the two can't diverge.
 const normHost = (h: string): string => h.replace(/^www\./i, '').toLowerCase();
 // siteHost may arrive Unicode or with a scheme/path — route it through the URL
 // parser so it's compared as the same punycode host-only form new URL().hostname
@@ -139,8 +132,12 @@ export function classifyElement(raw: RawElement, siteHost: string): DetectedElem
     const internal = !host || host === site || host.endsWith('.' + site);
     // Internal links (incl. the site's own social-named subdomain) are nav, not
     // social/outbound. Among external links, social wins (a social link IS
-    // outbound, but we want it named).
-    if (!internal) return make(isSocialHost(host) ? 'social' : 'outbound');
+    // outbound, but we want it named) — and we record WHICH network it is.
+    if (!internal) {
+      const net = socialNetworkOf(host);
+      if (net) return { ...make('social'), socialNetwork: net };
+      return make('outbound');
+    }
   }
   // CTA: a button, or a non-tracked anchor whose text reads like a call to action.
   if (raw.tag === 'button' || raw.tag === 'a') {
