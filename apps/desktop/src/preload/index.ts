@@ -120,6 +120,9 @@ const api = {
       ipcRenderer.invoke('suggestions:scan', url, opts),
     fromJson: (json: string): Promise<ParsedSuggestionsResult> =>
       ipcRenderer.invoke('suggestions:fromJson', json),
+    // Save the (renderer-built) template CSV to a user-chosen file → saved path or null.
+    exportCsv: (defaultName: string, csv: string): Promise<string | null> =>
+      ipcRenderer.invoke('suggestions:exportCsv', defaultName, csv),
     createTags: (
       accountId: string,
       containerId: string,

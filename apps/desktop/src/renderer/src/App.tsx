@@ -21,6 +21,7 @@ import type {
   SuggestedTagView,
   TagScanResult,
 } from '../../shared/ipc';
+import { suggestionToGroup, suggestionsToTemplateCsv, TEMPLATE_HEADERS } from '../../shared/tag-template';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: 'claude-opus-4-8',
@@ -992,6 +993,52 @@ function triggerCondition(s: SuggestedTagView): string {
   return parts.join(' AND ');
 }
 
+// The suggested tags rendered in the "GTM Structure - GA4 Events" template layout:
+// one block per tag (tag + trigger on the first row; one row per event parameter /
+// trigger condition). Same data the CSV download writes — via suggestionToGroup.
+const tplStyles: Record<string, React.CSSProperties> = {
+  wrap: { overflowX: 'auto', border: '1px solid #1f2937', borderRadius: 12 },
+  table: { borderCollapse: 'collapse', width: '100%', fontSize: 12, color: '#cbd5e1' },
+  th: { textAlign: 'left', padding: '8px 10px', background: '#0f1623', color: '#9ca3af', fontWeight: 600, borderBottom: '1px solid #1f2937', whiteSpace: 'nowrap' },
+  td: { padding: '6px 10px', borderBottom: '1px solid #16202e', verticalAlign: 'top' },
+  tdTag: { padding: '6px 10px', borderBottom: '1px solid #1f2937', borderLeft: '2px solid #1e3a5f', verticalAlign: 'top', background: '#101a28' },
+};
+function SuggestionTemplateTable({ suggestions }: { suggestions: SuggestedTagView[] }): JSX.Element {
+  return (
+    <div style={tplStyles.wrap}>
+      <table style={tplStyles.table}>
+        <thead>
+          <tr>{TEMPLATE_HEADERS.map((h) => <th key={h} style={tplStyles.th}>{h}</th>)}</tr>
+        </thead>
+        <tbody>
+          {suggestions.flatMap((s) => {
+            const g = suggestionToGroup(s);
+            return Array.from({ length: g.rowCount }, (_, i) => {
+              const first = i === 0;
+              const p = g.params[i];
+              const w = g.whens[i];
+              return (
+                <tr key={s.id + ':' + i}>
+                  {first && <td rowSpan={g.rowCount} style={tplStyles.tdTag}>{g.tagType}</td>}
+                  {first && <td rowSpan={g.rowCount} style={{ ...tplStyles.td, color: '#e5e7eb', fontWeight: 600 }}>{g.tagName}</td>}
+                  {first && <td rowSpan={g.rowCount} style={tplStyles.td}><code style={mdStyles.code}>{g.eventName}</code></td>}
+                  <td style={tplStyles.td}>{p?.name ?? ''}</td>
+                  <td style={tplStyles.td}>{p ? <code style={mdStyles.code}>{p.variable}</code> : ''}</td>
+                  {first && <td rowSpan={g.rowCount} style={tplStyles.td}>{g.triggerName}</td>}
+                  {first && <td rowSpan={g.rowCount} style={tplStyles.td}>{g.triggerType}</td>}
+                  <td style={tplStyles.td}>{w ? <code style={mdStyles.code}>{w.variable}</code> : ''}</td>
+                  <td style={tplStyles.td}>{w?.condition ?? ''}</td>
+                  <td style={tplStyles.td}>{w?.value ?? ''}</td>
+                </tr>
+              );
+            });
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 /** A discovered URL → a short, readable label (its path, "/" for the homepage). */
 function pagePathLabel(u: string): string {
   try {
@@ -1059,6 +1106,10 @@ function TagReviewPanel({
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
   const [discoverMode, setDiscoverMode] = useState<'site' | 'single'>('site');
   const [selectedPages, setSelectedPages] = useState<Record<string, boolean>>({});
+  // Suggestion display: "cards" (review + create) or "table" (the GTM-structure
+  // template layout, also what the CSV download writes).
+  const [tagView, setTagView] = useState<'cards' | 'table'>('cards');
+  const [exportNote, setExportNote] = useState('');
 
   const ctx = active?.gtmContext;
   const targetReady = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -1203,6 +1254,23 @@ function TagReviewPanel({
       eventName: e.eventName ?? s.eventName,
       measurementId: e.measurementId ?? s.measurementId,
     };
+  }
+
+  // Download the suggestions as the "GTM Structure - GA4 Events" template CSV. If
+  // any are selected, export those; otherwise export all. Uses effective() so the
+  // exported structure reflects any inline edits.
+  async function downloadStructureCsv(): Promise<void> {
+    const picked = suggestions.filter((s) => selected[s.id]);
+    const list = (picked.length ? picked : suggestions).map(effective);
+    if (!list.length) return;
+    setExportNote('');
+    try {
+      const csv = suggestionsToTemplateCsv(list);
+      const saved = await window.desktop.tags.exportCsv('GTM Structure - GA4 Events.csv', csv);
+      setExportNote(saved ? `✓ Saved ${list.length} tag(s) to ${saved}` : 'Export cancelled');
+    } catch (e) {
+      onError(String(e));
+    }
   }
 
   async function confirmCreate(): Promise<void> {
@@ -1566,19 +1634,45 @@ function TagReviewPanel({
                 {suggestions.length} suggestion(s) · {newCount} new, {emCount} already auto-tracked · {selectedIds.length}{' '}
                 selected
               </div>
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                <button style={styles.linkBtn} onClick={() => setAll(() => true)}>
-                  Select all
-                </button>
-                <button style={styles.linkBtn} onClick={() => setAll(() => false)}>
-                  Select none
-                </button>
-                <button style={styles.linkBtn} onClick={() => setAll((s) => !s.enhancedMeasurementOverlap)}>
-                  Select new only
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                {tagView === 'cards' && (
+                  <>
+                    <button style={styles.linkBtn} onClick={() => setAll(() => true)}>
+                      Select all
+                    </button>
+                    <button style={styles.linkBtn} onClick={() => setAll(() => false)}>
+                      Select none
+                    </button>
+                    <button style={styles.linkBtn} onClick={() => setAll((s) => !s.enhancedMeasurementOverlap)}>
+                      Select new only
+                    </button>
+                  </>
+                )}
+                {/* Cards = review & create; Table = the GTM-structure template layout. */}
+                <span style={styles.viewToggle}>
+                  <button
+                    style={tagView === 'cards' ? styles.viewToggleOn : styles.viewToggleOff}
+                    onClick={() => setTagView('cards')}
+                  >
+                    Cards
+                  </button>
+                  <button
+                    style={tagView === 'table' ? styles.viewToggleOn : styles.viewToggleOff}
+                    onClick={() => setTagView('table')}
+                  >
+                    Table
+                  </button>
+                </span>
+                <button style={styles.linkBtn} onClick={() => void downloadStructureCsv()}>
+                  ⬇ Download CSV
                 </button>
               </div>
             </div>
+            {exportNote && <div style={{ ...styles.muted, marginTop: -4 }}>{exportNote}</div>}
 
+            {tagView === 'table' ? (
+              <SuggestionTemplateTable suggestions={suggestions.map(effective)} />
+            ) : (
             <div style={styles.reviewList}>
               {suggestions.map((s) => {
                 const st = statuses[s.id];
@@ -1683,6 +1777,7 @@ function TagReviewPanel({
                 );
               })}
             </div>
+            )}
 
             {confirming ? (
               <div style={styles.confirm}>
@@ -2434,6 +2529,9 @@ const styles: Record<string, React.CSSProperties> = {
   editRow: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #1f2937', flexWrap: 'wrap' },
   editInput: { flex: 1, maxWidth: 320, background: '#161e2e', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 6, padding: '6px 9px', fontSize: 13 },
   confirmNote: { color: '#9ca3af', fontSize: 11, marginTop: 8 },
+  viewToggle: { display: 'inline-flex', border: '1px solid #334155', borderRadius: 7, overflow: 'hidden' },
+  viewToggleOn: { background: '#1e3a5f', color: '#e5e7eb', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
+  viewToggleOff: { background: 'transparent', color: '#93c5fd', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
 
   settings: { flex: 1, overflowY: 'auto', padding: 24, maxWidth: 720 },
   settingsTitle: { fontSize: 22, fontWeight: 700, margin: '0 0 16px' },

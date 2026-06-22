@@ -10,7 +10,8 @@
 // is not a way to bypass approval — write tools still only exist because a
 // confirm fn is supplied, and nothing is ever published.
 
-import { ipcMain } from 'electron';
+import { ipcMain, dialog, BrowserWindow } from 'electron';
+import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions } from '../../shared/ipc';
@@ -51,6 +52,19 @@ async function makeDriver(opts: TagScanOptions): Promise<PageDriver> {
 
 export function registerSuggestionsIpc(data: GoogleDataService): void {
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
+
+  // Save the suggestion structure (already rendered to CSV in the renderer) to a
+  // file the user picks. Read-only export — no GTM access. Returns the saved path,
+  // or null if the user cancelled.
+  ipcMain.handle('suggestions:exportCsv', async (e, defaultName: unknown, csv: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const name = String(defaultName ?? 'GTM Structure - GA4 Events.csv').replace(/[\\/:*?"<>|]/g, '_');
+    const opts = { title: 'Export tag structure', defaultPath: name, filters: [{ name: 'CSV', extensions: ['csv'] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    await writeFile(filePath, String(csv ?? ''), 'utf8');
+    return filePath;
+  });
 
   ipcMain.handle('suggestions:scan', async (_e, url: unknown, opts?: TagScanOptions) => {
     const target = String(url ?? '').trim();
