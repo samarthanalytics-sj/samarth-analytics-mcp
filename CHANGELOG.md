@@ -1,3 +1,9 @@
+## [1.20.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.9...v1.20.0) (2026-06-22)
+
+### Features
+
+* **tag-suggest:** name tags by intent (Subscribe/Learn More/Add to Cart/FAQ/Social…) instead of one generic CTA ([654f3cc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/654f3cc63fa1e2d269d4956e3de067aa23395d8e))
+
 ## [1.19.9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.8...v1.19.9) (2026-06-22)
 
 ### Bug Fixes
