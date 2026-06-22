@@ -5,7 +5,7 @@
 //   • createSuggestedTags() — the approved-create loop (outcome mapping).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/suggestion-service.test.ts
 
-import { crawlAndSuggest, scanUrls, type PageDriver, type DrivenPage } from '../scan-core';
+import { crawlAndSuggest, scanUrls, detectInstalled, type PageDriver, type DrivenPage } from '../scan-core';
 import { mergeDriven } from '../multi-driver';
 import { parseSitemapLocs, extractCrawlLinks } from '../discover';
 import { parseSuggestions, suggestionsFromData, createSuggestedTags } from '../suggestion-service';
@@ -224,6 +224,19 @@ async function main(): Promise<void> {
     check('scanUrls: scans exactly the listed pages (2), no crawl', res.summary.pagesScanned === 2 && fd.opened().length === 2);
     check('scanUrls: builds suggestions from those pages', events.has('generate_lead') && events.has('email_click') && events.has('phone_click'));
     check('scanUrls: driver closed once', fd.closes() === 1);
+  }
+
+  // ── detectInstalled: GTM/GA4 ids live on the scanned site ──────────────────
+  {
+    const inst = detectInstalled([
+      'https://www.googletagmanager.com/gtm.js?id=GTM-ABC123',
+      'https://www.googletagmanager.com/gtag/js?id=G-XYZ789',
+      'https://www.googletagmanager.com/gtag/js?id=AW-111222&l=dataLayer',
+      'https://cdn.example.com/app.js',
+    ]);
+    check('installed: detects the GTM container id', inst.containers.includes('GTM-ABC123') && inst.containers.length === 1);
+    check('installed: detects G-/AW- measurement ids', inst.measurementIds.includes('G-XYZ789') && inst.measurementIds.includes('AW-111222'));
+    check('installed: ignores unrelated scripts', detectInstalled(['https://x.com/a.js']).containers.length === 0);
   }
 
   // ── parseSuggestions: the four accepted shapes + junk ──────────────────────

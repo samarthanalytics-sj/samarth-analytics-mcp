@@ -98,6 +98,21 @@ export function pagePath(url: string): string {
   }
 }
 
+/** GTM containers (GTM-XXXX) + measurement ids (G-/AW-/GT-/UA-) that are LIVE on
+ *  the scanned pages — parsed from the googletagmanager.com script srcs. Lets the
+ *  user see which container is actually installed on the site. PURE + tested. */
+export function detectInstalled(scriptSrcs: string[]): { containers: string[]; measurementIds: string[] } {
+  const containers = new Set<string>();
+  const measurementIds = new Set<string>();
+  for (const src of scriptSrcs) {
+    const gtm = /googletagmanager\.com\/gtm\.js\?[^"'\s]*\bid=(GTM-[A-Z0-9]+)/i.exec(src);
+    if (gtm) containers.add(gtm[1].toUpperCase());
+    const gtag = /googletagmanager\.com\/gtag\/js\?[^"'\s]*\bid=((?:G|AW|GT|UA)-[A-Z0-9-]+)/i.exec(src);
+    if (gtag) measurementIds.add(gtag[1].toUpperCase());
+  }
+  return { containers: [...containers], measurementIds: [...measurementIds] };
+}
+
 function emptyResult(site: string, siteHost: string, warnings: string[]): TagScanResult {
   return {
     site,
@@ -116,6 +131,7 @@ function emptyResult(site: string, siteHost: string, warnings: string[]): TagSca
     suggestions: [],
     pages: [],
     inventory: { elements: [], forms: [] },
+    installed: { containers: [], measurementIds: [] },
     notScanned: [],
     warnings,
   };
@@ -187,6 +203,7 @@ function assembleResult(
       elements: input.elements.slice(0, 1000).map((e) => ({ page: e.page, kind: e.kind, text: e.text, href: e.href, region: e.region })),
       forms: input.forms.map((f) => ({ page: f.page, purpose: f.purpose, action: f.action, provider: f.provider.vendor })),
     },
+    installed: detectInstalled(pageScans.flatMap((p) => p.signals.scriptSrcs)),
     notScanned,
     warnings,
   };

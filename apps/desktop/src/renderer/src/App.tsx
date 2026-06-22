@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppInfo } from '../../preload';
 import type {
   AccountView,
+  AuditFindingView,
+  AuditReportView,
   ChatTurn,
   CreateTagOutcome,
   DiscoverResult,
@@ -26,7 +28,7 @@ const DEFAULT_MODEL: Record<LlmProvider, string> = {
   gemini: 'gemini-2.0-flash',
 };
 
-type View = 'chat' | 'review' | 'settings';
+type View = 'chat' | 'review' | 'audit' | 'settings';
 
 /* Friendly labels for GTM type codes, so approvals read in plain English. */
 const GTM_TYPE_LABELS: Record<string, string> = {
@@ -597,6 +599,12 @@ export function App(): JSX.Element {
             🏷 Tag suggestions
           </button>
           <button
+            style={{ ...styles.navItem, ...(view === 'audit' ? styles.navActive : {}) }}
+            onClick={() => setView('audit')}
+          >
+            🔍 Container audit
+          </button>
+          <button
             style={{ ...styles.navItem, ...(view === 'settings' ? styles.navActive : {}) }}
             onClick={() => setView('settings')}
           >
@@ -620,6 +628,8 @@ export function App(): JSX.Element {
           <ChatView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
         ) : view === 'review' ? (
           <TagReviewPanel key={active?.id ?? 'none'} active={active} onError={setError} />
+        ) : view === 'audit' ? (
+          <ContainerAuditPanel key={active?.id ?? 'none'} active={active} onError={setError} />
         ) : (
           <SettingsView
             active={active}
@@ -1034,7 +1044,7 @@ function TagReviewPanel({
   const [creating, setCreating] = useState(false);
   const [done, setDone] = useState<{ created: number; failed: number } | null>(null);
   const [settleMs, setSettleMs] = useState('2500');
-  const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned']; inventory: TagScanResult['inventory'] } | null>(null);
+  const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned']; inventory: TagScanResult['inventory']; installed: TagScanResult['installed'] } | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
@@ -1058,7 +1068,7 @@ function TagReviewPanel({
   function applyScanResult(res: TagScanResult): void {
     setMeta(res.summary);
     setWarnings(res.warnings);
-    setScanLog({ pages: res.pages, notScanned: res.notScanned, inventory: res.inventory });
+    setScanLog({ pages: res.pages, notScanned: res.notScanned, inventory: res.inventory, installed: res.installed });
     loadSuggestions(res.suggestions);
   }
 
@@ -1337,6 +1347,14 @@ function TagReviewPanel({
                 {showLog ? 'hide scan log' : 'show scan log'}
               </button>
             </div>
+            {(scanLog.installed.containers.length > 0 || scanLog.installed.measurementIds.length > 0) && (
+              <div style={{ ...styles.muted, marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                <span>Live on this site:</span>
+                {[...scanLog.installed.containers, ...scanLog.installed.measurementIds].map((id) => (
+                  <span key={id} style={styles.typeChip}>{id}</span>
+                ))}
+              </div>
+            )}
             {showLog && (
               <div style={{ marginTop: 10 }}>
                 {/* Forms detected (before dedup) */}
@@ -1600,6 +1618,161 @@ function TagReviewPanel({
               </div>
             )}
           </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ───────────────────── Container audit (existing tags) ───────────────────── */
+
+const SEV_BADGE: Record<string, React.CSSProperties> = {
+  high: { background: '#3a1416', color: '#fca5a5', border: '1px solid #7f1d1d' },
+  medium: { background: '#3a2c0a', color: '#fcd34d', border: '1px solid #92651a' },
+  low: { background: '#1b2433', color: '#9ca3af', border: '1px solid #334155' },
+  info: { background: '#10233f', color: '#93c5fd', border: '1px solid #1e3a5f' },
+};
+const SEV_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2, info: 3 };
+
+function ContainerAuditPanel({
+  active,
+  onError,
+}: {
+  active: AccountView | undefined;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const [report, setReport] = useState<AuditReportView | null>(null);
+  const [running, setRunning] = useState(false);
+  const [fix, setFix] = useState<Record<number, { state: 'idle' | 'confirm' | 'fixing' | 'done' | 'err'; msg?: string }>>({});
+
+  const ctx = active?.gtmContext;
+  const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
+
+  async function runAudit(): Promise<void> {
+    if (!ready || !ctx || running) return;
+    onError('');
+    setRunning(true);
+    setFix({});
+    try {
+      setReport(await window.desktop.gtm.audit(ctx.accountId!, ctx.containerId!, ctx.workspaceId!));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function applyFix(i: number, f: AuditFindingView): Promise<void> {
+    if (!f.fix) return;
+    const destructive = f.fix.tool.startsWith('delete');
+    if (destructive && fix[i]?.state !== 'confirm') {
+      setFix((s) => ({ ...s, [i]: { state: 'confirm' } }));
+      return;
+    }
+    setFix((s) => ({ ...s, [i]: { state: 'fixing' } }));
+    try {
+      await window.desktop.gtm.applyFix(f.fix);
+      setFix((s) => ({ ...s, [i]: { state: 'done' } }));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setFix((s) => ({ ...s, [i]: { state: 'err', msg } }));
+      onError(msg);
+    }
+  }
+
+  const findings = [...(report?.findings ?? [])].sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
+  const fixable = (report?.findings ?? []).filter((f) => f.autoFixable).length;
+
+  return (
+    <div style={styles.reviewWrap}>
+      <div style={styles.chatHeader}>
+        <div>
+          <div style={styles.chatTitle}>Container audit</div>
+          <div style={styles.chatSub}>Check the existing tags/triggers in your GTM container and fix issues (draft-only).</div>
+        </div>
+      </div>
+
+      <div style={styles.reviewBody}>
+        <div style={styles.card}>
+          {ready && ctx ? (
+            <div style={styles.muted}>
+              📁 {ctx.accountName} › {ctx.containerName} › <b style={{ color: '#e5e7eb' }}>{ctx.workspaceName}</b>
+              &nbsp;·&nbsp; {active?.email}
+            </div>
+          ) : (
+            <div style={{ color: '#fcd9a5', fontSize: 13 }}>
+              Pick a GTM account, container and draft workspace in <b>Chat</b> first, then return here.
+            </div>
+          )}
+          <div style={{ marginTop: 10 }}>
+            <button style={styles.primaryBtn} onClick={runAudit} disabled={!ready || running}>
+              {running ? 'Auditing…' : report ? 'Re-run audit' : 'Run audit'}
+            </button>
+          </div>
+        </div>
+
+        {report && (
+          <div style={styles.card}>
+            <div style={styles.muted}>
+              {report.counts.tags} tag(s) · {report.counts.triggers} trigger(s) · {report.counts.variables} variable(s) ·{' '}
+              <b style={{ color: report.counts.findings ? '#fcd34d' : '#6ee7b7' }}>
+                {report.counts.findings} issue(s)
+              </b>{' '}
+              ({report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low · {report.summary.info} info)
+              {fixable > 0 ? ` · ${fixable} auto-fixable` : ''}
+            </div>
+          </div>
+        )}
+
+        {report && findings.length === 0 && (
+          <div style={styles.empty}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
+            No issues found — every tag has a trigger, nothing's mis-paused, no orphans. Looks clean.
+          </div>
+        )}
+
+        {findings.length > 0 && (
+          <div style={styles.reviewList}>
+            {findings.map((f, i) => {
+              const st = fix[i];
+              const done = st?.state === 'done';
+              return (
+                <div key={i} style={{ ...styles.reviewRow, ...(done ? styles.reviewRowOk : {}) }}>
+                  <span style={{ ...styles.badge, ...(SEV_BADGE[f.severity] ?? SEV_BADGE.info), marginTop: 2 }}>{f.severity}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600 }}>
+                      {f.resource ? `${f.resource.name} ` : ''}
+                      <span style={{ fontWeight: 400, color: '#9ca3af', fontSize: 12 }}>
+                        {f.resource ? `(${f.resource.kind})` : f.category}
+                      </span>
+                    </div>
+                    <div style={{ ...styles.reviewMetaLine, color: '#cbd5e1' }}>{f.message}</div>
+                    <div style={styles.reviewEvidence}>{f.recommendation}</div>
+                    {st && st.state !== 'idle' && st.state !== 'confirm' && (
+                      <div style={{ fontSize: 12, marginTop: 4, color: st.state === 'done' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : '#9ca3af' }}>
+                        {st.state === 'fixing' ? 'Applying…' : st.state === 'done' ? '✓ applied — re-run to confirm' : `✗ ${st.msg}`}
+                      </div>
+                    )}
+                  </div>
+                  {f.autoFixable && f.fix && !done && (
+                    <button
+                      style={f.fix.tool.startsWith('delete') ? styles.dangerGhost : styles.ghostBtn}
+                      disabled={st?.state === 'fixing'}
+                      onClick={() => applyFix(i, f)}
+                    >
+                      {st?.state === 'fixing'
+                        ? '…'
+                        : st?.state === 'confirm'
+                          ? 'Confirm delete'
+                          : f.fix.tool.startsWith('delete')
+                            ? 'Delete'
+                            : 'Apply fix'}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>

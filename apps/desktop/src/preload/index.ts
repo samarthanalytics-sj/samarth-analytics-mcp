@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AccountView,
   AddAccountInput,
+  AuditReportView,
   ChatReply,
   ChatStreamEvent,
   ChatTurn,
@@ -126,6 +127,14 @@ const api = {
       suggestions: SuggestedTagView[]
     ): Promise<CreateTagOutcome[]> =>
       ipcRenderer.invoke('suggestions:createTags', accountId, containerId, workspaceId, suggestions),
+  },
+
+  // Container audit: surface the existing audit engine + its fixes as a panel.
+  gtm: {
+    audit: (accountId: string, containerId: string, workspaceId: string): Promise<AuditReportView> =>
+      ipcRenderer.invoke('gtm:audit', accountId, containerId, workspaceId),
+    applyFix: (fix: { tool: string; args: Record<string, unknown> }): Promise<unknown> =>
+      ipcRenderer.invoke('gtm:applyFix', fix),
   },
 
   // Continuous monitoring: schedule auto re-audits of the active container and
