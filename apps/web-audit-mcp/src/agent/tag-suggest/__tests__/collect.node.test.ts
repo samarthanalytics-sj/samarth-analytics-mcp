@@ -48,7 +48,7 @@ check('assemble: elements flattened across pages', input.elements.length === 2);
 
 const suggestions = buildSuggestions(input);
 const events = new Set(suggestions.map((s) => s.eventName));
-check('end-to-end: contact(HubSpot) → generate_lead', events.has('generate_lead'));
+check('end-to-end: contact(HubSpot) → contact_form', events.has('contact_form'));
 check('end-to-end: tel → phone_click, mailto → email_click', events.has('phone_click') && events.has('email_click'));
 check('end-to-end: every suggestion is a valid ga4_event payload', suggestions.every((s) => s.platform === 'ga4_event' && !!s.tagName && !!s.trigger.kind));
 
@@ -102,7 +102,7 @@ check('social: internal "discord.acme.com" subdomain → null (internal nav)', c
   const embedInput = buildSuggestInput([embedPage], 'acme.com');
   check('embed: cross-origin HubSpot iframe (no readable form) → synthesized contact form',
     embedInput.forms.length === 1 && embedInput.forms[0].provider.vendor === 'hubspot' && embedInput.forms[0].purpose === 'contact');
-  check('embed: synthesized form → generate_lead suggestion', buildSuggestions(embedInput).some((s) => s.eventName === 'generate_lead'));
+  check('embed: synthesized form → contact_form suggestion', buildSuggestions(embedInput).some((s) => s.eventName === 'contact_form'));
   const realPlusEmbed: PageScan = { ...embedPage, forms: [{ purpose: 'contact', action: 'https://acme.com/x' }] };
   check('embed: a readable form suppresses synthesis (no duplicate)', buildSuggestInput([realPlusEmbed], 'acme.com').forms.length === 1);
 }

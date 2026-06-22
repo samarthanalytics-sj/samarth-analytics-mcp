@@ -90,7 +90,7 @@ const BASE = 'https://acme.com/';
   const sugs = buildSuggestions(buildSuggestInput([page], 'acme.com'));
   const events = new Set(sugs.map((s) => s.eventName));
   check('end-to-end: tel → phone_click', events.has('phone_click'));
-  check('end-to-end: div signup form → sign_up', events.has('sign_up'));
+  check('end-to-end: div signup form → signup_form', events.has('signup_form'));
   check('end-to-end: every suggestion carries event parameters', sugs.every((s) => (s.eventParameters?.length ?? 0) > 0));
 }
 

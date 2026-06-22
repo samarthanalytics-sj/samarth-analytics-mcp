@@ -40,21 +40,21 @@ check('embed: null when there is no form signal at all', detectEmbeddedForm(sig(
 // ── form → suggestion ───────────────────────────────────────────────────────
 const contactForm: DetectedForm = { page: '/contact', purpose: 'contact', action: 'https://js.hsforms.net/x', provider: { vendor: 'hubspot', confidence: 'high', evidence: 'script js.hsforms.net' } };
 const out1 = buildSuggestions({ siteHost: 'acme.com', forms: [contactForm], elements: [] });
-check('form: contact → generate_lead on form_submit', out1.length === 1 && out1[0].eventName === 'generate_lead' && out1[0].trigger.kind === 'form_submit');
+check('form: contact → contact_form on form_submit', out1.length === 1 && out1[0].eventName === 'contact_form' && out1[0].trigger.kind === 'form_submit');
 check('form: label names the provider', out1[0].label.includes('hubspot'));
 check('form: directly creatable (platform + measurementId)', out1[0].platform === 'ga4_event' && out1[0].measurementId === '{{GA4 Measurement ID}}');
-check('naming: tag "GA4 Event - Contact Form", trigger "Form Submit - Contact"', out1[0].tagName === 'GA4 Event - Contact Form' && out1[0].trigger.name === 'Form Submit - Contact');
+check('naming: tag "GA4 Event - Contact Form Tag", trigger "Contact Form Trigger"', out1[0].tagName === 'GA4 Event - Contact Form Tag' && out1[0].trigger.name === 'Contact Form Trigger');
 check('form: search/login produce NO suggestion', buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'search', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] }).length === 0);
 const nlForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'newsletter', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
-check('form: newsletter → "GA4 Event - Newsletter Form" + newsletter_signup', nlForm[0].tagName === 'GA4 Event - Newsletter Form' && nlForm[0].eventName === 'newsletter_signup');
+check('form: newsletter → "GA4 Event - Newsletter Form Tag" + newsletter_form', nlForm[0].tagName === 'GA4 Event - Newsletter Form Tag' && nlForm[0].eventName === 'newsletter_form' && nlForm[0].trigger.name === 'Newsletter Form Trigger');
 const otherFormName = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/x', purpose: 'other', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
-check('form: "other" → "GA4 Event - Form Submission"', otherFormName[0].tagName === 'GA4 Event - Form Submission');
+check('form: "other" → "GA4 Event - Form Submission Tag" + form_submission', otherFormName[0].tagName === 'GA4 Event - Form Submission Tag' && otherFormName[0].eventName === 'form_submission');
 
 // ── social media links → a dedicated named tag ───────────────────────────────
 const socialOut = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [{ page: '/', kind: 'social', text: 'Facebook', href: 'https://facebook.com/acme', region: 'footer' }] });
-check('social: → "GA4 Event - Social Media Click" / social_click / link_click+regex',
-  socialOut[0].tagName === 'GA4 Event - Social Media Click' && socialOut[0].eventName === 'social_click' &&
-  socialOut[0].trigger.kind === 'link_click' && socialOut[0].trigger.clickUrlOperator === 'matchRegex');
+check('social: → "GA4 Event - Social Media Click Tag" / social_click / link_click+regex',
+  socialOut[0].tagName === 'GA4 Event - Social Media Click Tag' && socialOut[0].eventName === 'social_click' &&
+  socialOut[0].trigger.kind === 'link_click' && socialOut[0].trigger.name === 'Social Media Trigger' && socialOut[0].trigger.clickUrlOperator === 'matchRegex');
 check('social: NOT flagged EM overlap (dedicated named event)', socialOut[0].enhancedMeasurementOverlap === false);
 // The social trigger regex must fire on real social hosts and NOT on ordinary
 // links that merely contain a social token in the path/query/another-label.
@@ -79,7 +79,7 @@ const els = buildSuggestions(elInput);
 const byEvent = (e: string) => els.find((s) => s.eventName === e);
 check('email: mailto → email_click, startsWith mailto:', byEvent('email_click')?.trigger.clickUrlValue === 'mailto:' && byEvent('email_click')?.trigger.clickUrlOperator === 'startsWith');
 check('phone: tel → phone_click', byEvent('phone_click')?.trigger.clickUrlValue === 'tel:');
-check('naming: email tag "GA4 Event - Email Click", trigger "Link Click - Email"', byEvent('email_click')?.tagName === 'GA4 Event - Email Click' && byEvent('email_click')?.trigger.name === 'Link Click - Email');
+check('naming: email tag "GA4 Event - Email Click Tag", trigger "Email Trigger"', byEvent('email_click')?.tagName === 'GA4 Event - Email Click Tag' && byEvent('email_click')?.trigger.name === 'Email Trigger');
 
 // ── event parameters: GA4-standard, valued by GTM built-in variables ─────────
 const emailParams = byEvent('email_click')?.eventParameters ?? [];
@@ -89,7 +89,7 @@ check('email: carries link_url={{Click URL}} + link_text={{Click Text}}',
 check('download/outbound also carry link_url/link_text params',
   (byEvent('file_download')?.eventParameters?.length ?? 0) >= 2 && (byEvent('outbound_click')?.eventParameters?.length ?? 0) >= 2);
 const leadParams = out1[0].eventParameters ?? [];
-check('form: generate_lead carries form_id={{Form ID}} + form_destination={{Form URL}}',
+check('form: contact_form carries form_id={{Form ID}} + form_destination={{Form URL}}',
   leadParams.some((p) => p.name === 'form_id' && p.value === '{{Form ID}}') &&
   leadParams.some((p) => p.name === 'form_destination' && p.value === '{{Form URL}}'));
 check('form: also carries form_text={{Form Text}}', leadParams.some((p) => p.name === 'form_text' && p.value === '{{Form Text}}'));
@@ -139,23 +139,29 @@ const ctaInput = buildSuggestions({
   ],
 });
 const sub = ctaInput.find((s) => s.eventName === 'subscribe_click');
-check('cta: subscribe variants collapse to ONE "Subscribe Click" tag', ctaInput.filter((s) => s.eventName === 'subscribe_click').length === 1 && sub?.tagName === 'GA4 Event - Subscribe Click');
-check('cta: named-intent trigger is a case-insensitive matchRegex, site-wide', sub?.trigger.clickTextOperator === 'matchRegex' && sub?.trigger.name === 'All Clicks - Subscribe' && sub?.page === 'site-wide');
+check('cta: subscribe variants collapse to ONE "Subscribe Click Tag"', ctaInput.filter((s) => s.eventName === 'subscribe_click').length === 1 && sub?.tagName === 'GA4 Event - Subscribe Click Tag');
+check('cta: named-intent trigger is "<Action> Trigger" + case-insensitive matchRegex, site-wide', sub?.trigger.clickTextOperator === 'matchRegex' && sub?.trigger.name === 'Subscribe Trigger' && sub?.page === 'site-wide');
 // The trigger must actually FIRE on every variant the classifier accepts — incl.
 // different casing and a synonym whose keyword wasn't in the text (the bug the
 // review caught). And it must NOT fire on unrelated text.
 check('cta: subscribe trigger fires on "Subscribe", "SUBSCRIBE NOW", "Sign me up"',
   ['Subscribe', 'SUBSCRIBE NOW', 'Sign me up'].every((t) => reTest(sub?.trigger.clickTextValue ?? '', t)));
 const demo = ctaInput.find((s) => s.eventName === 'book_demo_click');
-check('cta: Book Demo named (from "Request a demo")', demo?.tagName === 'GA4 Event - Book Demo Click');
+check('cta: Book Demo named tag + "Book Demo Trigger"', demo?.tagName === 'GA4 Event - Book Demo Click Tag' && demo?.trigger.name === 'Book Demo Trigger');
 check('cta: book_demo trigger fires on "Book a Demo" but NOT "product demonstration"/"demo reel"',
   reTest(demo?.trigger.clickTextValue ?? '', 'Book a Demo') && !reTest(demo?.trigger.clickTextValue ?? '', 'Watch our product demonstration') && !reTest(demo?.trigger.clickTextValue ?? '', 'demo reel'));
-check('cta: Learn More named + own event', ctaInput.find((s) => s.eventName === 'learn_more_click')?.tagName === 'GA4 Event - Learn More Click');
+check('cta: Learn More named + own event', ctaInput.find((s) => s.eventName === 'learn_more_click')?.tagName === 'GA4 Event - Learn More Click Tag');
 check('cta: Add to Cart uses non-reserved add_to_cart_click event (not the GA4 ecommerce add_to_cart)',
-  ctaInput.find((s) => s.eventName === 'add_to_cart_click')?.tagName === 'GA4 Event - Add to Cart Click' && !ctaInput.some((s) => s.eventName === 'add_to_cart'));
+  ctaInput.find((s) => s.eventName === 'add_to_cart_click')?.tagName === 'GA4 Event - Add to Cart Click Tag' && !ctaInput.some((s) => s.eventName === 'add_to_cart'));
 const genericCtas = ctaInput.filter((s) => s.eventName === 'cta_click');
-check('cta: generic "Buy now" stays generic (literal text, contains) + collapses across pages', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'contains');
+check('cta: generic "Buy now" stays generic (literal text, contains) + "Buy now Trigger" + collapses', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'contains' && genericCtas[0].trigger.name === 'Buy now Trigger');
 check('cta: every CTA carries dynamic cta_text={{Click Text}}', ctaInput.every((s) => s.eventParameters?.some((p) => p.name === 'cta_text' && p.value === '{{Click Text}}')));
+
+// REGRESSION (image bug): no generated tag/trigger name may contain ":" (GTM rejects it).
+const colonCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Apply Now: Today', intent: 'generic' }] });
+check('names: a CTA text with ":" yields a colon-free trigger name ("Apply Now Today Trigger")', colonCta[0].trigger.name === 'Apply Now Today Trigger');
+const allNames = [...ctaInput, ...socialOut, ...els, ...out1, ...nlForm].flatMap((s) => [s.tagName, s.trigger.name]);
+check('names: NO tag or trigger name contains the GTM-invalid ":" character', allNames.every((n) => !n.includes(':')));
 
 console.log(`\nTag-suggest: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

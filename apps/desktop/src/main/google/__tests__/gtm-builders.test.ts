@@ -9,6 +9,7 @@ import {
   builtInVarsForTemplates,
   buildVariable,
   auditContainer,
+  sanitizeName,
 } from '../gtm-builders';
 
 let passed = 0;
@@ -102,6 +103,15 @@ test('link_click trigger: linkClick + {{Click URL}} autoEventFilter, needs click
   assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Click URL}}');
   assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, 'mailto:');
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'link_click', clickUrlValue: 'mailto:' }), ['clickUrl']);
+});
+
+test('names: GTM-invalid ":" is stripped from tag + trigger names (was failing creation)', () => {
+  assert.equal(sanitizeName('All Clicks - CTA: Apply Now'), 'All Clicks - CTA Apply Now');
+  assert.equal(sanitizeName('  weird   <name>:x  '), 'weird name x');
+  assert.equal(sanitizeName(''), 'Unnamed');
+  // Applied at the create boundary so a colon never reaches the GTM API.
+  assert.equal(buildTrigger({ name: 'CTA: Apply Now', kind: 'all_clicks', clickTextValue: 'Apply Now' }).name, 'CTA Apply Now');
+  assert.equal(buildGa4EventTag({ name: 'GA4 Event - Sale: 50% Tag', measurementId: '{{GA4 Measurement ID}}', eventName: 'e' }).name, 'GA4 Event - Sale 50% Tag');
 });
 
 test('all_clicks trigger: {{Click Text}} filter (CTA) + needs clickText var', () => {

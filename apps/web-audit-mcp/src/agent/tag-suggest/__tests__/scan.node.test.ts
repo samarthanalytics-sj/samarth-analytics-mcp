@@ -57,14 +57,14 @@ check('report: formsFound counts forms across pages', report.summary.formsFound 
 check('report: trackableElements counts elements across pages (3 raw → 3 detected)', report.summary.trackableElements === 3);
 
 const events = report.suggestions.map((s) => s.eventName);
-check('report: contact(HubSpot) → generate_lead', events.includes('generate_lead'));
+check('report: contact(HubSpot) → contact_form', events.includes('contact_form'));
 check('report: mailto → email_click (single, deduped site-wide)',
   events.filter((e) => e === 'email_click').length === 1);
 const mail = report.suggestions.find((s) => s.eventName === 'email_click');
 check('report: repeated footer mailto collapses to "site-wide"', mail?.page === 'site-wide');
 check('report: download → file_download', events.includes('file_download'));
 
-check('report: suggestions count = unique tags (generate_lead, email_click, file_download)', report.summary.suggestions === 3);
+check('report: suggestions count = unique tags (contact_form, email_click, file_download)', report.summary.suggestions === 3);
 check('report: byConfidence sums to suggestions',
   report.summary.byConfidence.high + report.summary.byConfidence.medium + report.summary.byConfidence.low === report.summary.suggestions);
 check('report: file_download flagged as Enhanced-Measurement overlap', report.summary.enhancedMeasurementOverlap === 1);

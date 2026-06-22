@@ -81,45 +81,79 @@ export function suggestionsFromData(data: unknown): ParsedSuggestions {
  *  pure/testable (no Electron, no real GTM). */
 export type ToolExecute = (name: string, args: Record<string, unknown>) => Promise<string>;
 
+/** GTM API rate-limit / quota errors (per-minute-per-user etc.) — retryable. */
+const QUOTA_RE = /quota exceeded|rate.?limit|rateLimitExceeded|userRateLimitExceeded|queries per (minute|second|day)|\b429\b|RESOURCE_EXHAUSTED/i;
+const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+export interface CreateTagsOptions {
+  /** Sleep impl — injectable so tests run instantly. */
+  sleep?: (ms: number) => Promise<void>;
+  /** Pause between tags to stay under the GTM per-minute quota (default 700ms). */
+  throttleMs?: number;
+  /** Retries on a quota/rate-limit error, with exponential backoff (default 4). */
+  maxRetries?: number;
+}
+
 /**
  * Create the user-approved suggestions as DRAFT tags via the existing
  * create_gtm_tracking_tag tool — the single create code path (same builders,
  * same draft-only/no-publish guarantee). SEQUENTIAL so one tag's failure is
- * isolated and the GTM API isn't hammered. Pure: the executor is injected.
+ * isolated. Throttled + retried-with-backoff so a batch doesn't trip the GTM
+ * "Queries per minute per user" quota (which otherwise fails tags mid-batch).
+ * Pure: the executor and sleep are injected.
  */
 export async function createSuggestedTags(
   execute: ToolExecute,
   ids: { accountId: string; containerId: string; workspaceId: string },
   tags: SuggestedTagView[],
+  opts: CreateTagsOptions = {},
 ): Promise<CreateTagOutcome[]> {
+  const sleep = opts.sleep ?? realSleep;
+  const throttleMs = opts.throttleMs ?? 700;
+  const maxRetries = opts.maxRetries ?? 4;
   const outcomes: CreateTagOutcome[] = [];
-  for (const t of tags) {
-    try {
-      const out = JSON.parse(
-        await execute('create_gtm_tracking_tag', {
-          accountId: ids.accountId,
-          containerId: ids.containerId,
-          workspaceId: ids.workspaceId,
-          platform: t.platform,
-          tagName: t.tagName,
-          measurementId: t.measurementId,
-          eventName: t.eventName,
-          eventParameters: Array.isArray(t.eventParameters) ? t.eventParameters : [],
-          trigger: t.trigger,
-        }),
-      ) as { declined?: boolean; tag?: { name?: string }; trigger?: { reused?: boolean } };
-      if (out?.declined) {
-        outcomes.push({ id: t.id, ok: false, error: 'declined' });
-      } else {
-        outcomes.push({
-          id: t.id,
-          ok: true,
-          tagName: out?.tag?.name ?? t.tagName,
-          triggerReused: out?.trigger?.reused === true,
-        });
+  for (let i = 0; i < tags.length; i++) {
+    const t = tags[i];
+    if (i > 0 && throttleMs > 0) await sleep(throttleMs); // smooth the request rate
+    let attempt = 0;
+    for (;;) {
+      try {
+        const out = JSON.parse(
+          await execute('create_gtm_tracking_tag', {
+            accountId: ids.accountId,
+            containerId: ids.containerId,
+            workspaceId: ids.workspaceId,
+            platform: t.platform,
+            tagName: t.tagName,
+            measurementId: t.measurementId,
+            eventName: t.eventName,
+            eventParameters: Array.isArray(t.eventParameters) ? t.eventParameters : [],
+            trigger: t.trigger,
+          }),
+        ) as { declined?: boolean; tag?: { name?: string }; trigger?: { reused?: boolean } };
+        if (out?.declined) {
+          outcomes.push({ id: t.id, ok: false, error: 'declined' });
+        } else {
+          outcomes.push({
+            id: t.id,
+            ok: true,
+            tagName: out?.tag?.name ?? t.tagName,
+            triggerReused: out?.trigger?.reused === true,
+          });
+        }
+        break;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        // Back off and retry on a transient quota error (trigger reuse-by-name
+        // makes a retry idempotent — it won't duplicate the trigger).
+        if (QUOTA_RE.test(msg) && attempt < maxRetries) {
+          attempt += 1;
+          await sleep(Math.min(30_000, 2_000 * 2 ** (attempt - 1))); // 2s, 4s, 8s, 16s
+          continue;
+        }
+        outcomes.push({ id: t.id, ok: false, error: msg });
+        break;
       }
-    } catch (e) {
-      outcomes.push({ id: t.id, ok: false, error: e instanceof Error ? e.message : String(e) });
     }
   }
   return outcomes;

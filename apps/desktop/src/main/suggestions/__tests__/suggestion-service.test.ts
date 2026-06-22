@@ -114,7 +114,7 @@ async function main(): Promise<void> {
 
     const events = new Set(res.suggestions.map((s) => s.eventName));
     check('crawl: visits entry + linked contact page', res.summary.pagesScanned === 2 && fd.opened().length === 2);
-    check('crawl: contact form → generate_lead', events.has('generate_lead'));
+    check('crawl: contact form → contact_form', events.has('contact_form'));
     check('crawl: mailto → email_click, tel → phone_click', events.has('email_click') && events.has('phone_click'));
     check('crawl: download + outbound + named CTA detected', events.has('file_download') && events.has('outbound_click') && events.has('book_demo_click'));
     check('crawl: six unique suggestions', res.summary.suggestions === 6, `${res.summary.suggestions}`);
@@ -222,7 +222,7 @@ async function main(): Promise<void> {
     const res = await scanUrls(fd.driver, ['https://acme.com/contact', 'https://acme.com/pricing'], 'acme.com');
     const events = new Set(res.suggestions.map((s) => s.eventName));
     check('scanUrls: scans exactly the listed pages (2), no crawl', res.summary.pagesScanned === 2 && fd.opened().length === 2);
-    check('scanUrls: builds suggestions from those pages', events.has('generate_lead') && events.has('email_click') && events.has('phone_click'));
+    check('scanUrls: builds suggestions from those pages', events.has('contact_form') && events.has('email_click') && events.has('phone_click'));
     check('scanUrls: driver closed once', fd.closes() === 1);
   }
 
@@ -246,14 +246,14 @@ async function main(): Promise<void> {
   check('paste: full report ({suggestions:[…]}) passes through', parseSuggestions(JSON.stringify({ suggestions: [oneTag] })).suggestions.length === 1);
   check('paste: bare SuggestedTag[] passes through', parseSuggestions(JSON.stringify([oneTag])).suggestions[0].eventName === 'generate_lead');
   check(
-    'paste: SuggestInput ({siteHost,forms,elements}) → engine builds generate_lead',
+    'paste: SuggestInput ({siteHost,forms,elements}) → engine builds contact_form',
     parseSuggestions(
       JSON.stringify({
         siteHost: 'acme.com',
         forms: [{ page: '/contact', purpose: 'contact', action: 'https://acme.com/x', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }],
         elements: [],
       }),
-    ).suggestions.some((s) => s.eventName === 'generate_lead'),
+    ).suggestions.some((s) => s.eventName === 'contact_form'),
   );
   check(
     'paste: PageScan[] → engine builds suggestions',
@@ -261,7 +261,7 @@ async function main(): Promise<void> {
       JSON.stringify([
         { page: '/contact', signals: { scriptSrcs: [], classNames: [], selectorsPresent: [] }, forms: [{ purpose: 'contact', action: 'https://acme.com/x' }], elements: [] },
       ]),
-    ).suggestions.some((s) => s.eventName === 'generate_lead'),
+    ).suggestions.some((s) => s.eventName === 'contact_form'),
   );
   check('paste: report drops non-GA4 items with a warning', (() => {
     const r = suggestionsFromData({ suggestions: [oneTag, { foo: 'bar' }] });
@@ -285,15 +285,41 @@ async function main(): Promise<void> {
       id, page: '/', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
       platform: 'ga4_event', tagName, measurementId: '{{GA4 Measurement ID}}', eventName: 'e', trigger: { name: 't', kind: 'all_clicks' },
     });
+    const fast = { sleep: async (): Promise<void> => {}, throttleMs: 0 };
     const outcomes = await createSuggestedTags(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, [
       tag('a', 'OK'), tag('b', 'BOOM'), tag('c', 'REUSE'), tag('d', 'NOPE'),
-    ]);
+    ], fast);
     check('create: one outcome per tag, in order', outcomes.length === 4 && outcomes.map((o) => o.id).join('') === 'abcd');
     check('create: ok tag → ok:true with name', outcomes[0].ok && outcomes[0].tagName === 'OK');
-    check('create: a thrown error is isolated, later tags still run', !outcomes[1].ok && (outcomes[1].error ?? '').includes('api 400') && outcomes[2].ok === true);
+    check('create: a thrown (non-quota) error is isolated, later tags still run', !outcomes[1].ok && (outcomes[1].error ?? '').includes('api 400') && outcomes[2].ok === true);
     check('create: reused trigger surfaced', outcomes[2].triggerReused === true);
     check('create: declined → ok:false error "declined"', !outcomes[3].ok && outcomes[3].error === 'declined');
     check('create: workspace ids passed to every call', calls.every((c) => c.accountId === '1' && c.containerId === '2' && c.workspaceId === '3') && calls.length === 4);
+  }
+
+  // ── createSuggestedTags: GTM quota / rate-limit retry-with-backoff ─────────
+  {
+    const ids = { accountId: '1', containerId: '2', workspaceId: '3' };
+    const tag = (id: string): SuggestedTagView => ({
+      id, page: '/', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
+      platform: 'ga4_event', tagName: 'T', measurementId: '{{GA4 Measurement ID}}', eventName: 'e', trigger: { name: 't', kind: 'all_clicks' },
+    });
+    // Transient quota error twice, then success → retried with exponential backoff.
+    let attempts = 0;
+    const slept: number[] = [];
+    const execQuota = async (): Promise<string> => {
+      attempts += 1;
+      if (attempts < 3) throw new Error("Quota exceeded for quota metric 'Queries' and limit 'Queries per minute per user' of service 'tagmanager.googleapis.com'");
+      return JSON.stringify({ tag: { name: 'T' } });
+    };
+    const out1 = await createSuggestedTags(execQuota, ids, [tag('q')], { sleep: async (ms: number): Promise<void> => { slept.push(ms); }, throttleMs: 0, maxRetries: 4 });
+    check('create: a quota error is retried with backoff, then succeeds', out1.length === 1 && out1[0].ok === true && attempts === 3);
+    check('create: backoff is exponential (2s, 4s)', slept.length === 2 && slept[0] === 2000 && slept[1] === 4000);
+    // Persistent quota error → gives up after maxRetries (returns the error, not a throw).
+    let n = 0;
+    const execAlways = async (): Promise<string> => { n += 1; throw new Error('RESOURCE_EXHAUSTED: rateLimitExceeded'); };
+    const out2 = await createSuggestedTags(execAlways, ids, [tag('z')], { sleep: async (): Promise<void> => {}, throttleMs: 0, maxRetries: 2 });
+    check('create: persistent quota error → ok:false after maxRetries+1 attempts', out2[0].ok === false && n === 3);
   }
 
   console.log(`\nsuggestion-service: ${passed} passed, ${failed} failed`);
