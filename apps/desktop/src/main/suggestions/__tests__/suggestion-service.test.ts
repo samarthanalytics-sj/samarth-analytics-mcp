@@ -6,6 +6,7 @@
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/suggestion-service.test.ts
 
 import { crawlAndSuggest, type PageDriver, type DrivenPage } from '../scan-core';
+import { mergeDriven } from '../multi-driver';
 import { parseSuggestions, suggestionsFromData, createSuggestedTags } from '../suggestion-service';
 import type { PageScanRaw, RawElement } from '../../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm } from '../../../../../web-audit-mcp/src/agent/forms.js';
@@ -174,6 +175,26 @@ async function main(): Promise<void> {
     const res = await crawlAndSuggest(fd.driver, 'not a url', {});
     check('bad start URL → empty result + warning + driver closed', res.suggestions.length === 0 && res.warnings.length > 0 && fd.closes() === 1);
   }
+
+  // ── mergeDriven: union of engines, dedup doubles, keep uniques ─────────────
+  {
+    const mk = (els: RawElement[], forms: RawForm[]): DrivenPage => ({ ok: true, httpStatus: 200, finalUrl: 'x', raw: raw(els), rawForms: forms });
+    const merged = mergeDriven([
+      mk([a('mailto:hi@acme.com'), a('https://partner.com/x')], [contactForm]),
+      mk([a('mailto:hi@acme.com'), a('https://acme.com/guide.pdf')], [contactForm]), // mailto + form are doubles
+    ]);
+    check('multi: doubled element kept once, uniques kept → 3 total', merged.raw?.elements.length === 3, `${merged.raw?.elements.length}`);
+    check('multi: doubled form kept once', merged.rawForms?.length === 1);
+    check('multi: merged is ok with the content engine status', merged.ok && merged.httpStatus === 200);
+  }
+  {
+    const merged = mergeDriven([
+      { ok: false, httpStatus: null, finalUrl: null, error: 'timeout' },
+      { ok: true, httpStatus: 200, finalUrl: 'y', raw: raw([a('tel:+15551234567')]), rawForms: [] },
+    ]);
+    check('multi: one engine fails, the other still contributes', merged.ok && merged.raw?.elements.length === 1);
+  }
+  check('multi: all engines fail → not ok', mergeDriven([{ ok: false, httpStatus: null, finalUrl: null, error: 'a' }]).ok === false);
 
   // ── parseSuggestions: the four accepted shapes + junk ──────────────────────
   check('paste: full report ({suggestions:[…]}) passes through', parseSuggestions(JSON.stringify({ suggestions: [oneTag] })).suggestions.length === 1);

@@ -15,11 +15,12 @@ import type { GoogleDataService } from '../google/data-service';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions } from '../../shared/ipc';
 import { crawlAndSuggest, type PageDriver } from './scan-core';
-// Electron is the default, zero-install engine — imported eagerly. The OPTIONAL
-// engines (Cheerio / Playwright) are imported LAZILY so a missing optional
-// package never crashes the app at startup; it only fails (with a clear hint) if
-// that engine is actually selected.
+// Electron is the always-on, zero-install engine. Cheerio is added when present
+// (lazy-imported so a missing optional package never crashes startup). The two
+// run together per page and their results are MERGED — Electron renders JS +
+// same-origin iframes; Cheerio adds anything in the raw server HTML.
 import { createElectronDriver } from './electron-driver';
+import { createMultiDriver } from './multi-driver';
 import { parseSuggestions, createSuggestedTags } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 
@@ -28,20 +29,16 @@ const clampSettle = (ms: number | undefined): number | undefined =>
 
 async function makeDriver(opts: TagScanOptions): Promise<PageDriver> {
   const settleMs = clampSettle(opts.settleMs);
-  if (opts.engine === 'cheerio') {
-    let mod: typeof import('./cheerio-driver');
-    try {
-      mod = await import('./cheerio-driver');
-    } catch {
-      throw new Error('The Static (Cheerio) engine needs the "cheerio" package. Run `npm install` in apps/desktop, then restart — or use the Browser engine.');
-    }
-    return mod.createCheerioDriver();
+  const drivers: PageDriver[] = [createElectronDriver(settleMs !== undefined ? { settleMs } : {})];
+  // Add the complementary static (Cheerio) engine if installed — purely additive.
+  // (Playwright is NOT added: it is another Chromium, redundant with Electron.)
+  try {
+    const { createCheerioDriver } = await import('./cheerio-driver');
+    drivers.push(createCheerioDriver());
+  } catch {
+    /* cheerio not installed — Electron-only is fine */
   }
-  if (opts.engine === 'playwright') {
-    const mod = await import('./playwright-driver');
-    return mod.createPlaywrightDriver({ settleMs }); // throws PlaywrightUnavailableError if not installed
-  }
-  return createElectronDriver(settleMs !== undefined ? { settleMs } : {});
+  return drivers.length === 1 ? drivers[0] : createMultiDriver(drivers);
 }
 
 export function registerSuggestionsIpc(data: GoogleDataService): void {

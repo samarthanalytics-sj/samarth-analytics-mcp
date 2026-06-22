@@ -14,7 +14,6 @@ import type {
   MonitorAlert,
   MonitorConfig,
   MonitorStatus,
-  ScanEngine,
   SecretSelfTest,
   SuggestedTagView,
   TagScanResult,
@@ -1025,7 +1024,6 @@ function TagReviewPanel({
   const [done, setDone] = useState<{ created: number; failed: number } | null>(null);
   const [maxPages, setMaxPages] = useState('10');
   const [maxDepth, setMaxDepth] = useState('2');
-  const [engine, setEngine] = useState<ScanEngine>('electron');
   const [settleMs, setSettleMs] = useState('2500');
   const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned']; inventory: TagScanResult['inventory'] } | null>(null);
   const [showLog, setShowLog] = useState(false);
@@ -1055,7 +1053,6 @@ function TagReviewPanel({
         maxPages: Number(maxPages) || undefined,
         maxDepth: Number(maxDepth) || undefined,
         settleMs: Number(settleMs) || undefined,
-        engine,
       });
       setMeta(res.summary);
       setWarnings(res.warnings);
@@ -1186,28 +1183,14 @@ function TagReviewPanel({
             </button>
           </div>
           <div style={{ ...styles.formRow, marginTop: 2 }}>
-            <label style={styles.scanNum} title="Browser = Electron's Chromium (default). Static = Cheerio, no JS (fast). Playwright = optional.">
-              engine
-              <select style={styles.scanSelect} value={engine} disabled={scanning} onChange={(e) => setEngine(e.target.value as ScanEngine)}>
-                <option value="electron">Browser (Electron)</option>
-                <option value="cheerio">Static (Cheerio · no JS)</option>
-                <option value="playwright">Playwright (optional)</option>
-              </select>
+            <label style={styles.scanNum} title="Wait after load for JS-rendered forms/embeds (ms, max 10000)">
+              settle ms
+              <input style={styles.scanNumInput} type="number" min={0} max={10000} step={500} value={settleMs} disabled={scanning} onChange={(e) => setSettleMs(e.target.value)} />
             </label>
-            {engine !== 'cheerio' && (
-              <label style={styles.scanNum} title="Wait after load for JS-rendered forms/embeds (ms, max 10000)">
-                settle ms
-                <input style={styles.scanNumInput} type="number" min={0} max={10000} step={500} value={settleMs} disabled={scanning} onChange={(e) => setSettleMs(e.target.value)} />
-              </label>
-            )}
           </div>
           <div style={styles.muted}>
-            {engine === 'cheerio'
-              ? 'Static fetch + parse (no browser, no JavaScript) — fast, best for server-rendered pages.'
-              : engine === 'playwright'
-                ? 'Playwright (optional — requires installing it in apps/desktop). Read-only; nothing is clicked or submitted.'
-                : "Crawls same-site pages in Electron's built-in browser (read-only — nothing is clicked or submitted)."}{' '}
-            Nothing is created until you approve.{' '}
+            Crawls same-site pages with Electron's browser <i>and</i> a static parse (Cheerio), merging what each
+            finds — read-only, nothing is clicked or submitted. Nothing is created until you approve.{' '}
             <button style={styles.linkBtn} onClick={() => setPasteOpen((o) => !o)}>
               {pasteOpen ? 'hide paste' : 'or paste a gtm_tag_suggestions report'}
             </button>
