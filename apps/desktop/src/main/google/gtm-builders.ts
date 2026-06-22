@@ -30,8 +30,10 @@ export interface GtmTriggerResource {
   filter?: Param[];
   autoEventFilter?: Param[];
   customEventFilter?: Param[];
-  /** Trigger-level options, e.g. a form trigger's waitForTags/checkValidation. */
-  parameter?: Param[];
+  /** Form-trigger options — DEDICATED top-level fields (single Parameter each, no
+   *  `key`), per the GTM API v2 Trigger schema; NOT entries in a `parameter[]`. */
+  waitForTags?: Param;
+  checkValidation?: Param;
 }
 export interface GtmVariableResource {
   name: string;
@@ -237,10 +239,13 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       // clicks — corpus: 85× in filter vs 3× in autoEventFilter).
       // waitForTags/checkValidation OFF: GTM's UI defaults them ON, which delays
       // the submit and skips non-validating/AJAX forms — not wanted for tracking.
+      // These are DEDICATED top-level Trigger fields (single Parameter, no `key`) —
+      // NOT entries in `parameter[]` (corpus: 269/269 form triggers store them so).
       const t: GtmTriggerResource = {
         name: sanitizeName(o.name),
         type: 'formSubmission',
-        parameter: [boolean('waitForTags', false), boolean('checkValidation', false)],
+        waitForTags: { type: 'boolean', value: 'false' },
+        checkValidation: { type: 'boolean', value: 'false' },
       };
       const filters: Param[] = [];
       if (o.formIdValue) filters.push(condition('{{Form ID}}', o.formIdOperator ?? 'equals', o.formIdValue));

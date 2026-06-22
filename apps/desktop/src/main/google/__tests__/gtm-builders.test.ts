@@ -152,9 +152,12 @@ test('form_submit trigger: scoped to one form by {{Form ID}} in filter, needs fo
   const tr = buildTrigger({ name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'contact-form' });
   assert.equal(tr.type, 'formSubmission');
   assert.equal(tr.autoEventFilter, undefined, 'form scope goes in filter, not autoEventFilter');
-  // Wait-for-Tags + Check-Validation are explicitly OFF (GTM defaults them ON).
-  assert.equal((tr.parameter ?? []).find((p) => p.key === 'waitForTags')?.value, 'false');
-  assert.equal((tr.parameter ?? []).find((p) => p.key === 'checkValidation')?.value, 'false');
+  // Wait-for-Tags + Check-Validation are explicitly OFF — as DEDICATED top-level
+  // fields (single Parameter, no key), not entries in a generic parameter[].
+  assert.equal((tr as { waitForTags?: { type: string; value: string; key?: string } }).waitForTags?.value, 'false');
+  assert.equal((tr as { waitForTags?: { key?: string } }).waitForTags?.key, undefined);
+  assert.equal((tr as { checkValidation?: { value: string } }).checkValidation?.value, 'false');
+  assert.equal((tr as { parameter?: unknown }).parameter, undefined);
   const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
   assert.equal(f.type, 'equals');
   assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Form ID}}');
