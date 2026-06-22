@@ -181,8 +181,37 @@ export interface TagScanResult {
   pages: Array<{ page: string; forms: number; elements: number }>;
   /** Every trackable element + form detected (before dedup) — the full inventory. */
   inventory: { elements: DetectedElementView[]; forms: DetectedFormView[] };
+  /** GTM containers + measurement ids LIVE on the scanned site (from its scripts). */
+  installed: { containers: string[]; measurementIds: string[] };
   notScanned: Array<{ url: string; reason: string }>;
   warnings: string[];
+}
+
+/* ── Container audit (the "Container audit" panel) ── */
+export interface AuditFindingView {
+  severity: 'high' | 'medium' | 'low' | 'info';
+  category: string;
+  message: string;
+  resource?: { kind: 'tag' | 'trigger' | 'variable'; id: string; name: string };
+  recommendation: string;
+  /** True when `fix` is a ready-to-run tool call (pause/unpause/delete). */
+  autoFixable: boolean;
+  fix?: { tool: string; args: Record<string, unknown> };
+}
+export interface AuditReportView {
+  counts: { tags: number; triggers: number; variables: number; findings: number };
+  summary: { high: number; medium: number; low: number; info: number };
+  findings: AuditFindingView[];
+}
+
+/** Result of discovering a site's pages (suggestions:discover). */
+export interface DiscoverResult {
+  /** Same-site page URLs found (sitemap or link-crawl). */
+  urls: string[];
+  /** True if a sitemap was used (complete); false if a link-crawl fallback. */
+  viaSitemap: boolean;
+  total: number;
+  note?: string;
 }
 
 /** Result of parsing a pasted plan (suggestions:fromJson). */

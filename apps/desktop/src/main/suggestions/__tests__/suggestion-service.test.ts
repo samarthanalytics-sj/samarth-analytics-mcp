@@ -5,8 +5,9 @@
 //   • createSuggestedTags() — the approved-create loop (outcome mapping).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/suggestion-service.test.ts
 
-import { crawlAndSuggest, type PageDriver, type DrivenPage } from '../scan-core';
+import { crawlAndSuggest, scanUrls, detectInstalled, type PageDriver, type DrivenPage } from '../scan-core';
 import { mergeDriven } from '../multi-driver';
+import { parseSitemapLocs, extractCrawlLinks } from '../discover';
 import { parseSuggestions, suggestionsFromData, createSuggestedTags } from '../suggestion-service';
 import type { PageScanRaw, RawElement } from '../../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm } from '../../../../../web-audit-mcp/src/agent/forms.js';
@@ -195,6 +196,48 @@ async function main(): Promise<void> {
     check('multi: one engine fails, the other still contributes', merged.ok && merged.raw?.elements.length === 1);
   }
   check('multi: all engines fail → not ok', mergeDriven([{ ok: false, httpStatus: null, finalUrl: null, error: 'a' }]).ok === false);
+
+  // ── discovery parsers (pure) ───────────────────────────────────────────────
+  {
+    const sm = parseSitemapLocs('<?xml version="1.0"?><urlset><url><loc>https://acme.com/</loc></url><url><loc>https://acme.com/contact</loc></url></urlset>');
+    check('sitemap: parses <loc> entries (not an index)', sm.locs.length === 2 && !sm.isIndex && sm.locs.includes('https://acme.com/contact'));
+    const idx = parseSitemapLocs('<sitemapindex><sitemap><loc>https://acme.com/sitemap1.xml</loc></sitemap></sitemapindex>');
+    check('sitemap: detects a sitemapindex', idx.isIndex && idx.locs[0] === 'https://acme.com/sitemap1.xml');
+    const links = extractCrawlLinks(
+      '<a href="/contact">C</a><a href="https://acme.com/pricing">P</a><a href="https://other.com/x">O</a><a href="mailto:x@a.com">M</a>',
+      'https://acme.com/',
+      'https://acme.com/',
+    );
+    check('crawl-links: same-site only, absolute, no mailto/offsite',
+      links.includes('https://acme.com/contact') && links.includes('https://acme.com/pricing') &&
+      !links.some((l) => l.includes('other.com')) && !links.some((l) => l.startsWith('mailto')));
+  }
+
+  // ── scanUrls: deep-scan a chosen list (no BFS) ─────────────────────────────
+  {
+    const fd = fakeDriver({
+      'https://acme.com/contact': { ok: true, httpStatus: 200, finalUrl: 'x', raw: raw([a('mailto:hi@acme.com')]), rawForms: [contactForm] },
+      'https://acme.com/pricing': { ok: true, httpStatus: 200, finalUrl: 'x', raw: raw([a('tel:+15551234567')]), rawForms: [] },
+    });
+    const res = await scanUrls(fd.driver, ['https://acme.com/contact', 'https://acme.com/pricing'], 'acme.com');
+    const events = new Set(res.suggestions.map((s) => s.eventName));
+    check('scanUrls: scans exactly the listed pages (2), no crawl', res.summary.pagesScanned === 2 && fd.opened().length === 2);
+    check('scanUrls: builds suggestions from those pages', events.has('generate_lead') && events.has('email_click') && events.has('phone_click'));
+    check('scanUrls: driver closed once', fd.closes() === 1);
+  }
+
+  // ── detectInstalled: GTM/GA4 ids live on the scanned site ──────────────────
+  {
+    const inst = detectInstalled([
+      'https://www.googletagmanager.com/gtm.js?id=GTM-ABC123',
+      'https://www.googletagmanager.com/gtag/js?id=G-XYZ789',
+      'https://www.googletagmanager.com/gtag/js?id=AW-111222&l=dataLayer',
+      'https://cdn.example.com/app.js',
+    ]);
+    check('installed: detects the GTM container id', inst.containers.includes('GTM-ABC123') && inst.containers.length === 1);
+    check('installed: detects G-/AW- measurement ids', inst.measurementIds.includes('G-XYZ789') && inst.measurementIds.includes('AW-111222'));
+    check('installed: ignores unrelated scripts', detectInstalled(['https://x.com/a.js']).containers.length === 0);
+  }
 
   // ── parseSuggestions: the four accepted shapes + junk ──────────────────────
   check('paste: full report ({suggestions:[…]}) passes through', parseSuggestions(JSON.stringify({ suggestions: [oneTag] })).suggestions.length === 1);
