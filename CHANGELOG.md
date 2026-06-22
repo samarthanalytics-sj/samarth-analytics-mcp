@@ -1,3 +1,13 @@
+## [1.27.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.26.0...v1.27.0) (2026-06-22)
+
+### Features
+
+* **tag-suggest:** track embedded YouTube video via GTM's built-in YouTube Video trigger ([baf5f77](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/baf5f776ef7491d5c02c3af6fbdeafa4a2f302f2))
+
+### Bug Fixes
+
+* **tag-suggest:** also detect lazy (data-src) and click-to-load facade YouTube embeds ([16b2798](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/16b27984fd12d0671ce1f34c1199737358cecdd1))
+
 ## [1.26.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.25.0...v1.26.0) (2026-06-22)
 
 ### Features
