@@ -8,6 +8,16 @@ const tpl = (key: string, value: string): Param => ({ type: 'template', key, val
 const boolean = (key: string, value: boolean): Param => ({ type: 'boolean', key, value: String(value) });
 const integer = (key: string, value: string): Param => ({ type: 'integer', key, value });
 
+// GTM rejects certain characters in resource names (notably ":"), failing
+// creation with "name contains invalid character". A tag/trigger name built from
+// scraped page text (a CTA label) can contain them, so strip the offenders and
+// collapse whitespace at the create boundary. Letters (incl. non-ASCII), digits,
+// and common punctuation are kept.
+export function sanitizeName(name: string): string {
+  const cleaned = (name ?? '').replace(/[<>:]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  return cleaned || 'Unnamed';
+}
+
 export interface GtmTagResource {
   name: string;
   type: string;
@@ -61,7 +71,7 @@ export function buildGa4EventTag(o: Ga4EventInput): GtmTagResource {
       })),
     });
   }
-  return { name: o.name, type: 'gaawe', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
+  return { name: sanitizeName(o.name), type: 'gaawe', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
 }
 
 export interface GoogleTagInput {
@@ -155,7 +165,7 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       // Click/auto-event triggers filter the clicked element via autoEventFilter
       // (NOT `filter`). Verified against the reference GTM MCP server. Multiple
       // conditions are AND-ed (e.g. a CTA filtered by its {{Click Text}}).
-      const t: GtmTriggerResource = { name: o.name, type: o.kind === 'link_click' ? 'linkClick' : 'click' };
+      const t: GtmTriggerResource = { name: sanitizeName(o.name), type: o.kind === 'link_click' ? 'linkClick' : 'click' };
       const filters: Param[] = [];
       if (o.clickUrlValue) filters.push(condition('{{Click URL}}', o.clickUrlOperator ?? 'contains', o.clickUrlValue));
       if (o.clickTextValue) filters.push(condition('{{Click Text}}', o.clickTextOperator ?? 'contains', o.clickTextValue));
@@ -164,15 +174,15 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
     }
     case 'custom_event':
       return {
-        name: o.name,
+        name: sanitizeName(o.name),
         type: 'customEvent',
         customEventFilter: [condition('{{_event}}', 'equals', o.eventName ?? '')],
       };
     case 'form_submit':
-      return { name: o.name, type: 'formSubmission' };
+      return { name: sanitizeName(o.name), type: 'formSubmission' };
     case 'pageview':
     default:
-      return { name: o.name, type: 'pageview' };
+      return { name: sanitizeName(o.name), type: 'pageview' };
   }
 }
 

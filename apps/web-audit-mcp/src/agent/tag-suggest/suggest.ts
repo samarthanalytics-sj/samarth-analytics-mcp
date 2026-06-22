@@ -36,7 +36,18 @@ const CLICK_PARAMS = [
 export const DOWNLOAD_EXT = 'pdf|zip|docx?|xlsx?|pptx?|csv|dmg|exe|rar|7z|mp4|mp3|pkg|apk';
 const cap = (s: string): string => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
-// Human-readable label for a GA4 event name, used in tag names.
+// GTM rejects some characters in resource names (notably ":"), which fails tag
+// creation ("name contains invalid character"). Strip them so a name built from
+// scraped page text (a CTA label) is always creatable. Mirrors gtm-builders
+// sanitizeName (defence-in-depth at the create boundary).
+const clean = (s: string): string => s.replace(/[<>:]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+// Naming convention: tags read "GA4 Event - <Name> Tag"; triggers read
+// "<Action> Trigger" (no "All Clicks -"/"Link Click -" prefix, no "Click" suffix).
+const tagNameOf = (label: string): string => clean(`GA4 Event - ${label} Tag`);
+const trigNameOf = (action: string): string => clean(`${action} Trigger`);
+
+// Human-readable label for a GA4 event name, used in tag names (elements only —
+// forms use FORM_LABEL, CTAs use their intent label).
 const EVENT_LABEL: Record<string, string> = {
   email_click: 'Email Click',
   phone_click: 'Phone Click',
@@ -44,15 +55,10 @@ const EVENT_LABEL: Record<string, string> = {
   outbound_click: 'Outbound Click',
   social_click: 'Social Media Click',
   cta_click: 'CTA Click',
-  generate_lead: 'Generate Lead',
-  sign_up: 'Sign Up',
-  newsletter_signup: 'Newsletter Signup',
-  form_submission: 'Form Submission',
 };
 const eventLabel = (e: string): string => EVENT_LABEL[e] ?? e.split('_').map(cap).join(' ');
 
-// Form purpose → human tag label. Names the tag for WHAT IT IS ("Contact Form")
-// rather than only the GA4 event ("Generate Lead").
+// Form purpose → human tag/trigger label ("Contact Form", "Newsletter Form").
 const FORM_LABEL: Record<string, string> = {
   contact: 'Contact Form',
   signup: 'Signup Form',
@@ -75,11 +81,11 @@ function hashId(s: string): string {
   return (h >>> 0).toString(36);
 }
 
-// Form purpose → GA4 event. Prefer GA4 recommended events where they exist.
+// Form purpose → GA4 event. Descriptive, form-specific event names.
 const FORM_EVENT: Record<string, string> = {
-  contact: 'generate_lead',
-  signup: 'sign_up',
-  newsletter: 'newsletter_signup',
+  contact: 'contact_form',
+  signup: 'signup_form',
+  newsletter: 'newsletter_form',
   // NOT "form_submit": that's the reserved name GA4 Enhanced Measurement's form
   // interactions emits, so reusing it would double-count.
   other: 'form_submission',
@@ -91,6 +97,7 @@ function formSuggestion(f: DetectedForm): SuggestedTag | null {
   // deferred to the v3 ecommerce phase rather than mis-suggested here.
   if (f.purpose === 'search' || f.purpose === 'login' || f.purpose === 'checkout') return null;
   const eventName = FORM_EVENT[f.purpose] ?? 'form_submission';
+  const formLabel = FORM_LABEL[f.purpose] ?? 'Form Submission';
   const prov = f.provider.vendor !== 'unknown' ? ` (${f.provider.vendor})` : '';
   return {
     id: hashId('form|' + f.page + '|' + f.purpose + '|' + f.action),
@@ -101,7 +108,7 @@ function formSuggestion(f: DetectedForm): SuggestedTag | null {
     // GA4 EM "form interactions" is limited/generic; a dedicated lead event is valuable.
     enhancedMeasurementOverlap: false,
     platform: 'ga4_event',
-    tagName: `GA4 Event - ${FORM_LABEL[f.purpose] ?? 'Form Submission'}`,
+    tagName: tagNameOf(formLabel),
     measurementId: GA4_VAR,
     eventName,
     // Capture which form + where it submits, via the form built-in variables.
@@ -113,7 +120,7 @@ function formSuggestion(f: DetectedForm): SuggestedTag | null {
       { name: 'form_text', value: FORM_TEXT },
       ...PAGE_PARAMS,
     ],
-    trigger: { name: `Form Submit - ${cap(f.purpose)}`, kind: 'form_submit' },
+    trigger: { name: trigNameOf(formLabel), kind: 'form_submit' },
   };
 }
 
@@ -124,7 +131,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
     confidence: conf,
     enhancedMeasurementOverlap: em,
     platform: 'ga4_event' as const,
-    tagName: `GA4 Event - ${eventLabel(eventName)}`,
+    tagName: tagNameOf(eventLabel(eventName)),
     measurementId: GA4_VAR,
     eventName,
   });
@@ -135,7 +142,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         label: 'Email link (mailto) → GA4 "email_click"',
         evidence: `mailto link${el.region ? ' in ' + el.region : ''}`,
         eventParameters: CLICK_PARAMS,
-        trigger: { name: 'Link Click - Email', kind: 'link_click', clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' },
+        trigger: { name: trigNameOf('Email'), kind: 'link_click', clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' },
       };
     case 'phone':
       return {
@@ -143,7 +150,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         label: 'Phone link (tel) → GA4 "phone_click"',
         evidence: `tel link${el.region ? ' in ' + el.region : ''}`,
         eventParameters: CLICK_PARAMS,
-        trigger: { name: 'Link Click - Phone', kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
+        trigger: { name: trigNameOf('Phone'), kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
       };
     case 'download':
       return {
@@ -151,7 +158,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         label: 'File download → GA4 "file_download"  ⚠ Enhanced Measurement already covers this',
         evidence: `download link ${el.href ?? ''}`.trim(),
         eventParameters: CLICK_PARAMS,
-        trigger: { name: 'Link Click - File Download', kind: 'link_click', clickUrlValue: `\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
+        trigger: { name: trigNameOf('File Download'), kind: 'link_click', clickUrlValue: `\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
       };
     case 'outbound':
       return {
@@ -159,7 +166,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         label: 'Outbound link → GA4 "outbound_click"  ⚠ Enhanced Measurement already covers this',
         evidence: `outbound link ${el.href ?? ''}`.trim(),
         eventParameters: CLICK_PARAMS,
-        trigger: { name: 'Link Click - Outbound', kind: 'link_click' },
+        trigger: { name: trigNameOf('Outbound'), kind: 'link_click' },
       };
     case 'social':
       return {
@@ -169,7 +176,7 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         // dedicated, named event (with the link captured) is what's usually wanted.
         evidence: `social media link ${el.href ?? ''}`.trim() + ' (note: EM also tracks this as an outbound click)',
         eventParameters: CLICK_PARAMS,
-        trigger: { name: 'Link Click - Social Media', kind: 'link_click', clickUrlValue: SOCIAL_URL_PATTERN, clickUrlOperator: 'matchRegex' },
+        trigger: { name: trigNameOf('Social Media'), kind: 'link_click', clickUrlValue: SOCIAL_URL_PATTERN, clickUrlOperator: 'matchRegex' },
       };
     case 'cta': {
       const def = CTA_BY_INTENT[el.intent ?? 'generic'];
@@ -180,16 +187,14 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
       // case doesn't matter). All variants of an intent share this pattern, so they
       // collapse to ONE tag. Generic → the element's own literal text (a
       // case-preserved 'contains', so two distinct generic CTAs stay distinct).
-      const trigName = isSpecific
-        ? `All Clicks - ${def.label.replace(/ Click$/, '')}`
-        : `All Clicks - CTA: ${el.text.slice(0, 40)}`;
+      const trigName = isSpecific ? trigNameOf(def.label.replace(/ Click$/, '')) : trigNameOf(el.text.slice(0, 40));
       const trigger: SuggestedTag['trigger'] = isSpecific
         ? { name: trigName, kind: 'all_clicks', clickTextValue: `(?i)${def.pattern}`, clickTextOperator: 'matchRegex' }
         : { name: trigName, kind: 'all_clicks', clickTextValue: el.text, clickTextOperator: 'contains' };
       return {
         ...base(def.event, isSpecific ? 'medium' : 'low', false),
         // Name the tag for what the click IS, not the raw event id.
-        tagName: `GA4 Event - ${def.label}`,
+        tagName: tagNameOf(def.label),
         label: `${def.label} "${el.text}" → GA4 "${def.event}"`,
         evidence: `button/link text "${el.text}"` + (isSpecific ? ` (intent: ${el.intent})` : ''),
         // cta_text is the DYNAMIC clicked text ({{Click Text}}), not the value
