@@ -6,12 +6,14 @@
 // on the pages the user selects.
 
 import { safeFetch } from './ssrf';
-import { normalizeUrl, sameSite } from './scan-core';
+import { normalizeUrl, sameSite, detectInstalled } from './scan-core';
 
 export interface DiscoverResult {
   urls: string[];
   viaSitemap: boolean;
   total: number;
+  /** GTM container + measurement ids already live on the site (from its homepage). */
+  installed: { containers: string[]; measurementIds: string[] };
   note?: string;
 }
 
@@ -131,20 +133,34 @@ async function discoverViaCrawl(start: string): Promise<string[]> {
   return [...discovered].slice(0, MAX_URLS);
 }
 
-/** Enumerate same-site pages: sitemap first, link-crawl fallback. */
+/** Read the homepage once to see which GTM/GA4 is already installed on the site. */
+async function detectInstalledOnHomepage(start: string): Promise<{ containers: string[]; measurementIds: string[] }> {
+  try {
+    const r = await safeFetch(start, 10_000);
+    if (r.status >= 400 || !r.body) return { containers: [], measurementIds: [] };
+    return detectInstalled([r.body]);
+  } catch {
+    return { containers: [], measurementIds: [] };
+  }
+}
+
+/** Enumerate same-site pages: sitemap first, link-crawl fallback. Also reports
+ *  which GTM container is already live on the site. */
 export async function discoverSite(startUrl: string): Promise<DiscoverResult> {
   const start = normalizeUrl(startUrl, startUrl);
-  if (!start) return { urls: [], viaSitemap: false, total: 0, note: 'Not a valid http(s) URL.' };
+  if (!start) return { urls: [], viaSitemap: false, total: 0, installed: { containers: [], measurementIds: [] }, note: 'Not a valid http(s) URL.' };
+  const installed = await detectInstalledOnHomepage(start);
   const sm = await discoverViaSitemap(start);
   if (sm.length > 0) {
     const urls = sm.includes(start) ? sm : [start, ...sm];
-    return { urls: urls.slice(0, MAX_URLS), viaSitemap: true, total: Math.min(urls.length, MAX_URLS) };
+    return { urls: urls.slice(0, MAX_URLS), viaSitemap: true, total: Math.min(urls.length, MAX_URLS), installed };
   }
   const crawled = await discoverViaCrawl(start);
   return {
     urls: crawled,
     viaSitemap: false,
     total: crawled.length,
+    installed,
     note: crawled.length >= MAX_CRAWL ? `Link-crawl capped at ${MAX_CRAWL} pages (no sitemap found).` : 'No sitemap found — discovered via a quick link-crawl (server-rendered links only).',
   };
 }
