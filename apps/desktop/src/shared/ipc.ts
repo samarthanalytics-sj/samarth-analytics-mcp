@@ -136,17 +136,30 @@ export interface SuggestedTagView {
   };
 }
 
-/** Which scraping engine the desktop uses for a scan. */
-export type ScanEngine = 'electron' | 'cheerio' | 'playwright';
-
-/** Options for a URL scan (suggestions:scan). */
+/** Options for a URL scan (suggestions:scan). The scan runs all available
+ *  engines (Electron + Cheerio) and merges their findings — no engine choice. */
 export interface TagScanOptions {
   maxPages?: number;
   maxDepth?: number;
-  /** Post-load settle (ms) for the browser engines — lets JS-rendered forms appear. */
+  /** Post-load settle (ms) for the browser engine — lets JS-rendered forms appear. */
   settleMs?: number;
-  /** electron (default, no install) · cheerio (no browser) · playwright (optional). */
-  engine?: ScanEngine;
+}
+
+/** One detected clickable element (before dedup) — the raw inventory. */
+export interface DetectedElementView {
+  page: string;
+  /** email | phone | download | outbound | cta */
+  kind: string;
+  text: string;
+  href?: string;
+  region?: string;
+}
+/** One detected form (before dedup). */
+export interface DetectedFormView {
+  page: string;
+  purpose: string;
+  action: string;
+  provider: string;
 }
 
 /** Result of crawling a URL for tag suggestions (suggestions:scan). */
@@ -166,6 +179,8 @@ export interface TagScanResult {
   };
   suggestions: SuggestedTagView[];
   pages: Array<{ page: string; forms: number; elements: number }>;
+  /** Every trackable element + form detected (before dedup) — the full inventory. */
+  inventory: { elements: DetectedElementView[]; forms: DetectedFormView[] };
   notScanned: Array<{ url: string; reason: string }>;
   warnings: string[];
 }
