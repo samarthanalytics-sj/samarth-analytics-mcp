@@ -1046,6 +1046,8 @@ function TagReviewPanel({
   const [creating, setCreating] = useState(false);
   const [done, setDone] = useState<{ created: number; failed: number } | null>(null);
   const [settleMs, setSettleMs] = useState('2500');
+  const [settleAuto, setSettleAuto] = useState(true);
+  const effSettleMs = (): number | undefined => (settleAuto ? undefined : Number(settleMs) || undefined);
   const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned']; inventory: TagScanResult['inventory']; installed: TagScanResult['installed'] } | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [discovering, setDiscovering] = useState(false);
@@ -1101,7 +1103,7 @@ function TagReviewPanel({
     onError('');
     setScanning(true);
     try {
-      applyScanResult(await window.desktop.tags.scanUrls(urls, { settleMs: Number(settleMs) || undefined }));
+      applyScanResult(await window.desktop.tags.scanUrls(urls, { settleMs: effSettleMs() }));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1116,7 +1118,7 @@ function TagReviewPanel({
     onError('');
     setScanning(true);
     try {
-      applyScanResult(await window.desktop.tags.scan(target, { maxPages: 25, maxDepth: 2, settleMs: Number(settleMs) || undefined }));
+      applyScanResult(await window.desktop.tags.scan(target, { maxPages: 25, maxDepth: 2, settleMs: effSettleMs() }));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1245,9 +1247,12 @@ function TagReviewPanel({
                 if (e.key === 'Enter') void doDiscover();
               }}
             />
-            <label style={styles.scanNum} title="Wait after load for JS-rendered forms/embeds (ms, max 10000)">
-              settle ms
-              <input style={styles.scanNumInput} type="number" min={0} max={10000} step={500} value={settleMs} disabled={scanning} onChange={(e) => setSettleMs(e.target.value)} />
+            <label style={styles.scanNum} title="Auto = wait until the page's network goes quiet (adapts per page). Untick to force a fixed wait in ms.">
+              <input type="checkbox" checked={settleAuto} disabled={scanning} onChange={(e) => setSettleAuto(e.target.checked)} />
+              settle: auto
+              {!settleAuto && (
+                <input style={styles.scanNumInput} type="number" min={0} max={10000} step={500} value={settleMs} disabled={scanning} onChange={(e) => setSettleMs(e.target.value)} title="Fixed wait after load (ms)" />
+              )}
             </label>
             <button style={styles.primaryBtn} onClick={doDiscover} disabled={!url.trim() || discovering || scanning}>
               {discovering ? 'Discovering…' : 'Discover pages'}

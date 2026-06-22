@@ -67,7 +67,9 @@ export interface PlaywrightDriverOptions {
 
 export async function createPlaywrightDriver(opts: PlaywrightDriverOptions = {}): Promise<PageDriver> {
   const navTimeoutMs = opts.navTimeoutMs ?? 20_000;
-  const settleMs = opts.settleMs ?? 2_500;
+  // undefined → AUTO: rely on networkidle (below) + a small post-idle buffer; a
+  // number → that exact extra wait.
+  const settleMs = opts.settleMs ?? 300;
   const pw = await loadPlaywright();
   if (!pw) throw new PlaywrightUnavailableError();
 
