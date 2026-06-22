@@ -211,6 +211,8 @@ export interface DiscoverResult {
   /** True if a sitemap was used (complete); false if a link-crawl fallback. */
   viaSitemap: boolean;
   total: number;
+  /** GTM container + measurement ids already live on the site (homepage). */
+  installed: { containers: string[]; measurementIds: string[] };
   note?: string;
 }
 

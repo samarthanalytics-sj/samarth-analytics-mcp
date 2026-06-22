@@ -237,6 +237,9 @@ async function main(): Promise<void> {
     check('installed: detects the GTM container id', inst.containers.includes('GTM-ABC123') && inst.containers.length === 1);
     check('installed: detects G-/AW- measurement ids', inst.measurementIds.includes('G-XYZ789') && inst.measurementIds.includes('AW-111222'));
     check('installed: ignores unrelated scripts', detectInstalled(['https://x.com/a.js']).containers.length === 0);
+    // From raw page HTML (discovery): the inline GTM snippet.
+    check('installed: catches the inline GTM snippet in HTML',
+      detectInstalled([`<script>(function(w,d,s,l,i){})(window,document,'script','dataLayer','GTM-INLINE9');</script>`]).containers.includes('GTM-INLINE9'));
   }
 
   // ── parseSuggestions: the four accepted shapes + junk ──────────────────────

@@ -85,7 +85,8 @@ export async function createPlaywrightDriver(opts: PlaywrightDriverOptions = {})
   return {
     async open(url: string): Promise<DrivenPage> {
       try {
-        const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeoutMs });
+        // networkidle waits for lazy/JS-rendered forms + embeds to finish loading.
+        const resp = await page.goto(url, { waitUntil: 'networkidle', timeout: navTimeoutMs });
         const status = resp ? resp.status() : null;
         if (status !== null && status >= 400) return { ok: true, httpStatus: status, finalUrl: page.url() || url };
         await page.waitForTimeout(settleMs);

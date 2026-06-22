@@ -1281,6 +1281,16 @@ function TagReviewPanel({
               </div>
             </div>
             {discovered.note && <div style={{ ...styles.muted, marginTop: 4 }}>{discovered.note}</div>}
+            <div style={{ ...styles.muted, marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span>Existing container on this site:</span>
+              {discovered.installed.containers.length > 0 || discovered.installed.measurementIds.length > 0 ? (
+                [...discovered.installed.containers, ...discovered.installed.measurementIds].map((id) => (
+                  <span key={id} style={styles.typeChip}>{id}</span>
+                ))
+              ) : (
+                <span style={{ color: '#9ca3af' }}>none detected</span>
+              )}
+            </div>
             {discovered.urls.length > 0 ? (
               <div style={styles.pageListScroll}>
                 {discovered.urls.map((u, i) => (
@@ -1694,14 +1704,22 @@ function ContainerAuditPanel({
 
       <div style={styles.reviewBody}>
         <div style={styles.card}>
-          {ready && ctx ? (
-            <div style={styles.muted}>
-              📁 {ctx.accountName} › {ctx.containerName} › <b style={{ color: '#e5e7eb' }}>{ctx.workspaceName}</b>
-              &nbsp;·&nbsp; {active?.email}
-            </div>
-          ) : (
-            <div style={{ color: '#fcd9a5', fontSize: 13 }}>
-              Pick a GTM account, container and draft workspace in <b>Chat</b> first, then return here.
+          <div style={styles.muted}>
+            Container:{' '}
+            {ctx?.containerId ? (
+              <b style={{ color: '#e5e7eb' }}>
+                {ctx.accountName} › {ctx.containerName} › {ctx.workspaceName ?? 'workspace?'}
+              </b>
+            ) : (
+              <b style={{ color: '#fcd9a5' }}>none</b>
+            )}
+            {active?.email ? ` · ${active.email}` : ''}
+          </div>
+          {!ready && (
+            <div style={{ color: '#fcd9a5', fontSize: 13, marginTop: 4 }}>
+              {!active?.hasGoogleToken
+                ? 'Sign this account into Google first.'
+                : 'Pick a GTM account, container and draft workspace in the Chat tab (the GTM bar), then return here.'}
             </div>
           )}
           <div style={{ marginTop: 10 }}>

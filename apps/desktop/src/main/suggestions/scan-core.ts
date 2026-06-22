@@ -99,16 +99,19 @@ export function pagePath(url: string): string {
 }
 
 /** GTM containers (GTM-XXXX) + measurement ids (G-/AW-/GT-/UA-) that are LIVE on
- *  the scanned pages — parsed from the googletagmanager.com script srcs. Lets the
- *  user see which container is actually installed on the site. PURE + tested. */
-export function detectInstalled(scriptSrcs: string[]): { containers: string[]; measurementIds: string[] } {
+ *  the site. Accepts either script-src strings (from a scan) OR raw page HTML
+ *  (from discovery) — catches gtm.js?id=, gtag/js?id=, AND the inline GTM
+ *  snippet ('GTM-XXXX'). PURE + tested. */
+export function detectInstalled(texts: string[]): { containers: string[]; measurementIds: string[] } {
   const containers = new Set<string>();
   const measurementIds = new Set<string>();
-  for (const src of scriptSrcs) {
-    const gtm = /googletagmanager\.com\/gtm\.js\?[^"'\s]*\bid=(GTM-[A-Z0-9]+)/i.exec(src);
-    if (gtm) containers.add(gtm[1].toUpperCase());
-    const gtag = /googletagmanager\.com\/gtag\/js\?[^"'\s]*\bid=((?:G|AW|GT|UA)-[A-Z0-9-]+)/i.exec(src);
-    if (gtag) measurementIds.add(gtag[1].toUpperCase());
+  const gtmRe = /googletagmanager\.com\/gtm\.js\?[^"'\s]*\bid=(GTM-[A-Z0-9]+)/gi;
+  const gtagRe = /googletagmanager\.com\/gtag\/js\?[^"'\s]*\bid=((?:G|AW|GT|UA)-[A-Z0-9-]+)/gi;
+  const gtmInline = /['"](GTM-[A-Z0-9]{4,})['"]/gi; // (window,document,'script','dataLayer','GTM-XXXX')
+  for (const t of texts) {
+    for (const m of t.matchAll(gtmRe)) containers.add(m[1].toUpperCase());
+    for (const m of t.matchAll(gtagRe)) measurementIds.add(m[1].toUpperCase());
+    for (const m of t.matchAll(gtmInline)) containers.add(m[1].toUpperCase());
   }
   return { containers: [...containers], measurementIds: [...measurementIds] };
 }

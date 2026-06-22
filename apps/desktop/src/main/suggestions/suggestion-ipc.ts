@@ -32,12 +32,19 @@ async function makeDriver(opts: TagScanOptions): Promise<PageDriver> {
   const settleMs = clampSettle(opts.settleMs);
   const drivers: PageDriver[] = [createElectronDriver(settleMs !== undefined ? { settleMs } : {})];
   // Add the complementary static (Cheerio) engine if installed — purely additive.
-  // (Playwright is NOT added: it is another Chromium, redundant with Electron.)
   try {
     const { createCheerioDriver } = await import('./cheerio-driver');
     drivers.push(createCheerioDriver());
   } catch {
-    /* cheerio not installed — Electron-only is fine */
+    /* cheerio not installed — fine */
+  }
+  // Add Playwright if the user installed it — it waits for network-idle, so it
+  // renders JS/embedded forms more thoroughly than the default settle; merged in.
+  try {
+    const { createPlaywrightDriver } = await import('./playwright-driver');
+    drivers.push(await createPlaywrightDriver({ settleMs }));
+  } catch {
+    /* playwright not installed — fine, Electron+Cheerio still run */
   }
   return drivers.length === 1 ? drivers[0] : createMultiDriver(drivers);
 }
