@@ -1,3 +1,9 @@
+## [1.23.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.22.0...v1.23.0) (2026-06-22)
+
+### Features
+
+* **tag-suggest:** replace "Sitemap URL" mode with "Single page" direct scan ([58827a3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/58827a32da96a31b04e00ba069ca6fbabd4bcd4f))
+
 ## [1.22.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.21.0...v1.22.0) (2026-06-22)
 
 ### Features
