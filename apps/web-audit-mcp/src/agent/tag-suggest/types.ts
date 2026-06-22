@@ -20,7 +20,7 @@ export interface PageSignals {
 }
 
 export type FormProvider =
-  | 'hubspot' | 'typeform' | 'mailchimp' | 'gravityforms' | 'contactform7'
+  | 'hubspot' | 'typeform' | 'paperform' | 'mailchimp' | 'gravityforms' | 'contactform7'
   | 'wpforms' | 'marketo' | 'pardot' | 'unknown';
 
 export interface ProviderMatch {
@@ -33,6 +33,13 @@ export interface ProviderMatch {
 /** Mirrors web-audit-mcp forms.ts FormPurpose. */
 export type FormPurpose = 'search' | 'login' | 'signup' | 'newsletter' | 'contact' | 'checkout' | 'other';
 
+/** A form field, compact — type + name + required (NEVER any entered value). */
+export interface FormFieldSummary {
+  type: string;
+  name: string;
+  required: boolean;
+}
+
 export interface DetectedForm {
   /** Page path, e.g. "/contact". */
   page: string;
@@ -40,6 +47,15 @@ export interface DetectedForm {
   /** Raw form action (its host is a provider hint). */
   action: string;
   provider: ProviderMatch;
+  /** "js" = a div/JS form (no native submit); "get"/"post" = a real <form>. */
+  method?: string;
+  /** The form element's own id/classes — used to scope the GTM trigger to THIS
+   *  form. Empty for cross-origin embedded forms (no readable element). */
+  formId?: string;
+  formClasses?: string;
+  /** The form's input fields (type/name/required only) — drives the field-based
+   *  signature shown to the user. */
+  fields?: FormFieldSummary[];
 }
 
 export type ElementKind = 'email' | 'phone' | 'download' | 'outbound' | 'social' | 'cta';
@@ -85,6 +101,8 @@ export interface SuggestedTag {
   label: string;
   /** Why we suggested it. */
   evidence: string;
+  /** Optional caveat (e.g. an embedded provider whose native trigger won't fire). */
+  note?: string;
   confidence: 'high' | 'medium' | 'low';
   /** GA4 Enhanced Measurement already auto-tracks this kind — flag, don't push. */
   enhancedMeasurementOverlap: boolean;
@@ -103,6 +121,12 @@ export interface SuggestedTag {
     /** For all_clicks/link_click: also filter on {{Click Text}} (e.g. a CTA). */
     clickTextValue?: string;
     clickTextOperator?: FilterOp;
+    /** For form_submit: scope to ONE form via {{Form ID}} / {{Form Classes}}, so
+     *  the tag fires for this form only — not every form on the page. */
+    formIdValue?: string;
+    formIdOperator?: FilterOp;
+    formClassesValue?: string;
+    formClassesOperator?: FilterOp;
     eventName?: string;
   };
 }

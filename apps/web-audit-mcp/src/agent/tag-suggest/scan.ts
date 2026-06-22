@@ -80,7 +80,7 @@ export function pagePath(url: string): string {
 export function toPageScan(
   url: string,
   raw: PageScanRaw,
-  forms: Array<{ purpose: FormPurpose; action: string }>,
+  forms: PageScan['forms'],
   siteHost: string,
 ): PageScan {
   const page = pagePath(url);
@@ -246,7 +246,7 @@ export async function scanSiteForTagSuggestions(
           const raw = await collectPageRaw(page);
           const forms = await scanForms(page, page.url());
           pageScans.push(
-            toPageScan(target.url, raw, forms.map((f) => ({ purpose: f.purpose, action: f.action })), siteHost),
+            toPageScan(target.url, raw, forms.map((f) => ({ purpose: f.purpose, action: f.action, method: f.method, formId: f.formId, formClasses: f.formClasses, fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })) })), siteHost),
           );
         } catch (err) {
           collectFailures.push({

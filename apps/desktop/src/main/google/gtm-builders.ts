@@ -155,6 +155,11 @@ export interface TriggerInput {
   /** For link_click/all_clicks: also filter on {{Click Text}} (e.g. a CTA). */
   clickTextValue?: string;
   clickTextOperator?: string;
+  /** For form_submit: scope to one form via {{Form ID}} / {{Form Classes}}. */
+  formIdValue?: string;
+  formIdOperator?: string;
+  formClassesValue?: string;
+  formClassesOperator?: string;
   /** For custom_event: the dataLayer event name. */
   eventName?: string;
 }
@@ -162,14 +167,16 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
   switch (o.kind) {
     case 'link_click':
     case 'all_clicks': {
-      // Click/auto-event triggers filter the clicked element via autoEventFilter
-      // (NOT `filter`). Verified against the reference GTM MCP server. Multiple
-      // conditions are AND-ed (e.g. a CTA filtered by its {{Click Text}}).
+      // The "fires on SOME clicks when …" scope conditions go in `filter` (fires
+      // iff ALL conditions are true) — NOT autoEventFilter. Verified against the
+      // user's 562-container corpus: {{Click URL}}/{{Click Text}} appear in
+      // `filter` ~2,700× vs ~1× in autoEventFilter. With the conditions in the
+      // wrong array GTM ignores them and the trigger fires on EVERY click.
       const t: GtmTriggerResource = { name: sanitizeName(o.name), type: o.kind === 'link_click' ? 'linkClick' : 'click' };
       const filters: Param[] = [];
       if (o.clickUrlValue) filters.push(condition('{{Click URL}}', o.clickUrlOperator ?? 'contains', o.clickUrlValue));
       if (o.clickTextValue) filters.push(condition('{{Click Text}}', o.clickTextOperator ?? 'contains', o.clickTextValue));
-      if (filters.length) t.autoEventFilter = filters;
+      if (filters.length) t.filter = filters;
       return t;
     }
     case 'custom_event':
@@ -178,8 +185,17 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
         type: 'customEvent',
         customEventFilter: [condition('{{_event}}', 'equals', o.eventName ?? '')],
       };
-    case 'form_submit':
-      return { name: sanitizeName(o.name), type: 'formSubmission' };
+    case 'form_submit': {
+      // A formSubmission trigger with no `filter` fires on ALL forms; the
+      // {{Form ID}}/{{Form Classes}} "Some Forms" scope goes in `filter` (same as
+      // clicks — corpus: 85× in filter vs 3× in autoEventFilter).
+      const t: GtmTriggerResource = { name: sanitizeName(o.name), type: 'formSubmission' };
+      const filters: Param[] = [];
+      if (o.formIdValue) filters.push(condition('{{Form ID}}', o.formIdOperator ?? 'equals', o.formIdValue));
+      if (o.formClassesValue) filters.push(condition('{{Form Classes}}', o.formClassesOperator ?? 'contains', o.formClassesValue));
+      if (filters.length) t.filter = filters;
+      return t;
+    }
     case 'pageview':
     default:
       return { name: sanitizeName(o.name), type: 'pageview' };
@@ -192,6 +208,10 @@ export function triggerBuiltInVars(o: TriggerInput): string[] {
   if (o.kind === 'link_click' || o.kind === 'all_clicks') {
     if (o.clickUrlValue) vars.push('clickUrl');
     if (o.clickTextValue) vars.push('clickText');
+  }
+  if (o.kind === 'form_submit') {
+    if (o.formIdValue) vars.push('formId');
+    if (o.formClassesValue) vars.push('formClasses');
   }
   return vars;
 }

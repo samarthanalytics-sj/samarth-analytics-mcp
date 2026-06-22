@@ -30,6 +30,13 @@ const SIGNATURES: Signature[] = [
       (/typeform\.com/i.test(action) ? 'action typeform.com' : null),
   },
   {
+    vendor: 'paperform',
+    test: (s, action) =>
+      some(s.scriptSrcs, /paperform\.co/i) ??
+      (hasClass(s, 'paperform') || hasSel(s, '[data-paperform-id]') ? 'paperform embed' : null) ??
+      (/paperform\.co/i.test(action) ? 'action paperform.co' : null),
+  },
+  {
     vendor: 'mailchimp',
     test: (s, action) =>
       (/list-manage\.com/i.test(action) ? 'action list-manage.com' : null) ??
@@ -74,6 +81,13 @@ const FORM_EMBED: Signature[] = [
       (hasSel(s, '[data-tf-widget]') ? '[data-tf-widget]' : null) ??
       some(s.scriptSrcs, /embed\.typeform\.com/i) ??
       some(s.iframeSrcs ?? [], /\.typeform\.com\/(to|embed|widget)/i),
+  },
+  {
+    vendor: 'paperform',
+    test: (s) =>
+      some(s.scriptSrcs, /paperform\.co/i) ??
+      (hasClass(s, 'paperform') || hasSel(s, '[data-paperform-id]') ? 'paperform embed' : null) ??
+      some(s.iframeSrcs ?? [], /paperform\.co/i),
   },
   { vendor: 'marketo', test: (s) => (s.selectorsPresent.some((x) => /^#mktoForm_\d/.test(x)) ? 'id #mktoForm_*' : null) },
   { vendor: 'mailchimp', test: (s, a) => (/list-manage\.com/i.test(a) ? 'action list-manage.com' : null) ?? (hasSel(s, '#mce-EMAIL') || hasSel(s, '#mc-embedded-subscribe') ? 'mailchimp id' : null) },

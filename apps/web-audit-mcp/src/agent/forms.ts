@@ -25,6 +25,11 @@ export interface RawForm {
   index: number;
   action: string;
   method: string;
+  /** The form element's own id/name/classes — used to scope the GTM trigger to
+   *  THIS form (filter {{Form ID}} / {{Form Classes}}) instead of all forms. */
+  formId: string;
+  formName: string;
+  formClasses: string;
   fieldCount: number;
   fields: RawFormField[];
   hasPrivacyLink: boolean;
@@ -102,6 +107,9 @@ export function extractFormsInPage(): RawForm[] {
         index: out.length,
         action,
         method: (form.getAttribute('method') || 'get').toLowerCase(),
+        formId: form.getAttribute('id') || '',
+        formName: form.getAttribute('name') || '',
+        formClasses: form.getAttribute('class') || '',
         fieldCount: fields.length,
         fields,
         hasPrivacyLink: privacyIn(form),
@@ -137,6 +145,9 @@ export function extractFormsInPage(): RawForm[] {
         index: out.length,
         action: '', // div/JS forms submit via JS — no element action to read
         method: 'js',
+        formId: host.getAttribute('id') || '',
+        formName: '',
+        formClasses: host.getAttribute('class') || '',
         fieldCount: fields.length,
         fields,
         hasPrivacyLink: privacyIn(host),
@@ -207,6 +218,8 @@ export interface FormAnalysis {
   index: number;
   action: string;
   method: string;
+  formId: string;
+  formClasses: string;
   purpose: FormPurpose;
   fieldCount: number;
   fields: Pick<RawFormField, 'type' | 'name' | 'label' | 'required'>[];
@@ -333,6 +346,8 @@ export function analyzeForms(rawForms: RawForm[], pageUrl: string): FormAnalysis
       index: form.index,
       action: form.action,
       method: form.method,
+      formId: form.formId,
+      formClasses: form.formClasses,
       purpose,
       fieldCount: form.fieldCount,
       fields: form.fields.map((f) => ({ type: f.type, name: f.name, label: f.label, required: f.required })),

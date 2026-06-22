@@ -36,6 +36,9 @@ check('embed: HubSpot via iframe src', detectEmbeddedForm(sig({ iframeSrcs: ['ht
 check('embed: Typeform via iframe src', detectEmbeddedForm(sig({ iframeSrcs: ['https://form.typeform.com/to/xyz'] }))?.vendor === 'typeform');
 check('embed: NOT triggered by generic HubSpot TRACKING script (no form)', detectEmbeddedForm(sig({ scriptSrcs: ['https://js.hs-scripts.com/123.js'] })) === null);
 check('embed: null when there is no form signal at all', detectEmbeddedForm(sig({ classNames: ['btn', 'container'] })) === null);
+check('provider: Paperform via script', detectFormProvider(sig({ scriptSrcs: ['https://paperform.co/__embed.min.js'] })).vendor === 'paperform');
+check('provider: Paperform via [data-paperform-id]', detectFormProvider(sig({ selectorsPresent: ['[data-paperform-id]'] })).vendor === 'paperform');
+check('embed: Paperform via iframe src', detectEmbeddedForm(sig({ iframeSrcs: ['https://acme.paperform.co/'] }))?.vendor === 'paperform');
 
 // ── form → suggestion ───────────────────────────────────────────────────────
 const contactForm: DetectedForm = { page: '/contact', purpose: 'contact', action: 'https://js.hsforms.net/x', provider: { vendor: 'hubspot', confidence: 'high', evidence: 'script js.hsforms.net' } };
@@ -49,6 +52,47 @@ const nlForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpos
 check('form: newsletter → "GA4 Event - Newsletter Form Tag" + newsletter_form', nlForm[0].tagName === 'GA4 Event - Newsletter Form Tag' && nlForm[0].eventName === 'newsletter_form' && nlForm[0].trigger.name === 'Newsletter Form Trigger');
 const otherFormName = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/x', purpose: 'other', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
 check('form: "other" → "GA4 Event - Form Submission Tag" + form_submission', otherFormName[0].tagName === 'GA4 Event - Form Submission Tag' && otherFormName[0].eventName === 'form_submission');
+
+// ── field/provider-aware form tracking ───────────────────────────────────────
+const prov0 = { vendor: 'unknown' as const, confidence: 'low' as const, evidence: '' };
+const formWithId = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/contact', purpose: 'contact', action: 'https://a.com/x', provider: prov0, method: 'post', formId: 'contact-form', formClasses: 'contact-form', fields: [{ type: 'email', name: 'email', required: true }, { type: 'textarea', name: 'message', required: false }] }], elements: [] });
+check('form: scoped to its id → {{Form ID}} equals, no caveat', formWithId[0].trigger.formIdValue === 'contact-form' && formWithId[0].trigger.formIdOperator === 'equals' && !formWithId[0].note);
+check('form: evidence lists the field signature', /fields: email, message/.test(formWithId[0].evidence) && /id=#contact-form/.test(formWithId[0].evidence));
+
+// Instance-unique class (numeric instance, e.g. gform_1) → {{Form Classes}} contains.
+const formInstanceClass = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/c', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'row gform_1 gform_wrapper', fields: [{ type: 'email', name: 'email', required: true }] }], elements: [] });
+check('form: instance class gform_1 → {{Form Classes}} contains (skips "row"/"gform_wrapper")', formInstanceClass[0].trigger.formClassesValue === 'gform_1' && formInstanceClass[0].trigger.formClassesOperator === 'contains');
+
+// A SHARED framework wrapper class (wpcf7-form, bare "form") is NOT used to scope.
+const formWrapperClass = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/c', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'wpcf7-form form', fields: [{ type: 'email', name: 'email', required: true }] }], elements: [] });
+check('form: wrapper class (wpcf7-form/"form") is NOT used → unscoped + "every form" note', !formWrapperClass[0].trigger.formClassesValue && /every form submit/i.test(formWrapperClass[0].note ?? ''));
+
+const formNoScope = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/c', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'row container', fields: [] }], elements: [] });
+check('form: no id/class → note that it fires on EVERY form submit', !formNoScope[0].trigger.formIdValue && !formNoScope[0].trigger.formClassesValue && /every form submit/i.test(formNoScope[0].note ?? ''));
+
+const hubForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: { vendor: 'hubspot', confidence: 'high', evidence: 'js.hsforms.net' }, method: 'js', formId: 'hsForm_123' }], elements: [] });
+check('form: HubSpot (embedded) → note recommends a Custom Event trigger', /custom event/i.test(hubForm[0].note ?? '') && /hubspot/i.test(hubForm[0].note ?? ''));
+
+const jsForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, method: 'js', fields: [{ type: 'email', name: 'email', required: true }] }], elements: [] });
+check('form: JS/div form → note the native Form Submission trigger may not fire', /native <form> submit|may not fire/i.test(jsForm[0].note ?? ''));
+
+// Pardot FORM HANDLER (native <form> POST) → native trigger DOES fire: scoped by id, no "won't fire" note.
+const pardotHandler = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: 'https://go.pardot.com/l/1/2/form-handler', provider: { vendor: 'pardot', confidence: 'high', evidence: 'action pardot.com' }, method: 'post', formId: 'pardot-form' }], elements: [] });
+check('form: Pardot form-handler (native POST) → scoped by id, NO iframe/Custom-Event note', pardotHandler[0].trigger.formIdValue === 'pardot-form' && !/iframe|custom event/i.test(pardotHandler[0].note ?? ''));
+
+// Two DIFFERENT contact forms (different ids) stay as TWO scoped tags, not merged.
+const twoForms = buildSuggestions({ siteHost: 'a.com', forms: [
+  { page: '/contact', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'contact-main' },
+  { page: '/', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'footer-contact' },
+], elements: [] });
+check('form: two contact forms with different ids → two scoped tags (not collapsed)', twoForms.filter((s) => s.eventName === 'contact_form').length === 2);
+
+// A NON-UNIQUE id (same id on two DIFFERENT forms) can't scope → dropped + collision note.
+const sharedId = buildSuggestions({ siteHost: 'a.com', forms: [
+  { page: '/contact', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'gform_1', fields: [{ type: 'email', name: 'email', required: true }, { type: 'textarea', name: 'message', required: false }] },
+  { page: '/', purpose: 'newsletter', action: '', provider: prov0, method: 'post', formId: 'gform_1', fields: [{ type: 'email', name: 'email', required: true }] },
+], elements: [] });
+check('form: shared id across different forms → no {{Form ID}} scope + a collision note', sharedId.every((s) => !s.trigger.formIdValue && /shares this id|unique id/i.test(s.note ?? '')));
 
 // ── social media links → a dedicated named tag ───────────────────────────────
 const socialOut = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [{ page: '/', kind: 'social', text: 'Facebook', href: 'https://facebook.com/acme', region: 'footer' }] });

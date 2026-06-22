@@ -157,6 +157,10 @@ async function scanTarget(
   const forms = (driven.rawForms ? analyzeForms(driven.rawForms, driven.finalUrl ?? url) : []).map((f) => ({
     purpose: f.purpose,
     action: f.action,
+    method: f.method,
+    formId: f.formId,
+    formClasses: f.formClasses,
+    fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })),
   }));
   const links: string[] = [];
   for (const el of driven.raw.elements) {

@@ -122,7 +122,7 @@ function field(over: Partial<RawFormField>): RawFormField {
 }
 function form(over: Partial<RawForm>): RawForm {
   const fields = over.fields ?? [];
-  return { index: 0, action: 'https://example.com/submit', method: 'post', fieldCount: fields.length, fields, hasPrivacyLink: false, text: '', ...over };
+  return { index: 0, action: 'https://example.com/submit', method: 'post', formId: '', formName: '', formClasses: '', fieldCount: fields.length, fields, hasPrivacyLink: false, text: '', ...over };
 }
 
 check('pii: email by type', classifyFieldPii(field({ type: 'email' })) === 'email');

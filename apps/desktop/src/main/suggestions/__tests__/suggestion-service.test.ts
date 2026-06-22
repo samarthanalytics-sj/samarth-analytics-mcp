@@ -42,6 +42,9 @@ const contactForm: RawForm = {
   index: 0,
   action: 'https://acme.com/submit',
   method: 'post',
+  formId: 'contact-form',
+  formName: 'contact',
+  formClasses: 'contact-form needs-validation',
   fieldCount: 2,
   fields: [
     { tag: 'input', type: 'email', name: 'email', id: '', label: 'Email', placeholder: '', autocomplete: 'email', required: true },

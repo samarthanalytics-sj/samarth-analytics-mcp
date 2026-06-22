@@ -14,7 +14,7 @@ import type { RawForm, RawFormField } from '../../../../web-audit-mcp/src/agent/
 import type { PageDriver, DrivenPage } from './scan-core';
 import { safeFetch } from './ssrf';
 
-const PROVIDER_SELECTORS = ['.hs-form', '[data-tf-widget]', '#mce-EMAIL', '#mc-embedded-subscribe', '.gform_wrapper', '.wpcf7', '.wpforms-form', '.wpforms-container'];
+const PROVIDER_SELECTORS = ['.hs-form', '[data-tf-widget]', '[data-paperform-id]', '#mce-EMAIL', '#mc-embedded-subscribe', '.gform_wrapper', '.wpcf7', '.wpforms-form', '.wpforms-container'];
 const SUBMIT_RE = /\b(submit|send|subscribe|sign\s*up|sign\s*me\s*up|get\s+started|register|join\b|request\s+(a\s+)?(quote|demo|info|callback)|contact\s+us|book\s+(a\s+)?(demo|call|meeting)|get\s+(a\s+)?quote)\b/i;
 const TEXTISH = new Set(['text', 'email', 'tel', 'url', 'search', 'password', 'number', 'textarea']);
 
@@ -130,6 +130,9 @@ function extractFormsCheerio($: CheerioAPI, abs: (href: string) => string): RawF
       index: out.length,
       action: abs(form.attr('action') || ''),
       method: (form.attr('method') || 'get').toLowerCase(),
+      formId: form.attr('id') || '',
+      formName: form.attr('name') || '',
+      formClasses: form.attr('class') || '',
       fieldCount: fields.length,
       fields,
       hasPrivacyLink: privacyIn(form),
@@ -164,6 +167,9 @@ function extractFormsCheerio($: CheerioAPI, abs: (href: string) => string): RawF
       index: out.length,
       action: '',
       method: 'js',
+      formId: host.attr('id') || '',
+      formName: '',
+      formClasses: host.attr('class') || '',
       fieldCount: fields.length,
       fields,
       hasPrivacyLink: privacyIn(host),

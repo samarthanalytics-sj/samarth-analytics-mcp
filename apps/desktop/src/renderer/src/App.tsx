@@ -980,6 +980,8 @@ function triggerCondition(s: SuggestedTagView): string {
   const parts: string[] = [];
   if (t.clickUrlValue) parts.push(`{{Click URL}} ${t.clickUrlOperator ?? 'contains'} "${t.clickUrlValue}"`);
   if (t.clickTextValue) parts.push(`{{Click Text}} ${t.clickTextOperator ?? 'contains'} "${t.clickTextValue}"`);
+  if (t.formIdValue) parts.push(`{{Form ID}} ${t.formIdOperator ?? 'equals'} "${t.formIdValue}"`);
+  if (t.formClassesValue) parts.push(`{{Form Classes}} ${t.formClassesOperator ?? 'contains'} "${t.formClassesValue}"`);
   if (t.eventName) parts.push(`event = "${t.eventName}"`);
   if (parts.length === 0) return t.kind === 'all_clicks' ? 'fires on every click' : t.kind === 'form_submit' ? 'fires on every form submit' : '—';
   return parts.join(' AND ');
@@ -1550,6 +1552,12 @@ function TagReviewPanel({
                         </span>
                       </div>
                       <div style={styles.reviewEvidence}>{s.evidence}</div>
+                      {s.note && (
+                        <div style={{ fontSize: 12, marginTop: 4, color: '#fcd9a5', display: 'flex', gap: 6 }}>
+                          <span>⚠</span>
+                          <span>{s.note}</span>
+                        </div>
+                      )}
                       {st && st.state !== 'idle' && (
                         <div
                           style={{
