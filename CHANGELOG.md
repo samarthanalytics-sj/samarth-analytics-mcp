@@ -1,3 +1,9 @@
+## [1.28.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.27.0...v1.28.0) (2026-06-22)
+
+### Features
+
+* **desktop:** tag view in the GTM-structure template format + CSV download ([7fd47eb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7fd47eba44219dcd82607d44c21e877299527466))
+
 ## [1.27.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.26.0...v1.27.0) (2026-06-22)
 
 ### Features
