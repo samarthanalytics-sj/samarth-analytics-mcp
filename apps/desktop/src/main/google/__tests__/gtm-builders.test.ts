@@ -152,6 +152,12 @@ test('form_submit trigger: scoped to one form by {{Form ID}} in filter, needs fo
   const tr = buildTrigger({ name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'contact-form' });
   assert.equal(tr.type, 'formSubmission');
   assert.equal(tr.autoEventFilter, undefined, 'form scope goes in filter, not autoEventFilter');
+  // Wait-for-Tags + Check-Validation are explicitly OFF — as DEDICATED top-level
+  // fields (single Parameter, no key), not entries in a generic parameter[].
+  assert.equal((tr as { waitForTags?: { type: string; value: string; key?: string } }).waitForTags?.value, 'false');
+  assert.equal((tr as { waitForTags?: { key?: string } }).waitForTags?.key, undefined);
+  assert.equal((tr as { checkValidation?: { value: string } }).checkValidation?.value, 'false');
+  assert.equal((tr as { parameter?: unknown }).parameter, undefined);
   const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
   assert.equal(f.type, 'equals');
   assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Form ID}}');
@@ -187,14 +193,19 @@ test('variables: constant / data_layer / javascript types + keys', () => {
 
 console.log('\nContainer audit:');
 
-test('findGa4BaseTag: gaawc / G- / GT- / {{var}} googtag present; Ads-only + event + PAUSED are not', () => {
-  const snap = (tags: Array<Record<string, unknown>>) => ({ tags: tags as never, triggers: [], variables: [] });
+test('findGa4BaseTag: gaawc / G- / GT- / {{var→G-}} present; Ads ({{var→AW-}}) + unresolved + event + PAUSED are not', () => {
+  const snap = (tags: Array<Record<string, unknown>>, variables: Array<Record<string, unknown>> = []) => ({ tags: tags as never, triggers: [], variables: variables as never });
   const g = (over: Record<string, unknown>) => ({ tagId: '1', name: 'x', type: 'googtag', firingTriggerId: [], paused: false, parameter: [], ...over });
+  const cvar = (name: string, value: string) => ({ variableId: 'v', name, type: 'c', parameter: [{ key: 'value', value }] });
   assert.equal(findGa4BaseTag(snap([{ ...g({ type: 'gaawc', name: 'GA4 Config' }) }]))?.name, 'GA4 Config');
   assert.equal(findGa4BaseTag(snap([g({ name: 'G tag', parameter: [{ key: 'tagId', value: 'G-ABC123' }] })]))?.name, 'G tag');
   // GT- destination id is a real GA4 base tag (was a false-negative → duplicate).
   assert.equal(findGa4BaseTag(snap([g({ name: 'GT tag', parameter: [{ key: 'tagId', value: 'GT-P3NGJTCV' }] })]))?.name, 'GT tag');
-  assert.equal(findGa4BaseTag(snap([g({ name: 'var tag', parameter: [{ key: 'tagId', value: '{{GA4 - Variable}}' }] })]))?.name, 'var tag');
+  // {{variable}} tagId is resolved: a constant → G- counts; → AW- (Ads) does NOT.
+  assert.equal(findGa4BaseTag(snap([g({ name: 'var GA4', parameter: [{ key: 'tagId', value: '{{GA4 - Variable}}' }] })], [cvar('GA4 - Variable', 'G-QHQL8N71DT')]))?.name, 'var GA4');
+  assert.equal(findGa4BaseTag(snap([g({ name: 'var Ads', parameter: [{ key: 'tagId', value: '{{Conversion ID}}' }] })], [cvar('Conversion ID', 'AW-16543357089')])), null);
+  // An unresolvable {{var}} (not a known constant) → not counted.
+  assert.equal(findGa4BaseTag(snap([g({ name: 'var ?', parameter: [{ key: 'tagId', value: '{{Some Unknown}}' }] })])), null);
   assert.equal(findGa4BaseTag(snap([g({ name: 'Ads', parameter: [{ key: 'tagId', value: 'AW-999' }] })])), null);
   assert.equal(findGa4BaseTag(snap([g({ name: 'evt', type: 'gaawe', firingTriggerId: ['T1'] })])), null);
   // A PAUSED base tag fires nothing → treated as absent (so a working one gets created).

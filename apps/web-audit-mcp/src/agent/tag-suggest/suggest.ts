@@ -25,10 +25,12 @@ const PAGE_PARAMS = [
   { name: 'page_path', value: '{{Page Path}}' },
   { name: 'page_referrer', value: '{{Referrer}}' },
 ];
-/** Standard GA4 click params — what was clicked, its text, and page context. */
+/** Standard GA4 click params — what was clicked, its text, and page context.
+ *  (click_url / click_text are the corpus-dominant names — 1090/1117 vs the GA4
+ *  defaults link_url/link_text at 796/855.) */
 const CLICK_PARAMS = [
-  { name: 'link_url', value: CLICK_URL },
-  { name: 'link_text', value: CLICK_TEXT },
+  { name: 'click_url', value: CLICK_URL },
+  { name: 'click_text', value: CLICK_TEXT },
   ...PAGE_PARAMS,
 ];
 // Single source of truth for "what's a downloadable file" — the collector's
@@ -315,7 +317,7 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         // baked in at scan time; link_url captures the href when the CTA is a link.
         eventParameters: [
           { name: 'cta_text', value: CLICK_TEXT },
-          { name: 'link_url', value: CLICK_URL },
+          { name: 'click_url', value: CLICK_URL },
           ...PAGE_PARAMS,
         ],
         trigger,

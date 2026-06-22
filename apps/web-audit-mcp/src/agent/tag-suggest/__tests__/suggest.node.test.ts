@@ -114,16 +114,22 @@ check('social: NOT flagged EM overlap (dedicated named event)', socialOut[0].enh
 // The social trigger regex must fire on real social hosts and NOT on ordinary
 // links that merely contain a social token in the path/query/another-label.
 const socialPat = socialOut[0].trigger.clickUrlValue ?? '';
-check('social trigger: matches real social hosts (facebook.com, m.youtube.com, x.com, t.co, youtu.be, lnkd.in)',
-  ['https://facebook.com/acme', 'https://m.youtube.com/watch?v=1', 'https://x.com/acme', 'https://t.co/abc', 'https://youtu.be/xyz', 'https://lnkd.in/abc'].every((u) => reTest(socialPat, u)));
-check('social trigger: does NOT fire on non-social URLs (microsoft.com, /facebook.html, ?ref=facebook.com, spoof facebook.com.evil.com, retext.com)',
-  ['https://www.microsoft.com/', 'https://mysite.com/facebook.html', 'https://example.com/?ref=facebook.com', 'https://facebook.com.evil.com/x', 'https://retext.com/', 'https://contact.company.com/x'].every((u) => !reTest(socialPat, u)));
+check('social trigger: short corpus-style pattern matches real social hosts (facebook.com, m.youtube.com, x.com, youtu.be, lnkd.in)',
+  ['https://facebook.com/acme', 'https://m.youtube.com/watch?v=1', 'https://x.com/acme', 'https://youtu.be/xyz', 'https://lnkd.in/abc'].every((u) => reTest(socialPat, u)));
+// Short domain alternation still avoids the obvious non-social URLs (a domain
+// substring is required: microsoft.com / a /facebook.html path / retext.com don't
+// contain a social domain). (?ref=…/subdomain-spoof do match — the corpus-style
+// brevity trade-off the user chose.)
+check('social trigger: does NOT fire on microsoft.com / a /facebook.html path / retext.com',
+  ['https://www.microsoft.com/', 'https://mysite.com/facebook.html', 'https://retext.com/', 'https://contact.company.com/x'].every((u) => !reTest(socialPat, u)));
+check('social trigger: corpus-style domain alternation (no ://, no ([/:?#] anchoring, no (?i))', !socialPat.includes('://') && !socialPat.includes('([/:?#]') && !socialPat.includes('(?i)'));
 
 // PRESENT-ONLY: the trigger matches ONLY the networks the site actually links to.
 const fbOnly = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [{ page: '/', kind: 'social', text: 'Facebook', href: 'https://facebook.com/acme', socialNetwork: 'facebook' }] });
 const fbPat = fbOnly[0].trigger.clickUrlValue ?? '';
 check('social present-only: facebook-only site → matches facebook, NOT linkedin/youtube/x',
   reTest(fbPat, 'https://facebook.com/acme') && !reTest(fbPat, 'https://linkedin.com/x') && !reTest(fbPat, 'https://youtube.com/x') && !reTest(fbPat, 'https://x.com/a'));
+check('social present-only: facebook-only pattern is SHORT', fbPat === 'facebook\\.com|fb\\.com|fb\\.me' && fbPat.length < 30);
 const fbLi = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [
   { page: '/', kind: 'social', text: 'Fb', href: 'https://facebook.com/a', socialNetwork: 'facebook' },
   { page: '/', kind: 'social', text: 'Li', href: 'https://lnkd.in/x', socialNetwork: 'linkedin' },
@@ -149,10 +155,10 @@ check('naming: email tag "GA4 Event - Email Click Tag", trigger "Email Trigger"'
 
 // ── event parameters: GA4-standard, valued by GTM built-in variables ─────────
 const emailParams = byEvent('email_click')?.eventParameters ?? [];
-check('email: carries link_url={{Click URL}} + link_text={{Click Text}}',
-  emailParams.some((p) => p.name === 'link_url' && p.value === '{{Click URL}}') &&
-  emailParams.some((p) => p.name === 'link_text' && p.value === '{{Click Text}}'));
-check('download/outbound also carry link_url/link_text params',
+check('email: carries click_url={{Click URL}} + click_text={{Click Text}} (corpus param names)',
+  emailParams.some((p) => p.name === 'click_url' && p.value === '{{Click URL}}') &&
+  emailParams.some((p) => p.name === 'click_text' && p.value === '{{Click Text}}'));
+check('download/outbound also carry click_url/click_text params',
   (byEvent('file_download')?.eventParameters?.length ?? 0) >= 2 && (byEvent('outbound_click')?.eventParameters?.length ?? 0) >= 2);
 const leadParams = out1[0].eventParameters ?? [];
 check('form: contact_form carries form_id={{Form ID}} + form_destination={{Form URL}}',

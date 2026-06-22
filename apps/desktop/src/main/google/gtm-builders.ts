@@ -30,6 +30,10 @@ export interface GtmTriggerResource {
   filter?: Param[];
   autoEventFilter?: Param[];
   customEventFilter?: Param[];
+  /** Form-trigger options — DEDICATED top-level fields (single Parameter each, no
+   *  `key`), per the GTM API v2 Trigger schema; NOT entries in a `parameter[]`. */
+  waitForTags?: Param;
+  checkValidation?: Param;
 }
 export interface GtmVariableResource {
   name: string;
@@ -110,14 +114,23 @@ export const BUILTIN_ALL_PAGES_TRIGGER_ID = '2147479553';
  *  googtag). Paused tags fire nothing, so they're treated as absent. Returns the
  *  tag name, or null when none is present. PURE. */
 export function findGa4BaseTag(snap: ContainerSnapshot): { name: string } | null {
+  // Resolve a "{{Some Constant}}" Tag ID to the constant's value, so a Google Tag
+  // configured for GA4 via a variable counts — but an Ads tag using e.g.
+  // "{{Conversion ID}}" (→ AW-…) does NOT falsely count as a GA4 base.
+  const resolve = (ref: string): string => {
+    const m = /^\s*\{\{(.+?)\}\}\s*$/.exec(ref);
+    if (!m) return ref;
+    const v = snap.variables.find((x) => x.name === m[1]);
+    return v ? String((v.parameter ?? []).find((p) => (p as { key?: string }).key === 'value')?.value ?? '') : '';
+  };
   for (const t of snap.tags) {
     if (t.paused) continue; // a paused base tag fires nothing → effectively absent
     if (t.type === 'gaawc') return { name: t.name };
     if (t.type === 'googtag') {
       // G-XXXX (GA4) and GT-XXXX (Google-tag destination group, also configures
-      // GA4) both qualify; a {{variable}} tagId is assumed GA4-configuring.
-      const tagId = String(t.parameter.find((p) => (p as { key?: string }).key === 'tagId')?.value ?? '');
-      if (/^G[T]?-/i.test(tagId) || tagId.includes('{{')) return { name: t.name };
+      // GA4) qualify; a {{variable}} tagId is resolved to its value first.
+      const id = resolve(String(t.parameter.find((p) => (p as { key?: string }).key === 'tagId')?.value ?? ''));
+      if (/^G[T]?-/i.test(id)) return { name: t.name };
     }
   }
   return null;
@@ -224,7 +237,16 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       // A formSubmission trigger with no `filter` fires on ALL forms; the
       // {{Form ID}}/{{Form Classes}} "Some Forms" scope goes in `filter` (same as
       // clicks — corpus: 85× in filter vs 3× in autoEventFilter).
-      const t: GtmTriggerResource = { name: sanitizeName(o.name), type: 'formSubmission' };
+      // waitForTags/checkValidation OFF: GTM's UI defaults them ON, which delays
+      // the submit and skips non-validating/AJAX forms — not wanted for tracking.
+      // These are DEDICATED top-level Trigger fields (single Parameter, no `key`) —
+      // NOT entries in `parameter[]` (corpus: 269/269 form triggers store them so).
+      const t: GtmTriggerResource = {
+        name: sanitizeName(o.name),
+        type: 'formSubmission',
+        waitForTags: { type: 'boolean', value: 'false' },
+        checkValidation: { type: 'boolean', value: 'false' },
+      };
       const filters: Param[] = [];
       if (o.formIdValue) filters.push(condition('{{Form ID}}', o.formIdOperator ?? 'equals', o.formIdValue));
       if (o.formClassesValue) filters.push(condition('{{Form Classes}}', o.formClassesOperator ?? 'contains', o.formClassesValue));
