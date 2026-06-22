@@ -144,28 +144,6 @@ async function detectInstalledOnHomepage(start: string): Promise<{ containers: s
   }
 }
 
-/** Discover pages directly from a SITEMAP URL the user provides (a sitemap.xml or
- *  a sitemapindex). Same-site to the sitemap's host; also reports the installed
- *  container from the site homepage. */
-export async function discoverFromSitemap(sitemapUrl: string): Promise<DiscoverResult> {
-  const sm = normalizeUrl(sitemapUrl, sitemapUrl);
-  const origin = sm ? originOf(sm) : null;
-  if (!sm || !origin) {
-    return { urls: [], viaSitemap: true, total: 0, installed: { containers: [], measurementIds: [] }, note: 'Not a valid sitemap http(s) URL.' };
-  }
-  const out = new Set<string>();
-  await collectSitemap(sm, origin, out, { n: MAX_SITEMAPS });
-  const installed = await detectInstalledOnHomepage(`${origin}/`);
-  const urls = [...out].slice(0, MAX_URLS);
-  return {
-    urls,
-    viaSitemap: true,
-    total: urls.length,
-    installed,
-    note: urls.length === 0 ? 'No page URLs found in that sitemap — check the URL points to a valid sitemap.xml.' : undefined,
-  };
-}
-
 /** Enumerate same-site pages: sitemap first, link-crawl fallback. Also reports
  *  which GTM container is already live on the site. */
 export async function discoverSite(startUrl: string): Promise<DiscoverResult> {

@@ -15,7 +15,7 @@ import type { GoogleDataService } from '../google/data-service';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions } from '../../shared/ipc';
 import { crawlAndSuggest, scanUrls, type PageDriver } from './scan-core';
-import { discoverSite, discoverFromSitemap } from './discover';
+import { discoverSite } from './discover';
 // Electron is the always-on, zero-install engine. Cheerio is added when present
 // (lazy-imported so a missing optional package never crashes startup). The two
 // run together per page and their results are MERGED — Electron renders JS +
@@ -67,14 +67,6 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     const verdict = urlAllowed(target, []);
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
     return discoverSite(target);
-  });
-
-  // Enumerate pages directly from a sitemap URL the user provides.
-  ipcMain.handle('suggestions:discoverSitemap', async (_e, url: unknown) => {
-    const target = String(url ?? '').trim();
-    const verdict = urlAllowed(target, []);
-    if (!verdict.ok) throw new Error(`Cannot fetch that sitemap: ${verdict.reason}`);
-    return discoverFromSitemap(target);
   });
 
   // Deep-scan a SPECIFIC list of pages the user selected after discovery.
