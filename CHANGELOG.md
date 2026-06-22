@@ -1,3 +1,9 @@
+## [1.25.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.24.1...v1.25.0) (2026-06-22)
+
+### Features
+
+* **tag-suggest:** build the social trigger from the EXACT domains Playwright scraped ([044afb0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/044afb0ee9dd16a80bc05ec2e17ebf802ace863b))
+
 ## [1.24.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.24.0...v1.24.1) (2026-06-22)
 
 ### Bug Fixes
