@@ -1,3 +1,10 @@
+## [1.24.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.24.0...v1.24.1) (2026-06-22)
+
+### Bug Fixes
+
+* **gtm:** corpus-correct triggers (no wait-for-tags, short social regex, click_* params) + GA4-config create ([07da057](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/07da0575c01f7b36a0d25b1bf7159cb2593e4dc0))
+* **gtm:** form trigger waitForTags/checkValidation are top-level fields, not parameter[] ([56f353b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/56f353b8fc76400c445077b714d7158c6dbcd316))
+
 ## [1.24.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.23.0...v1.24.0) (2026-06-22)
 
 ### Features
