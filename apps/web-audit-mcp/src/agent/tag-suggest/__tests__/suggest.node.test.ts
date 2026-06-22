@@ -2,7 +2,7 @@
  * Tag-suggestion engine — pure-logic tests (no browser).
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/suggest.node.test.ts
  */
-import { detectFormProvider } from '../providers.js';
+import { detectFormProvider, detectEmbeddedForm } from '../providers.js';
 import { buildSuggestions } from '../suggest.js';
 import type { PageSignals, SuggestInput, DetectedForm } from '../types.js';
 
@@ -27,6 +27,12 @@ check('provider: Marketo via id', detectFormProvider(sig({ selectorsPresent: ['#
 check('provider: Pardot via script', detectFormProvider(sig({ scriptSrcs: ['https://pi.pardot.com/pd.js'] })).vendor === 'pardot');
 check('provider: unknown when no signal', detectFormProvider(sig({ classNames: ['btn', 'container'] })).vendor === 'unknown');
 check('provider: carries evidence', detectFormProvider(sig({ classNames: ['hs-form'] })).evidence.includes('hs-form'));
+
+// ── embedded (cross-origin) form detection via iframe src ────────────────────
+check('embed: HubSpot via iframe src', detectEmbeddedForm(sig({ iframeSrcs: ['https://share.hsforms.com/abc123'] }))?.vendor === 'hubspot');
+check('embed: Typeform via iframe src', detectEmbeddedForm(sig({ iframeSrcs: ['https://form.typeform.com/to/xyz'] }))?.vendor === 'typeform');
+check('embed: NOT triggered by generic HubSpot TRACKING script (no form)', detectEmbeddedForm(sig({ scriptSrcs: ['https://js.hs-scripts.com/123.js'] })) === null);
+check('embed: null when there is no form signal at all', detectEmbeddedForm(sig({ classNames: ['btn', 'container'] })) === null);
 
 // ── form → suggestion ───────────────────────────────────────────────────────
 const contactForm: DetectedForm = { page: '/contact', purpose: 'contact', action: 'https://js.hsforms.net/x', provider: { vendor: 'hubspot', confidence: 'high', evidence: 'script js.hsforms.net' } };

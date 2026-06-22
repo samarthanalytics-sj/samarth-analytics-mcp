@@ -54,3 +54,41 @@ export function detectFormProvider(signals: PageSignals, action = ''): ProviderM
   }
   return { vendor: 'unknown', confidence: 'low', evidence: 'no known provider signature' };
 }
+
+// FORM-SPECIFIC embed markers — used to recognize a CROSS-ORIGIN embedded form
+// (whose fields we can't read) so it still gets a suggestion. Deliberately
+// STRICTER than detectFormProvider: only the providers' form scripts/classes/
+// selectors + form iframe srcs — NOT generic tracking (e.g. hs-scripts.com),
+// so we never synthesize a form that isn't there.
+const FORM_EMBED: Signature[] = [
+  {
+    vendor: 'hubspot',
+    test: (s) =>
+      some(s.scriptSrcs, /js\.hsforms\.net/i) ??
+      (hasClass(s, 'hs-form') || hasSel(s, '.hs-form') ? 'class .hs-form' : null) ??
+      some(s.iframeSrcs ?? [], /hsforms\.(com|net)|forms\.hubspot|share\.hsforms/i),
+  },
+  {
+    vendor: 'typeform',
+    test: (s) =>
+      (hasSel(s, '[data-tf-widget]') ? '[data-tf-widget]' : null) ??
+      some(s.scriptSrcs, /embed\.typeform\.com/i) ??
+      some(s.iframeSrcs ?? [], /\.typeform\.com\/(to|embed|widget)/i),
+  },
+  { vendor: 'marketo', test: (s) => (s.selectorsPresent.some((x) => /^#mktoForm_\d/.test(x)) ? 'id #mktoForm_*' : null) },
+  { vendor: 'mailchimp', test: (s, a) => (/list-manage\.com/i.test(a) ? 'action list-manage.com' : null) ?? (hasSel(s, '#mce-EMAIL') || hasSel(s, '#mc-embedded-subscribe') ? 'mailchimp id' : null) },
+  { vendor: 'gravityforms', test: (s) => (hasClass(s, 'gform_wrapper') ? 'class .gform_wrapper' : null) },
+  { vendor: 'contactform7', test: (s) => (hasClass(s, 'wpcf7') || hasClass(s, 'wpcf7-form') ? 'class .wpcf7' : null) },
+  { vendor: 'wpforms', test: (s) => (hasClass(s, 'wpforms-form') || hasClass(s, 'wpforms-container') ? 'class .wpforms-form' : null) },
+  { vendor: 'pardot', test: (s) => some(s.iframeSrcs ?? [], /pardot\.com/i) ?? some(s.scriptSrcs, /pi\.pardot\.com/i) },
+];
+
+/** A provider whose form is EMBEDDED on the page (often cross-origin), or null.
+ *  Used to synthesize a suggestion when the form's own fields are unreadable. */
+export function detectEmbeddedForm(signals: PageSignals): ProviderMatch | null {
+  for (const sig of FORM_EMBED) {
+    const evidence = sig.test(signals, '');
+    if (evidence) return { vendor: sig.vendor, confidence: 'medium', evidence: `${evidence} (embedded form)` };
+  }
+  return null;
+}

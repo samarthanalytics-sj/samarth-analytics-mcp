@@ -51,6 +51,11 @@ export function extractWithCheerio(html: string, baseUrl: string): { raw: PageSc
     const s = $(el).attr('src');
     if (s) scriptSrcs.push(abs(s));
   });
+  const iframeSrcs: string[] = [];
+  $('iframe[src]').slice(0, 50).each((_i, el) => {
+    const s = $(el).attr('src');
+    if (s) iframeSrcs.push(abs(s));
+  });
   const classNames = new Set<string>();
   $('[class]').slice(0, 1000).each((_i, el) => {
     const c = $(el).attr('class');
@@ -69,7 +74,7 @@ export function extractWithCheerio(html: string, baseUrl: string): { raw: PageSc
 
   const rawForms = extractFormsCheerio($, abs);
   return {
-    raw: { elements, signals: { scriptSrcs: scriptSrcs.slice(0, 300), classNames: [...classNames].slice(0, 600), selectorsPresent } },
+    raw: { elements, signals: { scriptSrcs: scriptSrcs.slice(0, 300), classNames: [...classNames].slice(0, 600), selectorsPresent, iframeSrcs: iframeSrcs.slice(0, 80) } },
     rawForms,
   };
 }

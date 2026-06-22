@@ -67,5 +67,21 @@ check('engine file_download trigger regex covers the same extensions (apk, #)', 
 // CTA tightening: bare "register" no longer matches header auth links
 check('CTA: "Login / Register" no longer a false-positive CTA', classifyElement({ tag: 'button', href: '', text: 'Login / Register', hasDownload: false, region: '' }, 'a.com') === null);
 
+// ── embedded cross-origin form → synthesized suggestion ──────────────────────
+{
+  const embedPage: PageScan = {
+    page: '/contact',
+    signals: { scriptSrcs: [], classNames: [], selectorsPresent: [], iframeSrcs: ['https://share.hsforms.com/x'] },
+    forms: [],
+    elements: [],
+  };
+  const embedInput = buildSuggestInput([embedPage], 'acme.com');
+  check('embed: cross-origin HubSpot iframe (no readable form) → synthesized contact form',
+    embedInput.forms.length === 1 && embedInput.forms[0].provider.vendor === 'hubspot' && embedInput.forms[0].purpose === 'contact');
+  check('embed: synthesized form → generate_lead suggestion', buildSuggestions(embedInput).some((s) => s.eventName === 'generate_lead'));
+  const realPlusEmbed: PageScan = { ...embedPage, forms: [{ purpose: 'contact', action: 'https://acme.com/x' }] };
+  check('embed: a readable form suppresses synthesis (no duplicate)', buildSuggestInput([realPlusEmbed], 'acme.com').forms.length === 1);
+}
+
 console.log(`\nTag-collect: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
