@@ -7,7 +7,7 @@
 
 import type { PwPage } from '../browser.js';
 import type { PageSignals, DetectedElement, DetectedForm, SuggestInput, FormPurpose } from './types.js';
-import { detectFormProvider } from './providers.js';
+import { detectFormProvider, detectEmbeddedForm } from './providers.js';
 import { DOWNLOAD_EXT } from './suggest.js';
 
 /** Raw, serializable element data emitted by the in-page collector. */
@@ -31,6 +31,7 @@ export function collectPageInBrowser(): PageScanRaw {
   const MAX = 400;
   const elements: RawElement[] = [];
   const scriptSrcs: string[] = [];
+  const iframeSrcs: string[] = [];
   const classNames = new Set<string>();
   const selectorsPresent = new Set<string>();
   const PROVIDER_SELECTORS = ['.hs-form', '[data-tf-widget]', '#mce-EMAIL', '#mc-embedded-subscribe', '.gform_wrapper', '.wpcf7', '.wpforms-form', '.wpforms-container'];
@@ -55,6 +56,10 @@ export function collectPageInBrowser(): PageScanRaw {
       elements.push({ tag: 'button', href: '', text: txt(b), hasDownload: false, region: regionOf(b) });
     }
     for (const s of Array.from(doc.querySelectorAll('script[src]')).slice(0, 200)) scriptSrcs.push((s as HTMLScriptElement).src);
+    for (const fr of Array.from(doc.querySelectorAll('iframe[src]')).slice(0, 50)) {
+      const src = (fr as HTMLIFrameElement).src;
+      if (src) iframeSrcs.push(src);
+    }
     for (const el of Array.from(doc.querySelectorAll('[class]')).slice(0, 1000)) {
       for (const c of (el as HTMLElement).classList) classNames.add(c);
       if (classNames.size > 600) break;
@@ -81,7 +86,7 @@ export function collectPageInBrowser(): PageScanRaw {
       /* cross-origin iframe — inaccessible */
     }
   }
-  return { elements, signals: { scriptSrcs: scriptSrcs.slice(0, 300), classNames: Array.from(classNames), selectorsPresent: Array.from(selectorsPresent) } };
+  return { elements, signals: { scriptSrcs: scriptSrcs.slice(0, 300), classNames: Array.from(classNames), selectorsPresent: Array.from(selectorsPresent), iframeSrcs: iframeSrcs.slice(0, 80) } };
 }
 
 /* ── PURE classification (unit-tested, no browser) ── */
@@ -157,6 +162,13 @@ export function buildSuggestInput(pages: PageScan[], siteHost: string): SuggestI
     elements.push(...p.elements);
     for (const f of p.forms) {
       forms.push({ page: p.page, purpose: f.purpose, action: f.action, provider: detectFormProvider(p.signals, f.action) });
+    }
+    // No readable <form> here, but a provider form is EMBEDDED (often a
+    // cross-origin iframe whose fields we can't read) → synthesize a lead form
+    // so it still gets a suggestion (these embeds are typically lead/contact).
+    if (p.forms.length === 0) {
+      const embed = detectEmbeddedForm(p.signals);
+      if (embed) forms.push({ page: p.page, purpose: 'contact', action: '', provider: embed });
     }
   }
   return { siteHost, forms, elements };

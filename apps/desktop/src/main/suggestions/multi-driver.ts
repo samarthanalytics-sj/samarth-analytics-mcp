@@ -28,6 +28,7 @@ export function mergeDriven(results: DrivenPage[]): DrivenPage {
   const scriptSrcs = new Set<string>();
   const classNames = new Set<string>();
   const selectorsPresent = new Set<string>();
+  const iframeSrcs = new Set<string>();
   const forms: RawForm[] = [];
   const seenForm = new Set<string>();
 
@@ -43,6 +44,7 @@ export function mergeDriven(results: DrivenPage[]): DrivenPage {
       for (const s of r.raw.signals.scriptSrcs) scriptSrcs.add(s);
       for (const c of r.raw.signals.classNames) classNames.add(c);
       for (const s of r.raw.signals.selectorsPresent) selectorsPresent.add(s);
+      for (const s of r.raw.signals.iframeSrcs ?? []) iframeSrcs.add(s);
     }
     if (r.rawForms) {
       for (const f of r.rawForms) {
@@ -61,7 +63,7 @@ export function mergeDriven(results: DrivenPage[]): DrivenPage {
     finalUrl: primary.finalUrl,
     raw: {
       elements,
-      signals: { scriptSrcs: [...scriptSrcs].slice(0, 300), classNames: [...classNames].slice(0, 600), selectorsPresent: [...selectorsPresent] },
+      signals: { scriptSrcs: [...scriptSrcs].slice(0, 300), classNames: [...classNames].slice(0, 600), selectorsPresent: [...selectorsPresent], iframeSrcs: [...iframeSrcs].slice(0, 80) },
     },
     rawForms: forms,
   };

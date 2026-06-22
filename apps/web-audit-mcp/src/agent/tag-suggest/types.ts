@@ -14,6 +14,9 @@ export interface PageSignals {
   classNames: string[];
   /** Selectors known to be present (e.g. '#mce-EMAIL', '[data-tf-widget]', '#mktoForm_12'). */
   selectorsPresent: string[];
+  /** <iframe src> values — lets us detect a CROSS-ORIGIN embedded provider form
+   *  (HubSpot/Typeform/Marketo) whose fields we can't read. */
+  iframeSrcs?: string[];
 }
 
 export type FormProvider =
