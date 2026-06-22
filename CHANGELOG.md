@@ -1,3 +1,13 @@
+## [1.26.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.25.0...v1.26.0) (2026-06-22)
+
+### Features
+
+* **tag-suggest:** track login, search, and view-all/case-studies buttons + un-skip login/search forms ([515f88e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/515f88eded0378849ef5dcbf1818c352c383878f))
+
+### Bug Fixes
+
+* **tag-suggest:** search CTA uses 'search_click' so a Search submit button can't double-count ([e8e2bfa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e8e2bfa20222fe994d079deb7745b515fcd79009))
+
 ## [1.25.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.24.1...v1.25.0) (2026-06-22)
 
 ### Features
