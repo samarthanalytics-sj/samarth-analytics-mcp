@@ -1,3 +1,15 @@
+## [1.22.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.21.0...v1.22.0) (2026-06-22)
+
+### Features
+
+* **gtm:** add GA4 base (Configuration) tag if missing, via a {{GA4 - Variable}} Measurement ID ([920612f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/920612fe22656f2a2e2a22b9937e2b65b38b9152))
+* **tag-suggest:** "settle: auto" by default — wait for network-idle instead of a manual ms ([9e5432d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9e5432d13fd0fa0b65f1395c2a6c53e4c1a65df0))
+* **tag-suggest:** sitemap-URL input mode + social trigger matches only the networks present on the site ([158b4bf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/158b4bf4caf2ba7780bba1bf0c1a855a6db5b427))
+
+### Bug Fixes
+
+* **gtm:** GA4-base detection — match GT- ids, skip paused, reject non-constant variable name clash ([4a11240](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4a11240f28e6c8f67eebc3747430c78c5589aa79))
+
 ## [1.21.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.20.1...v1.21.0) (2026-06-22)
 
 ### Features
