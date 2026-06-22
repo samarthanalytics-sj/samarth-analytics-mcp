@@ -330,11 +330,11 @@ const CONF = { high: 0, medium: 1, low: 2 } as const;
 
 export function buildSuggestions(input: SuggestInput): SuggestedTag[] {
   const scopeCtx = nonUniqueFormScopes(input.forms);
-  // Social trigger fires on ONLY the networks actually linked from the site.
-  const presentNetworks = new Set(
-    input.elements.filter((e) => e.kind === 'social' && e.socialNetwork).map((e) => e.socialNetwork as string),
+  // Social trigger fires on ONLY the exact domains scraped from the site's links.
+  const presentDomains = new Set(
+    input.elements.filter((e) => e.kind === 'social' && e.socialDomain).map((e) => e.socialDomain as string),
   );
-  const socialPattern = buildSocialUrlPattern(presentNetworks);
+  const socialPattern = buildSocialUrlPattern(presentDomains);
   const raw: SuggestedTag[] = [
     ...input.forms.map((f) => formSuggestion(f, scopeCtx)),
     ...input.elements.map((e) => elementSuggestion(e, socialPattern)),

@@ -82,9 +82,11 @@ export interface DetectedElement {
   selector?: string;
   /** Set when kind==='cta' — drives the tag/trigger name + the trigger filter. */
   intent?: CtaIntent;
-  /** Set when kind==='social' — which network (facebook, linkedin, …), so the
-   *  trigger can match ONLY the networks the site actually links to. */
+  /** Set when kind==='social' — which network (facebook, linkedin, …). */
   socialNetwork?: string;
+  /** Set when kind==='social' — the EXACT domain scraped (e.g. "facebook.com"),
+   *  so the trigger matches only the domains the site actually links to. */
+  socialDomain?: string;
 }
 
 export interface SuggestInput {

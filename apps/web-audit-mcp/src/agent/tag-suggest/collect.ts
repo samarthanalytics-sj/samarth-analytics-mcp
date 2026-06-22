@@ -9,7 +9,7 @@ import type { PwPage } from '../browser.js';
 import type { PageSignals, DetectedElement, DetectedForm, SuggestInput, FormPurpose, FormFieldSummary } from './types.js';
 import { detectFormProvider, detectEmbeddedForm } from './providers.js';
 import { classifyCtaIntent } from './cta-intents.js';
-import { socialNetworkOf } from './social.js';
+import { socialNetworkOf, socialDomainOf } from './social.js';
 import { DOWNLOAD_EXT } from './suggest.js';
 
 // Re-exported so callers/tests have one import site for the classifier.
@@ -135,7 +135,7 @@ export function classifyElement(raw: RawElement, siteHost: string): DetectedElem
     // outbound, but we want it named) — and we record WHICH network it is.
     if (!internal) {
       const net = socialNetworkOf(host);
-      if (net) return { ...make('social'), socialNetwork: net };
+      if (net) return { ...make('social'), socialNetwork: net, socialDomain: socialDomainOf(host) ?? undefined };
       return make('outbound');
     }
   }
