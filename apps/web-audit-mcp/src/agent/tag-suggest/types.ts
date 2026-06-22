@@ -69,7 +69,7 @@ export type ElementKind = 'email' | 'phone' | 'download' | 'outbound' | 'social'
  *  specific intent. */
 export type CtaIntent =
   | 'add_to_cart' | 'subscribe' | 'book_demo' | 'request_quote' | 'contact_sales'
-  | 'get_started' | 'learn_more' | 'faq' | 'generic';
+  | 'get_started' | 'login' | 'search' | 'view_more' | 'learn_more' | 'faq' | 'generic';
 
 export interface DetectedElement {
   page: string;

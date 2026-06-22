@@ -22,8 +22,9 @@ export interface CtaIntentDef {
   label: string;
 }
 
-// Ordered most-specific first; the first match wins. Bare "register" stays out
-// (it matches header "Login / Register" auth links) — only "register now/today".
+// Ordered most-specific first; the first match wins. Bare "register" stays out of
+// the generic bucket (only "register now/today") — but "log in"/"sign in" IS a
+// tracked intent (login) now, so "Login / Register" classifies as login.
 //
 // Precision note: these are HEURISTIC suggestions a human reviews, and the GTM
 // trigger uses the SAME pattern via RE2 matchRegex. RE2 has no lookahead, so the
@@ -42,6 +43,12 @@ export const CTA_INTENTS: CtaIntentDef[] = [
   { intent: 'contact_sales', pattern: '\\b(contact|talk\\s+to)\\s+sales\\b', event: 'contact_sales_click', label: 'Contact Sales Click' },
   { intent: 'subscribe', pattern: '\\bsubscribe\\b|\\bsign\\s*me\\s*up\\b', event: 'subscribe_click', label: 'Subscribe Click' },
   { intent: 'get_started', pattern: '\\b(get\\s+started|start\\s+(free|now|your\\s+(free\\s+)?trial)|free\\s+trial|try\\s+(it\\s+)?free|start\\s+for\\s+free)\\b', event: 'get_started_click', label: 'Get Started Click' },
+  { intent: 'login', pattern: '\\b(log\\s*in|login|sign\\s*in)\\b', event: 'login_click', label: 'Login Click' },
+  // event is 'search_click' (NOT bare 'search'): the search FORM's submit tag uses
+  // the GA4 'search' event, and clicking a "Search" submit button raises BOTH
+  // gtm.click and gtm.formSubmit — a shared event name would double-count.
+  { intent: 'search', pattern: '\\bsearch\\b', event: 'search_click', label: 'Search' },
+  { intent: 'view_more', pattern: '\\b(see|view|browse|explore|show)\\s+(all|more)\\b|\\bcase\\s+stud(y|ies)\\b|\\bview\\s+case\\b|\\bread\\s+more\\b', event: 'view_all_click', label: 'View All Click' },
   { intent: 'learn_more', pattern: '\\b(learn\\s+more|find\\s+out\\s+more|discover\\s+more)\\b', event: 'learn_more_click', label: 'Learn More Click' },
   { intent: 'faq', pattern: '\\b(faqs?|frequently\\s+asked\\s+questions?)\\b', event: 'faq_click', label: 'FAQ Click' },
   { intent: 'generic', pattern: '\\b(buy\\s+now|create\\s+(an\\s+)?account|sign\\s*up|join\\s+(now|today)|order\\s+now|shop\\s+now|donate|apply\\s+now|register\\s+(now|today))\\b', event: 'cta_click', label: 'CTA Click' },

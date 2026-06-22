@@ -66,6 +66,8 @@ const FORM_LABEL: Record<string, string> = {
   contact: 'Contact Form',
   signup: 'Signup Form',
   newsletter: 'Newsletter Form',
+  login: 'Login Form',
+  search: 'Search Form',
   other: 'Form Submission',
 };
 
@@ -81,6 +83,8 @@ const FORM_EVENT: Record<string, string> = {
   contact: 'contact_form',
   signup: 'signup_form',
   newsletter: 'newsletter_form',
+  login: 'login', // GA4 recommended event (a login-form submit)
+  search: 'search', // GA4 recommended event (a search-form submit)
   // NOT "form_submit": that's the reserved name GA4 Enhanced Measurement's form
   // interactions emits, so reusing it would double-count.
   other: 'form_submission',
@@ -134,7 +138,10 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // Skip: search/login submits aren't conversions; checkout is ECOMMERCE — it
   // needs the dataLayer (begin_checkout/purchase), not a form-submit tag, so it's
   // deferred to the v3 ecommerce phase rather than mis-suggested here.
-  if (f.purpose === 'search' || f.purpose === 'login' || f.purpose === 'checkout') return null;
+  // checkout is ECOMMERCE — needs the dataLayer (begin_checkout/purchase), so it's
+  // deferred to the v3 ecommerce phase rather than a form-submit tag. Search/login
+  // forms ARE tracked now (→ GA4 search / login events).
+  if (f.purpose === 'checkout') return null;
   const eventName = FORM_EVENT[f.purpose] ?? 'form_submission';
   const formLabel = FORM_LABEL[f.purpose] ?? 'Form Submission';
   const prov = f.provider.vendor !== 'unknown' ? ` (${f.provider.vendor})` : '';

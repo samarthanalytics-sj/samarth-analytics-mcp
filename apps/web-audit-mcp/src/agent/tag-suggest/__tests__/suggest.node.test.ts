@@ -47,7 +47,12 @@ check('form: contact → contact_form on form_submit', out1.length === 1 && out1
 check('form: label names the provider', out1[0].label.includes('hubspot'));
 check('form: directly creatable (platform + measurementId)', out1[0].platform === 'ga4_event' && out1[0].measurementId === '{{GA4 Measurement ID}}');
 check('naming: tag "GA4 Event - Contact Form Tag", trigger "Contact Form Trigger"', out1[0].tagName === 'GA4 Event - Contact Form Tag' && out1[0].trigger.name === 'Contact Form Trigger');
-check('form: search/login produce NO suggestion', buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'search', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] }).length === 0);
+const provLow = { vendor: 'unknown' as const, confidence: 'low' as const, evidence: '' };
+const searchForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'search', action: '', provider: provLow }], elements: [] });
+check('form: search form → search event + "GA4 Event - Search Form Tag"', searchForm.length === 1 && searchForm[0].eventName === 'search' && searchForm[0].tagName === 'GA4 Event - Search Form Tag');
+const loginFormS = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'login', action: '', provider: provLow }], elements: [] });
+check('form: login form → login event + "GA4 Event - Login Form Tag"', loginFormS.length === 1 && loginFormS[0].eventName === 'login' && loginFormS[0].tagName === 'GA4 Event - Login Form Tag');
+check('form: checkout STILL produces no suggestion (ecommerce, deferred)', buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'checkout', action: '', provider: provLow }], elements: [] }).length === 0);
 const nlForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'newsletter', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
 check('form: newsletter → "GA4 Event - Newsletter Form Tag" + newsletter_form', nlForm[0].tagName === 'GA4 Event - Newsletter Form Tag' && nlForm[0].eventName === 'newsletter_form' && nlForm[0].trigger.name === 'Newsletter Form Trigger');
 const otherFormName = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/x', purpose: 'other', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
@@ -229,10 +234,26 @@ const genericCtas = ctaInput.filter((s) => s.eventName === 'cta_click');
 check('cta: generic "Buy now" stays generic (literal text, contains) + "Buy now Trigger" + collapses', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'contains' && genericCtas[0].trigger.name === 'Buy now Trigger');
 check('cta: every CTA carries dynamic cta_text={{Click Text}}', ctaInput.every((s) => s.eventParameters?.some((p) => p.name === 'cta_text' && p.value === '{{Click Text}}')));
 
+// Newly tracked CTAs: login, search, and view-all / case-studies buttons.
+const moreCtas = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/', kind: 'cta', text: 'Login', intent: 'login' },
+  { page: '/', kind: 'cta', text: 'Search', intent: 'search' },
+  { page: '/work', kind: 'cta', text: 'See all case studies', intent: 'view_more' },
+] });
+const loginCta = moreCtas.find((s) => s.eventName === 'login_click');
+check('cta: login → "GA4 Event - Login Click Tag" + fires on "Login"/"Sign In"', loginCta?.tagName === 'GA4 Event - Login Click Tag' && reTest(loginCta?.trigger.clickTextValue ?? '', 'Login') && reTest(loginCta?.trigger.clickTextValue ?? '', 'Sign In'));
+const searchCta = moreCtas.find((s) => s.eventName === 'search_click');
+// search CTA uses 'search_click' (NOT bare 'search') so a "Search" submit button
+// can't double-count with the search FORM tag (which keeps the GA4 'search' event).
+check('cta: search button → "GA4 Event - Search Tag", event search_click, fires on "Search"', searchCta?.tagName === 'GA4 Event - Search Tag' && searchCta?.eventName === 'search_click' && reTest(searchCta?.trigger.clickTextValue ?? '', 'Search'));
+check('cta: search button event (search_click) is DISTINCT from search FORM event (search) — no double-count', searchForm[0].eventName === 'search' && searchCta?.eventName === 'search_click');
+const viewCta = moreCtas.find((s) => s.eventName === 'view_all_click');
+check('cta: "See all case studies" → "GA4 Event - View All Click Tag" + fires on "View all"/"Case studies"', viewCta?.tagName === 'GA4 Event - View All Click Tag' && reTest(viewCta?.trigger.clickTextValue ?? '', 'View all') && reTest(viewCta?.trigger.clickTextValue ?? '', 'Case studies'));
+
 // REGRESSION (image bug): no generated tag/trigger name may contain ":" (GTM rejects it).
 const colonCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Apply Now: Today', intent: 'generic' }] });
 check('names: a CTA text with ":" yields a colon-free trigger name ("Apply Now Today Trigger")', colonCta[0].trigger.name === 'Apply Now Today Trigger');
-const allNames = [...ctaInput, ...socialOut, ...els, ...out1, ...nlForm].flatMap((s) => [s.tagName, s.trigger.name]);
+const allNames = [...ctaInput, ...moreCtas, ...socialOut, ...els, ...out1, ...nlForm, ...searchForm, ...loginFormS].flatMap((s) => [s.tagName, s.trigger.name]);
 check('names: NO tag or trigger name contains the GTM-invalid ":" character', allNames.every((n) => !n.includes(':')));
 
 console.log(`\nTag-suggest: ${passed} passed, ${failed} failed`);
