@@ -1052,7 +1052,7 @@ function TagReviewPanel({
   const [showLog, setShowLog] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
-  const [discoverMode, setDiscoverMode] = useState<'site' | 'sitemap'>('site');
+  const [discoverMode, setDiscoverMode] = useState<'site' | 'single'>('site');
   const [selectedPages, setSelectedPages] = useState<Record<string, boolean>>({});
 
   const ctx = active?.gtmContext;
@@ -1077,15 +1077,37 @@ function TagReviewPanel({
     loadSuggestions(res.suggestions);
   }
 
-  // Step 1: enumerate the site's pages (sitemap/crawl), then the user picks which to scan.
+  // "Single page" mode: scan ONLY the entered URL directly — no discovery, no page
+  // list, straight to the tag results.
+  async function doSinglePageScan(): Promise<void> {
+    const target = url.trim();
+    if (!target || scanning || discovering) return;
+    onError('');
+    setScanning(true);
+    setDiscovered(null);
+    try {
+      applyScanResult(await window.desktop.tags.scanUrls([target], { settleMs: effSettleMs() }));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  // Step 1 (Main website mode): enumerate the site's pages (sitemap/crawl), then
+  // the user picks which to scan. In Single-page mode, scan the one URL directly.
   async function doDiscover(): Promise<void> {
     const target = url.trim();
     if (!target || discovering || scanning) return;
+    if (discoverMode === 'single') {
+      await doSinglePageScan();
+      return;
+    }
     onError('');
     setDiscovering(true);
     setDiscovered(null);
     try {
-      const res = discoverMode === 'sitemap' ? await window.desktop.tags.discoverSitemap(target) : await window.desktop.tags.discover(target);
+      const res = await window.desktop.tags.discover(target);
       setDiscovered(res);
       // Pre-select the first 25 so a click-to-scan is immediate but bounded.
       setSelectedPages(Object.fromEntries(res.urls.map((u, i) => [u, i < 25])));
@@ -1225,21 +1247,21 @@ function TagReviewPanel({
         {/* Source */}
         <div style={styles.card}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-            {(['site', 'sitemap'] as const).map((m) => (
+            {(['site', 'single'] as const).map((m) => (
               <button
                 key={m}
                 style={discoverMode === m ? styles.toggleOn : styles.toggleOff}
                 onClick={() => setDiscoverMode(m)}
                 disabled={scanning || discovering}
               >
-                {m === 'site' ? 'Main website' : 'Sitemap URL'}
+                {m === 'site' ? 'Main website' : 'Single page'}
               </button>
             ))}
           </div>
           <div style={styles.formRow}>
             <input
               style={styles.input}
-              placeholder={discoverMode === 'sitemap' ? 'https://example.com/sitemap.xml' : 'https://example.com'}
+              placeholder={discoverMode === 'single' ? 'https://example.com/pricing' : 'https://example.com'}
               value={url}
               disabled={scanning || discovering}
               onChange={(e) => setUrl(e.target.value)}
@@ -1255,14 +1277,20 @@ function TagReviewPanel({
               )}
             </label>
             <button style={styles.primaryBtn} onClick={doDiscover} disabled={!url.trim() || discovering || scanning}>
-              {discovering ? 'Discovering…' : 'Discover pages'}
+              {discoverMode === 'single'
+                ? scanning
+                  ? 'Scanning…'
+                  : 'Scan page'
+                : discovering
+                  ? 'Discovering…'
+                  : 'Discover pages'}
             </button>
           </div>
           <div style={styles.muted}>
-            {discoverMode === 'sitemap'
-              ? 'Pastes a sitemap.xml (or sitemapindex) URL and lists its pages directly — handy when auto-discovery misses pages.'
+            {discoverMode === 'single'
+              ? 'Scans ONLY this page (no crawl, no sitemap) and shows its tags directly'
               : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan'}
-            {' '}— then merges Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
+            {' '}— merging Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
             approve.{' '}
             <button style={styles.linkBtn} onClick={doQuickScan} disabled={!url.trim() || scanning || discovering}>
               quick scan (~25 pages)

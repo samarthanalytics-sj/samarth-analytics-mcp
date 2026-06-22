@@ -114,7 +114,6 @@ const api = {
   // GTM drafts via the existing create_gtm_tracking_tag path.
   tags: {
     discover: (url: string): Promise<DiscoverResult> => ipcRenderer.invoke('suggestions:discover', url),
-    discoverSitemap: (url: string): Promise<DiscoverResult> => ipcRenderer.invoke('suggestions:discoverSitemap', url),
     scanUrls: (urls: string[], opts?: TagScanOptions): Promise<TagScanResult> =>
       ipcRenderer.invoke('suggestions:scanUrls', urls, opts),
     scan: (url: string, opts?: TagScanOptions): Promise<TagScanResult> =>
