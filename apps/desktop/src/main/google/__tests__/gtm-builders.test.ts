@@ -94,11 +94,11 @@ test('Custom HTML tag: html type + snippet', () => {
   assert.equal(findParam(t.parameter, 'html')?.value, '<script>fbq()</script>');
 });
 
-test('link_click trigger: linkClick + {{Click URL}} autoEventFilter, needs clickUrl var', () => {
+test('link_click trigger: linkClick + {{Click URL}} scope in filter (NOT autoEventFilter), needs clickUrl var', () => {
   const tr = buildTrigger({ name: 'Email link click', kind: 'link_click', clickUrlValue: 'mailto:' });
   assert.equal(tr.type, 'linkClick');
-  assert.equal(tr.filter, undefined, 'click conditions go in autoEventFilter, not filter');
-  const f = (tr.autoEventFilter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(tr.autoEventFilter, undefined, 'scope conditions go in filter, not autoEventFilter (corpus-verified)');
+  const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
   assert.equal(f.type, 'contains');
   assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Click URL}}');
   assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, 'mailto:');
@@ -117,16 +117,16 @@ test('names: GTM-invalid ":" is stripped from tag + trigger names (was failing c
 test('all_clicks trigger: {{Click Text}} filter (CTA) + needs clickText var', () => {
   const tr = buildTrigger({ name: 'CTA click - Book a demo', kind: 'all_clicks', clickTextValue: 'Book a demo', clickTextOperator: 'contains' });
   assert.equal(tr.type, 'click');
-  const f = (tr.autoEventFilter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
   assert.equal(f.type, 'contains');
   assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Click Text}}');
   assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, 'Book a demo');
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'all_clicks', clickTextValue: 'Book a demo' }), ['clickText']);
 });
 
-test('click trigger: clickUrl AND clickText conditions are both emitted (AND-ed)', () => {
+test('click trigger: clickUrl AND clickText conditions are both emitted (AND-ed) in filter', () => {
   const tr = buildTrigger({ name: 'x', kind: 'all_clicks', clickUrlValue: '/buy', clickTextValue: 'Buy' });
-  assert.equal((tr.autoEventFilter ?? []).length, 2);
+  assert.equal((tr.filter ?? []).length, 2);
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'all_clicks', clickUrlValue: '/buy', clickTextValue: 'Buy' }), ['clickUrl', 'clickText']);
 });
 
@@ -144,6 +144,32 @@ test('custom_event trigger: customEvent + {{_event}} filter', () => {
   const f = (tr.customEventFilter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
   assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{_event}}');
   assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, 'purchase');
+});
+
+test('form_submit trigger: scoped to one form by {{Form ID}} in filter, needs formId var', () => {
+  const tr = buildTrigger({ name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'contact-form' });
+  assert.equal(tr.type, 'formSubmission');
+  assert.equal(tr.autoEventFilter, undefined, 'form scope goes in filter, not autoEventFilter');
+  const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(f.type, 'equals');
+  assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Form ID}}');
+  assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, 'contact-form');
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'form_submit', formIdValue: 'contact-form' }), ['formId']);
+});
+
+test('form_submit trigger: no form filter → fires on ALL forms (no filter)', () => {
+  const tr = buildTrigger({ name: 'All Forms Trigger', kind: 'form_submit' });
+  assert.equal(tr.type, 'formSubmission');
+  assert.equal(tr.filter, undefined);
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'form_submit' }), []);
+});
+
+test('form_submit trigger: {{Form Classes}} contains in filter when no id', () => {
+  const tr = buildTrigger({ name: 't', kind: 'form_submit', formClassesValue: 'gform_1' });
+  const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(f.type, 'contains');
+  assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Form Classes}}');
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'form_submit', formClassesValue: 'gform_1' }), ['formClasses']);
 });
 
 test('variables: constant / data_layer / javascript types + keys', () => {

@@ -117,6 +117,8 @@ export interface SuggestedTagView {
   page: string;
   label: string;
   evidence: string;
+  /** Optional caveat (e.g. an embedded provider whose native trigger won't fire). */
+  note?: string;
   confidence: 'high' | 'medium' | 'low';
   /** GA4 Enhanced Measurement already auto-tracks this — flagged, not pushed. */
   enhancedMeasurementOverlap: boolean;
@@ -132,6 +134,10 @@ export interface SuggestedTagView {
     clickUrlOperator?: string;
     clickTextValue?: string;
     clickTextOperator?: string;
+    formIdValue?: string;
+    formIdOperator?: string;
+    formClassesValue?: string;
+    formClassesOperator?: string;
     eventName?: string;
   };
 }

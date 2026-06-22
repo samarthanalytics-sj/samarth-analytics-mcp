@@ -6,7 +6,7 @@
 // classifier.
 
 import type { PwPage } from '../browser.js';
-import type { PageSignals, DetectedElement, DetectedForm, SuggestInput, FormPurpose } from './types.js';
+import type { PageSignals, DetectedElement, DetectedForm, SuggestInput, FormPurpose, FormFieldSummary } from './types.js';
 import { detectFormProvider, detectEmbeddedForm } from './providers.js';
 import { classifyCtaIntent } from './cta-intents.js';
 import { DOWNLOAD_EXT } from './suggest.js';
@@ -38,7 +38,7 @@ export function collectPageInBrowser(): PageScanRaw {
   const iframeSrcs: string[] = [];
   const classNames = new Set<string>();
   const selectorsPresent = new Set<string>();
-  const PROVIDER_SELECTORS = ['.hs-form', '[data-tf-widget]', '#mce-EMAIL', '#mc-embedded-subscribe', '.gform_wrapper', '.wpcf7', '.wpforms-form', '.wpforms-container'];
+  const PROVIDER_SELECTORS = ['.hs-form', '[data-tf-widget]', '[data-paperform-id]', '#mce-EMAIL', '#mc-embedded-subscribe', '.gform_wrapper', '.wpcf7', '.wpforms-form', '.wpforms-container'];
 
   const regionOf = (el: Element): RawElement['region'] => {
     const t = el.closest('header,footer,nav,main')?.tagName.toLowerCase();
@@ -166,7 +166,14 @@ export interface PageScan {
   page: string;
   elements: DetectedElement[];
   /** From forms.ts FormAnalysis (subset). */
-  forms: Array<{ purpose: FormPurpose; action: string }>;
+  forms: Array<{
+    purpose: FormPurpose;
+    action: string;
+    method?: string;
+    formId?: string;
+    formClasses?: string;
+    fields?: FormFieldSummary[];
+  }>;
   signals: PageSignals;
 }
 
@@ -179,7 +186,16 @@ export function buildSuggestInput(pages: PageScan[], siteHost: string): SuggestI
   for (const p of pages) {
     elements.push(...p.elements);
     for (const f of p.forms) {
-      forms.push({ page: p.page, purpose: f.purpose, action: f.action, provider: detectFormProvider(p.signals, f.action) });
+      forms.push({
+        page: p.page,
+        purpose: f.purpose,
+        action: f.action,
+        provider: detectFormProvider(p.signals, f.action),
+        method: f.method,
+        formId: f.formId,
+        formClasses: f.formClasses,
+        fields: f.fields,
+      });
     }
     // No readable <form> here, but a provider form is EMBEDDED (often a
     // cross-origin iframe whose fields we can't read) → synthesize a lead form

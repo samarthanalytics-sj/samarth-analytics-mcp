@@ -742,7 +742,7 @@ export function buildToolRegistry(
       description:
         'PREFERRED way to create a tag that fires on an event — builds a CORRECT GTM resource from simple fields (you do not write raw GTM JSON). One confirmed step: enables needed built-in variables, reuses an existing same-named trigger or creates it, and creates the tag linked to it. ' +
         'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for Facebook/LinkedIn/TikTok/other pixels). ' +
-        'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event), "pageview", "form_submit". ' +
+        'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event), "pageview", "form_submit" (optional formIdValue and/or formClassesValue, each with a *Operator — scopes the trigger to ONE form via {{Form ID}}/{{Form Classes}}; omit both and it fires on every form submit). ' +
         'eventParameters values may be GTM built-in variables (e.g. {{Click URL}}, {{Click Text}}, {{Form ID}}, {{Form URL}}) — the needed built-in variables are auto-enabled.',
       inputSchema: {
         type: 'object',
@@ -775,6 +775,10 @@ export function buildToolRegistry(
               clickUrlOperator: { type: 'string' },
               clickTextValue: { type: 'string' },
               clickTextOperator: { type: 'string' },
+              formIdValue: { type: 'string' },
+              formIdOperator: { type: 'string' },
+              formClassesValue: { type: 'string' },
+              formClassesOperator: { type: 'string' },
               eventName: { type: 'string' },
             },
             required: ['name', 'kind'],
@@ -826,6 +830,10 @@ export function buildToolRegistry(
           clickUrlOperator: ts.clickUrlOperator != null ? s(ts.clickUrlOperator) : undefined,
           clickTextValue: ts.clickTextValue != null ? s(ts.clickTextValue) : undefined,
           clickTextOperator: ts.clickTextOperator != null ? s(ts.clickTextOperator) : undefined,
+          formIdValue: ts.formIdValue != null ? s(ts.formIdValue) : undefined,
+          formIdOperator: ts.formIdOperator != null ? s(ts.formIdOperator) : undefined,
+          formClassesValue: ts.formClassesValue != null ? s(ts.formClassesValue) : undefined,
+          formClassesOperator: ts.formClassesOperator != null ? s(ts.formClassesOperator) : undefined,
           eventName: ts.eventName != null ? s(ts.eventName) : undefined,
         };
 

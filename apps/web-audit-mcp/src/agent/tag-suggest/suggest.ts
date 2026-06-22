@@ -5,7 +5,7 @@
 // we don't suggest redundant tags. Output is directly creatable via the existing
 // create_gtm_tracking_tag tool.
 
-import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag } from './types.js';
+import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, FormProvider } from './types.js';
 import { CTA_BY_INTENT } from './cta-intents.js';
 
 const GA4_VAR = '{{GA4 Measurement ID}}';
@@ -91,7 +91,51 @@ const FORM_EVENT: Record<string, string> = {
   other: 'form_submission',
 };
 
-function formSuggestion(f: DetectedForm): SuggestedTag | null {
+// Providers whose form submits inside an iframe / via AJAX — GTM's NATIVE Form
+// Submission trigger won't fire for these; they need a Custom Event listener.
+const EMBED_PROVIDERS = new Set<FormProvider>(['hubspot', 'paperform', 'typeform', 'marketo', 'pardot']);
+const PROVIDER_EVENT_HINT: Partial<Record<FormProvider, string>> = {
+  hubspot: 'HubSpot fires a global submit callback (hsFormCallback / window message)',
+  paperform: 'Paperform posts a window message on submit',
+  typeform: 'Typeform posts a window message on submit',
+  marketo: 'Marketo fires MktoForms2().onSuccess',
+  pardot: 'Pardot redirects to a thank-you/completion URL on submit',
+};
+
+// Framework/wrapper classes shared by EVERY form of a stack — useless (harmful)
+// for scoping a trigger to ONE form. Never used as a {{Form Classes}} filter.
+const GENERIC_FORM_CLASS = /^(form|form-(wrapper|container|inner|inline|horizontal|vertical|group|control|row|inputs?|fields?|signin|signup|stacked)|wpforms-(form|container|validate)|wpcf7(-form)?|gform_wrapper|hs-form|hbspt-form|mc4wp-form|mc-field-group|needs-validation|was-validated|elementor-form|nf-form|frm-show-form|et_pb_contact_form)$/i;
+
+/** A class that reliably scopes to ONE form — i.e. a form-ish class carrying a
+ *  numeric instance id (gform_1, mktoForm_521, form-42). Bare/wrapper classes are
+ *  rejected (they're shared across all forms of a stack → would over-fire).
+ *  Returns null if none → the caller warns "fires on every form". */
+function pickFormClass(classes?: string): string | null {
+  if (!classes) return null;
+  for (const c of classes.split(/\s+/).filter(Boolean)) {
+    if (GENERIC_FORM_CLASS.test(c)) continue;
+    if (/form/i.test(c) && /\d/.test(c) && c.length >= 5) return c;
+  }
+  return null;
+}
+
+/** Stable per-form signature (purpose + field shape + action) — two forms with
+ *  the SAME id but different signatures are DIFFERENT forms sharing a non-unique
+ *  id, so that id can't scope a trigger. NEVER includes entered values. */
+function formSignature(f: DetectedForm): string {
+  const fields = (f.fields ?? [])
+    .map((x) => `${x.type}:${x.name}`)
+    .sort()
+    .join(',');
+  return `${f.purpose}|${fields}|${f.action}`;
+}
+
+interface FormScopeCtx {
+  nonUniqueIds: Set<string>;
+  nonUniqueClasses: Set<string>;
+}
+
+function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null {
   // Skip: search/login submits aren't conversions; checkout is ECOMMERCE — it
   // needs the dataLayer (begin_checkout/purchase), not a form-submit tag, so it's
   // deferred to the v3 ecommerce phase rather than mis-suggested here.
@@ -99,11 +143,58 @@ function formSuggestion(f: DetectedForm): SuggestedTag | null {
   const eventName = FORM_EVENT[f.purpose] ?? 'form_submission';
   const formLabel = FORM_LABEL[f.purpose] ?? 'Form Submission';
   const prov = f.provider.vendor !== 'unknown' ? ` (${f.provider.vendor})` : '';
+
+  // Scope the trigger to THIS form via its id (preferred) or an instance-unique
+  // class — but ONLY if that id/class isn't shared with another form (else it
+  // would fire for both). Otherwise it stays unscoped (fires on every form).
+  const trigger: SuggestedTag['trigger'] = { name: trigNameOf(formLabel), kind: 'form_submit' };
+  const rawClass = pickFormClass(f.formClasses);
+  const idUnique = !!f.formId && !ctx.nonUniqueIds.has(f.formId);
+  const classUnique = !!rawClass && !ctx.nonUniqueClasses.has(rawClass);
+  let usedClass: string | null = null;
+  if (idUnique) {
+    trigger.formIdValue = f.formId;
+    trigger.formIdOperator = 'equals';
+  } else if (classUnique) {
+    trigger.formClassesValue = rawClass!;
+    trigger.formClassesOperator = 'contains';
+    usedClass = rawClass;
+  }
+
+  // Flag the cases where the trigger won't fire / won't scope correctly.
+  // Pardot's form-HANDLER mode is a native <form> POST the native trigger handles
+  // — only its iframe-embed mode (method 'js' / no native form) needs a listener.
+  const isEmbed =
+    EMBED_PROVIDERS.has(f.provider.vendor) &&
+    !(f.provider.vendor === 'pardot' && (f.method === 'post' || f.method === 'get'));
+  let note: string | undefined;
+  if (isEmbed) {
+    note = `${cap(f.provider.vendor)} submits in an iframe / via AJAX — GTM's native Form Submission trigger usually won't fire. Track it with a Custom Event trigger: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the provider submit event'} → push a dataLayer event → fire this tag on it.`;
+  } else if (f.method === 'js') {
+    note = `JS/div form (no native <form> submit) — GTM's Form Submission trigger may not fire. Use an All-Clicks trigger on the submit button, or a Custom Event from the form's submit handler.`;
+  } else if ((f.formId && !idUnique) || (rawClass && !classUnique)) {
+    const what = f.formId && !idUnique ? `id "#${f.formId}"` : `class ".${rawClass}"`;
+    note = `Another form on the site shares this ${what}, so this trigger will also fire for that form (double-counting). Give each <form> a unique id to scope it.`;
+  } else if (!trigger.formIdValue && !trigger.formClassesValue) {
+    note = `This form has no id or unique class, so the trigger fires on EVERY form submit on the page. Add an id to the <form> to scope it.`;
+  }
+
+  // Field signature (type/name only — never values) for the evidence line.
+  const sig = (f.fields ?? [])
+    .filter((x) => !['checkbox', 'radio', 'select', 'hidden'].includes(x.type))
+    .map((x) => x.name || x.type)
+    .filter(Boolean)
+    .slice(0, 8);
+
   return {
-    id: hashId('form|' + f.page + '|' + f.purpose + '|' + f.action),
+    id: hashId('form|' + f.page + '|' + f.purpose + '|' + (f.formId || f.action)),
     page: f.page,
     label: `${cap(f.purpose)} form${prov} → GA4 "${eventName}" on form submit`,
-    evidence: `form purpose=${f.purpose}; provider=${f.provider.vendor} (${f.provider.evidence})`,
+    evidence:
+      `form purpose=${f.purpose}; provider=${f.provider.vendor} (${f.provider.evidence})` +
+      (trigger.formIdValue ? `; id=#${f.formId}` : usedClass ? `; class=.${usedClass}` : '') +
+      (sig.length ? `; fields: ${sig.join(', ')}` : ''),
+    ...(note ? { note } : {}),
     confidence: 'high',
     // GA4 EM "form interactions" is limited/generic; a dedicated lead event is valuable.
     enhancedMeasurementOverlap: false,
@@ -120,7 +211,30 @@ function formSuggestion(f: DetectedForm): SuggestedTag | null {
       { name: 'form_text', value: FORM_TEXT },
       ...PAGE_PARAMS,
     ],
-    trigger: { name: trigNameOf(formLabel), kind: 'form_submit' },
+    trigger,
+  };
+}
+
+/** Find form ids / classes that are shared by DIFFERENT forms (different
+ *  signatures) — those can't scope a trigger to one form. */
+function nonUniqueFormScopes(forms: DetectedForm[]): FormScopeCtx {
+  const idSigs = new Map<string, Set<string>>();
+  const classSigs = new Map<string, Set<string>>();
+  for (const f of forms) {
+    const s = formSignature(f);
+    if (f.formId) {
+      if (!idSigs.has(f.formId)) idSigs.set(f.formId, new Set());
+      idSigs.get(f.formId)!.add(s);
+    }
+    const c = pickFormClass(f.formClasses);
+    if (c) {
+      if (!classSigs.has(c)) classSigs.set(c, new Set());
+      classSigs.get(c)!.add(s);
+    }
+  }
+  return {
+    nonUniqueIds: new Set([...idSigs].filter(([, s]) => s.size > 1).map(([k]) => k)),
+    nonUniqueClasses: new Set([...classSigs].filter(([, s]) => s.size > 1).map(([k]) => k)),
   };
 }
 
@@ -213,8 +327,9 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
 const CONF = { high: 0, medium: 1, low: 2 } as const;
 
 export function buildSuggestions(input: SuggestInput): SuggestedTag[] {
+  const scopeCtx = nonUniqueFormScopes(input.forms);
   const raw: SuggestedTag[] = [
-    ...input.forms.map(formSuggestion),
+    ...input.forms.map((f) => formSuggestion(f, scopeCtx)),
     ...input.elements.map(elementSuggestion),
   ].filter((x): x is SuggestedTag => x !== null);
 
@@ -228,7 +343,7 @@ export function buildSuggestions(input: SuggestInput): SuggestedTag[] {
     // one regex file_download, one outbound, etc.). The eventParameters are now
     // all GTM-variable refs (identical across instances), so the trigger filter
     // is the discriminator, not the parameter value.
-    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}`;
+    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}`;
     const seen = byKey.get(key);
     if (!seen) byKey.set(key, { ...s });
     else if (seen.page !== s.page) seen.page = 'site-wide';
