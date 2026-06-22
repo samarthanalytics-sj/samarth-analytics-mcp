@@ -2,7 +2,7 @@
  * Element collector — pure classifier + assembler tests (no browser).
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/collect.node.test.ts
  */
-import { classifyElement, classifyPageElements, buildSuggestInput, type RawElement, type PageScan } from '../collect.js';
+import { classifyElement, classifyPageElements, classifyCtaIntent, buildSuggestInput, type RawElement, type PageScan } from '../collect.js';
 import { buildSuggestions } from '../suggest.js';
 import type { PageSignals } from '../types.js';
 
@@ -66,6 +66,30 @@ const dl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: classifyPa
 check('engine file_download trigger regex covers the same extensions (apk, #)', !!dl && /apk/.test(dl.trigger.clickUrlValue ?? '') && /#/.test(dl.trigger.clickUrlValue ?? ''));
 // CTA tightening: bare "register" no longer matches header auth links
 check('CTA: "Login / Register" no longer a false-positive CTA', classifyElement({ tag: 'button', href: '', text: 'Login / Register', hasDownload: false, region: '' }, 'a.com') === null);
+
+// ── CTA intent classification ────────────────────────────────────────────────
+check('cta intent: "Add to cart" button → add_to_cart', (() => { const d = classifyElement({ tag: 'button', href: '', text: 'Add to cart', hasDownload: false, region: '' }, 'a.com'); return d?.kind === 'cta' && d?.intent === 'add_to_cart'; })());
+check('cta intent: "Learn more" same-site link → learn_more', (() => { const d = classifyElement(a('https://a.com/x', { text: 'Learn more' }), 'a.com'); return d?.kind === 'cta' && d?.intent === 'learn_more'; })());
+check('cta intent: Subscribe / Buy now / FAQ / Get started recognized', classifyCtaIntent('Subscribe') === 'subscribe' && classifyCtaIntent('Buy now') === 'generic' && classifyCtaIntent('FAQ') === 'faq' && classifyCtaIntent('Get started') === 'get_started');
+check('cta intent: "Login / Register" stays null (auth nav, not a CTA)', classifyCtaIntent('Login / Register') === null);
+check('cta intent: plain text "Our team" stays null', classifyCtaIntent('Our team') === null);
+// learn_more tightened: pagination/affordance text is NOT a Learn More CTA.
+check('cta intent: "See more"/"View more"/"View details"/"Read more" are NOT learn_more', ['See more', 'View more', 'View details', 'Read more'].every((t) => classifyCtaIntent(t) === null));
+check('cta intent: genuine "Learn more"/"Find out more"/"Discover more" still learn_more', ['Learn more', 'Find out more', 'Discover more'].every((t) => classifyCtaIntent(t) === 'learn_more'));
+// quote/demo recall: an adjective between the verb and the noun still matches.
+check('cta intent: "Get a free quote"/"Request your quote" → request_quote', classifyCtaIntent('Get a free quote') === 'request_quote' && classifyCtaIntent('Request your quote') === 'request_quote');
+check('cta intent: "Get a free demo"/"Book a demo"/"Request a demo" → book_demo', classifyCtaIntent('Get a free demo') === 'book_demo' && classifyCtaIntent('Book a demo') === 'book_demo' && classifyCtaIntent('Request a demo') === 'book_demo');
+// "view" dropped from book_demo: "View demo reel/gallery/video" is product content, not a booking.
+check('cta intent: "View demo reel"/"View demo gallery" are NOT book_demo (product content)', classifyCtaIntent('View demo reel') === null && classifyCtaIntent('View the product demo video') === null);
+
+// ── social-link classification ───────────────────────────────────────────────
+check('social: facebook link → social', classifyElement(a('https://facebook.com/acme', { text: 'Facebook' }), 'acme.com')?.kind === 'social');
+check('social: x.com + lnkd.in short hosts → social', classifyElement(a('https://x.com/acme'), 'acme.com')?.kind === 'social' && classifyElement(a('https://lnkd.in/abc'), 'acme.com')?.kind === 'social');
+check('social: non-social outbound link is still outbound', classifyElement(a('https://partner.com/x'), 'acme.com')?.kind === 'outbound');
+// Spoof host: social brand as an interior (non-registrable) label → NOT social.
+check('social: spoof "facebook.com.evil.com" → outbound (not social)', classifyElement(a('https://facebook.com.evil.com/x'), 'acme.com')?.kind === 'outbound');
+// The site's OWN social-named subdomain is internal nav, not a social click.
+check('social: internal "discord.acme.com" subdomain → null (internal nav)', classifyElement(a('https://discord.acme.com/x'), 'acme.com') === null);
 
 // ── embedded cross-origin form → synthesized suggestion ──────────────────────
 {
