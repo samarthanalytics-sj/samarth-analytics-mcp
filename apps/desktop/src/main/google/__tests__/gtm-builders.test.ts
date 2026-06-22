@@ -11,6 +11,7 @@ import {
   auditContainer,
   sanitizeName,
   findGa4BaseTag,
+  ga4VariablePlan,
 } from '../gtm-builders';
 
 let passed = 0;
@@ -186,13 +187,27 @@ test('variables: constant / data_layer / javascript types + keys', () => {
 
 console.log('\nContainer audit:');
 
-test('findGa4BaseTag: gaawc / G- googtag / {{var}} googtag are present; Ads-only googtag + event tag are not', () => {
+test('findGa4BaseTag: gaawc / G- / GT- / {{var}} googtag present; Ads-only + event + PAUSED are not', () => {
   const snap = (tags: Array<Record<string, unknown>>) => ({ tags: tags as never, triggers: [], variables: [] });
-  assert.equal(findGa4BaseTag(snap([{ tagId: '1', name: 'GA4 Config', type: 'gaawc', firingTriggerId: [], paused: false, parameter: [] }]))?.name, 'GA4 Config');
-  assert.equal(findGa4BaseTag(snap([{ tagId: '1', name: 'Google Tag', type: 'googtag', firingTriggerId: [], paused: false, parameter: [{ key: 'tagId', value: 'G-ABC123' }] }]))?.name, 'Google Tag');
-  assert.equal(findGa4BaseTag(snap([{ tagId: '1', name: 'GT via var', type: 'googtag', firingTriggerId: [], paused: false, parameter: [{ key: 'tagId', value: '{{GA4 - Variable}}' }] }]))?.name, 'GT via var');
-  assert.equal(findGa4BaseTag(snap([{ tagId: '1', name: 'Ads', type: 'googtag', firingTriggerId: [], paused: false, parameter: [{ key: 'tagId', value: 'AW-999' }] }])), null);
-  assert.equal(findGa4BaseTag(snap([{ tagId: '1', name: 'evt', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [] }])), null);
+  const g = (over: Record<string, unknown>) => ({ tagId: '1', name: 'x', type: 'googtag', firingTriggerId: [], paused: false, parameter: [], ...over });
+  assert.equal(findGa4BaseTag(snap([{ ...g({ type: 'gaawc', name: 'GA4 Config' }) }]))?.name, 'GA4 Config');
+  assert.equal(findGa4BaseTag(snap([g({ name: 'G tag', parameter: [{ key: 'tagId', value: 'G-ABC123' }] })]))?.name, 'G tag');
+  // GT- destination id is a real GA4 base tag (was a false-negative → duplicate).
+  assert.equal(findGa4BaseTag(snap([g({ name: 'GT tag', parameter: [{ key: 'tagId', value: 'GT-P3NGJTCV' }] })]))?.name, 'GT tag');
+  assert.equal(findGa4BaseTag(snap([g({ name: 'var tag', parameter: [{ key: 'tagId', value: '{{GA4 - Variable}}' }] })]))?.name, 'var tag');
+  assert.equal(findGa4BaseTag(snap([g({ name: 'Ads', parameter: [{ key: 'tagId', value: 'AW-999' }] })])), null);
+  assert.equal(findGa4BaseTag(snap([g({ name: 'evt', type: 'gaawe', firingTriggerId: ['T1'] })])), null);
+  // A PAUSED base tag fires nothing → treated as absent (so a working one gets created).
+  assert.equal(findGa4BaseTag(snap([g({ name: 'paused', paused: true, parameter: [{ key: 'tagId', value: 'G-1' }] })])), null);
+});
+
+test('ga4VariablePlan: create when absent, reuse a Constant, conflict on a non-constant of the same name', () => {
+  const snap = (vars: Array<Record<string, unknown>>) => ({ tags: [], triggers: [], variables: vars as never });
+  assert.equal(ga4VariablePlan(snap([]), 'GA4 - Variable').action, 'create');
+  assert.equal(ga4VariablePlan(snap([{ variableId: '1', name: 'GA4 - Variable', type: 'c' }]), 'GA4 - Variable').action, 'reuse');
+  const conflict = ga4VariablePlan(snap([{ variableId: '1', name: 'GA4 - Variable', type: 'v' }]), 'GA4 - Variable');
+  assert.equal(conflict.action, 'conflict');
+  assert.equal(conflict.existingType, 'v');
 });
 
 test('buildGoogleTag: googtag with {{variable}} tagId fires on the built-in All Pages trigger', () => {

@@ -15,7 +15,7 @@ import { ipcMain } from 'electron';
 import type { GoogleDataService } from '../google/data-service';
 import { auditWorkspace } from '../google/audit-runner';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
-import { buildVariable, buildGoogleTag, findGa4BaseTag, BUILTIN_ALL_PAGES_TRIGGER_ID } from '../google/gtm-builders';
+import { buildVariable, buildGoogleTag, findGa4BaseTag, ga4VariablePlan, BUILTIN_ALL_PAGES_TRIGGER_ID } from '../google/gtm-builders';
 
 export function registerGtmAuditIpc(data: GoogleDataService): void {
   ipcMain.handle('gtm:audit', (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
@@ -54,11 +54,21 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
       return { created: false, present: true, existingTag: existing.name, variableName, measurementId, tagName };
     }
 
+    // Only reuse an existing same-named variable if it's a Constant — otherwise the
+    // base tag's {{name}} would resolve to a wrong-purpose variable (a dataLayer
+    // lookup, a custom-JS value, …) and silently misconfigure GA4.
+    const plan = ga4VariablePlan(snap, variableName);
+    if (plan.action === 'conflict') {
+      throw new Error(
+        `A variable named "${variableName}" already exists but is not a Measurement-ID constant (type "${plan.existingType}"). Rename it, or use a different variable name, so the GA4 tag binds to a constant.`,
+      );
+    }
+
     const approve: ConfirmFn = async (p) => p.details; // renderer already confirmed
     const reg = buildToolRegistry(data, approve, 'gtm');
 
-    const variableExisted = snap.variables.some((v) => v.name === variableName);
-    if (!variableExisted) {
+    const variableCreated = plan.action === 'create';
+    if (variableCreated) {
       await reg.execute('create_gtm_variable', {
         accountId,
         containerId,
@@ -74,6 +84,6 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
         tag: buildGoogleTag({ name: tagName, tagId: `{{${variableName}}}`, firingTriggerId: [BUILTIN_ALL_PAGES_TRIGGER_ID] }),
       }),
     ) as { name?: string };
-    return { created: true, present: false, variableCreated: !variableExisted, variableName, measurementId, tagName: tagRes?.name ?? tagName };
+    return { created: true, present: false, variableCreated, variableName, measurementId, tagName: tagRes?.name ?? tagName };
   });
 }
