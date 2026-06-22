@@ -124,17 +124,17 @@ check('social trigger: does NOT fire on microsoft.com / a /facebook.html path / 
   ['https://www.microsoft.com/', 'https://mysite.com/facebook.html', 'https://retext.com/', 'https://contact.company.com/x'].every((u) => !reTest(socialPat, u)));
 check('social trigger: corpus-style domain alternation (no ://, no ([/:?#] anchoring, no (?i))', !socialPat.includes('://') && !socialPat.includes('([/:?#]') && !socialPat.includes('(?i)'));
 
-// PRESENT-ONLY: the trigger matches ONLY the networks the site actually links to.
-const fbOnly = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [{ page: '/', kind: 'social', text: 'Facebook', href: 'https://facebook.com/acme', socialNetwork: 'facebook' }] });
+// PRESENT-ONLY: the trigger matches ONLY the EXACT domains scraped from the page.
+const fbOnly = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [{ page: '/', kind: 'social', text: 'Facebook', href: 'https://facebook.com/acme', socialNetwork: 'facebook', socialDomain: 'facebook.com' }] });
 const fbPat = fbOnly[0].trigger.clickUrlValue ?? '';
-check('social present-only: facebook-only site → matches facebook, NOT linkedin/youtube/x',
+check('social present-only: facebook.com scraped → matches facebook, NOT linkedin/youtube/x',
   reTest(fbPat, 'https://facebook.com/acme') && !reTest(fbPat, 'https://linkedin.com/x') && !reTest(fbPat, 'https://youtube.com/x') && !reTest(fbPat, 'https://x.com/a'));
-check('social present-only: facebook-only pattern is SHORT', fbPat === 'facebook\\.com|fb\\.com|fb\\.me' && fbPat.length < 30);
+check('social present-only: pattern is JUST the scraped domain (not the whole network domain list)', fbPat === 'facebook\\.com');
 const fbLi = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [
-  { page: '/', kind: 'social', text: 'Fb', href: 'https://facebook.com/a', socialNetwork: 'facebook' },
-  { page: '/', kind: 'social', text: 'Li', href: 'https://lnkd.in/x', socialNetwork: 'linkedin' },
+  { page: '/', kind: 'social', text: 'Fb', href: 'https://facebook.com/a', socialNetwork: 'facebook', socialDomain: 'facebook.com' },
+  { page: '/', kind: 'social', text: 'Li', href: 'https://lnkd.in/x', socialNetwork: 'linkedin', socialDomain: 'lnkd.in' },
 ] });
-check('social present-only: fb+linkedin site → ONE tag matching both, not twitter', fbLi.filter((s) => s.eventName === 'social_click').length === 1 && (() => { const p = fbLi[0].trigger.clickUrlValue ?? ''; return reTest(p, 'https://facebook.com/a') && reTest(p, 'https://lnkd.in/x') && !reTest(p, 'https://twitter.com/a'); })());
+check('social present-only: scraped facebook.com + lnkd.in → ONE tag matching both, not twitter', fbLi.filter((s) => s.eventName === 'social_click').length === 1 && (() => { const p = fbLi[0].trigger.clickUrlValue ?? ''; return p === 'facebook\\.com|lnkd\\.in' && reTest(p, 'https://facebook.com/a') && reTest(p, 'https://lnkd.in/x') && !reTest(p, 'https://twitter.com/a'); })());
 
 // ── element → suggestion + Enhanced Measurement flagging ─────────────────────
 const elInput: SuggestInput = {
