@@ -1,3 +1,9 @@
+## [1.20.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.20.0...v1.20.1) (2026-06-22)
+
+### Bug Fixes
+
+* **tag-suggest:** GTM-safe names (no ":"), quota retry, "… Tag"/"… Trigger" naming + descriptive form events ([b3fb70d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b3fb70dea30c7f05fb5243ed9e266bfb07bb23d9))
+
 ## [1.20.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.19.9...v1.20.0) (2026-06-22)
 
 ### Features
