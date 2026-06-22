@@ -1058,6 +1058,30 @@ function TagReviewPanel({
   const ctx = active?.gtmContext;
   const targetReady = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
 
+  // Resolve a detected GTM-XXXX container id → its friendly name, when it's one of
+  // this account's containers, so "Live on this site" shows the name not the raw id.
+  const [containerNames, setContainerNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const accountId = ctx?.accountId;
+    if (!active?.hasGoogleToken || !accountId) {
+      setContainerNames({});
+      return;
+    }
+    let cancelled = false;
+    window.desktop.data.listGtmContainers(accountId).then(
+      (list) => {
+        if (!cancelled) setContainerNames(Object.fromEntries(list.map((c) => [c.publicId.toUpperCase(), c.name])));
+      },
+      () => {
+        if (!cancelled) setContainerNames({});
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [active?.hasGoogleToken, ctx?.accountId]);
+  const containerLabel = (id: string): string => containerNames[id.toUpperCase()] ?? id;
+
   function loadSuggestions(list: SuggestedTagView[]): void {
     setSuggestions(list);
     // Default-select the real gaps; leave what GA4 Enhanced Measurement already
@@ -1334,9 +1358,14 @@ function TagReviewPanel({
             <div style={{ ...styles.muted, marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
               <span>Existing container on this site:</span>
               {discovered.installed.containers.length > 0 || discovered.installed.measurementIds.length > 0 ? (
-                [...discovered.installed.containers, ...discovered.installed.measurementIds].map((id) => (
-                  <span key={id} style={styles.typeChip}>{id}</span>
-                ))
+                <>
+                  {discovered.installed.containers.map((id) => (
+                    <span key={id} style={styles.typeChip} title={id}>{containerLabel(id)}</span>
+                  ))}
+                  {discovered.installed.measurementIds.map((id) => (
+                    <span key={id} style={styles.typeChip}>{id}</span>
+                  ))}
+                </>
               ) : (
                 <span style={{ color: '#9ca3af' }}>none detected</span>
               )}
@@ -1410,7 +1439,10 @@ function TagReviewPanel({
             {(scanLog.installed.containers.length > 0 || scanLog.installed.measurementIds.length > 0) && (
               <div style={{ ...styles.muted, marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                 <span>Live on this site:</span>
-                {[...scanLog.installed.containers, ...scanLog.installed.measurementIds].map((id) => (
+                {scanLog.installed.containers.map((id) => (
+                  <span key={id} style={styles.typeChip} title={id}>{containerLabel(id)}</span>
+                ))}
+                {scanLog.installed.measurementIds.map((id) => (
                   <span key={id} style={styles.typeChip}>{id}</span>
                 ))}
               </div>
