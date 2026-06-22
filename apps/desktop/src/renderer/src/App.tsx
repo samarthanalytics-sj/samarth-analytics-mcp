@@ -1682,6 +1682,8 @@ function ContainerAuditPanel({
   const [report, setReport] = useState<AuditReportView | null>(null);
   const [running, setRunning] = useState(false);
   const [fix, setFix] = useState<Record<number, { state: 'idle' | 'confirm' | 'fixing' | 'done' | 'err'; msg?: string }>>({});
+  const [ga4Mid, setGa4Mid] = useState('G-123456789');
+  const [ga4, setGa4] = useState<{ state: 'idle' | 'confirm' | 'working' | 'done' | 'err'; msg?: string }>({ state: 'idle' });
 
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -1714,6 +1716,34 @@ function ContainerAuditPanel({
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setFix((s) => ({ ...s, [i]: { state: 'err', msg } }));
+      onError(msg);
+    }
+  }
+
+  async function ensureGa4Config(): Promise<void> {
+    if (!ready || !ctx) return;
+    if (ga4.state === 'idle' || ga4.state === 'err') {
+      setGa4({ state: 'confirm' });
+      return;
+    }
+    setGa4({ state: 'working' });
+    onError('');
+    try {
+      const r = await window.desktop.gtm.ensureGa4Config({
+        accountId: ctx.accountId!,
+        containerId: ctx.containerId!,
+        workspaceId: ctx.workspaceId!,
+        measurementId: ga4Mid.trim() || undefined,
+      });
+      setGa4({
+        state: 'done',
+        msg: r.present
+          ? `Already present — GA4 base tag "${r.existingTag}" exists; nothing created.`
+          : `Created Google Tag "${r.tagName}" using {{${r.variableName}}}${r.variableCreated ? ` + the "${r.variableName}" variable (= ${r.measurementId})` : ''}. Draft only — publish in GTM.`,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setGa4({ state: 'err', msg });
       onError(msg);
     }
   }
@@ -1755,6 +1785,54 @@ function ContainerAuditPanel({
               {running ? 'Auditing…' : report ? 'Re-run audit' : 'Run audit'}
             </button>
           </div>
+        </div>
+
+        {/* GA4 base/config tag bootstrap */}
+        <div style={styles.card}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>GA4 base (Configuration) tag</div>
+          <div style={styles.muted}>
+            Adds a Google Tag <b>only if the container has none</b> — storing the Measurement ID in a{' '}
+            <code style={mdStyles.code}>GA4 - Variable</code> constant and referencing{' '}
+            <code style={mdStyles.code}>{'{{GA4 - Variable}}'}</code>, firing on All Pages. Draft only.
+          </div>
+          <div style={{ ...styles.formRow, marginTop: 8, alignItems: 'center' }}>
+            <label style={styles.scanNum}>
+              Measurement ID
+              <input
+                style={{ ...styles.scanNumInput, width: 130 }}
+                value={ga4Mid}
+                disabled={ga4.state === 'working'}
+                onChange={(e) => setGa4Mid(e.target.value)}
+                placeholder="G-123456789"
+              />
+            </label>
+            {ga4.state === 'confirm' ? (
+              <>
+                <button style={styles.primaryBtn} onClick={ensureGa4Config} disabled={!ready}>
+                  Create it (draft)
+                </button>
+                <button style={styles.ghostBtn} onClick={() => setGa4({ state: 'idle' })}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button style={styles.primaryBtn} onClick={ensureGa4Config} disabled={!ready || ga4.state === 'working'}>
+                {ga4.state === 'working' ? 'Working…' : 'Add GA4 base tag if missing'}
+              </button>
+            )}
+          </div>
+          {ga4.state === 'confirm' && (
+            <div style={{ ...styles.muted, marginTop: 6, color: '#fcd9a5' }}>
+              Will create a <b>GA4 - Variable</b> constant (= {ga4Mid || 'G-123456789'}) and a <b>GA4 Configuration</b> Google
+              Tag into the DRAFT workspace — only if no GA4 base tag already exists. Not published.
+            </div>
+          )}
+          {ga4.msg && (
+            <div style={{ marginTop: 6, fontSize: 13, color: ga4.state === 'err' ? '#fca5a5' : '#6ee7b7' }}>
+              {ga4.state === 'err' ? '✗ ' : '✓ '}
+              {ga4.msg}
+            </div>
+          )}
         </div>
 
         {report && (

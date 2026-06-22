@@ -99,6 +99,26 @@ export function buildGoogleTag(o: GoogleTagInput): GtmTagResource {
   return { name: o.name, type: 'googtag', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
 }
 
+/** The GTM built-in "All Pages" trigger — a reserved id present in every web
+ *  container, so the base Google Tag can fire on it without creating a trigger.
+ *  (Corpus: the most common firing trigger for googtag base tags.) */
+export const BUILTIN_ALL_PAGES_TRIGGER_ID = '2147479553';
+
+/** Find an existing GA4 base/config tag in a container snapshot: a legacy GA4
+ *  Configuration (gaawc), OR a Google Tag (googtag) whose Tag ID is a G- id or a
+ *  {{variable}} reference (i.e. configured for GA4, not an Ads-only googtag).
+ *  Returns the tag name, or null when none is present. PURE. */
+export function findGa4BaseTag(snap: ContainerSnapshot): { name: string } | null {
+  for (const t of snap.tags) {
+    if (t.type === 'gaawc') return { name: t.name };
+    if (t.type === 'googtag') {
+      const tagId = String(t.parameter.find((p) => (p as { key?: string }).key === 'tagId')?.value ?? '');
+      if (/^G-/i.test(tagId) || tagId.includes('{{')) return { name: t.name };
+    }
+  }
+  return null;
+}
+
 export interface GoogleAdsConversionInput {
   name: string;
   conversionId: string; // "AW-123456789" or the bare numeric id

@@ -15,6 +15,7 @@ import { ipcMain } from 'electron';
 import type { GoogleDataService } from '../google/data-service';
 import { auditWorkspace } from '../google/audit-runner';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
+import { buildVariable, buildGoogleTag, findGa4BaseTag, BUILTIN_ALL_PAGES_TRIGGER_ID } from '../google/gtm-builders';
 
 export function registerGtmAuditIpc(data: GoogleDataService): void {
   ipcMain.handle('gtm:audit', (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
@@ -31,5 +32,48 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     const approve: ConfirmFn = async (p) => p.details; // renderer already confirmed
     const reg = buildToolRegistry(data, approve, 'gtm');
     return JSON.parse(await reg.execute(f.tool, f.args)) as unknown;
+  });
+
+  // Ensure a GA4 base/config tag exists. If none is present, store the Measurement
+  // ID in a Constant variable and create a Google Tag that references {{<var>}},
+  // firing on the built-in All Pages trigger. Draft-only; the renderer confirms
+  // first. No-op (no write) when a GA4 base tag already exists.
+  ipcMain.handle('gtm:ensureGa4Config', async (_e, ctx: unknown) => {
+    const o = (ctx && typeof ctx === 'object' ? ctx : {}) as Record<string, unknown>;
+    const accountId = String(o.accountId ?? '');
+    const containerId = String(o.containerId ?? '');
+    const workspaceId = String(o.workspaceId ?? '');
+    if (!accountId || !containerId || !workspaceId) throw new Error('Pick a GTM account, container and draft workspace first.');
+    const measurementId = String(o.measurementId ?? '').trim() || 'G-123456789';
+    const variableName = String(o.variableName ?? '').trim() || 'GA4 - Variable';
+    const tagName = String(o.tagName ?? '').trim() || 'GA4 Configuration';
+
+    const snap = await data.getGtmContainerSnapshot(accountId, containerId, workspaceId);
+    const existing = findGa4BaseTag(snap);
+    if (existing) {
+      return { created: false, present: true, existingTag: existing.name, variableName, measurementId, tagName };
+    }
+
+    const approve: ConfirmFn = async (p) => p.details; // renderer already confirmed
+    const reg = buildToolRegistry(data, approve, 'gtm');
+
+    const variableExisted = snap.variables.some((v) => v.name === variableName);
+    if (!variableExisted) {
+      await reg.execute('create_gtm_variable', {
+        accountId,
+        containerId,
+        workspaceId,
+        variable: buildVariable({ kind: 'constant', name: variableName, value: measurementId }),
+      });
+    }
+    const tagRes = JSON.parse(
+      await reg.execute('create_gtm_tag', {
+        accountId,
+        containerId,
+        workspaceId,
+        tag: buildGoogleTag({ name: tagName, tagId: `{{${variableName}}}`, firingTriggerId: [BUILTIN_ALL_PAGES_TRIGGER_ID] }),
+      }),
+    ) as { name?: string };
+    return { created: true, present: false, variableCreated: !variableExisted, variableName, measurementId, tagName: tagRes?.name ?? tagName };
   });
 }

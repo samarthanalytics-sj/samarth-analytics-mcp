@@ -10,6 +10,7 @@ import {
   buildVariable,
   auditContainer,
   sanitizeName,
+  findGa4BaseTag,
 } from '../gtm-builders';
 
 let passed = 0;
@@ -184,6 +185,22 @@ test('variables: constant / data_layer / javascript types + keys', () => {
 });
 
 console.log('\nContainer audit:');
+
+test('findGa4BaseTag: gaawc / G- googtag / {{var}} googtag are present; Ads-only googtag + event tag are not', () => {
+  const snap = (tags: Array<Record<string, unknown>>) => ({ tags: tags as never, triggers: [], variables: [] });
+  assert.equal(findGa4BaseTag(snap([{ tagId: '1', name: 'GA4 Config', type: 'gaawc', firingTriggerId: [], paused: false, parameter: [] }]))?.name, 'GA4 Config');
+  assert.equal(findGa4BaseTag(snap([{ tagId: '1', name: 'Google Tag', type: 'googtag', firingTriggerId: [], paused: false, parameter: [{ key: 'tagId', value: 'G-ABC123' }] }]))?.name, 'Google Tag');
+  assert.equal(findGa4BaseTag(snap([{ tagId: '1', name: 'GT via var', type: 'googtag', firingTriggerId: [], paused: false, parameter: [{ key: 'tagId', value: '{{GA4 - Variable}}' }] }]))?.name, 'GT via var');
+  assert.equal(findGa4BaseTag(snap([{ tagId: '1', name: 'Ads', type: 'googtag', firingTriggerId: [], paused: false, parameter: [{ key: 'tagId', value: 'AW-999' }] }])), null);
+  assert.equal(findGa4BaseTag(snap([{ tagId: '1', name: 'evt', type: 'gaawe', firingTriggerId: ['T1'], paused: false, parameter: [] }])), null);
+});
+
+test('buildGoogleTag: googtag with {{variable}} tagId fires on the built-in All Pages trigger', () => {
+  const t = buildGoogleTag({ name: 'GA4 Configuration', tagId: '{{GA4 - Variable}}', firingTriggerId: ['2147479553'] });
+  assert.equal(t.type, 'googtag');
+  assert.equal(t.parameter.find((p) => (p as { key?: string }).key === 'tagId')?.value, '{{GA4 - Variable}}');
+  assert.deepEqual(t.firingTriggerId, ['2147479553']);
+});
 
 test('audit flags no-trigger, paused, GA4-no-mid, unused trigger, custom HTML, dup names', () => {
   const r = auditContainer({
