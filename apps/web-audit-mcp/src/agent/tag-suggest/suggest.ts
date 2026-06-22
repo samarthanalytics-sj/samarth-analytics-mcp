@@ -6,6 +6,7 @@
 // create_gtm_tracking_tag tool.
 
 import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag } from './types.js';
+import { CTA_BY_INTENT } from './cta-intents.js';
 
 const GA4_VAR = '{{GA4 Measurement ID}}';
 // Event-parameter VALUES are GTM built-in variables, so the tag captures the
@@ -41,6 +42,7 @@ const EVENT_LABEL: Record<string, string> = {
   phone_click: 'Phone Click',
   file_download: 'File Download',
   outbound_click: 'Outbound Click',
+  social_click: 'Social Media Click',
   cta_click: 'CTA Click',
   generate_lead: 'Generate Lead',
   sign_up: 'Sign Up',
@@ -48,6 +50,23 @@ const EVENT_LABEL: Record<string, string> = {
   form_submission: 'Form Submission',
 };
 const eventLabel = (e: string): string => EVENT_LABEL[e] ?? e.split('_').map(cap).join(' ');
+
+// Form purpose → human tag label. Names the tag for WHAT IT IS ("Contact Form")
+// rather than only the GA4 event ("Generate Lead").
+const FORM_LABEL: Record<string, string> = {
+  contact: 'Contact Form',
+  signup: 'Signup Form',
+  newsletter: 'Newsletter Form',
+  other: 'Form Submission',
+};
+
+// {{Click URL}} regex for the social-link trigger — HOST-anchored so it mirrors
+// collect.ts isSocialHost and fires ONLY on real social hosts (not on a path like
+// /facebook.html, a ?ref=facebook.com query, or "microsof[t.co]m"). (?i) makes
+// GTM's RE2 matchRegex case-insensitive. Long hosts: the brand must be the
+// registrable label before a TLD that ends the host (boundary [/:?#] or end).
+const SOCIAL_URL_PATTERN =
+  '(?i)://([a-z0-9-]+\\.)*(facebook|instagram|linkedin|youtube|twitter|tiktok|pinterest|snapchat|reddit|threads|tumblr|whatsapp|telegram|discord|vimeo|twitch|mastodon)\\.[a-z]{2,}(\\.[a-z]{2,})?([/:?#]|$)|://(www\\.)?(x\\.com|t\\.co|fb\\.(com|me)|m\\.me|lnkd\\.in|youtu\\.be|wa\\.me|t\\.me|instagr\\.am|pin\\.it)([/:?#]|$)';
 
 // djb2 → base36; stable, no crypto dependency.
 function hashId(s: string): string {
@@ -82,7 +101,7 @@ function formSuggestion(f: DetectedForm): SuggestedTag | null {
     // GA4 EM "form interactions" is limited/generic; a dedicated lead event is valuable.
     enhancedMeasurementOverlap: false,
     platform: 'ga4_event',
-    tagName: `GA4 Event - ${eventLabel(eventName)}`,
+    tagName: `GA4 Event - ${FORM_LABEL[f.purpose] ?? 'Form Submission'}`,
     measurementId: GA4_VAR,
     eventName,
     // Capture which form + where it submits, via the form built-in variables.
@@ -142,11 +161,37 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
         eventParameters: CLICK_PARAMS,
         trigger: { name: 'Link Click - Outbound', kind: 'link_click' },
       };
-    case 'cta':
+    case 'social':
       return {
-        ...base('cta_click', 'low', false),
-        label: `CTA "${el.text}" → GA4 "cta_click"`,
-        evidence: `button/link text "${el.text}"`,
+        ...base('social_click', 'medium', false),
+        label: 'Social media link → GA4 "social_click"',
+        // A social link IS outbound, so EM's outbound_click also fires — but this
+        // dedicated, named event (with the link captured) is what's usually wanted.
+        evidence: `social media link ${el.href ?? ''}`.trim() + ' (note: EM also tracks this as an outbound click)',
+        eventParameters: CLICK_PARAMS,
+        trigger: { name: 'Link Click - Social Media', kind: 'link_click', clickUrlValue: SOCIAL_URL_PATTERN, clickUrlOperator: 'matchRegex' },
+      };
+    case 'cta': {
+      const def = CTA_BY_INTENT[el.intent ?? 'generic'];
+      const isSpecific = def.intent !== 'generic';
+      // Named intent → the trigger fires on {{Click Text}} matching the SAME
+      // case-insensitive, word-bounded pattern that classified it, so detection
+      // and the live GTM trigger always agree (every variant fires, none over-fire,
+      // case doesn't matter). All variants of an intent share this pattern, so they
+      // collapse to ONE tag. Generic → the element's own literal text (a
+      // case-preserved 'contains', so two distinct generic CTAs stay distinct).
+      const trigName = isSpecific
+        ? `All Clicks - ${def.label.replace(/ Click$/, '')}`
+        : `All Clicks - CTA: ${el.text.slice(0, 40)}`;
+      const trigger: SuggestedTag['trigger'] = isSpecific
+        ? { name: trigName, kind: 'all_clicks', clickTextValue: `(?i)${def.pattern}`, clickTextOperator: 'matchRegex' }
+        : { name: trigName, kind: 'all_clicks', clickTextValue: el.text, clickTextOperator: 'contains' };
+      return {
+        ...base(def.event, isSpecific ? 'medium' : 'low', false),
+        // Name the tag for what the click IS, not the raw event id.
+        tagName: `GA4 Event - ${def.label}`,
+        label: `${def.label} "${el.text}" → GA4 "${def.event}"`,
+        evidence: `button/link text "${el.text}"` + (isSpecific ? ` (intent: ${el.intent})` : ''),
         // cta_text is the DYNAMIC clicked text ({{Click Text}}), not the value
         // baked in at scan time; link_url captures the href when the CTA is a link.
         eventParameters: [
@@ -154,10 +199,9 @@ function elementSuggestion(el: DetectedElement): SuggestedTag | null {
           { name: 'link_url', value: CLICK_URL },
           ...PAGE_PARAMS,
         ],
-        // Fire only for THIS CTA (its text), not on every click — and capture the
-        // text dynamically. all_clicks covers both <button> and <a> CTAs.
-        trigger: { name: `All Clicks - CTA: ${el.text.slice(0, 40)}`, kind: 'all_clicks', clickTextValue: el.text, clickTextOperator: 'contains' },
+        trigger,
       };
+    }
   }
 }
 

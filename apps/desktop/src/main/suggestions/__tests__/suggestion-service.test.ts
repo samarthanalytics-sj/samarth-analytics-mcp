@@ -98,7 +98,7 @@ async function main(): Promise<void> {
         a('mailto:hi@acme.com', { text: 'Email us', region: 'footer' }), // email_click
         a('https://partner.com/x', { text: 'Partner' }), // outbound (EM overlap)
         a('https://acme.com/guide.pdf', { text: 'Guide' }), // file_download (EM overlap)
-        button('Book a demo'), // cta_click
+        button('Book a demo'), // book_demo_click (specific CTA intent → medium)
       ]),
       rawForms: [],
     };
@@ -116,12 +116,12 @@ async function main(): Promise<void> {
     check('crawl: visits entry + linked contact page', res.summary.pagesScanned === 2 && fd.opened().length === 2);
     check('crawl: contact form → generate_lead', events.has('generate_lead'));
     check('crawl: mailto → email_click, tel → phone_click', events.has('email_click') && events.has('phone_click'));
-    check('crawl: download + outbound + cta detected', events.has('file_download') && events.has('outbound_click') && events.has('cta_click'));
+    check('crawl: download + outbound + named CTA detected', events.has('file_download') && events.has('outbound_click') && events.has('book_demo_click'));
     check('crawl: six unique suggestions', res.summary.suggestions === 6, `${res.summary.suggestions}`);
     check('crawl: EM overlap = 2 (download + outbound)', res.summary.enhancedMeasurementOverlap === 2, `${res.summary.enhancedMeasurementOverlap}`);
     check(
-      'crawl: byConfidence high=3 medium=2 low=1',
-      res.summary.byConfidence.high === 3 && res.summary.byConfidence.medium === 2 && res.summary.byConfidence.low === 1,
+      'crawl: byConfidence high=3 medium=3 low=0 (Book a demo is a medium-confidence named CTA)',
+      res.summary.byConfidence.high === 3 && res.summary.byConfidence.medium === 3 && res.summary.byConfidence.low === 0,
       JSON.stringify(res.summary.byConfidence),
     );
     check('crawl: newTracking = suggestions − EM overlap', res.summary.newTracking === res.summary.suggestions - res.summary.enhancedMeasurementOverlap);

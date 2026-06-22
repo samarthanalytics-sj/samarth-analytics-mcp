@@ -42,7 +42,16 @@ export interface DetectedForm {
   provider: ProviderMatch;
 }
 
-export type ElementKind = 'email' | 'phone' | 'download' | 'outbound' | 'cta';
+export type ElementKind = 'email' | 'phone' | 'download' | 'outbound' | 'social' | 'cta';
+
+/** For kind==='cta': the inferred purpose of the call-to-action, so each one is
+ *  named + triggered by what it actually does ("Subscribe", "Add to Cart", …)
+ *  instead of a single generic "CTA". 'generic' = a conversion word with no more
+ *  specific intent. */
+export type CtaIntent =
+  | 'add_to_cart' | 'subscribe' | 'book_demo' | 'request_quote' | 'contact_sales'
+  | 'get_started' | 'learn_more' | 'faq' | 'generic';
+
 export interface DetectedElement {
   page: string;
   kind: ElementKind;
@@ -52,6 +61,8 @@ export interface DetectedElement {
   region?: 'header' | 'footer' | 'nav' | 'main';
   /** A stable CSS/text selector for the GTM trigger (Phase 2 fills this). */
   selector?: string;
+  /** Set when kind==='cta' — drives the tag/trigger name + the trigger filter. */
+  intent?: CtaIntent;
 }
 
 export interface SuggestInput {

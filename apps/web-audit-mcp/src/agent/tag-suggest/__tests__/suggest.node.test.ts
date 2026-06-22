@@ -14,6 +14,9 @@ function check(name: string, cond: boolean, detail?: string): void {
   else { failed += 1; failures.push(`✗ ${name}${detail ? ' — ' + detail : ''}`); }
 }
 const sig = (o: Partial<PageSignals>): PageSignals => ({ scriptSrcs: [], classNames: [], selectorsPresent: [], ...o });
+// GTM matchRegex is RE2 with (?i) honoured; JS RegExp can't parse inline (?i), so
+// strip it and pass the 'i' flag to test the pattern body the way GTM would.
+const reTest = (pattern: string, text: string): boolean => new RegExp(pattern.replace(/^\(\?i\)/, ''), 'i').test(text);
 
 // ── provider detection ──────────────────────────────────────────────────────
 check('provider: HubSpot via script', detectFormProvider(sig({ scriptSrcs: ['https://js.hsforms.net/forms/embed/v2.js'] })).vendor === 'hubspot');
@@ -40,8 +43,26 @@ const out1 = buildSuggestions({ siteHost: 'acme.com', forms: [contactForm], elem
 check('form: contact → generate_lead on form_submit', out1.length === 1 && out1[0].eventName === 'generate_lead' && out1[0].trigger.kind === 'form_submit');
 check('form: label names the provider', out1[0].label.includes('hubspot'));
 check('form: directly creatable (platform + measurementId)', out1[0].platform === 'ga4_event' && out1[0].measurementId === '{{GA4 Measurement ID}}');
-check('naming: tag "GA4 Event - Generate Lead", trigger "Form Submit - Contact"', out1[0].tagName === 'GA4 Event - Generate Lead' && out1[0].trigger.name === 'Form Submit - Contact');
+check('naming: tag "GA4 Event - Contact Form", trigger "Form Submit - Contact"', out1[0].tagName === 'GA4 Event - Contact Form' && out1[0].trigger.name === 'Form Submit - Contact');
 check('form: search/login produce NO suggestion', buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'search', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] }).length === 0);
+const nlForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'newsletter', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
+check('form: newsletter → "GA4 Event - Newsletter Form" + newsletter_signup', nlForm[0].tagName === 'GA4 Event - Newsletter Form' && nlForm[0].eventName === 'newsletter_signup');
+const otherFormName = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/x', purpose: 'other', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
+check('form: "other" → "GA4 Event - Form Submission"', otherFormName[0].tagName === 'GA4 Event - Form Submission');
+
+// ── social media links → a dedicated named tag ───────────────────────────────
+const socialOut = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [{ page: '/', kind: 'social', text: 'Facebook', href: 'https://facebook.com/acme', region: 'footer' }] });
+check('social: → "GA4 Event - Social Media Click" / social_click / link_click+regex',
+  socialOut[0].tagName === 'GA4 Event - Social Media Click' && socialOut[0].eventName === 'social_click' &&
+  socialOut[0].trigger.kind === 'link_click' && socialOut[0].trigger.clickUrlOperator === 'matchRegex');
+check('social: NOT flagged EM overlap (dedicated named event)', socialOut[0].enhancedMeasurementOverlap === false);
+// The social trigger regex must fire on real social hosts and NOT on ordinary
+// links that merely contain a social token in the path/query/another-label.
+const socialPat = socialOut[0].trigger.clickUrlValue ?? '';
+check('social trigger: matches real social hosts (facebook.com, m.youtube.com, x.com, t.co, youtu.be, lnkd.in)',
+  ['https://facebook.com/acme', 'https://m.youtube.com/watch?v=1', 'https://x.com/acme', 'https://t.co/abc', 'https://youtu.be/xyz', 'https://lnkd.in/abc'].every((u) => reTest(socialPat, u)));
+check('social trigger: does NOT fire on non-social URLs (microsoft.com, /facebook.html, ?ref=facebook.com, spoof facebook.com.evil.com, retext.com)',
+  ['https://www.microsoft.com/', 'https://mysite.com/facebook.html', 'https://example.com/?ref=facebook.com', 'https://facebook.com.evil.com/x', 'https://retext.com/', 'https://contact.company.com/x'].every((u) => !reTest(socialPat, u)));
 
 // ── element → suggestion + Enhanced Measurement flagging ─────────────────────
 const elInput: SuggestInput = {
@@ -104,19 +125,37 @@ check('provider: Pardot via form action (handler endpoint)', detectFormProvider(
 const otherForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/x', purpose: 'other', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
 check('form: "other" uses form_submission (not the reserved EM form_submit)', otherForm[0].eventName === 'form_submission');
 
-const ctas = buildSuggestions({
+// ── CTA INTENT naming + dedup ─────────────────────────────────────────────────
+const ctaInput = buildSuggestions({
   siteHost: 'a.com', forms: [],
   elements: [
-    { page: '/', kind: 'cta', text: 'Buy now' },
-    { page: '/', kind: 'cta', text: 'Request a demo' },
-    { page: '/pricing', kind: 'cta', text: 'Buy now' }, // same text on 2 pages → collapses
+    { page: '/', kind: 'cta', text: 'Subscribe now', intent: 'subscribe' },
+    { page: '/blog', kind: 'cta', text: 'Subscribe', intent: 'subscribe' }, // variant → collapses with the above
+    { page: '/', kind: 'cta', text: 'Learn more', intent: 'learn_more' },
+    { page: '/p', kind: 'cta', text: 'Add to cart', intent: 'add_to_cart' },
+    { page: '/', kind: 'cta', text: 'Request a demo', intent: 'book_demo' },
+    { page: '/', kind: 'cta', text: 'Buy now', intent: 'generic' },
+    { page: '/pricing', kind: 'cta', text: 'Buy now', intent: 'generic' }, // same generic text → collapses
   ],
 });
-const ctaSugs = ctas.filter((s) => s.eventName === 'cta_click');
-check('dedup: distinct CTAs stay distinct (2), same-text CTA collapses', ctaSugs.length === 2);
-check('cta: fires for its own text via a {{Click Text}} filter', new Set(ctaSugs.map((s) => s.trigger.clickTextValue)).size === 2 && ctaSugs.every((s) => s.trigger.clickTextOperator === 'contains'));
-check('cta: cta_text param is DYNAMIC {{Click Text}} (not the scraped text)', ctaSugs.every((s) => s.eventParameters?.some((p) => p.name === 'cta_text' && p.value === '{{Click Text}}')));
-check('dedup: same-text CTA across pages → site-wide', ctaSugs.find((s) => s.trigger.clickTextValue === 'Buy now')?.page === 'site-wide');
+const sub = ctaInput.find((s) => s.eventName === 'subscribe_click');
+check('cta: subscribe variants collapse to ONE "Subscribe Click" tag', ctaInput.filter((s) => s.eventName === 'subscribe_click').length === 1 && sub?.tagName === 'GA4 Event - Subscribe Click');
+check('cta: named-intent trigger is a case-insensitive matchRegex, site-wide', sub?.trigger.clickTextOperator === 'matchRegex' && sub?.trigger.name === 'All Clicks - Subscribe' && sub?.page === 'site-wide');
+// The trigger must actually FIRE on every variant the classifier accepts — incl.
+// different casing and a synonym whose keyword wasn't in the text (the bug the
+// review caught). And it must NOT fire on unrelated text.
+check('cta: subscribe trigger fires on "Subscribe", "SUBSCRIBE NOW", "Sign me up"',
+  ['Subscribe', 'SUBSCRIBE NOW', 'Sign me up'].every((t) => reTest(sub?.trigger.clickTextValue ?? '', t)));
+const demo = ctaInput.find((s) => s.eventName === 'book_demo_click');
+check('cta: Book Demo named (from "Request a demo")', demo?.tagName === 'GA4 Event - Book Demo Click');
+check('cta: book_demo trigger fires on "Book a Demo" but NOT "product demonstration"/"demo reel"',
+  reTest(demo?.trigger.clickTextValue ?? '', 'Book a Demo') && !reTest(demo?.trigger.clickTextValue ?? '', 'Watch our product demonstration') && !reTest(demo?.trigger.clickTextValue ?? '', 'demo reel'));
+check('cta: Learn More named + own event', ctaInput.find((s) => s.eventName === 'learn_more_click')?.tagName === 'GA4 Event - Learn More Click');
+check('cta: Add to Cart uses non-reserved add_to_cart_click event (not the GA4 ecommerce add_to_cart)',
+  ctaInput.find((s) => s.eventName === 'add_to_cart_click')?.tagName === 'GA4 Event - Add to Cart Click' && !ctaInput.some((s) => s.eventName === 'add_to_cart'));
+const genericCtas = ctaInput.filter((s) => s.eventName === 'cta_click');
+check('cta: generic "Buy now" stays generic (literal text, contains) + collapses across pages', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'contains');
+check('cta: every CTA carries dynamic cta_text={{Click Text}}', ctaInput.every((s) => s.eventParameters?.some((p) => p.name === 'cta_text' && p.value === '{{Click Text}}')));
 
 console.log(`\nTag-suggest: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
