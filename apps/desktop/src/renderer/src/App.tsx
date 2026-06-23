@@ -1208,6 +1208,7 @@ function TagReviewPanel({
     setScanning(true);
     setScanProgress(null);
     setDiscovered(null);
+    loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
       applyScanResult(await window.desktop.tags.scanUrlsStream([target], { settleMs: effSettleMs() }, onScanProgress));
     } catch (e) {
@@ -1249,6 +1250,7 @@ function TagReviewPanel({
     onError('');
     setScanning(true);
     setScanProgress(null);
+    loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
       applyScanResult(await window.desktop.tags.scanUrlsStream(urls, { settleMs: effSettleMs() }, onScanProgress));
     } catch (e) {
@@ -1266,6 +1268,7 @@ function TagReviewPanel({
     onError('');
     setScanning(true);
     setScanProgress(null);
+    loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
       applyScanResult(await window.desktop.tags.scanStream(target, { maxPages: 25, maxDepth: 2, settleMs: effSettleMs() }, onScanProgress));
     } catch (e) {
@@ -1895,7 +1898,7 @@ function TagReviewPanel({
               <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
                 <button
                   style={styles.primaryBtn}
-                  disabled={!targetReady || selectedIds.length === 0}
+                  disabled={!targetReady || scanning || selectedIds.length === 0}
                   onClick={() => setConfirming(true)}
                 >
                   Approve &amp; create selected ({selectedIds.length})
