@@ -1,3 +1,9 @@
+## [1.37.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.36.0...v1.37.0) (2026-06-23)
+
+### Features
+
+* **desktop:** Revert last changes — undo the previous query's GTM writes ([350a929](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/350a929063f3309c969be91e2b54e73fda462ab6))
+
 ## [1.36.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.35.3...v1.36.0) (2026-06-23)
 
 ### Features
