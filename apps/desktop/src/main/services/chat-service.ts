@@ -98,8 +98,11 @@ export class ChatService {
           '"unknown entity type" errors): to ADD GA4 event parameters (e.g. user_id, session_id, click_text) ' +
           'to GA4 event tags, call add_ga4_event_parameters (one call per tag); to CHANGE or REPLACE the ' +
           'Measurement ID — including swapping a {{variable}} like {{GA4 Measurement ID}} for {{GA4 Variable}} — ' +
-          'on GA4 event tags OR the Google tag, call set_ga4_measurement_id (one call per tag). When the user ' +
-          'says "all GA4 tags", first list the tags, then call the dedicated tool once per matching tag. ' +
+          'on GA4 event tags OR the Google tag, call set_ga4_measurement_id (one call per tag). ' +
+          'WHEN THE USER SAYS "ALL GA4 TAGS" / "every GA4 tag", use the BULK tool — ONE call, ONE approval — ' +
+          'NOT a per-tag loop: set_ga4_measurement_id_on_all_tags to change the Measurement ID on every GA4 ' +
+          'tag, and add_ga4_event_parameters_to_all_tags to add event parameters to every GA4 event tag. ' +
+          'Do NOT call set_gtm_tag_paused, delete_gtm_tag/trigger, or any unrelated tool for these requests. ' +
           'Only use update_gtm_tag for fields with no dedicated tool, and pass ONLY the fields you are changing. ' +
           'AUDITING: when the user asks to audit, check, review, or "health-check" the container, its ' +
           'tags/triggers/variables, or its setup, ALWAYS call audit_gtm_container FIRST — never reply ' +

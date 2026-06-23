@@ -493,6 +493,54 @@ export class GoogleDataService {
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
+  /** Bulk, ONE approval: set the Measurement ID on EVERY GA4 tag in the workspace
+   *  (gaawe → measurementIdOverride, googtag → tagId). Continues past a per-tag failure
+   *  and returns a summary, so one bad tag does not block the rest and the user approves
+   *  the whole "all GA4 tags" operation once instead of tag-by-tag. */
+  async setGa4MeasurementIdOnAllTags(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    measurementId: string
+  ): Promise<{ total: number; updated: string[]; failed: Array<{ tag: string; error: string }> }> {
+    const targets = (await this.listGtmTags(accountId, containerId, workspaceId)).filter(
+      (t) => t.type === 'gaawe' || t.type === 'googtag'
+    );
+    const updated: string[] = [];
+    const failed: Array<{ tag: string; error: string }> = [];
+    for (const t of targets) {
+      try {
+        await this.setGa4MeasurementId(accountId, containerId, workspaceId, t.tagId, measurementId);
+        updated.push(t.name);
+      } catch (e) {
+        failed.push({ tag: t.name, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    return { total: targets.length, updated, failed };
+  }
+
+  /** Bulk, ONE approval: append GA4 event parameters to EVERY GA4 Event tag (gaawe) in
+   *  the workspace. Continues past a per-tag failure; returns a summary. */
+  async addGa4EventParametersToAllTags(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    parameters: Array<{ name: string; value: string }>
+  ): Promise<{ total: number; updated: string[]; failed: Array<{ tag: string; error: string }> }> {
+    const targets = (await this.listGtmTags(accountId, containerId, workspaceId)).filter((t) => t.type === 'gaawe');
+    const updated: string[] = [];
+    const failed: Array<{ tag: string; error: string }> = [];
+    for (const t of targets) {
+      try {
+        await this.addGa4EventParameters(accountId, containerId, workspaceId, t.tagId, parameters);
+        updated.push(t.name);
+      } catch (e) {
+        failed.push({ tag: t.name, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    return { total: targets.length, updated, failed };
+  }
+
   /** Pause or unpause a tag WITHOUT losing its config: GTM update replaces the
    *  whole resource, so we fetch the current tag, flip `paused`, and write it
    *  back — preserving parameters, triggers, consent settings, etc. */
