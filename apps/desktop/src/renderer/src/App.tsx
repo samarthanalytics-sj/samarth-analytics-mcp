@@ -250,14 +250,16 @@ function summarizeProposal(tool: string, details: Record<string, unknown>): Arra
     if (details.variableId) rows.push({ label: 'Variable ID', value: String(details.variableId) });
     return rows;
   }
-  if (tool === 'set_ga4_measurement_id') {
-    rows.push({ label: 'Action', value: 'Set Measurement ID' });
+  if (tool === 'set_ga4_measurement_id' || tool === 'set_ga4_measurement_id_on_all_tags') {
+    const all = tool === 'set_ga4_measurement_id_on_all_tags';
+    rows.push({ label: 'Action', value: all ? 'Set Measurement ID on ALL GA4 tags' : 'Set Measurement ID' });
     if (details.tagId) rows.push({ label: 'Tag ID', value: String(details.tagId) });
     if (details.measurementId) rows.push({ label: 'Measurement ID', value: String(details.measurementId) });
     return rows;
   }
-  if (tool === 'add_ga4_event_parameters') {
-    rows.push({ label: 'Action', value: 'Add GA4 event parameters' });
+  if (tool === 'add_ga4_event_parameters' || tool === 'add_ga4_event_parameters_to_all_tags') {
+    const all = tool === 'add_ga4_event_parameters_to_all_tags';
+    rows.push({ label: 'Action', value: all ? 'Add event parameters to ALL GA4 event tags' : 'Add GA4 event parameters' });
     if (details.tagId) rows.push({ label: 'Tag ID', value: String(details.tagId) });
     const ps = Array.isArray(details.parameters) ? (details.parameters as Array<Record<string, unknown>>) : [];
     if (ps.length) rows.push({ label: 'Parameters', value: ps.map((p) => `${String(p.name)} = ${String(p.value)}`).join(', ') });

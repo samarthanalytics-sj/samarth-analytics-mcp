@@ -1054,6 +1054,64 @@ export function buildToolRegistry(
         data.setGa4MeasurementId(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId), s(a.measurementId)),
     },
     {
+      name: 'set_ga4_measurement_id_on_all_tags',
+      description:
+        'Set/replace the Measurement ID on ALL GA4 tags in the workspace in ONE approval (GA4 event tags + the Google tag). The value may be a literal id (G-/AW-/GT-XXXX) or a GTM variable like {{GA4 Variable}}. PREFER this whenever the user says "all GA4 tags" / "every GA4 tag" (e.g. "replace {{GA4 Measurement ID}} with {{GA4 Variable}} on all GA4 tags") — do NOT loop set_ga4_measurement_id tag-by-tag. It builds each parameter correctly, preserves the rest of every tag, continues past any single failure, and returns a summary of updated/failed tags.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          measurementId: {
+            type: 'string',
+            description: 'The Measurement ID (G-/AW-/GT-XXXX) or a GTM variable reference such as {{GA4 Variable}}.',
+          },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'measurementId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Set Measurement ID to ${s(a.measurementId)} on ALL GA4 tags in workspace ${s(a.workspaceId)}`,
+      handler: (a) =>
+        data.setGa4MeasurementIdOnAllTags(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.measurementId)),
+    },
+    {
+      name: 'add_ga4_event_parameters_to_all_tags',
+      description:
+        'Add GA4 event parameters to ALL GA4 Event tags (gaawe) in the workspace in ONE approval. PREFER this whenever the user says "all GA4 tags" / "every GA4 event tag" (e.g. "add user_id and session_id to all GA4 event tags") — do NOT loop add_ga4_event_parameters tag-by-tag. It appends to each tag\'s eventSettingsTable, updates a value in place if the name already exists, preserves each tag, continues past any single failure, and returns a summary. Values may be GTM variables like {{User ID}}.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          parameters: {
+            type: 'array',
+            description: 'Event parameters to add to every GA4 event tag.',
+            items: {
+              type: 'object',
+              properties: { name: { type: 'string' }, value: { type: 'string' } },
+              required: ['name', 'value'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'parameters'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) =>
+        `Add ${(Array.isArray(a.parameters) ? a.parameters.length : 0)} GA4 event parameter(s) to ALL GA4 event tags in workspace ${s(a.workspaceId)}`,
+      handler: (a) =>
+        data.addGa4EventParametersToAllTags(
+          s(a.accountId),
+          s(a.containerId),
+          s(a.workspaceId),
+          (Array.isArray(a.parameters) ? a.parameters : []) as Array<{ name: string; value: string }>
+        ),
+    },
+    {
       name: 'set_gtm_tag_paused',
       description:
         'Pause or unpause a tag in a GTM workspace, preserving all its other settings. Use this to apply the audit fix for a paused tag. Requires accountId, containerId, workspaceId, tagId, and paused (boolean — false to unpause/enable, true to pause). Optional name is shown in the approval prompt.',
