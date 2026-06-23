@@ -1,3 +1,9 @@
+## [1.32.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.31.0...v1.32.0) (2026-06-23)
+
+### Features
+
+* **desktop:** experimental AI single-page scan — screenshot + OpenAI vision picks the tags ([ce8449e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ce8449e176e819ca8894fd58d9b996776c1eebc4))
+
 ## [1.31.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.30.0...v1.31.0) (2026-06-23)
 
 ### Features
