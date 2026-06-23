@@ -1,3 +1,9 @@
+## [1.29.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.28.0...v1.29.0) (2026-06-23)
+
+### Features
+
+* **desktop:** group Tag suggestions + Container audit into one "GTM" workspace ([5ca0213](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5ca02132ee424e17f2edfb4373abfa552aa2b0c2))
+
 ## [1.28.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.27.0...v1.28.0) (2026-06-22)
 
 ### Features
