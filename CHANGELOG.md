@@ -1,3 +1,9 @@
+## [1.37.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.37.0...v1.37.1) (2026-06-23)
+
+### Bug Fixes
+
+* **desktop:** force Wait-for-Tags + Check-Validation OFF on linkClick/formSubmission triggers ([3b9093f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3b9093fc2d01a5afbdc1251f4e309c8dac27355f)), closes [#82](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/82)
+
 ## [1.37.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.36.0...v1.37.0) (2026-06-23)
 
 ### Features
