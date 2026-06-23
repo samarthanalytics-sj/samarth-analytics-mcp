@@ -333,6 +333,17 @@ async function main(): Promise<void> {
     );
   });
 
+  await test('bad args: a tool called with another tool\'s shape is redirected, not fired', async () => {
+    const reg = buildToolRegistry(fakeData().data, approveAsIs);
+    // The exact misfire from the logs: set_gtm_tag_paused called with measurementId and
+    // NO tagId. It must NOT hit the API; it must point at the tool the args fit.
+    await assert.rejects(
+      () => reg.execute('set_gtm_tag_paused', { accountId: '1', containerId: '2', workspaceId: '3', measurementId: '{{GA4 Variable}}' }),
+      /set_ga4_measurement_id_on_all_tags/,
+      'redirects misfiled set_gtm_tag_paused(measurementId) to set_ga4_measurement_id_on_all_tags'
+    );
+  });
+
   await test('audit_gtm_container returns counts + findings', async () => {
     const reg = buildToolRegistry(fakeData().data);
     const out = JSON.parse(await reg.execute('audit_gtm_container', { accountId: '1', containerId: '2', workspaceId: '3' }));

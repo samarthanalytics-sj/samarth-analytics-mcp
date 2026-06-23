@@ -1391,6 +1391,28 @@ export function buildToolRegistry(
         );
       }
       console.error(`[tool] → ${name}${tool.write ? ' [write]' : ''} args=${truncForLog(JSON.stringify(args ?? {}))}`);
+
+      // Guard against the model calling a plausible-looking tool with ANOTHER tool's
+      // arguments (observed: set_gtm_tag_paused called with measurementId and no tagId →
+      // a cryptic GTM 404). Validate the schema's required fields up front; if they are
+      // missing AND the supplied args fully satisfy a different tool, redirect the model
+      // there instead of firing a doomed request or showing a bad approval card.
+      const provided = Object.keys(args ?? {}).filter((k) => (args as Record<string, unknown>)[k] !== undefined);
+      const requiredOf = (t: { inputSchema: Record<string, unknown> }): string[] =>
+        Array.isArray((t.inputSchema as { required?: unknown }).required) ? ((t.inputSchema as { required: string[] }).required) : [];
+      const missing = requiredOf(tool).filter((r) => !provided.includes(r));
+      if (missing.length) {
+        const better = tools
+          .filter((t) => t.name !== name && t.write === tool.write && requiredOf(t).length > 0 && requiredOf(t).every((r) => provided.includes(r)))
+          .map((t) => t.name)
+          .slice(0, 3);
+        const msg =
+          `Tool "${name}" requires [${requiredOf(tool).join(', ')}] but is missing [${missing.join(', ')}] (you sent [${provided.join(', ')}]).` +
+          (better.length ? ` Those arguments match a different tool — call one of these instead: ${better.join(', ')}.` : '');
+        console.error(`[tool] ✗ ${name} BAD ARGS → ${msg}`);
+        throw new Error(msg);
+      }
+
       let effectiveArgs = args ?? {};
       if (tool.write) {
         if (!confirm) {
