@@ -17,6 +17,7 @@ import type {
   MonitorAlert,
   MonitorConfig,
   MonitorStatus,
+  ScanProgressView,
   SecretSelfTest,
   SuggestedTagView,
   TagScanResult,
@@ -1115,6 +1116,8 @@ function TagReviewPanel({
 }): JSX.Element {
   const [url, setUrl] = useState('');
   const [scanning, setScanning] = useState(false);
+  // Live crawl progress — suggestions stream in one-by-one as each page is scanned.
+  const [scanProgress, setScanProgress] = useState<{ scanned: number; found: number } | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [suggestions, setSuggestions] = useState<SuggestedTagView[]>([]);
@@ -1192,18 +1195,26 @@ function TagReviewPanel({
 
   // "Single page" mode: scan ONLY the entered URL directly — no discovery, no page
   // list, straight to the tag results.
+  // Suggestions stream in as each page is scanned, so the list fills one-by-one.
+  const onScanProgress = (p: ScanProgressView): void => {
+    setSuggestions(p.suggestions);
+    setScanProgress({ scanned: p.scanned, found: p.suggestions.length });
+  };
+
   async function doSinglePageScan(): Promise<void> {
     const target = url.trim();
     if (!target || scanning || discovering) return;
     onError('');
     setScanning(true);
+    setScanProgress(null);
     setDiscovered(null);
     try {
-      applyScanResult(await window.desktop.tags.scanUrls([target], { settleMs: effSettleMs() }));
+      applyScanResult(await window.desktop.tags.scanUrlsStream([target], { settleMs: effSettleMs() }, onScanProgress));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setScanning(false);
+      setScanProgress(null);
     }
   }
 
@@ -1237,12 +1248,14 @@ function TagReviewPanel({
     if (urls.length === 0 || scanning) return;
     onError('');
     setScanning(true);
+    setScanProgress(null);
     try {
-      applyScanResult(await window.desktop.tags.scanUrls(urls, { settleMs: effSettleMs() }));
+      applyScanResult(await window.desktop.tags.scanUrlsStream(urls, { settleMs: effSettleMs() }, onScanProgress));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setScanning(false);
+      setScanProgress(null);
     }
   }
 
@@ -1252,12 +1265,14 @@ function TagReviewPanel({
     if (!target || scanning) return;
     onError('');
     setScanning(true);
+    setScanProgress(null);
     try {
-      applyScanResult(await window.desktop.tags.scan(target, { maxPages: 25, maxDepth: 2, settleMs: effSettleMs() }));
+      applyScanResult(await window.desktop.tags.scanStream(target, { maxPages: 25, maxDepth: 2, settleMs: effSettleMs() }, onScanProgress));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setScanning(false);
+      setScanProgress(null);
     }
   }
 
@@ -1683,11 +1698,20 @@ function TagReviewPanel({
           </div>
         )}
 
+        {/* Live crawl progress — the list below fills in as each page is read. */}
+        {scanning && scanProgress && (
+          <div style={styles.scanBanner}>
+            ⏳ Scanning… {scanProgress.scanned} page(s) read · {scanProgress.found} tag(s) so far — they stream in below as each page is scanned.
+          </div>
+        )}
+
         {/* Results */}
         {suggestions.length === 0 ? (
           <div style={styles.empty}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>🏷</div>
-            {scanLog
+            {scanning
+              ? 'Reading the first page…'
+              : scanLog
               ? 'No trackable forms or clicks were found on the scanned pages. Try increasing pages/depth, or open the scan log above to see what was covered.'
               : 'Scan a website to see the GA4 event tags worth creating — form submissions (with the form provider), email & phone clicks, file downloads, outbound links and CTAs.'}
           </div>
@@ -2650,6 +2674,7 @@ const styles: Record<string, React.CSSProperties> = {
   scanNum: { display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#9ca3af', flex: '0 0 auto' },
   scanNumInput: { width: 52, background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 8px', fontSize: 13 },
   scanSelect: { background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 8px', fontSize: 13 },
+  scanBanner: { fontSize: 13, color: '#7dd3fc', background: '#0c2030', border: '1px solid #1e4258', borderRadius: 8, padding: '8px 12px', flexShrink: 0 },
   reviewToolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', flexShrink: 0 },
   reviewList: { display: 'flex', flexDirection: 'column', border: '1px solid #1f2937', borderRadius: 12, overflow: 'hidden', flexShrink: 0 },
   reviewRow: { display: 'flex', gap: 12, alignItems: 'flex-start', padding: '12px 14px', borderBottom: '1px solid #1f2937', background: '#111827' },

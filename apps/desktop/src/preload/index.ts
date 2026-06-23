@@ -21,6 +21,7 @@ import type {
   DiscoverResult,
   ParsedSuggestionsResult,
   ProviderStatus,
+  ScanProgressView,
   SecretSelfTest,
   SuggestedTagView,
   TagScanOptions,
@@ -118,6 +119,40 @@ const api = {
       ipcRenderer.invoke('suggestions:scanUrls', urls, opts),
     scan: (url: string, opts?: TagScanOptions): Promise<TagScanResult> =>
       ipcRenderer.invoke('suggestions:scan', url, opts),
+    // Streaming scan: `onProgress` fires with the running suggestion list after each
+    // page; the promise resolves with the final result. Mirrors llm.chatStream.
+    scanStream: (
+      url: string,
+      opts: TagScanOptions | undefined,
+      onProgress: (p: ScanProgressView) => void,
+    ): Promise<TagScanResult> => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const listener = (_e: unknown, payload: { requestId: string } & ScanProgressView): void => {
+        if (payload?.requestId !== requestId) return;
+        const { requestId: _drop, ...p } = payload;
+        onProgress(p);
+      };
+      ipcRenderer.on('suggestions:scan:event', listener);
+      return ipcRenderer
+        .invoke('suggestions:scanStream', requestId, url, opts)
+        .finally(() => ipcRenderer.removeListener('suggestions:scan:event', listener));
+    },
+    scanUrlsStream: (
+      urls: string[],
+      opts: TagScanOptions | undefined,
+      onProgress: (p: ScanProgressView) => void,
+    ): Promise<TagScanResult> => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const listener = (_e: unknown, payload: { requestId: string } & ScanProgressView): void => {
+        if (payload?.requestId !== requestId) return;
+        const { requestId: _drop, ...p } = payload;
+        onProgress(p);
+      };
+      ipcRenderer.on('suggestions:scan:event', listener);
+      return ipcRenderer
+        .invoke('suggestions:scanUrlsStream', requestId, urls, opts)
+        .finally(() => ipcRenderer.removeListener('suggestions:scan:event', listener));
+    },
     fromJson: (json: string): Promise<ParsedSuggestionsResult> =>
       ipcRenderer.invoke('suggestions:fromJson', json),
     // Save the (renderer-built) template CSV to a user-chosen file → saved path or null.

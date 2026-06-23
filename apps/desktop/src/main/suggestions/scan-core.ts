@@ -51,6 +51,25 @@ export interface ScanOptions {
   maxDepth?: number;
 }
 
+/** Streamed after every page is scanned — the RUNNING (full) suggestion list so the
+ *  review panel can fill in one-by-one as the crawl proceeds, plus crawl progress. */
+export interface ScanProgress {
+  /** Pages successfully scanned so far. */
+  scanned: number;
+  /** Pages opened (incl. failures) so far. */
+  opened: number;
+  /** Pages still queued (an estimate of what's left). */
+  queued: number;
+  /** The complete suggestion list built from everything scanned SO FAR. */
+  suggestions: SuggestedTag[];
+}
+export type OnScanProgress = (p: ScanProgress) => void;
+
+/** The complete (full-mode) suggestion list from the pages scanned so far. */
+function runningSuggestions(pageScans: PageScan[], siteHost: string): SuggestedTag[] {
+  return buildSuggestions(buildSuggestInput(pageScans, siteHost), { full: true });
+}
+
 const clamp = (v: number | undefined, dflt: number, cap: number): number =>
   v === undefined || !Number.isFinite(v) || v <= 0 ? dflt : Math.min(Math.floor(v), cap);
 
@@ -228,6 +247,7 @@ export async function crawlAndSuggest(
   driver: PageDriver,
   startUrl: string,
   opts: ScanOptions = {},
+  onProgress?: OnScanProgress,
 ): Promise<TagScanResult> {
   const maxPages = clamp(opts.maxPages, 10, 50);
   const maxDepth = clamp(opts.maxDepth, 2, 4);
@@ -281,6 +301,14 @@ export async function crawlAndSuggest(
           queue.push({ url: norm, depth: depth + 1 });
         }
       }
+      // Stream the running list so the review panel fills in as the crawl proceeds.
+      if (onProgress) {
+        try {
+          onProgress({ scanned: pageScans.length, opened, queued: queue.length, suggestions: runningSuggestions(pageScans, siteHost) });
+        } catch {
+          /* a progress sink error must never abort the crawl */
+        }
+      }
     }
   } finally {
     await driver.close();
@@ -299,7 +327,7 @@ export const SCAN_URLS_CAP = 60;
  * Deep-scan a SPECIFIC list of URLs (no BFS) — used after the discover step,
  * where the user picked which pages to scan. READ-ONLY.
  */
-export async function scanUrls(driver: PageDriver, urls: string[], siteHostHint?: string): Promise<TagScanResult> {
+export async function scanUrls(driver: PageDriver, urls: string[], siteHostHint?: string, onProgress?: OnScanProgress): Promise<TagScanResult> {
   const list = urls.filter(Boolean);
   const start = list[0] ? normalizeUrl(list[0], list[0]) : null;
   let siteHost = siteHostHint ?? '';
@@ -338,6 +366,13 @@ export async function scanUrls(driver: PageDriver, urls: string[], siteHostHint?
         continue;
       }
       pageScans.push(r.page);
+      if (onProgress) {
+        try {
+          onProgress({ scanned: pageScans.length, opened, queued: targets.length - opened, suggestions: runningSuggestions(pageScans, siteHost) });
+        } catch {
+          /* a progress sink error must never abort the scan */
+        }
+      }
     }
   } finally {
     await driver.close();

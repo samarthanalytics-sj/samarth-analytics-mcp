@@ -5,7 +5,7 @@
 //   • createSuggestedTags() — the approved-create loop (outcome mapping).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/suggestion-service.test.ts
 
-import { crawlAndSuggest, scanUrls, detectInstalled, type PageDriver, type DrivenPage } from '../scan-core';
+import { crawlAndSuggest, scanUrls, detectInstalled, type PageDriver, type DrivenPage, type ScanProgress } from '../scan-core';
 import { mergeDriven } from '../multi-driver';
 import { parseSitemapLocs, extractCrawlLinks } from '../discover';
 import { parseSuggestions, suggestionsFromData, createSuggestedTags, planGoogleTagVars, provisionVariables } from '../suggestion-service';
@@ -140,6 +140,16 @@ async function main(): Promise<void> {
     check('crawl: inventory lists ALL detected elements (5) + forms (1), pre-dedup', res.inventory.elements.length === 5 && res.inventory.forms.length === 1,
       `${res.inventory.elements.length} els, ${res.inventory.forms.length} forms`);
     check('crawl: inventory element carries page/kind/text/href', res.inventory.elements.every((e) => typeof e.page === 'string' && typeof e.kind === 'string'));
+
+    // Part 3 — onProgress streams the RUNNING list after each page.
+    const fd2 = fakeDriver({ 'https://acme.com/': home, 'https://acme.com/contact': contact });
+    const progressEvents: ScanProgress[] = [];
+    const res2 = await crawlAndSuggest(fd2.driver, 'https://acme.com/', { maxPages: 10, maxDepth: 2 }, (p) => progressEvents.push(p));
+    check('stream: onProgress fired once per scanned page', progressEvents.length === res2.summary.pagesScanned && progressEvents.length === 2);
+    check('stream: each event carries the RUNNING suggestion list; the last equals the final list', progressEvents[progressEvents.length - 1].suggestions.length === res2.summary.suggestions);
+    check('stream: the list GROWS across pages (page 1 ≤ page 2)', progressEvents[0].suggestions.length <= progressEvents[1].suggestions.length);
+    check('stream: GA4 Configuration is present from the very first event', progressEvents[0].suggestions.some((s) => s.platform === 'google_tag'));
+    check('stream: progress carries scanned/opened counters', progressEvents[0].scanned === 1 && progressEvents[1].scanned === 2);
   }
 
   // ── maxDepth clamps to a minimum of 1, so a linked page is still reached ────
