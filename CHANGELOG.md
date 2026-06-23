@@ -1,3 +1,9 @@
+## [1.32.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.32.1...v1.32.2) (2026-06-23)
+
+### Bug Fixes
+
+* **tags:** GTM tag update no longer wipes GA4 tag params + add a GA4-event-param tool ([eb1fecc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/eb1fecceaf55d0d19c8d9844862eef44647b6cb1))
+
 ## [1.32.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.32.0...v1.32.1) (2026-06-23)
 
 ### Bug Fixes
