@@ -323,6 +323,16 @@ async function main(): Promise<void> {
     }
   });
 
+  await test('unknown tool name suggests the closest real tool (did you mean)', async () => {
+    const reg = buildToolRegistry(fakeData().data, approveAsIs);
+    // A near-miss / hallucinated name (gemini-flash style) should point at the real tool.
+    await assert.rejects(
+      () => reg.execute('set_ga4_measurement_id_for_all_tags', { measurementId: 'x' }),
+      /Did you mean:.*set_ga4_measurement_id_on_all_tags/,
+      'suggests the real bulk tool for a near-miss name'
+    );
+  });
+
   await test('audit_gtm_container returns counts + findings', async () => {
     const reg = buildToolRegistry(fakeData().data);
     const out = JSON.parse(await reg.execute('audit_gtm_container', { accountId: '1', containerId: '2', workspaceId: '3' }));

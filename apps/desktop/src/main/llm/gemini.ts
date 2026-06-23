@@ -50,9 +50,25 @@ export function parseGeminiReply(data: unknown): LlmReply {
 }
 
 // Gemini's function parameters follow an OpenAPI subset that rejects
-// `additionalProperties`; strip it and omit `parameters` entirely for no-arg tools.
-function geminiFunctionDecl(tool: { name: string; description: string; inputSchema: Record<string, unknown> }) {
-  const { additionalProperties: _drop, ...params } = tool.inputSchema as Record<string, unknown>;
+// `additionalProperties` ANYWHERE — not just at the top level. A tool whose schema has
+// a nested `additionalProperties` (e.g. inside an array's `items`, like the GA4
+// event-parameter tools) makes Gemini reject/ignore that function. Strip it RECURSIVELY.
+export function stripGeminiUnsupported(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(stripGeminiUnsupported);
+  if (node && typeof node === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (k === 'additionalProperties') continue;
+      out[k] = stripGeminiUnsupported(v);
+    }
+    return out;
+  }
+  return node;
+}
+
+// Strip unsupported keywords, and omit `parameters` entirely for no-arg tools.
+export function geminiFunctionDecl(tool: { name: string; description: string; inputSchema: Record<string, unknown> }) {
+  const params = stripGeminiUnsupported(tool.inputSchema) as Record<string, unknown>;
   const props = (params.properties ?? {}) as Record<string, unknown>;
   const hasProps = Object.keys(props).length > 0;
   return {
