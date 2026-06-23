@@ -455,6 +455,7 @@ export class GoogleDataService {
     const gtm = tagmanager({ version: 'v2', auth });
     const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
     const current = (await gtm.accounts.containers.workspaces.tags.get({ path })).data;
+    console.error(`[gtm] addGa4EventParameters tag=${tagId} type=${current.type} params=[${parameters.map((p) => p.name).join(', ')}]`);
     if (current.type !== 'gaawe') {
       throw new Error(
         `Tag ${tagId} is type "${current.type ?? 'unknown'}", not a GA4 Event tag (gaawe). add_ga4_event_parameters only edits GA4 event tags.`
@@ -462,6 +463,7 @@ export class GoogleDataService {
     }
     const updated = addEventParameters(current as Record<string, unknown>, parameters);
     const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
+    console.error(`[gtm]   ✓ tag ${tagId} (${res.data.name}) saved`);
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
@@ -483,6 +485,7 @@ export class GoogleDataService {
     const current = (await gtm.accounts.containers.workspaces.tags.get({ path })).data;
     const key =
       current.type === 'gaawe' ? 'measurementIdOverride' : current.type === 'googtag' ? 'tagId' : null;
+    console.error(`[gtm] setGa4MeasurementId tag=${tagId} type=${current.type} → ${key ?? '(unsupported)'}=${measurementId}`);
     if (!key) {
       throw new Error(
         `Tag ${tagId} is type "${current.type ?? 'unknown'}", not a GA4 Event tag (gaawe) or Google tag (googtag). set_ga4_measurement_id only edits those.`
@@ -490,6 +493,7 @@ export class GoogleDataService {
     }
     const updated = setTemplateParam(current as Record<string, unknown>, key, measurementId);
     const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
+    console.error(`[gtm]   ✓ tag ${tagId} (${res.data.name}) saved`);
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
@@ -503,8 +507,10 @@ export class GoogleDataService {
     workspaceId: string,
     measurementId: string
   ): Promise<{ total: number; updated: string[]; failed: Array<{ tag: string; error: string }> }> {
-    const targets = (await this.listGtmTags(accountId, containerId, workspaceId)).filter(
-      (t) => t.type === 'gaawe' || t.type === 'googtag'
+    const allTags = await this.listGtmTags(accountId, containerId, workspaceId);
+    const targets = allTags.filter((t) => t.type === 'gaawe' || t.type === 'googtag');
+    console.error(
+      `[gtm] setGa4MeasurementIdOnAllTags: ${allTags.length} tag(s) in workspace, ${targets.length} GA4 target(s): ${targets.map((t) => `${t.name}#${t.tagId}(${t.type})`).join(' | ') || 'NONE — nothing to update'}`
     );
     const updated: string[] = [];
     const failed: Array<{ tag: string; error: string }> = [];
@@ -513,9 +519,12 @@ export class GoogleDataService {
         await this.setGa4MeasurementId(accountId, containerId, workspaceId, t.tagId, measurementId);
         updated.push(t.name);
       } catch (e) {
-        failed.push({ tag: t.name, error: e instanceof Error ? e.message : String(e) });
+        const error = e instanceof Error ? e.message : String(e);
+        failed.push({ tag: t.name, error });
+        console.error(`[gtm]   ✗ ${t.name}#${t.tagId}: ${error}`);
       }
     }
+    console.error(`[gtm] setGa4MeasurementIdOnAllTags DONE: ${updated.length} updated, ${failed.length} failed`);
     return { total: targets.length, updated, failed };
   }
 
@@ -527,7 +536,11 @@ export class GoogleDataService {
     workspaceId: string,
     parameters: Array<{ name: string; value: string }>
   ): Promise<{ total: number; updated: string[]; failed: Array<{ tag: string; error: string }> }> {
-    const targets = (await this.listGtmTags(accountId, containerId, workspaceId)).filter((t) => t.type === 'gaawe');
+    const allTags = await this.listGtmTags(accountId, containerId, workspaceId);
+    const targets = allTags.filter((t) => t.type === 'gaawe');
+    console.error(
+      `[gtm] addGa4EventParametersToAllTags: ${allTags.length} tag(s) in workspace, ${targets.length} gaawe target(s): ${targets.map((t) => `${t.name}#${t.tagId}`).join(' | ') || 'NONE — nothing to update'} · params=[${parameters.map((p) => p.name).join(', ')}]`
+    );
     const updated: string[] = [];
     const failed: Array<{ tag: string; error: string }> = [];
     for (const t of targets) {
@@ -535,9 +548,12 @@ export class GoogleDataService {
         await this.addGa4EventParameters(accountId, containerId, workspaceId, t.tagId, parameters);
         updated.push(t.name);
       } catch (e) {
-        failed.push({ tag: t.name, error: e instanceof Error ? e.message : String(e) });
+        const error = e instanceof Error ? e.message : String(e);
+        failed.push({ tag: t.name, error });
+        console.error(`[gtm]   ✗ ${t.name}#${t.tagId}: ${error}`);
       }
     }
+    console.error(`[gtm] addGa4EventParametersToAllTags DONE: ${updated.length} updated, ${failed.length} failed`);
     return { total: targets.length, updated, failed };
   }
 

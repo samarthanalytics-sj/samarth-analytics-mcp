@@ -54,6 +54,9 @@ const s = (v: unknown): string => String(v ?? '');
 const obj = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
 
+/** One-line truncation for logging tool args/results without flooding the console. */
+const truncForLog = (str: string, n = 600): string => (str.length > n ? `${str.slice(0, n)}…(+${str.length - n} chars)` : str);
+
 /** Cheap similarity for "did you mean" on an unknown tool name: common-prefix length,
  *  heavily boosted when one name contains the other (catches near-miss/hallucinated
  *  names like set_ga4_measurement_id_for_all_tags → ..._on_all_tags). */
@@ -1382,13 +1385,16 @@ export function buildToolRegistry(
       const tool = tools.find((t) => t.name === name);
       if (!tool) {
         const near = closestToolNames(name, tools.map((t) => t.name));
+        console.error(`[tool] ✗ model called UNKNOWN tool "${name}"${near.length ? ` — closest: ${near.join(', ')}` : ''}`);
         throw new Error(
           `Unknown tool: ${name}.${near.length ? ` Did you mean: ${near.join(', ')}? Call one of those EXACT names.` : ''}`
         );
       }
+      console.error(`[tool] → ${name}${tool.write ? ' [write]' : ''} args=${truncForLog(JSON.stringify(args ?? {}))}`);
       let effectiveArgs = args ?? {};
       if (tool.write) {
         if (!confirm) {
+          console.error(`[tool] ${name}: writes disabled (no confirm fn)`);
           return JSON.stringify({ declined: true, message: 'Write tools are disabled.' });
         }
         const summary = tool.summarize ? tool.summarize(effectiveArgs) : tool.name;
@@ -1402,7 +1408,13 @@ export function buildToolRegistry(
           details: effectiveArgs,
           destructive: tool.destructive,
         });
-        if (!edited) return declined;
+        if (!edited) {
+          console.error(`[tool] ${name}: user DECLINED in approval card`);
+          return declined;
+        }
+        if (JSON.stringify(edited) !== JSON.stringify(effectiveArgs)) {
+          console.error(`[tool] ${name}: args EDITED in approval card → ${truncForLog(JSON.stringify(edited))}`);
+        }
         effectiveArgs = edited;
 
         // Destructive tools (delete) require a SECOND, final confirmation.
@@ -1413,14 +1425,19 @@ export function buildToolRegistry(
             details: effectiveArgs,
             destructive: true,
           });
-          if (!again) return declined;
+          if (!again) {
+            console.error(`[tool] ${name}: user DECLINED final confirmation`);
+            return declined;
+          }
         }
       }
       try {
-        return JSON.stringify(await tool.handler(effectiveArgs));
+        const result = await tool.handler(effectiveArgs);
+        console.error(`[tool] ✓ ${name} → ${truncForLog(JSON.stringify(result))}`);
+        return JSON.stringify(result);
       } catch (e) {
         const msg = apiErrorMessage(e);
-        console.error(`[samarth-desktop] tool "${name}" failed: ${msg}`);
+        console.error(`[tool] ✗ ${name} FAILED: ${msg}`);
         throw new Error(msg);
       }
     },
