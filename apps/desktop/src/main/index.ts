@@ -155,7 +155,7 @@ app.whenReady().then(() => {
   registerDataIpc(dataService);
   registerChatIpc(chatService);
   registerMonitorIpc(monitor);
-  registerSuggestionsIpc(dataService);
+  registerSuggestionsIpc(dataService, providerKeys);
   registerGtmAuditIpc(dataService);
   createWindow();
 

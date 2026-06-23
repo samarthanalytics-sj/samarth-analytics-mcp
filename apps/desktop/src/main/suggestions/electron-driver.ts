@@ -188,6 +188,43 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
       }
     },
 
+    // Capture a PNG of the CURRENTLY loaded page (call right after open()). Best
+    // effort full-page: grow the hidden window to the content height (capped) then
+    // capturePage; falls back to the viewport. Returns null if capture fails.
+    async screenshot(): Promise<Buffer | null> {
+      if (!win || win.isDestroyed()) return null;
+      const wc = win.webContents;
+      const [w] = win.getSize();
+      let grew = false;
+      try {
+        let height = 900;
+        try {
+          const h = Number(await wc.executeJavaScript('document.documentElement.scrollHeight'));
+          if (Number.isFinite(h) && h > 900) height = Math.min(Math.round(h), 3000);
+        } catch {
+          /* keep the viewport height */
+        }
+        if (height > 900) {
+          win.setSize(w, height);
+          grew = true;
+          await delay(350);
+        }
+        const img = await wc.capturePage();
+        const png = img.toPNG();
+        return png.length ? png : null;
+      } catch {
+        return null;
+      } finally {
+        if (grew && win && !win.isDestroyed()) {
+          try {
+            win.setSize(w, 900);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    },
+
     async close(): Promise<void> {
       try {
         if (win && !win.isDestroyed()) win.destroy();

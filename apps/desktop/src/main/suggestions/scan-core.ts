@@ -41,6 +41,9 @@ export interface DrivenPage {
 /** Drives a browser to one page at a time. The Electron adapter implements this. */
 export interface PageDriver {
   open(url: string): Promise<DrivenPage>;
+  /** Capture a PNG of the page loaded by the most recent open() (for the AI scan).
+   *  Optional — only the browser drivers implement it (Cheerio can't). */
+  screenshot?(): Promise<Buffer | null>;
   close(): Promise<void>;
 }
 
@@ -135,7 +138,7 @@ export function detectInstalled(texts: string[]): { containers: string[]; measur
   return { containers: [...containers], measurementIds: [...measurementIds] };
 }
 
-function emptyResult(site: string, siteHost: string, warnings: string[]): TagScanResult {
+export function emptyResult(site: string, siteHost: string, warnings: string[]): TagScanResult {
   return {
     site,
     siteHost,
@@ -191,19 +194,46 @@ async function scanTarget(
   return { page: { page: path, elements, forms, signals: driven.raw.signals }, links };
 }
 
-/** Build the final report from collected page scans (pure assembly + dedup). */
-function assembleResult(
+/** Dedup key for a suggestion — its event + trigger filter (mirrors buildSuggestions). */
+const suggestionKey = (s: SuggestedTag): string =>
+  `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}`;
+
+/** Build a PageScan from an ALREADY-opened page (mirrors scanTarget's assembly,
+ *  minus the link extraction) — so the AI scan can open once, screenshot, and scan. */
+export function pageScanFromDriven(driven: DrivenPage, url: string, siteHost: string): PageScan | null {
+  if (!driven.ok || !driven.raw) return null;
+  const path = pagePath(url);
+  const elements = classifyPageElements(driven.raw.elements, siteHost, path);
+  const forms = (driven.rawForms ? analyzeForms(driven.rawForms, driven.finalUrl ?? url) : []).map((f) => ({
+    purpose: f.purpose,
+    action: f.action,
+    method: f.method,
+    formId: f.formId,
+    formClasses: f.formClasses,
+    title: f.title,
+    fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })),
+  }));
+  return { page: path, elements, forms, signals: driven.raw.signals };
+}
+
+/** Build the final report from collected page scans (pure assembly + dedup). `extra`
+ *  suggestions (e.g. AI-derived) are appended after the scan-derived ones, deduped
+ *  against them by trigger key — used by the AI single-page scan. */
+export function assembleResult(
   site: string,
   siteHost: string,
   pageScans: PageScan[],
   notScanned: TagScanResult['notScanned'],
   warnings: string[],
   opened: number,
+  extra: SuggestedTag[] = [],
 ): TagScanResult {
   const input = buildSuggestInput(pageScans, siteHost);
   // full: include the GA4 Configuration base tag + the All-form / All-PDF catch-alls
   // so the review list is the COMPLETE set of creatable tags, not only scan-derived.
-  const suggestions: SuggestedTag[] = buildSuggestions(input, { full: true });
+  const scanned: SuggestedTag[] = buildSuggestions(input, { full: true });
+  const seen = new Set(scanned.map(suggestionKey));
+  const suggestions = [...scanned, ...extra.filter((s) => !seen.has(suggestionKey(s)))];
   const byConfidence = { high: 0, medium: 0, low: 0 };
   let em = 0;
   for (const sug of suggestions) {

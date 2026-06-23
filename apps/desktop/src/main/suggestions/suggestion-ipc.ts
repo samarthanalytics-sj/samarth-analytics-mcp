@@ -13,6 +13,7 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
+import type { ProviderKeyStore } from '../storage/provider-keys';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions } from '../../shared/ipc';
@@ -51,8 +52,23 @@ async function makeDriver(opts: TagScanOptions): Promise<PageDriver> {
   return drivers.length === 1 ? drivers[0] : createMultiDriver(drivers);
 }
 
-export function registerSuggestionsIpc(data: GoogleDataService): void {
+export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: ProviderKeyStore): void {
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
+
+  // EXPERIMENTAL: single-page AI scan — screenshot the page + let OpenAI vision pick
+  // the GA4 tags, wired to the real scraped elements. Uses the stored OpenAI key.
+  // Sends the page screenshot to OpenAI (opt-in, the user picked this mode).
+  ipcMain.handle('suggestions:aiScan', async (_e, url: unknown, opts?: TagScanOptions) => {
+    const target = String(url ?? '').trim();
+    const verdict = urlAllowed(target, []);
+    if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
+    const apiKey = providerKeys.getKey('openai');
+    if (!apiKey) throw new Error('No OpenAI API key found — add one in Settings → Providers to use the AI scan.');
+    const settleMs = clampSettle((opts ?? {}).settleMs);
+    const driver = createElectronDriver(settleMs !== undefined ? { settleMs } : {});
+    const { aiScanPage } = await import('./ai-scan');
+    return aiScanPage({ url: target, apiKey, model: 'gpt-4o', driver });
+  });
 
   // Read-only: the container's existing tag names + whether a GA4 base/config tag is
   // present, so the review panel can mark suggestions that ALREADY EXIST (don't
