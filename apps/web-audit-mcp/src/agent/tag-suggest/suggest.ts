@@ -373,9 +373,74 @@ function videoSuggestion(embeds: VideoEmbed[]): SuggestedTag | null {
   };
 }
 
+// ── Always-/conditionally-offered tags (independent of which exact elements were
+//    found) — only emitted in `full` mode so the existing scan output is unchanged.
+
+/** The base "Google tag" (the GA4 Configuration that loads GA4 on every page).
+ *  Created via the google_tag platform — tagId is the Measurement-ID variable. The
+ *  desktop marks it "already exists" when the container already has a GA4 base tag. */
+export function ga4ConfigSuggestion(): SuggestedTag {
+  return {
+    id: 'ga4-config',
+    page: 'site-wide',
+    label: 'GA4 Configuration (Google tag) — loads GA4 on every page',
+    evidence: 'the base Google tag every GA4 setup needs; fires on All Pages',
+    confidence: 'high',
+    enhancedMeasurementOverlap: false,
+    platform: 'google_tag',
+    tagName: 'GA4 Configuration',
+    measurementId: GA4_VAR,
+    tagId: GA4_VAR,
+    eventName: '',
+    trigger: { name: 'All Pages', kind: 'pageview' },
+  };
+}
+
+/** One catch-all tag firing on EVERY form submit (no per-form scope). Offered
+ *  alongside the scoped per-form tags so the user can pick either. */
+export function allFormsSuggestion(): SuggestedTag {
+  return {
+    id: 'all-forms',
+    page: 'site-wide',
+    label: 'All form submissions → GA4 "form_submission"',
+    evidence: 'one tag firing on every form submit on the site',
+    confidence: 'medium',
+    enhancedMeasurementOverlap: false,
+    platform: 'ga4_event',
+    tagName: tagNameOf('All Form Submissions'),
+    measurementId: GA4_VAR,
+    eventName: 'form_submission',
+    eventParameters: [{ name: 'form_id', value: FORM_ID }, { name: 'form_url', value: FORM_URL }, ...PAGE_PARAMS],
+    trigger: { name: trigNameOf('All Form Submissions'), kind: 'form_submit' },
+  };
+}
+
+/** One catch-all tag firing on every PDF link click. */
+export function allPdfSuggestion(): SuggestedTag {
+  return {
+    id: 'all-pdf',
+    page: 'site-wide',
+    label: 'All PDF downloads → GA4 "file_download"',
+    evidence: 'one tag firing on every PDF link click  ⚠ Enhanced Measurement may already cover this',
+    confidence: 'medium',
+    enhancedMeasurementOverlap: true,
+    platform: 'ga4_event',
+    tagName: tagNameOf('All PDF Downloads'),
+    measurementId: GA4_VAR,
+    eventName: 'file_download',
+    eventParameters: CLICK_PARAMS,
+    trigger: { name: trigNameOf('All PDF Downloads'), kind: 'link_click', clickUrlValue: '\\.pdf(\\?|#|$)', clickUrlOperator: 'matchRegex' },
+  };
+}
+
+const isPdf = (href: string | undefined): boolean => /\.pdf(\?|#|$)/i.test(href ?? '');
+
 const CONF = { high: 0, medium: 1, low: 2 } as const;
 
-export function buildSuggestions(input: SuggestInput): SuggestedTag[] {
+/** opts.full prepends the GA4 Configuration tag (always) and the All-form /
+ *  All-PDF catch-alls (when the site has any form / any PDF), so the review list
+ *  is the COMPLETE set of creatable tags — not only the scan-derived ones. */
+export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } = {}): SuggestedTag[] {
   const scopeCtx = nonUniqueFormScopes(input.forms);
   // Social trigger fires on ONLY the exact domains scraped from the site's links.
   const presentDomains = new Set(
@@ -405,10 +470,17 @@ export function buildSuggestions(input: SuggestInput): SuggestedTag[] {
   }
 
   // Rank: confidence (high→low), then real-value (non-EM-overlap first), then label.
-  return [...byKey.values()].sort(
+  const ranked = [...byKey.values()].sort(
     (a, b) =>
       CONF[a.confidence] - CONF[b.confidence] ||
       Number(a.enhancedMeasurementOverlap) - Number(b.enhancedMeasurementOverlap) ||
       a.label.localeCompare(b.label)
   );
+  if (!opts.full) return ranked;
+  // COMPLETE list: the GA4 Configuration base tag (always) + the All-form /
+  // All-PDF catch-alls (when applicable), surfaced ABOVE the scan-derived tags.
+  const head: SuggestedTag[] = [ga4ConfigSuggestion()];
+  if (input.forms.length > 0) head.push(allFormsSuggestion());
+  if (input.elements.some((e) => e.kind === 'download' && isPdf(e.href))) head.push(allPdfSuggestion());
+  return [...head, ...ranked];
 }

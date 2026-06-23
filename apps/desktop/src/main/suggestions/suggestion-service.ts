@@ -49,7 +49,7 @@ export function suggestionsFromData(data: unknown): ParsedSuggestions {
     if (looksLikePageScan(data[0])) {
       // siteHost only labels the input; element outbound-classification already
       // happened upstream, so '' is fine here.
-      return { suggestions: buildSuggestions(buildSuggestInput(data as PageScan[], '')), warnings };
+      return { suggestions: buildSuggestions(buildSuggestInput(data as PageScan[], ''), { full: true }), warnings };
     }
     throw new Error('Unrecognized array — expected suggestions (SuggestedTag[]) or page scans (PageScan[]).');
   }
@@ -70,7 +70,7 @@ export function suggestionsFromData(data: unknown): ParsedSuggestions {
         forms: Array.isArray(data.forms) ? (data.forms as SuggestInput['forms']) : [],
         elements: Array.isArray(data.elements) ? (data.elements as SuggestInput['elements']) : [],
       };
-      return { suggestions: buildSuggestions(input), warnings };
+      return { suggestions: buildSuggestions(input, { full: true }), warnings };
     }
   }
 
@@ -126,8 +126,11 @@ export async function createSuggestedTags(
             platform: t.platform,
             tagName: t.tagName,
             measurementId: t.measurementId,
-            eventName: t.eventName,
-            eventParameters: Array.isArray(t.eventParameters) ? t.eventParameters : [],
+            // google_tag (the GA4 Configuration base tag) uses tagId + configSettings;
+            // ga4_event uses eventName + eventParameters. Send the right set per platform.
+            ...(t.platform === 'google_tag'
+              ? { tagId: t.tagId ?? t.measurementId, configSettings: Array.isArray(t.configSettings) ? t.configSettings : [] }
+              : { eventName: t.eventName, eventParameters: Array.isArray(t.eventParameters) ? t.eventParameters : [] }),
             trigger: t.trigger,
           }),
         ) as { declined?: boolean; tag?: { name?: string }; trigger?: { reused?: boolean } };

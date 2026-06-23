@@ -50,6 +50,13 @@ const yt = base({
 const gyt = suggestionToGroup(yt);
 check('group: youtube_video → "YouTube Video" type, no when conditions', gyt.triggerType === 'YouTube Video' && gyt.whens.length === 0 && gyt.rowCount === 4);
 
+// ── the GA4 Configuration (google_tag) base tag ──────────────────────────────
+const gtag = base({ id: 'g', platform: 'google_tag', tagName: 'GA4 Configuration', eventName: '', tagId: '{{GA4 Measurement ID}}', trigger: { name: 'All Pages', kind: 'pageview' }, configSettings: [{ name: 'send_page_view', value: 'true' }] });
+const gg = suggestionToGroup(gtag);
+check('group: google_tag → "Google Tag" tag type', gg.tagType === 'Google Tag');
+check('group: google_tag rows use configSettings (not eventParameters) as the params', gg.params.length === 1 && gg.params[0].name === 'send_page_view' && gg.params[0].variable === 'true');
+check('csv: google_tag block has Page View trigger + no when conditions', gg.triggerType === 'Page View' && gg.whens.length === 0);
+
 // ── CSV layout ───────────────────────────────────────────────────────────────
 const csv = suggestionsToTemplateCsv([phone]);
 const rows = csv.split('\r\n');

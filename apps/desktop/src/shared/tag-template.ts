@@ -70,10 +70,12 @@ export interface TemplateGroup {
 
 /** One suggestion → its template block (the structure both the table + CSV use). */
 export function suggestionToGroup(s: SuggestedTagView): TemplateGroup {
-  const params = (s.eventParameters ?? []).map((p) => ({ name: p.name, variable: p.value }));
+  const params = s.platform === 'google_tag'
+    ? (s.configSettings ?? []).map((p) => ({ name: p.name, variable: p.value }))
+    : (s.eventParameters ?? []).map((p) => ({ name: p.name, variable: p.value }));
   const whens = triggerWhens(s);
   return {
-    tagType: 'GA4 Event Tag',
+    tagType: s.platform === 'google_tag' ? 'Google Tag' : 'GA4 Event Tag',
     tagName: s.tagName,
     eventName: s.eventName,
     triggerName: s.trigger.name,

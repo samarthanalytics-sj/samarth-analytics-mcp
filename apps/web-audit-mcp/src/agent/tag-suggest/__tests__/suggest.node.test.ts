@@ -263,6 +263,16 @@ check('video: carries the standard video_* params valued by the Video built-ins'
 check('video: flagged as EM-overlap (GA4 Video engagement) but still suggested', ytTag?.enhancedMeasurementOverlap === true);
 check('video: no embed → no video tag', buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }).length === 0);
 
+// ── full mode: GA4 Configuration + All-form / All-PDF catch-alls ─────────────
+const fullForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, formId: 'c' }], elements: [] }, { full: true });
+check('full: GA4 Configuration (google_tag) is always FIRST, on All Pages', fullForm[0].platform === 'google_tag' && fullForm[0].tagName === 'GA4 Configuration' && fullForm[0].trigger.kind === 'pageview' && fullForm[0].tagId === '{{GA4 Measurement ID}}');
+check('full: "All Form Submissions" catch-all when a form exists (form_submit, no scope)', fullForm.some((s) => s.tagName === 'GA4 Event - All Form Submissions Tag' && s.eventName === 'form_submission' && s.trigger.kind === 'form_submit' && !s.trigger.formIdValue));
+const fullPdf = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Guide', href: 'https://a.com/g.pdf' }] }, { full: true });
+check('full: "All PDF Downloads" catch-all when a PDF exists (\\.pdf matchRegex)', fullPdf.some((s) => s.tagName === 'GA4 Event - All PDF Downloads Tag' && /\\\.pdf/.test(s.trigger.clickUrlValue ?? '') && s.trigger.clickUrlOperator === 'matchRegex'));
+check('full: no PDF → no "All PDF Downloads" tag; no form → no "All Form Submissions"', (() => { const x = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }, { full: true }); return !x.some((s) => s.tagName === 'GA4 Event - All PDF Downloads Tag') && !x.some((s) => s.tagName === 'GA4 Event - All Form Submissions Tag'); })());
+check('full: GA4 Configuration is still present even with nothing found', buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }, { full: true }).some((s) => s.platform === 'google_tag'));
+check('default (no opts): NO google_tag / catch-alls added (scan output unchanged)', !buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, formId: 'c' }], elements: [] }).some((s) => s.platform === 'google_tag' || s.tagName.startsWith('GA4 Event - All ')));
+
 // REGRESSION (image bug): no generated tag/trigger name may contain ":" (GTM rejects it).
 const colonCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Apply Now: Today', intent: 'generic' }] });
 check('names: a CTA text with ":" yields a colon-free trigger name ("Apply Now Today Trigger")', colonCta[0].trigger.name === 'Apply Now Today Trigger');

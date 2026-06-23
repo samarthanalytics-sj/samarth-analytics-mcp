@@ -182,7 +182,9 @@ function assembleResult(
   opened: number,
 ): TagScanResult {
   const input = buildSuggestInput(pageScans, siteHost);
-  const suggestions: SuggestedTag[] = buildSuggestions(input);
+  // full: include the GA4 Configuration base tag + the All-form / All-PDF catch-alls
+  // so the review list is the COMPLETE set of creatable tags, not only scan-derived.
+  const suggestions: SuggestedTag[] = buildSuggestions(input, { full: true });
   const byConfidence = { high: 0, medium: 0, low: 0 };
   let em = 0;
   for (const sug of suggestions) {

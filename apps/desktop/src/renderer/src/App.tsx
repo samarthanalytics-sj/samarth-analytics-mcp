@@ -1730,18 +1730,18 @@ function TagReviewPanel({
                       <div style={styles.reviewRowHead}>
                         <span style={{ fontWeight: 600 }}>{eff.tagName}</span>
                         <span style={{ ...styles.badge, ...CONF_BADGE[s.confidence] }}>{s.confidence}</span>
-                        <span style={styles.typeChip}>GA4 event</span>
+                        <span style={styles.typeChip}>{s.platform === 'google_tag' ? 'Google tag' : 'GA4 event'}</span>
                         {s.enhancedMeasurementOverlap && (
                           <span style={styles.emChip}>⚠ Enhanced Measurement already tracks this</span>
                         )}
                       </div>
                       <div style={styles.detailGrid}>
-                        <span style={styles.detailKey}>Event</span>
-                        <span><code style={mdStyles.code}>{eff.eventName}</code></span>
+                        <span style={styles.detailKey}>{s.platform === 'google_tag' ? 'Tag ID' : 'Event'}</span>
+                        <span><code style={mdStyles.code}>{s.platform === 'google_tag' ? (s.tagId ?? eff.measurementId) : eff.eventName}</code></span>
                         <span style={styles.detailKey}>Page</span>
                         <span>{s.page}</span>
                         <span style={styles.detailKey}>Tag type</span>
-                        <span>GA4 Event (gaawe)</span>
+                        <span>{s.platform === 'google_tag' ? 'Google tag (googtag)' : 'GA4 Event (gaawe)'}</span>
                         <span style={styles.detailKey}>Trigger</span>
                         <span>
                           <b style={{ color: '#e5e7eb' }}>{s.trigger.name}</b> · {triggerTypeLabel(s.trigger.kind)}
