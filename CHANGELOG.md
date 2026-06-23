@@ -1,3 +1,9 @@
+## [1.32.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.32.0...v1.32.1) (2026-06-23)
+
+### Bug Fixes
+
+* **tag-suggest:** GA4 Config creates with a default ID (no block) + drop the "View All Click" tag ([dba8dac](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dba8dacb7c84a5094a6d56e2fd20e4179cd80e78))
+
 ## [1.32.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.31.0...v1.32.0) (2026-06-23)
 
 ### Features
