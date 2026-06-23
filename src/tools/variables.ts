@@ -9,10 +9,9 @@ import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 import { workspaceScope as wsBase } from '../utils/schemas.js';
-
-const parameterSchema = z
-  .array(z.object({ type: z.string(), key: z.string().optional(), value: z.string().optional() }))
-  .optional();
+import { gtmParameterArray as parameterSchema } from '../utils/paramSchema.js';
+import { mergeParametersByKey } from '../utils/tagParams.js';
+import type { tagmanager_v2 } from 'googleapis';
 
 export function registerVariableTools(server: McpServer, getClient: () => GtmClient): void {
   server.registerTool(
@@ -93,7 +92,8 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
   server.registerTool(
     'variables_update',
     {
-      description: '[WRITE] Update a GTM variable. Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
+      description:
+        '[WRITE] Update a GTM variable (read-modify-write — omitted fields are preserved; `parameter` is merged by key). Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
       inputSchema: wsBase.extend({
         variableId: z.string(),
         name: z.string().optional(),
@@ -112,10 +112,23 @@ export function registerVariableTools(server: McpServer, getClient: () => GtmCli
           return textResult(`[DRY RUN] Would update variable ${variableId}`);
         }
         const client = getClient();
+        const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/variables/${variableId}`;
+        // GTM's update is a full replace — fetch, overlay only the provided fields, and
+        // merge `parameter` by key so the rest of the variable isn't wiped.
+        const existing = (await client.accounts.containers.workspaces.variables.get({ path })).data;
+        const merged: tagmanager_v2.Schema$Variable = { ...existing };
+        for (const [k, v] of Object.entries(updates)) {
+          if (v === undefined) continue;
+          if (k === 'parameter') {
+            merged.parameter = mergeParametersByKey(existing.parameter ?? [], v as tagmanager_v2.Schema$Parameter[]);
+          } else {
+            (merged as Record<string, unknown>)[k] = v;
+          }
+        }
         const res = await client.accounts.containers.workspaces.variables.update({
-          path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/variables/${variableId}`,
-          ...(fingerprint ? { fingerprint } : {}),
-          requestBody: updates,
+          path,
+          fingerprint: fingerprint ?? existing.fingerprint ?? undefined,
+          requestBody: merged,
         });
         return jsonResult(res.data);
       } catch (err) {

@@ -9,25 +9,13 @@ import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
 import { addEventParameters, mergeParametersByKey } from '../utils/tagParams.js';
+import { gtmParameterArray as parameterSchema } from '../utils/paramSchema.js';
 
 const wsBase = z.object({
   accountId: z.string().describe('The GTM account ID.'),
   containerId: z.string().describe('The GTM container ID.'),
   workspaceId: z.string().describe('The GTM workspace ID.'),
 });
-
-const singleParamSchema = z.object({
-  type: z.string().describe('Parameter type: template, integer, boolean, list, map, tagReference, triggerReference.'),
-  key: z.string().optional(),
-  value: z.string().optional(),
-});
-
-// GTM parameters can be nested (list/map of parameters), but the googleapis SDK
-// expects Schema$Parameter[] for nested entries. We accept plain objects and cast.
-const parameterSchema = z
-  .array(singleParamSchema)
-  .optional()
-  .describe('GTM parameter list. For list/map parameters, use the GTM UI or pass via raw JSON update.');
 
 export function registerTagTools(server: McpServer, getClient: () => GtmClient): void {
   // ── tags/list ────────────────────────────────────────────────────────────
