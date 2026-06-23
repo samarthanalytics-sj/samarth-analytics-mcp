@@ -9,6 +9,7 @@ import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
 import { mergeParametersByKey, addEventParameters, setTemplateParam, type GtmParam } from './tag-params';
+import { changeJournal, type EntityKind } from './change-journal';
 import type { Ga4AccountView, GtmAccountView } from '../../shared/ipc';
 
 // Follows nextPageToken so large containers/accounts return EVERY item, not just
@@ -404,6 +405,7 @@ export class GoogleDataService {
       parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
       requestBody: tag,
     });
+    this.journal('tag', accountId, containerId, workspaceId, res.data.tagId ?? '', `${res.data.name ?? 'tag'} (#${res.data.tagId})`);
     return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
@@ -437,6 +439,7 @@ export class GoogleDataService {
       }
     }
     const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: merged });
+    this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
     return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
@@ -464,6 +467,7 @@ export class GoogleDataService {
     const updated = addEventParameters(current as Record<string, unknown>, parameters);
     const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
     console.error(`[gtm]   ✓ tag ${tagId} (${res.data.name}) saved`);
+    this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
@@ -494,6 +498,7 @@ export class GoogleDataService {
     const updated = setTemplateParam(current as Record<string, unknown>, key, measurementId);
     const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
     console.error(`[gtm]   ✓ tag ${tagId} (${res.data.name}) saved`);
+    this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
@@ -557,6 +562,48 @@ export class GoogleDataService {
     return { total: targets.length, updated, failed };
   }
 
+  /** What the last chat query changed (deduped) — for the renderer's Revert button. */
+  peekLastChanges(): { count: number; labels: string[] } {
+    const refs = changeJournal.peekLast();
+    return { count: refs?.length ?? 0, labels: (refs ?? []).map((r) => r.label) };
+  }
+
+  /** Revert the GTM entities the last chat query wrote to, using GTM's native per-entity
+   *  revert (restores each to its last published version). Continues past per-entity
+   *  failures and returns a summary. The revert itself is NOT journaled (no undo-of-undo). */
+  async revertLastChanges(): Promise<{ reverted: string[]; failed: Array<{ label: string; error: string }> }> {
+    const refs = changeJournal.takeLast();
+    if (!refs || !refs.length) return { reverted: [], failed: [] };
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const ws = (r: { accountId: string; containerId: string; workspaceId: string }): string =>
+      `accounts/${r.accountId}/containers/${r.containerId}/workspaces/${r.workspaceId}`;
+    const reverted: string[] = [];
+    const failed: Array<{ label: string; error: string }> = [];
+    console.error(`[gtm] revertLastChanges: ${refs.length} entity(ies): ${refs.map((r) => r.label).join(' | ')}`);
+    for (const r of refs) {
+      try {
+        const path = `${ws(r)}/${r.kind}s/${r.id}`;
+        if (r.kind === 'tag') await gtm.accounts.containers.workspaces.tags.revert({ path });
+        else if (r.kind === 'trigger') await gtm.accounts.containers.workspaces.triggers.revert({ path });
+        else await gtm.accounts.containers.workspaces.variables.revert({ path });
+        reverted.push(r.label);
+        console.error(`[gtm]   ✓ reverted ${r.kind} ${r.id}`);
+      } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        failed.push({ label: r.label, error });
+        console.error(`[gtm]   ✗ revert ${r.kind} ${r.id}: ${error}`);
+      }
+    }
+    console.error(`[gtm] revertLastChanges DONE: ${reverted.length} reverted, ${failed.length} failed`);
+    return { reverted, failed };
+  }
+
+  /** Record a touched entity into the current chat turn's change journal (for Revert). */
+  private journal(kind: EntityKind, accountId: string, containerId: string, workspaceId: string, id: string, label: string): void {
+    if (id) changeJournal.record({ kind, accountId, containerId, workspaceId, id, label });
+  }
+
   /** Pause or unpause a tag WITHOUT losing its config: GTM update replaces the
    *  whole resource, so we fetch the current tag, flip `paused`, and write it
    *  back — preserving parameters, triggers, consent settings, etc. */
@@ -575,6 +622,7 @@ export class GoogleDataService {
       path,
       requestBody: { ...current.data, paused },
     });
+    this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
@@ -766,6 +814,7 @@ export class GoogleDataService {
       parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
       requestBody: trigger,
     });
+    this.journal('trigger', accountId, containerId, workspaceId, res.data.triggerId ?? '', `${res.data.name ?? 'trigger'} (#${res.data.triggerId})`);
     return { triggerId: res.data.triggerId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
@@ -781,6 +830,7 @@ export class GoogleDataService {
       parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
       requestBody: variable,
     });
+    this.journal('variable', accountId, containerId, workspaceId, res.data.variableId ?? '', `${res.data.name ?? 'variable'} (#${res.data.variableId})`);
     return { variableId: res.data.variableId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 

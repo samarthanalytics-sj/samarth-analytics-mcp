@@ -78,6 +78,11 @@ const api = {
     listGtmWorkspaces: (accountId: string, containerId: string): Promise<GtmWorkspaceView[]> =>
       ipcRenderer.invoke('data:listGtmWorkspaces', accountId, containerId),
     listGa4Accounts: (): Promise<Ga4AccountView[]> => ipcRenderer.invoke('data:listGa4Accounts'),
+    // Revert the last chat query's GTM writes.
+    peekLastChange: (): Promise<{ count: number; labels: string[] }> =>
+      ipcRenderer.invoke('gtm:peekLastChange'),
+    revertLastChange: (): Promise<{ reverted: string[]; failed: Array<{ label: string; error: string }> }> =>
+      ipcRenderer.invoke('gtm:revertLastChange'),
   },
 
   llm: {

@@ -689,6 +689,9 @@ function ChatView({
       destructive?: boolean;
     } | null
   >(null);
+  // What the previous query changed in GTM (for the Revert button).
+  const [revertable, setRevertable] = useState<{ count: number; labels: string[] } | null>(null);
+  const [reverting, setReverting] = useState(false);
 
   const taRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -718,6 +721,7 @@ function ChatView({
     setMessages((m) => [...m, { role: 'user', text }, { role: 'assistant', text: '', tools: [] }]);
     setInput('');
     setBusy(true);
+    setRevertable(null);
     try {
       await window.desktop.llm.chatStream(history, text, product, (ev) => {
         setMessages((m) => {
@@ -744,6 +748,32 @@ function ChatView({
       setMessages((m) => (m[m.length - 1]?.role === 'assistant' && !m[m.length - 1].text ? m.slice(0, -1) : m));
     } finally {
       setBusy(false);
+      if (product === 'gtm') {
+        try {
+          const change = await window.desktop.data.peekLastChange();
+          setRevertable(change.count > 0 ? change : null);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  async function revertLast(): Promise<void> {
+    if (!revertable || reverting) return;
+    if (!window.confirm(`Revert ${revertable.count} item(s) to their last published version?\n\n${revertable.labels.join('\n')}`)) return;
+    setReverting(true);
+    onError('');
+    try {
+      const res = await window.desktop.data.revertLastChange();
+      const parts = [`Reverted ${res.reverted.length} item(s)`];
+      if (res.failed.length) parts.push(`${res.failed.length} failed: ${res.failed.map((f) => f.label).join(', ')}`);
+      setMessages((m) => [...m, { role: 'assistant', text: `↩︎ ${parts.join(' · ')}.`, tools: [] }]);
+      setRevertable(null);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReverting(false);
     }
   }
 
@@ -823,6 +853,15 @@ function ChatView({
             await window.desktop.llm.confirm(id, null);
           }}
         />
+      )}
+
+      {revertable && !busy && (
+        <div style={styles.revertBar}>
+          <span style={styles.revertText}>↩︎ The last query changed {revertable.count} item(s).</span>
+          <button style={styles.revertBtn} disabled={reverting} onClick={() => void revertLast()}>
+            {reverting ? 'Reverting…' : 'Revert last changes'}
+          </button>
+        </div>
       )}
 
       <div style={styles.composer}>
@@ -2687,6 +2726,9 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sendBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
   stopBtn: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
+  revertBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', margin: '0 0 8px', background: '#1f2937', border: '1px solid #374151', borderRadius: 10 },
+  revertText: { fontSize: 13, color: '#cbd5e1' },
+  revertBtn: { background: 'transparent', color: '#f59e0b', border: '1px solid #f59e0b', borderRadius: 8, padding: '6px 12px', fontSize: 13, cursor: 'pointer' },
 
   confirm: { background: '#251c10', border: '1px solid #92651a', borderRadius: 10, padding: 12, margin: '0 16px 8px', color: '#fcd9a5' },
   confirmDanger: { background: '#2a1416', border: '1px solid #b91c1c', borderRadius: 10, padding: 12, margin: '0 16px 8px', color: '#fca5a5' },

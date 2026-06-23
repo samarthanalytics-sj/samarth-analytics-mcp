@@ -12,4 +12,9 @@ export function registerDataIpc(service: GoogleDataService): void {
     service.listGtmWorkspaces(String(accountId), String(containerId))
   );
   ipcMain.handle('data:listGa4Accounts', () => service.listGa4Accounts());
+
+  // Revert (undo the last chat query's GTM writes). peek → what the button offers;
+  // revertLast → execute it via GTM's native per-entity revert.
+  ipcMain.handle('gtm:peekLastChange', () => service.peekLastChanges());
+  ipcMain.handle('gtm:revertLastChange', () => service.revertLastChanges());
 }
