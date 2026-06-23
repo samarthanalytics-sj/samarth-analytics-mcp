@@ -3,6 +3,7 @@
  * eventSettingsTable append). Run: tsx src/__tests__/tag-params.test.ts
  */
 import { addEventParameters, mergeParametersByKey } from '../utils/tagParams.js';
+import { gtmParameterArray } from '../utils/paramSchema.js';
 import type { tagmanager_v2 } from 'googleapis';
 
 type Tag = tagmanager_v2.Schema$Tag;
@@ -71,6 +72,15 @@ const m = mergeParametersByKey(existing, [{ type: 'list', key: 'eventSettingsTab
 check('merge: a same-key param REPLACES, the rest are KEPT', m.length === 3 && m.find((p) => p.key === 'eventName')?.value === 'e' && (m.find((p) => p.key === 'eventSettingsTable')?.list ?? []).length === 1);
 const m2 = mergeParametersByKey(existing, [{ type: 'template', key: 'newKey', value: 'v' }]);
 check('merge: a new key is ADDED, every existing key kept (nothing wiped)', m2.length === 4 && m2.some((p) => p.key === 'newKey') && m2.some((p) => p.key === 'measurementId') && m2.some((p) => p.key === 'eventName'));
+
+// ── gtmParameterArray: the recursive schema accepts NESTED list/map params ───
+const nested = [{ type: 'list', key: 'eventSettingsTable', list: [{ type: 'map', map: [
+  { type: 'template', key: 'parameter', value: 'click_text' },
+  { type: 'template', key: 'parameterValue', value: '{{Click Text}}' },
+] }] }];
+const parsedNested = gtmParameterArray.parse(nested);
+check('schema: NESTED list/map params now parse (was flat type/key/value only)', parsedNested?.[0]?.list?.[0]?.map?.[1]?.value === '{{Click Text}}');
+check('schema: flat params still parse', (gtmParameterArray.parse([{ type: 'template', key: 'a', value: 'b' }]) ?? [])[0]?.value === 'b');
 
 console.log(`\ntag-params: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
