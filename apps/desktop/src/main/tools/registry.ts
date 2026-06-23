@@ -54,6 +54,23 @@ const s = (v: unknown): string => String(v ?? '');
 const obj = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
 
+/** Cheap similarity for "did you mean" on an unknown tool name: common-prefix length,
+ *  heavily boosted when one name contains the other (catches near-miss/hallucinated
+ *  names like set_ga4_measurement_id_for_all_tags → ..._on_all_tags). */
+function toolNameSimilarity(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i + (a.includes(b) || b.includes(a) ? 100 : 0);
+}
+function closestToolNames(name: string, names: string[]): string[] {
+  return names
+    .map((n) => ({ n, score: toolNameSimilarity(name, n) }))
+    .filter((x) => x.score > 2)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map((x) => x.n);
+}
+
 // Pull the real Google API error out of a googleapis/Gaxios error so the model
 // (and the dev console) sees the true reason — e.g. "Request had insufficient
 // authentication scopes" (403) or a precise field validation message (400).
@@ -1363,7 +1380,12 @@ export function buildToolRegistry(
       tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
     execute: async (name, args): Promise<string> => {
       const tool = tools.find((t) => t.name === name);
-      if (!tool) throw new Error(`Unknown tool: ${name}`);
+      if (!tool) {
+        const near = closestToolNames(name, tools.map((t) => t.name));
+        throw new Error(
+          `Unknown tool: ${name}.${near.length ? ` Did you mean: ${near.join(', ')}? Call one of those EXACT names.` : ''}`
+        );
+      }
       let effectiveArgs = args ?? {};
       if (tool.write) {
         if (!confirm) {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { toOpenAiMessages, parseOpenAiReply } from '../openai';
 import { toAnthropicMessages, parseAnthropicReply } from '../anthropic';
-import { toGeminiContents, parseGeminiReply } from '../gemini';
+import { toGeminiContents, parseGeminiReply, geminiFunctionDecl, stripGeminiUnsupported } from '../gemini';
 import type { LlmTurn } from '../types';
 
 let passed = 0;
@@ -89,6 +89,47 @@ test('Gemini: parse text + functionCall parts', () => {
   assert.equal(reply.text, 'hi');
   assert.equal(reply.toolCalls?.[0].name, 't');
   assert.deepEqual(reply.toolCalls?.[0].args, { a: 1 });
+});
+
+test('Gemini: strips additionalProperties RECURSIVELY (nested in array items)', () => {
+  // Mirrors the GA4 event-parameter tools: additionalProperties is nested inside
+  // parameters.items — Gemini rejects it anywhere, so it must be gone everywhere.
+  const schema = {
+    type: 'object',
+    properties: {
+      tagId: { type: 'string' },
+      parameters: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: { name: { type: 'string' }, value: { type: 'string' } },
+          required: ['name', 'value'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['tagId', 'parameters'],
+    additionalProperties: false,
+  };
+  const json = JSON.stringify(stripGeminiUnsupported(schema));
+  assert.equal(json.includes('additionalProperties'), false, 'no additionalProperties survives anywhere');
+  // but the meaningful shape is preserved
+  const out = stripGeminiUnsupported(schema) as Record<string, any>;
+  assert.equal(out.properties.parameters.items.properties.value.type, 'string');
+  assert.deepEqual(out.properties.parameters.items.required, ['name', 'value']);
+});
+
+test('Gemini: geminiFunctionDecl emits clean params, omits parameters for no-arg tools', () => {
+  const withArgs = geminiFunctionDecl({
+    name: 'add_ga4_event_parameters_to_all_tags',
+    description: 'd',
+    inputSchema: { type: 'object', properties: { x: { type: 'string' } }, additionalProperties: false },
+  });
+  assert.equal(withArgs.name, 'add_ga4_event_parameters_to_all_tags');
+  assert.ok(withArgs.parameters, 'parameters kept when there are properties');
+  assert.equal(JSON.stringify(withArgs).includes('additionalProperties'), false);
+  const noArgs = geminiFunctionDecl({ name: 'x', description: 'd', inputSchema: { type: 'object', properties: {} } });
+  assert.equal('parameters' in noArgs, false, 'parameters omitted for a no-arg tool');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
