@@ -8,6 +8,7 @@ import type { ContainerSnapshot } from './gtm-builders';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
+import { mergeParametersByKey, addEventParameters, type GtmParam } from './tag-params';
 import type { Ga4AccountView, GtmAccountView } from '../../shared/ipc';
 
 // Follows nextPageToken so large containers/accounts return EVERY item, not just
@@ -406,6 +407,12 @@ export class GoogleDataService {
     return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
+  /** Update a tag WITHOUT losing its config. GTM's update replaces the whole
+   *  resource, so we fetch the current tag, overlay only the provided fields, and
+   *  merge `parameter` BY KEY — a partial update (e.g. just a new name or a couple of
+   *  params) no longer wipes eventName / measurementId / measurementIdOverride, which
+   *  is what made GTM reject "vendorTemplate.parameter.measurementIdOverride: The value
+   *  must not be empty." To ADD GA4 event parameters, use addGa4EventParameters. */
   async updateGtmTag(
     accountId: string,
     containerId: string,
@@ -415,11 +422,47 @@ export class GoogleDataService {
   ): Promise<GtmTagView> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const res = await gtm.accounts.containers.workspaces.tags.update({
-      path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`,
-      requestBody: tag,
-    });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
+    const current = (await gtm.accounts.containers.workspaces.tags.get({ path })).data;
+    const merged: Record<string, unknown> = { ...current };
+    for (const [k, v] of Object.entries(tag)) {
+      if (v === undefined) continue;
+      if (k === 'parameter') {
+        merged.parameter = mergeParametersByKey(
+          (current.parameter as GtmParam[] | undefined) ?? [],
+          v as GtmParam[]
+        );
+      } else {
+        merged[k] = v;
+      }
+    }
+    const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: merged });
     return { tagId: res.data.tagId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  /** Add GA4 event parameters to an existing GA4 Event tag (type "gaawe") by appending
+   *  them to its eventSettingsTable, preserving eventName / measurementId. Rejects
+   *  non-gaawe tags. This is the correct path for "add session_id / click_text / … to
+   *  all my GA4 tags" — it never wipes the rest of the tag. */
+  async addGa4EventParameters(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    tagId: string,
+    parameters: Array<{ name: string; value: string }>
+  ): Promise<GtmTagView> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
+    const current = (await gtm.accounts.containers.workspaces.tags.get({ path })).data;
+    if (current.type !== 'gaawe') {
+      throw new Error(
+        `Tag ${tagId} is type "${current.type ?? 'unknown'}", not a GA4 Event tag (gaawe). add_ga4_event_parameters only edits GA4 event tags.`
+      );
+    }
+    const updated = addEventParameters(current as Record<string, unknown>, parameters);
+    const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
+    return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
   /** Pause or unpause a tag WITHOUT losing its config: GTM update replaces the
