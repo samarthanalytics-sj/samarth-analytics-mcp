@@ -1,3 +1,13 @@
+## [1.31.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.30.0...v1.31.0) (2026-06-23)
+
+### Features
+
+* **desktop:** stream scan suggestions one-by-one as the crawl runs (part 3/3) ([79c0770](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/79c077056bb7f083bd15ea47883b49241fadf7ff))
+
+### Bug Fixes
+
+* **desktop:** clear prior scan's row state at stream start + disable create while scanning ([78144bc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/78144bc2ecb414119e812320c2688bac1ccd56c5))
+
 ## [1.30.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.29.0...v1.30.0) (2026-06-23)
 
 ### Features
