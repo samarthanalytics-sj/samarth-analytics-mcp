@@ -48,7 +48,6 @@ export const CTA_INTENTS: CtaIntentDef[] = [
   // the GA4 'search' event, and clicking a "Search" submit button raises BOTH
   // gtm.click and gtm.formSubmit — a shared event name would double-count.
   { intent: 'search', pattern: '\\bsearch\\b', event: 'search_click', label: 'Search' },
-  { intent: 'view_more', pattern: '\\b(see|view|browse|explore|show)\\s+(all|more)\\b|\\bcase\\s+stud(y|ies)\\b|\\bview\\s+case\\b|\\bread\\s+more\\b', event: 'view_all_click', label: 'View All Click' },
   { intent: 'learn_more', pattern: '\\b(learn\\s+more|find\\s+out\\s+more|discover\\s+more)\\b', event: 'learn_more_click', label: 'Learn More Click' },
   { intent: 'faq', pattern: '\\b(faqs?|frequently\\s+asked\\s+questions?)\\b', event: 'faq_click', label: 'FAQ Click' },
   { intent: 'generic', pattern: '\\b(buy\\s+now|create\\s+(an\\s+)?account|sign\\s*up|join\\s+(now|today)|order\\s+now|shop\\s+now|donate|apply\\s+now|register\\s+(now|today))\\b', event: 'cta_click', label: 'CTA Click' },
