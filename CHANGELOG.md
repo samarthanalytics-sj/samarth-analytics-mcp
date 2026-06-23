@@ -1,3 +1,9 @@
+## [1.35.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.35.0...v1.35.1) (2026-06-23)
+
+### Bug Fixes
+
+* **desktop:** Gemini-valid tool schemas + "did you mean" on unknown tool names ([012dbed](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/012dbedf4bbaf1ed9fb16cf674b9fd2cc99cb069))
+
 ## [1.35.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.34.0...v1.35.0) (2026-06-23)
 
 ### Features
