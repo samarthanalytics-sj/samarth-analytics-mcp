@@ -1,3 +1,9 @@
+## [1.35.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.35.2...v1.35.3) (2026-06-23)
+
+### Bug Fixes
+
+* **desktop:** GA4 tag-edit tools were filtered OUT of the GTM chat (the real root cause) ([52eabaa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/52eabaa3ac61978e2cd1507295e04a1fe40eb1f5))
+
 ## [1.35.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.35.1...v1.35.2) (2026-06-23)
 
 ### Bug Fixes
