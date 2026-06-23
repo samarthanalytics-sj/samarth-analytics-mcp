@@ -70,6 +70,7 @@ export async function runChat(
     );
 
     if (reply.toolCalls && reply.toolCalls.length > 0) {
+      console.error(`[chat] step ${step}: model requested ${reply.toolCalls.length} tool call(s): ${reply.toolCalls.map((c) => c.name).join(', ')}`);
       messages.push({ role: 'assistant', text: reply.text, toolCalls: reply.toolCalls });
       const results = [];
       // Fail fast: once a tool call in this batch errors, STOP — don't prompt the user
@@ -106,8 +107,10 @@ export async function runChat(
       continue;
     }
 
+    console.error(`[chat] step ${step}: model returned a final answer (no tool calls)`);
     return { text: reply.text ?? '', steps: step };
   }
 
+  console.error(`[chat] stopped after ${maxSteps} steps without a final answer (tool-call limit)`);
   return { text: 'Stopped after reaching the tool-call limit without a final answer.', steps: maxSteps };
 }
