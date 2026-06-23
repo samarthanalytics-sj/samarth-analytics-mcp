@@ -1,3 +1,9 @@
+## [1.35.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.34.0...v1.35.0) (2026-06-23)
+
+### Features
+
+* **desktop:** bulk "all GA4 tags" tools — one approval, no per-tag loop ([da425b5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/da425b5c3135046455a96dc27916c6254d37a575))
+
 ## [1.34.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.33.1...v1.34.0) (2026-06-23)
 
 ### Features
