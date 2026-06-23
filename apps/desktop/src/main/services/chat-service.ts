@@ -5,6 +5,7 @@ import type { AuditHistoryStore } from '../storage/audit-history';
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
+import { changeJournal } from '../google/change-journal';
 import type { ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct } from '../../shared/ipc';
 import type { LlmTurn } from '../llm/types';
 
@@ -190,6 +191,8 @@ export class ChatService {
     ];
 
     const toolCalls: ChatToolCall[] = [];
+    // Open a fresh change-journal turn so the user can revert this query's GTM writes.
+    if (product === 'gtm') changeJournal.beginTurn();
     const result = await runChat(client, { system, model: active.llm.model, apiKey, messages, signal }, tools, {
       onDelta: emit ? (delta) => emit({ type: 'text', delta }) : undefined,
       onToolCall: (call) => {
