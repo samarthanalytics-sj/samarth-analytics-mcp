@@ -13,6 +13,7 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
+import { findGa4BaseTag } from '../google/gtm-builders';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions } from '../../shared/ipc';
 import { crawlAndSuggest, scanUrls, type PageDriver } from './scan-core';
@@ -23,7 +24,7 @@ import { discoverSite } from './discover';
 // same-origin iframes; Cheerio adds anything in the raw server HTML.
 import { createElectronDriver } from './electron-driver';
 import { createMultiDriver } from './multi-driver';
-import { parseSuggestions, createSuggestedTags } from './suggestion-service';
+import { parseSuggestions, createSuggestedTags, planGoogleTagVars, provisionVariables } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 
 const clampSettle = (ms: number | undefined): number | undefined =>
@@ -52,6 +53,16 @@ async function makeDriver(opts: TagScanOptions): Promise<PageDriver> {
 
 export function registerSuggestionsIpc(data: GoogleDataService): void {
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
+
+  // Read-only: the container's existing tag names + whether a GA4 base/config tag is
+  // present, so the review panel can mark suggestions that ALREADY EXIST (don't
+  // re-create them — that just fails with "duplicate name" and wastes API quota).
+  ipcMain.handle('suggestions:existing', async (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
+    const a = String(accountId ?? ''), c = String(containerId ?? ''), w = String(workspaceId ?? '');
+    if (!a || !c || !w) return { names: [], hasGa4Base: false };
+    const snap = await data.getGtmContainerSnapshot(a, c, w);
+    return { names: snap.tags.map((t) => t.name), hasGa4Base: findGa4BaseTag(snap) !== null };
+  });
 
   // Save the suggestion structure (already rendered to CSV in the renderer) to a
   // file the user picks. Read-only export — no GTM access. Returns the saved path,
@@ -116,7 +127,33 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // create_gtm_tracking_tag write path runs (draft-only, no publish).
       const approve: ConfirmFn = async (p) => p.details;
       const reg = buildToolRegistry(data, approve, 'gtm');
-      return createSuggestedTags((name, args) => reg.execute(name, args), { accountId: acct, containerId: cont, workspaceId: ws }, list);
+      const ids = { accountId: acct, containerId: cont, workspaceId: ws };
+
+      // A google_tag (GA4 Configuration) whose tagId is a {{variable}} needs that
+      // variable to EXIST, or the base tag points at nothing and GA4 never loads
+      // (mirrors ensureGa4Config). Provision a Constant from the row's real
+      // Measurement ID first; block the row if the ID is still the placeholder.
+      const errors = new Map<string, string>();
+      const hasGoogleTagVar = list.some((t) => t.platform === 'google_tag' && /^\s*\{\{.+\}\}\s*$/.test(t.tagId ?? ''));
+      if (hasGoogleTagVar) {
+        const snap = await data.getGtmContainerSnapshot(acct, cont, ws);
+        const plan = planGoogleTagVars(snap, list);
+        for (const [id, msg] of plan.errors) errors.set(id, msg);
+        // Resilient variable creation — a duplicate/quota hiccup on a variable fails
+        // ONLY the google_tag rows that need it, never the whole approved batch.
+        const failedVars = await provisionVariables((name, args) => reg.execute(name, args), ids, plan.creates);
+        if (failedVars.size) {
+          for (const t of list) {
+            if (t.platform !== 'google_tag') continue;
+            const vn = /^\s*\{\{(.+?)\}\}\s*$/.exec(t.tagId ?? '')?.[1]?.toLowerCase();
+            if (vn && failedVars.has(vn)) errors.set(t.id, `Couldn't create the variable it needs: ${failedVars.get(vn)}`);
+          }
+        }
+      }
+      const creatable = list.filter((t) => !errors.has(t.id));
+      const outcomes = await createSuggestedTags((name, args) => reg.execute(name, args), ids, creatable);
+      for (const [id, error] of errors) outcomes.push({ id, ok: false, error });
+      return outcomes;
     },
   );
 }

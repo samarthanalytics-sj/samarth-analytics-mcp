@@ -8,7 +8,8 @@
 import { crawlAndSuggest, scanUrls, detectInstalled, type PageDriver, type DrivenPage } from '../scan-core';
 import { mergeDriven } from '../multi-driver';
 import { parseSitemapLocs, extractCrawlLinks } from '../discover';
-import { parseSuggestions, suggestionsFromData, createSuggestedTags } from '../suggestion-service';
+import { parseSuggestions, suggestionsFromData, createSuggestedTags, planGoogleTagVars, provisionVariables } from '../suggestion-service';
+import type { ContainerSnapshot } from '../../google/gtm-builders';
 import type { PageScanRaw, RawElement } from '../../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm } from '../../../../../web-audit-mcp/src/agent/forms.js';
 import type { SuggestedTagView } from '../../../shared/ipc';
@@ -121,15 +122,19 @@ async function main(): Promise<void> {
     check('crawl: contact form → contact_form', events.has('contact_form'));
     check('crawl: mailto → email_click, tel → phone_click', events.has('email_click') && events.has('phone_click'));
     check('crawl: download + outbound + named CTA detected', events.has('file_download') && events.has('outbound_click') && events.has('book_demo_click'));
-    check('crawl: six unique suggestions', res.summary.suggestions === 6, `${res.summary.suggestions}`);
-    check('crawl: EM overlap = 2 (download + outbound)', res.summary.enhancedMeasurementOverlap === 2, `${res.summary.enhancedMeasurementOverlap}`);
+    // full mode (scan path): the 6 scan-derived tags + GA4 Configuration + the
+    // All-form / All-PDF catch-alls (the fake site has a form and a .pdf) = 9.
+    check('crawl: full list = 6 scan tags + GA4 Configuration + All-form + All-PDF = 9', res.summary.suggestions === 9, `${res.summary.suggestions}`);
+    check('crawl: GA4 Configuration (google_tag) is included', res.suggestions.some((s) => s.platform === 'google_tag' && s.tagName === 'GA4 Configuration'));
+    check('crawl: All Form Submissions + All PDF Downloads catch-alls included', res.suggestions.some((s) => s.tagName === 'GA4 Event - All Form Submissions Tag') && res.suggestions.some((s) => s.tagName === 'GA4 Event - All PDF Downloads Tag'));
+    check('crawl: EM overlap = 3 (download + outbound + all-PDF)', res.summary.enhancedMeasurementOverlap === 3, `${res.summary.enhancedMeasurementOverlap}`);
     check(
-      'crawl: byConfidence high=3 medium=3 low=0 (Book a demo is a medium-confidence named CTA)',
-      res.summary.byConfidence.high === 3 && res.summary.byConfidence.medium === 3 && res.summary.byConfidence.low === 0,
+      'crawl: byConfidence high=4 medium=5 low=0 (GA4 config high; catch-alls medium)',
+      res.summary.byConfidence.high === 4 && res.summary.byConfidence.medium === 5 && res.summary.byConfidence.low === 0,
       JSON.stringify(res.summary.byConfidence),
     );
     check('crawl: newTracking = suggestions − EM overlap', res.summary.newTracking === res.summary.suggestions - res.summary.enhancedMeasurementOverlap);
-    check('crawl: every suggestion is a ga4_event payload', res.suggestions.every((s) => s.platform === 'ga4_event' && !!s.tagName && !!s.trigger.kind));
+    check('crawl: every suggestion is a ga4_event or google_tag payload', res.suggestions.every((s) => (s.platform === 'ga4_event' || s.platform === 'google_tag') && !!s.tagName && !!s.trigger.kind));
     check('crawl: siteHost derived from start', res.siteHost === 'acme.com');
     check('crawl: driver.close() called exactly once', fd.closes() === 1, `${fd.closes()}`);
     check('crawl: inventory lists ALL detected elements (5) + forms (1), pre-dedup', res.inventory.elements.length === 5 && res.inventory.forms.length === 1,
@@ -299,6 +304,19 @@ async function main(): Promise<void> {
     check('create: reused trigger surfaced', outcomes[2].triggerReused === true);
     check('create: declined → ok:false error "declined"', !outcomes[3].ok && outcomes[3].error === 'declined');
     check('create: workspace ids passed to every call', calls.every((c) => c.accountId === '1' && c.containerId === '2' && c.workspaceId === '3') && calls.length === 4);
+
+    // The GA4 Configuration base tag (google_tag) must send tagId + configSettings,
+    // NOT eventName/eventParameters (the registry's google_tag branch reads tagId).
+    const gtag: SuggestedTagView = {
+      id: 'g', page: 'site-wide', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
+      platform: 'google_tag', tagName: 'GA4 Configuration', measurementId: '{{GA4 Measurement ID}}',
+      tagId: '{{GA4 Measurement ID}}', configSettings: [{ name: 'send_page_view', value: 'true' }],
+      eventName: '', trigger: { name: 'All Pages', kind: 'pageview' },
+    };
+    const gcalls: Array<Record<string, unknown>> = [];
+    const gexec = async (_n: string, args: Record<string, unknown>): Promise<string> => { gcalls.push(args); return JSON.stringify({ tag: { name: 'GA4 Configuration' } }); };
+    await createSuggestedTags(gexec, { accountId: '1', containerId: '2', workspaceId: '3' }, [gtag], fast);
+    check('create: google_tag sends platform + tagId + configSettings and OMITS eventName', gcalls[0].platform === 'google_tag' && gcalls[0].tagId === '{{GA4 Measurement ID}}' && Array.isArray(gcalls[0].configSettings) && gcalls[0].eventName === undefined);
   }
 
   // ── createSuggestedTags: GTM quota / rate-limit retry-with-backoff ─────────
@@ -324,6 +342,47 @@ async function main(): Promise<void> {
     const execAlways = async (): Promise<string> => { n += 1; throw new Error('RESOURCE_EXHAUSTED: rateLimitExceeded'); };
     const out2 = await createSuggestedTags(execAlways, ids, [tag('z')], { sleep: async (): Promise<void> => {}, throttleMs: 0, maxRetries: 2 });
     check('create: persistent quota error → ok:false after maxRetries+1 attempts', out2[0].ok === false && n === 3);
+
+    // "Found entity with duplicate name" → marked existing (skipped), not an error,
+    // and NOT retried (the name won't free up).
+    let dn = 0;
+    const execDup = async (): Promise<string> => { dn += 1; throw new Error('Found entity with duplicate name.'); };
+    const outDup = await createSuggestedTags(execDup, ids, [tag('d')], { sleep: async (): Promise<void> => {}, throttleMs: 0 });
+    check('create: duplicate-name → existing:true (skipped, not error), tried once', outDup[0].existing === true && outDup[0].ok === false && dn === 1);
+  }
+
+  // ── planGoogleTagVars: provision the {{variable}} a GA4 Configuration references ──
+  {
+    const snap = (vars: Array<{ name: string; type: string }>): ContainerSnapshot => ({ tags: [], triggers: [], variables: vars } as unknown as ContainerSnapshot);
+    const gcfg = (over: Partial<SuggestedTagView> = {}): SuggestedTagView => ({
+      id: 'g', page: 'site-wide', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
+      platform: 'google_tag', tagName: 'GA4 Configuration', measurementId: 'G-XXXXXXXXXX', tagId: '{{GA4 Measurement ID}}', eventName: '', trigger: { name: 'All Pages', kind: 'pageview' }, ...over,
+    });
+    check('plan: placeholder Measurement ID → row BLOCKED, no variable created', (() => { const p = planGoogleTagVars(snap([]), [gcfg()]); return p.creates.length === 0 && p.errors.has('g'); })());
+    check('plan: real id → CREATE Constant "GA4 Measurement ID"=id, no error', (() => { const p = planGoogleTagVars(snap([]), [gcfg({ measurementId: 'G-ABC1234567' })]); return p.errors.size === 0 && p.creates.length === 1 && p.creates[0].name === 'GA4 Measurement ID' && p.creates[0].value === 'G-ABC1234567'; })());
+    check('plan: existing Constant variable → REUSE (no create, no error)', (() => { const p = planGoogleTagVars(snap([{ name: 'GA4 Measurement ID', type: 'c' }]), [gcfg({ measurementId: 'G-ABC1234567' })]); return p.creates.length === 0 && p.errors.size === 0; })());
+    check('plan: a NON-constant variable owns the name → row BLOCKED (conflict)', (() => { const p = planGoogleTagVars(snap([{ name: 'GA4 Measurement ID', type: 'v' }]), [gcfg({ measurementId: 'G-ABC1234567' })]); return p.errors.has('g') && p.creates.length === 0; })());
+    check('plan: literal G- tagId → no variable needed, no error', (() => { const p = planGoogleTagVars(snap([]), [gcfg({ tagId: 'G-ABC1234567', measurementId: 'G-ABC1234567' })]); return p.creates.length === 0 && p.errors.size === 0; })());
+    check('plan: ga4_event rows are ignored', (() => { const ev: SuggestedTagView = { id: 'e', page: '/', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false, platform: 'ga4_event', tagName: 'T', measurementId: '{{GA4 Measurement ID}}', eventName: 'e', trigger: { name: 't', kind: 'all_clicks' } }; const p = planGoogleTagVars(snap([]), [ev]); return p.creates.length === 0 && p.errors.size === 0; })());
+    check('plan: a REAL id containing an X-run (G-1XXXAB2345) is ACCEPTED (only the all-X placeholder is rejected)', (() => { const p = planGoogleTagVars(snap([]), [gcfg({ measurementId: 'G-1XXXAB2345' })]); return p.errors.size === 0 && p.creates.length === 1 && p.creates[0].value === 'G-1XXXAB2345'; })());
+  }
+
+  // ── provisionVariables: resilient variable creation (failures isolated) ──────
+  {
+    const ids = { accountId: '1', containerId: '2', workspaceId: '3' };
+    const fast = { sleep: async (): Promise<void> => {} };
+    const okCalls: Array<Record<string, unknown>> = [];
+    const okExec = async (_n: string, a: Record<string, unknown>): Promise<string> => { okCalls.push(a); return '{}'; };
+    const f1 = await provisionVariables(okExec, ids, [{ name: 'V', value: 'G-ABC1234567' }], fast);
+    check('provision: success → no failures, create called once', f1.size === 0 && okCalls.length === 1);
+    const dupExec = async (): Promise<string> => { throw new Error('Found entity with duplicate name.'); };
+    check('provision: duplicate-name (TOCTOU race) is TOLERATED → not a failure', (await provisionVariables(dupExec, ids, [{ name: 'V', value: 'x' }], fast)).size === 0);
+    let qn = 0;
+    const quotaExec = async (): Promise<string> => { qn += 1; throw new Error('RESOURCE_EXHAUSTED: rateLimitExceeded'); };
+    const f3 = await provisionVariables(quotaExec, ids, [{ name: 'V', value: 'x' }], { sleep: async (): Promise<void> => {}, maxRetries: 2 });
+    check('provision: persistent quota → retried then recorded as failed var', f3.has('v') && qn === 3);
+    const errExec = async (): Promise<string> => { throw new Error('api 400 invalid'); };
+    check('provision: other error → recorded per-variable (so only dependent rows fail)', (await provisionVariables(errExec, ids, [{ name: 'V', value: 'x' }], fast)).has('v'));
   }
 
   console.log(`\nsuggestion-service: ${passed} passed, ${failed} failed`);

@@ -946,7 +946,7 @@ function GtmContextBar({
 
 /* ───────────────────── Tag suggestions (review & approve) ───────────────────── */
 
-type RowStatus = { state: 'idle' | 'creating' | 'ok' | 'err'; msg?: string };
+type RowStatus = { state: 'idle' | 'creating' | 'ok' | 'err' | 'exists'; msg?: string };
 interface TagEdit {
   tagName?: string;
   eventName?: string;
@@ -1140,6 +1140,9 @@ function TagReviewPanel({
   // template layout, also what the CSV download writes).
   const [tagView, setTagView] = useState<'cards' | 'table'>('cards');
   const [exportNote, setExportNote] = useState('');
+  // The container's existing tags — so suggestions already present are marked
+  // "already exists" and skipped (no duplicate-name failure, no wasted API quota).
+  const [existing, setExisting] = useState<{ names: Set<string>; hasGa4Base: boolean }>({ names: new Set(), hasGa4Base: false });
 
   const ctx = active?.gtmContext;
   const targetReady = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -1272,8 +1275,9 @@ function TagReviewPanel({
   }
 
   const selectedIds = suggestions.filter((s) => selected[s.id]).map((s) => s.id);
+  // "Select all / new" never selects a tag that already exists in the container.
   const setAll = (pred: (s: SuggestedTagView) => boolean): void =>
-    setSelected(Object.fromEntries(suggestions.map((s) => [s.id, pred(s)])));
+    setSelected(Object.fromEntries(suggestions.map((s) => [s.id, pred(s) && !alreadyExists(s)])));
 
   function effective(s: SuggestedTagView): SuggestedTagView {
     const e = edits[s.id];
@@ -1285,6 +1289,35 @@ function TagReviewPanel({
       measurementId: e.measurementId ?? s.measurementId,
     };
   }
+
+  // A suggestion already exists in the container if a tag of its (effective) name is
+  // there, or — for the GA4 Configuration — if any GA4 base tag is already present.
+  const alreadyExists = (s: SuggestedTagView): boolean =>
+    existing.names.has(effective(s).tagName.trim().toLowerCase()) || (s.platform === 'google_tag' && existing.hasGa4Base);
+
+  // Load the container's existing tags whenever the target is ready, then deselect
+  // any suggestion that already exists (so a "create" never re-creates a duplicate).
+  useEffect(() => {
+    if (!targetReady || !ctx?.accountId || !ctx.containerId || !ctx.workspaceId) {
+      setExisting({ names: new Set(), hasGa4Base: false });
+      return;
+    }
+    let cancelled = false;
+    window.desktop.tags.existing(ctx.accountId, ctx.containerId, ctx.workspaceId).then(
+      (r) => { if (!cancelled) setExisting({ names: new Set(r.names.map((n) => n.trim().toLowerCase())), hasGa4Base: r.hasGa4Base }); },
+      () => { if (!cancelled) setExisting({ names: new Set(), hasGa4Base: false }); },
+    );
+    return () => { cancelled = true; };
+  }, [targetReady, ctx?.accountId, ctx?.containerId, ctx?.workspaceId]);
+
+  useEffect(() => {
+    if (!existing.names.size && !existing.hasGa4Base) return;
+    setSelected((sel) => {
+      const n = { ...sel };
+      for (const s of suggestions) if (alreadyExists(s)) n[s.id] = false;
+      return n;
+    });
+  }, [existing, suggestions]);
 
   // Download the suggestions as the "GTM Structure - GA4 Events" template CSV. If
   // any are selected, export those; otherwise export all. Uses effective() so the
@@ -1307,7 +1340,7 @@ function TagReviewPanel({
     if (!targetReady || !ctx) return;
     setCreating(true);
     onError('');
-    const chosen = suggestions.filter((s) => selected[s.id]).map(effective);
+    const chosen = suggestions.filter((s) => selected[s.id] && !alreadyExists(s)).map(effective);
     setStatuses((st) => {
       const n = { ...st };
       for (const s of chosen) n[s.id] = { state: 'creating' };
@@ -1327,16 +1360,18 @@ function TagReviewPanel({
           const o = byId.get(s.id);
           if (!o) n[s.id] = { state: 'err', msg: 'no result' };
           else if (o.ok) n[s.id] = { state: 'ok', msg: o.triggerReused ? 'created · trigger reused' : 'created · trigger created' };
+          else if (o.existing) n[s.id] = { state: 'exists', msg: 'already exists in the container' };
           else n[s.id] = { state: 'err', msg: o.error ?? 'failed' };
         }
         return n;
       });
       const created = outcomes.filter((o) => o.ok).length;
-      setDone({ created, failed: outcomes.length - created });
-      // Succeeded rows: deselect (and they become read-only). Failures stay selected to retry.
+      const existing = outcomes.filter((o) => o.existing).length;
+      setDone({ created, failed: outcomes.length - created - existing });
+      // Succeeded + already-existing rows: deselect (read-only). Failures stay selected to retry.
       setSelected((sel) => {
         const n = { ...sel };
-        for (const o of outcomes) if (o.ok) n[o.id] = false;
+        for (const o of outcomes) if (o.ok || o.existing) n[o.id] = false;
         return n;
       });
     } catch (e) {
@@ -1710,19 +1745,21 @@ function TagReviewPanel({
                 const ed = edits[s.id] ?? {};
                 const eff = effective(s);
                 const okRow = st?.state === 'ok';
+                const existsRow = st?.state === 'exists' || alreadyExists(s);
+                const doneRow = okRow || existsRow;
                 return (
                   <div
                     key={s.id}
                     style={{
                       ...styles.reviewRow,
                       ...(okRow ? styles.reviewRowOk : {}),
-                      opacity: s.enhancedMeasurementOverlap && !isSel && !okRow ? 0.72 : 1,
+                      opacity: existsRow || (s.enhancedMeasurementOverlap && !isSel && !okRow) ? 0.6 : 1,
                     }}
                   >
                     <input
                       type="checkbox"
-                      checked={isSel}
-                      disabled={okRow || creating}
+                      checked={isSel && !existsRow}
+                      disabled={doneRow || creating}
                       onChange={(e) => setSelected((sel) => ({ ...sel, [s.id]: e.target.checked }))}
                       style={{ marginTop: 4 }}
                     />
@@ -1730,18 +1767,19 @@ function TagReviewPanel({
                       <div style={styles.reviewRowHead}>
                         <span style={{ fontWeight: 600 }}>{eff.tagName}</span>
                         <span style={{ ...styles.badge, ...CONF_BADGE[s.confidence] }}>{s.confidence}</span>
-                        <span style={styles.typeChip}>GA4 event</span>
-                        {s.enhancedMeasurementOverlap && (
+                        <span style={styles.typeChip}>{s.platform === 'google_tag' ? 'Google tag' : 'GA4 event'}</span>
+                        {existsRow && <span style={styles.existsChip}>✓ already exists</span>}
+                        {s.enhancedMeasurementOverlap && !existsRow && (
                           <span style={styles.emChip}>⚠ Enhanced Measurement already tracks this</span>
                         )}
                       </div>
                       <div style={styles.detailGrid}>
-                        <span style={styles.detailKey}>Event</span>
-                        <span><code style={mdStyles.code}>{eff.eventName}</code></span>
+                        <span style={styles.detailKey}>{s.platform === 'google_tag' ? 'Tag ID' : 'Event'}</span>
+                        <span><code style={mdStyles.code}>{s.platform === 'google_tag' ? (s.tagId ?? eff.measurementId) : eff.eventName}</code></span>
                         <span style={styles.detailKey}>Page</span>
                         <span>{s.page}</span>
                         <span style={styles.detailKey}>Tag type</span>
-                        <span>GA4 Event (gaawe)</span>
+                        <span>{s.platform === 'google_tag' ? 'Google tag (googtag)' : 'GA4 Event (gaawe)'}</span>
                         <span style={styles.detailKey}>Trigger</span>
                         <span>
                           <b style={{ color: '#e5e7eb' }}>{s.trigger.name}</b> · {triggerTypeLabel(s.trigger.kind)}
@@ -1772,7 +1810,7 @@ function TagReviewPanel({
                           style={{
                             fontSize: 12,
                             marginTop: 4,
-                            color: st.state === 'ok' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : '#9ca3af',
+                            color: st.state === 'ok' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : st.state === 'exists' ? '#7dd3fc' : '#9ca3af',
                           }}
                         >
                           {st.state === 'creating' ? 'Creating…' : st.state === 'ok' ? `✓ ${st.msg}` : `✗ ${st.msg}`}
@@ -1785,11 +1823,13 @@ function TagReviewPanel({
                             value={ed.tagName ?? s.tagName}
                             onChange={(v) => setEdits((m) => ({ ...m, [s.id]: { ...m[s.id], tagName: v } }))}
                           />
-                          <EditLine
-                            label="Event name"
-                            value={ed.eventName ?? s.eventName}
-                            onChange={(v) => setEdits((m) => ({ ...m, [s.id]: { ...m[s.id], eventName: v } }))}
-                          />
+                          {s.platform !== 'google_tag' && (
+                            <EditLine
+                              label="Event name"
+                              value={ed.eventName ?? s.eventName}
+                              onChange={(v) => setEdits((m) => ({ ...m, [s.id]: { ...m[s.id], eventName: v } }))}
+                            />
+                          )}
                           <EditLine
                             label="Measurement ID"
                             value={ed.measurementId ?? s.measurementId}
@@ -2620,6 +2660,7 @@ const styles: Record<string, React.CSSProperties> = {
   badge: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, borderRadius: 6, padding: '1px 7px' },
   typeChip: { fontSize: 11, color: '#93c5fd', background: '#10233f', border: '1px solid #1e3a5f', borderRadius: 6, padding: '1px 7px' },
   emChip: { fontSize: 11, color: '#fcd34d', background: '#3a2c0a', border: '1px solid #92651a', borderRadius: 6, padding: '1px 7px' },
+  existsChip: { fontSize: 11, color: '#7dd3fc', background: '#0c2a3a', border: '1px solid #1e5570', borderRadius: 6, padding: '1px 7px' },
   editGrid: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8, background: '#0b0f17', borderRadius: 8, padding: '4px 12px' },
   detailGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 12, rowGap: 3, marginTop: 5, fontSize: 12.5, color: '#cbd5e1', alignItems: 'start' },
   detailKey: { color: '#6b7280', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, paddingTop: 1 },

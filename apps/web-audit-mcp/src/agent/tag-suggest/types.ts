@@ -125,10 +125,18 @@ export interface SuggestedTag {
   /** GA4 Enhanced Measurement already auto-tracks this kind — flag, don't push. */
   enhancedMeasurementOverlap: boolean;
   // ── create_gtm_tracking_tag payload ──
-  platform: 'ga4_event';
+  /** 'ga4_event' = a GA4 event tag (gaawe). 'google_tag' = the base Google tag
+   *  (the "GA4 Configuration" that loads GA4 on every page) — uses tagId, not
+   *  eventName/eventParameters. */
+  platform: 'ga4_event' | 'google_tag';
   tagName: string;
   /** Defaults to the {{GA4 Measurement ID}} variable; user can override at create. */
   measurementId: string;
+  /** For platform 'google_tag': the Measurement ID (or its {{variable}}) the base
+   *  tag loads. Ignored for 'ga4_event'. */
+  tagId?: string;
+  /** For platform 'google_tag': optional gtag config settings (name/value). */
+  configSettings?: Array<{ name: string; value: string }>;
   eventName: string;
   eventParameters?: Array<{ name: string; value: string }>;
   trigger: {

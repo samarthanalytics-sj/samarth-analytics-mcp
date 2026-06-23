@@ -122,9 +122,15 @@ export interface SuggestedTagView {
   confidence: 'high' | 'medium' | 'low';
   /** GA4 Enhanced Measurement already auto-tracks this — flagged, not pushed. */
   enhancedMeasurementOverlap: boolean;
-  platform: 'ga4_event';
+  /** 'ga4_event' = a GA4 event tag; 'google_tag' = the base Google tag (GA4
+   *  Configuration) — uses tagId, not eventName/eventParameters. */
+  platform: 'ga4_event' | 'google_tag';
   tagName: string;
   measurementId: string;
+  /** For platform 'google_tag': the Measurement ID (or its {{variable}}). */
+  tagId?: string;
+  /** For platform 'google_tag': optional gtag config settings. */
+  configSettings?: Array<{ name: string; value: string }>;
   eventName: string;
   eventParameters?: Array<{ name: string; value: string }>;
   trigger: {
@@ -234,6 +240,8 @@ export interface CreateTagOutcome {
   ok: boolean;
   tagName?: string;
   triggerReused?: boolean;
+  /** The container already has a tag with this name — skipped, not an error. */
+  existing?: boolean;
   error?: string;
 }
 
