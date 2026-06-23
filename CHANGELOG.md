@@ -1,3 +1,9 @@
+## [1.35.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.35.1...v1.35.2) (2026-06-23)
+
+### Bug Fixes
+
+* **desktop:** validate tool args + redirect misfiled calls (root cause of the GA4-edit failures) ([7d51cc0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7d51cc0233123a7aeaa59095615d9ffbe7d22adf))
+
 ## [1.35.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.35.0...v1.35.1) (2026-06-23)
 
 ### Bug Fixes
