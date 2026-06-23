@@ -8,7 +8,7 @@
 import { crawlAndSuggest, scanUrls, detectInstalled, type PageDriver, type DrivenPage } from '../scan-core';
 import { mergeDriven } from '../multi-driver';
 import { parseSitemapLocs, extractCrawlLinks } from '../discover';
-import { parseSuggestions, suggestionsFromData, createSuggestedTags, planGoogleTagVars } from '../suggestion-service';
+import { parseSuggestions, suggestionsFromData, createSuggestedTags, planGoogleTagVars, provisionVariables } from '../suggestion-service';
 import type { ContainerSnapshot } from '../../google/gtm-builders';
 import type { PageScanRaw, RawElement } from '../../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm } from '../../../../../web-audit-mcp/src/agent/forms.js';
@@ -364,6 +364,25 @@ async function main(): Promise<void> {
     check('plan: a NON-constant variable owns the name → row BLOCKED (conflict)', (() => { const p = planGoogleTagVars(snap([{ name: 'GA4 Measurement ID', type: 'v' }]), [gcfg({ measurementId: 'G-ABC1234567' })]); return p.errors.has('g') && p.creates.length === 0; })());
     check('plan: literal G- tagId → no variable needed, no error', (() => { const p = planGoogleTagVars(snap([]), [gcfg({ tagId: 'G-ABC1234567', measurementId: 'G-ABC1234567' })]); return p.creates.length === 0 && p.errors.size === 0; })());
     check('plan: ga4_event rows are ignored', (() => { const ev: SuggestedTagView = { id: 'e', page: '/', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false, platform: 'ga4_event', tagName: 'T', measurementId: '{{GA4 Measurement ID}}', eventName: 'e', trigger: { name: 't', kind: 'all_clicks' } }; const p = planGoogleTagVars(snap([]), [ev]); return p.creates.length === 0 && p.errors.size === 0; })());
+    check('plan: a REAL id containing an X-run (G-1XXXAB2345) is ACCEPTED (only the all-X placeholder is rejected)', (() => { const p = planGoogleTagVars(snap([]), [gcfg({ measurementId: 'G-1XXXAB2345' })]); return p.errors.size === 0 && p.creates.length === 1 && p.creates[0].value === 'G-1XXXAB2345'; })());
+  }
+
+  // ── provisionVariables: resilient variable creation (failures isolated) ──────
+  {
+    const ids = { accountId: '1', containerId: '2', workspaceId: '3' };
+    const fast = { sleep: async (): Promise<void> => {} };
+    const okCalls: Array<Record<string, unknown>> = [];
+    const okExec = async (_n: string, a: Record<string, unknown>): Promise<string> => { okCalls.push(a); return '{}'; };
+    const f1 = await provisionVariables(okExec, ids, [{ name: 'V', value: 'G-ABC1234567' }], fast);
+    check('provision: success → no failures, create called once', f1.size === 0 && okCalls.length === 1);
+    const dupExec = async (): Promise<string> => { throw new Error('Found entity with duplicate name.'); };
+    check('provision: duplicate-name (TOCTOU race) is TOLERATED → not a failure', (await provisionVariables(dupExec, ids, [{ name: 'V', value: 'x' }], fast)).size === 0);
+    let qn = 0;
+    const quotaExec = async (): Promise<string> => { qn += 1; throw new Error('RESOURCE_EXHAUSTED: rateLimitExceeded'); };
+    const f3 = await provisionVariables(quotaExec, ids, [{ name: 'V', value: 'x' }], { sleep: async (): Promise<void> => {}, maxRetries: 2 });
+    check('provision: persistent quota → retried then recorded as failed var', f3.has('v') && qn === 3);
+    const errExec = async (): Promise<string> => { throw new Error('api 400 invalid'); };
+    check('provision: other error → recorded per-variable (so only dependent rows fail)', (await provisionVariables(errExec, ids, [{ name: 'V', value: 'x' }], fast)).has('v'));
   }
 
   console.log(`\nsuggestion-service: ${passed} passed, ${failed} failed`);

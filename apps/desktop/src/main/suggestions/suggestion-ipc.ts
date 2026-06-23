@@ -13,7 +13,7 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
-import { findGa4BaseTag, buildVariable } from '../google/gtm-builders';
+import { findGa4BaseTag } from '../google/gtm-builders';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions } from '../../shared/ipc';
 import { crawlAndSuggest, scanUrls, type PageDriver } from './scan-core';
@@ -24,7 +24,7 @@ import { discoverSite } from './discover';
 // same-origin iframes; Cheerio adds anything in the raw server HTML.
 import { createElectronDriver } from './electron-driver';
 import { createMultiDriver } from './multi-driver';
-import { parseSuggestions, createSuggestedTags, planGoogleTagVars } from './suggestion-service';
+import { parseSuggestions, createSuggestedTags, planGoogleTagVars, provisionVariables } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 
 const clampSettle = (ms: number | undefined): number | undefined =>
@@ -133,14 +133,21 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // variable to EXIST, or the base tag points at nothing and GA4 never loads
       // (mirrors ensureGa4Config). Provision a Constant from the row's real
       // Measurement ID first; block the row if the ID is still the placeholder.
-      let errors = new Map<string, string>();
+      const errors = new Map<string, string>();
       const hasGoogleTagVar = list.some((t) => t.platform === 'google_tag' && /^\s*\{\{.+\}\}\s*$/.test(t.tagId ?? ''));
       if (hasGoogleTagVar) {
         const snap = await data.getGtmContainerSnapshot(acct, cont, ws);
         const plan = planGoogleTagVars(snap, list);
-        errors = plan.errors;
-        for (const c of plan.creates) {
-          await reg.execute('create_gtm_variable', { ...ids, variable: buildVariable({ kind: 'constant', name: c.name, value: c.value }) });
+        for (const [id, msg] of plan.errors) errors.set(id, msg);
+        // Resilient variable creation — a duplicate/quota hiccup on a variable fails
+        // ONLY the google_tag rows that need it, never the whole approved batch.
+        const failedVars = await provisionVariables((name, args) => reg.execute(name, args), ids, plan.creates);
+        if (failedVars.size) {
+          for (const t of list) {
+            if (t.platform !== 'google_tag') continue;
+            const vn = /^\s*\{\{(.+?)\}\}\s*$/.exec(t.tagId ?? '')?.[1]?.toLowerCase();
+            if (vn && failedVars.has(vn)) errors.set(t.id, `Couldn't create the variable it needs: ${failedVars.get(vn)}`);
+          }
         }
       }
       const creatable = list.filter((t) => !errors.has(t.id));

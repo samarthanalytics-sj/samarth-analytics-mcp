@@ -10,7 +10,7 @@ import { buildSuggestions } from '../../../../web-audit-mcp/src/agent/tag-sugges
 import { buildSuggestInput, type PageScan } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { SuggestInput, SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import type { CreateTagOutcome, SuggestedTagView } from '../../shared/ipc';
-import { ga4VariablePlan, type ContainerSnapshot } from '../google/gtm-builders';
+import { ga4VariablePlan, buildVariable, type ContainerSnapshot } from '../google/gtm-builders';
 
 export interface ParsedSuggestions {
   suggestions: SuggestedTag[];
@@ -78,7 +78,11 @@ export function suggestionsFromData(data: unknown): ParsedSuggestions {
   throw new Error('Unrecognized JSON — expected a gtm_tag_suggestions report, a SuggestInput, or a suggestions array.');
 }
 
-const isRealMeasurementId = (v: string): boolean => /^(G|GT|AW)-[A-Z0-9]{4,}$/i.test(v) && !/X{3,}/i.test(v);
+// A real id is G-/GT-/AW- + an alphanumeric suffix, and is NOT the all-X placeholder
+// (G-XXXXXXXXXX). Only an all-X suffix is rejected — a real id that merely contains an
+// X-run (e.g. G-1XXXAB2345) is fine.
+const isRealMeasurementId = (v: string): boolean =>
+  /^(G|GT|AW)-[A-Z0-9]{4,}$/i.test(v) && !/^(G|GT|AW)-X+$/i.test(v.trim());
 
 /** Decide what a batch of suggestions needs before creation, for the base Google
  *  tag(s): which {{variable}} Constants to CREATE (so a google_tag whose tagId is a
@@ -215,4 +219,41 @@ export async function createSuggestedTags(
     }
   }
   return outcomes;
+}
+
+/** Create the Constant variables a google_tag batch needs, with the SAME duplicate /
+ *  quota resilience as the tag creates: a duplicate (a TOCTOU race where the variable
+ *  was created since the snapshot) is tolerated, a quota error is retried with
+ *  backoff, and any OTHER failure is recorded PER-VARIABLE — so only the dependent
+ *  google_tag rows fail, never the whole batch. Returns variable-name (lowercased) →
+ *  error message for the ones that genuinely failed. PURE (execute + sleep injected). */
+export async function provisionVariables(
+  execute: ToolExecute,
+  ids: { accountId: string; containerId: string; workspaceId: string },
+  creates: Array<{ name: string; value: string }>,
+  opts: CreateTagsOptions = {},
+): Promise<Map<string, string>> {
+  const sleep = opts.sleep ?? realSleep;
+  const maxRetries = opts.maxRetries ?? 6;
+  const failed = new Map<string, string>();
+  for (const c of creates) {
+    let attempt = 0;
+    for (;;) {
+      try {
+        await execute('create_gtm_variable', { ...ids, variable: buildVariable({ kind: 'constant', name: c.name, value: c.value }) });
+        break;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (DUPLICATE_RE.test(msg)) break; // race: the constant already exists → fine
+        if (QUOTA_RE.test(msg) && attempt < maxRetries) {
+          attempt += 1;
+          await sleep(Math.min(30_000, 2_000 * 2 ** (attempt - 1)));
+          continue;
+        }
+        failed.set(c.name.toLowerCase(), msg);
+        break;
+      }
+    }
+  }
+  return failed;
 }
