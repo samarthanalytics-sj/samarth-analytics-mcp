@@ -333,6 +333,17 @@ async function main(): Promise<void> {
     );
   });
 
+  await test('GA4 tag-edit tools are scoped to the GTM product (reachable in the GTM chat)', async () => {
+    const editTools = ['set_ga4_measurement_id', 'set_ga4_measurement_id_on_all_tags', 'add_ga4_event_parameters', 'add_ga4_event_parameters_to_all_tags'];
+    // GTM chat (where these belong — they edit GTM tags): all must be present.
+    const gtm = buildToolRegistry(fakeData().data, approveAsIs, 'gtm').list().map((t) => t.name);
+    for (const n of editTools) assert.equal(gtm.includes(n), true, `${n} must be available in the GTM chat`);
+    // GA4 chat (read-only Analytics): they must NOT leak in, but the real GA4 read tools do.
+    const ga4 = buildToolRegistry(fakeData().data, approveAsIs, 'ga4').list().map((t) => t.name);
+    for (const n of editTools) assert.equal(ga4.includes(n), false, `${n} must NOT appear in the GA4 chat`);
+    assert.equal(ga4.includes('list_ga4_properties'), true, 'real GA4 read tools still scoped to GA4');
+  });
+
   await test('bad args: a tool called with another tool\'s shape is redirected, not fired', async () => {
     const reg = buildToolRegistry(fakeData().data, approveAsIs);
     // The exact misfire from the logs: set_gtm_tag_paused called with measurementId and

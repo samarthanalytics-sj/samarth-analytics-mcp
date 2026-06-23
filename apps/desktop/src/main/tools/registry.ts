@@ -97,9 +97,23 @@ function apiErrorMessage(e: unknown): string {
  * and each one calls `confirm` first — if the user declines, nothing is applied.
  * Writes never publish; changes stay in the workspace until published in GTM.
  */
-// Tool product is derived from its name (every GA4 tool contains "ga4", every
-// GTM tool contains "gtm") — used to hard-scope the registry to one product.
-const productOf = (name: string): GoogleProduct => (name.includes('ga4') ? 'ga4' : 'gtm');
+// GTM WRITE tools that edit GA4 *tags inside GTM*. Their names contain "ga4" but they
+// belong to the GTM product, NOT the read-only GA4 Analytics product. Without this
+// exception the substring match below files them under 'ga4' → they get filtered OUT of
+// the GTM chat (and GA4 is read-only, so unavailable there too), making them unreachable
+// by the model — which is exactly why it fell back to set_gtm_tag_paused.
+const GTM_GA4_TAG_TOOLS = new Set([
+  'set_ga4_measurement_id',
+  'set_ga4_measurement_id_on_all_tags',
+  'add_ga4_event_parameters',
+  'add_ga4_event_parameters_to_all_tags',
+]);
+
+// Tool product is derived from its name (GA4 Analytics tools contain "ga4", GTM tools
+// contain "gtm") — used to hard-scope the registry to one product — EXCEPT the GTM
+// tag-edit tools above, which operate on GTM despite the "ga4" in their name.
+const productOf = (name: string): GoogleProduct =>
+  name.includes('ga4') && !GTM_GA4_TAG_TOOLS.has(name) ? 'ga4' : 'gtm';
 
 export function buildToolRegistry(
   data: GoogleDataService,
