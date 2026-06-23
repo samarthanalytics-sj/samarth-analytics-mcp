@@ -103,6 +103,8 @@ export class ChatService {
           'NOT a per-tag loop: set_ga4_measurement_id_on_all_tags to change the Measurement ID on every GA4 ' +
           'tag, and add_ga4_event_parameters_to_all_tags to add event parameters to every GA4 event tag. ' +
           'Do NOT call set_gtm_tag_paused, delete_gtm_tag/trigger, or any unrelated tool for these requests. ' +
+          'set_gtm_tag_paused ONLY pauses or enables a tag — it does NOT change a Measurement ID, event parameters, ' +
+          'or any tag config; never use it to edit a GA4 tag. ' +
           'Only use update_gtm_tag for fields with no dedicated tool, and pass ONLY the fields you are changing. ' +
           'AUDITING: when the user asks to audit, check, review, or "health-check" the container, its ' +
           'tags/triggers/variables, or its setup, ALWAYS call audit_gtm_container FIRST — never reply ' +
