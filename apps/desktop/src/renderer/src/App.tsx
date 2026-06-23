@@ -29,7 +29,8 @@ const DEFAULT_MODEL: Record<LlmProvider, string> = {
   gemini: 'gemini-2.0-flash',
 };
 
-type View = 'chat' | 'review' | 'audit' | 'settings';
+type View = 'chat' | 'gtm' | 'settings';
+type GtmTab = 'suggestions' | 'audit';
 
 /* Friendly labels for GTM type codes, so approvals read in plain English. */
 const GTM_TYPE_LABELS: Record<string, string> = {
@@ -594,16 +595,10 @@ export function App(): JSX.Element {
             💬 Chat
           </button>
           <button
-            style={{ ...styles.navItem, ...(view === 'review' ? styles.navActive : {}) }}
-            onClick={() => setView('review')}
+            style={{ ...styles.navItem, ...(view === 'gtm' ? styles.navActive : {}) }}
+            onClick={() => setView('gtm')}
           >
-            🏷 Tag suggestions
-          </button>
-          <button
-            style={{ ...styles.navItem, ...(view === 'audit' ? styles.navActive : {}) }}
-            onClick={() => setView('audit')}
-          >
-            🔍 Container audit
+            🗂 GTM
           </button>
           <button
             style={{ ...styles.navItem, ...(view === 'settings' ? styles.navActive : {}) }}
@@ -627,10 +622,8 @@ export function App(): JSX.Element {
 
         {view === 'chat' ? (
           <ChatView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
-        ) : view === 'review' ? (
-          <TagReviewPanel key={active?.id ?? 'none'} active={active} onError={setError} />
-        ) : view === 'audit' ? (
-          <ContainerAuditPanel key={active?.id ?? 'none'} active={active} onError={setError} />
+        ) : view === 'gtm' ? (
+          <GtmToolsView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
         ) : (
           <SettingsView
             active={active}
@@ -1073,6 +1066,43 @@ function EditLine({
       <span style={styles.proposalLabel}>{label}</span>
       <input style={styles.editInput} value={value} onChange={(e) => onChange(e.target.value)} />
     </label>
+  );
+}
+
+// The grouped "GTM" workspace: one shared account/container/workspace picker
+// (GtmContextBar) over two sub-tabs — Tag suggestions and Container audit — so both
+// GTM-container tools share the same target instead of each finding it on its own.
+function GtmToolsView({
+  active,
+  onError,
+  refresh,
+}: {
+  active: AccountView | undefined;
+  onError: (m: string) => void;
+  refresh: () => Promise<void>;
+}): JSX.Element {
+  const [tab, setTab] = useState<GtmTab>('suggestions');
+  return (
+    <div style={styles.gtmWorkspace}>
+      {active ? (
+        <GtmContextBar active={active} refresh={refresh} onError={onError} />
+      ) : (
+        <div style={{ ...styles.sideWarn, margin: '12px 20px' }}>Connect a Google account to choose a GTM container & workspace.</div>
+      )}
+      <div style={styles.subTabs} role="tablist">
+        <button style={tab === 'suggestions' ? styles.subTabOn : styles.subTabOff} onClick={() => setTab('suggestions')} role="tab" aria-selected={tab === 'suggestions'}>
+          🏷 Tag suggestions
+        </button>
+        <button style={tab === 'audit' ? styles.subTabOn : styles.subTabOff} onClick={() => setTab('audit')} role="tab" aria-selected={tab === 'audit'}>
+          🔍 Container audit
+        </button>
+      </div>
+      {tab === 'suggestions' ? (
+        <TagReviewPanel key={(active?.id ?? 'none') + ':sug'} active={active} onError={onError} />
+      ) : (
+        <ContainerAuditPanel key={(active?.id ?? 'none') + ':aud'} active={active} onError={onError} />
+      )}
+    </div>
   );
 }
 
@@ -2483,6 +2513,10 @@ const styles: Record<string, React.CSSProperties> = {
   sideVersion: { color: '#4b5563', fontSize: 11, marginTop: 10 },
 
   main: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 },
+  gtmWorkspace: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
+  subTabs: { display: 'flex', gap: 8, padding: '10px 20px', borderBottom: '1px solid #1f2937', flexShrink: 0 },
+  subTabOn: { background: '#1e3a5f', color: '#e5e7eb', border: '1px solid #1e3a5f', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
+  subTabOff: { background: 'transparent', color: '#93c5fd', border: '1px solid #334155', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13 },
   errorBar: { background: '#1f1416', borderBottom: '1px solid #7f1d1d', color: '#fca5a5', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 },
   errorClose: { background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer' },
 
