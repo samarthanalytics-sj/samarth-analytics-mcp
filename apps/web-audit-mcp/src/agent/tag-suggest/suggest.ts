@@ -297,7 +297,7 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         label: 'File download → GA4 "file_download"  ⚠ Enhanced Measurement already covers this',
         evidence: `download link ${el.href ?? ''}`.trim(),
         eventParameters: CLICK_PARAMS,
-        trigger: { name: trigNameOf('File Download'), kind: 'link_click', clickUrlValue: `\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
+        trigger: { name: trigNameOf('File Download'), kind: 'link_click', clickUrlValue: `(?i)\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
       };
     case 'outbound':
       return {
@@ -379,17 +379,24 @@ function videoSuggestion(embeds: VideoEmbed[]): SuggestedTag | null {
 /** The base "Google tag" (the GA4 Configuration that loads GA4 on every page).
  *  Created via the google_tag platform — tagId is the Measurement-ID variable. The
  *  desktop marks it "already exists" when the container already has a GA4 base tag. */
+/** Placeholder Measurement ID — the user MUST replace it with their real G-XXXXXXXXXX
+ *  before creating (the create path blocks an unresolved placeholder). */
+export const GA4_MID_PLACEHOLDER = 'G-XXXXXXXXXX';
+
 export function ga4ConfigSuggestion(): SuggestedTag {
   return {
     id: 'ga4-config',
     page: 'site-wide',
     label: 'GA4 Configuration (Google tag) — loads GA4 on every page',
     evidence: 'the base Google tag every GA4 setup needs; fires on All Pages',
+    note: `Set your real Measurement ID (e.g. G-ABC1234567) in the Measurement ID field — creating this also makes the {{GA4 Measurement ID}} variable that the GA4 event tags reference, so the whole setup resolves.`,
     confidence: 'high',
     enhancedMeasurementOverlap: false,
     platform: 'google_tag',
     tagName: 'GA4 Configuration',
-    measurementId: GA4_VAR,
+    // measurementId is the real id the user supplies (default = placeholder); tagId
+    // references the variable provisioned from it, so config + event tags share one id.
+    measurementId: GA4_MID_PLACEHOLDER,
     tagId: GA4_VAR,
     eventName: '',
     trigger: { name: 'All Pages', kind: 'pageview' },
@@ -422,6 +429,7 @@ export function allPdfSuggestion(): SuggestedTag {
     page: 'site-wide',
     label: 'All PDF downloads → GA4 "file_download"',
     evidence: 'one tag firing on every PDF link click  ⚠ Enhanced Measurement may already cover this',
+    note: 'Overlaps the general "File Download" tag (which also covers PDFs) — pick one, not both.',
     confidence: 'medium',
     enhancedMeasurementOverlap: true,
     platform: 'ga4_event',
@@ -429,7 +437,7 @@ export function allPdfSuggestion(): SuggestedTag {
     measurementId: GA4_VAR,
     eventName: 'file_download',
     eventParameters: CLICK_PARAMS,
-    trigger: { name: trigNameOf('All PDF Downloads'), kind: 'link_click', clickUrlValue: '\\.pdf(\\?|#|$)', clickUrlOperator: 'matchRegex' },
+    trigger: { name: trigNameOf('All PDF Downloads'), kind: 'link_click', clickUrlValue: '(?i)\\.pdf(\\?|#|$)', clickUrlOperator: 'matchRegex' },
   };
 }
 
@@ -480,7 +488,15 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
   // COMPLETE list: the GA4 Configuration base tag (always) + the All-form /
   // All-PDF catch-alls (when applicable), surfaced ABOVE the scan-derived tags.
   const head: SuggestedTag[] = [ga4ConfigSuggestion()];
-  if (input.forms.length > 0) head.push(allFormsSuggestion());
+  let body = ranked;
+  if (input.forms.length > 0) {
+    head.push(allFormsSuggestion());
+    // The All-Form catch-all IS the unscoped generic "form_submission" tag, so drop
+    // any scan-derived one that's identical (unscoped + event 'form_submission') to
+    // avoid an exact double. SCOPED per-form tags and purpose-specific events
+    // (contact_form, signup_form, …) are KEPT — they send a different event.
+    body = body.filter((s) => !(s.trigger.kind === 'form_submit' && s.eventName === 'form_submission' && !s.trigger.formIdValue && !s.trigger.formClassesValue));
+  }
   if (input.elements.some((e) => e.kind === 'download' && isPdf(e.href))) head.push(allPdfSuggestion());
-  return [...head, ...ranked];
+  return [...head, ...body];
 }

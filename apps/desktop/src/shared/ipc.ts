@@ -240,6 +240,8 @@ export interface CreateTagOutcome {
   ok: boolean;
   tagName?: string;
   triggerReused?: boolean;
+  /** The container already has a tag with this name — skipped, not an error. */
+  existing?: boolean;
   error?: string;
 }
 

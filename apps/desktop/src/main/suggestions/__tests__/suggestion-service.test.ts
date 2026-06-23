@@ -8,7 +8,8 @@
 import { crawlAndSuggest, scanUrls, detectInstalled, type PageDriver, type DrivenPage } from '../scan-core';
 import { mergeDriven } from '../multi-driver';
 import { parseSitemapLocs, extractCrawlLinks } from '../discover';
-import { parseSuggestions, suggestionsFromData, createSuggestedTags } from '../suggestion-service';
+import { parseSuggestions, suggestionsFromData, createSuggestedTags, planGoogleTagVars } from '../suggestion-service';
+import type { ContainerSnapshot } from '../../google/gtm-builders';
 import type { PageScanRaw, RawElement } from '../../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm } from '../../../../../web-audit-mcp/src/agent/forms.js';
 import type { SuggestedTagView } from '../../../shared/ipc';
@@ -341,6 +342,28 @@ async function main(): Promise<void> {
     const execAlways = async (): Promise<string> => { n += 1; throw new Error('RESOURCE_EXHAUSTED: rateLimitExceeded'); };
     const out2 = await createSuggestedTags(execAlways, ids, [tag('z')], { sleep: async (): Promise<void> => {}, throttleMs: 0, maxRetries: 2 });
     check('create: persistent quota error → ok:false after maxRetries+1 attempts', out2[0].ok === false && n === 3);
+
+    // "Found entity with duplicate name" → marked existing (skipped), not an error,
+    // and NOT retried (the name won't free up).
+    let dn = 0;
+    const execDup = async (): Promise<string> => { dn += 1; throw new Error('Found entity with duplicate name.'); };
+    const outDup = await createSuggestedTags(execDup, ids, [tag('d')], { sleep: async (): Promise<void> => {}, throttleMs: 0 });
+    check('create: duplicate-name → existing:true (skipped, not error), tried once', outDup[0].existing === true && outDup[0].ok === false && dn === 1);
+  }
+
+  // ── planGoogleTagVars: provision the {{variable}} a GA4 Configuration references ──
+  {
+    const snap = (vars: Array<{ name: string; type: string }>): ContainerSnapshot => ({ tags: [], triggers: [], variables: vars } as unknown as ContainerSnapshot);
+    const gcfg = (over: Partial<SuggestedTagView> = {}): SuggestedTagView => ({
+      id: 'g', page: 'site-wide', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
+      platform: 'google_tag', tagName: 'GA4 Configuration', measurementId: 'G-XXXXXXXXXX', tagId: '{{GA4 Measurement ID}}', eventName: '', trigger: { name: 'All Pages', kind: 'pageview' }, ...over,
+    });
+    check('plan: placeholder Measurement ID → row BLOCKED, no variable created', (() => { const p = planGoogleTagVars(snap([]), [gcfg()]); return p.creates.length === 0 && p.errors.has('g'); })());
+    check('plan: real id → CREATE Constant "GA4 Measurement ID"=id, no error', (() => { const p = planGoogleTagVars(snap([]), [gcfg({ measurementId: 'G-ABC1234567' })]); return p.errors.size === 0 && p.creates.length === 1 && p.creates[0].name === 'GA4 Measurement ID' && p.creates[0].value === 'G-ABC1234567'; })());
+    check('plan: existing Constant variable → REUSE (no create, no error)', (() => { const p = planGoogleTagVars(snap([{ name: 'GA4 Measurement ID', type: 'c' }]), [gcfg({ measurementId: 'G-ABC1234567' })]); return p.creates.length === 0 && p.errors.size === 0; })());
+    check('plan: a NON-constant variable owns the name → row BLOCKED (conflict)', (() => { const p = planGoogleTagVars(snap([{ name: 'GA4 Measurement ID', type: 'v' }]), [gcfg({ measurementId: 'G-ABC1234567' })]); return p.errors.has('g') && p.creates.length === 0; })());
+    check('plan: literal G- tagId → no variable needed, no error', (() => { const p = planGoogleTagVars(snap([]), [gcfg({ tagId: 'G-ABC1234567', measurementId: 'G-ABC1234567' })]); return p.creates.length === 0 && p.errors.size === 0; })());
+    check('plan: ga4_event rows are ignored', (() => { const ev: SuggestedTagView = { id: 'e', page: '/', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false, platform: 'ga4_event', tagName: 'T', measurementId: '{{GA4 Measurement ID}}', eventName: 'e', trigger: { name: 't', kind: 'all_clicks' } }; const p = planGoogleTagVars(snap([]), [ev]); return p.creates.length === 0 && p.errors.size === 0; })());
   }
 
   console.log(`\nsuggestion-service: ${passed} passed, ${failed} failed`);

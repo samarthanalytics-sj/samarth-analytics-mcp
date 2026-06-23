@@ -10,6 +10,7 @@ import { buildSuggestions } from '../../../../web-audit-mcp/src/agent/tag-sugges
 import { buildSuggestInput, type PageScan } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { SuggestInput, SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import type { CreateTagOutcome, SuggestedTagView } from '../../shared/ipc';
+import { ga4VariablePlan, type ContainerSnapshot } from '../google/gtm-builders';
 
 export interface ParsedSuggestions {
   suggestions: SuggestedTag[];
@@ -77,20 +78,60 @@ export function suggestionsFromData(data: unknown): ParsedSuggestions {
   throw new Error('Unrecognized JSON — expected a gtm_tag_suggestions report, a SuggestInput, or a suggestions array.');
 }
 
+const isRealMeasurementId = (v: string): boolean => /^(G|GT|AW)-[A-Z0-9]{4,}$/i.test(v) && !/X{3,}/i.test(v);
+
+/** Decide what a batch of suggestions needs before creation, for the base Google
+ *  tag(s): which {{variable}} Constants to CREATE (so a google_tag whose tagId is a
+ *  variable doesn't point at nothing), and which rows to BLOCK (placeholder id, or a
+ *  same-named non-constant variable). PURE — snapshot in, plan out. Mirrors the
+ *  tested ensureGa4Config logic (ga4VariablePlan), applied to the scan create flow. */
+export function planGoogleTagVars(
+  snap: ContainerSnapshot,
+  list: SuggestedTagView[],
+): { creates: Array<{ name: string; value: string }>; errors: Map<string, string> } {
+  const errors = new Map<string, string>();
+  const creates: Array<{ name: string; value: string }> = [];
+  const planned = new Set<string>();
+  for (const t of list) {
+    if (t.platform !== 'google_tag') continue;
+    const m = /^\s*\{\{(.+?)\}\}\s*$/.exec(t.tagId ?? '');
+    if (!m) continue; // a literal G-XXXX tagId needs no variable
+    const varName = m[1];
+    const mid = String(t.measurementId ?? '').trim();
+    if (!isRealMeasurementId(mid)) {
+      errors.set(t.id, 'Enter your real GA4 Measurement ID (e.g. G-ABC1234567) on this row before creating.');
+      continue;
+    }
+    const key = varName.toLowerCase();
+    if (planned.has(key)) continue;
+    const plan = ga4VariablePlan(snap, varName);
+    if (plan.action === 'conflict') {
+      errors.set(t.id, `A variable named "${varName}" already exists but is not a constant (type "${plan.existingType}") — rename it, or edit the Tag ID.`);
+      continue;
+    }
+    if (plan.action === 'create') creates.push({ name: varName, value: mid });
+    planned.add(key);
+  }
+  return { creates, errors };
+}
+
 /** A tool runner — buildToolRegistry's `execute`. Injected so the create loop is
  *  pure/testable (no Electron, no real GTM). */
 export type ToolExecute = (name: string, args: Record<string, unknown>) => Promise<string>;
 
 /** GTM API rate-limit / quota errors (per-minute-per-user etc.) — retryable. */
 const QUOTA_RE = /quota exceeded|rate.?limit|rateLimitExceeded|userRateLimitExceeded|queries per (minute|second|day)|\b429\b|RESOURCE_EXHAUSTED/i;
+/** "Found entity with duplicate name" — a tag with this name already exists. Not an
+ *  error to surface: it's already there, so it's SKIPPED (marked "already exists"). */
+const DUPLICATE_RE = /duplicate name|already exists|entity with duplicate|duplicate entity/i;
 const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export interface CreateTagsOptions {
   /** Sleep impl — injectable so tests run instantly. */
   sleep?: (ms: number) => Promise<void>;
-  /** Pause between tags to stay under the GTM per-minute quota (default 700ms). */
+  /** Pause between tags to stay under the GTM per-minute quota (default 900ms). */
   throttleMs?: number;
-  /** Retries on a quota/rate-limit error, with exponential backoff (default 4). */
+  /** Retries on a quota/rate-limit error, with exponential backoff (default 6). */
   maxRetries?: number;
 }
 
@@ -109,8 +150,14 @@ export async function createSuggestedTags(
   opts: CreateTagsOptions = {},
 ): Promise<CreateTagOutcome[]> {
   const sleep = opts.sleep ?? realSleep;
-  const throttleMs = opts.throttleMs ?? 700;
-  const maxRetries = opts.maxRetries ?? 4;
+  const baseThrottle = opts.throttleMs ?? 900;
+  const maxRetries = opts.maxRetries ?? 6;
+  // Each create does several API calls (enable vars + list/create trigger + create
+  // tag), so a big batch can trip the GTM "Queries per minute" quota. After a quota
+  // error we PERMANENTLY slow the rest of the batch (adaptive throttle) so the run
+  // self-tunes under the limit instead of repeatedly retrying into it.
+  let throttleMs = baseThrottle;
+  const MAX_THROTTLE = 8_000;
   const outcomes: CreateTagOutcome[] = [];
   for (let i = 0; i < tags.length; i++) {
     const t = tags[i];
@@ -147,11 +194,19 @@ export async function createSuggestedTags(
         break;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        // A tag with this name already exists → skip it, mark "already exists" (NOT
+        // an error, and don't retry — the name won't free up).
+        if (DUPLICATE_RE.test(msg)) {
+          outcomes.push({ id: t.id, ok: false, existing: true, error: 'already exists' });
+          break;
+        }
         // Back off and retry on a transient quota error (trigger reuse-by-name
-        // makes a retry idempotent — it won't duplicate the trigger).
+        // makes a retry idempotent — it won't duplicate the trigger). Also slow the
+        // REST of the batch so we stop hammering the per-minute quota.
         if (QUOTA_RE.test(msg) && attempt < maxRetries) {
           attempt += 1;
-          await sleep(Math.min(30_000, 2_000 * 2 ** (attempt - 1))); // 2s, 4s, 8s, 16s
+          throttleMs = Math.min(MAX_THROTTLE, throttleMs + 1_500);
+          await sleep(Math.min(30_000, 2_000 * 2 ** (attempt - 1))); // 2s,4s,8s,16s,30s,30s
           continue;
         }
         outcomes.push({ id: t.id, ok: false, error: msg });
