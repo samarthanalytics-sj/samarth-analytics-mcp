@@ -971,7 +971,8 @@ export function buildToolRegistry(
     },
     {
       name: 'update_gtm_tag',
-      description: 'Update an existing tag in a GTM workspace. Requires accountId, containerId, workspaceId, tagId, and the full tag object.',
+      description:
+        'Update an existing tag in a GTM workspace (read-modify-write — the current tag is fetched and only the fields you pass are overlaid; `parameter` is merged by key, so omitted fields like eventName/measurementId are preserved). Pass only the fields you want to change. To ADD GA4 event parameters (session_id, user_id, click_text, …) to GA4 event tags, use add_ga4_event_parameters instead — it appends to the eventSettingsTable without wiping the tag.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -979,14 +980,54 @@ export function buildToolRegistry(
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
           tagId: { type: 'string' },
-          tag: { type: 'object' },
+          tag: { type: 'object', description: 'Partial tag — only the fields to change. parameter[] is merged by key.' },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'tagId', 'tag'],
         additionalProperties: false,
       },
       write: true,
-      summarize: (a) => `Update tag ${s(a.tagId)} ("${s(obj(a.tag).name)}") in workspace ${s(a.workspaceId)}`,
+      summarize: (a) => `Update tag ${s(a.tagId)} in workspace ${s(a.workspaceId)}`,
       handler: (a) => data.updateGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId), obj(a.tag)),
+    },
+    {
+      name: 'add_ga4_event_parameters',
+      description:
+        'Add GA4 event parameters to an existing GA4 Event tag (type "gaawe"). Appends them to the tag\'s eventSettingsTable — the correct place for GA4 event parameters — and preserves eventName/measurementId, so it never triggers "measurementIdOverride/eventName must not be empty". A parameter whose name already exists has its value updated (not duplicated). Use this for requests like "add session_id and user_id to all GA4 event tags". Values may be GTM variables like {{Click Text}}. Call once per tag.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          tagId: { type: 'string', description: 'The GA4 Event (gaawe) tag ID.' },
+          parameters: {
+            type: 'array',
+            description: 'Event parameters to add.',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                value: { type: 'string' },
+              },
+              required: ['name', 'value'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tagId', 'parameters'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) =>
+        `Add ${(Array.isArray(a.parameters) ? a.parameters.length : 0)} GA4 event parameter(s) to tag ${s(a.tagId)} in workspace ${s(a.workspaceId)}`,
+      handler: (a) =>
+        data.addGa4EventParameters(
+          s(a.accountId),
+          s(a.containerId),
+          s(a.workspaceId),
+          s(a.tagId),
+          (Array.isArray(a.parameters) ? a.parameters : []) as Array<{ name: string; value: string }>
+        ),
     },
     {
       name: 'set_gtm_tag_paused',
