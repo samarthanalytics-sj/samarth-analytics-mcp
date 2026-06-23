@@ -72,7 +72,23 @@ export async function runChat(
     if (reply.toolCalls && reply.toolCalls.length > 0) {
       messages.push({ role: 'assistant', text: reply.text, toolCalls: reply.toolCalls });
       const results = [];
+      // Fail fast: once a tool call in this batch errors, STOP — don't prompt the user
+      // to approve the remaining changes (e.g. don't ask to update tags 2-4 when tag 1
+      // already failed). We still push a result for every call so the provider's
+      // tool_use/tool_result pairing stays valid; the skipped ones report why.
+      let batchFailed = false;
       for (const call of reply.toolCalls) {
+        if (batchFailed) {
+          results.push({
+            id: call.id,
+            name: call.name,
+            content:
+              'Skipped: an earlier change in this batch failed, so this one was not run. ' +
+              'Tell the user what failed and stop — do not retry the rest until they decide how to proceed.',
+            isError: true,
+          });
+          continue;
+        }
         callbacks.onToolCall?.(call);
         try {
           results.push({ id: call.id, name: call.name, content: await executor.execute(call.name, call.args) });
@@ -83,6 +99,7 @@ export async function runChat(
             content: e instanceof Error ? e.message : String(e),
             isError: true,
           });
+          batchFailed = true;
         }
       }
       messages.push({ role: 'tool', results });

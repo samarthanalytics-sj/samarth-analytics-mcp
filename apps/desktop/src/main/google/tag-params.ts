@@ -27,6 +27,19 @@ export function mergeParametersByKey(existing: GtmParam[], provided: GtmParam[])
   return [...byKey.values(), ...keyless];
 }
 
+/** Set a single TEMPLATE parameter (by key) on a tag, preserving everything else.
+ *  Used to point a GA4 event tag's `measurementIdOverride` — or a Google tag's
+ *  `tagId` — at a Measurement ID or a {{Variable}}, without the model hand-building
+ *  the parameter JSON (the source of the "template key" errors). PURE. */
+export function setTemplateParam(
+  tag: Record<string, unknown>,
+  key: string,
+  value: string,
+): Record<string, unknown> {
+  const existing = (tag.parameter as GtmParam[] | undefined) ?? [];
+  return { ...tag, parameter: mergeParametersByKey(existing, [{ type: 'template', key, value }]) };
+}
+
 function eventParamMap(name: string, value: string): GtmParam {
   return {
     type: 'map',

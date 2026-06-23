@@ -170,8 +170,11 @@ function buildEditFields(tool: string, details: Record<string, unknown>): EditFi
   const variable = asObj(details.variable);
 
   if (details.tag) {
-    fields.push({ key: 'tagName', label: 'Tag name', initial: String(tag.name ?? ''), apply: (d, v) => { const t = asObj(d.tag); t.name = v; d.tag = t; } });
-    fields.push({ key: 'tagType', label: 'Tag type (code)', initial: String(tag.type ?? ''), apply: (d, v) => { const t = asObj(d.tag); t.type = v; d.tag = t; } });
+    // Only surface fields the args actually carry. A partial update (e.g. just a
+    // parameter change) has no name/type — showing a blank box and applying it would
+    // BLANK the tag's real name on save. Guarded like the audit-fix path above.
+    if (tag.name !== undefined) fields.push({ key: 'tagName', label: 'Tag name', initial: String(tag.name ?? ''), apply: (d, v) => { const t = asObj(d.tag); t.name = v; d.tag = t; } });
+    if (tag.type !== undefined) fields.push({ key: 'tagType', label: 'Tag type (code)', initial: String(tag.type ?? ''), apply: (d, v) => { const t = asObj(d.tag); t.type = v; d.tag = t; } });
     // Surface every top-level template parameter, so each platform's config shows:
     // Google Ads (conversionId/conversionLabel), Facebook/LinkedIn (Custom HTML),
     // GA4 (eventName/measurementId), etc. List/map params (e.g. GA4 eventParameters)
@@ -190,8 +193,8 @@ function buildEditFields(tool: string, details: Record<string, unknown>): EditFi
     }
   }
   if (details.trigger) {
-    fields.push({ key: 'trigName', label: 'Trigger name', initial: String(trigger.name ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.name = v; d.trigger = t; } });
-    fields.push({ key: 'trigType', label: 'Trigger type (code)', initial: String(trigger.type ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.type = v; d.trigger = t; } });
+    if (trigger.name !== undefined) fields.push({ key: 'trigName', label: 'Trigger name', initial: String(trigger.name ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.name = v; d.trigger = t; } });
+    if (trigger.type !== undefined) fields.push({ key: 'trigType', label: 'Trigger type (code)', initial: String(trigger.type ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.type = v; d.trigger = t; } });
     const filter = Array.isArray(trigger.filter) ? (trigger.filter as Array<Record<string, unknown>>) : [];
     const p0 = Array.isArray(filter[0]?.parameter) ? (filter[0].parameter as Array<Record<string, unknown>>) : [];
     if (p0.find((p) => p.key === 'arg1')) {
@@ -208,8 +211,8 @@ function buildEditFields(tool: string, details: Record<string, unknown>): EditFi
     }
   }
   if (details.variable) {
-    fields.push({ key: 'varName', label: 'Variable name', initial: String(variable.name ?? ''), apply: (d, v) => { const t = asObj(d.variable); t.name = v; d.variable = t; } });
-    fields.push({ key: 'varType', label: 'Variable type (code)', initial: String(variable.type ?? ''), apply: (d, v) => { const t = asObj(d.variable); t.type = v; d.variable = t; } });
+    if (variable.name !== undefined) fields.push({ key: 'varName', label: 'Variable name', initial: String(variable.name ?? ''), apply: (d, v) => { const t = asObj(d.variable); t.name = v; d.variable = t; } });
+    if (variable.type !== undefined) fields.push({ key: 'varType', label: 'Variable type (code)', initial: String(variable.type ?? ''), apply: (d, v) => { const t = asObj(d.variable); t.type = v; d.variable = t; } });
   }
   if (tool.includes('workspace') && details.name !== undefined) {
     fields.push({ key: 'wsName', label: 'Workspace name', initial: String(details.name ?? ''), apply: (d, v) => { d.name = v; } });
@@ -245,6 +248,19 @@ function summarizeProposal(tool: string, details: Record<string, unknown>): Arra
     rows.push({ label: 'Action', value: 'Delete variable' });
     if (details.name) rows.push({ label: 'Variable', value: String(details.name) });
     if (details.variableId) rows.push({ label: 'Variable ID', value: String(details.variableId) });
+    return rows;
+  }
+  if (tool === 'set_ga4_measurement_id') {
+    rows.push({ label: 'Action', value: 'Set Measurement ID' });
+    if (details.tagId) rows.push({ label: 'Tag ID', value: String(details.tagId) });
+    if (details.measurementId) rows.push({ label: 'Measurement ID', value: String(details.measurementId) });
+    return rows;
+  }
+  if (tool === 'add_ga4_event_parameters') {
+    rows.push({ label: 'Action', value: 'Add GA4 event parameters' });
+    if (details.tagId) rows.push({ label: 'Tag ID', value: String(details.tagId) });
+    const ps = Array.isArray(details.parameters) ? (details.parameters as Array<Record<string, unknown>>) : [];
+    if (ps.length) rows.push({ label: 'Parameters', value: ps.map((p) => `${String(p.name)} = ${String(p.value)}`).join(', ') });
     return rows;
   }
   if (tool.includes('tag')) {

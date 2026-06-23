@@ -1,6 +1,6 @@
 /** Desktop tag-parameter helpers: read-modify-write merge + eventSettingsTable append.
  *  Run: tsx src/main/google/__tests__/tag-params.test.ts */
-import { addEventParameters, mergeParametersByKey, type GtmParam } from '../tag-params';
+import { addEventParameters, mergeParametersByKey, setTemplateParam, type GtmParam } from '../tag-params';
 
 let passed = 0;
 let failed = 0;
@@ -54,6 +54,13 @@ const existing: GtmParam[] = [
 ];
 const m = mergeParametersByKey(existing, [{ type: 'template', key: 'eventName', value: 'NEW' }, { type: 'template', key: 'addedKey', value: 'v' }]);
 check('merge: same key replaced, new key added, untouched kept', m.length === 3 && m.find((p) => p.key === 'eventName')?.value === 'NEW' && m.some((p) => p.key === 'measurementId') && m.some((p) => p.key === 'addedKey'));
+
+// ── setTemplateParam: point measurementIdOverride at a {{Variable}}, preserve rest ──
+const sm = setTemplateParam(ga4, 'measurementIdOverride', '{{GA4 Variable}}');
+check('setTemplateParam: measurementIdOverride updated to the variable', params(sm).find((p) => p.key === 'measurementIdOverride')?.value === '{{GA4 Variable}}' && params(sm).find((p) => p.key === 'measurementIdOverride')?.type === 'template');
+check('setTemplateParam: eventName + measurementId tagReference + event table preserved', params(sm).some((p) => p.key === 'eventName' && p.value === 'email_click') && params(sm).some((p) => p.key === 'measurementId' && p.type === 'tagReference') && !!est(sm));
+check('setTemplateParam: adds the key when absent (googtag tagId)', (() => { const g = setTemplateParam({ type: 'googtag', parameter: [] }, 'tagId', '{{GA4 Variable}}'); return (g.parameter as GtmParam[])[0]?.key === 'tagId' && (g.parameter as GtmParam[])[0]?.value === '{{GA4 Variable}}'; })());
+check('setTemplateParam: input not mutated (pure)', params(ga4).find((p) => p.key === 'measurementIdOverride')?.value === '{{GA4 Measurement ID}}');
 
 console.log(`\ndesktop tag-params: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

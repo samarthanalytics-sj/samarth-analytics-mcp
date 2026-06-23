@@ -39,6 +39,7 @@ function record(name: string, passed: boolean, detail = ''): void {
 // write was explicitly approved.
 const MUTATIONS = new Set([
   'createGtmWorkspace', 'createGtmTag', 'updateGtmTag', 'setGtmTagPaused',
+  'addGa4EventParameters', 'setGa4MeasurementId',
   'deleteGtmTag', 'deleteGtmTrigger', 'deleteGtmVariable',
   'enableGtmBuiltInVariables', 'createGtmTrigger', 'createGtmVariable',
 ]);
@@ -112,6 +113,8 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     createGtmWorkspace: () => r('createGtmWorkspace', { workspaceId: 'w9', name: 'WS', path: '' }),
     createGtmTag: () => r('createGtmTag', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
     updateGtmTag: () => r('updateGtmTag', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
+    addGa4EventParameters: () => r('addGa4EventParameters', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
+    setGa4MeasurementId: () => r('setGa4MeasurementId', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
     setGtmTagPaused: () => r('setGtmTagPaused', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
     deleteGtmTag: () => r('deleteGtmTag', { deleted: true, tagId: '9' }),
     deleteGtmTrigger: () => r('deleteGtmTrigger', { deleted: true, triggerId: 'T2' }),

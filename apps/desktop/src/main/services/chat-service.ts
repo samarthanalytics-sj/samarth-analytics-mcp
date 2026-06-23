@@ -93,6 +93,14 @@ export class ChatService {
           'tag, all in ONE approval), and create_gtm_variable_typed for variables (constant / data_layer ' +
           '/ javascript). Only fall back to the raw create_gtm_tag/trigger/variable tools for advanced ' +
           'cases. The user must approve each change. ' +
+          'EDITING EXISTING TAGS — use the dedicated edit tools, do NOT hand-build a tag for update_gtm_tag ' +
+          '(that is what causes "measurementIdOverride/eventName must not be empty" and "template key" / ' +
+          '"unknown entity type" errors): to ADD GA4 event parameters (e.g. user_id, session_id, click_text) ' +
+          'to GA4 event tags, call add_ga4_event_parameters (one call per tag); to CHANGE or REPLACE the ' +
+          'Measurement ID — including swapping a {{variable}} like {{GA4 Measurement ID}} for {{GA4 Variable}} — ' +
+          'on GA4 event tags OR the Google tag, call set_ga4_measurement_id (one call per tag). When the user ' +
+          'says "all GA4 tags", first list the tags, then call the dedicated tool once per matching tag. ' +
+          'Only use update_gtm_tag for fields with no dedicated tool, and pass ONLY the fields you are changing. ' +
           'AUDITING: when the user asks to audit, check, review, or "health-check" the container, its ' +
           'tags/triggers/variables, or its setup, ALWAYS call audit_gtm_container FIRST — never reply ' +
           'with a manual checklist or from memory. Then report the counts and severity summary, and list ' +

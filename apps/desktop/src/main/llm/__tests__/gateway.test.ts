@@ -17,8 +17,11 @@ async function test(name: string, fn: () => Promise<void>): Promise<void> {
 
 class ScriptedClient implements LlmClient {
   private i = 0;
+  /** Every input passed to chatStream, in order — lets tests assert what got fed back. */
+  readonly inputs: LlmChatInput[] = [];
   constructor(private readonly replies: LlmReply[]) {}
-  async chatStream(_input: LlmChatInput, onDelta: (t: string) => void): Promise<LlmReply> {
+  async chatStream(input: LlmChatInput, onDelta: (t: string) => void): Promise<LlmReply> {
+    this.inputs.push(input);
     const reply = this.replies[Math.min(this.i++, this.replies.length - 1)];
     if (reply.text) onDelta(reply.text);
     return reply;
@@ -65,6 +68,40 @@ await test('a thrown tool error is fed back, loop recovers', async () => {
     exec
   );
   assert.equal(res.text, 'recovered');
+});
+
+await test('fail-fast: after one tool error, the rest of the batch is skipped (not executed/approved)', async () => {
+  const executed: unknown[] = [];
+  const announced: string[] = [];
+  const client = new ScriptedClient([
+    { toolCalls: [
+      { id: '1', name: 't', args: { tag: 1 } },
+      { id: '2', name: 't', args: { tag: 2 } },
+      { id: '3', name: 't', args: { tag: 3 } },
+    ] },
+    { text: 'done' },
+  ]);
+  // execute() throws on the first call; 2 & 3 must never reach it.
+  const exec = executor(async (_n, a) => {
+    executed.push(a);
+    throw new Error('tag 1 failed');
+  });
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }] },
+    exec,
+    { onToolCall: (c) => announced.push(c.id) }
+  );
+  assert.equal(res.text, 'done');
+  assert.equal(executed.length, 1, 'only the first tool actually ran');
+  assert.deepEqual(announced, ['1'], 'calls 2 & 3 were skipped before any approval prompt');
+  // Protocol invariant: EVERY tool call must get a paired result fed back, or the
+  // provider 400s. The 2nd model turn's last message is the tool turn — assert all 3.
+  const secondTurnMessages = client.inputs[1]?.messages ?? [];
+  const toolTurn = secondTurnMessages[secondTurnMessages.length - 1] as { role: string; results?: Array<{ id: string; isError?: boolean }> };
+  assert.equal(toolTurn.role, 'tool', 'a tool-result turn was fed back');
+  assert.deepEqual((toolTurn.results ?? []).map((r) => r.id), ['1', '2', '3'], 'all 3 tool calls have a paired result (incl. the 2 skipped)');
+  assert.equal((toolTurn.results ?? []).every((r) => r.isError), true, 'the failed call + both skipped results are all errors');
 });
 
 await test('caps at maxSteps when the model keeps calling tools', async () => {

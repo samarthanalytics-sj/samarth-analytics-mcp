@@ -8,7 +8,7 @@ import type { ContainerSnapshot } from './gtm-builders';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
-import { mergeParametersByKey, addEventParameters, type GtmParam } from './tag-params';
+import { mergeParametersByKey, addEventParameters, setTemplateParam, type GtmParam } from './tag-params';
 import type { Ga4AccountView, GtmAccountView } from '../../shared/ipc';
 
 // Follows nextPageToken so large containers/accounts return EVERY item, not just
@@ -461,6 +461,34 @@ export class GoogleDataService {
       );
     }
     const updated = addEventParameters(current as Record<string, unknown>, parameters);
+    const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
+    return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  /** Point a tag's Measurement ID at a value (a G-/AW-/GT- id, or a {{Variable}})
+   *  WITHOUT the model hand-building parameter JSON — the source of the "template
+   *  key" errors. For a GA4 Event tag (gaawe) it sets `measurementIdOverride`; for a
+   *  Google tag (googtag) it sets `tagId`. Read-modify-write, so the rest of the tag
+   *  (eventName, event parameters, triggers) is preserved. Rejects other tag types. */
+  async setGa4MeasurementId(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    tagId: string,
+    measurementId: string
+  ): Promise<GtmTagView> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
+    const current = (await gtm.accounts.containers.workspaces.tags.get({ path })).data;
+    const key =
+      current.type === 'gaawe' ? 'measurementIdOverride' : current.type === 'googtag' ? 'tagId' : null;
+    if (!key) {
+      throw new Error(
+        `Tag ${tagId} is type "${current.type ?? 'unknown'}", not a GA4 Event tag (gaawe) or Google tag (googtag). set_ga4_measurement_id only edits those.`
+      );
+    }
+    const updated = setTemplateParam(current as Record<string, unknown>, key, measurementId);
     const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
