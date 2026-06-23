@@ -10,6 +10,22 @@ import type { ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct 
 import type { LlmTurn } from '../llm/types';
 
 /**
+ * The "GTM Audit Brain" — an evidence-based, deterministic methodology the model must
+ * follow when auditing a container, so audits return findings (not opinions) and never
+ * lead with cosmetics or invent runtime verdicts. Exported so it's testable / reusable.
+ */
+export const GTM_AUDIT_METHODOLOGY =
+  'AUDIT METHODOLOGY (GTM Audit Brain) — when the user asks to audit / check / review / "health-check" the container or its setup, follow this method exactly; return findings, not opinions: ' +
+  '(1) ALWAYS call audit_gtm_container FIRST for the deterministic findings — never audit from memory or a generic checklist. ' +
+  '(2) OPEN with the boundary statement: a container-only audit proves CONFIGURATION, not firing behaviour, dataLayer reality, PII in hits, or consent timing — those need runtime verification (GA4 DebugView / Tag Assistant, a network capture of /collect requests, and the live CMP). ' +
+  '(3) Tag EVERY finding with a confidence level — [Certain] = provable from the container; [Likely] = strong inference needing one cheap confirmation; [Guessing / runtime-required] = needs runtime evidence you do not have. Never count a [Guessing/runtime-required] item as a confirmed defect. ' +
+  '(4) ORDER by impact, not category: Critical (active data corruption or a legal violation — e.g. a double-firing purchase/conversion tag, PII sent to GA4/Ads, tags able to fire before the consent default) → High → Medium → Low. Hygiene (naming, paused, orphaned, folders) is LISTED last, NEVER leads, and is NEVER reported as a data or legal issue. If a container is messy but functionally sound, say so plainly. ' +
+  '(5) Each finding has FOUR parts: what is wrong (one sentence) · impact (data / legal / security, quantified where possible) · evidence (the exact tag/trigger/variable/parameter name) · fix (the specific action). When a finding carries a ready-to-run `fix` ({tool,args} with ids filled in), OFFER to apply it and — once the user approves — CALL that exact tool (never tell the user to fix it manually in the GTM UI when a fix tool exists); each fix needs approval, deletes need two. ' +
+  '(6) FALSE-POSITIVE GUARDS: a denied consent signal correctly BLOCKING a tag is correct behaviour, not a violation; a tag that does not fire where it was never meant to is not broken; classify a tag by its actual destination ID, not a guessed brand; a hygiene issue is never a data/legal issue; if you cannot prove it from the evidence in hand, mark it runtime-required rather than inventing a verdict. ' +
+  '(7) CONSENT MODE v2 needs ALL FOUR signals (ad_storage, analytics_storage, ad_user_data, ad_personalization) with a denied-by-default Consent Initialization — flag missing signals as Critical, but consent TIMING/firing-order is runtime-required. ' +
+  '(8) END with an explicit list of the runtime-required checks not yet verified, so nobody assumes they passed. After applying fixes, re-run audit_gtm_container to confirm they cleared. ';
+
+/**
  * A system-prompt line telling the model the ACTUAL current date. Without this
  * the model assumes its training-cutoff date (e.g. "October 2023"), which breaks
  * all date reasoning: it mis-years relative dates like "May 1", rejects valid
@@ -113,15 +129,7 @@ export class ChatService {
           '"Check Validation" (checkValidation) — leave them OFF/unticked by default (simply omit those fields, ' +
           'or set them to boolean "false"). Only enable them (boolean "true", and waitForTagsTimeout for the wait) ' +
           'if the user EXPLICITLY asks to wait for tags or check validation. ' +
-          'AUDITING: when the user asks to audit, check, review, or "health-check" the container, its ' +
-          'tags/triggers/variables, or its setup, ALWAYS call audit_gtm_container FIRST — never reply ' +
-          'with a manual checklist or from memory. Then report the counts and severity summary, and list ' +
-          'EVERY finding grouped by severity (high → info) as a table: severity, the issue, the affected ' +
-          'tag/trigger/variable, and the recommended fix. Each finding may include a ready-to-run `fix` ' +
-          '({tool, args} with ids already filled in); for those, OFFER to apply it and — once the user ' +
-          'approves — CALL that exact tool to fix it. Do NOT tell the user to go fix it manually in the ' +
-          'GTM UI when a fix tool exists. You may offer to apply several fixes; each still needs approval ' +
-          '(deletes need two). After applying fixes, re-run audit_gtm_container to confirm they cleared. ' +
+          GTM_AUDIT_METHODOLOGY +
           'MONITORING / DRIFT: when the user asks what CHANGED, about regressions, or to monitor the ' +
           'container over time, call audit_gtm_container_changes — it reports NEW vs RESOLVED issues since ' +
           'the last audit (lead with the new ones and offer their fixes). When the user asks what a publish ' +

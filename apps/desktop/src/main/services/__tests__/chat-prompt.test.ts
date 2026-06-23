@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { dateContextLine } from '../chat-service';
+import { dateContextLine, GTM_AUDIT_METHODOLOGY } from '../chat-service';
 
 let passed = 0;
 let failed = 0;
@@ -29,6 +29,16 @@ test('pads single-digit month/day to a valid ISO date', () => {
   const line = dateContextLine(new Date(2026, 0, 5)); // Jan 5, 2026
   assert.ok(line.includes('2026-01-05'), 'zero-padded ISO');
   assert.ok(!line.includes('2026-1-5'));
+});
+
+test('GTM_AUDIT_METHODOLOGY carries the Audit-Brain essentials', () => {
+  const m = GTM_AUDIT_METHODOLOGY;
+  assert.ok(/audit_gtm_container FIRST/i.test(m), 'calls the deterministic audit first');
+  assert.ok(/boundary statement/i.test(m) && /runtime verification/i.test(m), 'has the container-only boundary statement');
+  assert.ok(/\[Certain\]/.test(m) && /\[Likely\]/.test(m) && /runtime-required/i.test(m), 'has the three confidence levels');
+  assert.ok(/Hygiene[\s\S]*NEVER leads/i.test(m), 'orders by impact — hygiene never leads');
+  assert.ok(/denied consent signal correctly BLOCKING a tag is correct/i.test(m), 'has the denied-pass false-positive guard');
+  assert.ok(/ad_user_data/.test(m) && /ad_personalization/.test(m), 'names the four Consent Mode v2 signals');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

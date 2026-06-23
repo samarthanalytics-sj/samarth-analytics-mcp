@@ -617,7 +617,7 @@ export function App(): JSX.Element {
             style={{ ...styles.navItem, ...(view === 'gtm' ? styles.navActive : {}) }}
             onClick={() => setView('gtm')}
           >
-            🗂 GTM
+            🗂 GTM Tools
           </button>
           <button
             style={{ ...styles.navItem, ...(view === 'settings' ? styles.navActive : {}) }}
