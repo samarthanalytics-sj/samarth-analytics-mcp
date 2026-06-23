@@ -5,6 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot } from './gtm-builders';
+import { applyTriggerWaitDefaults } from './gtm-builders';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
@@ -812,7 +813,7 @@ export class GoogleDataService {
     const gtm = tagmanager({ version: 'v2', auth });
     const res = await gtm.accounts.containers.workspaces.triggers.create({
       parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
-      requestBody: trigger,
+      requestBody: applyTriggerWaitDefaults(trigger),
     });
     this.journal('trigger', accountId, containerId, workspaceId, res.data.triggerId ?? '', `${res.data.name ?? 'trigger'} (#${res.data.triggerId})`);
     return { triggerId: res.data.triggerId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
