@@ -221,6 +221,20 @@ export interface TriggerInput {
   /** For custom_event: the dataLayer event name. */
   eventName?: string;
 }
+/** GTM defaults "Wait for Tags" + "Check Validation" to ON for linkClick ("Just Links")
+ *  and formSubmission triggers — which delays the click/submit and skips some events.
+ *  Force them OFF unless they were EXPLICITLY set (so a user asking to enable them, or a
+ *  builder that already set them, is respected). Applied at the create funnel so EVERY
+ *  trigger path (chat, structured, suggestions) gets the off-by-default behavior. PURE. */
+export function applyTriggerWaitDefaults(trigger: Record<string, unknown>): Record<string, unknown> {
+  const type = String((trigger as { type?: unknown }).type ?? '');
+  if (type !== 'linkClick' && type !== 'formSubmission') return trigger;
+  const out = { ...trigger };
+  if (out.waitForTags === undefined) out.waitForTags = { type: 'boolean', value: 'false' };
+  if (out.checkValidation === undefined) out.checkValidation = { type: 'boolean', value: 'false' };
+  return out;
+}
+
 export function buildTrigger(o: TriggerInput): GtmTriggerResource {
   switch (o.kind) {
     case 'link_click':

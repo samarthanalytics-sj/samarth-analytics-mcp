@@ -5,6 +5,7 @@ import {
   buildGoogleAdsConversionTag,
   buildCustomHtmlTag,
   buildTrigger,
+  applyTriggerWaitDefaults,
   triggerBuiltInVars,
   builtInVarsForTemplates,
   buildVariable,
@@ -436,6 +437,32 @@ test('audit: variable referenced only via consentType / trigger parameter is NOT
   });
   const unusedVars = r.findings.filter((f) => f.category === 'unused' && f.resource?.kind === 'variable');
   assert.equal(unusedVars.length, 0, 'references inside consentType and trigger parameter are detected');
+});
+
+test('applyTriggerWaitDefaults: linkClick gets Wait-for-Tags + Check-Validation OFF', () => {
+  const out = applyTriggerWaitDefaults({ name: 'Click - Email Link', type: 'linkClick', filter: [] });
+  assert.deepEqual(out.waitForTags, { type: 'boolean', value: 'false' });
+  assert.deepEqual(out.checkValidation, { type: 'boolean', value: 'false' });
+});
+
+test('applyTriggerWaitDefaults: formSubmission gets both OFF', () => {
+  const out = applyTriggerWaitDefaults({ name: 'f', type: 'formSubmission' });
+  assert.equal((out.waitForTags as { value: string }).value, 'false');
+  assert.equal((out.checkValidation as { value: string }).value, 'false');
+});
+
+test('applyTriggerWaitDefaults: an EXPLICIT waitForTags is respected (user asked to enable)', () => {
+  const out = applyTriggerWaitDefaults({ type: 'linkClick', waitForTags: { type: 'boolean', value: 'true' } });
+  assert.equal((out.waitForTags as { value: string }).value, 'true', 'explicit true kept');
+  assert.equal((out.checkValidation as { value: string }).value, 'false', 'the unset one still defaults off');
+});
+
+test('applyTriggerWaitDefaults: other trigger types are untouched (no wait fields added)', () => {
+  for (const type of ['click', 'pageview', 'customEvent', 'scrollDepth']) {
+    const out = applyTriggerWaitDefaults({ type });
+    assert.equal('waitForTags' in out, false, `${type} should not get waitForTags`);
+    assert.equal('checkValidation' in out, false, `${type} should not get checkValidation`);
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
