@@ -9,6 +9,9 @@ import type { WriteProposal } from '../tools/registry';
 const pendingConfirms = new Map<string, (result: Record<string, unknown> | null) => void>();
 let confirmSeq = 0;
 
+// In-flight streaming chats, keyed by requestId, so 'llm:chat:stop' can abort one.
+const activeChats = new Map<string, AbortController>();
+
 export function registerChatIpc(service: ChatService): void {
   // Non-streaming, read-only (no confirm → write tools unavailable).
   ipcMain.handle(
@@ -47,15 +50,32 @@ export function registerChatIpc(service: ChatService): void {
             destructive: proposal.destructive,
           });
         });
-      return service.chatStream(
-        Array.isArray(history) ? history : [],
-        message,
-        scopedProduct,
-        (ev) => send({ requestId, ...ev }),
-        confirm
-      );
+      const controller = new AbortController();
+      activeChats.set(requestId, controller);
+      return service
+        .chatStream(
+          Array.isArray(history) ? history : [],
+          message,
+          scopedProduct,
+          (ev) => send({ requestId, ...ev }),
+          confirm,
+          controller.signal
+        )
+        .finally(() => activeChats.delete(requestId));
     }
   );
+
+  // Stop a streaming chat: abort its provider request AND release any approval prompt
+  // it's waiting on (resolve as declined) so the agentic loop unwinds cleanly.
+  ipcMain.handle('llm:chat:stop', (_event, requestId: string) => {
+    activeChats.get(requestId)?.abort();
+    for (const [confirmId, resolve] of pendingConfirms) {
+      if (confirmId.startsWith(`${requestId}:`)) {
+        pendingConfirms.delete(confirmId);
+        resolve(null);
+      }
+    }
+  });
 
   // Renderer's answer to a write-confirmation prompt: the (possibly edited) args
   // to apply, or null to decline.

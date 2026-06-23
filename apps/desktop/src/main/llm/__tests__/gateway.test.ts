@@ -132,6 +132,35 @@ await test('forwards streamed text deltas via onDelta', async () => {
   assert.deepEqual(deltas, ['streamed reply']);
 });
 
+await test('stop: an already-aborted signal returns "Stopped." and never calls the model', async () => {
+  const client = new ScriptedClient([{ text: 'should not run' }]);
+  const ac = new AbortController();
+  ac.abort();
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }], signal: ac.signal },
+    executor(async () => 'ok')
+  );
+  assert.equal(res.text, 'Stopped.');
+  assert.equal(client.inputs.length, 0, 'model not called once stopped');
+});
+
+await test('stop: a provider AbortError is returned as "Stopped." (not thrown)', async () => {
+  const client: LlmClient = {
+    async chatStream() {
+      const e = new Error('aborted') as Error & { name: string };
+      e.name = 'AbortError';
+      throw e;
+    },
+  };
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }] },
+    executor(async () => 'ok')
+  );
+  assert.equal(res.text, 'Stopped.');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
 }

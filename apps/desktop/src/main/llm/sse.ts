@@ -6,12 +6,14 @@ export async function startStream(
   url: string,
   headers: Record<string, string>,
   body: unknown,
-  providerLabel: string
+  providerLabel: string,
+  signal?: AbortSignal
 ): Promise<Response> {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');

@@ -37,6 +37,8 @@ export interface LlmChatInput {
   apiKey: string;
   tools: LlmToolDef[];
   messages: LlmTurn[];
+  /** Aborts the in-flight provider request when the user stops the chat. */
+  signal?: AbortSignal;
 }
 
 export interface LlmReply {

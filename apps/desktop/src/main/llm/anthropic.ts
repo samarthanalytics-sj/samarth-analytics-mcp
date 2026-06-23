@@ -115,7 +115,8 @@ export const anthropicClient: LlmClient = {
         })),
         stream: true,
       },
-      'Anthropic'
+      'Anthropic',
+      input.signal
     );
     const acc = anthropicStreamAccumulator(onDelta);
     for await (const data of sseEvents(res)) {
