@@ -1,3 +1,9 @@
+## [1.34.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.33.1...v1.34.0) (2026-06-23)
+
+### Features
+
+* **desktop:** set_ga4_measurement_id tool, fail-fast batches, safer approval card ([92d0adf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/92d0adf86533802177db5d0fe675f51491dc4342))
+
 ## [1.33.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.33.0...v1.33.1) (2026-06-23)
 
 ### Bug Fixes
