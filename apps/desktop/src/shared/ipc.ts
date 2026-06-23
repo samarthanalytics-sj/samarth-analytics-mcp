@@ -148,6 +148,15 @@ export interface SuggestedTagView {
   };
 }
 
+/** Streamed after each page during a scan — the running suggestion list (so the
+ *  review panel fills in as the crawl proceeds) + crawl progress. */
+export interface ScanProgressView {
+  scanned: number;
+  opened: number;
+  queued: number;
+  suggestions: SuggestedTagView[];
+}
+
 /** Options for a URL scan (suggestions:scan). The scan runs all available
  *  engines (Electron + Cheerio) and merges their findings — no engine choice. */
 export interface TagScanOptions {

@@ -16,7 +16,7 @@ import type { GoogleDataService } from '../google/data-service';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions } from '../../shared/ipc';
-import { crawlAndSuggest, scanUrls, type PageDriver } from './scan-core';
+import { crawlAndSuggest, scanUrls, type PageDriver, type ScanProgress } from './scan-core';
 import { discoverSite } from './discover';
 // Electron is the always-on, zero-install engine. Cheerio is added when present
 // (lazy-imported so a missing optional package never crashes startup). The two
@@ -106,6 +106,36 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       /* per-URL admission still applies in scanUrls */
     }
     return scanUrls(driver, list, siteHost);
+  });
+
+  // Streaming variants — push 'suggestions:scan:event' (the RUNNING suggestion list +
+  // crawl progress, tagged by requestId) after every page, so the review panel fills
+  // in one-by-one instead of waiting for the whole crawl. Resolve with the final result.
+  const streamSink = (event: { sender: Electron.WebContents }, requestId: string) =>
+    (p: ScanProgress): void => {
+      if (!event.sender.isDestroyed()) event.sender.send('suggestions:scan:event', { requestId, ...p });
+    };
+
+  ipcMain.handle('suggestions:scanStream', async (event, requestId: unknown, url: unknown, opts?: TagScanOptions) => {
+    const target = String(url ?? '').trim();
+    const verdict = urlAllowed(target, []);
+    if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
+    const o = opts ?? {};
+    const driver = await makeDriver(o);
+    return crawlAndSuggest(driver, target, { maxPages: o.maxPages, maxDepth: o.maxDepth }, streamSink(event, String(requestId ?? '')));
+  });
+
+  ipcMain.handle('suggestions:scanUrlsStream', async (event, requestId: unknown, urls: unknown, opts?: TagScanOptions) => {
+    const list = Array.isArray(urls) ? urls.map((u) => String(u)).filter(Boolean) : [];
+    if (list.length === 0) throw new Error('No pages selected to scan.');
+    const driver = await makeDriver(opts ?? {});
+    let siteHost: string | undefined;
+    try {
+      siteHost = new URL(list[0]).hostname;
+    } catch {
+      /* per-URL admission still applies */
+    }
+    return scanUrls(driver, list, siteHost, streamSink(event, String(requestId ?? '')));
   });
 
   ipcMain.handle(
