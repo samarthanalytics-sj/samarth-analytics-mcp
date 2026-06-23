@@ -1,3 +1,9 @@
+## [1.38.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.37.1...v1.38.0) (2026-06-23)
+
+### Features
+
+* **desktop:** GTM Audit Brain methodology in the audit prompt + rename sidebar "GTM" → "GTM Tools" ([35c612d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/35c612dcfea9978d4bf3b959075496f3ca533832))
+
 ## [1.37.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.37.0...v1.37.1) (2026-06-23)
 
 ### Bug Fixes
