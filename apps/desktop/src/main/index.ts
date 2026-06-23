@@ -133,6 +133,23 @@ app.whenReady().then(() => {
   const auditHistory = new AuditHistoryStore(join(dataDir, 'audit-history.json'));
   const chatService = new ChatService(registry, dataService, providerKeys, auditHistory);
 
+  // Startup diagnostic — proves THIS running process loaded the current build. If the
+  // GA4-edit tools are missing here, the main process is stale (electron-vite did not
+  // reload it): fully quit and `npm run dev` again. See [[desktop-dev-restart-gotcha]].
+  void (async () => {
+    try {
+      const { buildToolRegistry } = await import('./tools/registry');
+      const names = buildToolRegistry(dataService, async () => null).list().map((t) => t.name);
+      const ga4Edit = ['set_ga4_measurement_id', 'set_ga4_measurement_id_on_all_tags', 'add_ga4_event_parameters', 'add_ga4_event_parameters_to_all_tags'];
+      const present = ga4Edit.filter((n) => names.includes(n));
+      console.error(
+        `[samarth-desktop] ${names.length} GTM/GA4 tools loaded · GA4-edit tools: ${present.length === ga4Edit.length ? `ALL present (${present.join(', ')})` : `MISSING ${ga4Edit.filter((n) => !present.includes(n)).join(', ')} — STALE BUILD, fully restart npm run dev`}`
+      );
+    } catch (e) {
+      console.error('[samarth-desktop] tool diagnostic failed:', e);
+    }
+  })();
+
   // Continuous monitoring: re-audits the active container on a timer and pushes
   // a 'monitor:alert' to every open window when NEW issues appear.
   const broadcastAlert = (alert: MonitorAlert): void => {
