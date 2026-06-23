@@ -379,9 +379,10 @@ function videoSuggestion(embeds: VideoEmbed[]): SuggestedTag | null {
 /** The base "Google tag" (the GA4 Configuration that loads GA4 on every page).
  *  Created via the google_tag platform — tagId is the Measurement-ID variable. The
  *  desktop marks it "already exists" when the container already has a GA4 base tag. */
-/** Placeholder Measurement ID — the user MUST replace it with their real G-XXXXXXXXXX
- *  before creating (the create path blocks an unresolved placeholder). */
-export const GA4_MID_PLACEHOLDER = 'G-XXXXXXXXXX';
+/** Default Measurement ID for the GA4 Configuration tag — a valid-shaped placeholder
+ *  the user can keep or edit. Creating the tag makes a "GA4 Measurement ID" Constant
+ *  with this value (changeable in GTM afterwards); only an all-X / empty id is blocked. */
+export const GA4_MID_PLACEHOLDER = 'G-1234567890';
 
 export function ga4ConfigSuggestion(): SuggestedTag {
   return {
@@ -389,7 +390,7 @@ export function ga4ConfigSuggestion(): SuggestedTag {
     page: 'site-wide',
     label: 'GA4 Configuration (Google tag) — loads GA4 on every page',
     evidence: 'the base Google tag every GA4 setup needs; fires on All Pages',
-    note: `Set your real Measurement ID (e.g. G-ABC1234567) in the Measurement ID field — creating this also makes the {{GA4 Measurement ID}} variable that the GA4 event tags reference, so the whole setup resolves.`,
+    note: `Creates a "GA4 Measurement ID" Constant variable (= ${GA4_MID_PLACEHOLDER}) and a Google tag using {{GA4 Measurement ID}}. Edit the Measurement ID here (or change the variable's value in GTM) to your real G-XXXXXXXXXX.`,
     confidence: 'high',
     enhancedMeasurementOverlap: false,
     platform: 'google_tag',

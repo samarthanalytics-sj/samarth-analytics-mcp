@@ -74,10 +74,10 @@ check('cta intent: "Learn more" same-site link → learn_more', (() => { const d
 check('cta intent: Subscribe / Buy now / FAQ / Get started recognized', classifyCtaIntent('Subscribe') === 'subscribe' && classifyCtaIntent('Buy now') === 'generic' && classifyCtaIntent('FAQ') === 'faq' && classifyCtaIntent('Get started') === 'get_started');
 check('cta intent: "Login"/"Sign in"/"Login / Register" → login', classifyCtaIntent('Login') === 'login' && classifyCtaIntent('Sign in') === 'login' && classifyCtaIntent('Login / Register') === 'login');
 check('cta intent: "Search" → search, "Research papers" stays null (word-bounded)', classifyCtaIntent('Search') === 'search' && classifyCtaIntent('Research papers') === null);
-check('cta intent: "See all case studies"/"View all"/"See more"/"Case studies" → view_more', ['See all case studies', 'View all', 'See more', 'Browse all', 'Case studies', 'Read more'].every((t) => classifyCtaIntent(t) === 'view_more'));
+check('cta intent: "See all case studies"/"View all"/"See more"/"Read more" are NOT tracked (view-all removed as noise)', ['See all case studies', 'View all', 'See more', 'Browse all', 'Case studies', 'Read more'].every((t) => classifyCtaIntent(t) === null));
 check('cta intent: plain text "Our team" stays null', classifyCtaIntent('Our team') === null);
 // "View details" is still NOT a tracked CTA (too generic); genuine learn-more stays.
-check('cta intent: "View details" stays null (not view_more, not learn_more)', classifyCtaIntent('View details') === null);
+check('cta intent: "View details" stays null (too generic to track)', classifyCtaIntent('View details') === null);
 check('cta intent: genuine "Learn more"/"Find out more"/"Discover more" still learn_more', ['Learn more', 'Find out more', 'Discover more'].every((t) => classifyCtaIntent(t) === 'learn_more'));
 // quote/demo recall: an adjective between the verb and the noun still matches.
 check('cta intent: "Get a free quote"/"Request your quote" → request_quote', classifyCtaIntent('Get a free quote') === 'request_quote' && classifyCtaIntent('Request your quote') === 'request_quote');

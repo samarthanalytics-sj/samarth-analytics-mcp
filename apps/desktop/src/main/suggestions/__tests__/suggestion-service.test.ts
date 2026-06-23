@@ -375,6 +375,7 @@ async function main(): Promise<void> {
     check('plan: literal G- tagId → no variable needed, no error', (() => { const p = planGoogleTagVars(snap([]), [gcfg({ tagId: 'G-ABC1234567', measurementId: 'G-ABC1234567' })]); return p.creates.length === 0 && p.errors.size === 0; })());
     check('plan: ga4_event rows are ignored', (() => { const ev: SuggestedTagView = { id: 'e', page: '/', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false, platform: 'ga4_event', tagName: 'T', measurementId: '{{GA4 Measurement ID}}', eventName: 'e', trigger: { name: 't', kind: 'all_clicks' } }; const p = planGoogleTagVars(snap([]), [ev]); return p.creates.length === 0 && p.errors.size === 0; })());
     check('plan: a REAL id containing an X-run (G-1XXXAB2345) is ACCEPTED (only the all-X placeholder is rejected)', (() => { const p = planGoogleTagVars(snap([]), [gcfg({ measurementId: 'G-1XXXAB2345' })]); return p.errors.size === 0 && p.creates.length === 1 && p.creates[0].value === 'G-1XXXAB2345'; })());
+    check('plan: the GA4-config default (G-1234567890) is ACCEPTED → creates the Constant, no block', (() => { const p = planGoogleTagVars(snap([]), [gcfg({ measurementId: 'G-1234567890' })]); return p.errors.size === 0 && p.creates.length === 1 && p.creates[0].name === 'GA4 Measurement ID' && p.creates[0].value === 'G-1234567890'; })());
   }
 
   // ── provisionVariables: resilient variable creation (failures isolated) ──────

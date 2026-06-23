@@ -235,11 +235,10 @@ const genericCtas = ctaInput.filter((s) => s.eventName === 'cta_click');
 check('cta: generic "Buy now" stays generic (literal text, contains) + "Buy now Trigger" + collapses', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'contains' && genericCtas[0].trigger.name === 'Buy now Trigger');
 check('cta: every CTA carries dynamic cta_text={{Click Text}}', ctaInput.every((s) => s.eventParameters?.some((p) => p.name === 'cta_text' && p.value === '{{Click Text}}')));
 
-// Newly tracked CTAs: login, search, and view-all / case-studies buttons.
+// Newly tracked CTAs: login + search.
 const moreCtas = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
   { page: '/', kind: 'cta', text: 'Login', intent: 'login' },
   { page: '/', kind: 'cta', text: 'Search', intent: 'search' },
-  { page: '/work', kind: 'cta', text: 'See all case studies', intent: 'view_more' },
 ] });
 const loginCta = moreCtas.find((s) => s.eventName === 'login_click');
 check('cta: login → "GA4 Event - Login Click Tag" + fires on "Login"/"Sign In"', loginCta?.tagName === 'GA4 Event - Login Click Tag' && reTest(loginCta?.trigger.clickTextValue ?? '', 'Login') && reTest(loginCta?.trigger.clickTextValue ?? '', 'Sign In'));
@@ -248,8 +247,6 @@ const searchCta = moreCtas.find((s) => s.eventName === 'search_click');
 // can't double-count with the search FORM tag (which keeps the GA4 'search' event).
 check('cta: search button → "GA4 Event - Search Tag", event search_click, fires on "Search"', searchCta?.tagName === 'GA4 Event - Search Tag' && searchCta?.eventName === 'search_click' && reTest(searchCta?.trigger.clickTextValue ?? '', 'Search'));
 check('cta: search button event (search_click) is DISTINCT from search FORM event (search) — no double-count', searchForm[0].eventName === 'search' && searchCta?.eventName === 'search_click');
-const viewCta = moreCtas.find((s) => s.eventName === 'view_all_click');
-check('cta: "See all case studies" → "GA4 Event - View All Click Tag" + fires on "View all"/"Case studies"', viewCta?.tagName === 'GA4 Event - View All Click Tag' && reTest(viewCta?.trigger.clickTextValue ?? '', 'View all') && reTest(viewCta?.trigger.clickTextValue ?? '', 'Case studies'));
 
 // ── YouTube video → GA4 video tag (built-in YouTube Video trigger) ───────────
 check('video: isYouTubeEmbed matches /embed/ players, not watch/share/vimeo',
@@ -273,7 +270,7 @@ check('full: no PDF → no "All PDF Downloads" tag; no form → no "All Form Sub
 check('full: GA4 Configuration is still present even with nothing found', buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }, { full: true }).some((s) => s.platform === 'google_tag'));
 check('default (no opts): NO google_tag / catch-alls added (scan output unchanged)', !buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, formId: 'c' }], elements: [] }).some((s) => s.platform === 'google_tag' || s.tagName.startsWith('GA4 Event - All ')));
 // Review fixes: real-id placeholder, case-insensitive regex, no double-fire.
-check('full: GA4 Configuration defaults to a REAL-id placeholder the user must set (not the variable)', fullForm[0].measurementId === 'G-XXXXXXXXXX');
+check('full: GA4 Configuration defaults to a valid-shaped Measurement ID (G-1234567890) the user can keep or edit', fullForm[0].measurementId === 'G-1234567890');
 check('full: All PDF + File Download regexes are CASE-INSENSITIVE ((?i) so .PDF matches)', (fullPdf.find((s) => s.tagName === 'GA4 Event - All PDF Downloads Tag')?.trigger.clickUrlValue ?? '').startsWith('(?i)') && (fullPdf.find((s) => s.eventName === 'file_download' && s.tagName !== 'GA4 Event - All PDF Downloads Tag')?.trigger.clickUrlValue ?? '').startsWith('(?i)'));
 check('full: SCOPED / purpose form tag is KEPT (contact_form not dropped by the catch-all)', fullForm.some((s) => s.eventName === 'contact_form'));
 const fullOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'other', action: '', provider: prov0 }], elements: [] }, { full: true });
