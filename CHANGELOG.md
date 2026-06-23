@@ -1,3 +1,9 @@
+## [1.36.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.35.3...v1.36.0) (2026-06-23)
+
+### Features
+
+* **desktop:** Stop button to cancel a running chat query ([43e3e56](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/43e3e5631d45aa23e148f08bb4b54a1b83f1f1f9))
+
 ## [1.35.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.35.2...v1.35.3) (2026-06-23)
 
 ### Bug Fixes
