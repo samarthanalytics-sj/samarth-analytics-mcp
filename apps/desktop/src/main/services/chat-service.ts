@@ -106,6 +106,10 @@ export class ChatService {
           'set_gtm_tag_paused ONLY pauses or enables a tag — it does NOT change a Measurement ID, event parameters, ' +
           'or any tag config; never use it to edit a GA4 tag. ' +
           'Only use update_gtm_tag for fields with no dedicated tool, and pass ONLY the fields you are changing. ' +
+          'TRIGGERS: when you create a trigger (form/link/click), do NOT set "Wait for Tags" (waitForTags) or ' +
+          '"Check Validation" (checkValidation) — leave them OFF/unticked by default (simply omit those fields, ' +
+          'or set them to boolean "false"). Only enable them (boolean "true", and waitForTagsTimeout for the wait) ' +
+          'if the user EXPLICITLY asks to wait for tags or check validation. ' +
           'AUDITING: when the user asks to audit, check, review, or "health-check" the container, its ' +
           'tags/triggers/variables, or its setup, ALWAYS call audit_gtm_container FIRST — never reply ' +
           'with a manual checklist or from memory. Then report the counts and severity summary, and list ' +
