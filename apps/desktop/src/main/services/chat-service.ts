@@ -53,9 +53,10 @@ export class ChatService {
     message: string,
     product: GoogleProduct,
     emit: (event: ChatStreamEvent) => void,
-    confirm?: ConfirmFn
+    confirm?: ConfirmFn,
+    signal?: AbortSignal
   ): Promise<ChatReply> {
-    return this.run(history, message, product, emit, confirm);
+    return this.run(history, message, product, emit, confirm, signal);
   }
 
   private async run(
@@ -63,7 +64,8 @@ export class ChatService {
     message: string,
     product: GoogleProduct,
     emit?: (event: ChatStreamEvent) => void,
-    confirm?: ConfirmFn
+    confirm?: ConfirmFn,
+    signal?: AbortSignal
   ): Promise<ChatReply> {
     const active = this.registry.getActiveView();
     if (!active) throw new Error('No active account. Connect and activate a Google account.');
@@ -188,7 +190,7 @@ export class ChatService {
     ];
 
     const toolCalls: ChatToolCall[] = [];
-    const result = await runChat(client, { system, model: active.llm.model, apiKey, messages }, tools, {
+    const result = await runChat(client, { system, model: active.llm.model, apiKey, messages, signal }, tools, {
       onDelta: emit ? (delta) => emit({ type: 'text', delta }) : undefined,
       onToolCall: (call) => {
         toolCalls.push({ name: call.name, args: call.args });

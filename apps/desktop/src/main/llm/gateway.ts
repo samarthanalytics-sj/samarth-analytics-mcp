@@ -28,6 +28,8 @@ export interface RunChatInput {
   model: string;
   apiKey: string;
   messages: LlmTurn[];
+  /** When aborted, the loop stops and returns the text so far (user pressed Stop). */
+  signal?: AbortSignal;
 }
 
 export interface RunChatResult {
@@ -58,16 +60,30 @@ export async function runChat(
   const tools = executor.list();
 
   for (let step = 1; step <= maxSteps; step++) {
-    const reply = await client.chatStream(
-      {
-        system: input.system,
-        model: input.model,
-        apiKey: input.apiKey,
-        tools,
-        messages,
-      },
-      (delta) => callbacks.onDelta?.(delta)
-    );
+    if (input.signal?.aborted) {
+      console.error('[chat] stopped by user');
+      return { text: 'Stopped.', steps: step - 1 };
+    }
+    let reply;
+    try {
+      reply = await client.chatStream(
+        {
+          system: input.system,
+          model: input.model,
+          apiKey: input.apiKey,
+          tools,
+          messages,
+          signal: input.signal,
+        },
+        (delta) => callbacks.onDelta?.(delta)
+      );
+    } catch (e) {
+      if (input.signal?.aborted || (e as { name?: string })?.name === 'AbortError') {
+        console.error('[chat] stopped by user (mid-stream)');
+        return { text: 'Stopped.', steps: step };
+      }
+      throw e;
+    }
 
     if (reply.toolCalls && reply.toolCalls.length > 0) {
       console.error(`[chat] step ${step}: model requested ${reply.toolCalls.length} tool call(s): ${reply.toolCalls.map((c) => c.name).join(', ')}`);

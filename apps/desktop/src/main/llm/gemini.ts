@@ -118,7 +118,8 @@ export const geminiClient: LlmClient = {
           ? { tools: [{ functionDeclarations: input.tools.map(geminiFunctionDecl) }] }
           : {}),
       },
-      'Gemini'
+      'Gemini',
+      input.signal
     );
     const acc = geminiStreamAccumulator(onDelta);
     for await (const data of sseEvents(res)) {

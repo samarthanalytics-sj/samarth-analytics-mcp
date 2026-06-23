@@ -28,6 +28,9 @@ import type {
   TagScanResult,
 } from '../shared/ipc';
 
+// Tracks the in-flight streaming chat so llm.stop() can abort the right one.
+let activeChatRequestId: string | null = null;
+
 // The ONLY surface the renderer can reach in the main process. Every capability
 // is an explicit, typed method — never raw ipcRenderer. Each phase adds a
 // namespace here: Phase 1 → accounts + secrets; later → google (OAuth), mcp
@@ -90,6 +93,7 @@ const api = {
       onEvent: (event: ChatStreamEvent) => void
     ): Promise<ChatReply> => {
       const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      activeChatRequestId = requestId;
       const listener = (
         _e: unknown,
         payload: { requestId: string } & ChatStreamEvent
@@ -101,8 +105,16 @@ const api = {
       ipcRenderer.on('llm:chat:event', listener);
       return ipcRenderer
         .invoke('llm:chat:start', requestId, history, message, product)
-        .finally(() => ipcRenderer.removeListener('llm:chat:event', listener));
+        .finally(() => {
+          ipcRenderer.removeListener('llm:chat:event', listener);
+          if (activeChatRequestId === requestId) activeChatRequestId = null;
+        });
     },
+
+    // Stop the in-flight streaming chat (abort the provider request + decline any
+    // pending approval). No-op if nothing is running.
+    stop: (): Promise<void> =>
+      activeChatRequestId ? ipcRenderer.invoke('llm:chat:stop', activeChatRequestId) : Promise.resolve(),
 
     // Answer a write-confirmation prompt raised during a streaming chat: the
     // (possibly edited) args to apply, or null to decline.

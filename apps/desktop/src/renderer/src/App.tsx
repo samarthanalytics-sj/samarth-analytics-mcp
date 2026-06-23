@@ -841,9 +841,22 @@ function ChatView({
             }
           }}
         />
-        <button style={styles.sendBtn} onClick={send} disabled={!ready || busy}>
-          Send
-        </button>
+        {busy ? (
+          <button
+            style={styles.stopBtn}
+            onClick={() => {
+              void window.desktop.llm.stop();
+              setPendingConfirm(null);
+            }}
+            title="Stop the running query"
+          >
+            Stop
+          </button>
+        ) : (
+          <button style={styles.sendBtn} onClick={send} disabled={!ready}>
+            Send
+          </button>
+        )}
       </div>
     </div>
   );
@@ -2673,6 +2686,7 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: 'border-box',
   },
   sendBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
+  stopBtn: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
 
   confirm: { background: '#251c10', border: '1px solid #92651a', borderRadius: 10, padding: 12, margin: '0 16px 8px', color: '#fcd9a5' },
   confirmDanger: { background: '#2a1416', border: '1px solid #b91c1c', borderRadius: 10, padding: 12, margin: '0 16px 8px', color: '#fca5a5' },

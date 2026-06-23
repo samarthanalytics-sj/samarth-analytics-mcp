@@ -105,7 +105,8 @@ export const openaiClient: LlmClient = {
         tool_choice: 'auto',
         stream: true,
       },
-      'OpenAI'
+      'OpenAI',
+      input.signal
     );
     const acc = openaiStreamAccumulator(onDelta);
     for await (const data of sseEvents(res)) {
