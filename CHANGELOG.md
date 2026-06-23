@@ -1,3 +1,14 @@
+## [1.30.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.29.0...v1.30.0) (2026-06-23)
+
+### Features
+
+* **tag-suggest:** "already exists" detection + create-robustness, and fold the part-1 review fixes ([c124812](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c12481240ee56cb06cb5f257c643e483f9322031))
+* **tag-suggest:** complete suggestion list — GA4 Configuration tag + All-form / All-PDF catch-alls ([375a65a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/375a65a7a221f8a30393cb44d642f4a0c3d161bc))
+
+### Bug Fixes
+
+* **tag-suggest:** isolate variable-create failures + don't reject real IDs containing 'XXX' ([18a3e95](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/18a3e9532762c4befb6ef9c2df1d6d46adb7b911))
+
 ## [1.29.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.28.0...v1.29.0) (2026-06-23)
 
 ### Features
