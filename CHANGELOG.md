@@ -1,3 +1,9 @@
+## [1.33.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.32.2...v1.33.0) (2026-06-23)
+
+### Features
+
+* **tools:** nested parameter support + read-modify-write updates across tags/variables/triggers ([22e668a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/22e668afa12f7f8d4b805e209989e2630151ffa3))
+
 ## [1.32.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.32.1...v1.32.2) (2026-06-23)
 
 ### Bug Fixes
