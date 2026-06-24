@@ -39,7 +39,7 @@ function record(name: string, passed: boolean, detail = ''): void {
 // write was explicitly approved.
 const MUTATIONS = new Set([
   'createGtmWorkspace', 'createGtmTag', 'updateGtmTag', 'setGtmTagPaused',
-  'addGa4EventParameters', 'setGa4MeasurementId',
+  'addGa4EventParameters', 'setGa4MeasurementId', 'setGtmTagConsent',
   'addGa4EventParametersToAllTags', 'setGa4MeasurementIdOnAllTags',
   'deleteGtmTag', 'deleteGtmTrigger', 'deleteGtmVariable',
   'enableGtmBuiltInVariables', 'createGtmTrigger', 'createGtmVariable',
@@ -116,6 +116,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     updateGtmTag: () => r('updateGtmTag', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
     addGa4EventParameters: () => r('addGa4EventParameters', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
     setGa4MeasurementId: () => r('setGa4MeasurementId', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
+    setGtmTagConsent: () => r('setGtmTagConsent', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
     addGa4EventParametersToAllTags: () => r('addGa4EventParametersToAllTags', { total: 1, updated: ['X'], failed: [] }),
     setGa4MeasurementIdOnAllTags: () => r('setGa4MeasurementIdOnAllTags', { total: 1, updated: ['X'], failed: [] }),
     setGtmTagPaused: () => r('setGtmTagPaused', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),

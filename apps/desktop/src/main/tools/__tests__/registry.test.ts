@@ -311,12 +311,13 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 52, 'read + write registry has 52 tools');
+    assert.equal(withWrites.list().length, 53, 'read + write registry has 53 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'add_ga4_event_parameters'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'set_ga4_measurement_id'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'set_ga4_measurement_id_on_all_tags'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'add_ga4_event_parameters_to_all_tags'), true);
+    assert.equal(withWrites.list().some((t) => t.name === 'set_gtm_tag_consent'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_variable_typed'), true);
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
       assert.equal(withWrites.list().some((t) => t.name === fixTool), true, `${fixTool} is registered`);

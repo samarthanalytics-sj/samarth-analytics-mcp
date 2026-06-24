@@ -693,6 +693,7 @@ export function buildToolRegistry(
             category: f.category,
             message: f.message,
             recommendation: f.recommendation,
+            confidence: f.confidence,
           })),
         });
         if (a.ga4Property != null && s(a.ga4Property)) {
@@ -746,6 +747,7 @@ export function buildToolRegistry(
             category: f.category,
             message: f.message,
             recommendation: f.recommendation,
+            confidence: f.confidence,
           })),
         });
         if (a.ga4Property != null && s(a.ga4Property)) {
@@ -765,7 +767,13 @@ export function buildToolRegistry(
           const consent = consentReportToSection(a.consentReport);
           if (consent) sections.push(consent);
         }
-        return { report: buildReport(sections, { generatedAt: new Date().toISOString() }) };
+        return {
+          report: buildReport(sections, {
+            generatedAt: new Date().toISOString(),
+            boundary: gtm.boundary,
+            runtimeRequired: gtm.runtimeRequired,
+          }),
+        };
       },
     },
   ];
@@ -1086,6 +1094,45 @@ export function buildToolRegistry(
       summarize: (a) => `Set Measurement ID to ${s(a.measurementId)} on tag ${s(a.tagId)} in workspace ${s(a.workspaceId)}`,
       handler: (a) =>
         data.setGa4MeasurementId(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId), s(a.measurementId)),
+    },
+    {
+      name: 'set_gtm_tag_consent',
+      description:
+        'Set a tag\'s Consent Mode v2 settings — the fix for the "no Consent Mode v2 settings" audit finding. consentStatus "needed" + consentTypes (ad_storage, analytics_storage, ad_user_data, ad_personalization) makes GTM block the tag until those are granted; consentStatus "notNeeded" declares the tag needs no additional consent (it relies on Consent Mode at the Google-tag level). Read-modify-write; preserves the rest of the tag.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          tagId: { type: 'string' },
+          consentStatus: { type: 'string', enum: ['needed', 'notNeeded'], description: 'needed = require the consentTypes; notNeeded = no additional consent required.' },
+          consentTypes: {
+            type: 'array',
+            description: 'Required consent types when consentStatus is "needed" (e.g. ["analytics_storage"] for GA4, ["ad_storage","ad_user_data","ad_personalization"] for Ads).',
+            items: { type: 'string' },
+          },
+          name: { type: 'string', description: 'Tag name, for display only.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tagId', 'consentStatus'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => {
+        const who = a.name ? `"${s(a.name)}" (${s(a.tagId)})` : `tag ${s(a.tagId)}`;
+        const types = Array.isArray(a.consentTypes) && a.consentTypes.length ? ` — require ${a.consentTypes.join(', ')}` : '';
+        const what = s(a.consentStatus) === 'notNeeded' ? 'No additional consent required' : `Require consent${types}`;
+        return `Set consent on ${who}: ${what}`;
+      },
+      handler: (a) =>
+        data.setGtmTagConsent(
+          s(a.accountId),
+          s(a.containerId),
+          s(a.workspaceId),
+          s(a.tagId),
+          s(a.consentStatus),
+          (Array.isArray(a.consentTypes) ? a.consentTypes : []) as string[]
+        ),
     },
     {
       name: 'set_ga4_measurement_id_on_all_tags',

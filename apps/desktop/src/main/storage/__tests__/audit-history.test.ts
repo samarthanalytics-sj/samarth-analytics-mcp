@@ -20,8 +20,10 @@ function test(name: string, fn: () => void): void {
 
 const report = (n: number): AuditReport => ({
   counts: { tags: n, triggers: 0, variables: 0, findings: 0 },
-  summary: { high: 0, medium: 0, low: 0, info: 0 },
+  summary: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
   findings: [],
+  boundary: 'test',
+  runtimeRequired: [],
 });
 
 console.log('\nAuditHistoryStore:');

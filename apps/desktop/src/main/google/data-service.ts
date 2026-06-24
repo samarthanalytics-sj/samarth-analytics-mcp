@@ -503,6 +503,38 @@ export class GoogleDataService {
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
+  /** Set a tag's Consent Mode v2 settings (read-modify-write, preserving the rest of the
+   *  tag). `consentStatus: 'needed'` + consentTypes (ad_storage / analytics_storage /
+   *  ad_user_data / ad_personalization) means GTM blocks the tag until those are granted;
+   *  `'notNeeded'` declares the tag needs no extra consent (relies on Consent Mode at the
+   *  Google-tag level). Resolves the "no Consent Mode v2 settings" audit finding. */
+  async setGtmTagConsent(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    tagId: string,
+    consentStatus: string,
+    consentTypes: string[]
+  ): Promise<GtmTagView> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
+    const current = (await gtm.accounts.containers.workspaces.tags.get({ path })).data;
+    const status = consentStatus === 'notNeeded' ? 'notNeeded' : 'needed';
+    const consentSettings =
+      status === 'notNeeded'
+        ? { consentStatus: 'notNeeded' }
+        : {
+            consentStatus: 'needed',
+            consentType: { type: 'list', list: consentTypes.map((t) => ({ type: 'template', value: t })) },
+          };
+    const updated = { ...current, consentSettings };
+    const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated as typeof current });
+    console.error(`[gtm] setGtmTagConsent tag=${tagId} → ${status}${status === 'needed' ? ` [${consentTypes.join(', ')}]` : ''}`);
+    this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
+    return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
   /** Bulk, ONE approval: set the Measurement ID on EVERY GA4 tag in the workspace
    *  (gaawe → measurementIdOverride, googtag → tagId). Continues past a per-tag failure
    *  and returns a summary, so one bad tag does not block the rest and the user approves

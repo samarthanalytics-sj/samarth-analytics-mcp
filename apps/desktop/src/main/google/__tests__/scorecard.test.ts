@@ -83,7 +83,7 @@ test('top issues are ranked by severity and capped at 10, carrying the section +
 test('per-section counts tally correctly', () => {
   const r = buildScorecard([{ key: 'g', label: 'G', findings: [f('high'), f('high'), f('low'), f('info')] }]);
   const s = r.sections[0];
-  assert.deepEqual(s.counts, { high: 2, medium: 0, low: 1, info: 1 });
+  assert.deepEqual(s.counts, { critical: 0, high: 2, medium: 0, low: 1, info: 1 });
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
