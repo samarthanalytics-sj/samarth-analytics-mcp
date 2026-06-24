@@ -421,7 +421,10 @@ export interface AuditFix {
   args: Record<string, unknown>;
 }
 export interface AuditFinding {
-  severity: 'high' | 'medium' | 'low' | 'info';
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  /** Audit Brain confidence: certain = provable from the container; likely = strong
+   *  inference needing one cheap confirmation; runtime-required = needs live evidence. */
+  confidence: 'certain' | 'likely' | 'runtime-required';
   /** Coarse grouping: firing | paused | ga4 | deprecated | consent | security | performance | unused | naming. */
   category: string;
   message: string;
@@ -433,6 +436,39 @@ export interface AuditFinding {
   autoFixable: boolean;
   fix?: AuditFix;
 }
+
+/** Container-only boundary statement — what a config audit proves and what it cannot. */
+export const AUDIT_BOUNDARY =
+  'Container-only audit: this proves CONFIGURATION, not runtime behaviour. It cannot confirm firing timing, dataLayer contents, PII in actual hits, or live consent behaviour — verify those in Tag Assistant / Network, GA4 DebugView, and your CMP.';
+
+/** Checks a container export CANNOT settle — surfaced so no one assumes they passed. */
+export const AUDIT_RUNTIME_REQUIRED: string[] = [
+  'Consent timing — load the site with no prior consent and watch the network: do GA4/Ads requests fire BEFORE the user chooses?',
+  'Double-firing — does any event (page_view, purchase, …) appear twice in GA4 DebugView for one interaction?',
+  'PII in hits — inspect actual /collect requests for email/phone/name in the page path, query params, or event parameters.',
+  'dataLayer reality — do custom-event triggers’ events actually push during the real user journey?',
+  'Ecommerce integrity — is the items array well-formed (currency/value) in the collect request?',
+  'Cross-domain & server IP — correct linker behaviour, and (server-side) the real client IP rather than the edge IP.',
+];
+
+/** Audit Brain confidence per finding category. Most container findings are provable
+ *  ('certain'); consent + "unused" are strong inferences whose real impact needs one
+ *  confirmation (runtime CMP behaviour / published-version check) → 'likely'. */
+function confidenceFor(category: string): AuditFinding['confidence'] {
+  if (category === 'consent' || category === 'unused') return 'likely';
+  return 'certain';
+}
+
+/** Consent types to REQUIRE on a tag with no Consent Mode v2 settings, by its
+ *  destination type. Ads/Floodlight need the ad signals; GA4/analytics need
+ *  analytics_storage; the Google tag serves both. Drives the one-click consent fix. */
+export function consentTypesFor(tagType: string): string[] {
+  if (['awct', 'sp', 'gclidw', 'flc', 'fls'].includes(tagType)) {
+    return ['ad_storage', 'ad_user_data', 'ad_personalization'];
+  }
+  if (tagType === 'googtag') return ['analytics_storage', 'ad_storage'];
+  return ['analytics_storage'];
+}
 export interface ContainerSnapshot {
   tags: AuditTag[];
   triggers: AuditTrigger[];
@@ -440,8 +476,12 @@ export interface ContainerSnapshot {
 }
 export interface AuditReport {
   counts: { tags: number; triggers: number; variables: number; findings: number };
-  summary: { high: number; medium: number; low: number; info: number };
+  summary: { critical: number; high: number; medium: number; low: number; info: number };
   findings: AuditFinding[];
+  /** Container-only boundary statement (state it before the findings). */
+  boundary: string;
+  /** Checks that need live verification (never scored as confirmed defects). */
+  runtimeRequired: string[];
 }
 
 // GTM tag types that send data to ad/analytics platforms and therefore should
@@ -474,7 +514,8 @@ function refsIn(value: unknown, into: Set<string>): void {
 }
 
 export function auditContainer(s: ContainerSnapshot): AuditReport {
-  const findings: AuditFinding[] = [];
+  // Built without `confidence`; it's added per-category in one pass at the end.
+  const findings: Array<Omit<AuditFinding, 'confidence'>> = [];
   const measurementIds = new Set<string>();
 
   for (const t of s.tags) {
@@ -584,12 +625,16 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
       const status = normConsent(t.consentSettings?.consentStatus);
       if (!status || status === 'notset') {
         findings.push({
-          severity: 'medium',
+          severity: 'high',
           category: 'consent',
           resource,
           message: `Tag "${t.name}" has no Consent Mode v2 settings (consent status is not set).`,
-          recommendation: 'In the tag\'s "Consent Settings", declare the consent types it requires (e.g. ad_storage, analytics_storage), or "No additional consent required" if it genuinely needs none.',
-          autoFixable: false,
+          recommendation: 'In the tag\'s "Consent Settings", declare the consent types it requires (e.g. ad_storage, analytics_storage), or "No additional consent required" if it genuinely needs none. "Apply fix" requires the consent types for this tag type.',
+          autoFixable: true,
+          fix: {
+            tool: 'set_gtm_tag_consent',
+            args: { tagId: t.tagId, consentStatus: 'needed', consentTypes: consentTypesFor(t.type), name: t.name },
+          },
         });
       }
     }
@@ -679,17 +724,22 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
   dupes(s.tags, 'medium', 'tag');
   dupes(s.triggers, 'low', 'trigger');
 
-  const summary = { high: 0, medium: 0, low: 0, info: 0 };
-  for (const f of findings) summary[f.severity]++;
+  // Add the Audit Brain confidence to each finding in one pass.
+  const withConfidence: AuditFinding[] = findings.map((f) => ({ ...f, confidence: confidenceFor(f.category) }));
+
+  const summary = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  for (const f of withConfidence) summary[f.severity]++;
 
   return {
     counts: {
       tags: s.tags.length,
       triggers: s.triggers.length,
       variables: s.variables.length,
-      findings: findings.length,
+      findings: withConfidence.length,
     },
     summary,
-    findings,
+    findings: withConfidence,
+    boundary: AUDIT_BOUNDARY,
+    runtimeRequired: AUDIT_RUNTIME_REQUIRED,
   };
 }

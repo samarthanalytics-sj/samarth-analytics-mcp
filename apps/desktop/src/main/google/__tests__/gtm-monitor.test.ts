@@ -17,6 +17,7 @@ function test(name: string, fn: () => void): void {
 
 const f = (over: Partial<AuditFinding>): AuditFinding => ({
   severity: 'medium',
+  confidence: 'certain',
   category: 'paused',
   message: 'x',
   recommendation: 'y',

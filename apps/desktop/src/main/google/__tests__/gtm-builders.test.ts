@@ -6,6 +6,7 @@ import {
   buildCustomHtmlTag,
   buildTrigger,
   applyTriggerWaitDefaults,
+  consentTypesFor,
   triggerBuiltInVars,
   builtInVarsForTemplates,
   buildVariable,
@@ -342,6 +343,28 @@ test('audit: Consent Mode v2 + missing event name flagged on bare GA4/Ads tags',
   assert.ok(r.findings.some((f) => f.message.includes('has no event name')), 'GA4 missing event name flagged');
   // Both consent-relevant tags should be flagged for consent.
   assert.equal(r.findings.filter((f) => f.category === 'consent').length, 2);
+  // Brain: consent is High (not Medium), confidence 'likely', and now AUTO-FIXABLE.
+  const ga4Consent = r.findings.find((f) => f.category === 'consent' && f.resource?.id === '1');
+  assert.equal(ga4Consent?.severity, 'high', 'consent finding is High');
+  assert.equal(ga4Consent?.confidence, 'likely', 'consent finding is [Likely]');
+  assert.equal(ga4Consent?.autoFixable, true, 'consent finding is auto-fixable');
+  assert.equal(ga4Consent?.fix?.tool, 'set_gtm_tag_consent');
+  assert.deepEqual(ga4Consent?.fix?.args.consentTypes, ['analytics_storage'], 'GA4 → analytics_storage');
+  const adsConsent = r.findings.find((f) => f.category === 'consent' && f.resource?.id === '2');
+  assert.deepEqual(adsConsent?.fix?.args.consentTypes, ['ad_storage', 'ad_user_data', 'ad_personalization'], 'Ads → ad signals');
+});
+
+test('consentTypesFor maps destination type → required consent signals', () => {
+  assert.deepEqual(consentTypesFor('gaawe'), ['analytics_storage']);
+  assert.deepEqual(consentTypesFor('googtag'), ['analytics_storage', 'ad_storage']);
+  assert.deepEqual(consentTypesFor('awct'), ['ad_storage', 'ad_user_data', 'ad_personalization']);
+});
+
+test('audit: AuditReport carries the boundary statement + runtime-required list', () => {
+  const r = auditContainer({ tags: [], triggers: [], variables: [] });
+  assert.ok(r.boundary.includes('Container-only'), 'boundary statement present');
+  assert.ok(r.runtimeRequired.length >= 4 && r.runtimeRequired.some((x) => /consent timing/i.test(x)), 'runtime-required list present');
+  assert.equal(r.summary.critical, 0, 'summary has a critical bucket');
 });
 
 test('audit: consent flags only notSet — needed and notNeeded are valid, NOT flagged', () => {

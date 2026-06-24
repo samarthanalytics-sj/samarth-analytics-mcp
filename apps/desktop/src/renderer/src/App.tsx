@@ -2065,16 +2065,21 @@ function ContainerAuditPanel({
     }
   }
 
-  async function applyFix(i: number, f: AuditFindingView): Promise<void> {
-    if (!f.fix) return;
-    const destructive = f.fix.tool.startsWith('delete');
+  async function applyFix(
+    i: number,
+    f: AuditFindingView,
+    override?: { tool: string; args: Record<string, unknown> }
+  ): Promise<void> {
+    const toRun = override ?? f.fix;
+    if (!toRun) return;
+    const destructive = toRun.tool.startsWith('delete');
     if (destructive && fix[i]?.state !== 'confirm') {
       setFix((s) => ({ ...s, [i]: { state: 'confirm' } }));
       return;
     }
     setFix((s) => ({ ...s, [i]: { state: 'fixing' } }));
     try {
-      await window.desktop.gtm.applyFix(f.fix);
+      await window.desktop.gtm.applyFix(toRun);
       setFix((s) => ({ ...s, [i]: { state: 'done' } }));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -2241,7 +2246,30 @@ function ContainerAuditPanel({
                       </div>
                     )}
                   </div>
-                  {f.autoFixable && f.fix && !done && (
+                  {f.autoFixable && f.fix && !done && f.fix.tool === 'set_gtm_tag_consent' ? (
+                    // Consent has two valid answers — let the user pick rather than
+                    // silently forcing "require consent" (which would block GA4 under denial).
+                    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                      <button
+                        style={styles.ghostBtn}
+                        disabled={st?.state === 'fixing'}
+                        onClick={() => applyFix(i, f)}
+                        title="Require these consent types before the tag fires"
+                      >
+                        {st?.state === 'fixing' ? '…' : 'Require consent'}
+                      </button>
+                      <button
+                        style={styles.ghostBtn}
+                        disabled={st?.state === 'fixing'}
+                        onClick={() =>
+                          applyFix(i, f, { tool: 'set_gtm_tag_consent', args: { ...f.fix!.args, consentStatus: 'notNeeded', consentTypes: [] } })
+                        }
+                        title="Declare the tag needs no additional consent (relies on Consent Mode at the Google-tag level)"
+                      >
+                        No extra consent
+                      </button>
+                    </div>
+                  ) : f.autoFixable && f.fix && !done ? (
                     <button
                       style={f.fix.tool.startsWith('delete') ? styles.dangerGhost : styles.ghostBtn}
                       disabled={st?.state === 'fixing'}
@@ -2255,7 +2283,7 @@ function ContainerAuditPanel({
                             ? 'Delete'
                             : 'Apply fix'}
                     </button>
-                  )}
+                  ) : null}
                 </div>
               );
             })}

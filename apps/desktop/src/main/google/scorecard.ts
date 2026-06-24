@@ -4,13 +4,16 @@
 // ranked top-issues list. No I/O — fully unit-testable. Generic over findings so
 // new audit sources compose without touching the engine.
 
-export type Severity = 'high' | 'medium' | 'low' | 'info';
+export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+export type Confidence = 'certain' | 'likely' | 'runtime-required';
 
 export interface ScorecardFinding {
   severity: Severity;
   category: string;
   message: string;
   recommendation?: string;
+  /** Audit Brain confidence, when the source provides it (GTM container audit). */
+  confidence?: Confidence;
 }
 export interface ScorecardSection {
   key: string;
@@ -19,6 +22,7 @@ export interface ScorecardSection {
 }
 
 export interface SeverityCounts {
+  critical: number;
   high: number;
   medium: number;
   low: number;
@@ -37,6 +41,7 @@ export interface ScorecardIssue {
   category: string;
   message: string;
   recommendation?: string;
+  confidence?: Confidence;
 }
 export interface Scorecard {
   score: number;
@@ -48,11 +53,11 @@ export interface Scorecard {
 
 // Points deducted per finding. info is informational only (never lowers the
 // score). Mirrors the web-audit scorer's high/medium/low weighting.
-const WEIGHT: Record<Severity, number> = { high: 15, medium: 7, low: 3, info: 0 };
-const SEVERITY_RANK: Record<Severity, number> = { high: 0, medium: 1, low: 2, info: 3 };
+const WEIGHT: Record<Severity, number> = { critical: 30, high: 15, medium: 7, low: 3, info: 0 };
+const SEVERITY_RANK: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
 function tally(findings: ScorecardFinding[]): SeverityCounts {
-  const counts: SeverityCounts = { high: 0, medium: 0, low: 0, info: 0 };
+  const counts: SeverityCounts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const f of findings) counts[f.severity]++;
   return counts;
 }
@@ -88,6 +93,7 @@ export function buildScorecard(sections: ScorecardSection[]): Scorecard {
         category: f.category,
         message: f.message,
         ...(f.recommendation ? { recommendation: f.recommendation } : {}),
+        ...(f.confidence ? { confidence: f.confidence } : {}),
       }))
     )
     .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])

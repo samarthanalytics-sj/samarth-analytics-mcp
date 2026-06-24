@@ -210,7 +210,8 @@ export interface TagScanResult {
 
 /* ── Container audit (the "Container audit" panel) ── */
 export interface AuditFindingView {
-  severity: 'high' | 'medium' | 'low' | 'info';
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  confidence?: 'certain' | 'likely' | 'runtime-required';
   category: string;
   message: string;
   resource?: { kind: 'tag' | 'trigger' | 'variable'; id: string; name: string };
@@ -272,7 +273,7 @@ export interface MonitorStatus extends MonitorConfig {
 
 /** A renderer-safe finding (no machine fix args) for the monitoring banner. */
 export interface MonitorFinding {
-  severity: 'high' | 'medium' | 'low' | 'info';
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   category: string;
   message: string;
 }
