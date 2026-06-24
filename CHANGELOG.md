@@ -1,3 +1,13 @@
+## [1.40.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.39.0...v1.40.0) (2026-06-24)
+
+### Features
+
+* **desktop:** drop Data-tools + Monitoring from Settings; show GA4-base bootstrap only when no config tag ([364f911](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/364f911adade527e1770deebf0d4cf26766bd921))
+
+### Bug Fixes
+
+* **desktop:** repair UTF-8 mojibake in App.tsx (emoji/dashes/quotes garbled) ([d587915](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d58791516a72985227c1f26abc333ee36ce8e296)), closes [#88](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/88)
+
 ## [1.39.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.38.0...v1.39.0) (2026-06-24)
 
 ### Features
