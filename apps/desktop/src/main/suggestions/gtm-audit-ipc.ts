@@ -24,7 +24,9 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     const c = String(containerId ?? '');
     const w = String(workspaceId ?? '');
     if (!a || !c || !w) throw new Error('Pick a GTM account, container and workspace first.');
-    return auditWorkspace(data, { accountId: a, containerId: c, workspaceId: w });
+    // The audit READ (list tags/triggers/variables) also trips GTM's per-minute quota
+    // during heavy sessions — retry it with backoff so the panel doesn't crash on a 429.
+    return withQuotaRetry(() => auditWorkspace(data, { accountId: a, containerId: c, workspaceId: w }));
   });
 
   ipcMain.handle('gtm:applyFix', async (_e, fix: unknown) => {
@@ -37,7 +39,9 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     // failing the fix. f.tool/f.args are constants here, so a retry is idempotent.
     const tool = f.tool;
     const args = f.args;
-    return JSON.parse(await withQuotaRetry(() => reg.execute(tool, args))) as unknown;
+    // 5 retries (more than the default) — a saturated per-minute quota during a big batch
+    // can need several backoffs before a single write gets through.
+    return JSON.parse(await withQuotaRetry(() => reg.execute(tool, args), { maxRetries: 5 })) as unknown;
   });
 
   // Ensure a GA4 base/config tag exists. If none is present, store the Measurement

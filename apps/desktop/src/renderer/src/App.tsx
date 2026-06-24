@@ -2052,6 +2052,7 @@ function ContainerAuditPanel({
   const [applyingAll, setApplyingAll] = useState(false);
   const [canceling, setCanceling] = useState(false);
   const cancelRef = useRef(false); // set by Cancel; the batch loop checks it between fixes
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const [typeFilter, setTypeFilter] = useState<string>('all');
 
   const ctx = active?.gtmContext;
@@ -2122,34 +2123,51 @@ function ContainerAuditPanel({
   const noExtraFixable = findings.filter(
     (f, i) => typeMatches(f) && f.autoFixable && isConsentFix(f) && f.checkId !== 'B6-ad-pixel-consent' && fix[i]?.state !== 'done'
   ).length;
+  // Unpausing a paused tag is non-destructive (set_gtm_tag_paused → paused:false), so it
+  // applies with NO confirmation — offered as its own one-click batch.
+  const isUnpauseFix = (f: AuditFindingView): boolean => f.fix?.tool === 'set_gtm_tag_paused';
+  const pausedFixable = findings.filter((f, i) => typeMatches(f) && f.autoFixable && isUnpauseFix(f) && fix[i]?.state !== 'done').length;
   // Rows to render — keep each finding's ORIGINAL index so the per-row fix state still aligns.
   const visible = findings.map((f, i) => ({ f, i })).filter(({ f }) => typeMatches(f));
 
-  // Apply every non-destructive fix matching `pred`, sequentially, with per-row status.
-  // Deletes are always excluded (per-row confirm only). `override` builds an alternate fix
-  // per finding (e.g. consent → notNeeded for the "No extra consent" batch).
+  // Apply every non-destructive fix matching `pred`, sequentially, with per-row status and a
+  // live m/n counter. Deletes are always excluded (per-row confirm only). A small pace
+  // between writes keeps a big batch under GTM's per-minute quota (the IPC also retries on a
+  // 429). `override` builds an alternate fix per finding (consent → notNeeded for "No extra").
   async function applyBatch(
     pred: (f: AuditFindingView, i: number) => boolean,
     override?: (f: AuditFindingView) => { tool: string; args: Record<string, unknown> }
   ): Promise<void> {
     if (applyingAll) return;
+    // Resolve the work-list up front so the m/n total is exact and stable.
+    const targets: number[] = [];
+    for (let i = 0; i < findings.length; i++) {
+      const f = findings[i];
+      if (!typeMatches(f)) continue; // respect the active tag-type filter
+      if (!f.autoFixable || !f.fix || f.fix.tool.startsWith('delete')) continue;
+      if (fix[i]?.state === 'done' || fix[i]?.state === 'fixing') continue;
+      if (!pred(f, i)) continue;
+      targets.push(i);
+    }
+    if (targets.length === 0) return;
     cancelRef.current = false;
     setCanceling(false);
     setApplyingAll(true);
+    setBatchProgress({ done: 0, total: targets.length });
     try {
-      for (let i = 0; i < findings.length; i++) {
+      let done = 0;
+      for (const i of targets) {
         if (cancelRef.current) break; // Cancel stops launching further fixes
-        const f = findings[i];
-        if (!typeMatches(f)) continue; // respect the active tag-type filter
-        if (!f.autoFixable || !f.fix || f.fix.tool.startsWith('delete')) continue;
-        if (fix[i]?.state === 'done' || fix[i]?.state === 'fixing') continue;
-        if (!pred(f, i)) continue;
-        await applyFix(i, f, override?.(f)); // one workspace write at a time
+        if (done > 0) await new Promise((r) => setTimeout(r, 400)); // pace under the per-minute quota
+        await applyFix(i, findings[i], override?.(findings[i])); // one workspace write at a time
+        done += 1;
+        setBatchProgress({ done, total: targets.length });
       }
     } finally {
       setApplyingAll(false);
       setCanceling(false);
       cancelRef.current = false;
+      setBatchProgress(null);
     }
   }
 
@@ -2227,7 +2245,7 @@ function ContainerAuditPanel({
                 )}
               </div>
             )}
-            {(bulkFixable > 0 || consentFixable > 0 || applyingAll) && (
+            {(bulkFixable > 0 || consentFixable > 0 || pausedFixable > 0 || applyingAll) && (
               <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 {bulkFixable > 0 && (
                   <button
@@ -2264,6 +2282,16 @@ function ContainerAuditPanel({
                     {applyingAll ? 'Applying…' : `No extra consent on all (${noExtraFixable})`}
                   </button>
                 )}
+                {pausedFixable > 0 && (
+                  <button
+                    style={styles.ghostBtn}
+                    onClick={() => applyBatch(isUnpauseFix)}
+                    disabled={applyingAll}
+                    title="Unpause every paused tag at once (set it live). No confirmation — unpausing is non-destructive."
+                  >
+                    {applyingAll ? 'Applying…' : `Unpause all paused (${pausedFixable})`}
+                  </button>
+                )}
                 {applyingAll && (
                   <button
                     style={styles.dangerGhost}
@@ -2277,8 +2305,8 @@ function ContainerAuditPanel({
                 <span style={{ color: '#9ca3af', fontSize: 12 }}>
                   {applyingAll
                     ? canceling
-                      ? 'Stopping after the current fix…'
-                      : 'Applying… click Cancel to stop after the current fix.'
+                      ? `Stopping after the current fix… (${batchProgress?.done ?? 0}/${batchProgress?.total ?? 0})`
+                      : `Applying ${batchProgress?.done ?? 0}/${batchProgress?.total ?? 0}… click Cancel to stop after the current fix.`
                     : 'Non-destructive only — deletes stay per-row; “No extra consent” skips ad pixels.'}
                 </span>
               </div>
