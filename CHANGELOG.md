@@ -1,3 +1,9 @@
+## [1.43.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.42.3...v1.43.0) (2026-06-24)
+
+### Features
+
+* **desktop:** B6 ad-pixel consent — externalized registry, gate eval, region severity ([dd4b01d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dd4b01dcd001fe1096b8610c49b85efa2191143c))
+
 ## [1.42.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.42.2...v1.42.3) (2026-06-24)
 
 ### Bug Fixes
