@@ -559,6 +559,10 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
   // the general consent check gets).
   const findings: Array<Omit<AuditFinding, 'confidence'> & { confidence?: AuditFinding['confidence'] }> = [];
   const measurementIds = new Set<string>();
+  // A Google/Configuration tag in the container lets GTM resolve a {{variable}} Measurement
+  // ID ("Google tag found in this container") — so the variable-id "Cannot detect" note is
+  // only relevant when NO such tag exists.
+  const hasGoogleTag = s.tags.some((t) => t.type === 'googtag' || t.type === 'gaawc');
 
   for (const t of s.tags) {
     const resource = { kind: 'tag' as const, id: t.tagId, name: t.name };
@@ -621,17 +625,18 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
         });
       } else if (mid.startsWith('G-')) {
         measurementIds.add(mid);
-      } else if (mid.includes('{{')) {
-        // A8: a {{variable}} Measurement ID is BEST PRACTICE, not a defect — but it's
-        // GTM's "Cannot detect the Google tag" case, so TRACK it as runtime-required
-        // (never scored) instead of passing it silently.
+      } else if (mid.includes('{{') && !hasGoogleTag) {
+        // A8: a {{variable}} Measurement ID is BEST PRACTICE, not a defect. When a
+        // Google/Configuration tag IS in the container, GTM resolves it ("Google tag
+        // found") — so only flag the runtime-required check when NO Google tag exists
+        // (the genuine "Cannot detect the Google tag" case: confirm the config loads).
         findings.push({
           severity: 'info',
           confidence: 'runtime-required',
           category: 'ga4',
           resource,
-          message: `GA4 event tag "${t.name}" uses a variable Measurement ID (${mid}) — GTM's "Cannot detect the Google tag" warning is expected for a variable (best practice, not a defect).`,
-          recommendation: `On a live page load (Tag Assistant / GA4 DebugView) confirm ${mid} resolves to a valid G-XXXXXXX id.`,
+          message: `GA4 event tag "${t.name}" uses a variable Measurement ID (${mid}) and this container has NO Google/Configuration tag — GTM shows "Cannot detect the Google tag". A variable id is best practice, not a defect, but with no config tag the gtag may not load.`,
+          recommendation: `Confirm a Google tag loads for this property (a googtag in this container, another container, or on-page), and that ${mid} resolves to a valid G-XXXXXXX id on a live load.`,
           autoFixable: false,
         });
       }
@@ -675,17 +680,9 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
           recommendation: 'Set its Tag ID (a G-XXXXXXX / AW-XXXXXX / GT-XXXXXX value or a {{variable}}).',
           autoFixable: false,
         });
-      } else if (id.includes('{{')) {
-        findings.push({
-          severity: 'info',
-          confidence: 'runtime-required',
-          category: 'ga4',
-          resource,
-          message: `Google tag "${t.name}" uses a variable Tag ID (${id}) — GTM's "Cannot detect the Google tag" warning is expected for a variable (best practice, not a defect).`,
-          recommendation: `On a live page load confirm ${id} resolves to a valid G-/AW-/GT- id.`,
-          autoFixable: false,
-        });
       }
+      // A {{variable}} Tag ID on the Google tag itself is fine — GTM does not show the
+      // "Cannot detect" warning on the source tag, so it is NOT flagged.
     }
     if (t.type === 'awct') {
       // A8: a Google Ads conversion tag with no Conversion ID/Label tracks nothing —

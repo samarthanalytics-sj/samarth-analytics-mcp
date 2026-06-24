@@ -565,6 +565,21 @@ test('audit A8: a {{variable}} Measurement ID is runtime-required (tracked), not
   assert.equal(r.findings.some((x) => /has no measurement ID/i.test(x.message)), false, 'NOT flagged as missing');
 });
 
+test('audit A8: a variable Measurement ID is NOT flagged when a Google tag IS present (GTM resolves it)', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'GA4 - File Download', type: 'gaawe', firingTriggerId: ['T1'], paused: false,
+        parameter: [{ key: 'measurementIdOverride', value: '{{GA4 Measurement ID}}' }, { key: 'eventName', value: 'email_click' }] },
+      { tagId: '2', name: 'GA4 Config', type: 'googtag', firingTriggerId: ['T2'], paused: false,
+        parameter: [{ key: 'tagId', value: '{{GA4 Measurement ID}}' }] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'T', type: 'linkClick' }, { triggerId: 'T2', name: 'AP', type: 'pageview' }],
+    variables: [],
+  });
+  assert.equal(r.findings.some((x) => /variable Measurement ID/i.test(x.message)), false, 'suppressed — "Google tag found in this container"');
+  assert.equal(r.findings.some((x) => /variable Tag ID/i.test(x.message)), false, 'the Google tag itself is never flagged for a variable id');
+});
+
 test('audit A11: a manual tag for an Enhanced-Measurement event is flagged [Likely] Medium', () => {
   const r = auditContainer({
     tags: [{ tagId: '1', name: 'GA4 - File Download', type: 'gaawe', firingTriggerId: ['T1'], paused: false,
