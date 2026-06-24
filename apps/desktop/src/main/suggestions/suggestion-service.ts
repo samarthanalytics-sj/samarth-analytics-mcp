@@ -11,6 +11,7 @@ import { buildSuggestInput, type PageScan } from '../../../../web-audit-mcp/src/
 import type { SuggestInput, SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import type { CreateTagOutcome, SuggestedTagView } from '../../shared/ipc';
 import { ga4VariablePlan, buildVariable, type ContainerSnapshot } from '../google/gtm-builders';
+import { QUOTA_RE } from '../google/quota-retry';
 
 export interface ParsedSuggestions {
   suggestions: SuggestedTag[];
@@ -123,8 +124,6 @@ export function planGoogleTagVars(
  *  pure/testable (no Electron, no real GTM). */
 export type ToolExecute = (name: string, args: Record<string, unknown>) => Promise<string>;
 
-/** GTM API rate-limit / quota errors (per-minute-per-user etc.) — retryable. */
-const QUOTA_RE = /quota exceeded|rate.?limit|rateLimitExceeded|userRateLimitExceeded|queries per (minute|second|day)|\b429\b|RESOURCE_EXHAUSTED/i;
 /** "Found entity with duplicate name" — a tag with this name already exists. Not an
  *  error to surface: it's already there, so it's SKIPPED (marked "already exists"). */
 const DUPLICATE_RE = /duplicate name|already exists|entity with duplicate|duplicate entity/i;

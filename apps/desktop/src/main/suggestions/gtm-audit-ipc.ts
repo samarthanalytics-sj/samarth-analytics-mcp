@@ -16,6 +16,7 @@ import type { GoogleDataService } from '../google/data-service';
 import { auditWorkspace } from '../google/audit-runner';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-builders';
+import { withQuotaRetry } from '../google/quota-retry';
 
 export function registerGtmAuditIpc(data: GoogleDataService): void {
   ipcMain.handle('gtm:audit', (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
@@ -31,7 +32,12 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     if (!f.tool || !f.args || typeof f.args !== 'object') throw new Error('Invalid fix.');
     const approve: ConfirmFn = async (p) => p.details; // renderer already confirmed
     const reg = buildToolRegistry(data, approve, 'gtm');
-    return JSON.parse(await reg.execute(f.tool, f.args)) as unknown;
+    // GTM's per-minute write quota trips during big batches — retry the transient
+    // 429 / "Quota exceeded" with exponential backoff (default 3 retries) instead of
+    // failing the fix. f.tool/f.args are constants here, so a retry is idempotent.
+    const tool = f.tool;
+    const args = f.args;
+    return JSON.parse(await withQuotaRetry(() => reg.execute(tool, args))) as unknown;
   });
 
   // Ensure a GA4 base/config tag exists. If none is present, store the Measurement
