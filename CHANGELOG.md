@@ -1,3 +1,9 @@
+## [1.43.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.43.1...v1.43.2) (2026-06-24)
+
+### Bug Fixes
+
+* **desktop:** enlarge the audit finding message line for readability ([2d0c926](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2d0c9269dfcc7f3ff7ccc633bb26b0ba1986531f))
+
 ## [1.43.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.43.0...v1.43.1) (2026-06-24)
 
 ### Bug Fixes
