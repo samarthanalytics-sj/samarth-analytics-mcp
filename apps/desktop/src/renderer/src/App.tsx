@@ -2092,8 +2092,13 @@ function ContainerAuditPanel({
   const bulkFixable = findings.filter(
     (f, i) => f.autoFixable && f.fix && !f.fix.tool.startsWith('delete') && fix[i]?.state !== 'done'
   ).length;
+  const consentFixable = findings.filter(
+    (f, i) => f.autoFixable && f.fix?.tool === 'set_gtm_tag_consent' && fix[i]?.state !== 'done'
+  ).length;
 
-  async function applyAllFixes(): Promise<void> {
+  // Apply every non-destructive fix matching `pred`, sequentially, with per-row status.
+  // Deletes are always excluded (per-row confirm only).
+  async function applyBatch(pred: (f: AuditFindingView, i: number) => boolean): Promise<void> {
     if (applyingAll) return;
     setApplyingAll(true);
     try {
@@ -2101,7 +2106,8 @@ function ContainerAuditPanel({
         const f = findings[i];
         if (!f.autoFixable || !f.fix || f.fix.tool.startsWith('delete')) continue;
         if (fix[i]?.state === 'done' || fix[i]?.state === 'fixing') continue;
-        await applyFix(i, f); // sequential — one workspace write at a time, with per-row status
+        if (!pred(f, i)) continue;
+        await applyFix(i, f); // one workspace write at a time
       }
     } finally {
       setApplyingAll(false);
@@ -2154,18 +2160,30 @@ function ContainerAuditPanel({
               ({report.summary.critical} critical · {report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low ·{' '}
               {report.summary.info} info){fixable > 0 ? ` · ${fixable} auto-fixable` : ''}
             </div>
-            {bulkFixable > 0 && (
+            {(bulkFixable > 0 || consentFixable > 0) && (
               <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <button
-                  style={styles.primaryBtn}
-                  onClick={applyAllFixes}
-                  disabled={applyingAll}
-                  title="Apply every non-destructive fix at once (consent → require consent; unpause). Deletes must be confirmed per row. Re-run the audit afterwards to confirm."
-                >
-                  {applyingAll ? 'Applying all…' : `Apply all fixes (${bulkFixable})`}
-                </button>
+                {bulkFixable > 0 && (
+                  <button
+                    style={styles.primaryBtn}
+                    onClick={() => applyBatch(() => true)}
+                    disabled={applyingAll}
+                    title="Apply every non-destructive fix at once (consent → require consent; unpause). Deletes must be confirmed per row. Re-run the audit afterwards to confirm."
+                  >
+                    {applyingAll ? 'Applying…' : `Apply all fixes (${bulkFixable})`}
+                  </button>
+                )}
+                {consentFixable > 0 && (
+                  <button
+                    style={styles.ghostBtn}
+                    onClick={() => applyBatch((f) => f.fix?.tool === 'set_gtm_tag_consent')}
+                    disabled={applyingAll}
+                    title="Set 'require consent' on every consent finding at once (the ad/analytics types each tag needs). Use a row's 'No extra consent' for any tag that genuinely needs none."
+                  >
+                    {applyingAll ? 'Applying…' : `Require consent on all (${consentFixable})`}
+                  </button>
+                )}
                 <span style={{ color: '#9ca3af', fontSize: 12 }}>
-                  Non-destructive only — deletes stay per-row; consent fixes apply “require consent”.
+                  Non-destructive only — deletes stay per-row; consent applies “require consent”.
                 </span>
               </div>
             )}
