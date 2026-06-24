@@ -211,7 +211,7 @@ export interface TagScanResult {
 /* ── Container audit (the "Container audit" panel) ── */
 export interface AuditFindingView {
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
-  confidence?: 'certain' | 'likely' | 'runtime-required';
+  confidence?: 'certain' | 'likely' | 'runtime-required' | 'guessing';
   category: string;
   message: string;
   resource?: { kind: 'tag' | 'trigger' | 'variable'; id: string; name: string };

@@ -7,7 +7,7 @@ import {
   buildTrigger,
   applyTriggerWaitDefaults,
   consentTypesFor,
-  detectAdPixel,
+  evaluateConsentGate,
   triggerBuiltInVars,
   builtInVarsForTemplates,
   buildVariable,
@@ -16,6 +16,7 @@ import {
   findGa4BaseTag,
   ga4VariablePlan,
 } from '../gtm-builders';
+import { classifyPixel } from '../pixel-signatures';
 
 let passed = 0;
 let failed = 0;
@@ -361,11 +362,41 @@ test('consentTypesFor maps destination type → required consent signals', () =>
   assert.deepEqual(consentTypesFor('awct'), ['ad_storage', 'ad_user_data', 'ad_personalization']);
 });
 
-test('detectAdPixel recognises the major ad networks, ignores plain HTML', () => {
-  assert.equal(detectAdPixel('<script>fbq("init","123");</script>'), 'Meta/Facebook');
-  assert.equal(detectAdPixel('https://analytics.tiktok.com/i18n/pixel'), 'TikTok');
-  assert.equal(detectAdPixel('var _linkedin_partner_id = "9";'), 'LinkedIn');
-  assert.equal(detectAdPixel('<div>hello world</div>'), null);
+test('classifyPixel: strong signal → advertising_pixel; domain-only → possible; plain → not', () => {
+  assert.equal(classifyPixel('<script>fbq("init","123");</script>').classification, 'advertising_pixel');
+  assert.equal(classifyPixel('<script>fbq("init","123");</script>').network, 'Meta / Facebook');
+  assert.equal(classifyPixel('<script>ttq.load("ABC")</script>').classification, 'advertising_pixel');
+  assert.equal(classifyPixel('var _linkedin_partner_id = "9";').classification, 'advertising_pixel');
+  // a domain reference with no init is "possible, review", NOT a confirmed pixel
+  assert.equal(classifyPixel('https://analytics.tiktok.com/i18n/pixel').classification, 'possible_pixel_review');
+  assert.equal(classifyPixel('connect.facebook.net/en_US/fbevents.js').classification, 'possible_pixel_review');
+  assert.equal(classifyPixel('<div>hello world</div>').classification, 'not_a_pixel');
+});
+
+test('classifyPixel: short tokens (twq(/rdt(/uetq) need their domain to co-occur', () => {
+  // strong token alone is NOT enough for the ambiguous networks
+  assert.equal(classifyPixel('twq("track");').classification, 'not_a_pixel');
+  assert.equal(classifyPixel('uetq.push("event");').classification, 'not_a_pixel');
+  // strong + weak domain co-occurring → pixel
+  assert.equal(classifyPixel('twq("track"); static.ads-twitter.com').classification, 'advertising_pixel');
+  assert.equal(classifyPixel('var uetq=[]; bat.bing.com/bat.js').classification, 'advertising_pixel');
+});
+
+test('classifyPixel: an unreadable external <script src> with no signal → opaque_review', () => {
+  assert.equal(classifyPixel('<script src="https://cdn.example.com/x.js"></script>').classification, 'opaque_review');
+});
+
+test('evaluateConsentGate: gated / partial / wrong_types / ungated / declared_no_consent', () => {
+  const need = ['ad_storage', 'ad_user_data', 'ad_personalization'];
+  const list = (...vals: string[]) => ({ consentType: { type: 'list', list: vals.map((v) => ({ type: 'template', value: v })) } });
+  assert.equal(evaluateConsentGate({ consentStatus: 'needed', ...list(...need) }, need), 'gated');
+  assert.equal(evaluateConsentGate({ consentStatus: 'needed', ...list('ad_storage') }, need), 'partial');
+  assert.equal(evaluateConsentGate({ consentStatus: 'needed', ...list('analytics_storage') }, need), 'wrong_types');
+  assert.equal(evaluateConsentGate({ consentStatus: 'notSet' }, need), 'ungated');
+  assert.equal(evaluateConsentGate(null, need), 'ungated');
+  assert.equal(evaluateConsentGate({ consentStatus: 'notNeeded' }, need), 'declared_no_consent');
+  // UPPER_SNAKE from export JSON normalizes identically
+  assert.equal(evaluateConsentGate({ consentStatus: 'NOT_SET' }, need), 'ungated');
 });
 
 test('audit B6: ungated ad pixel in Custom HTML → Critical [Certain], auto-fixable', () => {
@@ -386,17 +417,101 @@ test('audit B6: ungated ad pixel in Custom HTML → Critical [Certain], auto-fix
   assert.equal(r.summary.critical, 1, 'counted as Critical');
 });
 
-test('audit B6: an ad pixel WITH a consent gate is NOT flagged (denied-pass guard)', () => {
+const consentList = (...vals: string[]) => ({ type: 'list', list: vals.map((v) => ({ type: 'template', value: v })) });
+
+test('audit B6: a correctly gated ad pixel is NOT flagged (denied-pass guard)', () => {
   const r = auditContainer({
     tags: [
       { tagId: '1', name: 'Meta Pixel', type: 'html', firingTriggerId: ['T1'], paused: false,
-        consentSettings: { consentStatus: 'needed', consentType: null },
+        consentSettings: { consentStatus: 'needed', consentType: consentList('ad_storage', 'ad_user_data', 'ad_personalization') },
         parameter: [{ key: 'html', value: '<script>fbq("init","555")</script>' }] },
     ],
     triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
     variables: [],
   });
-  assert.equal(r.findings.some((f) => f.category === 'consent' && f.severity === 'critical'), false, 'gated pixel → no B6');
+  assert.equal(r.findings.some((f) => f.checkId === 'B6-ad-pixel-consent'), false, 'fully gated pixel → no B6 finding');
+});
+
+test('audit B6 §8 case 1: TikTok ttq.load() with consentStatus notSet → Critical (UK/EU), with fix', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'TikTok – Social Click', type: 'html', firingTriggerId: ['T1'], paused: false,
+        parameter: [{ key: 'html', value: '<script>ttq.load("ABC");ttq.page();</script>' }] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  const b6 = r.findings.find((f) => f.checkId === 'B6-ad-pixel-consent');
+  assert.ok(b6, 'TikTok ungated pixel flagged');
+  assert.equal(b6?.severity, 'critical', 'Critical on a UK/EU site (default region)');
+  assert.equal(b6?.confidence, 'certain');
+  assert.ok(/TikTok/.test(b6!.message) && /without a consent gate/i.test(b6!.message));
+  assert.equal(b6?.fix?.tool, 'set_gtm_tag_consent');
+  assert.deepEqual(b6?.fix?.args.consentTypes, ['ad_storage', 'ad_user_data', 'ad_personalization']);
+});
+
+test('audit B6 §8: region drives severity — non-risk region → High, not Critical', () => {
+  const snap = {
+    tags: [
+      { tagId: '1', name: 'TikTok', type: 'html', firingTriggerId: ['T1'], paused: false,
+        parameter: [{ key: 'html', value: '<script>ttq.load("ABC")</script>' }] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  };
+  assert.equal(auditContainer(snap, { clientRegion: ['US'] }).findings.find((f) => f.checkId === 'B6-ad-pixel-consent')?.severity, 'high');
+  assert.equal(auditContainer(snap, { clientRegion: ['AU'] }).findings.find((f) => f.checkId === 'B6-ad-pixel-consent')?.severity, 'critical');
+});
+
+test('audit B6 §8 case 3: gated on ad_storage only → Medium (partial), names the missing types', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'Meta', type: 'html', firingTriggerId: ['T1'], paused: false,
+        consentSettings: { consentStatus: 'needed', consentType: consentList('ad_storage') },
+        parameter: [{ key: 'html', value: '<script>fbq("init","9")</script>' }] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  const b6 = r.findings.find((f) => f.checkId === 'B6-ad-pixel-consent');
+  assert.equal(b6?.severity, 'medium', 'partial gate → Medium');
+  assert.ok(/ad_user_data/.test(b6!.message) && /ad_personalization/.test(b6!.message), 'names missing types');
+});
+
+test('audit B6 §8 case 4: LinkedIn declared notNeeded → Critical (declared_no_consent)', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'LinkedIn', type: 'html', firingTriggerId: ['T1'], paused: false,
+        consentSettings: { consentStatus: 'notNeeded' },
+        parameter: [{ key: 'html', value: 'var _linkedin_partner_id="9";' }] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  const b6 = r.findings.find((f) => f.checkId === 'B6-ad-pixel-consent');
+  assert.equal(b6?.severity, 'critical');
+  assert.ok(/NO consent/i.test(b6!.message), 'declared-no-consent wording');
+});
+
+test('audit B6 §8 case 5/6: domain-only and opaque script → Info [Guessing] review notes', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'FB domain only', type: 'html', firingTriggerId: ['T1'], paused: false,
+        parameter: [{ key: 'html', value: 'connect.facebook.net/en_US/fbevents.js' }] },
+      { tagId: '2', name: 'Opaque loader', type: 'html', firingTriggerId: ['T1'], paused: false,
+        parameter: [{ key: 'html', value: '<script src="https://cdn.example.com/x.js"></script>' }] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  const reviews = r.findings.filter((f) => f.checkId === 'B6-ad-pixel-review');
+  assert.equal(reviews.length, 2, 'one review note per ambiguous tag');
+  assert.ok(reviews.every((f) => f.severity === 'info' && f.confidence === 'guessing'), 'Info [Guessing], not scored');
+  // the two ambiguous outcomes must read differently (possible = domain seen; opaque = unreadable script)
+  const possible = reviews.find((f) => f.resource?.id === '1');
+  const opaque = reviews.find((f) => f.resource?.id === '2');
+  assert.ok(/domain/i.test(possible!.message), 'case 5 (possible) cites the network domain');
+  assert.ok(/external script/i.test(opaque!.message) && /can't read/i.test(opaque!.message), 'case 6 (opaque) cites the unreadable external script');
 });
 
 test('audit A8: Ads conversion tag with no Conversion ID → High', () => {
@@ -610,13 +725,43 @@ test('audit A11: a manual tag for an Enhanced-Measurement event is flagged [Like
   assert.ok(f && f.severity === 'medium' && f.confidence === 'likely', 'EM-overlap finding is Medium [Likely]');
 });
 
-test('audit C5: a Custom JavaScript variable (jsm) is flagged for review', () => {
+test('audit C5: a USED Custom JavaScript variable (jsm) is flagged for review', () => {
+  const r = auditContainer({
+    tags: [{ tagId: '1', name: 'GA4', type: 'gaawe', firingTriggerId: ['T1'], paused: false,
+      parameter: [{ key: 'measurementIdOverride', value: 'G-1' }, { key: 'eventName', value: 'x' }, { key: 'p', value: '{{CJS - scrape}}' }] }],
+    triggers: [{ triggerId: 'T1', name: 'T', type: 'customEvent' }],
+    variables: [{ variableId: 'V1', name: 'CJS - scrape', type: 'jsm', parameter: [{ key: 'javascript', value: 'function(){return document.cookie}' }] }],
+  });
+  assert.ok(r.findings.some((x) => x.checkId === 'C5-custom-js-variable'), 'used jsm variable flagged');
+});
+
+test('audit §7 precedence: an UNUSED jsm variable gets only the unused finding, not C5', () => {
   const r = auditContainer({
     tags: [],
     triggers: [],
     variables: [{ variableId: 'V1', name: 'CJS - scrape', type: 'jsm', parameter: [{ key: 'javascript', value: 'function(){return document.cookie}' }] }],
   });
-  assert.ok(r.findings.some((x) => x.category === 'security' && /Custom JavaScript variable/i.test(x.message)), 'jsm variable flagged');
+  const forVar = r.findings.filter((f) => f.resource?.id === 'V1');
+  assert.equal(forVar.some((f) => f.checkId === 'C5-custom-js-variable'), false, 'no runtime-risk finding on an unused item');
+  assert.equal(forVar.some((f) => f.checkId === 'unused-variable'), true, 'unused-cleanup finding wins');
+});
+
+test('audit §7 dedup: the same check never emits twice for one resource', () => {
+  // Two distinct jsm variables that differ only by their id are two findings (not merged);
+  // but the dedup guarantees no single (check, resource) pair appears more than once.
+  const r = auditContainer({
+    tags: [{ tagId: '1', name: 'GA4', type: 'gaawe', firingTriggerId: ['T1'], paused: false,
+      parameter: [{ key: 'measurementIdOverride', value: 'G-1' }, { key: 'eventName', value: 'x' }, { key: 'a', value: '{{JS A}}' }, { key: 'b', value: '{{JS B}}' }] }],
+    triggers: [{ triggerId: 'T1', name: 'T', type: 'customEvent' }],
+    variables: [
+      { variableId: 'VA', name: 'JS A', type: 'jsm', parameter: [] },
+      { variableId: 'VB', name: 'JS B', type: 'jsm', parameter: [] },
+    ],
+  });
+  const c5 = r.findings.filter((f) => f.checkId === 'C5-custom-js-variable');
+  assert.equal(c5.length, 2, 'two distinct variables → two findings');
+  const keys = new Set(c5.map((f) => `${f.checkId}::${f.resource?.id}`));
+  assert.equal(keys.size, 2, 'each (check, resource) pair is unique — no duplicate rows');
 });
 
 test('audit: an unrecognised tag type is flagged for manual review, not skipped', () => {
