@@ -551,5 +551,48 @@ test('applyTriggerWaitDefaults: other trigger types are untouched (no wait field
   }
 });
 
+test('audit A8: a {{variable}} Measurement ID is runtime-required (tracked), not a defect', () => {
+  const r = auditContainer({
+    tags: [{ tagId: '1', name: 'GA4 - Email Click', type: 'gaawe', firingTriggerId: ['T1'], paused: false,
+      parameter: [{ key: 'measurementIdOverride', value: '{{GA4 Variable}}' }, { key: 'eventName', value: 'email_click' }] }],
+    triggers: [{ triggerId: 'T1', name: 'T', type: 'customEvent' }],
+    variables: [],
+  });
+  const f = r.findings.find((x) => x.category === 'ga4' && /variable Measurement ID/i.test(x.message));
+  assert.ok(f, 'the variable-id case is TRACKED (not silently passed)');
+  assert.equal(f?.confidence, 'runtime-required', 'marked runtime-required');
+  assert.equal(f?.severity, 'info', 'info severity → not scored');
+  assert.equal(r.findings.some((x) => /has no measurement ID/i.test(x.message)), false, 'NOT flagged as missing');
+});
+
+test('audit A11: a manual tag for an Enhanced-Measurement event is flagged [Likely] Medium', () => {
+  const r = auditContainer({
+    tags: [{ tagId: '1', name: 'GA4 - File Download', type: 'gaawe', firingTriggerId: ['T1'], paused: false,
+      parameter: [{ key: 'measurementIdOverride', value: 'G-1' }, { key: 'eventName', value: 'file_download' }] }],
+    triggers: [{ triggerId: 'T1', name: 'T', type: 'linkClick' }],
+    variables: [],
+  });
+  const f = r.findings.find((x) => /Enhanced Measurement also auto-tracks/i.test(x.message));
+  assert.ok(f && f.severity === 'medium' && f.confidence === 'likely', 'EM-overlap finding is Medium [Likely]');
+});
+
+test('audit C5: a Custom JavaScript variable (jsm) is flagged for review', () => {
+  const r = auditContainer({
+    tags: [],
+    triggers: [],
+    variables: [{ variableId: 'V1', name: 'CJS - scrape', type: 'jsm', parameter: [{ key: 'javascript', value: 'function(){return document.cookie}' }] }],
+  });
+  assert.ok(r.findings.some((x) => x.category === 'security' && /Custom JavaScript variable/i.test(x.message)), 'jsm variable flagged');
+});
+
+test('audit: an unrecognised tag type is flagged for manual review, not skipped', () => {
+  const r = auditContainer({
+    tags: [{ tagId: '1', name: 'Mystery', type: 'someNewVendorXyz', firingTriggerId: ['T1'], paused: false, parameter: [] }],
+    triggers: [{ triggerId: 'T1', name: 'T', type: 'pageview' }],
+    variables: [],
+  });
+  assert.ok(r.findings.some((x) => /unrecognised type/i.test(x.message)), 'unknown type flagged');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
