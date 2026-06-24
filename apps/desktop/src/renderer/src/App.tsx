@@ -2560,7 +2560,7 @@ const styles: Record<string, React.CSSProperties> = {
   reviewRow: { display: 'flex', gap: 12, alignItems: 'flex-start', padding: '12px 14px', borderBottom: '1px solid #1f2937', background: '#111827' },
   reviewRowOk: { borderLeft: '3px solid #34d399', background: '#0f1b16' },
   reviewRowHead: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  reviewMetaLine: { color: '#9ca3af', fontSize: 11, marginTop: 3 },
+  reviewMetaLine: { color: '#9ca3af', fontSize: 13, marginTop: 3, lineHeight: 1.5 },
   reviewEvidence: { color: '#6b7280', fontSize: 12, marginTop: 3, fontStyle: 'italic' },
   badge: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, borderRadius: 6, padding: '1px 7px' },
   typeChip: { fontSize: 11, color: '#93c5fd', background: '#10233f', border: '1px solid #1e3a5f', borderRadius: 6, padding: '1px 7px' },
