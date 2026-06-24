@@ -1,3 +1,9 @@
+## [1.42.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.42.2...v1.42.3) (2026-06-24)
+
+### Bug Fixes
+
+* **desktop:** "Cannot detect the Google tag" finding is High [Likely], not info ([ab891d6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ab891d688c26080a72381095977b844ca32a59e7))
+
 ## [1.42.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.42.1...v1.42.2) (2026-06-24)
 
 ### Bug Fixes
