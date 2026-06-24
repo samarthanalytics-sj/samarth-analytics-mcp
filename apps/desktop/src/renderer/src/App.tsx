@@ -2092,13 +2092,22 @@ function ContainerAuditPanel({
   const bulkFixable = findings.filter(
     (f, i) => f.autoFixable && f.fix && !f.fix.tool.startsWith('delete') && fix[i]?.state !== 'done'
   ).length;
-  const consentFixable = findings.filter(
-    (f, i) => f.autoFixable && f.fix?.tool === 'set_gtm_tag_consent' && fix[i]?.state !== 'done'
+  const isConsentFix = (f: AuditFindingView): boolean => f.fix?.tool === 'set_gtm_tag_consent';
+  // "Require consent" batch includes ad pixels (gating a pixel is the safe direction).
+  const consentFixable = findings.filter((f, i) => f.autoFixable && isConsentFix(f) && fix[i]?.state !== 'done').length;
+  // "No extra consent" batch EXCLUDES B6 ad pixels — one-click un-gating an ad pixel is a
+  // compliance regression, so those keep their per-row choice.
+  const noExtraFixable = findings.filter(
+    (f, i) => f.autoFixable && isConsentFix(f) && f.checkId !== 'B6-ad-pixel-consent' && fix[i]?.state !== 'done'
   ).length;
 
   // Apply every non-destructive fix matching `pred`, sequentially, with per-row status.
-  // Deletes are always excluded (per-row confirm only).
-  async function applyBatch(pred: (f: AuditFindingView, i: number) => boolean): Promise<void> {
+  // Deletes are always excluded (per-row confirm only). `override` builds an alternate fix
+  // per finding (e.g. consent → notNeeded for the "No extra consent" batch).
+  async function applyBatch(
+    pred: (f: AuditFindingView, i: number) => boolean,
+    override?: (f: AuditFindingView) => { tool: string; args: Record<string, unknown> }
+  ): Promise<void> {
     if (applyingAll) return;
     setApplyingAll(true);
     try {
@@ -2107,7 +2116,7 @@ function ContainerAuditPanel({
         if (!f.autoFixable || !f.fix || f.fix.tool.startsWith('delete')) continue;
         if (fix[i]?.state === 'done' || fix[i]?.state === 'fixing') continue;
         if (!pred(f, i)) continue;
-        await applyFix(i, f); // one workspace write at a time
+        await applyFix(i, f, override?.(f)); // one workspace write at a time
       }
     } finally {
       setApplyingAll(false);
@@ -2175,15 +2184,30 @@ function ContainerAuditPanel({
                 {consentFixable > 0 && (
                   <button
                     style={styles.ghostBtn}
-                    onClick={() => applyBatch((f) => f.fix?.tool === 'set_gtm_tag_consent')}
+                    onClick={() => applyBatch(isConsentFix)}
                     disabled={applyingAll}
-                    title="Set 'require consent' on every consent finding at once (the ad/analytics types each tag needs). Use a row's 'No extra consent' for any tag that genuinely needs none."
+                    title="Set 'require consent' on every consent finding at once (the ad/analytics types each tag needs)."
                   >
                     {applyingAll ? 'Applying…' : `Require consent on all (${consentFixable})`}
                   </button>
                 )}
+                {noExtraFixable > 0 && (
+                  <button
+                    style={styles.ghostBtn}
+                    onClick={() =>
+                      applyBatch(
+                        (f) => isConsentFix(f) && f.checkId !== 'B6-ad-pixel-consent',
+                        (f) => ({ tool: 'set_gtm_tag_consent', args: { ...f.fix!.args, consentStatus: 'notNeeded', consentTypes: [] } })
+                      )
+                    }
+                    disabled={applyingAll}
+                    title="Declare 'no additional consent required' on every consent finding at once — for tags that rely on Consent Mode at the Google-tag level. Advertising pixels are EXCLUDED (un-gating them is a compliance risk); use a pixel's own buttons."
+                  >
+                    {applyingAll ? 'Applying…' : `No extra consent on all (${noExtraFixable})`}
+                  </button>
+                )}
                 <span style={{ color: '#9ca3af', fontSize: 12 }}>
-                  Non-destructive only — deletes stay per-row; consent applies “require consent”.
+                  Non-destructive only — deletes stay per-row; “No extra consent” skips ad pixels.
                 </span>
               </div>
             )}
