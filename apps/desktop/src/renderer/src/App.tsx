@@ -2156,7 +2156,7 @@ function ContainerAuditPanel({
                         {f.resource ? `(${f.resource.kind})` : f.category}
                       </span>
                       {f.category === 'paused' && (
-                        <span style={{ fontWeight: 600, color: '#fbbf24', fontSize: 11, marginLeft: 6 }}>(Paused)</span>
+                        <span style={{ fontWeight: 700, color: '#fbbf24', fontSize: 14, marginLeft: 6 }}>(Paused)</span>
                       )}
                     </div>
                     <div style={{ ...styles.reviewMetaLine, color: '#cbd5e1' }}>{f.message}</div>
