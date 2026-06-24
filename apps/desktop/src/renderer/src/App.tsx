@@ -7,16 +7,12 @@ import type {
   ChatTurn,
   CreateTagOutcome,
   DiscoverResult,
-  Ga4AccountView,
   GoogleClientStatus,
   GtmAccountView,
   GtmContainerView,
   GtmContext,
   GtmWorkspaceView,
   LlmProvider,
-  MonitorAlert,
-  MonitorConfig,
-  MonitorStatus,
   ScanProgressView,
   SecretSelfTest,
   SuggestedTagView,
@@ -41,8 +37,8 @@ const GTM_TYPE_LABELS: Record<string, string> = {
   sp: 'Google Ads Remarketing',
   html: 'Custom HTML',
   img: 'Custom Image',
-  linkClick: 'Click — Just Links',
-  click: 'Click — All Elements',
+  linkClick: 'Click â€” Just Links',
+  click: 'Click â€” All Elements',
   pageview: 'Page View',
   domReady: 'DOM Ready',
   windowLoaded: 'Window Loaded',
@@ -83,7 +79,7 @@ function describeCondition(filter: unknown): string {
     .join(' AND ');
 }
 
-/* ── Editable approval fields ── */
+/* â”€â”€ Editable approval fields â”€â”€ */
 const asObj = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
 
@@ -125,7 +121,7 @@ function prettyParamLabel(key: string): string {
   );
 }
 
-/* Editable fields for a proposed write — names, types, key config. Each apply()
+/* Editable fields for a proposed write â€” names, types, key config. Each apply()
    writes back into a (cloned) copy of the proposal args before it's sent. */
 function buildEditFields(tool: string, details: Record<string, unknown>): EditField[] {
   const fields: EditField[] = [];
@@ -171,7 +167,7 @@ function buildEditFields(tool: string, details: Record<string, unknown>): EditFi
 
   if (details.tag) {
     // Only surface fields the args actually carry. A partial update (e.g. just a
-    // parameter change) has no name/type — showing a blank box and applying it would
+    // parameter change) has no name/type â€” showing a blank box and applying it would
     // BLANK the tag's real name on save. Guarded like the audit-fix path above.
     if (tag.name !== undefined) fields.push({ key: 'tagName', label: 'Tag name', initial: String(tag.name ?? ''), apply: (d, v) => { const t = asObj(d.tag); t.name = v; d.tag = t; } });
     if (tag.type !== undefined) fields.push({ key: 'tagType', label: 'Tag type (code)', initial: String(tag.type ?? ''), apply: (d, v) => { const t = asObj(d.tag); t.type = v; d.tag = t; } });
@@ -297,9 +293,9 @@ function summarizeProposal(tool: string, details: Record<string, unknown>): Arra
   return rows;
 }
 
-/* ───────── Minimal Markdown renderer (dependency-free, XSS-safe) ─────────
-   Renders what the assistant emits — GFM tables, headings, bold/italic, inline
-   code, fenced code blocks, and bullet/ordered lists — as real elements so
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€ Minimal Markdown renderer (dependency-free, XSS-safe) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   Renders what the assistant emits â€” GFM tables, headings, bold/italic, inline
+   code, fenced code blocks, and bullet/ordered lists â€” as real elements so
    tables show as proper bordered tables instead of raw `|` text. All text is
    placed via React children (escaped), so there is no raw-HTML injection. */
 const mdStyles: Record<string, React.CSSProperties> = {
@@ -317,7 +313,7 @@ const mdStyles: Record<string, React.CSSProperties> = {
 
 function renderInline(text: string, kp: string): Array<string | JSX.Element> {
   const out: Array<string | JSX.Element> = [];
-  // **bold** | `code` | *italic* | [label](url) — bold is tried before italic.
+  // **bold** | `code` | *italic* | [label](url) â€” bold is tried before italic.
   const re = /\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*|\[([^\]]+)\]\(([^)]+)\)/g;
   let last = 0;
   let k = 0;
@@ -327,7 +323,7 @@ function renderInline(text: string, kp: string): Array<string | JSX.Element> {
     if (m[1] != null) out.push(<strong key={`${kp}b${k}`}>{m[1]}</strong>);
     else if (m[2] != null) out.push(<code key={`${kp}c${k}`} style={mdStyles.code}>{m[2]}</code>);
     else if (m[3] != null) out.push(<em key={`${kp}i${k}`}>{m[3]}</em>);
-    else if (m[4] != null) out.push(<span key={`${kp}l${k}`}>{m[4]}</span>); // link label only — no in-app navigation
+    else if (m[4] != null) out.push(<span key={`${kp}l${k}`}>{m[4]}</span>); // link label only â€” no in-app navigation
     last = re.lastIndex;
     k++;
   }
@@ -478,7 +474,7 @@ function ConfirmCard({
   return (
     <div style={proposal.destructive ? styles.confirmDanger : styles.confirm}>
       <div style={styles.confirmHead}>
-        {proposal.destructive ? '🗑 Delete — approve this action?' : '⚠ Approve this change to your GTM?'}
+        {proposal.destructive ? 'ðŸ—‘ Delete â€” approve this action?' : 'âš  Approve this change to your GTM?'}
       </div>
 
       {fields.length > 0 ? (
@@ -516,8 +512,8 @@ function ConfirmCard({
       </div>
       <div style={styles.confirmNote}>
         {proposal.destructive
-          ? 'Delete needs two approvals. Applies to a draft workspace — not published.'
-          : 'Edit any field above if needed. Applies to a draft workspace only — not published.'}
+          ? 'Delete needs two approvals. Applies to a draft workspace â€” not published.'
+          : 'Edit any field above if needed. Applies to a draft workspace only â€” not published.'}
       </div>
     </div>
   );
@@ -600,10 +596,10 @@ export function App(): JSX.Element {
           onClick={connect}
           disabled={connecting || !google?.configured}
         >
-          {connecting ? 'Signing in…' : '+ Connect account'}
+          {connecting ? 'Signing inâ€¦' : '+ Connect account'}
         </button>
         {google && !google.configured && (
-          <div style={styles.sideWarn}>OAuth client not set — see Settings.</div>
+          <div style={styles.sideWarn}>OAuth client not set â€” see Settings.</div>
         )}
 
         <div style={styles.sideNav}>
@@ -611,19 +607,19 @@ export function App(): JSX.Element {
             style={{ ...styles.navItem, ...(view === 'chat' ? styles.navActive : {}) }}
             onClick={() => setView('chat')}
           >
-            💬 Chat
+            ðŸ’¬ Chat
           </button>
           <button
             style={{ ...styles.navItem, ...(view === 'gtm' ? styles.navActive : {}) }}
             onClick={() => setView('gtm')}
           >
-            🗂 GTM Tools
+            ðŸ—‚ GTM Tools
           </button>
           <button
             style={{ ...styles.navItem, ...(view === 'settings' ? styles.navActive : {}) }}
             onClick={() => setView('settings')}
           >
-            ⚙ Settings
+            âš™ Settings
           </button>
         </div>
         <div style={styles.sideVersion}>v{info?.version ?? '0.0.0'}</div>
@@ -634,7 +630,7 @@ export function App(): JSX.Element {
           <div style={styles.errorBar}>
             <span>{error}</span>
             <button style={styles.errorClose} onClick={() => setError('')}>
-              ✕
+              âœ•
             </button>
           </div>
         )}
@@ -659,7 +655,7 @@ export function App(): JSX.Element {
   );
 }
 
-/* ───────────────────────────── Chat ───────────────────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Chat â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -768,7 +764,7 @@ function ChatView({
       const res = await window.desktop.data.revertLastChange();
       const parts = [`Reverted ${res.reverted.length} item(s)`];
       if (res.failed.length) parts.push(`${res.failed.length} failed: ${res.failed.map((f) => f.label).join(', ')}`);
-      setMessages((m) => [...m, { role: 'assistant', text: `↩︎ ${parts.join(' · ')}.`, tools: [] }]);
+      setMessages((m) => [...m, { role: 'assistant', text: `â†©ï¸Ž ${parts.join(' Â· ')}.`, tools: [] }]);
       setRevertable(null);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -783,8 +779,8 @@ function ChatView({
         <div>
           <div style={styles.chatTitle}>{active ? active.email : 'No account'}</div>
           <div style={styles.chatSub}>
-            {active?.llm ? `${active.llm.provider} · ${active.llm.model}` : 'No model configured'}
-            {active?.hasGoogleToken ? ' · Google ✓' : ' · not signed in'}
+            {active?.llm ? `${active.llm.provider} Â· ${active.llm.model}` : 'No model configured'}
+            {active?.hasGoogleToken ? ' Â· Google âœ“' : ' Â· not signed in'}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -821,21 +817,21 @@ function ChatView({
       <div style={styles.chatLog}>
         {messages.length === 0 && (
           <div style={styles.empty}>
-            <div style={{ fontSize: 32, marginBottom: 8 }}>💬</div>
-            Ask about your GTM &amp; GA4 — “list my GTM accounts”, “run a GA4 report for last 28
-            days”, or “create an email-click event tag”.
+            <div style={{ fontSize: 32, marginBottom: 8 }}>ðŸ’¬</div>
+            Ask about your GTM &amp; GA4 â€” â€œlist my GTM accountsâ€, â€œrun a GA4 report for last 28
+            daysâ€, or â€œcreate an email-click event tagâ€.
           </div>
         )}
         {messages.map((m, i) => (
           <div key={i} style={m.role === 'user' ? styles.userMsg : styles.asstMsg}>
             {m.role === 'assistant' ? (
-              m.text ? <Markdown text={m.text} /> : <span style={{ opacity: 0.6 }}>…</span>
+              m.text ? <Markdown text={m.text} /> : <span style={{ opacity: 0.6 }}>â€¦</span>
             ) : (
-              <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || 'â€¦'}</div>
             )}
           </div>
         ))}
-        {busy && !pendingConfirm && <div style={styles.asstMsg}>Thinking…</div>}
+        {busy && !pendingConfirm && <div style={styles.asstMsg}>Thinkingâ€¦</div>}
       </div>
 
       {pendingConfirm && (
@@ -857,9 +853,9 @@ function ChatView({
 
       {revertable && !busy && (
         <div style={styles.revertBar}>
-          <span style={styles.revertText}>↩︎ The last query changed {revertable.count} item(s).</span>
+          <span style={styles.revertText}>â†©ï¸Ž The last query changed {revertable.count} item(s).</span>
           <button style={styles.revertBtn} disabled={reverting} onClick={() => void revertLast()}>
-            {reverting ? 'Reverting…' : 'Revert last changes'}
+            {reverting ? 'Revertingâ€¦' : 'Revert last changes'}
           </button>
         </div>
       )}
@@ -868,7 +864,7 @@ function ChatView({
         <textarea
           ref={taRef}
           style={styles.composerInput}
-          placeholder={ready ? 'Message…  (Enter to send, Shift+Enter for a new line)' : hint}
+          placeholder={ready ? 'Messageâ€¦  (Enter to send, Shift+Enter for a new line)' : hint}
           value={input}
           disabled={!ready || busy}
           rows={1}
@@ -974,7 +970,7 @@ function GtmContextBar({
     return (
       <div style={styles.ctxBar}>
         <span>
-          📁 {ctx.accountName} › {ctx.containerName} ›{' '}
+          ðŸ“ {ctx.accountName} â€º {ctx.containerName} â€º{' '}
           <b style={{ color: '#e5e7eb' }}>{ctx.workspaceName ?? 'workspace?'}</b>
         </span>
         <button style={styles.linkBtn} onClick={() => { setSel(ctx); setEditing(true); }}>
@@ -988,19 +984,19 @@ function GtmContextBar({
     <div style={styles.ctxBarEdit}>
       <span style={styles.muted}>Working in:</span>
       <select style={styles.ctxSelect} value={sel.accountId ?? ''} onChange={(e) => void pickAccount(e.target.value)}>
-        <option value="">Account…</option>
+        <option value="">Accountâ€¦</option>
         {accounts.map((a) => (
           <option key={a.accountId} value={a.accountId}>{a.name}</option>
         ))}
       </select>
       <select style={styles.ctxSelect} value={sel.containerId ?? ''} disabled={!sel.accountId || loading === 'containers'} onChange={(e) => void pickContainer(e.target.value)}>
-        <option value="">{loading === 'containers' ? 'Loading…' : 'Container…'}</option>
+        <option value="">{loading === 'containers' ? 'Loadingâ€¦' : 'Containerâ€¦'}</option>
         {containers.map((c) => (
           <option key={c.containerId} value={c.containerId}>{c.name}</option>
         ))}
       </select>
       <select style={styles.ctxSelect} value={sel.workspaceId ?? ''} disabled={!sel.containerId || loading === 'workspaces'} onChange={(e) => pickWorkspace(e.target.value)}>
-        <option value="">{loading === 'workspaces' ? 'Loading…' : 'Workspace…'}</option>
+        <option value="">{loading === 'workspaces' ? 'Loadingâ€¦' : 'Workspaceâ€¦'}</option>
         {workspaces.map((w) => (
           <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
         ))}
@@ -1015,7 +1011,7 @@ function GtmContextBar({
   );
 }
 
-/* ───────────────────── Tag suggestions (review & approve) ───────────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Tag suggestions (review & approve) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 type RowStatus = { state: 'idle' | 'creating' | 'ok' | 'err' | 'exists'; msg?: string };
 interface TagEdit {
@@ -1053,13 +1049,13 @@ function triggerCondition(s: SuggestedTagView): string {
     return t.kind === 'all_clicks' ? 'fires on every click'
       : t.kind === 'form_submit' ? 'fires on every form submit'
       : t.kind === 'youtube_video' ? 'fires on YouTube video start / progress (25/50/75/90%) / complete'
-      : '—';
+      : 'â€”';
   return parts.join(' AND ');
 }
 
 // The suggested tags rendered in the "GTM Structure - GA4 Events" template layout:
 // one block per tag (tag + trigger on the first row; one row per event parameter /
-// trigger condition). Same data the CSV download writes — via suggestionToGroup.
+// trigger condition). Same data the CSV download writes â€” via suggestionToGroup.
 const tplStyles: Record<string, React.CSSProperties> = {
   wrap: { overflowX: 'auto', border: '1px solid #1f2937', borderRadius: 12 },
   table: { borderCollapse: 'collapse', width: '100%', fontSize: 12, color: '#cbd5e1' },
@@ -1103,7 +1099,7 @@ function SuggestionTemplateTable({ suggestions }: { suggestions: SuggestedTagVie
   );
 }
 
-/** A discovered URL → a short, readable label (its path, "/" for the homepage). */
+/** A discovered URL â†’ a short, readable label (its path, "/" for the homepage). */
 function pagePathLabel(u: string): string {
   try {
     const x = new URL(u);
@@ -1113,14 +1109,14 @@ function pagePathLabel(u: string): string {
   }
 }
 
-/** "outbound 40 · cta 30 · download 25 · phone 2 · email 1" for the inventory header. */
+/** "outbound 40 Â· cta 30 Â· download 25 Â· phone 2 Â· email 1" for the inventory header. */
 function kindCountsLabel(elements: Array<{ kind: string }>): string {
   const counts: Record<string, number> = {};
   for (const e of elements) counts[e.kind] = (counts[e.kind] ?? 0) + 1;
   return Object.entries(counts)
     .sort((a, b) => b[1] - a[1])
     .map(([k, n]) => `${k} ${n}`)
-    .join(' · ');
+    .join(' Â· ');
 }
 
 function EditLine({
@@ -1141,7 +1137,7 @@ function EditLine({
 }
 
 // The grouped "GTM" workspace: one shared account/container/workspace picker
-// (GtmContextBar) over two sub-tabs — Tag suggestions and Container audit — so both
+// (GtmContextBar) over two sub-tabs â€” Tag suggestions and Container audit â€” so both
 // GTM-container tools share the same target instead of each finding it on its own.
 function GtmToolsView({
   active,
@@ -1162,10 +1158,10 @@ function GtmToolsView({
       )}
       <div style={styles.subTabs} role="tablist">
         <button style={tab === 'suggestions' ? styles.subTabOn : styles.subTabOff} onClick={() => setTab('suggestions')} role="tab" aria-selected={tab === 'suggestions'}>
-          🏷 Tag suggestions
+          ðŸ· Tag suggestions
         </button>
         <button style={tab === 'audit' ? styles.subTabOn : styles.subTabOff} onClick={() => setTab('audit')} role="tab" aria-selected={tab === 'audit'}>
-          🔍 Container audit
+          ðŸ” Container audit
         </button>
       </div>
       {tab === 'suggestions' ? (
@@ -1186,7 +1182,7 @@ function TagReviewPanel({
 }): JSX.Element {
   const [url, setUrl] = useState('');
   const [scanning, setScanning] = useState(false);
-  // Live crawl progress — suggestions stream in one-by-one as each page is scanned.
+  // Live crawl progress â€” suggestions stream in one-by-one as each page is scanned.
   const [scanProgress, setScanProgress] = useState<{ scanned: number; found: number } | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
@@ -1208,7 +1204,7 @@ function TagReviewPanel({
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
   const [discoverMode, setDiscoverMode] = useState<'site' | 'single' | 'ai'>('site');
-  // OpenAI key presence — gates the experimental AI (screenshot + vision) mode.
+  // OpenAI key presence â€” gates the experimental AI (screenshot + vision) mode.
   const [hasOpenAi, setHasOpenAi] = useState(false);
   useEffect(() => {
     window.desktop.providers.status().then((s) => setHasOpenAi(!!s.openai)).catch(() => setHasOpenAi(false));
@@ -1218,14 +1214,14 @@ function TagReviewPanel({
   // template layout, also what the CSV download writes).
   const [tagView, setTagView] = useState<'cards' | 'table'>('cards');
   const [exportNote, setExportNote] = useState('');
-  // The container's existing tags — so suggestions already present are marked
+  // The container's existing tags â€” so suggestions already present are marked
   // "already exists" and skipped (no duplicate-name failure, no wasted API quota).
   const [existing, setExisting] = useState<{ names: Set<string>; hasGa4Base: boolean }>({ names: new Set(), hasGa4Base: false });
 
   const ctx = active?.gtmContext;
   const targetReady = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
 
-  // Resolve a detected GTM-XXXX container id → its friendly name, when it's one of
+  // Resolve a detected GTM-XXXX container id â†’ its friendly name, when it's one of
   // this account's containers, so "Live on this site" shows the name not the raw id.
   const [containerNames, setContainerNames] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -1268,7 +1264,7 @@ function TagReviewPanel({
     loadSuggestions(res.suggestions);
   }
 
-  // "Single page" mode: scan ONLY the entered URL directly — no discovery, no page
+  // "Single page" mode: scan ONLY the entered URL directly â€” no discovery, no page
   // list, straight to the tag results.
   // Suggestions stream in as each page is scanned, so the list fills one-by-one.
   const onScanProgress = (p: ScanProgressView): void => {
@@ -1407,7 +1403,7 @@ function TagReviewPanel({
   }
 
   // A suggestion already exists in the container if a tag of its (effective) name is
-  // there, or — for the GA4 Configuration — if any GA4 base tag is already present.
+  // there, or â€” for the GA4 Configuration â€” if any GA4 base tag is already present.
   const alreadyExists = (s: SuggestedTagView): boolean =>
     existing.names.has(effective(s).tagName.trim().toLowerCase()) || (s.platform === 'google_tag' && existing.hasGa4Base);
 
@@ -1446,7 +1442,7 @@ function TagReviewPanel({
     try {
       const csv = suggestionsToTemplateCsv(list);
       const saved = await window.desktop.tags.exportCsv('GTM Structure - GA4 Events.csv', csv);
-      setExportNote(saved ? `✓ Saved ${list.length} tag(s) to ${saved}` : 'Export cancelled');
+      setExportNote(saved ? `âœ“ Saved ${list.length} tag(s) to ${saved}` : 'Export cancelled');
     } catch (e) {
       onError(String(e));
     }
@@ -1475,7 +1471,7 @@ function TagReviewPanel({
         for (const s of chosen) {
           const o = byId.get(s.id);
           if (!o) n[s.id] = { state: 'err', msg: 'no result' };
-          else if (o.ok) n[s.id] = { state: 'ok', msg: o.triggerReused ? 'created · trigger reused' : 'created · trigger created' };
+          else if (o.ok) n[s.id] = { state: 'ok', msg: o.triggerReused ? 'created Â· trigger reused' : 'created Â· trigger created' };
           else if (o.existing) n[s.id] = { state: 'exists', msg: 'already exists in the container' };
           else n[s.id] = { state: 'err', msg: o.error ?? 'failed' };
         }
@@ -1531,12 +1527,12 @@ function TagReviewPanel({
                 style={discoverMode === m ? styles.toggleOn : styles.toggleOff}
                 onClick={() => setDiscoverMode(m)}
                 disabled={scanning || discovering || (m === 'ai' && !hasOpenAi)}
-                title={m === 'ai' && !hasOpenAi ? 'Add an OpenAI API key in Settings → Providers to use this' : undefined}
+                title={m === 'ai' && !hasOpenAi ? 'Add an OpenAI API key in Settings â†’ Providers to use this' : undefined}
               >
-                {m === 'site' ? 'Main website' : m === 'single' ? 'Single page' : '🤖 AI (single page)'}
+                {m === 'site' ? 'Main website' : m === 'single' ? 'Single page' : 'ðŸ¤– AI (single page)'}
               </button>
             ))}
-            {discoverMode === 'ai' && <span style={styles.muted}>experimental · screenshots the page + reads it with OpenAI vision</span>}
+            {discoverMode === 'ai' && <span style={styles.muted}>experimental Â· screenshots the page + reads it with OpenAI vision</span>}
           </div>
           <div style={styles.formRow}>
             <input
@@ -1559,29 +1555,29 @@ function TagReviewPanel({
             <button style={styles.primaryBtn} onClick={doDiscover} disabled={!url.trim() || discovering || scanning}>
               {discoverMode === 'ai'
                 ? scanning
-                  ? 'Analyzing…'
-                  : '🤖 Analyze with AI'
+                  ? 'Analyzingâ€¦'
+                  : 'ðŸ¤– Analyze with AI'
                 : discoverMode === 'single'
                   ? scanning
-                    ? 'Scanning…'
+                    ? 'Scanningâ€¦'
                     : 'Scan page'
                   : discovering
-                    ? 'Discovering…'
+                    ? 'Discoveringâ€¦'
                     : 'Discover pages'}
             </button>
           </div>
           <div style={styles.muted}>
             {discoverMode === 'ai'
-              ? 'Screenshots this page and asks OpenAI vision which tags to create, wired to the page’s real elements (the screenshot is sent to OpenAI). Experimental.'
+              ? 'Screenshots this page and asks OpenAI vision which tags to create, wired to the pageâ€™s real elements (the screenshot is sent to OpenAI). Experimental.'
               : discoverMode === 'single'
                 ? 'Scans ONLY this page (no crawl, no sitemap) and shows its tags directly'
                 : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan'}
-            {' '}— merging Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
+            {' '}â€” merging Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
             approve.{' '}
             <button style={styles.linkBtn} onClick={doQuickScan} disabled={!url.trim() || scanning || discovering}>
               quick scan (~25 pages)
             </button>{' '}
-            ·{' '}
+            Â·{' '}
             <button style={styles.linkBtn} onClick={() => setPasteOpen((o) => !o)}>
               {pasteOpen ? 'hide paste' : 'paste a report'}
             </button>
@@ -1590,7 +1586,7 @@ function TagReviewPanel({
             <div style={{ marginTop: 8 }}>
               <textarea
                 style={styles.pasteArea}
-                placeholder={'Paste the JSON output of the web-audit "gtm_tag_suggestions" tool…'}
+                placeholder={'Paste the JSON output of the web-audit "gtm_tag_suggestions" toolâ€¦'}
                 value={pasteText}
                 onChange={(e) => setPasteText(e.target.value)}
               />
@@ -1601,13 +1597,13 @@ function TagReviewPanel({
           )}
         </div>
 
-        {/* Discovered pages → pick which to deep-scan */}
+        {/* Discovered pages â†’ pick which to deep-scan */}
         {discovered && (
           <div style={styles.card}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <div style={styles.muted}>
                 Found <b style={{ color: '#e5e7eb' }}>{discovered.total}</b> page(s){' '}
-                {discovered.viaSitemap ? 'via sitemap' : 'via link-crawl'} · {selectedPageCount} selected
+                {discovered.viaSitemap ? 'via sitemap' : 'via link-crawl'} Â· {selectedPageCount} selected
               </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                 <button style={styles.linkBtn} onClick={() => setAllPages(() => true)}>Select all</button>
@@ -1647,11 +1643,11 @@ function TagReviewPanel({
                 ))}
               </div>
             ) : (
-              <div style={{ ...styles.muted, marginTop: 6 }}>No pages found — try the quick scan above, or check the URL.</div>
+              <div style={{ ...styles.muted, marginTop: 6 }}>No pages found â€” try the quick scan above, or check the URL.</div>
             )}
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
               <button style={styles.primaryBtn} onClick={doScanSelected} disabled={selectedPageCount === 0 || scanning}>
-                {scanning ? 'Scanning…' : `Scan selected (${selectedPageCount})`}
+                {scanning ? 'Scanningâ€¦' : `Scan selected (${selectedPageCount})`}
               </button>
               {selectedPageCount > 60 && <span style={{ color: '#fcd9a5', fontSize: 13 }}>Up to 60 pages are scanned per run.</span>}
             </div>
@@ -1663,8 +1659,8 @@ function TagReviewPanel({
           <div style={styles.h2}>Create into</div>
           {targetReady && ctx ? (
             <div style={styles.muted}>
-              📁 {ctx.accountName} › {ctx.containerName} › <b style={{ color: '#e5e7eb' }}>{ctx.workspaceName}</b>
-              &nbsp;·&nbsp; {active?.email}
+              ðŸ“ {ctx.accountName} â€º {ctx.containerName} â€º <b style={{ color: '#e5e7eb' }}>{ctx.workspaceName}</b>
+              &nbsp;Â·&nbsp; {active?.email}
             </div>
           ) : (
             <div style={{ color: '#fcd9a5', fontSize: 13 }}>
@@ -1673,7 +1669,7 @@ function TagReviewPanel({
             </div>
           )}
           <div style={{ ...styles.muted, marginTop: 6 }}>
-            measurementId defaults to the <code style={mdStyles.code}>{'{{GA4 Measurement ID}}'}</code> variable — make
+            measurementId defaults to the <code style={mdStyles.code}>{'{{GA4 Measurement ID}}'}</code> variable â€” make
             sure it exists in this container, or edit a row to a real G-XXXX id.
           </div>
         </div>
@@ -1681,7 +1677,7 @@ function TagReviewPanel({
         {/* Warnings (scan or paste) */}
         {warnings.map((w, i) => (
           <div key={i} style={{ ...styles.muted, color: '#fcd9a5' }}>
-            ⚠ {w}
+            âš  {w}
           </div>
         ))}
 
@@ -1691,7 +1687,7 @@ function TagReviewPanel({
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <div style={styles.muted}>
                 {meta
-                  ? `Scanned ${meta.pagesScanned} of ${meta.pagesCrawled} page(s) · found ${meta.formsFound} form(s), ${meta.trackableElements} trackable element(s) → ${meta.suggestions} suggestion(s)`
+                  ? `Scanned ${meta.pagesScanned} of ${meta.pagesCrawled} page(s) Â· found ${meta.formsFound} form(s), ${meta.trackableElements} trackable element(s) â†’ ${meta.suggestions} suggestion(s)`
                   : ''}
               </div>
               <button style={styles.linkBtn} onClick={() => setShowLog((o) => !o)}>
@@ -1728,7 +1724,7 @@ function TagReviewPanel({
                         <td style={styles.invTd}>{f.page}</td>
                         <td style={styles.invTd}>{f.purpose}</td>
                         <td style={styles.invTd}>{f.provider}</td>
-                        <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{f.action || '—'}</td>
+                        <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{f.action || 'â€”'}</td>
                       </tr>
                     ))}
                     {scanLog.inventory.forms.length === 0 && (
@@ -1746,7 +1742,7 @@ function TagReviewPanel({
                   All trackable elements ({scanLog.inventory.elements.length})
                   {scanLog.inventory.elements.length > 0 && (
                     <span style={{ textTransform: 'none', color: '#6b7280', fontWeight: 400, letterSpacing: 0 }}>
-                      {' '}— {kindCountsLabel(scanLog.inventory.elements)}
+                      {' '}â€” {kindCountsLabel(scanLog.inventory.elements)}
                     </span>
                   )}
                 </div>
@@ -1765,8 +1761,8 @@ function TagReviewPanel({
                         <tr key={i}>
                           <td style={styles.invTd}>{e.page}</td>
                           <td style={styles.invTd}>{e.kind}</td>
-                          <td style={styles.invTd}>{(e.text || '—').slice(0, 80)}</td>
-                          <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{e.href || '—'}</td>
+                          <td style={styles.invTd}>{(e.text || 'â€”').slice(0, 80)}</td>
+                          <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{e.href || 'â€”'}</td>
                         </tr>
                       ))}
                       {scanLog.inventory.elements.length === 0 && (
@@ -1784,7 +1780,7 @@ function TagReviewPanel({
                 <ul style={styles.resultList}>
                   {scanLog.pages.map((p, i) => (
                     <li key={i} style={styles.resultRow}>
-                      {p.page} — {p.forms} form(s), {p.elements} element(s)
+                      {p.page} â€” {p.forms} form(s), {p.elements} element(s)
                     </li>
                   ))}
                   {scanLog.pages.length === 0 && <li style={styles.resultRow}>none</li>}
@@ -1795,10 +1791,10 @@ function TagReviewPanel({
                     <ul style={styles.resultList}>
                       {scanLog.notScanned.slice(0, 40).map((n, i) => (
                         <li key={i} style={styles.resultRow}>
-                          {n.url} — {n.reason}
+                          {n.url} â€” {n.reason}
                         </li>
                       ))}
-                      {scanLog.notScanned.length > 40 && <li style={styles.resultRow}>…and {scanLog.notScanned.length - 40} more</li>}
+                      {scanLog.notScanned.length > 40 && <li style={styles.resultRow}>â€¦and {scanLog.notScanned.length - 40} more</li>}
                     </ul>
                   </>
                 )}
@@ -1807,29 +1803,29 @@ function TagReviewPanel({
           </div>
         )}
 
-        {/* Live crawl progress — the list below fills in as each page is read. */}
+        {/* Live crawl progress â€” the list below fills in as each page is read. */}
         {scanning && scanProgress && (
           <div style={styles.scanBanner}>
-            ⏳ Scanning… {scanProgress.scanned} page(s) read · {scanProgress.found} tag(s) so far — they stream in below as each page is scanned.
+            â³ Scanningâ€¦ {scanProgress.scanned} page(s) read Â· {scanProgress.found} tag(s) so far â€” they stream in below as each page is scanned.
           </div>
         )}
 
         {/* Results */}
         {suggestions.length === 0 ? (
           <div style={styles.empty}>
-            <div style={{ fontSize: 32, marginBottom: 8 }}>🏷</div>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>ðŸ·</div>
             {scanning
-              ? 'Reading the first page…'
+              ? 'Reading the first pageâ€¦'
               : scanLog
               ? 'No trackable forms or clicks were found on the scanned pages. Try increasing pages/depth, or open the scan log above to see what was covered.'
-              : 'Scan a website to see the GA4 event tags worth creating — form submissions (with the form provider), email & phone clicks, file downloads, outbound links and CTAs.'}
+              : 'Scan a website to see the GA4 event tags worth creating â€” form submissions (with the form provider), email & phone clicks, file downloads, outbound links and CTAs.'}
           </div>
         ) : (
           <>
             <div style={styles.reviewToolbar}>
               <div style={styles.muted}>
-                {meta ? `${meta.pagesScanned} page(s) scanned · ` : ''}
-                {suggestions.length} suggestion(s) · {newCount} new, {emCount} already auto-tracked · {selectedIds.length}{' '}
+                {meta ? `${meta.pagesScanned} page(s) scanned Â· ` : ''}
+                {suggestions.length} suggestion(s) Â· {newCount} new, {emCount} already auto-tracked Â· {selectedIds.length}{' '}
                 selected
               </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1862,7 +1858,7 @@ function TagReviewPanel({
                   </button>
                 </span>
                 <button style={styles.linkBtn} onClick={() => void downloadStructureCsv()}>
-                  ⬇ Download CSV
+                  â¬‡ Download CSV
                 </button>
               </div>
             </div>
@@ -1901,9 +1897,9 @@ function TagReviewPanel({
                         <span style={{ fontWeight: 600 }}>{eff.tagName}</span>
                         <span style={{ ...styles.badge, ...CONF_BADGE[s.confidence] }}>{s.confidence}</span>
                         <span style={styles.typeChip}>{s.platform === 'google_tag' ? 'Google tag' : 'GA4 event'}</span>
-                        {existsRow && <span style={styles.existsChip}>✓ already exists</span>}
+                        {existsRow && <span style={styles.existsChip}>âœ“ already exists</span>}
                         {s.enhancedMeasurementOverlap && !existsRow && (
-                          <span style={styles.emChip}>⚠ Enhanced Measurement already tracks this</span>
+                          <span style={styles.emChip}>âš  Enhanced Measurement already tracks this</span>
                         )}
                       </div>
                       <div style={styles.detailGrid}>
@@ -1915,7 +1911,7 @@ function TagReviewPanel({
                         <span>{s.platform === 'google_tag' ? 'Google tag (googtag)' : 'GA4 Event (gaawe)'}</span>
                         <span style={styles.detailKey}>Trigger</span>
                         <span>
-                          <b style={{ color: '#e5e7eb' }}>{s.trigger.name}</b> · {triggerTypeLabel(s.trigger.kind)}
+                          <b style={{ color: '#e5e7eb' }}>{s.trigger.name}</b> Â· {triggerTypeLabel(s.trigger.kind)}
                         </span>
                         <span style={styles.detailKey}>Condition</span>
                         <span>{triggerCondition(s)}</span>
@@ -1924,17 +1920,17 @@ function TagReviewPanel({
                           {(eff.eventParameters ?? []).length > 0
                             ? (eff.eventParameters ?? []).map((p, i) => (
                                 <span key={i}>
-                                  {i > 0 ? '  ·  ' : ''}
+                                  {i > 0 ? '  Â·  ' : ''}
                                   <code style={mdStyles.code}>{p.name}</code>={p.value}
                                 </span>
                               ))
-                            : '—'}
+                            : 'â€”'}
                         </span>
                       </div>
                       <div style={styles.reviewEvidence}>{s.evidence}</div>
                       {s.note && (
                         <div style={{ fontSize: 12, marginTop: 4, color: '#fcd9a5', display: 'flex', gap: 6 }}>
-                          <span>⚠</span>
+                          <span>âš </span>
                           <span>{s.note}</span>
                         </div>
                       )}
@@ -1946,7 +1942,7 @@ function TagReviewPanel({
                             color: st.state === 'ok' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : st.state === 'exists' ? '#7dd3fc' : '#9ca3af',
                           }}
                         >
-                          {st.state === 'creating' ? 'Creating…' : st.state === 'ok' ? `✓ ${st.msg}` : `✗ ${st.msg}`}
+                          {st.state === 'creating' ? 'Creatingâ€¦' : st.state === 'ok' ? `âœ“ ${st.msg}` : `âœ— ${st.msg}`}
                         </div>
                       )}
                       {expanded[s.id] && (
@@ -1973,7 +1969,7 @@ function TagReviewPanel({
                     </div>
                     {!okRow && (
                       <button style={styles.linkBtn} onClick={() => setExpanded((x) => ({ ...x, [s.id]: !x[s.id] }))}>
-                        {expanded[s.id] ? 'done' : '✎ edit'}
+                        {expanded[s.id] ? 'done' : 'âœŽ edit'}
                       </button>
                     )}
                   </div>
@@ -1986,14 +1982,14 @@ function TagReviewPanel({
               <div style={styles.confirm}>
                 <div style={styles.confirmHead}>Create {selectedIds.length} draft tag(s)?</div>
                 <div style={{ ...styles.muted, margin: '6px 0', color: '#fcd9a5' }}>
-                  Into {ctx?.containerName} › {ctx?.workspaceName}. Applies to a DRAFT workspace only — not published. You
+                  Into {ctx?.containerName} â€º {ctx?.workspaceName}. Applies to a DRAFT workspace only â€” not published. You
                   publish in GTM yourself.
                   {selectedHasEmOverlap && ' Some selected tags duplicate GA4 Enhanced Measurement auto-tracking.'}
-                  {selectedUsesVar && ' Some tags use the {{GA4 Measurement ID}} variable — verify it exists in this container.'}
+                  {selectedUsesVar && ' Some tags use the {{GA4 Measurement ID}} variable â€” verify it exists in this container.'}
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button style={styles.primaryBtn} onClick={confirmCreate} disabled={creating}>
-                    {creating ? 'Creating…' : `Create ${selectedIds.length} tag(s)`}
+                    {creating ? 'Creatingâ€¦' : `Create ${selectedIds.length} tag(s)`}
                   </button>
                   <button style={styles.ghostBtn} onClick={() => setConfirming(false)} disabled={creating}>
                     Cancel
@@ -2012,7 +2008,7 @@ function TagReviewPanel({
                 {!targetReady && <span style={{ color: '#fcd9a5', fontSize: 13 }}>Pick a draft workspace first.</span>}
                 {done && (
                   <span style={{ color: done.failed ? '#fcd9a5' : '#6ee7b7', fontSize: 13 }}>
-                    {done.created} created{done.failed ? `, ${done.failed} failed` : ''} — open GTM to review &amp;
+                    {done.created} created{done.failed ? `, ${done.failed} failed` : ''} â€” open GTM to review &amp;
                     publish.
                   </span>
                 )}
@@ -2025,7 +2021,7 @@ function TagReviewPanel({
   );
 }
 
-/* ───────────────────── Container audit (existing tags) ───────────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Container audit (existing tags) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 const SEV_BADGE: Record<string, React.CSSProperties> = {
   high: { background: '#3a1416', color: '#fca5a5', border: '1px solid #7f1d1d' },
@@ -2106,8 +2102,8 @@ function ContainerAuditPanel({
       setGa4({
         state: 'done',
         msg: r.present
-          ? `Already present — GA4 base tag "${r.existingTag}" exists; nothing created.`
-          : `Created Google Tag "${r.tagName}" using {{${r.variableName}}}${r.variableCreated ? ` + the "${r.variableName}" variable (= ${r.measurementId})` : ''}. Draft only — publish in GTM.`,
+          ? `Already present â€” GA4 base tag "${r.existingTag}" exists; nothing created.`
+          : `Created Google Tag "${r.tagName}" using {{${r.variableName}}}${r.variableCreated ? ` + the "${r.variableName}" variable (= ${r.measurementId})` : ''}. Draft only â€” publish in GTM.`,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -2134,12 +2130,12 @@ function ContainerAuditPanel({
             Container:{' '}
             {ctx?.containerId ? (
               <b style={{ color: '#e5e7eb' }}>
-                {ctx.accountName} › {ctx.containerName} › {ctx.workspaceName ?? 'workspace?'}
+                {ctx.accountName} â€º {ctx.containerName} â€º {ctx.workspaceName ?? 'workspace?'}
               </b>
             ) : (
               <b style={{ color: '#fcd9a5' }}>none</b>
             )}
-            {active?.email ? ` · ${active.email}` : ''}
+            {active?.email ? ` Â· ${active.email}` : ''}
           </div>
           {!ready && (
             <div style={{ color: '#fcd9a5', fontSize: 13, marginTop: 4 }}>
@@ -2150,16 +2146,17 @@ function ContainerAuditPanel({
           )}
           <div style={{ marginTop: 10 }}>
             <button style={styles.primaryBtn} onClick={runAudit} disabled={!ready || running}>
-              {running ? 'Auditing…' : report ? 'Re-run audit' : 'Run audit'}
+              {running ? 'Auditingâ€¦' : report ? 'Re-run audit' : 'Run audit'}
             </button>
           </div>
         </div>
 
-        {/* GA4 base/config tag bootstrap */}
+        {/* GA4 base/config tag bootstrap â€” shown ONLY when the audit found no Configuration tag. */}
+        {!report?.hasGa4Config && (
         <div style={styles.card}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>GA4 base (Configuration) tag</div>
           <div style={styles.muted}>
-            Adds a Google Tag <b>only if the container has none</b> — storing the Measurement ID in a{' '}
+            Adds a Google Tag <b>only if the container has none</b> â€” storing the Measurement ID in a{' '}
             <code style={mdStyles.code}>GA4 - Variable</code> constant and referencing{' '}
             <code style={mdStyles.code}>{'{{GA4 - Variable}}'}</code>, firing on All Pages. Draft only.
           </div>
@@ -2185,41 +2182,42 @@ function ContainerAuditPanel({
               </>
             ) : (
               <button style={styles.primaryBtn} onClick={ensureGa4Config} disabled={!ready || ga4.state === 'working'}>
-                {ga4.state === 'working' ? 'Working…' : 'Add GA4 base tag if missing'}
+                {ga4.state === 'working' ? 'Workingâ€¦' : 'Add GA4 base tag if missing'}
               </button>
             )}
           </div>
           {ga4.state === 'confirm' && (
             <div style={{ ...styles.muted, marginTop: 6, color: '#fcd9a5' }}>
               Will create a <b>GA4 - Variable</b> constant (= {ga4Mid || 'G-123456789'}) and a <b>GA4 Configuration</b> Google
-              Tag into the DRAFT workspace — only if no GA4 base tag already exists. Not published.
+              Tag into the DRAFT workspace â€” only if no GA4 base tag already exists. Not published.
             </div>
           )}
           {ga4.msg && (
             <div style={{ marginTop: 6, fontSize: 13, color: ga4.state === 'err' ? '#fca5a5' : '#6ee7b7' }}>
-              {ga4.state === 'err' ? '✗ ' : '✓ '}
+              {ga4.state === 'err' ? 'âœ— ' : 'âœ“ '}
               {ga4.msg}
             </div>
           )}
         </div>
+        )}
 
         {report && (
           <div style={styles.card}>
             <div style={styles.muted}>
-              {report.counts.tags} tag(s) · {report.counts.triggers} trigger(s) · {report.counts.variables} variable(s) ·{' '}
+              {report.counts.tags} tag(s) Â· {report.counts.triggers} trigger(s) Â· {report.counts.variables} variable(s) Â·{' '}
               <b style={{ color: report.counts.findings ? '#fcd34d' : '#6ee7b7' }}>
                 {report.counts.findings} issue(s)
               </b>{' '}
-              ({report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low · {report.summary.info} info)
-              {fixable > 0 ? ` · ${fixable} auto-fixable` : ''}
+              ({report.summary.high} high Â· {report.summary.medium} medium Â· {report.summary.low} low Â· {report.summary.info} info)
+              {fixable > 0 ? ` Â· ${fixable} auto-fixable` : ''}
             </div>
           </div>
         )}
 
         {report && findings.length === 0 && (
           <div style={styles.empty}>
-            <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
-            No issues found — every tag has a trigger, nothing's mis-paused, no orphans. Looks clean.
+            <div style={{ fontSize: 32, marginBottom: 8 }}>âœ…</div>
+            No issues found â€” every tag has a trigger, nothing's mis-paused, no orphans. Looks clean.
           </div>
         )}
 
@@ -2242,12 +2240,12 @@ function ContainerAuditPanel({
                     <div style={styles.reviewEvidence}>{f.recommendation}</div>
                     {st && st.state !== 'idle' && st.state !== 'confirm' && (
                       <div style={{ fontSize: 12, marginTop: 4, color: st.state === 'done' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : '#9ca3af' }}>
-                        {st.state === 'fixing' ? 'Applying…' : st.state === 'done' ? '✓ applied — re-run to confirm' : `✗ ${st.msg}`}
+                        {st.state === 'fixing' ? 'Applyingâ€¦' : st.state === 'done' ? 'âœ“ applied â€” re-run to confirm' : `âœ— ${st.msg}`}
                       </div>
                     )}
                   </div>
                   {f.autoFixable && f.fix && !done && f.fix.tool === 'set_gtm_tag_consent' ? (
-                    // Consent has two valid answers — let the user pick rather than
+                    // Consent has two valid answers â€” let the user pick rather than
                     // silently forcing "require consent" (which would block GA4 under denial).
                     <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                       <button
@@ -2256,7 +2254,7 @@ function ContainerAuditPanel({
                         onClick={() => applyFix(i, f)}
                         title="Require these consent types before the tag fires"
                       >
-                        {st?.state === 'fixing' ? '…' : 'Require consent'}
+                        {st?.state === 'fixing' ? 'â€¦' : 'Require consent'}
                       </button>
                       <button
                         style={styles.ghostBtn}
@@ -2276,7 +2274,7 @@ function ContainerAuditPanel({
                       onClick={() => applyFix(i, f)}
                     >
                       {st?.state === 'fixing'
-                        ? '…'
+                        ? 'â€¦'
                         : st?.state === 'confirm'
                           ? 'Confirm delete'
                           : f.fix.tool.startsWith('delete')
@@ -2294,7 +2292,7 @@ function ContainerAuditPanel({
   );
 }
 
-/* ─────────────────────────── Settings ─────────────────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 function SettingsView({
   active,
@@ -2319,10 +2317,10 @@ function SettingsView({
 
       {google && !google.configured && (
         <section style={styles.warn}>
-          <strong>Google OAuth client not configured.</strong> Create a Google “Desktop app” OAuth
+          <strong>Google OAuth client not configured.</strong> Create a Google â€œDesktop appâ€ OAuth
           client, then drop a file at:
           <pre style={styles.codeBlock}>{google.configPath}</pre>
-          <code>{'{ "clientId": "…apps.googleusercontent.com", "clientSecret": "…" }'}</code>
+          <code>{'{ "clientId": "â€¦apps.googleusercontent.com", "clientSecret": "â€¦" }'}</code>
         </section>
       )}
       {active ? (
@@ -2330,7 +2328,7 @@ function SettingsView({
           <section style={styles.card}>
             <h2 style={styles.h2}>Active account</h2>
             <div style={styles.kv}><span>Email</span><b>{active.email}</b></div>
-            <div style={styles.kv}><span>Google</span><b>{active.hasGoogleToken ? '✓ signed in' : '— not connected'}</b></div>
+            <div style={styles.kv}><span>Google</span><b>{active.hasGoogleToken ? 'âœ“ signed in' : 'â€” not connected'}</b></div>
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
               {active.hasGoogleToken && (
                 <button style={styles.ghostBtn} onClick={() => run(() => window.desktop.google.disconnect(active.id))}>
@@ -2346,16 +2344,6 @@ function SettingsView({
           <section style={styles.card}>
             <h2 style={styles.h2}>Language model</h2>
             <LlmEditor account={active} onChange={refresh} onError={onError} />
-          </section>
-
-          <section style={styles.card}>
-            <h2 style={styles.h2}>Data tools (read-only)</h2>
-            <DataTools active={active} onError={onError} />
-          </section>
-
-          <section style={styles.card}>
-            <h2 style={styles.h2}>Continuous monitoring (GTM)</h2>
-            <MonitoringEditor active={active} onError={onError} />
           </section>
         </>
       ) : (
@@ -2373,137 +2361,15 @@ function SettingsView({
         <h2 style={styles.h2}>Diagnostics</h2>
         {selfTest && (
           <div style={{ color: selfTest.ok ? '#34d399' : '#fca5a5', marginBottom: 8 }}>
-            Secret store (DPAPI): {selfTest.ok ? '✓ working' : `✗ ${selfTest.detail}`}
+            Secret store (DPAPI): {selfTest.ok ? 'âœ“ working' : `âœ— ${selfTest.detail}`}
           </div>
         )}
         {info && (
           <div style={styles.muted}>
-            Electron {info.electron} · Node {info.node} · {info.platform}
+            Electron {info.electron} Â· Node {info.node} Â· {info.platform}
           </div>
         )}
       </section>
-    </div>
-  );
-}
-
-/* Continuous-monitoring control: enable/interval + Audit now + latest alert. */
-function MonitoringEditor({
-  active,
-  onError,
-}: {
-  active: AccountView;
-  onError: (m: string) => void;
-}): JSX.Element {
-  const [status, setStatus] = useState<MonitorStatus | null>(null);
-  const [alert, setAlert] = useState<MonitorAlert | null>(null);
-  const [intervalDraft, setIntervalDraft] = useState<string>('');
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    window.desktop.monitor
-      .status()
-      .then((s) => {
-        setStatus(s);
-        setIntervalDraft(String(s.intervalMinutes));
-        // Show the most recent alert even if it fired while this view was closed.
-        if (s.lastAlert) setAlert(s.lastAlert);
-      })
-      .catch((e) => onError(String(e)));
-    const off = window.desktop.monitor.onAlert(setAlert);
-    return off;
-  }, [onError]);
-
-  const update = async (patch: Partial<MonitorConfig>): Promise<void> => {
-    try {
-      const s = await window.desktop.monitor.configure(patch);
-      setStatus(s);
-      setIntervalDraft(String(s.intervalMinutes));
-    } catch (e) {
-      onError(String(e));
-    }
-  };
-
-  const auditNow = async (): Promise<void> => {
-    setBusy(true);
-    try {
-      const a = await window.desktop.monitor.runNow();
-      if (a) setAlert(a);
-      setStatus(await window.desktop.monitor.status());
-    } catch (e) {
-      onError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const ctx = active.gtmContext;
-  const ready = Boolean(active.hasGoogleToken && ctx?.containerId && ctx?.workspaceId);
-
-  if (!ready) {
-    return (
-      <p style={styles.muted}>
-        Pick a GTM container and workspace (in chat or Data tools) to enable monitoring.
-      </p>
-    );
-  }
-
-  return (
-    <div>
-      <p style={styles.muted}>
-        Re-audits {ctx?.containerName ? `“${ctx.containerName}”` : 'the selected container'} on a timer and
-        alerts you when NEW issues appear since the last check.
-      </p>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        <input
-          type="checkbox"
-          checked={status?.enabled ?? false}
-          onChange={(e) => void update({ enabled: e.target.checked })}
-        />
-        <span>Enable automatic monitoring</span>
-      </label>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-        <span style={styles.muted}>Every</span>
-        <input
-          type="number"
-          min={5}
-          value={intervalDraft}
-          // Commit on blur / Enter (not every keystroke) so changing the interval
-          // doesn't trigger a live audit per digit.
-          onChange={(e) => setIntervalDraft(e.target.value)}
-          onBlur={() => {
-            const n = Number(intervalDraft);
-            if (Number.isFinite(n) && n !== status?.intervalMinutes) void update({ intervalMinutes: n });
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-          }}
-          style={{ width: 70 }}
-        />
-        <span style={styles.muted}>minutes (min 5)</span>
-        <button style={styles.ghostBtn} disabled={busy} onClick={() => void auditNow()}>
-          {busy ? 'Auditing…' : 'Audit now'}
-        </button>
-      </div>
-      {status?.lastRunAt ? (
-        <div style={styles.muted}>Last check: {new Date(status.lastRunAt).toLocaleString()}</div>
-      ) : null}
-      {status?.lastError ? <div style={{ color: '#fca5a5' }}>Last error: {status.lastError}</div> : null}
-      {alert ? (
-        <div style={{ ...styles.warn, marginTop: 10 }}>
-          <strong>
-            {alert.newFindings.length} new issue{alert.newFindings.length === 1 ? '' : 's'}
-          </strong>
-          {alert.resolvedCount > 0 ? <span> · {alert.resolvedCount} resolved</span> : null}
-          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-            {alert.newFindings.slice(0, 6).map((f, i) => (
-              <li key={i}>
-                <b>{f.severity}</b> — {f.message}
-              </li>
-            ))}
-          </ul>
-          <div style={styles.muted}>Ask in chat to fix these.</div>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -2554,8 +2420,8 @@ function LlmEditor({
         </button>
       </div>
       <div style={styles.muted}>
-        API key: {account.llm?.hasApiKey ? `✓ using the app-level ${account.llm.provider} key` : '✗ not set — add it under Providers below'}
-        {saved && <span style={{ color: '#34d399' }}> · {saved}</span>}
+        API key: {account.llm?.hasApiKey ? `âœ“ using the app-level ${account.llm.provider} key` : 'âœ— not set â€” add it under Providers below'}
+        {saved && <span style={{ color: '#34d399' }}> Â· {saved}</span>}
       </div>
     </div>
   );
@@ -2602,14 +2468,14 @@ function ProvidersEditor({
       {providers.map((p) => (
         <div key={p} style={styles.formRow}>
           <span style={{ width: 90, fontSize: 13, alignSelf: 'center', textTransform: 'capitalize' }}>
-            {p} {status[p] ? '✓' : ''}
+            {p} {status[p] ? 'âœ“' : ''}
           </span>
           <input
             style={styles.input}
             type="password"
             value={keys[p] ?? ''}
             onChange={(e) => setKeys((k) => ({ ...k, [p]: e.target.value }))}
-            placeholder={status[p] ? 'key saved — enter to replace' : 'API key'}
+            placeholder={status[p] ? 'key saved â€” enter to replace' : 'API key'}
           />
           <button style={styles.ghostBtn} onClick={() => save(p)}>
             Save
@@ -2625,57 +2491,7 @@ function ProvidersEditor({
   );
 }
 
-function DataTools({
-  active,
-  onError,
-}: {
-  active: AccountView;
-  onError: (m: string) => void;
-}): JSX.Element {
-  const [rows, setRows] = useState<string[]>([]);
-  const [loading, setLoading] = useState('');
-
-  async function load(kind: 'gtm' | 'ga4'): Promise<void> {
-    setLoading(kind);
-    onError('');
-    try {
-      if (kind === 'gtm') {
-        const r: GtmAccountView[] = await window.desktop.data.listGtmAccounts();
-        setRows(r.map((a) => `${a.name} (${a.accountId})`));
-      } else {
-        const r: Ga4AccountView[] = await window.desktop.data.listGa4Accounts();
-        setRows(r.map((a) => `${a.displayName} — ${a.propertyCount} properties`));
-      }
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-      setRows([]);
-    } finally {
-      setLoading('');
-    }
-  }
-
-  return (
-    <div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button style={styles.ghostBtn} disabled={!active.hasGoogleToken || !!loading} onClick={() => load('gtm')}>
-          {loading === 'gtm' ? 'Loading…' : 'List GTM accounts'}
-        </button>
-        <button style={styles.ghostBtn} disabled={!active.hasGoogleToken || !!loading} onClick={() => load('ga4')}>
-          {loading === 'ga4' ? 'Loading…' : 'List GA4 accounts'}
-        </button>
-      </div>
-      {rows.length > 0 && (
-        <ul style={styles.resultList}>
-          {rows.map((r, i) => (
-            <li key={i} style={styles.resultRow}>{r}</li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-/* ─────────────────────────── Styles ─────────────────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 const styles: Record<string, React.CSSProperties> = {
   app: {

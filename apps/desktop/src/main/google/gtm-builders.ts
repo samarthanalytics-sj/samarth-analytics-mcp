@@ -482,6 +482,9 @@ export interface AuditReport {
   boundary: string;
   /** Checks that need live verification (never scored as confirmed defects). */
   runtimeRequired: string[];
+  /** True if a GA4/Google base Configuration tag (googtag/gaawc) is present — drives
+   *  whether the "Add GA4 base tag" bootstrap is offered (hidden when one exists). */
+  hasGa4Config: boolean;
 }
 
 // GTM tag types that send data to ad/analytics platforms and therefore should
@@ -741,5 +744,6 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
     findings: withConfidence,
     boundary: AUDIT_BOUNDARY,
     runtimeRequired: AUDIT_RUNTIME_REQUIRED,
+    hasGa4Config: s.tags.some((t) => t.type === 'googtag' || t.type === 'gaawc'),
   };
 }

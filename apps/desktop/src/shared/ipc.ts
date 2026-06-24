@@ -222,8 +222,10 @@ export interface AuditFindingView {
 }
 export interface AuditReportView {
   counts: { tags: number; triggers: number; variables: number; findings: number };
-  summary: { high: number; medium: number; low: number; info: number };
+  summary: { critical: number; high: number; medium: number; low: number; info: number };
   findings: AuditFindingView[];
+  /** True if a GA4/Google base Configuration tag is present (hides the "Add GA4 base" card). */
+  hasGa4Config?: boolean;
 }
 
 /** Result of discovering a site's pages (suggestions:discover). */
