@@ -1,3 +1,9 @@
+## [1.41.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.40.0...v1.41.0) (2026-06-24)
+
+### Features
+
+* **desktop:** Audit Brain update — B6 ad-pixel-without-consent, A8 Ads conversion ID, D1 escalation ([d722f79](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d722f79c4b7580ae2efadaf97ddae334f1de50ab))
+
 ## [1.40.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.39.0...v1.40.0) (2026-06-24)
 
 ### Features
