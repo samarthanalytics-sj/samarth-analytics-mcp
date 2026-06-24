@@ -643,12 +643,12 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
         // covered, so flag it runtime-required (never scored): confirm a Google tag loads
         // for it. (When a config tag DOES use the same id → "Google tag found" → suppressed.)
         findings.push({
-          severity: 'info',
-          confidence: 'runtime-required',
+          severity: 'high',
+          confidence: 'likely',
           category: 'ga4',
           resource,
-          message: `GA4 event tag "${t.name}" uses a variable Measurement ID (${mid}) that no Google/Configuration tag in this container declares — GTM shows "Cannot detect the Google tag".`,
-          recommendation: `Confirm a Google tag loads for this property (a googtag in this container using ${mid}, another container, or on-page) and that ${mid} resolves to a valid G-XXXXXXX id on a live load.`,
+          message: `GA4 event tag "${t.name}" uses a variable Measurement ID (${mid}) that NO Google/Configuration tag in this container declares — GTM shows "Cannot detect the Google tag", so these events may not be collected.`,
+          recommendation: `Point this tag at the Measurement ID your Google/Configuration tag uses, or add a Google tag for ${mid}. Then confirm on a live load (Tag Assistant / GA4 DebugView) that ${mid} resolves to a valid G-XXXXXXX id.`,
           autoFixable: false,
         });
       }
