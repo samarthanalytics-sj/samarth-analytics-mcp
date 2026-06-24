@@ -1,3 +1,9 @@
+## [1.44.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.43.4...v1.44.0) (2026-06-24)
+
+### Features
+
+* **desktop:** "Apply all fixes" button on the container audit ([eaa787a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/eaa787aabea583c8c7682f04d325c2deb950977d))
+
 ## [1.43.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.43.3...v1.43.4) (2026-06-24)
 
 ### Bug Fixes
