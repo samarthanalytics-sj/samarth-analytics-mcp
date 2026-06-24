@@ -2155,9 +2155,12 @@ function ContainerAuditPanel({
                       <span style={{ fontWeight: 400, color: '#9ca3af', fontSize: 12 }}>
                         {f.resource ? `(${f.resource.kind})` : f.category}
                       </span>
+                      {f.category === 'paused' && (
+                        <span style={{ fontWeight: 600, color: '#fbbf24', fontSize: 11, marginLeft: 6 }}>(Paused)</span>
+                      )}
                     </div>
                     <div style={{ ...styles.reviewMetaLine, color: '#cbd5e1' }}>{f.message}</div>
-                    <div style={styles.reviewEvidence}>{f.recommendation}</div>
+                    <div style={{ ...styles.reviewEvidence, fontSize: 13, color: '#cbd5e1', fontStyle: 'normal', lineHeight: 1.55 }}>{f.recommendation}</div>
                     {st && st.state !== 'idle' && st.state !== 'confirm' && (
                       <div style={{ fontSize: 12, marginTop: 4, color: st.state === 'done' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : '#9ca3af' }}>
                         {st.state === 'fixing' ? 'Applying…' : st.state === 'done' ? '✓ applied — re-run to confirm' : `✗ ${st.msg}`}
@@ -2557,7 +2560,7 @@ const styles: Record<string, React.CSSProperties> = {
   reviewRow: { display: 'flex', gap: 12, alignItems: 'flex-start', padding: '12px 14px', borderBottom: '1px solid #1f2937', background: '#111827' },
   reviewRowOk: { borderLeft: '3px solid #34d399', background: '#0f1b16' },
   reviewRowHead: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  reviewMetaLine: { color: '#9ca3af', fontSize: 12, marginTop: 3 },
+  reviewMetaLine: { color: '#9ca3af', fontSize: 11, marginTop: 3 },
   reviewEvidence: { color: '#6b7280', fontSize: 12, marginTop: 3, fontStyle: 'italic' },
   badge: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, borderRadius: 6, padding: '1px 7px' },
   typeChip: { fontSize: 11, color: '#93c5fd', background: '#10233f', border: '1px solid #1e3a5f', borderRadius: 6, padding: '1px 7px' },
