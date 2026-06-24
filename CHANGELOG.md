@@ -1,3 +1,9 @@
+## [1.43.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.43.0...v1.43.1) (2026-06-24)
+
+### Bug Fixes
+
+* **desktop:** audit findings — (Paused) badge, smaller message line, readable recommendation ([4856834](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/485683437829daa501cc6faeb900850611a0f900)), closes [#cbd5e1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/cbd5e1)
+
 ## [1.43.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.42.3...v1.43.0) (2026-06-24)
 
 ### Features
