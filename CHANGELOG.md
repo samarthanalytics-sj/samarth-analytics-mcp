@@ -1,3 +1,9 @@
+## [1.43.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.43.2...v1.43.3) (2026-06-24)
+
+### Bug Fixes
+
+* **desktop:** enlarge the (Paused) badge on audit findings ([48ab211](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/48ab21114bcaa8316a8cb404797bf08ed6d27b24))
+
 ## [1.43.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.43.1...v1.43.2) (2026-06-24)
 
 ### Bug Fixes
