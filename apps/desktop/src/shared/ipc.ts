@@ -212,6 +212,8 @@ export interface TagScanResult {
 export interface AuditFindingView {
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   confidence?: 'certain' | 'likely' | 'runtime-required' | 'guessing';
+  /** Stable per-check id (e.g. 'B6-ad-pixel-consent') — lets the UI batch by check. */
+  checkId?: string;
   category: string;
   message: string;
   resource?: { kind: 'tag' | 'trigger' | 'variable'; id: string; name: string };
