@@ -1,3 +1,9 @@
+## [1.39.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.38.0...v1.39.0) (2026-06-24)
+
+### Features
+
+* **desktop:** Audit Brain engine (Critical/confidence/runtime-required) + one-click consent fix ([d2eb527](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d2eb527e296fda27bd6d4dccfc883d5143855ee6))
+
 ## [1.38.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.37.1...v1.38.0) (2026-06-23)
 
 ### Features
