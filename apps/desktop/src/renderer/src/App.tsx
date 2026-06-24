@@ -2050,6 +2050,8 @@ function ContainerAuditPanel({
   const [running, setRunning] = useState(false);
   const [fix, setFix] = useState<Record<number, { state: 'idle' | 'confirm' | 'fixing' | 'done' | 'err'; msg?: string }>>({});
   const [applyingAll, setApplyingAll] = useState(false);
+  const [canceling, setCanceling] = useState(false);
+  const cancelRef = useRef(false); // set by Cancel; the batch loop checks it between fixes
   const [typeFilter, setTypeFilter] = useState<string>('all');
 
   const ctx = active?.gtmContext;
@@ -2131,9 +2133,12 @@ function ContainerAuditPanel({
     override?: (f: AuditFindingView) => { tool: string; args: Record<string, unknown> }
   ): Promise<void> {
     if (applyingAll) return;
+    cancelRef.current = false;
+    setCanceling(false);
     setApplyingAll(true);
     try {
       for (let i = 0; i < findings.length; i++) {
+        if (cancelRef.current) break; // Cancel stops launching further fixes
         const f = findings[i];
         if (!typeMatches(f)) continue; // respect the active tag-type filter
         if (!f.autoFixable || !f.fix || f.fix.tool.startsWith('delete')) continue;
@@ -2143,7 +2148,14 @@ function ContainerAuditPanel({
       }
     } finally {
       setApplyingAll(false);
+      setCanceling(false);
+      cancelRef.current = false;
     }
+  }
+
+  function cancelBatch(): void {
+    cancelRef.current = true;
+    setCanceling(true);
   }
 
   return (
@@ -2215,7 +2227,7 @@ function ContainerAuditPanel({
                 )}
               </div>
             )}
-            {(bulkFixable > 0 || consentFixable > 0) && (
+            {(bulkFixable > 0 || consentFixable > 0 || applyingAll) && (
               <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 {bulkFixable > 0 && (
                   <button
@@ -2252,8 +2264,22 @@ function ContainerAuditPanel({
                     {applyingAll ? 'Applying…' : `No extra consent on all (${noExtraFixable})`}
                   </button>
                 )}
+                {applyingAll && (
+                  <button
+                    style={styles.dangerGhost}
+                    onClick={cancelBatch}
+                    disabled={canceling}
+                    title="Stop the batch — the fix in progress finishes, then no more are applied. Already-applied fixes stay."
+                  >
+                    {canceling ? 'Stopping…' : 'Cancel'}
+                  </button>
+                )}
                 <span style={{ color: '#9ca3af', fontSize: 12 }}>
-                  Non-destructive only — deletes stay per-row; “No extra consent” skips ad pixels.
+                  {applyingAll
+                    ? canceling
+                      ? 'Stopping after the current fix…'
+                      : 'Applying… click Cancel to stop after the current fix.'
+                    : 'Non-destructive only — deletes stay per-row; “No extra consent” skips ad pixels.'}
                 </span>
               </div>
             )}
