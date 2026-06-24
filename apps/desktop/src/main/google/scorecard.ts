@@ -53,7 +53,8 @@ export interface Scorecard {
 
 // Points deducted per finding. info is informational only (never lowers the
 // score). Mirrors the web-audit scorer's high/medium/low weighting.
-const WEIGHT: Record<Severity, number> = { critical: 30, high: 15, medium: 7, low: 3, info: 0 };
+// Audit Brain §7 — fixed, versioned weights (constants, not judgment calls).
+const WEIGHT: Record<Severity, number> = { critical: 30, high: 12, medium: 4, low: 1, info: 0 };
 const SEVERITY_RANK: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
 function tally(findings: ScorecardFinding[]): SeverityCounts {
@@ -64,7 +65,11 @@ function tally(findings: ScorecardFinding[]): SeverityCounts {
 
 function scoreOf(findings: ScorecardFinding[]): number {
   let score = 100;
-  for (const f of findings) score -= WEIGHT[f.severity];
+  for (const f of findings) {
+    // Audit Brain §7: [Guessing] / runtime-required findings never count toward the score.
+    if (f.confidence === 'runtime-required') continue;
+    score -= WEIGHT[f.severity];
+  }
   return Math.max(0, Math.min(100, score));
 }
 

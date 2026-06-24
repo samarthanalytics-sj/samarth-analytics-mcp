@@ -522,6 +522,25 @@ export function detectAdPixel(html: string): string | null {
   return null;
 }
 
+// GA4 Enhanced Measurement auto-tracks these — a manual tag for them double-counts unless
+// EM is off (A11). Lowercased for comparison.
+const ENHANCED_MEASUREMENT_EVENTS = new Set([
+  'page_view', 'scroll', 'click', 'view_search_results', 'file_download',
+  'video_start', 'video_progress', 'video_complete', 'form_start', 'form_submit',
+]);
+
+// Known GTM tag-type codes (section 4 is documentation; this is the runtime registry). A
+// type that is neither here nor a custom template (`cvt_…`) is flagged for manual review
+// rather than skipped, so a new/vendor tag never passes unaudited. `isKnownTagType` is
+// exported so the registry has one source of truth.
+const KNOWN_TAG_TYPES = new Set([
+  'googtag', 'gaawc', 'gaawe', 'awct', 'sp', 'gclidw', 'html', 'img', 'ua',
+  'flc', 'fls', 'baut', 'bzi', 'hjtc', 'awcr', 'gclidw',
+]);
+export function isKnownTagType(type: string): boolean {
+  return KNOWN_TAG_TYPES.has(type) || type.startsWith('cvt_');
+}
+
 // Pull every {{Variable Name}} token out of any nested value into `into`.
 const VAR_REF = /\{\{([^}]+)\}\}/g;
 function refsIn(value: unknown, into: Set<string>): void {
@@ -543,6 +562,20 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
 
   for (const t of s.tags) {
     const resource = { kind: 'tag' as const, id: t.tagId, name: t.name };
+
+    // Section 4: a tag whose type isn't in the registry is flagged for manual review, never
+    // skipped silently — otherwise a new vendor tag passes unaudited.
+    if (t.type && !isKnownTagType(t.type)) {
+      findings.push({
+        severity: 'low',
+        confidence: 'likely',
+        category: 'security',
+        resource,
+        message: `Tag "${t.name}" has an unrecognised type "${t.type}" — not in the audit's tag-type registry, so its type-specific checks were skipped.`,
+        recommendation: 'Review this tag manually; if it is a legitimate new/vendor tag type, add it to the registry so future audits cover it.',
+        autoFixable: false,
+      });
+    }
 
     if (!t.firingTriggerId || t.firingTriggerId.length === 0) {
       findings.push({
@@ -588,9 +621,23 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
         });
       } else if (mid.startsWith('G-')) {
         measurementIds.add(mid);
+      } else if (mid.includes('{{')) {
+        // A8: a {{variable}} Measurement ID is BEST PRACTICE, not a defect — but it's
+        // GTM's "Cannot detect the Google tag" case, so TRACK it as runtime-required
+        // (never scored) instead of passing it silently.
+        findings.push({
+          severity: 'info',
+          confidence: 'runtime-required',
+          category: 'ga4',
+          resource,
+          message: `GA4 event tag "${t.name}" uses a variable Measurement ID (${mid}) — GTM's "Cannot detect the Google tag" warning is expected for a variable (best practice, not a defect).`,
+          recommendation: `On a live page load (Tag Assistant / GA4 DebugView) confirm ${mid} resolves to a valid G-XXXXXXX id.`,
+          autoFixable: false,
+        });
       }
-      const hasEventName = t.parameter.some((p) => p.key === 'eventName' && p.value);
-      if (!hasEventName) {
+      const eventNameParam = t.parameter.find((p) => p.key === 'eventName' && p.value);
+      const eventName = eventNameParam ? String(eventNameParam.value) : '';
+      if (!eventName) {
         findings.push({
           severity: 'high',
           category: 'ga4',
@@ -599,19 +646,43 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
           recommendation: 'Set the GA4 event name (e.g. "purchase", "generate_lead", "page_view").',
           autoFixable: false,
         });
+      } else if (ENHANCED_MEASUREMENT_EVENTS.has(eventName.toLowerCase())) {
+        // A11: GA4 Enhanced Measurement auto-tracks these, so a manual tag double-counts
+        // UNLESS EM is off for it — and EM state lives on the web stream, not the
+        // container, so this is a [Likely] cross-check, not a verdict.
+        findings.push({
+          severity: 'medium',
+          confidence: 'likely',
+          category: 'ga4',
+          resource,
+          message: `GA4 event tag "${t.name}" sends "${eventName}", which GA4 Enhanced Measurement also auto-tracks — this double-counts unless Enhanced Measurement is off for it.`,
+          recommendation: `On the GA4 web stream, check whether Enhanced Measurement tracks "${eventName}"; if so, turn off either the EM toggle or this manual tag — not both.`,
+          autoFixable: false,
+        });
       }
     }
     if (t.type === 'googtag') {
       // The Google tag loads gtag.js and configures GA4/Ads — it needs a tag ID
       // (G-/AW-/GT-…). (Corpus: googtag is the 4th-most-common tag type, 826.)
-      const hasTagId = t.parameter.some((p) => (p.key === 'tagId' || p.key === 'tag_id') && p.value);
-      if (!hasTagId) {
+      const idParam = t.parameter.find((p) => (p.key === 'tagId' || p.key === 'tag_id') && p.value);
+      const id = idParam ? String(idParam.value) : '';
+      if (!id) {
         findings.push({
           severity: 'high',
           category: 'ga4',
           resource,
           message: `Google tag "${t.name}" has no tag ID — it can't configure GA4/Ads.`,
           recommendation: 'Set its Tag ID (a G-XXXXXXX / AW-XXXXXX / GT-XXXXXX value or a {{variable}}).',
+          autoFixable: false,
+        });
+      } else if (id.includes('{{')) {
+        findings.push({
+          severity: 'info',
+          confidence: 'runtime-required',
+          category: 'ga4',
+          resource,
+          message: `Google tag "${t.name}" uses a variable Tag ID (${id}) — GTM's "Cannot detect the Google tag" warning is expected for a variable (best practice, not a defect).`,
+          recommendation: `On a live page load confirm ${id} resolves to a valid G-/AW-/GT- id.`,
           autoFixable: false,
         });
       }
@@ -757,6 +828,21 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
     refsIn(tr.parameter, refs);
   }
   for (const v of s.variables) refsIn(v.parameter, refs);
+  // C5: Custom JavaScript variables (jsm) run wherever referenced — not on a trigger — so
+  // they execute broadly and are a wider risk surface than a Custom HTML tag.
+  for (const v of s.variables) {
+    if (v.type === 'jsm') {
+      findings.push({
+        severity: 'medium',
+        confidence: 'likely',
+        category: 'security',
+        resource: { kind: 'variable', id: v.variableId, name: v.name },
+        message: `Custom JavaScript variable "${v.name}" runs arbitrary JS wherever it is referenced — a wider risk surface than a Custom HTML tag.`,
+        recommendation: 'Review its code for DOM scraping, cookie/PII reads, external calls, and unguarded paths that return undefined (which poisons every tag that consumes it). Prefer a built-in or template variable where possible.',
+        autoFixable: false,
+      });
+    }
+  }
   for (const v of s.variables) {
     if (!refs.has(v.name)) {
       findings.push({
