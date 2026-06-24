@@ -1,3 +1,9 @@
+## [1.43.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.43.3...v1.43.4) (2026-06-24)
+
+### Bug Fixes
+
+* **desktop:** subtle white-tint background on the audit recommendation line ([fee8e88](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fee8e88fc817342233b58750058144c39d584360))
+
 ## [1.43.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.43.2...v1.43.3) (2026-06-24)
 
 ### Bug Fixes
