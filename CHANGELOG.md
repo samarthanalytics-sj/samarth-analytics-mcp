@@ -1,3 +1,9 @@
+## [1.49.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.48.0...v1.49.0) (2026-06-24)
+
+### Features
+
+* **desktop:** batch progress m/n, unpause-all batch, and quota retry on the audit read ([0c7c635](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0c7c6359a9b196858f10c4773822c50fe1049ebf))
+
 ## [1.48.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.47.1...v1.48.0) (2026-06-24)
 
 ### Features
