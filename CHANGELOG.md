@@ -1,3 +1,9 @@
+## [1.42.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.42.0...v1.42.1) (2026-06-24)
+
+### Bug Fixes
+
+* **desktop:** don't flag a variable Measurement ID when a Google tag is present ([fab5583](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fab558336449c9b7957cde660efd685966c4afed))
+
 ## [1.42.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.41.0...v1.42.0) (2026-06-24)
 
 ### Features
