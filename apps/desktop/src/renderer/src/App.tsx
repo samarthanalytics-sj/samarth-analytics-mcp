@@ -2041,6 +2041,7 @@ function ContainerAuditPanel({
   const [report, setReport] = useState<AuditReportView | null>(null);
   const [running, setRunning] = useState(false);
   const [fix, setFix] = useState<Record<number, { state: 'idle' | 'confirm' | 'fixing' | 'done' | 'err'; msg?: string }>>({});
+  const [applyingAll, setApplyingAll] = useState(false);
 
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -2084,6 +2085,28 @@ function ContainerAuditPanel({
 
   const findings = [...(report?.findings ?? [])].sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
   const fixable = (report?.findings ?? []).filter((f) => f.autoFixable).length;
+  // Bulk apply: every non-destructive auto-fix not already applied. Deletes are EXCLUDED —
+  // they stay per-row behind an explicit confirm so nothing irreversible happens in bulk.
+  // Consent fixes apply their default ("require consent" — the conservative, reversible
+  // choice); use a row's "No extra consent" button for the exceptions.
+  const bulkFixable = findings.filter(
+    (f, i) => f.autoFixable && f.fix && !f.fix.tool.startsWith('delete') && fix[i]?.state !== 'done'
+  ).length;
+
+  async function applyAllFixes(): Promise<void> {
+    if (applyingAll) return;
+    setApplyingAll(true);
+    try {
+      for (let i = 0; i < findings.length; i++) {
+        const f = findings[i];
+        if (!f.autoFixable || !f.fix || f.fix.tool.startsWith('delete')) continue;
+        if (fix[i]?.state === 'done' || fix[i]?.state === 'fixing') continue;
+        await applyFix(i, f); // sequential — one workspace write at a time, with per-row status
+      }
+    } finally {
+      setApplyingAll(false);
+    }
+  }
 
   return (
     <div style={styles.reviewWrap}>
@@ -2125,12 +2148,27 @@ function ContainerAuditPanel({
           <div style={styles.card}>
             <div style={styles.muted}>
               {report.counts.tags} tag(s) · {report.counts.triggers} trigger(s) · {report.counts.variables} variable(s) ·{' '}
-              <b style={{ color: report.counts.findings ? '#fcd34d' : '#6ee7b7' }}>
+              <b style={{ color: report.summary.critical ? '#fca5a5' : report.counts.findings ? '#fcd34d' : '#6ee7b7' }}>
                 {report.counts.findings} issue(s)
               </b>{' '}
-              ({report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low · {report.summary.info} info)
-              {fixable > 0 ? ` · ${fixable} auto-fixable` : ''}
+              ({report.summary.critical} critical · {report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low ·{' '}
+              {report.summary.info} info){fixable > 0 ? ` · ${fixable} auto-fixable` : ''}
             </div>
+            {bulkFixable > 0 && (
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <button
+                  style={styles.primaryBtn}
+                  onClick={applyAllFixes}
+                  disabled={applyingAll}
+                  title="Apply every non-destructive fix at once (consent → require consent; unpause). Deletes must be confirmed per row. Re-run the audit afterwards to confirm."
+                >
+                  {applyingAll ? 'Applying all…' : `Apply all fixes (${bulkFixable})`}
+                </button>
+                <span style={{ color: '#9ca3af', fontSize: 12 }}>
+                  Non-destructive only — deletes stay per-row; consent fixes apply “require consent”.
+                </span>
+              </div>
+            )}
           </div>
         )}
 
