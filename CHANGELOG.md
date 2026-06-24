@@ -1,3 +1,9 @@
+## [1.47.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.47.0...v1.47.1) (2026-06-24)
+
+### Bug Fixes
+
+* **desktop:** retry GTM quota / rate-limit errors when applying audit fixes ([f367089](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f367089fc7695a01d76e76ce71087b5092b88322))
+
 ## [1.47.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.46.0...v1.47.0) (2026-06-24)
 
 ### Features
