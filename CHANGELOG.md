@@ -1,3 +1,9 @@
+## [1.42.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.41.0...v1.42.0) (2026-06-24)
+
+### Features
+
+* **desktop:** Audit Brain v3 — track variable Measurement IDs + A11/C5/unknown-type + explicit weights ([535ef71](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/535ef71d6bf4f42f187a5af75adf6e68f12d8047))
+
 ## [1.41.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.40.0...v1.41.0) (2026-06-24)
 
 ### Features
