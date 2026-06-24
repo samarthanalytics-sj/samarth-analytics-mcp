@@ -1,3 +1,9 @@
+## [1.46.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.45.0...v1.46.0) (2026-06-24)
+
+### Features
+
+* **desktop:** "No extra consent on all" batch fix on the container audit ([39e09a1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/39e09a16a9264b430052c8fbf7edb088b47e7b21))
+
 ## [1.45.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.44.0...v1.45.0) (2026-06-24)
 
 ### Features
