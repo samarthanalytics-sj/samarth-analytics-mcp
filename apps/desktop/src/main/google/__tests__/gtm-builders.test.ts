@@ -580,6 +580,25 @@ test('audit A8: a variable Measurement ID is NOT flagged when a Google tag IS pr
   assert.equal(r.findings.some((x) => /variable Tag ID/i.test(x.message)), false, 'the Google tag itself is never flagged for a variable id');
 });
 
+test('audit A8: per-ID match — a variable the config does NOT declare is still flagged', () => {
+  const r = auditContainer({
+    tags: [
+      // Email Click uses {{GA4 Variable}} — the config tag uses a DIFFERENT variable → "Cannot detect".
+      { tagId: '1', name: 'GA4 - Email Click', type: 'gaawe', firingTriggerId: ['T1'], paused: false,
+        parameter: [{ key: 'measurementIdOverride', value: '{{GA4 Variable}}' }, { key: 'eventName', value: 'email_click' }] },
+      // File Download uses the SAME variable the config declares → "Google tag found".
+      { tagId: '2', name: 'GA4 - File Download', type: 'gaawe', firingTriggerId: ['T1'], paused: false,
+        parameter: [{ key: 'measurementIdOverride', value: '{{GA4 Measurement ID}}' }, { key: 'eventName', value: 'email_click' }] },
+      { tagId: '3', name: 'GA4 - Configuration', type: 'googtag', firingTriggerId: ['T2'], paused: false,
+        parameter: [{ key: 'tagId', value: '{{GA4 Measurement ID}}' }] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'T', type: 'customEvent' }, { triggerId: 'T2', name: 'AP', type: 'pageview' }],
+    variables: [],
+  });
+  assert.ok(r.findings.some((x) => x.resource?.id === '1' && /Cannot detect/i.test(x.message)), 'Email Click ({{GA4 Variable}}) IS flagged — config declares a different id');
+  assert.equal(r.findings.some((x) => x.resource?.id === '2' && /Cannot detect/i.test(x.message)), false, 'File Download ({{GA4 Measurement ID}}) NOT flagged — config declares it');
+});
+
 test('audit A11: a manual tag for an Enhanced-Measurement event is flagged [Likely] Medium', () => {
   const r = auditContainer({
     tags: [{ tagId: '1', name: 'GA4 - File Download', type: 'gaawe', firingTriggerId: ['T1'], paused: false,
