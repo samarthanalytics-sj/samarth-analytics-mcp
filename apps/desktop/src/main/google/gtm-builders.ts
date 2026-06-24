@@ -435,7 +435,7 @@ export interface AuditFinding {
   category: string;
   message: string;
   /** The GTM resource the finding is about, when it targets one. */
-  resource?: { kind: 'tag' | 'trigger' | 'variable'; id: string; name: string };
+  resource?: { kind: 'tag' | 'trigger' | 'variable'; id: string; name: string; type?: string };
   /** What to change to resolve it (always present, human-readable). */
   recommendation: string;
   /** True when `fix` is a ready-to-run tool call the model can apply on approval. */
@@ -992,8 +992,19 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
     return true;
   });
 
-  // Add the Audit Brain confidence to each finding in one pass.
-  const withConfidence: AuditFinding[] = deduped.map((f) => ({ ...f, confidence: f.confidence ?? confidenceFor(f.category) }));
+  // Enrich each finding's resource with its GTM type code (gaawe/googtag/html/…) so the UI
+  // can filter findings — and scope batch fixes — by tag type.
+  const typeById = new Map<string, string>();
+  for (const t of s.tags) typeById.set(`tag:${t.tagId}`, t.type);
+  for (const tr of s.triggers) typeById.set(`trigger:${tr.triggerId}`, tr.type);
+  for (const v of s.variables) typeById.set(`variable:${v.variableId}`, v.type);
+
+  // Add the Audit Brain confidence + resource type to each finding in one pass.
+  const withConfidence: AuditFinding[] = deduped.map((f) => ({
+    ...f,
+    confidence: f.confidence ?? confidenceFor(f.category),
+    resource: f.resource ? { ...f.resource, type: typeById.get(`${f.resource.kind}:${f.resource.id}`) } : f.resource,
+  }));
 
   const summary = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const f of withConfidence) summary[f.severity]++;
