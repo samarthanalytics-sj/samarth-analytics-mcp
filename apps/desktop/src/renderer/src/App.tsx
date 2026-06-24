@@ -2160,7 +2160,7 @@ function ContainerAuditPanel({
                       )}
                     </div>
                     <div style={{ ...styles.reviewMetaLine, color: '#cbd5e1' }}>{f.message}</div>
-                    <div style={{ ...styles.reviewEvidence, fontSize: 13, color: '#cbd5e1', fontStyle: 'normal', lineHeight: 1.55 }}>{f.recommendation}</div>
+                    <div style={{ ...styles.reviewEvidence, fontSize: 13, color: '#cbd5e1', fontStyle: 'normal', lineHeight: 1.55, background: 'rgba(255, 255, 255, 0.05)', padding: '6px 9px', borderRadius: 6, marginTop: 6 }}>{f.recommendation}</div>
                     {st && st.state !== 'idle' && st.state !== 'confirm' && (
                       <div style={{ fontSize: 12, marginTop: 4, color: st.state === 'done' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : '#9ca3af' }}>
                         {st.state === 'fixing' ? 'Applying…' : st.state === 'done' ? '✓ applied — re-run to confirm' : `✗ ${st.msg}`}
