@@ -1,3 +1,9 @@
+## [1.42.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.42.1...v1.42.2) (2026-06-24)
+
+### Bug Fixes
+
+* **desktop:** match the variable Measurement ID per-ID (not "any Google tag present") ([1dc36ca](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1dc36ca9fe75c2f4d65071a3f799d4e014e3c76f)), closes [#93](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/93)
+
 ## [1.42.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.42.0...v1.42.1) (2026-06-24)
 
 ### Bug Fixes
