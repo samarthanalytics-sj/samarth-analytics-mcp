@@ -3,6 +3,8 @@
 // shape (type codes, parameter keys, the eventSettingsTable list-of-maps keyed
 // parameter/parameterValue, etc.). No I/O — fully unit-testable.
 
+import { classifyPixel } from './pixel-signatures';
+
 type Param = Record<string, unknown>;
 const tpl = (key: string, value: string): Param => ({ type: 'template', key, value });
 const boolean = (key: string, value: boolean): Param => ({ type: 'boolean', key, value: String(value) });
@@ -423,8 +425,12 @@ export interface AuditFix {
 export interface AuditFinding {
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   /** Audit Brain confidence: certain = provable from the container; likely = strong
-   *  inference needing one cheap confirmation; runtime-required = needs live evidence. */
-  confidence: 'certain' | 'likely' | 'runtime-required';
+   *  inference needing one cheap confirmation; runtime-required = needs live evidence;
+   *  guessing = a low-confidence heuristic match (never scored). */
+  confidence: 'certain' | 'likely' | 'runtime-required' | 'guessing';
+  /** Stable per-check identifier. Combined with the resource id it forms a finding's
+   *  identity, so the same check never emits twice for the same tag/variable (dedup). */
+  checkId?: string;
   /** Coarse grouping: firing | paused | ga4 | deprecated | consent | security | performance | unused | naming. */
   category: string;
   message: string;
@@ -504,22 +510,49 @@ export function normConsent(status: unknown): string {
   return typeof status === 'string' ? status.replace(/_/g, '').toLowerCase() : '';
 }
 
-// Advertising/marketing pixels commonly pasted as Custom HTML. A Custom HTML tag has
-// NO built-in Consent Mode, so an ungated pixel here fires on every load and drops ad
-// cookies regardless of consent (Audit Brain B6). Signatures from the Brain.
-const AD_PIXELS: Array<{ name: string; re: RegExp }> = [
-  { name: 'Meta/Facebook', re: /connect\.facebook\.net|fbq\s*\(|fbevents\.js/i },
-  { name: 'TikTok', re: /analytics\.tiktok\.com|ttq\./i },
-  { name: 'LinkedIn', re: /snap\.licdn\.com|_linkedin_partner_id/i },
-  { name: 'Pinterest', re: /s\.pinimg\.com|pintrk\s*\(/i },
-  { name: 'Snapchat', re: /sc-static\.net|snaptr\s*\(/i },
-  { name: 'X/Twitter', re: /static\.ads-twitter\.com|twq\s*\(/i },
-  { name: 'Reddit', re: /rdt\s*\(|redditstatic\.com/i },
-  { name: 'Microsoft/Bing UET', re: /bat\.bing\.com|uetq/i },
-];
-export function detectAdPixel(html: string): string | null {
-  for (const p of AD_PIXELS) if (p.re.test(html)) return p.name;
-  return null;
+// B6 consent-gate evaluation. An advertising pixel in Custom HTML has NO built-in Consent
+// Mode — it fires by raw <script> unless an explicit additional-consent check is declared.
+// We read the tag's declared consent and decide whether that gate is valid for the network.
+//
+// Regions whose privacy law makes an ungated ad pixel a Consent Mode v2 / GDPR exposure.
+const RISK_REGIONS = ['EU', 'UK', 'AU'];
+
+export type ConsentGate =
+  | 'gated' // status 'needed' AND ad_storage declared (and all required types) — VALID, no finding
+  | 'partial' // gated on ad_storage but missing some required ad types
+  | 'wrong_types' // status 'needed' but ad_storage NOT among the declared types
+  | 'ungated' // status 'notSet'/absent — no additional consent check at all
+  | 'declared_no_consent'; // status 'notNeeded' — explicitly declared as needing none
+
+/** Lowercased consent-type values declared on a tag (consentType.list[].value, or a bare array). */
+export function configuredConsentTypes(consentSettings: AuditTag['consentSettings']): string[] {
+  const ct = consentSettings?.consentType as unknown;
+  const list = Array.isArray(ct)
+    ? ct
+    : ct && typeof ct === 'object' && Array.isArray((ct as { list?: unknown[] }).list)
+      ? (ct as { list: unknown[] }).list
+      : [];
+  return list
+    .map((e) => (e && typeof e === 'object' ? (e as { value?: unknown }).value : e))
+    .filter((v): v is string => typeof v === 'string' && v.length > 0)
+    .map((v) => v.toLowerCase());
+}
+
+/** Evaluate the consent gate on a tag against the network's required consent types. */
+export function evaluateConsentGate(
+  consentSettings: AuditTag['consentSettings'],
+  requiredConsent: string[]
+): ConsentGate {
+  const status = normConsent(consentSettings?.consentStatus); // '' | 'notset' | 'needed' | 'notneeded'
+  const configured = configuredConsentTypes(consentSettings);
+  if (status === 'needed') {
+    if (configured.includes('ad_storage')) {
+      return requiredConsent.every((rc) => configured.includes(rc)) ? 'gated' : 'partial';
+    }
+    return 'wrong_types';
+  }
+  if (status === 'notneeded') return 'declared_no_consent';
+  return 'ungated'; // 'notset' or absent
 }
 
 // GA4 Enhanced Measurement auto-tracks these — a manual tag for them double-counts unless
@@ -553,11 +586,17 @@ function refsIn(value: unknown, into: Set<string>): void {
   }
 }
 
-export function auditContainer(s: ContainerSnapshot): AuditReport {
+export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: string[] }): AuditReport {
   // Built with confidence OPTIONAL — most get it per-category at the end, but a finding
   // may set its own (e.g. B6 ad-pixel-without-consent is [Certain], not the [Likely]
   // the general consent check gets).
   const findings: Array<Omit<AuditFinding, 'confidence'> & { confidence?: AuditFinding['confidence'] }> = [];
+  // Client region drives B6 severity. Default to UK/EU — the higher-risk assumption that
+  // matches the client base — so an ungated ad pixel is Critical unless told otherwise.
+  const regions = (opts?.clientRegion && opts.clientRegion.length ? opts.clientRegion : ['UK', 'EU']).map((r) =>
+    String(r).toUpperCase()
+  );
+  const riskRegions = regions.filter((r) => RISK_REGIONS.includes(r));
   const measurementIds = new Set<string>();
   // The exact Measurement/Tag IDs (variable tokens AND hardcoded ids) that Google /
   // Configuration tags declare. GTM matches an event tag's id against THESE specifically —
@@ -723,48 +762,98 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
       });
     }
     if (t.type === 'html') {
+      // Generic security/PII note — the SECONDARY note on the tag (the B6 pixel finding,
+      // when present, is the headline and outranks it by severity).
       findings.push({
         severity: 'info',
         category: 'security',
+        checkId: 'html-review',
         resource,
         message: `Tag "${t.name}" is Custom HTML — review the snippet for security/PII.`,
         recommendation: 'Prefer a native template where one exists; ensure the HTML contains no secrets or unvetted third-party script.',
         autoFixable: false,
       });
       const htmlParam = t.parameter.find((p) => p.key === 'html');
-      if (htmlParam && /document\.write/.test(String(htmlParam.value))) {
+      const snippet = htmlParam ? String(htmlParam.value) : '';
+      if (/document\.write/.test(snippet)) {
         findings.push({
           severity: 'medium',
           category: 'performance',
+          checkId: 'html-document-write',
           resource,
           message: `Custom HTML tag "${t.name}" uses document.write — it can block rendering.`,
           recommendation: 'Replace document.write with DOM insertion, or enable "Support document.write" only if truly required.',
           autoFixable: false,
         });
       }
-      // B6: an advertising pixel in Custom HTML with no consent gate. Custom HTML has no
-      // built-in Consent Mode, so this is a CERTAIN ungated-pixel defect (not the [Likely]
-      // the general consent check gives Google tags). This is the primary finding — it
-      // outranks the "review this snippet" security note above.
-      const pixel = htmlParam ? detectAdPixel(String(htmlParam.value)) : null;
-      if (pixel) {
-        const cs = normConsent(t.consentSettings?.consentStatus);
-        if (!cs || cs === 'notset') {
+      // B6: classify the snippet (strong/weak signals, externalized registry), then evaluate
+      // its consent gate. Custom HTML has no built-in Consent Mode, so the gate must be an
+      // explicit additional-consent check. The container PROVES no valid gate is configured
+      // ([Certain]); whether it actually fires before consent stays runtime-required.
+      const match = snippet ? classifyPixel(snippet) : ({ classification: 'not_a_pixel' } as const);
+      if (match.classification === 'advertising_pixel' && match.network && match.requiredConsent) {
+        const network = match.network;
+        const required = match.requiredConsent;
+        const gate = evaluateConsentGate(t.consentSettings, required);
+        // False-positive guard: a correctly gated pixel is correct behaviour — emit nothing.
+        if (gate === 'partial') {
+          const missing = required.filter((rc) => !configuredConsentTypes(t.consentSettings).includes(rc));
           findings.push({
-            severity: 'critical',
+            severity: 'medium',
             confidence: 'certain',
             category: 'consent',
+            checkId: 'B6-ad-pixel-consent',
             resource,
-            message: `Custom HTML tag "${t.name}" is a ${pixel} advertising pixel with NO consent check — Custom HTML has no built-in Consent Mode, so it fires on every load, drops ad cookies and sends user data regardless of consent.`,
-            recommendation:
-              'Gate it: Tag → Consent Settings → "Require additional consent for tag to fire" → ad_storage, ad_user_data, ad_personalization (or replace the raw snippet with a consent-aware community template). A Custom HTML gate is binary — no cookieless fallback. For EU/UK/AU this is a Consent Mode v2 violation.',
+            message: `${network} advertising pixel "${t.name}" is consent-gated but its declaration is incomplete — missing ${missing.join(', ')}. Consent Mode v2 expects all of ${required.join(', ')} for ${network}.`,
+            recommendation: `Add ${missing.join(', ')} to the tag's Consent Settings (additional consent required) so ${network} only fires with full advertising consent.`,
             autoFixable: true,
             fix: {
               tool: 'set_gtm_tag_consent',
-              args: { tagId: t.tagId, consentStatus: 'needed', consentTypes: ['ad_storage', 'ad_user_data', 'ad_personalization'], name: t.name },
+              args: { tagId: t.tagId, consentStatus: 'needed', consentTypes: required, name: t.name },
+            },
+          });
+        } else if (gate !== 'gated') {
+          // ungated | wrong_types | declared_no_consent — no valid gate exists.
+          const regionRisk = riskRegions.length > 0;
+          const regionLabel = regionRisk ? riskRegions.join('/') : 'this';
+          const why =
+            gate === 'declared_no_consent'
+              ? 'It is built as Custom HTML and explicitly declared as needing NO consent (consentStatus "notNeeded")'
+              : gate === 'wrong_types'
+                ? 'It is built as Custom HTML and requires consent, but not the advertising types (ad_storage is not declared)'
+                : 'It is built as Custom HTML with consentStatus "notSet"';
+          findings.push({
+            severity: regionRisk ? 'critical' : 'high',
+            confidence: 'certain',
+            category: 'consent',
+            checkId: 'B6-ad-pixel-consent',
+            resource,
+            message: `${network} advertising pixel "${t.name}" fires without a consent gate. ${why}, so it runs on every load regardless of consent, drops advertising cookies, and sends user data to ${network}. On a ${regionLabel} site this is a Consent Mode v2 / GDPR exposure.`,
+            recommendation: `Best: replace the raw snippet with a consent-aware ${network} community template that integrates Consent Mode. Otherwise add an additional consent check requiring ${required.join(', ')} under the tag's Consent Settings. Long term, route server-side and gate at the server. (A Custom HTML gate is binary — no cookieless fallback.)`,
+            autoFixable: true,
+            fix: {
+              tool: 'set_gtm_tag_consent',
+              args: { tagId: t.tagId, consentStatus: 'needed', consentTypes: required, name: t.name },
             },
           });
         }
+      } else if (match.classification === 'possible_pixel_review' || match.classification === 'opaque_review') {
+        // A domain seen with no clear init, or an unreadable injected script — review, not a
+        // scored failure. NOT passed as clean.
+        const detail =
+          match.classification === 'opaque_review'
+            ? "injects an external script this audit can't read"
+            : `references ${match.network ?? 'an ad network'}'s domain but shows no clear pixel initialisation`;
+        findings.push({
+          severity: 'info',
+          confidence: 'guessing',
+          category: 'consent',
+          checkId: 'B6-ad-pixel-review',
+          resource,
+          message: `Custom HTML tag "${t.name}" ${detail} — it may be an advertising pixel that needs a consent gate.`,
+          recommendation: 'Open the snippet: if it loads an ad/marketing pixel, gate it with an additional consent check (e.g. ad_storage, ad_user_data) or replace it with a consent-aware template. Confirm on a live load whether it fires before consent.',
+          autoFixable: false,
+        });
       }
     }
     // Consent Mode v2: ad/analytics tags should declare their consent. Only the
@@ -839,12 +928,15 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
   for (const v of s.variables) refsIn(v.parameter, refs);
   // C5: Custom JavaScript variables (jsm) run wherever referenced — not on a trigger — so
   // they execute broadly and are a wider risk surface than a Custom HTML tag.
+  // Unused-vs-risk precedence: an UNUSED jsm variable runs nowhere, so it cannot be a
+  // runtime risk surface — suppress the C5 finding and let the unused-cleanup finding win.
   for (const v of s.variables) {
-    if (v.type === 'jsm') {
+    if (v.type === 'jsm' && refs.has(v.name)) {
       findings.push({
         severity: 'medium',
         confidence: 'likely',
         category: 'security',
+        checkId: 'C5-custom-js-variable',
         resource: { kind: 'variable', id: v.variableId, name: v.name },
         message: `Custom JavaScript variable "${v.name}" runs arbitrary JS wherever it is referenced — a wider risk surface than a Custom HTML tag.`,
         recommendation: 'Review its code for DOM scraping, cookie/PII reads, external calls, and unguarded paths that return undefined (which poisons every tag that consumes it). Prefer a built-in or template variable where possible.',
@@ -857,6 +949,7 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
       findings.push({
         severity: 'low',
         category: 'unused',
+        checkId: 'unused-variable',
         resource: { kind: 'variable', id: v.variableId, name: v.name },
         message: `Variable "${v.name}" appears unused — no tag, trigger, or variable in this workspace references it.`,
         recommendation: 'Review it in GTM and delete it (delete_gtm_variable) if truly unused — first confirm it is not relied on by a published version or a field this audit does not inspect.',
@@ -888,8 +981,19 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
   dupes(s.tags, 'medium', 'tag');
   dupes(s.triggers, 'low', 'trigger');
 
+  // Dedup by finding identity = checkId + resource id (spec §7). The message is included so
+  // two DIFFERENT checks on the same resource never collapse — only a true repeat of the
+  // same check on the same resource is dropped.
+  const seen = new Set<string>();
+  const deduped = findings.filter((f) => {
+    const key = `${f.checkId ?? f.category}::${f.resource?.id ?? ''}::${f.message}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
   // Add the Audit Brain confidence to each finding in one pass.
-  const withConfidence: AuditFinding[] = findings.map((f) => ({ ...f, confidence: f.confidence ?? confidenceFor(f.category) }));
+  const withConfidence: AuditFinding[] = deduped.map((f) => ({ ...f, confidence: f.confidence ?? confidenceFor(f.category) }));
 
   const summary = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const f of withConfidence) summary[f.severity]++;

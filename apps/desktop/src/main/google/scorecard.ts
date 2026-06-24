@@ -5,7 +5,7 @@
 // new audit sources compose without touching the engine.
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
-export type Confidence = 'certain' | 'likely' | 'runtime-required';
+export type Confidence = 'certain' | 'likely' | 'runtime-required' | 'guessing';
 
 export interface ScorecardFinding {
   severity: Severity;
@@ -67,7 +67,7 @@ function scoreOf(findings: ScorecardFinding[]): number {
   let score = 100;
   for (const f of findings) {
     // Audit Brain §7: [Guessing] / runtime-required findings never count toward the score.
-    if (f.confidence === 'runtime-required') continue;
+    if (f.confidence === 'runtime-required' || f.confidence === 'guessing') continue;
     score -= WEIGHT[f.severity];
   }
   return Math.max(0, Math.min(100, score));
