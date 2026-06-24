@@ -33,8 +33,16 @@ type GtmTab = 'suggestions' | 'audit';
 const GTM_TYPE_LABELS: Record<string, string> = {
   gaawe: 'GA4 Event',
   gaawc: 'GA4 Configuration',
+  googtag: 'Google Tag',
   awct: 'Google Ads Conversion',
   sp: 'Google Ads Remarketing',
+  gclidw: 'Conversion Linker',
+  flc: 'Floodlight Counter',
+  fls: 'Floodlight Sales',
+  baut: 'Microsoft Ads UET',
+  bzi: 'LinkedIn Insight',
+  hjtc: 'Hotjar',
+  ua: 'Universal Analytics',
   html: 'Custom HTML',
   img: 'Custom Image',
   linkClick: 'Click — Just Links',
@@ -2042,6 +2050,7 @@ function ContainerAuditPanel({
   const [running, setRunning] = useState(false);
   const [fix, setFix] = useState<Record<number, { state: 'idle' | 'confirm' | 'fixing' | 'done' | 'err'; msg?: string }>>({});
   const [applyingAll, setApplyingAll] = useState(false);
+  const [typeFilter, setTypeFilter] = useState<string>('all');
 
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -2051,6 +2060,7 @@ function ContainerAuditPanel({
     onError('');
     setRunning(true);
     setFix({});
+    setTypeFilter('all');
     try {
       setReport(await window.desktop.gtm.audit(ctx.accountId!, ctx.containerId!, ctx.workspaceId!));
     } catch (e) {
@@ -2085,21 +2095,33 @@ function ContainerAuditPanel({
 
   const findings = [...(report?.findings ?? [])].sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
   const fixable = (report?.findings ?? []).filter((f) => f.autoFixable).length;
-  // Bulk apply: every non-destructive auto-fix not already applied. Deletes are EXCLUDED —
-  // they stay per-row behind an explicit confirm so nothing irreversible happens in bulk.
-  // Consent fixes apply their default ("require consent" — the conservative, reversible
-  // choice); use a row's "No extra consent" button for the exceptions.
+
+  // Tag-type filter. The dropdown lists every tag type present in the findings (with counts);
+  // when one is picked, both the list and the batch buttons scope to it.
+  const typeCounts = new Map<string, number>();
+  for (const f of findings) {
+    if (f.resource?.kind === 'tag' && f.resource.type) typeCounts.set(f.resource.type, (typeCounts.get(f.resource.type) ?? 0) + 1);
+  }
+  const tagTypes = [...typeCounts.keys()].sort((a, b) => gtmTypeLabel(a).localeCompare(gtmTypeLabel(b)));
+  const typeMatches = (f: AuditFindingView): boolean => typeFilter === 'all' || f.resource?.type === typeFilter;
+
+  // Bulk apply: every non-destructive auto-fix not already applied (and matching the active
+  // type filter). Deletes are EXCLUDED — they stay per-row behind an explicit confirm so
+  // nothing irreversible happens in bulk. Consent fixes apply their default ("require
+  // consent" — conservative, reversible); use a row's "No extra consent" for the exceptions.
   const bulkFixable = findings.filter(
-    (f, i) => f.autoFixable && f.fix && !f.fix.tool.startsWith('delete') && fix[i]?.state !== 'done'
+    (f, i) => typeMatches(f) && f.autoFixable && f.fix && !f.fix.tool.startsWith('delete') && fix[i]?.state !== 'done'
   ).length;
   const isConsentFix = (f: AuditFindingView): boolean => f.fix?.tool === 'set_gtm_tag_consent';
   // "Require consent" batch includes ad pixels (gating a pixel is the safe direction).
-  const consentFixable = findings.filter((f, i) => f.autoFixable && isConsentFix(f) && fix[i]?.state !== 'done').length;
+  const consentFixable = findings.filter((f, i) => typeMatches(f) && f.autoFixable && isConsentFix(f) && fix[i]?.state !== 'done').length;
   // "No extra consent" batch EXCLUDES B6 ad pixels — one-click un-gating an ad pixel is a
   // compliance regression, so those keep their per-row choice.
   const noExtraFixable = findings.filter(
-    (f, i) => f.autoFixable && isConsentFix(f) && f.checkId !== 'B6-ad-pixel-consent' && fix[i]?.state !== 'done'
+    (f, i) => typeMatches(f) && f.autoFixable && isConsentFix(f) && f.checkId !== 'B6-ad-pixel-consent' && fix[i]?.state !== 'done'
   ).length;
+  // Rows to render — keep each finding's ORIGINAL index so the per-row fix state still aligns.
+  const visible = findings.map((f, i) => ({ f, i })).filter(({ f }) => typeMatches(f));
 
   // Apply every non-destructive fix matching `pred`, sequentially, with per-row status.
   // Deletes are always excluded (per-row confirm only). `override` builds an alternate fix
@@ -2113,6 +2135,7 @@ function ContainerAuditPanel({
     try {
       for (let i = 0; i < findings.length; i++) {
         const f = findings[i];
+        if (!typeMatches(f)) continue; // respect the active tag-type filter
         if (!f.autoFixable || !f.fix || f.fix.tool.startsWith('delete')) continue;
         if (fix[i]?.state === 'done' || fix[i]?.state === 'fixing') continue;
         if (!pred(f, i)) continue;
@@ -2169,6 +2192,29 @@ function ContainerAuditPanel({
               ({report.summary.critical} critical · {report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low ·{' '}
               {report.summary.info} info){fixable > 0 ? ` · ${fixable} auto-fixable` : ''}
             </div>
+            {tagTypes.length > 0 && (
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ color: '#9ca3af', fontSize: 13 }}>Tag type:</span>
+                <select
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                  style={styles.select}
+                  title="Filter findings — and scope the batch fixes — to one tag type"
+                >
+                  <option value="all">All tag types ({findings.length})</option>
+                  {tagTypes.map((t) => (
+                    <option key={t} value={t}>
+                      {gtmTypeLabel(t)} ({typeCounts.get(t)})
+                    </option>
+                  ))}
+                </select>
+                {typeFilter !== 'all' && (
+                  <button style={styles.ghostBtn} onClick={() => setTypeFilter('all')} title="Clear the tag-type filter">
+                    Clear filter
+                  </button>
+                )}
+              </div>
+            )}
             {(bulkFixable > 0 || consentFixable > 0) && (
               <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 {bulkFixable > 0 && (
@@ -2221,9 +2267,13 @@ function ContainerAuditPanel({
           </div>
         )}
 
-        {findings.length > 0 && (
+        {findings.length > 0 && visible.length === 0 && (
+          <div style={styles.empty}>No {gtmTypeLabel(typeFilter)} findings. Clear the tag-type filter to see the rest.</div>
+        )}
+
+        {visible.length > 0 && (
           <div style={styles.reviewList}>
-            {findings.map((f, i) => {
+            {visible.map(({ f, i }) => {
               const st = fix[i];
               const done = st?.state === 'done';
               return (

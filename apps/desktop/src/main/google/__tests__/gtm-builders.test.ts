@@ -773,5 +773,22 @@ test('audit: an unrecognised tag type is flagged for manual review, not skipped'
   assert.ok(r.findings.some((x) => /unrecognised type/i.test(x.message)), 'unknown type flagged');
 });
 
+test('audit: findings carry the resource GTM type (drives the tag-type filter)', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'Paused GA4', type: 'gaawe', firingTriggerId: ['T1'], paused: true,
+        parameter: [{ key: 'measurementIdOverride', value: 'G-1' }, { key: 'eventName', value: 'x' }] },
+      { tagId: '2', name: 'TikTok', type: 'html', firingTriggerId: ['T1'], paused: false,
+        parameter: [{ key: 'html', value: '<script>ttq.load("A")</script>' }] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'T', type: 'customEvent' }],
+    variables: [{ variableId: 'V1', name: 'Orphan CJS', type: 'jsm', parameter: [] }],
+  });
+  assert.equal(r.findings.find((x) => x.resource?.id === '1')?.resource?.type, 'gaawe', 'GA4 event tag finding tagged gaawe');
+  assert.equal(r.findings.find((x) => x.resource?.id === '2')?.resource?.type, 'html', 'Custom HTML tag finding tagged html');
+  // non-tag resources are enriched too (variable → jsm), though the UI filter lists tag types
+  assert.equal(r.findings.find((x) => x.resource?.id === 'V1')?.resource?.type, 'jsm', 'variable finding carries its type');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

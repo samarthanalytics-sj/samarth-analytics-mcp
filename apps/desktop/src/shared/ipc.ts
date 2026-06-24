@@ -216,7 +216,7 @@ export interface AuditFindingView {
   checkId?: string;
   category: string;
   message: string;
-  resource?: { kind: 'tag' | 'trigger' | 'variable'; id: string; name: string };
+  resource?: { kind: 'tag' | 'trigger' | 'variable'; id: string; name: string; type?: string };
   recommendation: string;
   /** True when `fix` is a ready-to-run tool call (pause/unpause/delete). */
   autoFixable: boolean;
