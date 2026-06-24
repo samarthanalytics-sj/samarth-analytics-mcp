@@ -7,6 +7,7 @@ import {
   buildTrigger,
   applyTriggerWaitDefaults,
   consentTypesFor,
+  detectAdPixel,
   triggerBuiltInVars,
   builtInVarsForTemplates,
   buildVariable,
@@ -303,10 +304,10 @@ test('audit: structured findings carry resource + recommendation + machine fix',
 
   // counts gained a findings tally; severity summary is present.
   assert.equal(r.counts.findings, r.findings.length);
-  assert.equal(r.summary.high + r.summary.medium + r.summary.low + r.summary.info, r.findings.length);
+  assert.equal(r.summary.critical + r.summary.high + r.summary.medium + r.summary.low + r.summary.info, r.findings.length);
 
   const paused = r.findings.find((f) => f.category === 'paused');
-  assert.equal(paused?.severity, 'medium');
+  assert.equal(paused?.severity, 'low'); // a paused GA4 EVENT tag (not a config/conversion) is Low (D1)
   assert.equal(paused?.resource?.id, '2');
   assert.ok(paused?.recommendation.length, 'recommendation present');
   assert.equal(paused?.autoFixable, true);
@@ -358,6 +359,68 @@ test('consentTypesFor maps destination type → required consent signals', () =>
   assert.deepEqual(consentTypesFor('gaawe'), ['analytics_storage']);
   assert.deepEqual(consentTypesFor('googtag'), ['analytics_storage', 'ad_storage']);
   assert.deepEqual(consentTypesFor('awct'), ['ad_storage', 'ad_user_data', 'ad_personalization']);
+});
+
+test('detectAdPixel recognises the major ad networks, ignores plain HTML', () => {
+  assert.equal(detectAdPixel('<script>fbq("init","123");</script>'), 'Meta/Facebook');
+  assert.equal(detectAdPixel('https://analytics.tiktok.com/i18n/pixel'), 'TikTok');
+  assert.equal(detectAdPixel('var _linkedin_partner_id = "9";'), 'LinkedIn');
+  assert.equal(detectAdPixel('<div>hello world</div>'), null);
+});
+
+test('audit B6: ungated ad pixel in Custom HTML → Critical [Certain], auto-fixable', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'Meta Pixel', type: 'html', firingTriggerId: ['T1'], paused: false,
+        parameter: [{ key: 'html', value: '<script>!function(){fbq("init","555")}();</script>' }] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  const b6 = r.findings.find((f) => f.category === 'consent' && f.severity === 'critical');
+  assert.ok(b6, 'a Critical consent finding for the ungated Meta pixel');
+  assert.equal(b6?.confidence, 'certain', 'B6 is [Certain] — Custom HTML has no built-in consent');
+  assert.equal(b6?.autoFixable, true);
+  assert.equal(b6?.fix?.tool, 'set_gtm_tag_consent');
+  assert.deepEqual(b6?.fix?.args.consentTypes, ['ad_storage', 'ad_user_data', 'ad_personalization']);
+  assert.equal(r.summary.critical, 1, 'counted as Critical');
+});
+
+test('audit B6: an ad pixel WITH a consent gate is NOT flagged (denied-pass guard)', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'Meta Pixel', type: 'html', firingTriggerId: ['T1'], paused: false,
+        consentSettings: { consentStatus: 'needed', consentType: null },
+        parameter: [{ key: 'html', value: '<script>fbq("init","555")</script>' }] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  assert.equal(r.findings.some((f) => f.category === 'consent' && f.severity === 'critical'), false, 'gated pixel → no B6');
+});
+
+test('audit A8: Ads conversion tag with no Conversion ID → High', () => {
+  const r = auditContainer({
+    tags: [{ tagId: '1', name: 'Ads Conv', type: 'awct', firingTriggerId: ['T1'], paused: false, parameter: [] }],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  assert.ok(r.findings.some((f) => f.severity === 'high' && /no Conversion ID/i.test(f.message)), 'A8 conversion-id finding');
+});
+
+test('audit D1: a paused CONFIG tag is High; a paused plain tag is Low', () => {
+  const r = auditContainer({
+    tags: [
+      { tagId: '1', name: 'GA4 Config', type: 'googtag', firingTriggerId: ['T1'], paused: true, parameter: [{ key: 'tagId', value: 'G-1' }] },
+      { tagId: '2', name: 'Some HTML', type: 'html', firingTriggerId: ['T1'], paused: true, parameter: [{ key: 'html', value: '<div>x</div>' }] },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'All Pages', type: 'pageview' }],
+    variables: [],
+  });
+  const pausedCfg = r.findings.find((f) => f.category === 'paused' && f.resource?.id === '1');
+  const pausedHtml = r.findings.find((f) => f.category === 'paused' && f.resource?.id === '2');
+  assert.equal(pausedCfg?.severity, 'high', 'paused config tag escalated to High');
+  assert.equal(pausedHtml?.severity, 'low', 'paused plain tag stays Low');
 });
 
 test('audit: AuditReport carries the boundary statement + runtime-required list', () => {

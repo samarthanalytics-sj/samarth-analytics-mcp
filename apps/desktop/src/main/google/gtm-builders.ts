@@ -504,6 +504,24 @@ export function normConsent(status: unknown): string {
   return typeof status === 'string' ? status.replace(/_/g, '').toLowerCase() : '';
 }
 
+// Advertising/marketing pixels commonly pasted as Custom HTML. A Custom HTML tag has
+// NO built-in Consent Mode, so an ungated pixel here fires on every load and drops ad
+// cookies regardless of consent (Audit Brain B6). Signatures from the Brain.
+const AD_PIXELS: Array<{ name: string; re: RegExp }> = [
+  { name: 'Meta/Facebook', re: /connect\.facebook\.net|fbq\s*\(|fbevents\.js/i },
+  { name: 'TikTok', re: /analytics\.tiktok\.com|ttq\./i },
+  { name: 'LinkedIn', re: /snap\.licdn\.com|_linkedin_partner_id/i },
+  { name: 'Pinterest', re: /s\.pinimg\.com|pintrk\s*\(/i },
+  { name: 'Snapchat', re: /sc-static\.net|snaptr\s*\(/i },
+  { name: 'X/Twitter', re: /static\.ads-twitter\.com|twq\s*\(/i },
+  { name: 'Reddit', re: /rdt\s*\(|redditstatic\.com/i },
+  { name: 'Microsoft/Bing UET', re: /bat\.bing\.com|uetq/i },
+];
+export function detectAdPixel(html: string): string | null {
+  for (const p of AD_PIXELS) if (p.re.test(html)) return p.name;
+  return null;
+}
+
 // Pull every {{Variable Name}} token out of any nested value into `into`.
 const VAR_REF = /\{\{([^}]+)\}\}/g;
 function refsIn(value: unknown, into: Set<string>): void {
@@ -517,8 +535,10 @@ function refsIn(value: unknown, into: Set<string>): void {
 }
 
 export function auditContainer(s: ContainerSnapshot): AuditReport {
-  // Built without `confidence`; it's added per-category in one pass at the end.
-  const findings: Array<Omit<AuditFinding, 'confidence'>> = [];
+  // Built with confidence OPTIONAL — most get it per-category at the end, but a finding
+  // may set its own (e.g. B6 ad-pixel-without-consent is [Certain], not the [Likely]
+  // the general consent check gets).
+  const findings: Array<Omit<AuditFinding, 'confidence'> & { confidence?: AuditFinding['confidence'] }> = [];
   const measurementIds = new Set<string>();
 
   for (const t of s.tags) {
@@ -535,12 +555,19 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
       });
     }
     if (t.paused) {
+      // D1: a paused tag is Low on its own, BUT a paused conversion (awct) or GA4/Google
+      // CONFIG tag (googtag/gaawc) is likely a tracking gap nobody noticed — escalate.
+      const keyPaused = t.type === 'awct' || t.type === 'googtag' || t.type === 'gaawc';
       findings.push({
-        severity: 'medium',
+        severity: keyPaused ? 'high' : 'low',
         category: 'paused',
         resource,
-        message: `Tag "${t.name}" is paused.`,
-        recommendation: 'Unpause it if it should be live.',
+        message: keyPaused
+          ? `Tag "${t.name}" is PAUSED — and it is a ${t.type === 'awct' ? 'conversion' : 'GA4/Google config'} tag, so this likely means tracking is silently off.`
+          : `Tag "${t.name}" is paused.`,
+        recommendation: keyPaused
+          ? 'Unpause it if it should be live; if it is paused deliberately, confirm that — a paused conversion/config tag stops data collection with nothing else signalling it.'
+          : 'Unpause it if it should be live.',
         autoFixable: true,
         fix: { tool: 'set_gtm_tag_paused', args: { tagId: t.tagId, paused: false, name: t.name } },
       });
@@ -589,6 +616,21 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
         });
       }
     }
+    if (t.type === 'awct') {
+      // A8: a Google Ads conversion tag with no Conversion ID/Label tracks nothing —
+      // it looks active but sends no conversion. (A {{variable}} value is fine, not flagged.)
+      const hasConvId = t.parameter.some((p) => (p.key === 'conversionId' || p.key === 'conversionLabel') && p.value);
+      if (!hasConvId) {
+        findings.push({
+          severity: 'high',
+          category: 'ga4',
+          resource,
+          message: `Google Ads conversion tag "${t.name}" has no Conversion ID/Label — it records no conversions.`,
+          recommendation: 'Set the Conversion ID (AW-XXXXXX) and Conversion Label from the Google Ads conversion action.',
+          autoFixable: false,
+        });
+      }
+    }
     if (t.type === 'ua') {
       // Universal Analytics: 758 such tags in the corpus, all now inert.
       findings.push({
@@ -619,6 +661,30 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
           recommendation: 'Replace document.write with DOM insertion, or enable "Support document.write" only if truly required.',
           autoFixable: false,
         });
+      }
+      // B6: an advertising pixel in Custom HTML with no consent gate. Custom HTML has no
+      // built-in Consent Mode, so this is a CERTAIN ungated-pixel defect (not the [Likely]
+      // the general consent check gives Google tags). This is the primary finding — it
+      // outranks the "review this snippet" security note above.
+      const pixel = htmlParam ? detectAdPixel(String(htmlParam.value)) : null;
+      if (pixel) {
+        const cs = normConsent(t.consentSettings?.consentStatus);
+        if (!cs || cs === 'notset') {
+          findings.push({
+            severity: 'critical',
+            confidence: 'certain',
+            category: 'consent',
+            resource,
+            message: `Custom HTML tag "${t.name}" is a ${pixel} advertising pixel with NO consent check — Custom HTML has no built-in Consent Mode, so it fires on every load, drops ad cookies and sends user data regardless of consent.`,
+            recommendation:
+              'Gate it: Tag → Consent Settings → "Require additional consent for tag to fire" → ad_storage, ad_user_data, ad_personalization (or replace the raw snippet with a consent-aware community template). A Custom HTML gate is binary — no cookieless fallback. For EU/UK/AU this is a Consent Mode v2 violation.',
+            autoFixable: true,
+            fix: {
+              tool: 'set_gtm_tag_consent',
+              args: { tagId: t.tagId, consentStatus: 'needed', consentTypes: ['ad_storage', 'ad_user_data', 'ad_personalization'], name: t.name },
+            },
+          });
+        }
       }
     }
     // Consent Mode v2: ad/analytics tags should declare their consent. Only the
@@ -728,7 +794,7 @@ export function auditContainer(s: ContainerSnapshot): AuditReport {
   dupes(s.triggers, 'low', 'trigger');
 
   // Add the Audit Brain confidence to each finding in one pass.
-  const withConfidence: AuditFinding[] = findings.map((f) => ({ ...f, confidence: confidenceFor(f.category) }));
+  const withConfidence: AuditFinding[] = findings.map((f) => ({ ...f, confidence: f.confidence ?? confidenceFor(f.category) }));
 
   const summary = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const f of withConfidence) summary[f.severity]++;
