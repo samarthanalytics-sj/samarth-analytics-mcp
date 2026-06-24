@@ -1,3 +1,9 @@
+## [1.47.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.46.0...v1.47.0) (2026-06-24)
+
+### Features
+
+* **desktop:** tag-type filter on the container audit (scopes list + batch fixes) ([1700381](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/170038138e69b7d47f09a0a5530e537aaf24efae))
+
 ## [1.46.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.45.0...v1.46.0) (2026-06-24)
 
 ### Features
