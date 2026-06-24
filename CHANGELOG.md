@@ -1,3 +1,9 @@
+## [1.45.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.44.0...v1.45.0) (2026-06-24)
+
+### Features
+
+* **desktop:** consent-only batch fix on the container audit ([13fa582](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/13fa5828e0667a65fd77c3fe5fdcdcdd7ecba476))
+
 ## [1.44.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.43.4...v1.44.0) (2026-06-24)
 
 ### Features
