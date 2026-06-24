@@ -24,6 +24,7 @@ const report = (n: number): AuditReport => ({
   findings: [],
   boundary: 'test',
   runtimeRequired: [],
+  hasGa4Config: false,
 });
 
 console.log('\nAuditHistoryStore:');
