@@ -1,3 +1,9 @@
+## [1.48.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.47.1...v1.48.0) (2026-06-24)
+
+### Features
+
+* **desktop:** cancel option while applying batch fixes ([6e71c1e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6e71c1ee4c851f8110c000234616f288410051b9))
+
 ## [1.47.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.47.0...v1.47.1) (2026-06-24)
 
 ### Bug Fixes
