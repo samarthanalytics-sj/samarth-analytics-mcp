@@ -347,7 +347,10 @@ function splitTableRow(line: string): string[] {
 }
 function isTableSeparator(line: string): boolean {
   const s = line.trim();
-  return s.length > 0 && /^[|\s:-]+$/.test(s) && s.includes('-');
+  // Accept the ASCII `---|---` separator AND the unicode-dash variants some models emit
+  // (U+2010-U+2015: hyphen, figure/en/em dash, horizontal bar) so the table renders
+  // instead of falling through to raw `|` text.
+  return s.length > 0 && /^[|\s:\u2010-\u2015\-]+$/.test(s) && /[\u2010-\u2015\-]/.test(s);
 }
 function isHeading(line: string): boolean {
   return /^#{1,6}\s+/.test(line);
