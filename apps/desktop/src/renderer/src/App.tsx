@@ -312,7 +312,13 @@ const mdStyles: Record<string, React.CSSProperties> = {
   th: { border: '1px solid rgba(255,255,255,0.18)', padding: '6px 10px', textAlign: 'left', verticalAlign: 'top', background: 'rgba(255,255,255,0.06)', fontWeight: 600 },
   td: { border: '1px solid rgba(255,255,255,0.18)', padding: '6px 10px', textAlign: 'left', verticalAlign: 'top' },
   code: { background: 'rgba(255,255,255,0.10)', borderRadius: 4, padding: '1px 5px', fontFamily: 'ui-monospace, monospace', fontSize: 12 },
-  pre: { background: 'rgba(0,0,0,0.30)', borderRadius: 6, padding: 10, overflowX: 'auto', margin: '8px 0', fontFamily: 'ui-monospace, monospace', fontSize: 12 },
+  pre: { background: 'rgba(0,0,0,0.30)', borderRadius: 6, padding: 10, paddingTop: 28, overflowX: 'auto', margin: 0, fontFamily: 'ui-monospace, monospace', fontSize: 12 },
+  codeWrap: { position: 'relative', margin: '8px 0' },
+  copyBtn: {
+    position: 'absolute', top: 6, right: 6, zIndex: 1, padding: '2px 9px', fontSize: 11,
+    background: 'rgba(255,255,255,0.10)', color: '#cbd5e1', border: '1px solid rgba(255,255,255,0.18)',
+    borderRadius: 6, cursor: 'pointer',
+  },
   h: { margin: '10px 0 4px', fontWeight: 600, lineHeight: 1.3 },
   p: { margin: '4px 0', whiteSpace: 'pre-wrap' },
   list: { margin: '4px 0', paddingLeft: 20 },
@@ -359,6 +365,29 @@ function isListItem(line: string): boolean {
   return /^\s*([-*]|\d+\.)\s+/.test(line);
 }
 
+/** A fenced code block rendered as a boxed snippet with a Copy button. */
+function CodeBlock({ code }: { code: string }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const copy = (): void => {
+    const done = (): void => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    };
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(code).then(done).catch(() => {});
+    else done();
+  };
+  return (
+    <div style={mdStyles.codeWrap}>
+      <button style={mdStyles.copyBtn} onClick={copy} title="Copy to clipboard">
+        {copied ? '✓ Copied' : 'Copy'}
+      </button>
+      <pre style={mdStyles.pre}>
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
 function Markdown({ text }: { text: string }): JSX.Element {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
   const blocks: JSX.Element[] = [];
@@ -375,7 +404,7 @@ function Markdown({ text }: { text: string }): JSX.Element {
       i++;
       while (i < lines.length && !lines[i].trim().startsWith('```')) { buf.push(lines[i]); i++; }
       i++; // closing fence (if present)
-      blocks.push(<pre key={key++} style={mdStyles.pre}><code>{buf.join('\n')}</code></pre>);
+      blocks.push(<CodeBlock key={key++} code={buf.join('\n')} />);
       continue;
     }
 
