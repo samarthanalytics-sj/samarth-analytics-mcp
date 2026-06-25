@@ -175,6 +175,18 @@ export function buildToolRegistry(
       handler: (a) => data.listGtmFolders(s(a.accountId), s(a.containerId), s(a.workspaceId)),
     },
     {
+      name: 'list_gtm_environments',
+      description:
+        "List the container's GTM environments (Test/Staging/etc.) — each one's environmentId, type, gtm_auth token (authorizationCode), and a ready-to-paste install snippet (head <script> + body <noscript>). The GTM API DOES manage environments, so use this (and create_gtm_environment) instead of telling the user to do it in the GTM UI. Requires accountId, containerId.",
+      inputSchema: {
+        type: 'object',
+        properties: { accountId: { type: 'string' }, containerId: { type: 'string' } },
+        required: ['accountId', 'containerId'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGtmEnvironments(s(a.accountId), s(a.containerId)),
+    },
+    {
       name: 'list_gtm_tags',
       description:
         'List the tags in a GTM workspace. Requires accountId, containerId, workspaceId.',
@@ -997,6 +1009,32 @@ export function buildToolRegistry(
       write: true,
       summarize: (a) => `Create GTM workspace "${s(a.name)}" in container ${s(a.containerId)}`,
       handler: (a) => data.createGtmWorkspace(s(a.accountId), s(a.containerId), s(a.name)),
+    },
+    {
+      name: 'create_gtm_environment',
+      description:
+        'Create a GTM ENVIRONMENT (e.g. a "Test" preview-and-debug environment) and return its environmentId, gtm_auth token (authorizationCode), and the ready-to-paste install snippet (head <script> + body <noscript>, with gtm_auth/gtm_preview/gtm_cookies_win filled in). This is a config write (not a publish) — it does not change the live container. Requires accountId, containerId, name; optional url and enableDebug (boolean). Use this instead of telling the user to create the environment in the GTM UI.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          name: { type: 'string' },
+          url: { type: 'string' },
+          enableDebug: { type: 'boolean' },
+          description: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'name'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create GTM environment "${s(a.name)}" in container ${s(a.containerId)}`,
+      handler: (a) =>
+        data.createGtmEnvironment(s(a.accountId), s(a.containerId), s(a.name), {
+          url: a.url != null ? s(a.url) : undefined,
+          enableDebug: typeof a.enableDebug === 'boolean' ? a.enableDebug : a.enableDebug != null ? s(a.enableDebug) === 'true' : undefined,
+          description: a.description != null ? s(a.description) : undefined,
+        }),
     },
     {
       name: 'create_gtm_folder',

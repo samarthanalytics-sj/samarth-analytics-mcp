@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet } from './gtm-builders';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
@@ -126,6 +126,17 @@ export interface GtmFolderView {
   folderId: string;
   name: string;
   path: string;
+}
+
+export interface GtmEnvironmentView {
+  environmentId: string;
+  name: string;
+  type: string;
+  /** The gtm_auth token (USER environments). Empty for built-in types that don't expose it. */
+  authorizationCode: string;
+  url: string;
+  /** Ready-to-paste install snippet for this environment (head <script> + body <noscript>). */
+  snippet: { head: string; body: string };
 }
 
 export interface GtmTagView {
@@ -254,6 +265,79 @@ export class GoogleDataService {
       (r) => r.data.nextPageToken
     );
     return folders.map((f) => ({ folderId: f.folderId ?? '', name: f.name ?? '(unnamed)', path: f.path ?? '' }));
+  }
+
+  /** The container's public id (GTM-XXXXXX) — needed to build install snippets. */
+  private async getContainerPublicId(accountId: string, containerId: string): Promise<string> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.get({ path: `accounts/${accountId}/containers/${containerId}` });
+    return res.data.publicId ?? '';
+  }
+
+  /** List the container's environments (incl. their gtm_auth token + a ready install snippet). */
+  async listGtmEnvironments(accountId: string, containerId: string): Promise<GtmEnvironmentView[]> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}`;
+    const [publicId, environments] = await Promise.all([
+      this.getContainerPublicId(accountId, containerId),
+      collectPages(
+        (pageToken) => gtm.accounts.containers.environments.list({ parent, pageToken }),
+        (r) => r.data.environment,
+        (r) => r.data.nextPageToken
+      ),
+    ]);
+    return environments.map((e) => ({
+      environmentId: e.environmentId ?? '',
+      name: e.name ?? '(unnamed)',
+      type: e.type ?? '',
+      authorizationCode: e.authorizationCode ?? '',
+      url: e.url ?? '',
+      snippet: buildEnvironmentSnippet(publicId, e.authorizationCode ?? '', e.environmentId ?? ''),
+    }));
+  }
+
+  /** Create a USER environment (e.g. "Test") and return it WITH the install snippet. */
+  async createGtmEnvironment(
+    accountId: string,
+    containerId: string,
+    name: string,
+    opts?: { url?: string; enableDebug?: boolean; description?: string }
+  ): Promise<GtmEnvironmentView> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const [publicId, res] = await Promise.all([
+      this.getContainerPublicId(accountId, containerId),
+      gtm.accounts.containers.environments.create({
+        parent: `accounts/${accountId}/containers/${containerId}`,
+        requestBody: {
+          name,
+          type: 'user',
+          ...(opts?.url ? { url: opts.url } : {}),
+          ...(opts?.enableDebug !== undefined ? { enableDebug: opts.enableDebug } : {}),
+          ...(opts?.description ? { description: opts.description } : {}),
+        },
+      }),
+    ]);
+    let e = res.data;
+    // A freshly created environment may come back without its gtm_auth token — generate it
+    // so the returned snippet is immediately usable (the whole point of this tool).
+    if (!e.authorizationCode && e.environmentId) {
+      const re = await gtm.accounts.containers.environments.reauthorize({
+        path: `accounts/${accountId}/containers/${containerId}/environments/${e.environmentId}`,
+        requestBody: {},
+      });
+      e = re.data;
+    }
+    return {
+      environmentId: e.environmentId ?? '',
+      name: e.name ?? name,
+      type: e.type ?? 'user',
+      authorizationCode: e.authorizationCode ?? '',
+      url: e.url ?? '',
+      snippet: buildEnvironmentSnippet(publicId, e.authorizationCode ?? '', e.environmentId ?? ''),
+    };
   }
 
   async listGtmTags(

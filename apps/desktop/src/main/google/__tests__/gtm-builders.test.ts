@@ -6,6 +6,7 @@ import {
   buildCustomHtmlTag,
   buildTrigger,
   applyTriggerWaitDefaults,
+  buildEnvironmentSnippet,
   consentTypesFor,
   evaluateConsentGate,
   triggerBuiltInVars,
@@ -788,6 +789,15 @@ test('audit: findings carry the resource GTM type (drives the tag-type filter)',
   assert.equal(r.findings.find((x) => x.resource?.id === '2')?.resource?.type, 'html', 'Custom HTML tag finding tagged html');
   // non-tag resources are enriched too (variable → jsm), though the UI filter lists tag types
   assert.equal(r.findings.find((x) => x.resource?.id === 'V1')?.resource?.type, 'jsm', 'variable finding carries its type');
+});
+
+test('buildEnvironmentSnippet embeds gtm_auth + gtm_preview=env-<id> + the public id', () => {
+  const { head, body } = buildEnvironmentSnippet('GTM-ABC123', 'AUTH_TOKEN_XYZ', '7');
+  assert.ok(head.includes("'GTM-ABC123'"), 'container public id in the script');
+  assert.ok(head.includes('&gtm_auth=AUTH_TOKEN_XYZ'), 'gtm_auth token');
+  assert.ok(head.includes('&gtm_preview=env-7'), 'gtm_preview is env-<environmentId>');
+  assert.ok(head.includes('&gtm_cookies_win=x'), 'gtm_cookies_win');
+  assert.ok(body.includes('ns.html?id=GTM-ABC123') && body.includes('&gtm_auth=AUTH_TOKEN_XYZ'), 'noscript iframe carries the same params');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

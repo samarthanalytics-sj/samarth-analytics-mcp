@@ -20,6 +20,35 @@ export function sanitizeName(name: string): string {
   return cleaned || 'Unnamed';
 }
 
+/**
+ * Build the GTM install snippet for an ENVIRONMENT — the normal container snippet plus the
+ * environment's gtm_auth (authorizationCode), gtm_preview (env-<environmentId>) and
+ * gtm_cookies_win params. `publicId` is the GTM-XXXXXX container id. Returns the <head>
+ * script and the <body> noscript. Pure / testable.
+ */
+export function buildEnvironmentSnippet(
+  publicId: string,
+  authorizationCode: string,
+  environmentId: string
+): { head: string; body: string } {
+  const params = `&gtm_auth=${authorizationCode}&gtm_preview=env-${environmentId}&gtm_cookies_win=x`;
+  const head =
+    '<!-- Google Tag Manager -->\n' +
+    "<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':\n" +
+    "new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],\n" +
+    "j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=\n" +
+    `'https://www.googletagmanager.com/gtm.js?id='+i+dl+'${params}';\n` +
+    "f.parentNode.insertBefore(j,f);\n" +
+    `})(window,document,'script','dataLayer','${publicId}');</script>\n` +
+    '<!-- End Google Tag Manager -->';
+  const body =
+    '<!-- Google Tag Manager (noscript) -->\n' +
+    `<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=${publicId}${params}"\n` +
+    'height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>\n' +
+    '<!-- End Google Tag Manager (noscript) -->';
+  return { head, body };
+}
+
 export interface GtmTagResource {
   name: string;
   type: string;
