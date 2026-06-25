@@ -10,6 +10,8 @@ import {
   customEventNameOf,
   findExistingTrigger,
   buildEnvironmentSnippet,
+  buildGa4Client,
+  buildGa4ServerTag,
   consentTypesFor,
   evaluateConsentGate,
   triggerBuiltInVars,
@@ -863,6 +865,25 @@ test('findExistingTrigger: matches by name (ci) OR by same custom-event, else un
   assert.equal(findExistingTrigger(existing, { name: '  All Pages  ' })?.triggerId, '10');
   // an empty proposed name does NOT spuriously match an existing trigger
   assert.equal(findExistingTrigger(existing, { name: '', type: 'pageview' }), undefined);
+});
+
+test('buildGa4Client builds a gaaw_client that claims the default GA4 paths', () => {
+  const c = buildGa4Client('GA4');
+  assert.equal(c.type, 'gaaw_client');
+  const p = (c.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(p.find((x) => x.key === 'activateDefaultPaths')?.value, 'true');
+});
+
+test('buildGa4ServerTag builds an sgtmgaaw tag relaying to the Measurement ID', () => {
+  const t = buildGa4ServerTag('GA4 - Server', 'G-ABC123');
+  assert.equal(t.type, 'sgtmgaaw');
+  const p = (t.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(p.find((x) => x.key === 'measurementId')?.value, 'G-ABC123');
+  assert.equal(p.find((x) => x.key === 'eventName')?.value, '{{Event Name}}', 'defaults to forwarding the incoming event');
+  assert.equal(p.find((x) => x.key === 'epToIncludeDropdown')?.value, 'all');
+  // a per-event tag uses a literal event name
+  const purchase = buildGa4ServerTag('GA4 - Purchase', 'G-ABC123', 'purchase');
+  assert.equal(((purchase.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'eventName')?.value, 'purchase');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

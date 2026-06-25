@@ -73,6 +73,35 @@ function fakeData(
       calls.push(`listVariables:${a}:${c}:${w}`);
       return opts.existingVariables ?? [];
     },
+    listGtmClients: async () => {
+      calls.push('listClients');
+      return [];
+    },
+    listGtmTransformations: async () => {
+      calls.push('listTransformations');
+      return [];
+    },
+    createServerContainer: async (a: string, name: string) => {
+      calls.push(`createServerContainer:${a}:${name}`);
+      return { containerId: 'SC1', publicId: 'GTM-SERVER', name, taggingServerUrls: [] };
+    },
+    createGtmClient: async (a: string, c: string, w: string, cl: Record<string, unknown>) => {
+      calls.push(`createClient:${a}:${c}:${w}:${String(cl.type ?? '')}`);
+      return { clientId: 'CL1', name: String(cl.name ?? ''), type: String(cl.type ?? '') };
+    },
+    createGtmTransformation: async (a: string, c: string, w: string, x: Record<string, unknown>) => {
+      calls.push(`createTransformation:${a}:${c}:${w}`);
+      return { transformationId: 'X1', name: String(x.name ?? ''), type: String(x.type ?? '') };
+    },
+    bootstrapServerSideTagging: async (a: string, name: string, mid: string) => {
+      calls.push(`bootstrapServer:${a}:${name}:${mid}`);
+      return {
+        container: { containerId: 'SC1', publicId: 'GTM-SERVER', name, taggingServerUrls: [] },
+        workspaceId: 'w1',
+        client: { clientId: 'CL1', name: 'GA4' },
+        serverTag: { tagId: 'T1', name: 'GA4 - Server' },
+      };
+    },
     listGa4DataStreams: async (p: string) => {
       calls.push(`ga4Streams:${p}`);
       return [];
@@ -285,10 +314,12 @@ async function main(): Promise<void> {
       'list_ga4_measurement_protocol_secrets',
       'list_ga4_properties',
       'list_gtm_accounts',
+      'list_gtm_clients',
       'list_gtm_containers',
       'list_gtm_environments',
       'list_gtm_folders',
       'list_gtm_tags',
+      'list_gtm_transformations',
       'list_gtm_triggers',
       'list_gtm_variables',
       'list_gtm_versions',
@@ -316,11 +347,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 38, 'read-only registry has 38 tools');
+    assert.equal(readOnly.list().length, 40, 'read-only registry has 40 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 61, 'read + write registry has 61 tools');
+    assert.equal(withWrites.list().length, 67, 'read + write registry has 67 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1022,6 +1053,27 @@ async function main(): Promise<void> {
       trigger: { name: 'CE - Add To Cart', type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'add_to_cart' }] }] },
     });
     assert.ok(fd.calls.some((x) => x.startsWith('createTrigger:')), 'a genuinely new trigger is created');
+  });
+
+  await test('server-side GTM: list tools are read-only; create + bootstrap are confirm-gated writes', async () => {
+    const fd = fakeData();
+    // Read tools available without a confirm fn.
+    const ro = buildToolRegistry(fd.data);
+    assert.ok(ro.list().some((t) => t.name === 'list_gtm_clients') && ro.list().some((t) => t.name === 'list_gtm_transformations'), 'sGTM list tools are read-only');
+    assert.equal(ro.list().some((t) => t.name === 'create_server_container'), false, 'create_server_container hidden read-only');
+
+    const reg = buildToolRegistry(fd.data, approveAsIs, 'gtm');
+    const created = JSON.parse(await reg.execute('create_server_container', { accountId: '1', name: 'Server' }));
+    assert.equal(created.publicId, 'GTM-SERVER');
+    assert.ok(fd.calls.includes('createServerContainer:1:Server'));
+
+    const boot = JSON.parse(await reg.execute('bootstrap_server_side_tagging', { accountId: '1', name: 'Server', measurementId: 'G-1' }));
+    assert.equal(boot.serverTag.name, 'GA4 - Server');
+    assert.equal(boot.client.name, 'GA4');
+    assert.ok(fd.calls.includes('bootstrapServer:1:Server:G-1'));
+
+    const client = JSON.parse(await reg.execute('create_gtm_client', { accountId: '1', containerId: '2', workspaceId: '3', client: { name: 'GA4', type: 'gaaw_client' } }));
+    assert.equal(client.type, 'gaaw_client');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

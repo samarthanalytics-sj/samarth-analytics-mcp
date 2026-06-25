@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag } from './gtm-builders';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
@@ -973,6 +973,129 @@ export class GoogleDataService {
       (r) => r.data.nextPageToken
     );
     return variables.map((v) => ({ variableId: v.variableId ?? '', name: v.name ?? '(unnamed)', type: v.type ?? '' }));
+  }
+
+  /* ── Server-side GTM (sGTM) ── */
+
+  /** Create a SERVER container (usageContext 'server'). The actual tagging-server HOST
+   *  (Cloud Run / App Engine) must be provisioned separately; taggingServerUrls reflects it. */
+  async createServerContainer(
+    accountId: string,
+    name: string
+  ): Promise<{ containerId: string; publicId: string; name: string; taggingServerUrls: string[] }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.create({
+      parent: `accounts/${accountId}`,
+      requestBody: { name, usageContext: ['server'] },
+    });
+    return {
+      containerId: res.data.containerId ?? '',
+      publicId: res.data.publicId ?? '',
+      name: res.data.name ?? name,
+      taggingServerUrls: res.data.taggingServerUrls ?? [],
+    };
+  }
+
+  /** The default workspace of a container (named "Default Workspace", else the first). */
+  private async defaultWorkspaceId(accountId: string, containerId: string): Promise<string> {
+    const wss = await this.listGtmWorkspaces(accountId, containerId);
+    const def = wss.find((w) => w.name.toLowerCase() === 'default workspace') ?? wss[0];
+    if (!def) throw new Error('New container has no workspace.');
+    return def.workspaceId;
+  }
+
+  async listGtmClients(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<Array<{ clientId: string; name: string; type: string }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const clients = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.clients.list({ parent, pageToken }),
+      (r) => r.data.client,
+      (r) => r.data.nextPageToken
+    );
+    return clients.map((c) => ({ clientId: c.clientId ?? '', name: c.name ?? '(unnamed)', type: c.type ?? '' }));
+  }
+
+  async createGtmClient(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    client: Record<string, unknown>
+  ): Promise<{ clientId: string; name: string; type: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.clients.create({
+      parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+      requestBody: client,
+    });
+    return { clientId: res.data.clientId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  async listGtmTransformations(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<Array<{ transformationId: string; name: string; type: string }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const xs = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.transformations.list({ parent, pageToken }),
+      (r) => r.data.transformation,
+      (r) => r.data.nextPageToken
+    );
+    return xs.map((t) => ({ transformationId: t.transformationId ?? '', name: t.name ?? '(unnamed)', type: t.type ?? '' }));
+  }
+
+  async createGtmTransformation(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    transformation: Record<string, unknown>
+  ): Promise<{ transformationId: string; name: string; type: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.transformations.create({
+      parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+      requestBody: transformation,
+    });
+    return { transformationId: res.data.transformationId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  /** One-shot: create a SERVER container, then add a GA4 client + a GA4 server tag (relaying
+   *  to `measurementId`) in its default workspace. Returns the new ids + taggingServerUrls.
+   *  Does NOT deploy the tagging-server host or wire the web container (no URL yet). */
+  async bootstrapServerSideTagging(
+    accountId: string,
+    name: string,
+    measurementId: string
+  ): Promise<{
+    container: { containerId: string; publicId: string; name: string; taggingServerUrls: string[] };
+    workspaceId: string;
+    client: { clientId: string; name: string };
+    serverTag: { tagId: string; name: string };
+  }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const container = await this.createServerContainer(accountId, name);
+    const workspaceId = await this.defaultWorkspaceId(accountId, container.containerId);
+    const parent = `accounts/${accountId}/containers/${container.containerId}/workspaces/${workspaceId}`;
+    const clientRes = await gtm.accounts.containers.workspaces.clients.create({ parent, requestBody: buildGa4Client('GA4') });
+    const tagRes = await gtm.accounts.containers.workspaces.tags.create({
+      parent,
+      requestBody: buildGa4ServerTag('GA4 - Server', measurementId),
+    });
+    return {
+      container,
+      workspaceId,
+      client: { clientId: clientRes.data.clientId ?? '', name: clientRes.data.name ?? 'GA4' },
+      serverTag: { tagId: tagRes.data.tagId ?? '', name: tagRes.data.name ?? 'GA4 - Server' },
+    };
   }
 
   /** Enable built-in variables (e.g. "clickUrl") in a workspace. Idempotent-ish:

@@ -227,6 +227,45 @@ export function buildCustomHtmlTag(o: CustomHtmlInput): GtmTagResource {
   };
 }
 
+/* ───────────── Server-side GTM (sGTM) ───────────── */
+
+/** A server-container Client resource (claims incoming requests). */
+export interface GtmClientResource {
+  name: string;
+  type: string;
+  parameter?: Param[];
+  priority?: number;
+}
+
+/** The GA4 client (`gaaw_client`) — claims incoming GA4 / gtag requests on a server
+ *  container so server tags can read the event. Shape corpus-validated (3 server
+ *  containers). `activateDefaultPaths` claims the standard /g/collect endpoints. */
+export function buildGa4Client(name: string): GtmClientResource {
+  return {
+    name: sanitizeName(name),
+    type: 'gaaw_client',
+    parameter: [boolean('activateDefaultPaths', true), boolean('activateGtagSupport', true)],
+  };
+}
+
+/** A server-side GA4 tag (`sgtmgaaw`) — forwards the event the client received on to GA4.
+ *  Shape corpus-validated. eventName defaults to the server built-in {{Event Name}} so it
+ *  relays whatever event arrived; pass a literal (e.g. "purchase") for a per-event tag.
+ *  ep/upToIncludeDropdown='all' forwards all event + user parameters. */
+export function buildGa4ServerTag(name: string, measurementId: string, eventName?: string, firingTriggerId?: string[]): GtmTagResource {
+  return {
+    name: sanitizeName(name),
+    type: 'sgtmgaaw',
+    parameter: [
+      tpl('eventName', eventName && eventName.trim() !== '' ? eventName : '{{Event Name}}'),
+      tpl('measurementId', measurementId),
+      tpl('epToIncludeDropdown', 'all'),
+      tpl('upToIncludeDropdown', 'all'),
+    ],
+    ...(firingTriggerId ? { firingTriggerId } : {}),
+  };
+}
+
 /* ───────────── Triggers ───────────── */
 
 const FILTER_OPS = new Set(['equals', 'contains', 'startsWith', 'endsWith', 'matchRegex', 'greater', 'less']);
