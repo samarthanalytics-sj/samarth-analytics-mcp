@@ -1,3 +1,9 @@
+## [1.52.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.52.0...v1.52.1) (2026-06-25)
+
+### Bug Fixes
+
+* **desktop:** add list_gtm_folders + fix folder-move "internal error" ([d43411c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d43411c3374ca70e9942307aa16a10228a59788a))
+
 ## [1.52.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.51.0...v1.52.0) (2026-06-25)
 
 ### Features
