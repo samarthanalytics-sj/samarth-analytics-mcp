@@ -1,3 +1,9 @@
+## [1.56.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.55.2...v1.56.0) (2026-06-25)
+
+### Features
+
+* **desktop:** creates are idempotent — reuse an existing tag/trigger/variable, no duplicate prompt ([f146398](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f146398ef7bb1b297da8c2e14e60824c6b30481a))
+
 ## [1.55.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.55.1...v1.55.2) (2026-06-25)
 
 ### Bug Fixes
