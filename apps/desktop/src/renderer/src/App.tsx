@@ -547,6 +547,11 @@ export function App(): JSX.Element {
     window.desktop.google.status().then(setGoogle).catch((e) => setError(String(e)));
     window.desktop.secrets.selfTest().then(setSelfTest).catch((e) => setError(String(e)));
     refresh().catch((e) => setError(String(e)));
+    // The chat can switch the active workspace/container — re-fetch so the GTM bar follows.
+    const off = window.desktop.accounts.onChanged(() => {
+      refresh().catch((e) => setError(String(e)));
+    });
+    return off;
   }, []);
 
   async function run(fn: () => Promise<unknown>): Promise<void> {

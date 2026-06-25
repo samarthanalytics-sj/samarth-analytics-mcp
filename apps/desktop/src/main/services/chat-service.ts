@@ -6,7 +6,7 @@ import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
 import { changeJournal } from '../google/change-journal';
-import type { ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct } from '../../shared/ipc';
+import type { ChatReply, ChatStreamEvent, ChatToolCall, ChatTurn, GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { LlmTurn } from '../llm/types';
 
 /**
@@ -55,7 +55,9 @@ export class ChatService {
     private readonly registry: RegistryService,
     private readonly data: GoogleDataService,
     private readonly providerKeys: ProviderKeyStore,
-    private readonly history?: AuditHistoryStore
+    private readonly history?: AuditHistoryStore,
+    /** Called after a chat tool switches the active GTM context, so the UI refreshes. */
+    private readonly notifyContextChanged?: () => void
   ) {}
 
   /** Non-streaming: returns the final reply only. */
@@ -97,8 +99,22 @@ export class ChatService {
     }
 
     const client = createProvider(active.llm.provider);
+    // GTM-only: let the model switch the active workspace/container, persisting it to the
+    // account and notifying the UI so the GTM-bar dropdown follows. Mutating `active` too
+    // keeps later tool calls in the same turn consistent.
+    const ctxControl =
+      product === 'gtm'
+        ? {
+            current: () => active.gtmContext,
+            set: (ctx: GtmContext): void => {
+              active.gtmContext = ctx;
+              this.registry.setGtmContext(active.id, ctx);
+              this.notifyContextChanged?.();
+            },
+          }
+        : undefined;
     // GA4 is read-only; only GTM gets write tools (and thus the confirm flow).
-    const tools = buildToolRegistry(this.data, product === 'gtm' ? confirm : undefined, product, this.history);
+    const tools = buildToolRegistry(this.data, product === 'gtm' ? confirm : undefined, product, this.history, ctxControl);
 
     const productLabel = product === 'gtm' ? 'Google Tag Manager (GTM)' : 'Google Analytics 4 (GA4)';
     const system =

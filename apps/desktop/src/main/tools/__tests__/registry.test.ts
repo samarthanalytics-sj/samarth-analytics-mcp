@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildToolRegistry } from '../registry';
+import { buildToolRegistry, type GtmContextControl } from '../registry';
 import { AuditHistoryStore } from '../../storage/audit-history';
 import type { GoogleDataService } from '../../google/data-service';
+import type { GtmContext } from '../../../shared/ipc';
 
 let passed = 0;
 let failed = 0;
@@ -832,6 +833,52 @@ async function main(): Promise<void> {
       /Unknown tool/
     );
     assert.equal(fd.calls.length, 0);
+  });
+
+  await test('context tools switch the active GTM context (present only with ctxControl)', async () => {
+    const data = {
+      listGtmContainers: async () => [
+        { containerId: 'C1', name: 'web', publicId: 'GTM-AAA', path: '' },
+        { containerId: 'C2', name: 'app', publicId: 'GTM-BBB', path: '' },
+      ],
+      listGtmWorkspaces: async (_a: string, c: string) =>
+        c === 'C2'
+          ? [{ workspaceId: '9', name: 'Default Workspace', path: '' }]
+          : [
+              { workspaceId: '1', name: 'Default Workspace', path: '' },
+              { workspaceId: '3', name: 'MCP-TEST', path: '' },
+            ],
+    } as unknown as GoogleDataService;
+
+    // Absent without a context controller.
+    assert.equal(buildToolRegistry(data, undefined, 'gtm').list().some((t) => t.name === 'set_gtm_workspace'), false);
+
+    const setCalls: GtmContext[] = [];
+    const ctxControl: GtmContextControl = {
+      current: () => ({ accountId: '1', accountName: 'A', containerId: 'C1', containerName: 'web', workspaceId: '1', workspaceName: 'Default Workspace' }),
+      set: (ctx) => {
+        setCalls.push(ctx);
+      },
+    };
+    const reg = buildToolRegistry(data, undefined, 'gtm', undefined, ctxControl);
+    assert.ok(reg.list().some((t) => t.name === 'set_gtm_workspace'), 'set_gtm_workspace present with ctxControl');
+    assert.ok(reg.list().some((t) => t.name === 'set_gtm_container'), 'set_gtm_container present with ctxControl');
+
+    // Switch workspace by name (case-insensitive), keeping the current container.
+    await reg.execute('set_gtm_workspace', { workspaceName: 'mcp-test' });
+    assert.equal(setCalls[0]?.workspaceId, '3');
+    assert.equal(setCalls[0]?.workspaceName, 'MCP-TEST');
+    assert.equal(setCalls[0]?.containerId, 'C1', 'keeps the current container');
+
+    // Switch container by name → picks its Default Workspace.
+    await reg.execute('set_gtm_container', { containerName: 'app' });
+    assert.equal(setCalls[1]?.containerId, 'C2');
+    assert.equal(setCalls[1]?.workspaceId, '9');
+    assert.equal(setCalls[1]?.workspaceName, 'Default Workspace');
+
+    // Unknown name → a clear error listing the options, and no further context change.
+    await assert.rejects(() => reg.execute('set_gtm_workspace', { workspaceName: 'nope' }), /not found/i);
+    assert.equal(setCalls.length, 2, 'a failed switch does not change context');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
