@@ -1201,20 +1201,31 @@ export function buildToolRegistry(
     {
       name: 'bootstrap_server_side_tagging',
       description:
-        'Set up server-side tagging FROM a web container in one step: creates a SERVER container, then adds a GA4 client + a GA4 server tag (relaying to `measurementId` — pass the web container\'s GA4 Measurement ID) in its default workspace. Returns the new container id + taggingServerUrls. Does NOT deploy the tagging-server host or change the web container — once the server is provisioned and you have its URL, set the web Google tag\'s server_container_url (update_gtm_tag) to send to it. Requires accountId, name, measurementId.',
+        "Set up server-side tagging FROM a web container in one step: creates a SERVER container, then adds a GA4 client + a GA4 server tag in its default workspace. Give it the GA4 Measurement ID to relay EITHER directly via `measurementId`, OR via `webContainerId` (the web container — it derives that container's GA4 Measurement ID automatically; pass the ACTIVE web container's id when the user says \"set up a server container for this web container\"). Returns the new container id + taggingServerUrls. Does NOT deploy the tagging-server host or change the web container — once the server is provisioned and you have its URL, call set_web_server_container_url to send to it. Requires accountId, name, and one of measurementId / webContainerId.",
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           name: { type: 'string' },
           measurementId: { type: 'string' },
+          webContainerId: { type: 'string', description: 'Derive the GA4 Measurement ID from this web container (alternative to measurementId).' },
         },
-        required: ['accountId', 'name', 'measurementId'],
+        required: ['accountId', 'name'],
         additionalProperties: false,
       },
       write: true,
-      summarize: (a) => `Bootstrap SERVER container "${s(a.name)}" with a GA4 client + GA4 server tag (→ ${s(a.measurementId)})`,
-      handler: (a) => data.bootstrapServerSideTagging(s(a.accountId), s(a.name), s(a.measurementId)),
+      summarize: (a) =>
+        `Bootstrap SERVER container "${s(a.name)}" with a GA4 client + GA4 server tag (→ ${s(a.measurementId) || `GA4 id from web container ${s(a.webContainerId)}`})`,
+      handler: async (a) => {
+        // Trim so a whitespace-only id doesn't read as "present" and skip both the derive
+        // fallback and the empty-id guard (relaying a blank Measurement ID).
+        let measurementId = a.measurementId != null ? s(a.measurementId).trim() : '';
+        if (!measurementId && a.webContainerId != null && s(a.webContainerId)) {
+          measurementId = await data.deriveWebContainerMeasurementId(s(a.accountId), s(a.webContainerId));
+        }
+        if (!measurementId) throw new Error("Provide measurementId, or webContainerId to derive it from that web container's GA4 tags.");
+        return data.bootstrapServerSideTagging(s(a.accountId), s(a.name), measurementId);
+      },
     },
     {
       name: 'set_web_server_container_url',
