@@ -46,6 +46,7 @@ const MUTATIONS = new Set([
   'createGtmFolder', 'moveEntitiesToFolder', 'renameGtmFolder', 'deleteGtmFolder',
   'createGtmEnvironment',
   'createServerContainer', 'createGtmClient', 'createGtmTransformation', 'bootstrapServerSideTagging',
+  'setWebServerContainerUrl',
 ]);
 
 // A snapshot crafted so the audit produces every kind of finding: a paused GA4
@@ -94,6 +95,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     createGtmTransformation: () => r('createGtmTransformation', { transformationId: 'X1', name: 'X', type: 'sgtm_transformation' }),
     bootstrapServerSideTagging: () =>
       r('bootstrapServerSideTagging', { container: { containerId: 'SC1', publicId: 'GTM-SERVER', name: 'Server', taggingServerUrls: [] }, workspaceId: 'w1', client: { clientId: 'CL1', name: 'GA4' }, serverTag: { tagId: 'T1', name: 'GA4 - Server' } }),
+    setWebServerContainerUrl: () => r('setWebServerContainerUrl', { tagId: '1', name: 'Google Tag', serverContainerUrl: 'https://sgtm.example.com' }),
     listGtmTriggers: () => r('listGtmTriggers', [] as Array<{ triggerId: string; name: string; type: string }>),
     getGtmContainerSnapshot: () => r('getGtmContainerSnapshot', structuredClone(SNAPSHOT)),
     listGa4Accounts: () => r('listGa4Accounts', []),

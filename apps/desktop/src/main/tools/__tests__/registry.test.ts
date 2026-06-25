@@ -102,6 +102,10 @@ function fakeData(
         serverTag: { tagId: 'T1', name: 'GA4 - Server' },
       };
     },
+    setWebServerContainerUrl: async (_a: string, _c: string, _w: string, tagId: string, url: string) => {
+      calls.push(`setWebServerUrl:${tagId}:${url}`);
+      return { tagId, name: 'Google Tag', serverContainerUrl: url };
+    },
     listGa4DataStreams: async (p: string) => {
       calls.push(`ga4Streams:${p}`);
       return [];
@@ -351,7 +355,7 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 67, 'read + write registry has 67 tools');
+    assert.equal(withWrites.list().length, 68, 'read + write registry has 68 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1074,6 +1078,13 @@ async function main(): Promise<void> {
 
     const client = JSON.parse(await reg.execute('create_gtm_client', { accountId: '1', containerId: '2', workspaceId: '3', client: { name: 'GA4', type: 'gaaw_client' } }));
     assert.equal(client.type, 'gaaw_client');
+
+    // Phase 2: web→server wiring sets the web Google tag's server_container_url.
+    const wired = JSON.parse(
+      await reg.execute('set_web_server_container_url', { accountId: '1', containerId: '2', workspaceId: '3', tagId: '9', serverUrl: 'https://sgtm.example.com' }),
+    );
+    assert.equal(wired.serverContainerUrl, 'https://sgtm.example.com');
+    assert.ok(fd.calls.includes('setWebServerUrl:9:https://sgtm.example.com'));
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

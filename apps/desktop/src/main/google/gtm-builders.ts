@@ -147,6 +147,30 @@ export function buildGoogleTag(o: GoogleTagInput): GtmTagResource {
   return { name: o.name, type: 'googtag', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
 }
 
+/** Upsert a Google-tag config setting (e.g. server_container_url for server-side tagging)
+ *  in the tag's configSettingsTable, preserving every other setting. Returns a NEW
+ *  parameter[] (read-modify-write safe). PURE / testable. */
+export function upsertGoogleTagConfig(tag: Record<string, unknown>, configKey: string, value: string): Param[] {
+  const params: Param[] = Array.isArray(tag.parameter) ? (tag.parameter as Param[]).map((p) => ({ ...p })) : [];
+  let idx = params.findIndex((p) => (p as { key?: unknown }).key === 'configSettingsTable');
+  if (idx < 0) {
+    params.push({ type: 'list', key: 'configSettingsTable', list: [] });
+    idx = params.length - 1;
+  }
+  const table = { ...(params[idx] as { type?: string; key?: string; list?: Param[] }) };
+  const list: Param[] = Array.isArray(table.list) ? table.list.map((m) => ({ ...m })) : [];
+  const entry: Param = { type: 'map', map: [tpl('parameter', configKey), tpl('parameterValue', value)] };
+  const at = list.findIndex((m) => {
+    const map = ((m as { map?: Param[] }).map ?? []) as Param[];
+    return map.some((kv) => (kv as { key?: unknown }).key === 'parameter' && (kv as { value?: unknown }).value === configKey);
+  });
+  if (at >= 0) list[at] = entry;
+  else list.push(entry);
+  table.list = list;
+  params[idx] = table;
+  return params;
+}
+
 /** The GTM built-in "All Pages" trigger — a reserved id present in every web
  *  container, so the base Google Tag can fire on it without creating a trigger.
  *  (Corpus: the most common firing trigger for googtag base tags.) */
