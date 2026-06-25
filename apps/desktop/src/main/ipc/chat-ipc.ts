@@ -48,6 +48,7 @@ export function registerChatIpc(service: ChatService): void {
             summary: proposal.summary,
             details: proposal.details,
             destructive: proposal.destructive,
+            requireTextConfirm: proposal.requireTextConfirm,
           });
         });
       const controller = new AbortController();

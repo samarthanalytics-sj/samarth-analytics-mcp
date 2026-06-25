@@ -455,6 +455,7 @@ interface PendingConfirm {
   summary: string;
   details: Record<string, unknown>;
   destructive?: boolean;
+  requireTextConfirm?: string;
 }
 
 function ConfirmCard({
@@ -470,8 +471,12 @@ function ConfirmCard({
   const [vals, setVals] = useState<Record<string, string>>(() =>
     Object.fromEntries(fields.map((f) => [f.key, f.initial]))
   );
+  const [typed, setTyped] = useState('');
+  const needType = proposal.requireTextConfirm;
+  const typeOk = !needType || typed.trim().toLowerCase() === needType.toLowerCase();
 
   function approve(): void {
+    if (!typeOk) return;
     const edited = structuredClone(proposal.details);
     for (const f of fields) f.apply(edited, vals[f.key] ?? f.initial);
     onApprove(edited);
@@ -510,8 +515,29 @@ function ConfirmCard({
         </div>
       )}
 
+      {needType && (
+        <div style={styles.editRow}>
+          <span style={styles.proposalLabel}>Type “{needType}” to confirm</span>
+          <input
+            style={{ ...styles.editInput, borderColor: typeOk ? '#7f1d1d' : '#334155' }}
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={needType}
+            autoFocus
+            spellCheck={false}
+          />
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 8 }}>
-        <button style={proposal.destructive ? styles.dangerSolid : styles.primaryBtn} onClick={approve}>
+        <button
+          style={{
+            ...(proposal.destructive ? styles.dangerSolid : styles.primaryBtn),
+            ...(typeOk ? {} : { opacity: 0.5, cursor: 'not-allowed' }),
+          }}
+          onClick={approve}
+          disabled={!typeOk}
+        >
           {proposal.destructive ? 'Yes, delete' : 'Approve & apply'}
         </button>
         <button style={styles.ghostBtn} onClick={onReject}>
@@ -519,9 +545,11 @@ function ConfirmCard({
         </button>
       </div>
       <div style={styles.confirmNote}>
-        {proposal.destructive
-          ? 'Delete needs two approvals. Applies to a draft workspace — not published.'
-          : 'Edit any field above if needed. Applies to a draft workspace only — not published.'}
+        {needType
+          ? `Type “${needType}” above to enable this — the final confirmation. Applies to a draft workspace — not published.`
+          : proposal.destructive
+            ? 'Delete needs two approvals. Applies to a draft workspace — not published.'
+            : 'Edit any field above if needed. Applies to a draft workspace only — not published.'}
       </div>
     </div>
   );
@@ -696,6 +724,7 @@ function ChatView({
       summary: string;
       details: Record<string, unknown>;
       destructive?: boolean;
+      requireTextConfirm?: string;
     } | null
   >(null);
   // What the previous query changed in GTM (for the Revert button).
@@ -749,6 +778,7 @@ function ChatView({
             summary: ev.summary,
             details: ev.details,
             destructive: ev.destructive,
+            requireTextConfirm: ev.requireTextConfirm,
           });
         }
       });

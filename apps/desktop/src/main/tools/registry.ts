@@ -30,6 +30,9 @@ export interface WriteProposal {
   details: Record<string, unknown>;
   /** Destructive (delete) — the UI emphasizes this and it requires a 2nd confirm. */
   destructive?: boolean;
+  /** When set, the approval card requires the user to TYPE this word (e.g. "delete") before
+   *  the action can be approved — used for the final confirmation of a destructive action. */
+  requireTextConfirm?: string;
 }
 
 /**
@@ -1033,6 +1036,47 @@ export function buildToolRegistry(
         }),
     },
     {
+      name: 'rename_gtm_folder',
+      description:
+        'Rename a GTM folder. Organisational only — does not change what fires. Requires accountId, containerId, workspaceId, folderId, name (the new name).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          folderId: { type: 'string' },
+          name: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'folderId', 'name'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Rename GTM folder ${s(a.folderId)} to "${s(a.name)}" in workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.renameGtmFolder(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.folderId), s(a.name)),
+    },
+    {
+      name: 'delete_gtm_folder',
+      description:
+        'Delete a GTM folder (draft, not published). GTM does NOT delete the folder\'s contents — its tags/triggers/variables simply become unfiled. Requires accountId, containerId, workspaceId, folderId. Destructive — requires the user to confirm twice (and type "delete").',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          folderId: { type: 'string' },
+          name: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'folderId'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => `Delete GTM folder ${s(a.name) || s(a.folderId)} from workspace ${s(a.workspaceId)} (its items become unfiled, not deleted)`,
+      handler: (a) => data.deleteGtmFolder(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.folderId)),
+    },
+    {
       name: 'create_gtm_tag',
       description:
         'Create a tag in a GTM workspace (draft). `tag` is a GTM API Tag resource ' +
@@ -1649,6 +1693,7 @@ export function buildToolRegistry(
             summary: `FINAL CONFIRMATION — permanently ${tool.summarize ? tool.summarize(effectiveArgs) : summary}. This cannot be undone.`,
             details: effectiveArgs,
             destructive: true,
+            requireTextConfirm: 'delete', // type "delete" to confirm
           });
           if (!again) {
             console.error(`[tool] ${name}: user DECLINED final confirmation`);

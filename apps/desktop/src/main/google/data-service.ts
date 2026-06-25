@@ -434,6 +434,39 @@ export class GoogleDataService {
     return { folderId, moved: { tags: tagId.length, triggers: triggerId.length, variables: variableId.length } };
   }
 
+  /** Rename a folder. Organisational only — does not affect firing. */
+  async renameGtmFolder(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    folderId: string,
+    name: string
+  ): Promise<{ folderId: string; name: string; path: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.folders.update({
+      path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/folders/${folderId}`,
+      requestBody: { name },
+    });
+    return { folderId: res.data.folderId ?? folderId, name: res.data.name ?? name, path: res.data.path ?? '' };
+  }
+
+  /** Delete a folder (draft). GTM does NOT delete the folder's contents — its tags /
+   *  triggers / variables simply become unfiled. Still gated behind a confirm. */
+  async deleteGtmFolder(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    folderId: string
+  ): Promise<{ deleted: true; folderId: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    await gtm.accounts.containers.workspaces.folders.delete({
+      path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/folders/${folderId}`,
+    });
+    return { deleted: true, folderId };
+  }
+
   async createGtmTag(
     accountId: string,
     containerId: string,
