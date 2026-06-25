@@ -281,6 +281,7 @@ async function main(): Promise<void> {
       'list_ga4_properties',
       'list_gtm_accounts',
       'list_gtm_containers',
+      'list_gtm_folders',
       'list_gtm_tags',
       'list_gtm_triggers',
       'list_gtm_versions',
@@ -308,11 +309,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 35, 'read-only registry has 35 tools');
+    assert.equal(readOnly.list().length, 36, 'read-only registry has 36 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 57, 'read + write registry has 57 tools');
+    assert.equal(withWrites.list().length, 58, 'read + write registry has 58 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -887,6 +888,7 @@ async function main(): Promise<void> {
   await test('folder tools create a folder and move entities (gtm write tools, confirm-gated)', async () => {
     const calls: string[] = [];
     const data = {
+      listGtmFolders: async () => [{ folderId: '12', name: 'Marketing', path: '' }],
       createGtmFolder: async (_a: string, _c: string, _w: string, name: string) => {
         calls.push('createFolder');
         return { folderId: 'f1', name, path: '' };
@@ -896,6 +898,11 @@ async function main(): Promise<void> {
         return { folderId, moved: { tags: ids.tagIds?.length ?? 0, triggers: 0, variables: 0 } };
       },
     } as unknown as GoogleDataService;
+
+    // list_gtm_folders is a READ tool (available without a confirm fn).
+    const folders = JSON.parse(await buildToolRegistry(data).execute('list_gtm_folders', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(folders[0].folderId, '12');
+    assert.equal(folders[0].name, 'Marketing');
 
     // Confirm-gated writes: absent read-only, present with a confirm fn.
     assert.equal(buildToolRegistry(data).list().some((t) => t.name === 'create_gtm_folder'), false);

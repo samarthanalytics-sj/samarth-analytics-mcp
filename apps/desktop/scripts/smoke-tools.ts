@@ -80,6 +80,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     listGtmAccounts: () => r('listGtmAccounts', [{ accountId: '1', name: 'Acct', path: 'accounts/1' }]),
     listGtmContainers: () => r('listGtmContainers', [{ containerId: '2', name: 'Web', publicId: 'GTM-X', path: '' }]),
     listGtmWorkspaces: () => r('listGtmWorkspaces', [{ workspaceId: '3', name: 'Default', path: '' }]),
+    listGtmFolders: () => r('listGtmFolders', [{ folderId: '12', name: 'Marketing', path: '' }]),
     listGtmTags: () => r('listGtmTags', [{ tagId: '1', name: 'T', type: 'gaawe' }]),
     listGtmTriggers: () => r('listGtmTriggers', [] as Array<{ triggerId: string; name: string; type: string }>),
     getGtmContainerSnapshot: () => r('getGtmContainerSnapshot', structuredClone(SNAPSHOT)),
@@ -188,7 +189,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 35 read tools', readOnlyNames.size === 35, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 36 read tools', readOnlyNames.size === 36, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────

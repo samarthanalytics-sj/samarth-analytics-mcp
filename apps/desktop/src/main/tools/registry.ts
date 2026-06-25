@@ -163,6 +163,18 @@ export function buildToolRegistry(
       handler: (a) => data.listGtmWorkspaces(s(a.accountId), s(a.containerId)),
     },
     {
+      name: 'list_gtm_folders',
+      description:
+        'List the folders in a GTM workspace (each folder\'s name + folderId). The GTM API DOES expose this (folders.list) — use it to find a folder\'s id before move_gtm_entities_to_folder / rename_gtm_folder / delete_gtm_folder, instead of asking the user to read ids from the GTM UI. Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGtmFolders(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+    },
+    {
       name: 'list_gtm_tags',
       description:
         'List the tags in a GTM workspace. Requires accountId, containerId, workspaceId.',
