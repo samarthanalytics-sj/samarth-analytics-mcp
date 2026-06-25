@@ -1173,6 +1173,26 @@ export function buildToolRegistry(
       handler: (a) => data.bootstrapServerSideTagging(s(a.accountId), s(a.name), s(a.measurementId)),
     },
     {
+      name: 'set_web_server_container_url',
+      description:
+        "Wire a WEB container to a server container: set the web Google tag's server_container_url (the data then flows web→server). Requires accountId, containerId, workspaceId, tagId (the web Google tag — type googtag; find it with list_gtm_tags), and serverUrl (the https://… tagging-server URL, available only AFTER you provision the server host). Upserts the config setting, preserving the tag's other settings. After this, QA in GTM Preview.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          tagId: { type: 'string' },
+          serverUrl: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tagId', 'serverUrl'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Point web Google tag ${s(a.tagId)} at server ${s(a.serverUrl)} (server_container_url)`,
+      handler: (a) => data.setWebServerContainerUrl(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId), s(a.serverUrl)),
+    },
+    {
       name: 'create_gtm_folder',
       description:
         'Create a folder in a GTM workspace to organise tags/triggers/variables. Folders are PURELY organisational — they do not change what fires. Requires accountId, containerId, workspaceId, name. To then file items into it, call move_gtm_entities_to_folder with the returned folderId.',

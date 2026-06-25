@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, upsertGoogleTagConfig } from './gtm-builders';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
@@ -1096,6 +1096,32 @@ export class GoogleDataService {
       client: { clientId: clientRes.data.clientId ?? '', name: clientRes.data.name ?? 'GA4' },
       serverTag: { tagId: tagRes.data.tagId ?? '', name: tagRes.data.name ?? 'GA4 - Server' },
     };
+  }
+
+  /** Point a WEB Google tag at a server container (the web→server link): upsert
+   *  server_container_url in the tag's configSettingsTable, preserving other settings.
+   *  Read-modify-write; only valid on a Google tag (googtag). */
+  async setWebServerContainerUrl(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    tagId: string,
+    serverUrl: string
+  ): Promise<{ tagId: string; name: string; serverContainerUrl: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
+    const current = (await gtm.accounts.containers.workspaces.tags.get({ path })).data;
+    if (current.type !== 'googtag') {
+      throw new Error(`Tag ${tagId} is type "${current.type}", not a Google tag (googtag) — server_container_url is set on the web Google tag.`);
+    }
+    const merged: Record<string, unknown> = {
+      ...current,
+      parameter: upsertGoogleTagConfig(current as Record<string, unknown>, 'server_container_url', serverUrl),
+    };
+    const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: merged });
+    this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
+    return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', serverContainerUrl: serverUrl };
   }
 
   /** Enable built-in variables (e.g. "clickUrl") in a workspace. Idempotent-ish:

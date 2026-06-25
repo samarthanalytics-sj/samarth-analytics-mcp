@@ -12,6 +12,7 @@ import {
   buildEnvironmentSnippet,
   buildGa4Client,
   buildGa4ServerTag,
+  upsertGoogleTagConfig,
   consentTypesFor,
   evaluateConsentGate,
   triggerBuiltInVars,
@@ -884,6 +885,32 @@ test('buildGa4ServerTag builds an sgtmgaaw tag relaying to the Measurement ID', 
   // a per-event tag uses a literal event name
   const purchase = buildGa4ServerTag('GA4 - Purchase', 'G-ABC123', 'purchase');
   assert.equal(((purchase.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'eventName')?.value, 'purchase');
+});
+
+test('upsertGoogleTagConfig adds server_container_url, preserves other settings, updates in place', () => {
+  // existing googtag with one config setting (send_page_view)
+  const tag = {
+    type: 'googtag',
+    parameter: [
+      { type: 'template', key: 'tagId', value: 'G-1' },
+      { type: 'list', key: 'configSettingsTable', list: [{ type: 'map', map: [{ type: 'template', key: 'parameter', value: 'send_page_view' }, { type: 'template', key: 'parameterValue', value: 'true' }] }] },
+    ],
+  };
+  const params = upsertGoogleTagConfig(tag, 'server_container_url', 'https://sgtm.example.com');
+  const table = params.find((p) => (p as { key?: string }).key === 'configSettingsTable') as { list: Array<{ map: Array<{ key: string; value: string }> }> };
+  const settings = Object.fromEntries(table.list.map((m) => [m.map.find((x) => x.key === 'parameter')!.value, m.map.find((x) => x.key === 'parameterValue')!.value]));
+  assert.equal(settings.server_container_url, 'https://sgtm.example.com', 'server URL added');
+  assert.equal(settings.send_page_view, 'true', 'existing setting preserved');
+  assert.ok(params.some((p) => (p as { key?: string }).key === 'tagId'), 'tagId preserved');
+
+  // updating in place (no duplicate)
+  const again = upsertGoogleTagConfig({ type: 'googtag', parameter: params }, 'server_container_url', 'https://new.example.com');
+  const t2 = again.find((p) => (p as { key?: string }).key === 'configSettingsTable') as { list: unknown[] };
+  assert.equal(t2.list.length, 2, 'updated in place — still 2 settings, no duplicate');
+
+  // no configSettingsTable yet → creates it
+  const fresh = upsertGoogleTagConfig({ type: 'googtag', parameter: [{ type: 'template', key: 'tagId', value: 'G-2' }] }, 'server_container_url', 'https://x.example.com');
+  assert.ok(fresh.some((p) => (p as { key?: string }).key === 'configSettingsTable'), 'creates the table when absent');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
