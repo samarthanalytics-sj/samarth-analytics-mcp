@@ -1,3 +1,9 @@
+## [1.63.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.62.2...v1.63.0) (2026-06-25)
+
+### Features
+
+* **desktop:** set the server container's tagging URL via the API (set_server_container_tagging_url) ([0d31256](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0d31256e0d48b38d760e44f9d77e1d08f15cd845))
+
 ## [1.62.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.62.1...v1.62.2) (2026-06-25)
 
 ### Bug Fixes
