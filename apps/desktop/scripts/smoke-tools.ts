@@ -43,7 +43,7 @@ const MUTATIONS = new Set([
   'addGa4EventParametersToAllTags', 'setGa4MeasurementIdOnAllTags',
   'deleteGtmTag', 'deleteGtmTrigger', 'deleteGtmVariable',
   'enableGtmBuiltInVariables', 'createGtmTrigger', 'createGtmVariable',
-  'createGtmFolder', 'moveEntitiesToFolder',
+  'createGtmFolder', 'moveEntitiesToFolder', 'renameGtmFolder', 'deleteGtmFolder',
 ]);
 
 // A snapshot crafted so the audit produces every kind of finding: a paused GA4
@@ -115,6 +115,8 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     createGtmWorkspace: () => r('createGtmWorkspace', { workspaceId: 'w9', name: 'WS', path: '' }),
     createGtmFolder: () => r('createGtmFolder', { folderId: 'f1', name: 'Analytics', path: '' }),
     moveEntitiesToFolder: () => r('moveEntitiesToFolder', { folderId: 'f1', moved: { tags: 1, triggers: 0, variables: 0 } }),
+    renameGtmFolder: () => r('renameGtmFolder', { folderId: 'f1', name: 'Renamed', path: '' }),
+    deleteGtmFolder: () => r('deleteGtmFolder', { deleted: true, folderId: 'f1' }),
     createGtmTag: () => r('createGtmTag', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
     updateGtmTag: () => r('updateGtmTag', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
     addGa4EventParameters: () => r('addGa4EventParameters', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),

@@ -70,6 +70,8 @@ export type ChatStreamEvent =
       summary: string;
       details: Record<string, unknown>;
       destructive?: boolean;
+      /** When set, the approval card requires typing this word (e.g. "delete") to approve. */
+      requireTextConfirm?: string;
     };
 
 export interface GtmAccountView {

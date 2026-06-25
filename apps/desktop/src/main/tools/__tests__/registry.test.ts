@@ -312,10 +312,11 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 55, 'read + write registry has 55 tools');
+    assert.equal(withWrites.list().length, 57, 'read + write registry has 57 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
-    assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_folder'), true);
-    assert.equal(withWrites.list().some((t) => t.name === 'move_gtm_entities_to_folder'), true);
+    for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
+      assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
+    }
     assert.equal(withWrites.list().some((t) => t.name === 'add_ga4_event_parameters'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'set_ga4_measurement_id'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'set_ga4_measurement_id_on_all_tags'), true);
@@ -909,6 +910,40 @@ async function main(): Promise<void> {
     );
     assert.equal(moved.moved.tags, 2);
     assert.deepEqual(calls, ['createFolder', 'move']);
+  });
+
+  await test('folder rename (one confirm) + delete (two confirms, final requires typing "delete")', async () => {
+    const calls: string[] = [];
+    const data = {
+      renameGtmFolder: async (_a: string, _c: string, _w: string, folderId: string, name: string) => {
+        calls.push(`rename:${folderId}:${name}`);
+        return { folderId, name, path: '' };
+      },
+      deleteGtmFolder: async (_a: string, _c: string, _w: string, folderId: string) => {
+        calls.push(`delete:${folderId}`);
+        return { deleted: true, folderId };
+      },
+    } as unknown as GoogleDataService;
+
+    const r = JSON.parse(
+      await buildToolRegistry(data, approveAsIs, 'gtm').execute('rename_gtm_folder', { accountId: '1', containerId: '2', workspaceId: '3', folderId: 'f1', name: 'Marketing' }),
+    );
+    assert.equal(r.name, 'Marketing');
+    assert.ok(calls.includes('rename:f1:Marketing'), 'renamed');
+
+    // delete is destructive: two confirms, and the FINAL one carries requireTextConfirm.
+    const ct = seqConfirm(true, true);
+    await buildToolRegistry(data, ct.fn, 'gtm').execute('delete_gtm_folder', { accountId: '1', containerId: '2', workspaceId: '3', folderId: 'f1', name: 'Marketing' });
+    assert.equal(ct.calls.length, 2, 'delete folder asked twice');
+    assert.equal((ct.calls[0] as { requireTextConfirm?: string }).requireTextConfirm, undefined, 'first confirm is a plain approval');
+    assert.equal((ct.calls[1] as { requireTextConfirm?: string }).requireTextConfirm, 'delete', 'final confirm requires typing "delete"');
+    assert.ok(calls.includes('delete:f1'), 'deleted after both approvals');
+
+    // Declining the final confirm leaves the folder untouched.
+    calls.length = 0;
+    const cd = seqConfirm(true, false);
+    await buildToolRegistry(data, cd.fn, 'gtm').execute('delete_gtm_folder', { accountId: '1', containerId: '2', workspaceId: '3', folderId: 'f1' });
+    assert.equal(calls.length, 0, 'no delete when the final confirmation is declined');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
