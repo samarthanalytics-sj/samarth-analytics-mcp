@@ -7,6 +7,9 @@ import { classifyPixel } from './pixel-signatures';
 
 type Param = Record<string, unknown>;
 const tpl = (key: string, value: string): Param => ({ type: 'template', key, value });
+/** A template Parameter for a DEDICATED top-level Trigger field (e.g. interval, eventName) —
+ *  no `key`, unlike entries in a `parameter[]` array. */
+const namedParam = (value: string): Param => ({ type: 'template', value });
 const boolean = (key: string, value: boolean): Param => ({ type: 'boolean', key, value: String(value) });
 const integer = (key: string, value: string): Param => ({ type: 'integer', key, value });
 
@@ -70,6 +73,11 @@ export interface GtmTriggerResource {
    *  (corpus: 69/69 youTubeVideo triggers store them in `parameter`). NOT for
    *  form waitForTags/checkValidation (those are the top-level fields above). */
   parameter?: Param[];
+  /** Timer-trigger options — DEDICATED top-level fields (single Parameter each, no `key`),
+   *  per the GTM API v2 Trigger schema; NOT entries in `parameter[]`. */
+  eventName?: Param;
+  interval?: Param;
+  limit?: Param;
 }
 export interface GtmVariableResource {
   name: string;
@@ -333,13 +341,18 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
         ],
       };
     case 'timer': {
-      // GTM Timer trigger: eventName (gtm.timer), interval (ms), limit (count; omit =
-      // unlimited) all live in parameter[] as template params. The conditions ("Some
-      // Timers") would go in autoEventFilter; the common case is All Timers (no filter).
-      const params: Param[] = [tpl('eventName', o.eventName || 'gtm.timer')];
-      if (o.intervalMs !== undefined && String(o.intervalMs) !== '') params.push(tpl('interval', String(o.intervalMs)));
-      if (o.limit !== undefined && String(o.limit) !== '') params.push(tpl('limit', String(o.limit)));
-      return { name: sanitizeName(o.name), type: 'timer', parameter: params };
+      // GTM Timer trigger: eventName (gtm.timer), interval (ms), and limit (count; omit =
+      // unlimited) are DEDICATED top-level Trigger fields — a single Parameter each, with
+      // NO `key` (like waitForTags) — NOT entries in parameter[]. Putting them in
+      // parameter[] leaves the GTM UI's Interval/Limit blank.
+      const t: GtmTriggerResource = {
+        name: sanitizeName(o.name),
+        type: 'timer',
+        eventName: namedParam(o.eventName || 'gtm.timer'),
+      };
+      if (o.intervalMs !== undefined && String(o.intervalMs) !== '') t.interval = namedParam(String(o.intervalMs));
+      if (o.limit !== undefined && String(o.limit) !== '') t.limit = namedParam(String(o.limit));
+      return t;
     }
     case 'pageview':
     default:
@@ -347,39 +360,42 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
   }
 }
 
-/** Normalize a raw Timer trigger so interval/limit/eventName always end up where GTM reads
- *  them — in parameter[] as template params — even if the model put them at the top level
- *  (a common mistake that leaves the GTM UI's Interval/Limit fields BLANK). eventName
- *  defaults to gtm.timer; interval/limit are kept only when a value is present (no value =
- *  unlimited, matching the UI). PURE; applied at the create funnel for the raw tool path. */
+/** Normalize a raw Timer trigger so interval/limit/eventName end up where GTM actually reads
+ *  them — as DEDICATED top-level Trigger fields (a single template Parameter each, no `key`),
+ *  per the GTM API v2 schema. The model often supplies them as a raw string, or wrongly in
+ *  parameter[], which leaves the GTM UI's Interval/Limit BLANK. This pulls a value from a
+ *  top-level field (raw string OR Parameter object) OR a parameter[] entry, and writes it to
+ *  the top-level field. eventName defaults to gtm.timer; interval/limit are kept only when a
+ *  value is present (no limit = unlimited). PURE; applied at the create funnel. */
 export function normalizeTimerTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
   if (String((trigger as { type?: unknown }).type ?? '') !== 'timer') return trigger;
   const out: Record<string, unknown> = { ...trigger };
   const params = Array.isArray(out.parameter) ? [...(out.parameter as Param[])] : [];
-  const fromParam = (k: string): string | undefined => {
-    const p = params.find((x) => (x as { key?: unknown }).key === k) as { value?: unknown } | undefined;
-    return p && p.value != null ? String(p.value) : undefined;
-  };
-  const fromTop = (v: unknown): string | undefined => {
-    if (v == null) return undefined;
-    if (typeof v === 'object') {
-      const o = v as { value?: unknown };
-      return o.value != null ? String(o.value) : undefined;
+  // Resolve a value for `field` from: a top-level Parameter object, a top-level raw string,
+  // or a parameter[] entry keyed `field`.
+  const resolve = (field: string): string | undefined => {
+    const top = out[field];
+    if (top != null && typeof top === 'object') {
+      const v = (top as { value?: unknown }).value;
+      if (v != null && String(v) !== '') return String(v);
+    } else if (top != null && String(top) !== '') {
+      return String(top);
     }
-    return String(v);
+    const p = params.find((x) => (x as { key?: unknown }).key === field) as { value?: unknown } | undefined;
+    return p && p.value != null && String(p.value) !== '' ? String(p.value) : undefined;
   };
-  const eventName = fromParam('eventName') ?? fromTop(out.eventName) ?? 'gtm.timer';
-  const interval = fromParam('interval') ?? fromTop(out.interval);
-  const limit = fromParam('limit') ?? fromTop(out.limit);
+  const eventName = resolve('eventName') ?? 'gtm.timer';
+  const interval = resolve('interval');
+  const limit = resolve('limit');
+  // Timer settings live at the TOP LEVEL — strip any stray copies from parameter[].
   const others = params.filter((x) => !['eventName', 'interval', 'limit'].includes(String((x as { key?: unknown }).key ?? '')));
-  const rebuilt: Param[] = [...others, tpl('eventName', eventName)];
-  if (interval !== undefined && interval !== '') rebuilt.push(tpl('interval', interval));
-  if (limit !== undefined && limit !== '') rebuilt.push(tpl('limit', limit));
-  out.parameter = rebuilt;
-  // Remove the stray top-level fields GTM doesn't accept on a Trigger resource.
-  delete out.interval;
-  delete out.limit;
-  delete out.eventName;
+  if (others.length) out.parameter = others;
+  else delete out.parameter;
+  out.eventName = namedParam(eventName);
+  if (interval !== undefined) out.interval = namedParam(interval);
+  else delete out.interval;
+  if (limit !== undefined) out.limit = namedParam(limit);
+  else delete out.limit;
   return out;
 }
 

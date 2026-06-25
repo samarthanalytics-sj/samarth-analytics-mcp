@@ -801,32 +801,41 @@ test('buildEnvironmentSnippet embeds gtm_auth + gtm_preview=env-<id> + the publi
   assert.ok(body.includes('ns.html?id=GTM-ABC123') && body.includes('&gtm_auth=AUTH_TOKEN_XYZ'), 'noscript iframe carries the same params');
 });
 
-test('buildTrigger timer: interval + limit + eventName go into parameter[]', () => {
+type TimerParam = { type?: string; key?: string; value?: string };
+
+test('buildTrigger timer: interval + eventName are TOP-LEVEL fields (no key), not parameter[]', () => {
   const t = buildTrigger({ name: 'Timer - 30s', kind: 'timer', intervalMs: 30000 });
   assert.equal(t.type, 'timer');
-  const p = (t.parameter ?? []) as Array<{ key: string; value: string }>;
-  assert.equal(p.find((x) => x.key === 'eventName')?.value, 'gtm.timer');
-  assert.equal(p.find((x) => x.key === 'interval')?.value, '30000');
+  assert.equal((t.eventName as TimerParam)?.value, 'gtm.timer');
+  assert.equal((t.interval as TimerParam)?.value, '30000');
+  assert.equal((t.interval as TimerParam)?.key, undefined, 'interval is a dedicated field with NO key');
+  assert.equal(t.parameter, undefined, 'timer settings do not go in parameter[]');
 });
 
-test('normalizeTimerTrigger: migrates top-level interval/limit into parameter[] (the blank-field bug)', () => {
-  // The model put interval/limit at the TOP level → GTM showed blank fields. Normalize it.
-  const fixed = normalizeTimerTrigger({ name: 'T', type: 'timer', interval: '30000', limit: '5' }) as {
-    parameter?: Array<{ key: string; value: string }>;
-    interval?: unknown;
-    limit?: unknown;
-  };
-  const p = fixed.parameter ?? [];
-  assert.equal(p.find((x) => x.key === 'interval')?.value, '30000', 'interval moved into parameter[]');
-  assert.equal(p.find((x) => x.key === 'limit')?.value, '5', 'limit moved into parameter[]');
-  assert.equal(p.find((x) => x.key === 'eventName')?.value, 'gtm.timer', 'eventName defaulted');
-  assert.equal(fixed.interval, undefined, 'stray top-level interval removed');
-  assert.equal(fixed.limit, undefined, 'stray top-level limit removed');
+test('normalizeTimerTrigger: a top-level RAW string interval/limit becomes top-level Parameter objects (the blank-field bug)', () => {
+  // The model put interval/limit as raw strings → GTM showed blank fields. Wrap them.
+  const fixed = normalizeTimerTrigger({ name: 'T', type: 'timer', interval: '30000', limit: '5' }) as Record<string, TimerParam>;
+  assert.equal(fixed.interval?.value, '30000', 'interval is a top-level template Parameter');
+  assert.equal(fixed.interval?.type, 'template');
+  assert.equal(fixed.interval?.key, undefined, 'no key on the dedicated field');
+  assert.equal(fixed.limit?.value, '5');
+  assert.equal(fixed.eventName?.value, 'gtm.timer', 'eventName defaulted');
 });
 
-test('normalizeTimerTrigger: no limit value → unlimited (no limit param); non-timer untouched', () => {
-  const noLimit = normalizeTimerTrigger({ name: 'T', type: 'timer', interval: '5000' }) as { parameter?: Array<{ key: string }> };
-  assert.equal((noLimit.parameter ?? []).some((x) => x.key === 'limit'), false, 'unlimited → no limit param');
+test('normalizeTimerTrigger: interval wrongly placed in parameter[] is moved to the top-level field', () => {
+  const fixed = normalizeTimerTrigger({
+    name: 'T',
+    type: 'timer',
+    parameter: [{ type: 'template', key: 'interval', value: '15000' }, { type: 'template', key: 'limit', value: '3' }],
+  }) as { interval?: TimerParam; limit?: TimerParam; parameter?: unknown[] };
+  assert.equal(fixed.interval?.value, '15000', 'interval pulled from parameter[] to the top level');
+  assert.equal(fixed.limit?.value, '3');
+  assert.equal(fixed.parameter, undefined, 'timer keys stripped from parameter[]');
+});
+
+test('normalizeTimerTrigger: no limit → unlimited (no limit field); non-timer untouched', () => {
+  const noLimit = normalizeTimerTrigger({ name: 'T', type: 'timer', interval: '5000' }) as { limit?: unknown };
+  assert.equal(noLimit.limit, undefined, 'unlimited → no limit field');
   const other = { name: 'X', type: 'customEvent', customEventFilter: [] };
   assert.deepEqual(normalizeTimerTrigger(other), other, 'non-timer triggers pass through unchanged');
 });
