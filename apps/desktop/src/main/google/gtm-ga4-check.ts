@@ -75,6 +75,39 @@ export function extractConfiguredGa4Ids(snapshot: ContainerSnapshot): Configured
   return { ids: dedupedIds, variableRefs };
 }
 
+/** Like extractConfiguredGa4Ids, but ALSO resolves a `{{variable}}` measurement-id reference
+ *  that points at a CONSTANT variable (type 'c') to that constant's literal G- value — the
+ *  GTM API CAN read a Constant's value (it lives in parameter[].value). Returns the distinct
+ *  literal ids (direct + resolved) plus the references that still couldn't be resolved. */
+export function resolveGa4MeasurementIds(snapshot: ContainerSnapshot): { ids: string[]; unresolvedRefs: string[] } {
+  const { ids, variableRefs } = extractConfiguredGa4Ids(snapshot);
+  const found = new Set(ids.map((x) => x.id));
+
+  // Constant variable name (lowercased) → its literal value.
+  const constants = new Map<string, string>();
+  for (const v of snapshot.variables) {
+    if ((v.type ?? '').toLowerCase() !== 'c') continue;
+    const p = (v.parameter ?? []).find((x) => (x as TagParam).key === 'value');
+    const val = p ? String((p as TagParam).value ?? '') : '';
+    if (val) constants.set((v.name ?? '').toLowerCase(), val);
+  }
+
+  const unresolvedRefs: string[] = [];
+  for (const ref of variableRefs) {
+    let resolved = false;
+    for (const m of ref.reference.matchAll(/\{\{([^}]+)\}\}/g)) {
+      const val = constants.get(m[1].trim().toLowerCase());
+      const lit = val ? val.match(GA4_ID) : null;
+      if (lit) {
+        found.add(lit[0].toUpperCase());
+        resolved = true;
+      }
+    }
+    if (!resolved) unresolvedRefs.push(ref.reference);
+  }
+  return { ids: Array.from(found), unresolvedRefs };
+}
+
 export interface AccessibleStream {
   measurementId: string;
   property: string;
