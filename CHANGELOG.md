@@ -1,3 +1,9 @@
+## [1.64.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.63.0...v1.64.0) (2026-06-25)
+
+### Features
+
+* **desktop:** bootstrap a COMPLETE, firing GA4 server setup (client + trigger + tag) ([d78ba4a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d78ba4a9dd1ee9272ca8fe77ff3022c2f29f6ab3))
+
 ## [1.63.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.62.2...v1.63.0) (2026-06-25)
 
 ### Features
