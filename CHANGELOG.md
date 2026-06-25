@@ -1,3 +1,9 @@
+## [1.65.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.64.0...v1.65.0) (2026-06-25)
+
+### Features
+
+* **desktop:** add delete_gtm_client + harden the prompt against false "API can't" claims ([d29db6a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d29db6aa554fbc2f402f7933426bfe689ebe6ab4)), closes [#127](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/127)
+
 ## [1.64.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.63.0...v1.64.0) (2026-06-25)
 
 ### Features
