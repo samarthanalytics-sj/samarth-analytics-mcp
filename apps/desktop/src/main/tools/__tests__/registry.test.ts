@@ -1097,6 +1097,18 @@ async function main(): Promise<void> {
     assert.equal(ga4srv.type, 'sgtmgaaw', 'platform ga4 → sgtmgaaw server tag');
     // missing required field → clear error (no create)
     await assert.rejects(() => reg.execute('create_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', platform: 'ads_conversion', name: 'X' }), /requires conversionId/);
+
+    // Phase 4: Event Data variable (server) + allow-params transformation.
+    const edVar = JSON.parse(
+      await reg.execute('create_gtm_variable_typed', { accountId: '1', containerId: '2', workspaceId: '3', kind: 'event_data', name: 'ed - items', keyPath: 'items' }),
+    );
+    assert.equal(edVar.type, 'ed', 'event_data → ed variable');
+    const xform = JSON.parse(
+      await reg.execute('create_gtm_transformation', { accountId: '1', containerId: '2', workspaceId: '3', name: 'Keep ecommerce', allowParams: ['transaction_id', 'currency'] }),
+    );
+    assert.equal(xform.type, 'tf_allow_params', 'allowParams → tf_allow_params transformation');
+    // neither allowParams nor a raw transformation → clear error
+    await assert.rejects(() => reg.execute('create_gtm_transformation', { accountId: '1', containerId: '2', workspaceId: '3' }), /allowParams|transformation/);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
