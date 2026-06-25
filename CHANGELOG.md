@@ -1,3 +1,9 @@
+## [1.66.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.65.0...v1.66.0) (2026-06-25)
+
+### Features
+
+* **desktop:** scope the server GA4 trigger to "Client Name equals GA4" ([bd825dc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bd825dcb6bbb247f74c0bd0e96ef72e05a9ed3a7))
+
 ## [1.65.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.64.0...v1.65.0) (2026-06-25)
 
 ### Features
