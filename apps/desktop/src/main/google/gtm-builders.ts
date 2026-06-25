@@ -290,6 +290,53 @@ export function buildGa4ServerTag(name: string, measurementId: string, eventName
   };
 }
 
+/** Server-side Google Ads CONVERSION tag (`sgtmadsct`). Shape corpus-validated. Reads the
+ *  conversion value/currency from the event the client received; conversionId is the AW-
+ *  account id, conversionLabel the per-conversion label (both may be {{variables}}). */
+export function buildAdsConversionServerTag(name: string, conversionId: string, conversionLabel: string, firingTriggerId?: string[]): GtmTagResource {
+  return {
+    name: sanitizeName(name),
+    type: 'sgtmadsct',
+    parameter: [
+      tpl('conversionId', conversionId),
+      tpl('conversionLabel', conversionLabel),
+      boolean('enableConversionLinker', true),
+      tpl('productReportingDataSource', 'EVENT'),
+      boolean('enableProductReporting', true),
+      boolean('rdp', false),
+    ],
+    ...(firingTriggerId ? { firingTriggerId } : {}),
+  };
+}
+
+/** Server-side Google Ads CONVERSION LINKER tag (`sgtmadscl`). Shape corpus-validated.
+ *  Reads/sets the linker (gclid etc.) on the server. */
+export function buildAdsConversionLinkerServerTag(name: string, firingTriggerId?: string[]): GtmTagResource {
+  return {
+    name: sanitizeName(name),
+    type: 'sgtmadscl',
+    parameter: [boolean('enableLinkerParams', false), boolean('enableCookieOverrides', false)],
+    ...(firingTriggerId ? { firingTriggerId } : {}),
+  };
+}
+
+/** Server-side Google Ads REMARKETING tag (`sgtmadsremarket`). Shape corpus-validated.
+ *  Dynamic remarketing reads item data from the event; conversionId is the AW- id. */
+export function buildAdsRemarketingServerTag(name: string, conversionId: string, firingTriggerId?: string[]): GtmTagResource {
+  return {
+    name: sanitizeName(name),
+    type: 'sgtmadsremarket',
+    parameter: [
+      tpl('conversionId', conversionId),
+      boolean('enableConversionLinker', true),
+      boolean('enableDynamicRemarketing', true),
+      tpl('remarketingEventDataSource', 'EVENT_DATA'),
+      boolean('rdp', false),
+    ],
+    ...(firingTriggerId ? { firingTriggerId } : {}),
+  };
+}
+
 /* ───────────── Triggers ───────────── */
 
 const FILTER_OPS = new Set(['equals', 'contains', 'startsWith', 'endsWith', 'matchRegex', 'greater', 'less']);

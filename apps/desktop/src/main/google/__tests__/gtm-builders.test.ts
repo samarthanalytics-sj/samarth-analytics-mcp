@@ -12,6 +12,9 @@ import {
   buildEnvironmentSnippet,
   buildGa4Client,
   buildGa4ServerTag,
+  buildAdsConversionServerTag,
+  buildAdsConversionLinkerServerTag,
+  buildAdsRemarketingServerTag,
   upsertGoogleTagConfig,
   consentTypesFor,
   evaluateConsentGate,
@@ -911,6 +914,25 @@ test('upsertGoogleTagConfig adds server_container_url, preserves other settings,
   // no configSettingsTable yet → creates it
   const fresh = upsertGoogleTagConfig({ type: 'googtag', parameter: [{ type: 'template', key: 'tagId', value: 'G-2' }] }, 'server_container_url', 'https://x.example.com');
   assert.ok(fresh.some((p) => (p as { key?: string }).key === 'configSettingsTable'), 'creates the table when absent');
+});
+
+test('Ads server tag builders emit the corpus-validated sgtm types + key fields', () => {
+  const conv = buildAdsConversionServerTag('Ads - Purchase', 'AW-123', 'abcLABEL');
+  assert.equal(conv.type, 'sgtmadsct');
+  const cp = (conv.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(cp.find((x) => x.key === 'conversionId')?.value, 'AW-123');
+  assert.equal(cp.find((x) => x.key === 'conversionLabel')?.value, 'abcLABEL');
+  assert.equal(cp.find((x) => x.key === 'enableConversionLinker')?.value, 'true');
+
+  const linker = buildAdsConversionLinkerServerTag('Ads - Linker');
+  assert.equal(linker.type, 'sgtmadscl');
+
+  const rmkt = buildAdsRemarketingServerTag('Ads - Remarketing', 'AW-123');
+  assert.equal(rmkt.type, 'sgtmadsremarket');
+  const rp = (rmkt.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(rp.find((x) => x.key === 'conversionId')?.value, 'AW-123');
+  assert.equal(rp.find((x) => x.key === 'enableDynamicRemarketing')?.value, 'true');
+  assert.equal(rp.find((x) => x.key === 'remarketingEventDataSource')?.value, 'EVENT_DATA');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

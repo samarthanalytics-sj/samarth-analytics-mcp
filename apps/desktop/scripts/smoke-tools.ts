@@ -166,8 +166,9 @@ function synthesize(schema: unknown): unknown {
     case 'object': {
       const out: Record<string, unknown> = {};
       const props = s.properties ?? {};
-      const required = s.required ?? Object.keys(props);
-      for (const key of required) if (props[key] !== undefined) out[key] = synthesize(props[key]);
+      // Fill ALL properties (not just required) so tools with conditionally-required fields
+      // (e.g. create_server_tag's platform-specific measurementId/conversionId) get valid args.
+      for (const key of Object.keys(props)) if (props[key] !== undefined) out[key] = synthesize(props[key]);
       return out;
     }
     default: return 'x';
