@@ -902,6 +902,16 @@ test('buildServerAllEventsTrigger → CUSTOM_EVENT firing on every event ({{_eve
   assert.equal(cef[0].type, 'matchRegex');
   assert.equal(cef[0].parameter.find((x) => x.key === 'arg0')?.value, '{{_event}}');
   assert.equal(cef[0].parameter.find((x) => x.key === 'arg1')?.value, '.*');
+  assert.equal(tr.filter, undefined, 'no client filter when clientName is omitted');
+});
+
+test('buildServerAllEventsTrigger scoped to a client → {{Client Name}} equals <client> filter', () => {
+  const tr = buildServerAllEventsTrigger('All Events', 'GA4');
+  const f = (tr.filter ?? []) as Array<{ type: string; parameter: Array<{ key: string; value: string }> }>;
+  assert.equal(f.length, 1, 'has a Client Name filter');
+  assert.equal(f[0].type, 'equals');
+  assert.equal(f[0].parameter.find((x) => x.key === 'arg0')?.value, '{{Client Name}}');
+  assert.equal(f[0].parameter.find((x) => x.key === 'arg1')?.value, 'GA4');
 });
 
 test('upsertGoogleTagConfig adds server_container_url, preserves other settings, updates in place', () => {

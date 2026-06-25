@@ -290,16 +290,20 @@ export function buildGa4ServerTag(name: string, measurementId: string, eventName
   };
 }
 
-/** A server "All Events" Custom Event trigger — fires on every event a client produces
- *  ({{_event}} matches `.*`). Shape corpus-validated (server triggers are CUSTOM_EVENT with a
- *  customEventFilter on {{_event}}). Needs no built-in variable. This is the firing trigger
- *  for a forward-all GA4 server tag. PURE. */
-export function buildServerAllEventsTrigger(name: string): GtmTriggerResource {
-  return {
+/** A server Custom Event trigger that fires on every event ({{_event}} matches `.*`). When
+ *  `clientName` is given, it's SCOPED to that client via a `{{Client Name}} equals <name>`
+ *  filter (the Google/Stape-recommended pattern — fires only on events the GA4 client
+ *  produced; needs the CLIENT_NAME built-in enabled, which bootstrap does). Shape
+ *  corpus-validated (server triggers are CUSTOM_EVENT with a customEventFilter on {{_event}}
+ *  plus a {{Client Name}} filter). PURE. */
+export function buildServerAllEventsTrigger(name: string, clientName?: string): GtmTriggerResource {
+  const t: GtmTriggerResource = {
     name: sanitizeName(name),
     type: 'customEvent',
     customEventFilter: [condition('{{_event}}', 'matchRegex', '.*')],
   };
+  if (clientName && clientName.trim() !== '') t.filter = [condition('{{Client Name}}', 'equals', clientName)];
+  return t;
 }
 
 /** Server-side Google Ads CONVERSION tag (`sgtmadsct`). Shape corpus-validated. Reads the
