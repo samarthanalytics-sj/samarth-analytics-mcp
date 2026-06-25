@@ -1,3 +1,9 @@
+## [1.62.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.62.1...v1.62.2) (2026-06-25)
+
+### Bug Fixes
+
+* **desktop:** treat sGTM transformations as optional — ask the user before building one ([5d14afc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5d14afc3c9141c684fe286e2a23e6876ce8dd073))
+
 ## [1.62.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.62.0...v1.62.1) (2026-06-25)
 
 ### Bug Fixes
