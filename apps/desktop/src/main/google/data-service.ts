@@ -394,6 +394,46 @@ export class GoogleDataService {
     };
   }
 
+  /** Create a folder in a draft workspace (organisational only — no effect on firing). */
+  async createGtmFolder(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    name: string
+  ): Promise<{ folderId: string; name: string; path: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const res = await gtm.accounts.containers.workspaces.folders.create({
+      parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+      requestBody: { name },
+    });
+    return { folderId: res.data.folderId ?? '', name: res.data.name ?? name, path: res.data.path ?? '' };
+  }
+
+  /** Move tags / triggers / variables into a folder. Purely organisational — it does NOT
+   *  change what fires. Pass the ids to relocate. */
+  async moveEntitiesToFolder(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    folderId: string,
+    ids: { tagIds?: string[]; triggerIds?: string[]; variableIds?: string[] }
+  ): Promise<{ folderId: string; moved: { tags: number; triggers: number; variables: number } }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const tagId = ids.tagIds ?? [];
+    const triggerId = ids.triggerIds ?? [];
+    const variableId = ids.variableIds ?? [];
+    await gtm.accounts.containers.workspaces.folders.move_entities_to_folder({
+      path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/folders/${folderId}`,
+      tagId,
+      triggerId,
+      variableId,
+      requestBody: {},
+    });
+    return { folderId, moved: { tags: tagId.length, triggers: triggerId.length, variables: variableId.length } };
+  }
+
   async createGtmTag(
     accountId: string,
     containerId: string,

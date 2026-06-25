@@ -312,8 +312,10 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 53, 'read + write registry has 53 tools');
+    assert.equal(withWrites.list().length, 55, 'read + write registry has 55 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
+    assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_folder'), true);
+    assert.equal(withWrites.list().some((t) => t.name === 'move_gtm_entities_to_folder'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'add_ga4_event_parameters'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'set_ga4_measurement_id'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'set_ga4_measurement_id_on_all_tags'), true);
@@ -879,6 +881,34 @@ async function main(): Promise<void> {
     // Unknown name → a clear error listing the options, and no further context change.
     await assert.rejects(() => reg.execute('set_gtm_workspace', { workspaceName: 'nope' }), /not found/i);
     assert.equal(setCalls.length, 2, 'a failed switch does not change context');
+  });
+
+  await test('folder tools create a folder and move entities (gtm write tools, confirm-gated)', async () => {
+    const calls: string[] = [];
+    const data = {
+      createGtmFolder: async (_a: string, _c: string, _w: string, name: string) => {
+        calls.push('createFolder');
+        return { folderId: 'f1', name, path: '' };
+      },
+      moveEntitiesToFolder: async (_a: string, _c: string, _w: string, folderId: string, ids: { tagIds?: string[] }) => {
+        calls.push('move');
+        return { folderId, moved: { tags: ids.tagIds?.length ?? 0, triggers: 0, variables: 0 } };
+      },
+    } as unknown as GoogleDataService;
+
+    // Confirm-gated writes: absent read-only, present with a confirm fn.
+    assert.equal(buildToolRegistry(data).list().some((t) => t.name === 'create_gtm_folder'), false);
+    const reg = buildToolRegistry(data, approveAsIs, 'gtm');
+
+    const folder = JSON.parse(await reg.execute('create_gtm_folder', { accountId: '1', containerId: '2', workspaceId: '3', name: 'Analytics' }));
+    assert.equal(folder.folderId, 'f1');
+    assert.equal(folder.name, 'Analytics');
+
+    const moved = JSON.parse(
+      await reg.execute('move_gtm_entities_to_folder', { accountId: '1', containerId: '2', workspaceId: '3', folderId: 'f1', tagIds: ['7', '8'] }),
+    );
+    assert.equal(moved.moved.tags, 2);
+    assert.deepEqual(calls, ['createFolder', 'move']);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
