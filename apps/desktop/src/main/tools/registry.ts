@@ -1248,6 +1248,24 @@ export function buildToolRegistry(
       handler: (a) => data.setWebServerContainerUrl(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId), s(a.serverUrl)),
     },
     {
+      name: 'set_server_container_tagging_url',
+      description:
+        'Set the SERVER container\'s own Tagging Server URL (its container-level taggingServerUrls field). The GTM API CAN write this (containers.update) — do NOT tell the user it can only be set in the GTM UI. Use when they have their tagging-server host URL (e.g. https://sgtm.example.com) and want it recorded on the container; this clears the audit\'s "No tagging server URL" finding. IMPORTANT: this only RECORDS the URL in config — it does NOT deploy the host. The server at that URL must still be live (confirm with verify_server_endpoint). This is DIFFERENT from set_web_server_container_url (which points a WEB tag at the server). Requires accountId, containerId (the SERVER container), serverUrl.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          serverUrl: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'serverUrl'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Set tagging server URL ${s(a.serverUrl)} on server container ${s(a.containerId)}`,
+      handler: (a) => data.setServerContainerTaggingUrl(s(a.accountId), s(a.containerId), [s(a.serverUrl)]),
+    },
+    {
       name: 'create_server_tag',
       description:
         'Create a tag in a SERVER container workspace (reads event data from the GA4 client). platform: "ga4" (forward events to GA4 — needs measurementId, optional eventName, defaults to forwarding the incoming event), "ads_conversion" (Google Ads conversion — needs conversionId + conversionLabel), "ads_conversion_linker" (Google Ads conversion linker), or "ads_remarketing" (Google Ads dynamic remarketing — needs conversionId). Optional firingTriggerId. Requires accountId, containerId, workspaceId, platform, name.',

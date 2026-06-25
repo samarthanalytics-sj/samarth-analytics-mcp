@@ -1211,6 +1211,27 @@ export class GoogleDataService {
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', serverContainerUrl: serverUrl };
   }
 
+  /** Set the SERVER container's own Tagging Server URL(s) — the container-level
+   *  `taggingServerUrls` field, which the GTM API CAN write (containers.update). Read-modify-
+   *  write so the container's other fields (name, usageContext, fingerprint) are preserved.
+   *  Records the URL in config only — it does NOT deploy the host at that URL. Rejects a
+   *  non-server container (the field is server-only). */
+  async setServerContainerTaggingUrl(
+    accountId: string,
+    containerId: string,
+    serverUrls: string[]
+  ): Promise<{ containerId: string; name: string; taggingServerUrls: string[] }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}`;
+    const current = (await gtm.accounts.containers.get({ path })).data;
+    if (!Array.isArray(current.usageContext) || !current.usageContext.some((u) => String(u).toLowerCase() === 'server')) {
+      throw new Error(`Container ${containerId} is not a SERVER container (usageContext ${JSON.stringify(current.usageContext ?? [])}) — taggingServerUrls only applies to server containers.`);
+    }
+    const res = await gtm.accounts.containers.update({ path, requestBody: { ...current, taggingServerUrls: serverUrls } });
+    return { containerId: res.data.containerId ?? containerId, name: res.data.name ?? '', taggingServerUrls: res.data.taggingServerUrls ?? [] };
+  }
+
   /** Enable built-in variables (e.g. "clickUrl") in a workspace. Idempotent-ish:
    *  re-enabling an already-enabled one is tolerated by the caller. */
   async enableGtmBuiltInVariables(

@@ -110,6 +110,10 @@ function fakeData(
       calls.push(`setWebServerUrl:${tagId}:${url}`);
       return { tagId, name: 'Google Tag', serverContainerUrl: url };
     },
+    setServerContainerTaggingUrl: async (_a: string, containerId: string, urls: string[]) => {
+      calls.push(`setServerTaggingUrl:${containerId}:${urls.join(',')}`);
+      return { containerId, name: 'Server Container', taggingServerUrls: urls };
+    },
     getServerContainerSnapshot: async (a: string, c: string, w: string) => {
       calls.push(`serverSnapshot:${a}:${c}:${w}`);
       return {
@@ -374,7 +378,7 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 71, 'read + write registry has 71 tools');
+    assert.equal(withWrites.list().length, 72, 'read + write registry has 72 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1104,6 +1108,13 @@ async function main(): Promise<void> {
     );
     assert.equal(wired.serverContainerUrl, 'https://sgtm.example.com');
     assert.ok(fd.calls.includes('setWebServerUrl:9:https://sgtm.example.com'));
+
+    // Set the SERVER container's own tagging URL (the API CAN write taggingServerUrls).
+    const tagged = JSON.parse(
+      await reg.execute('set_server_container_tagging_url', { accountId: '1', containerId: '256548971', serverUrl: 'https://sgtm.example.com' }),
+    );
+    assert.deepEqual(tagged.taggingServerUrls, ['https://sgtm.example.com']);
+    assert.ok(fd.calls.includes('setServerTaggingUrl:256548971:https://sgtm.example.com'), 'wrote taggingServerUrls via the API');
 
     // Phase 3: server tags by platform → correct sgtm* type via create_gtm_tag.
     const adsConv = JSON.parse(
