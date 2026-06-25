@@ -28,6 +28,23 @@ export const GTM_AUDIT_METHODOLOGY =
   '(10) SCORING is deterministic + versioned: Critical −30, High −12, Medium −4, Low −1; info and runtime-required score 0. Report the number AND keep runtime-required items in their own "needs verification" list, never as scored defects. ' +
   '(11) END with that explicit runtime-required list so nobody assumes those checks passed. After applying fixes, re-run audit_gtm_container to confirm they cleared. ';
 
+/** Naming convention for GA4 tags/triggers the chat creates. Exported for testing. */
+export const GA4_TAG_NAMING =
+  'GA4 TAG NAMING — unless the user gives an explicit name, name every GA4 event tag you create "GA4 - Event - <Name> Tag" and its Custom Event trigger "<Name> Trigger", where <Name> is the event in Title Case: add_to_cart → tag "GA4 - Event - Add To Cart Tag" + trigger "Add To Cart Trigger"; view_item → "GA4 - Event - View Item Tag" + "View Item Trigger"; purchase → "GA4 - Event - Purchase Tag" + "Purchase Trigger". Apply this format to ALL GA4 tags/triggers you create. ';
+
+/** GA4 ecommerce events → their event parameters (from the GA4 Ecommerce GTM reference),
+ *  so the chat builds the matching tag for whatever ecommerce event the user asks for. */
+export const GA4_ECOMMERCE_REFERENCE =
+  'GA4 ECOMMERCE (GTM) — when the user asks for a standard GA4 ecommerce event tag, build it from this reference: a GA4 Event tag whose event parameters each read a Data Layer Variable on the dataLayer "ecommerce" object, PLUS a Custom Event trigger whose Event Name is the event and that fires on All Custom Events. Each parameter P takes value {{Ecommerce <P>}} read from data-layer key ecommerce.P — create those variables with create_gtm_variable_typed (kind data_layer, dataLayerName ecommerce.P) if they are missing, then reference them. EVENT → PARAMETERS: ' +
+  'view_item_list, select_item → items, item_list_id, item_list_name. ' +
+  'view_item, add_to_cart, add_to_wishlist, view_cart, remove_from_cart → items, value, currency. ' +
+  'begin_checkout → items, value, currency, coupon. ' +
+  'add_shipping_info → items, value, currency, coupon, shipping_tier. ' +
+  'add_payment_info → items, value, currency, coupon, payment_type. ' +
+  'purchase, refund → items, transaction_id, value, tax, shipping, currency, coupon. ' +
+  'view_promotion, select_promotion → creative_name, creative_slot, promotion_id, promotion_name, items. ' +
+  '(items always maps to {{Ecommerce Items}} / ecommerce.items.) MATCH the user\'s requested event to its row — e.g. "add to cart" → add_to_cart with items+value+currency; "checkout" → begin_checkout with items+value+currency+coupon; "purchase" → purchase with items+transaction_id+value+tax+shipping+currency+coupon. Use the same parameter set for the matching event; do not invent parameters not listed for that event. ';
+
 /**
  * A system-prompt line telling the model the ACTUAL current date. Without this
  * the model assumes its training-cutoff date (e.g. "October 2023"), which breaks
@@ -148,6 +165,8 @@ export class ChatService {
           '"Check Validation" (checkValidation) — leave them OFF/unticked by default (simply omit those fields, ' +
           'or set them to boolean "false"). Only enable them (boolean "true", and waitForTagsTimeout for the wait) ' +
           'if the user EXPLICITLY asks to wait for tags or check validation. ' +
+          GA4_TAG_NAMING +
+          GA4_ECOMMERCE_REFERENCE +
           GTM_AUDIT_METHODOLOGY +
           'MONITORING / DRIFT: when the user asks what CHANGED, about regressions, or to monitor the ' +
           'container over time, call audit_gtm_container_changes — it reports NEW vs RESOLVED issues since ' +
