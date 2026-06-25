@@ -1,6 +1,6 @@
 import type { GoogleDataService } from '../google/data-service';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
-import type { GoogleProduct } from '../../shared/ipc';
+import type { GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { AuditHistoryStore } from '../storage/audit-history';
 import {
   buildGa4EventTag,
@@ -38,6 +38,14 @@ export interface WriteProposal {
  * names/types/config before the change is made.
  */
 export type ConfirmFn = (proposal: WriteProposal) => Promise<Record<string, unknown> | null>;
+
+/** Lets a chat tool switch the app's ACTIVE GTM context (account/container/workspace).
+ *  `current` returns the working context (for defaults); `set` persists it AND notifies the
+ *  UI so the GTM bar dropdown updates. Provided only on the chat path. */
+export interface GtmContextControl {
+  current: () => GtmContext | undefined;
+  set: (ctx: GtmContext) => Promise<void> | void;
+}
 
 interface Tool extends LlmToolDef {
   /** Mutates GTM — only listed/executed when a confirm function is provided. */
@@ -119,7 +127,8 @@ export function buildToolRegistry(
   data: GoogleDataService,
   confirm?: ConfirmFn,
   product?: GoogleProduct,
-  history?: AuditHistoryStore
+  history?: AuditHistoryStore,
+  ctxControl?: GtmContextControl
 ): ToolExecutor {
   const readTools: Tool[] = [
     {
@@ -1436,7 +1445,91 @@ export function buildToolRegistry(
     },
   ];
 
-  const all = confirm ? [...readTools, ...writeTools] : readTools;
+  // Context tools switch the app's ACTIVE workspace/container (no GTM mutation), so they
+  // need no confirm — they exist only when a context controller is wired (the chat path).
+  const contextTools: Tool[] = ctxControl
+    ? [
+        {
+          name: 'set_gtm_workspace',
+          description:
+            'Switch the ACTIVE GTM workspace — the one shown in the app bar and used by the Container audit and new operations — within the current account and container. Accepts workspaceId OR workspaceName (e.g. "MCP-TEST", case-insensitive). Use when the user says "switch to / use / change to workspace X". Does NOT modify GTM; it only re-points the app.',
+          inputSchema: {
+            type: 'object',
+            properties: { workspaceId: { type: 'string' }, workspaceName: { type: 'string' } },
+            additionalProperties: false,
+          },
+          handler: async (a) => {
+            const cur = ctxControl.current();
+            if (!cur?.accountId || !cur?.containerId)
+              throw new Error('No active GTM account/container — pick one in the GTM bar first, then switch workspace.');
+            const wantId = s(a.workspaceId);
+            const wantName = s(a.workspaceName);
+            if (!wantId && !wantName) throw new Error('Provide workspaceId or workspaceName.');
+            const wss = await data.listGtmWorkspaces(cur.accountId, cur.containerId);
+            const match = wss.find(
+              (w) => (wantId && w.workspaceId === wantId) || (wantName && w.name.toLowerCase() === wantName.toLowerCase()),
+            );
+            if (!match)
+              throw new Error(
+                `Workspace "${wantName || wantId}" not found in ${cur.containerName ?? cur.containerId}. Available: ${wss.map((w) => w.name).join(', ') || '(none)'}.`,
+              );
+            const ctx: GtmContext = { ...cur, workspaceId: match.workspaceId, workspaceName: match.name };
+            await ctxControl.set(ctx);
+            return { switched: true, accountName: ctx.accountName, containerName: ctx.containerName, workspaceId: match.workspaceId, workspaceName: match.name };
+          },
+        },
+        {
+          name: 'set_gtm_container',
+          description:
+            'Switch the ACTIVE GTM container within the current account, by containerId OR containerName (case-insensitive). Optionally also set the workspace (workspaceId/workspaceName); otherwise the "Default Workspace" — or the first workspace — is selected. Use when the user says "switch to container X". Does NOT modify GTM; it only re-points the app.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              containerId: { type: 'string' },
+              containerName: { type: 'string' },
+              workspaceId: { type: 'string' },
+              workspaceName: { type: 'string' },
+            },
+            additionalProperties: false,
+          },
+          handler: async (a) => {
+            const cur = ctxControl.current();
+            if (!cur?.accountId) throw new Error('No active GTM account — pick one in the GTM bar first.');
+            const wantId = s(a.containerId);
+            const wantName = s(a.containerName);
+            if (!wantId && !wantName) throw new Error('Provide containerId or containerName.');
+            const containers = await data.listGtmContainers(cur.accountId);
+            const c = containers.find(
+              (x) => (wantId && x.containerId === wantId) || (wantName && x.name.toLowerCase() === wantName.toLowerCase()),
+            );
+            if (!c)
+              throw new Error(
+                `Container "${wantName || wantId}" not found in ${cur.accountName ?? cur.accountId}. Available: ${containers.map((x) => x.name).join(', ') || '(none)'}.`,
+              );
+            const wss = await data.listGtmWorkspaces(cur.accountId, c.containerId);
+            const wsWantId = s(a.workspaceId);
+            const wsWantName = s(a.workspaceName);
+            const ws =
+              wss.find((w) => (wsWantId && w.workspaceId === wsWantId) || (wsWantName && w.name.toLowerCase() === wsWantName.toLowerCase())) ??
+              wss.find((w) => w.name.toLowerCase() === 'default workspace') ??
+              wss[0];
+            if (!ws) throw new Error(`Container "${c.name}" has no workspaces.`);
+            const ctx: GtmContext = {
+              accountId: cur.accountId,
+              accountName: cur.accountName,
+              containerId: c.containerId,
+              containerName: c.name,
+              workspaceId: ws.workspaceId,
+              workspaceName: ws.name,
+            };
+            await ctxControl.set(ctx);
+            return { switched: true, containerId: c.containerId, containerName: c.name, workspaceId: ws.workspaceId, workspaceName: ws.name };
+          },
+        },
+      ]
+    : [];
+
+  const all = [...readTools, ...(confirm ? writeTools : []), ...contextTools];
   const tools = product ? all.filter((t) => productOf(t.name) === product) : all;
 
   return {

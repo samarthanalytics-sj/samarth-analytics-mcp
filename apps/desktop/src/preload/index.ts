@@ -49,6 +49,12 @@ const api = {
       ipcRenderer.invoke('accounts:setLlmConfig', id, provider, model),
     setGtmContext: (id: string, ctx: GtmContext): Promise<AccountView> =>
       ipcRenderer.invoke('accounts:setGtmContext', id, ctx),
+    // Fired when the chat switches the active GTM context — re-fetch to update the bar.
+    onChanged: (cb: () => void): (() => void) => {
+      const listener = (): void => cb();
+      ipcRenderer.on('accounts:changed', listener);
+      return () => ipcRenderer.removeListener('accounts:changed', listener);
+    },
   },
 
   // App-level LLM API keys (one per provider, shared by all accounts).

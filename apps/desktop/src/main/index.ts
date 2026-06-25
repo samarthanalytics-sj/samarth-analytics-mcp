@@ -132,7 +132,14 @@ app.whenReady().then(() => {
   );
   const dataService = new GoogleDataService(registry, clientManager);
   const auditHistory = new AuditHistoryStore(join(dataDir, 'audit-history.json'));
-  const chatService = new ChatService(registry, dataService, providerKeys, auditHistory);
+  // When a chat tool switches the active GTM workspace/container, tell every window to
+  // re-fetch accounts so the GTM-bar dropdown reflects the new context.
+  const broadcastAccountsChanged = (): void => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('accounts:changed');
+    }
+  };
+  const chatService = new ChatService(registry, dataService, providerKeys, auditHistory, broadcastAccountsChanged);
 
   // Startup diagnostic — proves THIS running process loaded the current build. If the
   // GA4-edit tools are missing here, the main process is stale (electron-vite did not
