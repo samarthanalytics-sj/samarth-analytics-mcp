@@ -1,3 +1,9 @@
+## [1.52.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.52.1...v1.52.2) (2026-06-25)
+
+### Bug Fixes
+
+* **desktop:** render markdown tables whose separator uses em/en dashes ([f319bca](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f319bcaacd072af0c100b5d16b2cf34ab66df42d))
+
 ## [1.52.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.52.0...v1.52.1) (2026-06-25)
 
 ### Bug Fixes
