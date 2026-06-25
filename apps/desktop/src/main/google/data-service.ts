@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf } from './gtm-builders';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
@@ -939,7 +939,7 @@ export class GoogleDataService {
     accountId: string,
     containerId: string,
     workspaceId: string
-  ): Promise<Array<{ triggerId: string; name: string; type: string }>> {
+  ): Promise<Array<{ triggerId: string; name: string; type: string; customEventName: string }>> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
@@ -952,7 +952,27 @@ export class GoogleDataService {
       triggerId: t.triggerId ?? '',
       name: t.name ?? '(unnamed)',
       type: t.type ?? '',
+      // For Custom Event triggers, surface the dataLayer event so callers can detect a
+      // duplicate that fires on the same event under a different name.
+      customEventName: customEventNameOf(t as unknown as Record<string, unknown>),
     }));
+  }
+
+  /** List the variables in a workspace (name + type). */
+  async listGtmVariables(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<Array<{ variableId: string; name: string; type: string }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const variables = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.variables.list({ parent, pageToken }),
+      (r) => r.data.variable,
+      (r) => r.data.nextPageToken
+    );
+    return variables.map((v) => ({ variableId: v.variableId ?? '', name: v.name ?? '(unnamed)', type: v.type ?? '' }));
   }
 
   /** Enable built-in variables (e.g. "clickUrl") in a workspace. Idempotent-ish:

@@ -25,7 +25,8 @@ const rec = (v: unknown): Record<string, unknown> => v as Record<string, unknown
 // Records calls so we can assert the registry routes args correctly.
 function fakeData(
   opts: {
-    existingTriggers?: Array<{ triggerId: string; name: string; type: string }>;
+    existingTriggers?: Array<{ triggerId: string; name: string; type: string; customEventName?: string }>;
+    existingVariables?: Array<{ variableId: string; name: string; type: string }>;
     snapshot?: {
       tags: Array<Record<string, unknown>>;
       triggers: Array<Record<string, unknown>>;
@@ -67,6 +68,10 @@ function fakeData(
     listGtmTriggers: async (a: string, c: string, w: string) => {
       calls.push(`listTriggers:${a}:${c}:${w}`);
       return opts.existingTriggers ?? [];
+    },
+    listGtmVariables: async (a: string, c: string, w: string) => {
+      calls.push(`listVariables:${a}:${c}:${w}`);
+      return opts.existingVariables ?? [];
     },
     listGa4DataStreams: async (p: string) => {
       calls.push(`ga4Streams:${p}`);
@@ -285,6 +290,7 @@ async function main(): Promise<void> {
       'list_gtm_folders',
       'list_gtm_tags',
       'list_gtm_triggers',
+      'list_gtm_variables',
       'list_gtm_versions',
       'list_gtm_workspaces',
       'run_ga4_realtime_report',
@@ -310,11 +316,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 37, 'read-only registry has 37 tools');
+    assert.equal(readOnly.list().length, 38, 'read-only registry has 38 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 60, 'read + write registry has 60 tools');
+    assert.equal(withWrites.list().length, 61, 'read + write registry has 61 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -981,6 +987,41 @@ async function main(): Promise<void> {
     assert.equal(created.environmentId, '7');
     assert.ok(created.snippet.head.includes('gtm_auth=AUTH_7'), 'created env returns its install snippet');
     assert.deepEqual(calls, ['list', 'create:Test']);
+  });
+
+  await test('precheck: an already-present trigger/variable is reused, NOT re-created (no approval)', async () => {
+    // Existing custom-event trigger for product_view + an existing variable "GA4 Variable".
+    const fd = fakeData({
+      existingTriggers: [{ triggerId: '11', name: 'CE - Product View', type: 'customEvent', customEventName: 'product_view' }],
+      existingVariables: [{ variableId: '5', name: 'GA4 Variable', type: 'c' }],
+    });
+    const c = seqConfirm(true, true); // would approve — but the precheck should skip before any prompt
+    const reg = buildToolRegistry(fd.data, c.fn);
+
+    // Same event under a different name → detected as already present, no create, no confirm.
+    const trg = JSON.parse(
+      await reg.execute('create_gtm_trigger', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        trigger: { name: 'Product View Listener', type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'product_view' }] }] },
+      }),
+    );
+    assert.equal(trg.alreadyExists, true, 'existing trigger reported as already present');
+    assert.equal(trg.trigger.triggerId, '11');
+    assert.equal(fd.calls.some((x) => x.startsWith('createTrigger')), false, 'no create call');
+    assert.equal(c.calls.length, 0, 'no approval prompt for a no-op');
+
+    // Existing variable by name → already present.
+    const v = JSON.parse(
+      await reg.execute('create_gtm_variable', { accountId: '1', containerId: '2', workspaceId: '3', variable: { name: 'GA4 Variable', type: 'c' } }),
+    );
+    assert.equal(v.alreadyExists, true, 'existing variable reported as already present');
+
+    // A NEW trigger (different event) proceeds to create.
+    await reg.execute('create_gtm_trigger', {
+      accountId: '1', containerId: '2', workspaceId: '3',
+      trigger: { name: 'CE - Add To Cart', type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'add_to_cart' }] }] },
+    });
+    assert.ok(fd.calls.some((x) => x.startsWith('createTrigger:')), 'a genuinely new trigger is created');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

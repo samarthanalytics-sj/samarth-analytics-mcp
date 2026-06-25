@@ -148,6 +148,7 @@ export class ChatService {
           'tag, all in ONE approval), and create_gtm_variable_typed for variables (constant / data_layer ' +
           '/ javascript). Only fall back to the raw create_gtm_tag/trigger/variable tools for advanced ' +
           'cases. The user must approve each change. ' +
+          'ALREADY-PRESENT: creating a tag/trigger/variable that already exists (same name — or, for a Custom Event trigger, the same dataLayer event) is auto-detected and REUSED — reported as "already present" with no duplicate and NO approval prompt. You can also list_gtm_tags / list_gtm_triggers / list_gtm_variables first to tell the user what already exists. ' +
           'EDITING EXISTING TAGS — use the dedicated edit tools, do NOT hand-build a tag for update_gtm_tag ' +
           '(that is what causes "measurementIdOverride/eventName must not be empty" and "template key" / ' +
           '"unknown entity type" errors): to ADD GA4 event parameters (e.g. user_id, session_id, click_text) ' +
