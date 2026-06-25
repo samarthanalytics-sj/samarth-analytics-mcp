@@ -18,6 +18,7 @@ import {
   buildAdsConversionLinkerServerTag,
   buildAdsRemarketingServerTag,
   buildAllowParamsTransformation,
+  auditServerContainer,
   type TriggerInput,
   type VariableKind,
   type GtmTagResource,
@@ -286,6 +287,31 @@ export function buildToolRegistry(
         additionalProperties: false,
       },
       handler: (a) => data.listGtmTransformations(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+    },
+    {
+      name: 'audit_server_container',
+      description:
+        'Audit a SERVER container workspace (server-side GTM). Checks that a client claims incoming requests, that server tags carry their destination id (GA4 Measurement ID / Ads Conversion ID+Label / remarketing id), have a firing trigger and are not paused, and that a tagging server URL is set. Returns the same findings/severity/boundary shape as audit_gtm_container — but for server resources. Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: async (a) =>
+        auditServerContainer(await data.getServerContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId))),
+    },
+    {
+      name: 'verify_server_endpoint',
+      description:
+        'Runtime check for a server-side GTM tagging server: GET <serverUrl>/healthy (sGTM servers answer "ok") to confirm the host is actually deployed and reachable. https-only, public hosts only. Use after bootstrapping a server container and deploying the host, or when an audit flags a missing/blank tagging server URL. Requires serverUrl (e.g. https://sgtm.example.com).',
+      inputSchema: {
+        type: 'object',
+        properties: { serverUrl: { type: 'string' } },
+        required: ['serverUrl'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.verifyServerEndpoint(s(a.serverUrl)),
     },
     {
       name: 'audit_gtm_container',

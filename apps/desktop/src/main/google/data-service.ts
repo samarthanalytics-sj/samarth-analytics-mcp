@@ -4,7 +4,7 @@ import { analyticsdata } from '@googleapis/analyticsdata';
 import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
-import type { ContainerSnapshot } from './gtm-builders';
+import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
 import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, upsertGoogleTagConfig } from './gtm-builders';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
@@ -1065,6 +1065,69 @@ export class GoogleDataService {
       requestBody: transformation,
     });
     return { transformationId: res.data.transformationId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  /** Snapshot a SERVER container for auditServerContainer: its tagging server URL(s),
+   *  clients, server tags (as AuditTags), and transformations. */
+  async getServerContainerSnapshot(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<ServerContainerSnapshot> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const [container, rawTags, clients, transformations] = await Promise.all([
+      gtm.accounts.containers.get({ path: `accounts/${accountId}/containers/${containerId}` }),
+      collectPages(
+        (pageToken) => gtm.accounts.containers.workspaces.tags.list({ parent, pageToken }),
+        (r) => r.data.tag,
+        (r) => r.data.nextPageToken
+      ),
+      this.listGtmClients(accountId, containerId, workspaceId),
+      this.listGtmTransformations(accountId, containerId, workspaceId),
+    ]);
+    const { tags } = toSnapshot(rawTags, [], []);
+    return {
+      taggingServerUrls: container.data.taggingServerUrls ?? [],
+      clients,
+      tags,
+      transformations,
+    };
+  }
+
+  /** Runtime check: GET <serverUrl>/healthy on the deployed tagging server (sGTM servers
+   *  answer "ok"). https-only, no embedded credentials, and guarded by the shared
+   *  SSRF check (requestAllowed) — which RESOLVES named hosts and blocks any that map to a
+   *  private/loopback/metadata IP, closing IPv6/IPv4-mapped/decimal-IP/DNS-rebind vectors a
+   *  string check misses. 6s timeout, no auth, no redirects followed. Confirms reachability. */
+  async verifyServerEndpoint(
+    serverUrl: string
+  ): Promise<{ url: string; ok: boolean; status: number | null; body?: string; error?: string }> {
+    let base: URL;
+    try {
+      base = new URL(serverUrl);
+    } catch {
+      return { url: serverUrl, ok: false, status: null, error: 'Not a valid URL.' };
+    }
+    // A safe label that never echoes embedded userinfo back into the transcript.
+    const safeUrl = `${base.protocol}//${base.host}/healthy`;
+    if (base.protocol !== 'https:') return { url: safeUrl, ok: false, status: null, error: 'Tagging server URL must be https.' };
+    if (base.username || base.password) return { url: safeUrl, ok: false, status: null, error: 'URL must not embed credentials (user:pass@).' };
+    const healthy = new URL('/healthy', base).toString(); // userinfo already rejected
+    const { requestAllowed } = await import('../suggestions/ssrf');
+    if (!(await requestAllowed(healthy))) return { url: safeUrl, ok: false, status: null, error: 'Refusing to probe a private/loopback/metadata host.' };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+    try {
+      const res = await fetch(healthy, { method: 'GET', signal: controller.signal, redirect: 'manual' });
+      const body = (await res.text().catch(() => '')).slice(0, 200);
+      return { url: healthy, ok: res.ok, status: res.status, body };
+    } catch (e) {
+      return { url: healthy, ok: false, status: null, error: (e as Error).message };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** One-shot: create a SERVER container, then add a GA4 client + a GA4 server tag (relaying
