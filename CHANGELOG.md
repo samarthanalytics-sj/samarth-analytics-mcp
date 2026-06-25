@@ -1,3 +1,9 @@
+## [1.61.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.60.0...v1.61.0) (2026-06-25)
+
+### Features
+
+* **desktop:** sGTM Phase 5 — server-container audit + runtime endpoint verify ([d65fd9f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d65fd9f0a2ed96c0c034230cd47c0b032ab808a9))
+
 ## [1.60.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.59.0...v1.60.0) (2026-06-25)
 
 ### Features
