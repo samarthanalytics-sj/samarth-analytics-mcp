@@ -1,3 +1,9 @@
+## [1.62.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.61.0...v1.62.0) (2026-06-25)
+
+### Features
+
+* **desktop:** bootstrap_server_side_tagging can derive the GA4 id from a web container ([63ea417](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/63ea4179024862c9270ef338dde9f4493b496c6f))
+
 ## [1.61.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.60.0...v1.61.0) (2026-06-25)
 
 ### Features
