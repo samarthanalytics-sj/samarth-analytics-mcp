@@ -13,8 +13,13 @@ import {
   buildVariable,
   findExistingTrigger,
   customEventNameOf,
+  buildGa4ServerTag,
+  buildAdsConversionServerTag,
+  buildAdsConversionLinkerServerTag,
+  buildAdsRemarketingServerTag,
   type TriggerInput,
   type VariableKind,
+  type GtmTagResource,
 } from '../google/gtm-builders';
 import { auditWorkspace, auditChanges } from '../google/audit-runner';
 import { diffSnapshots } from '../google/gtm-monitor';
@@ -1191,6 +1196,56 @@ export function buildToolRegistry(
       write: true,
       summarize: (a) => `Point web Google tag ${s(a.tagId)} at server ${s(a.serverUrl)} (server_container_url)`,
       handler: (a) => data.setWebServerContainerUrl(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId), s(a.serverUrl)),
+    },
+    {
+      name: 'create_server_tag',
+      description:
+        'Create a tag in a SERVER container workspace (reads event data from the GA4 client). platform: "ga4" (forward events to GA4 — needs measurementId, optional eventName, defaults to forwarding the incoming event), "ads_conversion" (Google Ads conversion — needs conversionId + conversionLabel), "ads_conversion_linker" (Google Ads conversion linker), or "ads_remarketing" (Google Ads dynamic remarketing — needs conversionId). Optional firingTriggerId. Requires accountId, containerId, workspaceId, platform, name.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          platform: { type: 'string', enum: ['ga4', 'ads_conversion', 'ads_conversion_linker', 'ads_remarketing'] },
+          name: { type: 'string' },
+          measurementId: { type: 'string' },
+          conversionId: { type: 'string' },
+          conversionLabel: { type: 'string' },
+          eventName: { type: 'string' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'platform', 'name'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create ${s(a.platform)} server tag "${s(a.name)}" in workspace ${s(a.workspaceId)}`,
+      precheck: (a) => findExistingByName(data, a, s(a.name), 'tag'),
+      handler: (a) => {
+        const name = s(a.name);
+        const ftid = Array.isArray(a.firingTriggerId) ? a.firingTriggerId.map(String) : undefined;
+        let tag: GtmTagResource;
+        switch (s(a.platform)) {
+          case 'ga4':
+            if (!s(a.measurementId)) throw new Error('platform "ga4" requires measurementId.');
+            tag = buildGa4ServerTag(name, s(a.measurementId), a.eventName != null ? s(a.eventName) : undefined, ftid);
+            break;
+          case 'ads_conversion':
+            if (!s(a.conversionId) || !s(a.conversionLabel)) throw new Error('platform "ads_conversion" requires conversionId and conversionLabel.');
+            tag = buildAdsConversionServerTag(name, s(a.conversionId), s(a.conversionLabel), ftid);
+            break;
+          case 'ads_conversion_linker':
+            tag = buildAdsConversionLinkerServerTag(name, ftid);
+            break;
+          case 'ads_remarketing':
+            if (!s(a.conversionId)) throw new Error('platform "ads_remarketing" requires conversionId.');
+            tag = buildAdsRemarketingServerTag(name, s(a.conversionId), ftid);
+            break;
+          default:
+            throw new Error(`Unknown server-tag platform "${s(a.platform)}" — use ga4 / ads_conversion / ads_conversion_linker / ads_remarketing.`);
+        }
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
     },
     {
       name: 'create_gtm_folder',

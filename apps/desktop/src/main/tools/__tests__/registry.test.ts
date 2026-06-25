@@ -355,7 +355,7 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 68, 'read + write registry has 68 tools');
+    assert.equal(withWrites.list().length, 69, 'read + write registry has 69 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1085,6 +1085,18 @@ async function main(): Promise<void> {
     );
     assert.equal(wired.serverContainerUrl, 'https://sgtm.example.com');
     assert.ok(fd.calls.includes('setWebServerUrl:9:https://sgtm.example.com'));
+
+    // Phase 3: server tags by platform → correct sgtm* type via create_gtm_tag.
+    const adsConv = JSON.parse(
+      await reg.execute('create_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', platform: 'ads_conversion', name: 'Ads - Purchase', conversionId: 'AW-1', conversionLabel: 'L1' }),
+    );
+    assert.equal(adsConv.type, 'sgtmadsct');
+    const ga4srv = JSON.parse(
+      await reg.execute('create_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', platform: 'ga4', name: 'GA4 - Server', measurementId: 'G-1' }),
+    );
+    assert.equal(ga4srv.type, 'sgtmgaaw', 'platform ga4 → sgtmgaaw server tag');
+    // missing required field → clear error (no create)
+    await assert.rejects(() => reg.execute('create_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', platform: 'ads_conversion', name: 'X' }), /requires conversionId/);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
