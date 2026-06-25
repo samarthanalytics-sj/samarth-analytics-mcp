@@ -45,8 +45,8 @@ const MUTATIONS = new Set([
   'enableGtmBuiltInVariables', 'createGtmTrigger', 'createGtmVariable',
   'createGtmFolder', 'moveEntitiesToFolder', 'renameGtmFolder', 'deleteGtmFolder',
   'createGtmEnvironment',
-  'createServerContainer', 'createGtmClient', 'createGtmTransformation', 'bootstrapServerSideTagging',
-  'setWebServerContainerUrl',
+  'createServerContainer', 'createGtmClient', 'deleteGtmClient', 'createGtmTransformation', 'bootstrapServerSideTagging',
+  'setWebServerContainerUrl', 'setServerContainerTaggingUrl',
 ]);
 
 // A snapshot crafted so the audit produces every kind of finding: a paused GA4
@@ -152,6 +152,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     deleteGtmTag: () => r('deleteGtmTag', { deleted: true, tagId: '9' }),
     deleteGtmTrigger: () => r('deleteGtmTrigger', { deleted: true, triggerId: 'T2' }),
     deleteGtmVariable: () => r('deleteGtmVariable', { deleted: true, variableId: 'V1' }),
+    deleteGtmClient: () => r('deleteGtmClient', { deleted: true, clientId: '4' }),
     enableGtmBuiltInVariables: (_a: string, _b: string, _c: string, types: string[]) => r('enableGtmBuiltInVariables', types),
     createGtmTrigger: (_a: string, _b: string, _c: string, t: Record<string, unknown>) =>
       r('createGtmTrigger', { triggerId: 'NEW1', name: String(t?.name ?? ''), type: String(t?.type ?? '') }),
