@@ -1,3 +1,9 @@
+## [1.54.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.53.0...v1.54.0) (2026-06-25)
+
+### Features
+
+* **desktop:** GTM environment tools — create_gtm_environment + list_gtm_environments with install snippet ([b302383](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b302383deb0a2dd56f608d3e389b979750e11004))
+
 ## [1.53.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.52.2...v1.53.0) (2026-06-25)
 
 ### Features
