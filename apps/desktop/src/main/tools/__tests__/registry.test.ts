@@ -93,6 +93,10 @@ function fakeData(
       calls.push(`createTransformation:${a}:${c}:${w}`);
       return { transformationId: 'X1', name: String(x.name ?? ''), type: String(x.type ?? '') };
     },
+    deriveWebContainerMeasurementId: async (a: string, webContainerId: string) => {
+      calls.push(`deriveMid:${a}:${webContainerId}`);
+      return 'G-WEB123';
+    },
     bootstrapServerSideTagging: async (a: string, name: string, mid: string) => {
       calls.push(`bootstrapServer:${a}:${name}:${mid}`);
       return {
@@ -1124,6 +1128,15 @@ async function main(): Promise<void> {
     assert.equal(xform.type, 'tf_allow_params', 'allowParams → tf_allow_params transformation');
     // neither allowParams nor a raw transformation → clear error
     await assert.rejects(() => reg.execute('create_gtm_transformation', { accountId: '1', containerId: '2', workspaceId: '3' }), /allowParams|transformation/);
+
+    // Bootstrap a server container FROM a web container: derive the GA4 id from webContainerId.
+    await reg.execute('bootstrap_server_side_tagging', { accountId: '1', name: 'Test Server', webContainerId: '2' });
+    assert.ok(fd.calls.includes('deriveMid:1:2'), 'derived the Measurement ID from the web container');
+    assert.ok(fd.calls.includes('bootstrapServer:1:Test Server:G-WEB123'), 'bootstrapped relaying to the derived id');
+    // neither measurementId nor webContainerId → clear error
+    await assert.rejects(() => reg.execute('bootstrap_server_side_tagging', { accountId: '1', name: 'X' }), /measurementId|webContainerId/);
+    // a whitespace-only measurementId must NOT relay a blank id — it's trimmed → treated as absent.
+    await assert.rejects(() => reg.execute('bootstrap_server_side_tagging', { accountId: '1', name: 'X', measurementId: '   ' }), /measurementId|webContainerId/);
 
     // Phase 5: server-container audit (read) + runtime endpoint check (read) — use `ro`.
     const srvAudit = JSON.parse(await ro.execute('audit_server_container', { accountId: '1', containerId: '2', workspaceId: '3' }));

@@ -6,6 +6,7 @@ import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
 import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, upsertGoogleTagConfig } from './gtm-builders';
+import { extractConfiguredGa4Ids } from './gtm-ga4-check';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
@@ -1133,6 +1134,31 @@ export class GoogleDataService {
   /** One-shot: create a SERVER container, then add a GA4 client + a GA4 server tag (relaying
    *  to `measurementId`) in its default workspace. Returns the new ids + taggingServerUrls.
    *  Does NOT deploy the tagging-server host or wire the web container (no URL yet). */
+  /** Derive THE GA4 Measurement ID to relay from a WEB container — reads its default
+   *  workspace and extracts the literal G-XXXX id its GA4/Google tags send to. Throws a
+   *  helpful error if there are none (or only {{variable}} refs) or more than one, so the
+   *  caller passes an explicit id instead of us guessing. */
+  async deriveWebContainerMeasurementId(accountId: string, webContainerId: string): Promise<string> {
+    const fromSnapshot = (snap: ContainerSnapshot): { distinct: string[]; variableRefs: Array<{ reference: string }> } => {
+      const { ids, variableRefs } = extractConfiguredGa4Ids(snap);
+      return { distinct: Array.from(new Set(ids.map((x) => x.id))), variableRefs };
+    };
+    const workspaceId = await this.defaultWorkspaceId(accountId, webContainerId);
+    let { distinct, variableRefs } = fromSnapshot(await this.getGtmContainerSnapshot(accountId, webContainerId, workspaceId));
+    if (distinct.length === 0) {
+      // The GA4 tag may live in the LIVE published version (or a non-default workspace that
+      // was published) rather than the default draft — fall back to it before giving up.
+      const live = await this.getGtmLiveVersionSnapshot(accountId, webContainerId).catch(() => null);
+      if (live) ({ distinct, variableRefs } = fromSnapshot(live));
+    }
+    if (distinct.length === 1) return distinct[0];
+    if (distinct.length === 0) {
+      const hint = variableRefs.length ? ` Its GA4 tag(s) use a {{variable}} for the id (${variableRefs.map((v) => v.reference).join(', ')}).` : '';
+      throw new Error(`No literal GA4 Measurement ID found in web container ${webContainerId} (checked its default workspace and live version).${hint} Pass measurementId explicitly.`);
+    }
+    throw new Error(`Web container ${webContainerId} has multiple GA4 Measurement IDs (${distinct.join(', ')}). Pass the one to relay as measurementId.`);
+  }
+
   async bootstrapServerSideTagging(
     accountId: string,
     name: string,
