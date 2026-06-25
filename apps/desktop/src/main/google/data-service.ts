@@ -1188,11 +1188,20 @@ export class GoogleDataService {
     const workspaceId = await this.defaultWorkspaceId(accountId, container.containerId);
     const parent = `accounts/${accountId}/containers/${container.containerId}/workspaces/${workspaceId}`;
     const clientRes = await gtm.accounts.containers.workspaces.clients.create({ parent, requestBody: buildGa4Client('GA4') });
+    const clientName = clientRes.data.name ?? 'GA4';
+    // Enable the Client Name built-in so the trigger's "{{Client Name}} equals GA4" filter
+    // resolves (best-effort — a failure here shouldn't abort the whole bootstrap).
+    try {
+      await this.enableGtmBuiltInVariables(accountId, container.containerId, workspaceId, ['clientName']);
+    } catch {
+      /* non-fatal: the trigger still matches all events if the filter can't be scoped */
+    }
     // Create the firing trigger FIRST so the GA4 server tag actually fires (a tag with no
-    // trigger never runs) — a complete, audit-clean setup in one step.
+    // trigger never runs) — scoped to the GA4 client (Google/Stape pattern). A complete,
+    // audit-clean setup in one step.
     const triggerRes = await gtm.accounts.containers.workspaces.triggers.create({
       parent,
-      requestBody: buildServerAllEventsTrigger('All Events') as unknown as Record<string, unknown>,
+      requestBody: buildServerAllEventsTrigger('All Events', clientName) as unknown as Record<string, unknown>,
     });
     const triggerId = triggerRes.data.triggerId ?? '';
     const tagRes = await gtm.accounts.containers.workspaces.tags.create({
