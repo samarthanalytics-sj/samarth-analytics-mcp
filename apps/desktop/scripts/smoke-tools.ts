@@ -94,7 +94,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     createGtmClient: () => r('createGtmClient', { clientId: 'CL1', name: 'GA4', type: 'gaaw_client' }),
     createGtmTransformation: () => r('createGtmTransformation', { transformationId: 'X1', name: 'X', type: 'sgtm_transformation' }),
     bootstrapServerSideTagging: () =>
-      r('bootstrapServerSideTagging', { container: { containerId: 'SC1', publicId: 'GTM-SERVER', name: 'Server', taggingServerUrls: [] }, workspaceId: 'w1', client: { clientId: 'CL1', name: 'GA4' }, serverTag: { tagId: 'T1', name: 'GA4 - Server' } }),
+      r('bootstrapServerSideTagging', { container: { containerId: 'SC1', publicId: 'GTM-SERVER', name: 'Server', taggingServerUrls: [] }, workspaceId: 'w1', client: { clientId: 'CL1', name: 'GA4' }, trigger: { triggerId: 'TR1', name: 'All Events' }, serverTag: { tagId: 'T1', name: 'GA4 - Server' } }),
     setWebServerContainerUrl: () => r('setWebServerContainerUrl', { tagId: '1', name: 'Google Tag', serverContainerUrl: 'https://sgtm.example.com' }),
     setServerContainerTaggingUrl: () => r('setServerContainerTaggingUrl', { containerId: 'SC1', name: 'Server', taggingServerUrls: ['https://sgtm.example.com'] }),
     getServerContainerSnapshot: () =>

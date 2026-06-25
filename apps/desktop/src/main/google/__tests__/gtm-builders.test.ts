@@ -12,6 +12,7 @@ import {
   buildEnvironmentSnippet,
   buildGa4Client,
   buildGa4ServerTag,
+  buildServerAllEventsTrigger,
   buildAdsConversionServerTag,
   buildAdsConversionLinkerServerTag,
   buildAdsRemarketingServerTag,
@@ -885,11 +886,22 @@ test('buildGa4ServerTag builds an sgtmgaaw tag relaying to the Measurement ID', 
   assert.equal(t.type, 'sgtmgaaw');
   const p = (t.parameter ?? []) as Array<{ key: string; value: string }>;
   assert.equal(p.find((x) => x.key === 'measurementId')?.value, 'G-ABC123');
-  assert.equal(p.find((x) => x.key === 'eventName')?.value, '{{Event Name}}', 'defaults to forwarding the incoming event');
+  // No eventName param when blank → GTM inherits the incoming event_name (per Google/Stape docs).
+  assert.equal(p.find((x) => x.key === 'eventName'), undefined, 'omits eventName so it inherits the incoming event');
   assert.equal(p.find((x) => x.key === 'epToIncludeDropdown')?.value, 'all');
   // a per-event tag uses a literal event name
   const purchase = buildGa4ServerTag('GA4 - Purchase', 'G-ABC123', 'purchase');
   assert.equal(((purchase.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'eventName')?.value, 'purchase');
+});
+
+test('buildServerAllEventsTrigger → CUSTOM_EVENT firing on every event ({{_event}} matches .*)', () => {
+  const tr = buildServerAllEventsTrigger('All Events');
+  assert.equal(tr.type, 'customEvent');
+  const cef = (tr.customEventFilter ?? []) as Array<{ type: string; parameter: Array<{ key: string; value: string }> }>;
+  assert.equal(cef.length, 1);
+  assert.equal(cef[0].type, 'matchRegex');
+  assert.equal(cef[0].parameter.find((x) => x.key === 'arg0')?.value, '{{_event}}');
+  assert.equal(cef[0].parameter.find((x) => x.key === 'arg1')?.value, '.*');
 });
 
 test('upsertGoogleTagConfig adds server_container_url, preserves other settings, updates in place', () => {
