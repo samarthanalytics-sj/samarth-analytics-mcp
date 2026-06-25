@@ -1,3 +1,9 @@
+## [1.55.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.55.0...v1.55.1) (2026-06-25)
+
+### Bug Fixes
+
+* **desktop:** Timer triggers now get their interval/limit (GTM showed blank fields) ([238bf81](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/238bf8169910d1e5aace1e072760d470aca1aded))
+
 ## [1.55.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.54.0...v1.55.0) (2026-06-25)
 
 ### Features
