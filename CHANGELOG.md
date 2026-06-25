@@ -1,3 +1,9 @@
+## [1.50.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.49.0...v1.50.0) (2026-06-25)
+
+### Features
+
+* **desktop:** chat can switch the active GTM workspace/container, and the bar follows ([f851a8f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f851a8fceb0c17d8c203fc30a56ae66529afaeaa))
+
 ## [1.49.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.48.0...v1.49.0) (2026-06-24)
 
 ### Features
