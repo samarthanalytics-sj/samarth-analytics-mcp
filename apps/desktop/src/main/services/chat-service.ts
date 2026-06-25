@@ -165,7 +165,7 @@ export class ChatService {
           '"Check Validation" (checkValidation) — leave them OFF/unticked by default (simply omit those fields, ' +
           'or set them to boolean "false"). Only enable them (boolean "true", and waitForTagsTimeout for the wait) ' +
           'if the user EXPLICITLY asks to wait for tags or check validation. ' +
-          'ENVIRONMENTS: the GTM API DOES manage environments — to create a Test/preview environment and return its install snippet (the container snippet plus gtm_auth, gtm_preview=env-<id>, gtm_cookies_win), call create_gtm_environment; to list existing environments with their tokens + snippets, list_gtm_environments. Never tell the user environments can only be set up in the GTM UI. ' +
+          'ENVIRONMENTS: the GTM API DOES manage environments — to create a Test/preview environment and return its install snippet (the container snippet plus gtm_auth, gtm_preview=env-<id>, gtm_cookies_win), call create_gtm_environment; to list existing environments with their tokens + snippets, list_gtm_environments. Never tell the user environments can only be set up in the GTM UI. Present the head and body install snippets each in their OWN fenced ``` code block (the head <script> and the body <noscript> separately) so they render as copyable code boxes — never inline a snippet as paragraph text. ' +
           GA4_TAG_NAMING +
           GA4_ECOMMERCE_REFERENCE +
           GTM_AUDIT_METHODOLOGY +
@@ -230,6 +230,7 @@ export class ChatService {
       'tags, triggers, variables, accounts, containers, or workspaces, the tools already ' +
       'return the COMPLETE paginated set — present EVERY item (a compact table is ideal) and ' +
       'never truncate, sample, or say "and more"; if a count is asked, count the full list. ' +
+      'Put any code, install snippet, or multi-line technical output in a fenced ``` code block so it renders as a copyable code box. ' +
       'Be concise and factual.';
 
     const messages: LlmTurn[] = [
