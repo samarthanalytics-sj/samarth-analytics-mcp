@@ -1,3 +1,9 @@
+## [1.57.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.56.0...v1.57.0) (2026-06-25)
+
+### Features
+
+* **desktop:** server-side GTM (sGTM) Phase 1 — server container, clients, transformations, bootstrap ([d4ca463](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d4ca463f5176ce66f0574205682d02291beb79e3))
+
 ## [1.56.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.55.2...v1.56.0) (2026-06-25)
 
 ### Features
