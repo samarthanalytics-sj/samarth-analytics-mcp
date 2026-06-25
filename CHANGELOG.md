@@ -1,3 +1,9 @@
+## [1.52.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.51.0...v1.52.0) (2026-06-25)
+
+### Features
+
+* **desktop:** rename + delete GTM folder tools; type-"delete" final confirmation ([3a334a4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3a334a459b37da118251a55ab7531486dd2556d4))
+
 ## [1.51.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.50.0...v1.51.0) (2026-06-25)
 
 ### Features
