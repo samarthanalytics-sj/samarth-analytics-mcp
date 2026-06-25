@@ -1,3 +1,9 @@
+## [1.55.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.55.1...v1.55.2) (2026-06-25)
+
+### Bug Fixes
+
+* **desktop:** Timer interval/limit are top-level Trigger fields, not parameter[] ([d26346e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d26346e3873f742890902599e608d86d003d25f4))
+
 ## [1.55.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.55.0...v1.55.1) (2026-06-25)
 
 ### Bug Fixes
