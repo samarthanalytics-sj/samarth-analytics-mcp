@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, upsertGoogleTagConfig } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, upsertGoogleTagConfig } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
@@ -1165,6 +1165,7 @@ export class GoogleDataService {
     container: { containerId: string; publicId: string; name: string; taggingServerUrls: string[] };
     workspaceId: string;
     client: { clientId: string; name: string };
+    trigger: { triggerId: string; name: string };
     serverTag: { tagId: string; name: string };
   }> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
@@ -1173,14 +1174,22 @@ export class GoogleDataService {
     const workspaceId = await this.defaultWorkspaceId(accountId, container.containerId);
     const parent = `accounts/${accountId}/containers/${container.containerId}/workspaces/${workspaceId}`;
     const clientRes = await gtm.accounts.containers.workspaces.clients.create({ parent, requestBody: buildGa4Client('GA4') });
+    // Create the firing trigger FIRST so the GA4 server tag actually fires (a tag with no
+    // trigger never runs) — a complete, audit-clean setup in one step.
+    const triggerRes = await gtm.accounts.containers.workspaces.triggers.create({
+      parent,
+      requestBody: buildServerAllEventsTrigger('All Events') as unknown as Record<string, unknown>,
+    });
+    const triggerId = triggerRes.data.triggerId ?? '';
     const tagRes = await gtm.accounts.containers.workspaces.tags.create({
       parent,
-      requestBody: buildGa4ServerTag('GA4 - Server', measurementId),
+      requestBody: buildGa4ServerTag('GA4 - Server', measurementId, undefined, triggerId ? [triggerId] : undefined),
     });
     return {
       container,
       workspaceId,
       client: { clientId: clientRes.data.clientId ?? '', name: clientRes.data.name ?? 'GA4' },
+      trigger: { triggerId, name: triggerRes.data.name ?? 'All Events' },
       serverTag: { tagId: tagRes.data.tagId ?? '', name: tagRes.data.name ?? 'GA4 - Server' },
     };
   }

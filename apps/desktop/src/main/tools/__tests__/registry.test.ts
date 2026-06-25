@@ -103,6 +103,7 @@ function fakeData(
         container: { containerId: 'SC1', publicId: 'GTM-SERVER', name, taggingServerUrls: [] },
         workspaceId: 'w1',
         client: { clientId: 'CL1', name: 'GA4' },
+        trigger: { triggerId: 'TR1', name: 'All Events' },
         serverTag: { tagId: 'T1', name: 'GA4 - Server' },
       };
     },

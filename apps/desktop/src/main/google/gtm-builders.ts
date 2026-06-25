@@ -273,20 +273,32 @@ export function buildGa4Client(name: string): GtmClientResource {
 }
 
 /** A server-side GA4 tag (`sgtmgaaw`) — forwards the event the client received on to GA4.
- *  Shape corpus-validated. eventName defaults to the server built-in {{Event Name}} so it
- *  relays whatever event arrived; pass a literal (e.g. "purchase") for a per-event tag.
- *  ep/upToIncludeDropdown='all' forwards all event + user parameters. */
+ *  Shape corpus-validated. eventName is OMITTED when not given so GTM inherits the incoming
+ *  event's event_name (per Google/Stape docs — a blank Event Name relays whatever arrived;
+ *  this also avoids depending on the {{Event Name}} built-in being enabled). Pass a literal
+ *  (e.g. "purchase") for a per-event tag. ep/upToIncludeDropdown='all' forwards all event +
+ *  user parameters. */
 export function buildGa4ServerTag(name: string, measurementId: string, eventName?: string, firingTriggerId?: string[]): GtmTagResource {
+  const parameter: Param[] = [];
+  if (eventName && eventName.trim() !== '') parameter.push(tpl('eventName', eventName));
+  parameter.push(tpl('measurementId', measurementId), tpl('epToIncludeDropdown', 'all'), tpl('upToIncludeDropdown', 'all'));
   return {
     name: sanitizeName(name),
     type: 'sgtmgaaw',
-    parameter: [
-      tpl('eventName', eventName && eventName.trim() !== '' ? eventName : '{{Event Name}}'),
-      tpl('measurementId', measurementId),
-      tpl('epToIncludeDropdown', 'all'),
-      tpl('upToIncludeDropdown', 'all'),
-    ],
     ...(firingTriggerId ? { firingTriggerId } : {}),
+    parameter,
+  };
+}
+
+/** A server "All Events" Custom Event trigger — fires on every event a client produces
+ *  ({{_event}} matches `.*`). Shape corpus-validated (server triggers are CUSTOM_EVENT with a
+ *  customEventFilter on {{_event}}). Needs no built-in variable. This is the firing trigger
+ *  for a forward-all GA4 server tag. PURE. */
+export function buildServerAllEventsTrigger(name: string): GtmTriggerResource {
+  return {
+    name: sanitizeName(name),
+    type: 'customEvent',
+    customEventFilter: [condition('{{_event}}', 'matchRegex', '.*')],
   };
 }
 
