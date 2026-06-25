@@ -17,6 +17,7 @@ import {
   buildAdsConversionServerTag,
   buildAdsConversionLinkerServerTag,
   buildAdsRemarketingServerTag,
+  buildAllowParamsTransformation,
   type TriggerInput,
   type VariableKind,
   type GtmTagResource,
@@ -1035,18 +1036,20 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_variable_typed',
       description:
-        'Create a GTM variable with the correct structure (you do not write raw JSON). kind: "constant" (value), "data_layer" (dataLayerName), "javascript" (javascript — a Custom JavaScript variable, e.g. "function(){return document.title;}" for page title). Requires accountId, containerId, workspaceId, kind, name.',
+        'Create a GTM variable with the correct structure (you do not write raw JSON). kind: "constant" (value), "data_layer" (dataLayerName), "javascript" (javascript — a Custom JavaScript variable, e.g. "function(){return document.title;}" for page title), or "event_data" (SERVER container only — reads keyPath from the incoming event, e.g. keyPath "items" or "x-ga-mp1-tt"; optional defaultValue). Requires accountId, containerId, workspaceId, kind, name.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          kind: { type: 'string', enum: ['constant', 'data_layer', 'javascript'] },
+          kind: { type: 'string', enum: ['constant', 'data_layer', 'javascript', 'event_data'] },
           name: { type: 'string' },
           value: { type: 'string' },
           dataLayerName: { type: 'string' },
           javascript: { type: 'string' },
+          keyPath: { type: 'string' },
+          defaultValue: { type: 'string' },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'kind', 'name'],
         additionalProperties: false,
@@ -1065,6 +1068,8 @@ export function buildToolRegistry(
             value: a.value != null ? s(a.value) : undefined,
             dataLayerName: a.dataLayerName != null ? s(a.dataLayerName) : undefined,
             javascript: a.javascript != null ? s(a.javascript) : undefined,
+            keyPath: a.keyPath != null ? s(a.keyPath) : undefined,
+            defaultValue: a.defaultValue != null ? s(a.defaultValue) : undefined,
           }) as unknown as Record<string, unknown>
         ),
     },
@@ -1143,21 +1148,29 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_transformation',
       description:
-        'Create a TRANSFORMATION in a SERVER container workspace (enrich/redact event data before tags run). `transformation` is a GTM API Transformation resource {name, type, parameter?}. Requires accountId, containerId, workspaceId, transformation.',
+        'Create a TRANSFORMATION in a SERVER container workspace (reshape event data before tags run). EITHER pass name + allowParams (a structured "Allow parameters" transformation — keeps ONLY the listed event params, dropping the rest, e.g. to strip PII), OR a raw `transformation` GTM resource {name, type, parameter?} for any other type. Requires accountId, containerId, workspaceId.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          transformation: { type: 'object', description: 'GTM Transformation resource {name, type, parameter?}' },
+          name: { type: 'string' },
+          allowParams: { type: 'array', items: { type: 'string' }, description: 'Event-param names to KEEP (builds an allow-list transformation)' },
+          transformation: { type: 'object', description: 'Raw GTM Transformation resource {name, type, parameter?} (alternative to allowParams)' },
         },
-        required: ['accountId', 'containerId', 'workspaceId', 'transformation'],
+        required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
       },
       write: true,
-      summarize: (a) => `Create transformation "${s(obj(a.transformation).name)}" in server workspace ${s(a.workspaceId)}`,
-      handler: (a) => data.createGtmTransformation(s(a.accountId), s(a.containerId), s(a.workspaceId), obj(a.transformation)),
+      summarize: (a) =>
+        `Create transformation "${s(a.name) || s(obj(a.transformation).name) || 'allow-params'}" in server workspace ${s(a.workspaceId)}`,
+      handler: (a) => {
+        const allow = Array.isArray(a.allowParams) ? a.allowParams.map(String) : [];
+        const t = allow.length > 0 ? buildAllowParamsTransformation(s(a.name) || 'Allow parameters', allow) : obj(a.transformation);
+        if (!t || Object.keys(t).length === 0) throw new Error('Provide allowParams (an event-param allow-list) or a raw transformation object.');
+        return data.createGtmTransformation(s(a.accountId), s(a.containerId), s(a.workspaceId), t);
+      },
     },
     {
       name: 'bootstrap_server_side_tagging',

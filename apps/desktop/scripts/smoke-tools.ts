@@ -154,7 +154,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
 
 // Build a minimal schema-valid argument object for a tool's inputSchema.
 function synthesize(schema: unknown): unknown {
-  const s = schema as { type?: string; enum?: unknown[]; properties?: Record<string, unknown>; required?: string[] };
+  const s = schema as { type?: string; enum?: unknown[]; properties?: Record<string, unknown>; required?: string[]; items?: unknown };
   if (!s || typeof s !== 'object') return undefined;
   if (Array.isArray(s.enum) && s.enum.length) return s.enum[0];
   switch (s.type) {
@@ -162,7 +162,7 @@ function synthesize(schema: unknown): unknown {
     case 'boolean': return false;
     case 'number':
     case 'integer': return 1;
-    case 'array': return [];
+    case 'array': return s.items ? [synthesize(s.items)] : [];
     case 'object': {
       const out: Record<string, unknown> = {};
       const props = s.properties ?? {};

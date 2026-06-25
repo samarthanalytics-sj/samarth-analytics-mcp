@@ -15,6 +15,7 @@ import {
   buildAdsConversionServerTag,
   buildAdsConversionLinkerServerTag,
   buildAdsRemarketingServerTag,
+  buildAllowParamsTransformation,
   upsertGoogleTagConfig,
   consentTypesFor,
   evaluateConsentGate,
@@ -933,6 +934,30 @@ test('Ads server tag builders emit the corpus-validated sgtm types + key fields'
   assert.equal(rp.find((x) => x.key === 'conversionId')?.value, 'AW-123');
   assert.equal(rp.find((x) => x.key === 'enableDynamicRemarketing')?.value, 'true');
   assert.equal(rp.find((x) => x.key === 'remarketingEventDataSource')?.value, 'EVENT_DATA');
+});
+
+test('buildVariable event_data → server Event Data variable (ed) reading keyPath', () => {
+  const v = buildVariable({ name: 'ed - items', kind: 'event_data', keyPath: 'items' });
+  assert.equal(v.type, 'ed');
+  const p = (v.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(p.find((x) => x.key === 'keyPath')?.value, 'items');
+  assert.equal(p.find((x) => x.key === 'setDefaultValue')?.value, 'false', 'no default → false');
+  // with a default value
+  const wd = buildVariable({ name: 'ed - currency', kind: 'event_data', keyPath: 'currency', defaultValue: 'USD' });
+  const wp = (wd.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(wp.find((x) => x.key === 'setDefaultValue')?.value, 'true');
+  assert.equal(wp.find((x) => x.key === 'defaultValue')?.value, 'USD');
+});
+
+test('buildAllowParamsTransformation → tf_allow_params keeping only the listed params', () => {
+  const t = buildAllowParamsTransformation('Keep ecommerce', ['transaction_id', 'currency', 'value']) as {
+    type: string;
+    parameter: Array<{ key: string; list?: Array<{ map: Array<{ key: string; value: string }> }> }>;
+  };
+  assert.equal(t.type, 'tf_allow_params');
+  const table = t.parameter.find((x) => x.key === 'allowedParamsTable');
+  const kept = (table?.list ?? []).map((m) => m.map.find((x) => x.key === 'allowedParams')!.value);
+  assert.deepEqual(kept, ['transaction_id', 'currency', 'value']);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -597,13 +597,15 @@ export function builtInVarsForTemplates(values: Array<string | undefined>): stri
 
 /* ───────────── Variables ───────────── */
 
-export type VariableKind = 'constant' | 'data_layer' | 'javascript';
+export type VariableKind = 'constant' | 'data_layer' | 'javascript' | 'event_data';
 export interface VariableInput {
   name: string;
   kind: VariableKind;
   value?: string; // constant
   dataLayerName?: string; // data_layer
   javascript?: string; // javascript (custom JS)
+  keyPath?: string; // event_data (server) — the event-data key to read, e.g. "items" or "x-ga-mp1-x"
+  defaultValue?: string; // event_data — value when the key is absent (sets setDefaultValue true)
 }
 export function buildVariable(o: VariableInput): GtmVariableResource {
   switch (o.kind) {
@@ -615,10 +617,36 @@ export function buildVariable(o: VariableInput): GtmVariableResource {
         type: 'v',
         parameter: [tpl('name', o.dataLayerName ?? ''), integer('dataLayerVersion', '2')],
       };
+    case 'event_data': {
+      // Server-container Event Data variable (`ed`) — reads keyPath from the incoming event.
+      // Shape corpus-validated (setDefaultValue + keyPath). Default value is optional.
+      const hasDefault = o.defaultValue !== undefined && o.defaultValue !== '';
+      const parameter: Param[] = [boolean('setDefaultValue', hasDefault), tpl('keyPath', o.keyPath ?? '')];
+      if (hasDefault) parameter.push(tpl('defaultValue', o.defaultValue as string));
+      return { name: o.name, type: 'ed', parameter };
+    }
     case 'javascript':
     default:
       return { name: o.name, type: 'jsm', parameter: [tpl('javascript', o.javascript ?? '')] };
   }
+}
+
+/** Server "Allow parameters" transformation (`tf_allow_params`) — keeps ONLY the listed
+ *  event parameters (drops the rest, e.g. to strip PII before tags run). Shape corpus-
+ *  validated: an allowedParamsTable list of {allowedParams} maps. PURE. */
+export function buildAllowParamsTransformation(name: string, allowedParams: string[]): Record<string, unknown> {
+  return {
+    name: sanitizeName(name),
+    type: 'tf_allow_params',
+    parameter: [
+      boolean('matchingConditionsEnabled', false),
+      {
+        type: 'list',
+        key: 'allowedParamsTable',
+        list: allowedParams.map((p) => ({ type: 'map', map: [tpl('allowedParams', p)] })),
+      },
+    ],
+  };
 }
 
 /* ───────────── Container audit ───────────── */
