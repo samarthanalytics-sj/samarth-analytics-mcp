@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { extractConfiguredGa4Ids, crossCheckMeasurementIds } from '../gtm-ga4-check';
+import { extractConfiguredGa4Ids, crossCheckMeasurementIds, resolveGa4MeasurementIds } from '../gtm-ga4-check';
 import type { ContainerSnapshot } from '../gtm-builders';
 
 let passed = 0;
@@ -61,6 +61,32 @@ test('googtag carrying an AW- id is not a GA4 id', () => {
   const c = extractConfiguredGa4Ids(snap([tag({ name: 'Ads gtag', type: 'googtag', parameter: [{ key: 'tagId', value: 'AW-12345' }] })]));
   assert.equal(c.ids.length, 0);
   assert.equal(c.variableRefs.length, 0);
+});
+
+test('resolveGa4MeasurementIds resolves a {{Constant}} measurement-id reference to its literal value', () => {
+  // The web GA4 config tag references {{GA4 Variable}}, a Constant holding the real id.
+  const snapshot: ContainerSnapshot = {
+    tags: [tag({ name: 'GA4 - Config', type: 'gaawc', parameter: [{ key: 'measurementId', value: '{{GA4 Variable}}' }] })] as never,
+    triggers: [],
+    variables: [
+      { variableId: '1', name: 'GA4 Variable', type: 'c', parameter: [{ key: 'value', value: 'G-123456789' }] },
+      { variableId: '2', name: 'Unrelated', type: 'c', parameter: [{ key: 'value', value: 'hello' }] },
+    ] as never,
+  };
+  const r = resolveGa4MeasurementIds(snapshot);
+  assert.deepEqual(r.ids, ['G-123456789'], 'resolved the Constant-variable id');
+  assert.equal(r.unresolvedRefs.length, 0, 'nothing left unresolved');
+});
+
+test('resolveGa4MeasurementIds reports a non-Constant {{variable}} ref as unresolved', () => {
+  const snapshot: ContainerSnapshot = {
+    tags: [tag({ name: 'GA4 - Config', type: 'gaawc', parameter: [{ key: 'measurementId', value: '{{Lookup MID}}' }] })] as never,
+    triggers: [],
+    variables: [{ variableId: '1', name: 'Lookup MID', type: 'smm', parameter: [] }] as never, // lookup table, not a Constant
+  };
+  const r = resolveGa4MeasurementIds(snapshot);
+  assert.equal(r.ids.length, 0);
+  assert.deepEqual(r.unresolvedRefs, ['{{Lookup MID}}']);
 });
 
 test('crossCheck: matched ids resolve to their property; unmatched are reported', () => {
