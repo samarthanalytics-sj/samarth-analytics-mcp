@@ -1,3 +1,9 @@
+## [1.51.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.50.0...v1.51.0) (2026-06-25)
+
+### Features
+
+* **desktop:** GTM folder tools for the chat — create_gtm_folder + move_gtm_entities_to_folder ([403ce84](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/403ce84dad232675267c3f12275ca02e51e8994e))
+
 ## [1.50.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.49.0...v1.50.0) (2026-06-25)
 
 ### Features
