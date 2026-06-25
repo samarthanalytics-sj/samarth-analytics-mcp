@@ -11,6 +11,8 @@ import {
   triggerBuiltInVars,
   builtInVarsForTemplates,
   buildVariable,
+  findExistingTrigger,
+  customEventNameOf,
   type TriggerInput,
   type VariableKind,
 } from '../google/gtm-builders';
@@ -57,6 +59,10 @@ interface Tool extends LlmToolDef {
   destructive?: boolean;
   /** Human-readable one-liner shown in the approval prompt. */
   summarize?: (args: Record<string, unknown>) => string;
+  /** Runs BEFORE the approval prompt. If it returns a value, that's an "already present"
+   *  short-circuit — the create is skipped (no duplicate, no approval) and the value is
+   *  returned to the model. Return null/undefined to proceed normally. */
+  precheck?: (args: Record<string, unknown>) => Promise<unknown>;
   handler: (args: Record<string, unknown>) => Promise<unknown>;
 }
 
@@ -67,6 +73,27 @@ const obj = (v: unknown): Record<string, unknown> =>
 
 /** One-line truncation for logging tool args/results without flooding the console. */
 const truncForLog = (str: string, n = 600): string => (str.length > n ? `${str.slice(0, n)}…(+${str.length - n} chars)` : str);
+
+/** Precheck helper: is a tag/variable with this name already in the workspace? Returns an
+ *  "already present" payload (so the create is skipped, no approval) or null to proceed. */
+async function findExistingByName(
+  data: GoogleDataService,
+  a: Record<string, unknown>,
+  name: string,
+  kind: 'tag' | 'variable'
+): Promise<unknown> {
+  const want = name.trim().toLowerCase();
+  if (!want) return null;
+  const list =
+    kind === 'tag'
+      ? await data.listGtmTags(s(a.accountId), s(a.containerId), s(a.workspaceId))
+      : await data.listGtmVariables(s(a.accountId), s(a.containerId), s(a.workspaceId));
+  const match = list.find((x) => x.name.trim().toLowerCase() === want);
+  if (!match) return null;
+  const id = kind === 'tag' ? (match as { tagId: string }).tagId : (match as { variableId: string }).variableId;
+  const label = kind === 'tag' ? 'Tag' : 'Variable';
+  return { alreadyExists: true, [kind]: match, message: `${label} "${match.name}" already exists (ID ${id}) — not created.` };
+}
 
 /** Cheap similarity for "did you mean" on an unknown tool name: common-prefix length,
  *  heavily boosted when one name contains the other (catches near-miss/hallucinated
@@ -216,6 +243,21 @@ export function buildToolRegistry(
         additionalProperties: false,
       },
       handler: (a) => data.listGtmTriggers(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+    },
+    {
+      name: 'list_gtm_variables',
+      description: 'List the user-defined variables in a GTM workspace (name + type). Use it to check whether a variable already exists before creating one. Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGtmVariables(s(a.accountId), s(a.containerId), s(a.workspaceId)),
     },
     {
       name: 'audit_gtm_container',
@@ -868,6 +910,7 @@ export function buildToolRegistry(
       write: true,
       summarize: (a) =>
         `Create ${s(a.platform)} tag "${s(a.tagName)}" firing on "${s(obj(a.trigger).name)}" trigger`,
+      precheck: (a) => findExistingByName(data, a, s(a.tagName), 'tag'),
       handler: async (a) => {
         const accountId = s(a.accountId);
         const containerId = s(a.containerId);
@@ -983,6 +1026,7 @@ export function buildToolRegistry(
       },
       write: true,
       summarize: (a) => `Create ${s(a.kind)} variable "${s(a.name)}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name), 'variable'),
       handler: (a) =>
         data.createGtmVariable(
           s(a.accountId),
@@ -1161,6 +1205,7 @@ export function buildToolRegistry(
       },
       write: true,
       summarize: (a) => `Create tag "${s(obj(a.tag).name)}" (type ${s(obj(a.tag).type)}) in workspace ${s(a.workspaceId)}`,
+      precheck: (a) => findExistingByName(data, a, s(obj(a.tag).name), 'tag'),
       handler: (a) => data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), obj(a.tag)),
     },
     {
@@ -1497,6 +1542,7 @@ export function buildToolRegistry(
       write: true,
       summarize: (a) =>
         `Create tag "${s(obj(a.tag).name)}" firing on trigger "${s(obj(a.trigger).name)}" in workspace ${s(a.workspaceId)}`,
+      precheck: (a) => findExistingByName(data, a, s(obj(a.tag).name), 'tag'),
       handler: async (a) => {
         const accountId = s(a.accountId);
         const containerId = s(a.containerId);
@@ -1566,6 +1612,14 @@ export function buildToolRegistry(
       },
       write: true,
       summarize: (a) => `Create trigger "${s(obj(a.trigger).name)}" (type ${s(obj(a.trigger).type)}) in workspace ${s(a.workspaceId)}`,
+      precheck: async (a) => {
+        const t = obj(a.trigger);
+        const existing = await data.listGtmTriggers(s(a.accountId), s(a.containerId), s(a.workspaceId));
+        const match = findExistingTrigger(existing, { name: s(t.name), type: s(t.type), customEventName: customEventNameOf(t) });
+        return match
+          ? { alreadyExists: true, reused: true, trigger: match, message: `Trigger "${match.name}" already exists (ID ${match.triggerId}) — reused, not created.` }
+          : null;
+      },
       handler: (a) => data.createGtmTrigger(s(a.accountId), s(a.containerId), s(a.workspaceId), obj(a.trigger)),
     },
     {
@@ -1584,6 +1638,7 @@ export function buildToolRegistry(
       },
       write: true,
       summarize: (a) => `Create variable "${s(obj(a.variable).name)}" (type ${s(obj(a.variable).type)}) in workspace ${s(a.workspaceId)}`,
+      precheck: (a) => findExistingByName(data, a, s(obj(a.variable).name), 'variable'),
       handler: (a) => data.createGtmVariable(s(a.accountId), s(a.containerId), s(a.workspaceId), obj(a.variable)),
     },
   ];
@@ -1711,6 +1766,15 @@ export function buildToolRegistry(
       }
 
       let effectiveArgs = args ?? {};
+      // Idempotency: if a create tool's target already exists, report it and SKIP — no
+      // duplicate, and (importantly) no approval prompt for a no-op.
+      if (tool.precheck) {
+        const pc = await tool.precheck(effectiveArgs);
+        if (pc) {
+          console.error(`[tool] ${name}: already present → skipped (no create, no approval)`);
+          return JSON.stringify(pc);
+        }
+      }
       if (tool.write) {
         if (!confirm) {
           console.error(`[tool] ${name}: writes disabled (no confirm fn)`);

@@ -7,6 +7,8 @@ import {
   buildTrigger,
   applyTriggerWaitDefaults,
   normalizeTimerTrigger,
+  customEventNameOf,
+  findExistingTrigger,
   buildEnvironmentSnippet,
   consentTypesFor,
   evaluateConsentGate,
@@ -838,6 +840,29 @@ test('normalizeTimerTrigger: no limit → unlimited (no limit field); non-timer 
   assert.equal(noLimit.limit, undefined, 'unlimited → no limit field');
   const other = { name: 'X', type: 'customEvent', customEventFilter: [] };
   assert.deepEqual(normalizeTimerTrigger(other), other, 'non-timer triggers pass through unchanged');
+});
+
+test('customEventNameOf extracts the dataLayer event from a customEvent trigger', () => {
+  const tr = buildTrigger({ name: 'CE - Product View', kind: 'custom_event', eventName: 'product_view' });
+  assert.equal(customEventNameOf(tr as unknown as Record<string, unknown>), 'product_view');
+  assert.equal(customEventNameOf({ type: 'pageview' }), '', 'non-custom-event → empty');
+});
+
+test('findExistingTrigger: matches by name (ci) OR by same custom-event, else undefined', () => {
+  const existing = [
+    { triggerId: '10', name: 'All Pages', type: 'pageview' },
+    { triggerId: '11', name: 'CE - Product View', type: 'customEvent', customEventName: 'product_view' },
+  ];
+  // by name (case-insensitive)
+  assert.equal(findExistingTrigger(existing, { name: 'ce - product view' })?.triggerId, '11');
+  // by same custom event under a DIFFERENT name
+  assert.equal(findExistingTrigger(existing, { name: 'Product View CE', type: 'customEvent', customEventName: 'product_view' })?.triggerId, '11');
+  // a genuinely new event → no match
+  assert.equal(findExistingTrigger(existing, { name: 'CE - Add To Cart', type: 'customEvent', customEventName: 'add_to_cart' }), undefined);
+  // surrounding whitespace is trimmed on the name match
+  assert.equal(findExistingTrigger(existing, { name: '  All Pages  ' })?.triggerId, '10');
+  // an empty proposed name does NOT spuriously match an existing trigger
+  assert.equal(findExistingTrigger(existing, { name: '', type: 'pageview' }), undefined);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -237,6 +237,44 @@ function condition(variable: string, op: string, value: string): Param {
   };
 }
 
+/** The dataLayer event a Custom Event trigger fires on — the arg1 of the {{_event}}
+ *  condition in customEventFilter (e.g. "product_view"). '' if not a custom-event trigger. */
+export function customEventNameOf(trigger: Record<string, unknown>): string {
+  const cef = (trigger as { customEventFilter?: unknown }).customEventFilter;
+  if (!Array.isArray(cef)) return '';
+  for (const cond of cef) {
+    const params = (cond as { parameter?: unknown }).parameter;
+    if (!Array.isArray(params)) continue;
+    let onEvent = false;
+    let val = '';
+    for (const p of params) {
+      const k = (p as { key?: unknown }).key;
+      const v = (p as { value?: unknown }).value;
+      if (k === 'arg0' && String(v ?? '') === '{{_event}}') onEvent = true;
+      if (k === 'arg1') val = String(v ?? '');
+    }
+    if (onEvent && val) return val;
+  }
+  return '';
+}
+
+/** Find an EXISTING trigger that the proposed one would duplicate — matched by name
+ *  (case-insensitive) OR, for Custom Event triggers, by the SAME dataLayer event. Lets the
+ *  create tools reuse it (and skip the approval) instead of making a duplicate. PURE. */
+export function findExistingTrigger(
+  existing: Array<{ triggerId: string; name: string; type?: string; customEventName?: string }>,
+  proposed: { name?: string; type?: string; customEventName?: string }
+): { triggerId: string; name: string } | undefined {
+  const pName = (proposed.name ?? '').trim().toLowerCase();
+  const pEvent = (proposed.customEventName ?? '').trim();
+  const pIsCustomEvent = (proposed.type ?? '') === 'customEvent';
+  return existing.find(
+    (e) =>
+      (pName !== '' && e.name.trim().toLowerCase() === pName) ||
+      (pIsCustomEvent && pEvent !== '' && e.type === 'customEvent' && (e.customEventName ?? '') === pEvent)
+  );
+}
+
 export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video' | 'timer';
 
 /** The standard GTM "Video" built-in variables a YouTube Video tag reports. */
