@@ -1,3 +1,9 @@
+## [1.62.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.62.0...v1.62.1) (2026-06-25)
+
+### Bug Fixes
+
+* **desktop:** derive the web container's GA4 id even when it's a {{Constant variable}} ([fb6a637](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fb6a63778862ea8c1122524a288ac07a5b2f0138))
+
 ## [1.62.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.61.0...v1.62.0) (2026-06-25)
 
 ### Features
