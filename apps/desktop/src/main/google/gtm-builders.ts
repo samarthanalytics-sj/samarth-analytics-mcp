@@ -1355,7 +1355,7 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
       confidence: 'likely',
       category: 'firing',
       message: 'The container has no tagging server URL — the tagging-server host may not be provisioned/deployed yet, so nothing receives requests.',
-      recommendation: 'Provision the tagging server (GTM "Automatically provision", or Cloud Run), then confirm it responds with verify_server_endpoint.',
+      recommendation: 'Record it with set_server_container_tagging_url once you have the server URL (the API CAN write taggingServerUrls), and deploy the host — then confirm it responds with verify_server_endpoint.',
       autoFixable: false,
     });
   }
