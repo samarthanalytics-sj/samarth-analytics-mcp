@@ -1,3 +1,9 @@
+## [1.59.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.58.0...v1.59.0) (2026-06-25)
+
+### Features
+
+* **desktop:** sGTM Phase 3 — Ads server tags via create_server_tag (platform dispatch) ([97a11e7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/97a11e7ff22379f90bfdbef7911318013e150bd5))
+
 ## [1.58.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.57.0...v1.58.0) (2026-06-25)
 
 ### Features
