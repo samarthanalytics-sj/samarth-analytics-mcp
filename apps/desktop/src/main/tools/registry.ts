@@ -260,6 +260,28 @@ export function buildToolRegistry(
       handler: (a) => data.listGtmVariables(s(a.accountId), s(a.containerId), s(a.workspaceId)),
     },
     {
+      name: 'list_gtm_clients',
+      description: 'List the CLIENTS in a SERVER container workspace (server-side GTM — e.g. the GA4 client "gaaw_client" that claims incoming requests). Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGtmClients(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+    },
+    {
+      name: 'list_gtm_transformations',
+      description: 'List the TRANSFORMATIONS in a SERVER container workspace (server-side GTM — they enrich/redact event data before tags run). Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGtmTransformations(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+    },
+    {
       name: 'audit_gtm_container',
       description:
         'Audit a GTM workspace and return ACTIONABLE findings. Returns counts, a severity summary, and an array of findings — each with severity, category, the affected resource, a recommendation, and (for auto-fixable issues) a ready-to-run `fix` { tool, args } you can call directly to resolve it (the workspace ids are already filled in). ' +
@@ -1079,6 +1101,76 @@ export function buildToolRegistry(
           enableDebug: typeof a.enableDebug === 'boolean' ? a.enableDebug : a.enableDebug != null ? s(a.enableDebug) === 'true' : undefined,
           description: a.description != null ? s(a.description) : undefined,
         }),
+    },
+    {
+      name: 'create_server_container',
+      description:
+        'Create a SERVER container (server-side GTM, usageContext "server") in an account. Note: this only creates the CONTAINER — the actual tagging-server HOST (Cloud Run / App Engine) must be provisioned separately (GTM UI "automatically provision tagging server", or gcloud); its URL then appears as the container\'s taggingServerUrls. Requires accountId, name.',
+      inputSchema: {
+        type: 'object',
+        properties: { accountId: { type: 'string' }, name: { type: 'string' } },
+        required: ['accountId', 'name'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create SERVER container "${s(a.name)}" in account ${s(a.accountId)}`,
+      handler: (a) => data.createServerContainer(s(a.accountId), s(a.name)),
+    },
+    {
+      name: 'create_gtm_client',
+      description:
+        'Create a CLIENT in a SERVER container workspace. `client` is a GTM API Client resource {name, type, parameter?}. The GA4 client is type "gaaw_client" (claims incoming GA4/gtag requests). Requires accountId, containerId, workspaceId, client.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          client: { type: 'object', description: 'GTM Client resource {name, type, parameter?}' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'client'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create client "${s(obj(a.client).name)}" (type ${s(obj(a.client).type)}) in server workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.createGtmClient(s(a.accountId), s(a.containerId), s(a.workspaceId), obj(a.client)),
+    },
+    {
+      name: 'create_gtm_transformation',
+      description:
+        'Create a TRANSFORMATION in a SERVER container workspace (enrich/redact event data before tags run). `transformation` is a GTM API Transformation resource {name, type, parameter?}. Requires accountId, containerId, workspaceId, transformation.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          transformation: { type: 'object', description: 'GTM Transformation resource {name, type, parameter?}' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'transformation'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create transformation "${s(obj(a.transformation).name)}" in server workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.createGtmTransformation(s(a.accountId), s(a.containerId), s(a.workspaceId), obj(a.transformation)),
+    },
+    {
+      name: 'bootstrap_server_side_tagging',
+      description:
+        'Set up server-side tagging FROM a web container in one step: creates a SERVER container, then adds a GA4 client + a GA4 server tag (relaying to `measurementId` — pass the web container\'s GA4 Measurement ID) in its default workspace. Returns the new container id + taggingServerUrls. Does NOT deploy the tagging-server host or change the web container — once the server is provisioned and you have its URL, set the web Google tag\'s server_container_url (update_gtm_tag) to send to it. Requires accountId, name, measurementId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          name: { type: 'string' },
+          measurementId: { type: 'string' },
+        },
+        required: ['accountId', 'name', 'measurementId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Bootstrap SERVER container "${s(a.name)}" with a GA4 client + GA4 server tag (→ ${s(a.measurementId)})`,
+      handler: (a) => data.bootstrapServerSideTagging(s(a.accountId), s(a.name), s(a.measurementId)),
     },
     {
       name: 'create_gtm_folder',

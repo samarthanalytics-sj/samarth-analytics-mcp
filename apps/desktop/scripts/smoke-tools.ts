@@ -45,6 +45,7 @@ const MUTATIONS = new Set([
   'enableGtmBuiltInVariables', 'createGtmTrigger', 'createGtmVariable',
   'createGtmFolder', 'moveEntitiesToFolder', 'renameGtmFolder', 'deleteGtmFolder',
   'createGtmEnvironment',
+  'createServerContainer', 'createGtmClient', 'createGtmTransformation', 'bootstrapServerSideTagging',
 ]);
 
 // A snapshot crafted so the audit produces every kind of finding: a paused GA4
@@ -86,6 +87,13 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     createGtmEnvironment: () => r('createGtmEnvironment', { environmentId: '7', name: 'Test', type: 'user', authorizationCode: 'A', url: '', snippet: { head: 'h', body: 'b' } }),
     listGtmTags: () => r('listGtmTags', [{ tagId: '1', name: 'T', type: 'gaawe' }]),
     listGtmVariables: () => r('listGtmVariables', [{ variableId: '1', name: 'V', type: 'jsm' }]),
+    listGtmClients: () => r('listGtmClients', [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }]),
+    listGtmTransformations: () => r('listGtmTransformations', [{ transformationId: '1', name: 'X', type: 'sgtm_transformation' }]),
+    createServerContainer: () => r('createServerContainer', { containerId: 'SC1', publicId: 'GTM-SERVER', name: 'Server', taggingServerUrls: [] }),
+    createGtmClient: () => r('createGtmClient', { clientId: 'CL1', name: 'GA4', type: 'gaaw_client' }),
+    createGtmTransformation: () => r('createGtmTransformation', { transformationId: 'X1', name: 'X', type: 'sgtm_transformation' }),
+    bootstrapServerSideTagging: () =>
+      r('bootstrapServerSideTagging', { container: { containerId: 'SC1', publicId: 'GTM-SERVER', name: 'Server', taggingServerUrls: [] }, workspaceId: 'w1', client: { clientId: 'CL1', name: 'GA4' }, serverTag: { tagId: 'T1', name: 'GA4 - Server' } }),
     listGtmTriggers: () => r('listGtmTriggers', [] as Array<{ triggerId: string; name: string; type: string }>),
     getGtmContainerSnapshot: () => r('getGtmContainerSnapshot', structuredClone(SNAPSHOT)),
     listGa4Accounts: () => r('listGa4Accounts', []),
@@ -193,7 +201,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 38 read tools', readOnlyNames.size === 38, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 40 read tools', readOnlyNames.size === 40, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────
