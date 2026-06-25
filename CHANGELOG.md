@@ -1,3 +1,9 @@
+## [1.53.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.52.2...v1.53.0) (2026-06-25)
+
+### Features
+
+* **desktop:** GA4 ecommerce event-parameter reference + tag/trigger naming in the chat prompt ([75198ba](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/75198baf1d25a0dedcb559f0a88480cdcd7b7960))
+
 ## [1.52.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.52.1...v1.52.2) (2026-06-25)
 
 ### Bug Fixes
