@@ -122,6 +122,12 @@ export interface GtmWorkspaceView {
   path: string;
 }
 
+export interface GtmFolderView {
+  folderId: string;
+  name: string;
+  path: string;
+}
+
 export interface GtmTagView {
   tagId: string;
   name: string;
@@ -235,6 +241,19 @@ export class GoogleDataService {
       name: w.name ?? '(unnamed)',
       path: w.path ?? '',
     }));
+  }
+
+  /** List the folders in a workspace. (The GTM API DOES expose this — folders.list.) */
+  async listGtmFolders(accountId: string, containerId: string, workspaceId: string): Promise<GtmFolderView[]> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const folders = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.folders.list({ parent, pageToken }),
+      (r) => r.data.folder,
+      (r) => r.data.nextPageToken
+    );
+    return folders.map((f) => ({ folderId: f.folderId ?? '', name: f.name ?? '(unnamed)', path: f.path ?? '' }));
   }
 
   async listGtmTags(
@@ -424,12 +443,15 @@ export class GoogleDataService {
     const tagId = ids.tagIds ?? [];
     const triggerId = ids.triggerIds ?? [];
     const variableId = ids.variableIds ?? [];
+    // Only send entity-id params that actually have values — an empty `triggerId=` /
+    // `variableId=` query param makes the API 500 ("internal error"). The path already
+    // identifies the destination folder; the body just echoes it.
     await gtm.accounts.containers.workspaces.folders.move_entities_to_folder({
       path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/folders/${folderId}`,
-      tagId,
-      triggerId,
-      variableId,
-      requestBody: {},
+      ...(tagId.length ? { tagId } : {}),
+      ...(triggerId.length ? { triggerId } : {}),
+      ...(variableId.length ? { variableId } : {}),
+      requestBody: { folderId },
     });
     return { folderId, moved: { tags: tagId.length, triggers: triggerId.length, variables: variableId.length } };
   }
