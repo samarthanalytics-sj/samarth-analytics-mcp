@@ -1172,6 +1172,28 @@ export function buildToolRegistry(
       handler: (a) => data.createGtmClient(s(a.accountId), s(a.containerId), s(a.workspaceId), obj(a.client)),
     },
     {
+      name: 'delete_gtm_client',
+      description:
+        'Delete a CLIENT from a SERVER container workspace (draft, not published). The GTM API DOES support this (workspaces.clients.delete) — do NOT tell the user clients can only be removed in the GTM UI. Useful for removing a duplicate/unused client. Requires accountId, containerId, workspaceId, clientId. Destructive — requires the user to confirm twice; make sure the client is not the only one claiming requests. Optional name is shown in the approval prompt.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          clientId: { type: 'string' },
+          name: { type: 'string', description: 'Client name, for display only.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'clientId'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) =>
+        `Delete client ${a.name ? `"${s(a.name)}" (${s(a.clientId)})` : s(a.clientId)} from server workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.deleteGtmClient(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.clientId)),
+    },
+    {
       name: 'create_gtm_transformation',
       description:
         'Create a TRANSFORMATION in a SERVER container workspace (reshape event data before tags run). EITHER pass name + allowParams (a structured "Allow parameters" transformation — keeps ONLY the listed event params, dropping the rest, e.g. to strip PII), OR a raw `transformation` GTM resource {name, type, parameter?} for any other type. Requires accountId, containerId, workspaceId.',

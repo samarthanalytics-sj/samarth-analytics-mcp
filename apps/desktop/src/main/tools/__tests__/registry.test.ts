@@ -89,6 +89,10 @@ function fakeData(
       calls.push(`createClient:${a}:${c}:${w}:${String(cl.type ?? '')}`);
       return { clientId: 'CL1', name: String(cl.name ?? ''), type: String(cl.type ?? '') };
     },
+    deleteGtmClient: async (_a: string, _c: string, _w: string, clientId: string) => {
+      calls.push(`deleteClient:${clientId}`);
+      return { deleted: true, clientId };
+    },
     createGtmTransformation: async (a: string, c: string, w: string, x: Record<string, unknown>) => {
       calls.push(`createTransformation:${a}:${c}:${w}`);
       return { transformationId: 'X1', name: String(x.name ?? ''), type: String(x.type ?? '') };
@@ -379,7 +383,7 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 72, 'read + write registry has 72 tools');
+    assert.equal(withWrites.list().length, 73, 'read + write registry has 73 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1109,6 +1113,12 @@ async function main(): Promise<void> {
     );
     assert.equal(wired.serverContainerUrl, 'https://sgtm.example.com');
     assert.ok(fd.calls.includes('setWebServerUrl:9:https://sgtm.example.com'));
+
+    // Delete a (duplicate) server client — destructive, two confirms.
+    const dc = seqConfirm(true, true);
+    await buildToolRegistry(fd.data, dc.fn, 'gtm').execute('delete_gtm_client', { accountId: '1', containerId: '2', workspaceId: '3', clientId: '4', name: 'GA4 Client' });
+    assert.equal(dc.calls.length, 2, 'delete client asked twice');
+    assert.ok(fd.calls.includes('deleteClient:4'), 'deleted the duplicate client via the API');
 
     // Set the SERVER container's own tagging URL (the API CAN write taggingServerUrls).
     const tagged = JSON.parse(

@@ -1037,6 +1037,20 @@ export class GoogleDataService {
     return { clientId: res.data.clientId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
+  async deleteGtmClient(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    clientId: string
+  ): Promise<{ deleted: boolean; clientId: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    await gtm.accounts.containers.workspaces.clients.delete({
+      path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/clients/${clientId}`,
+    });
+    return { deleted: true, clientId };
+  }
+
   async listGtmTransformations(
     accountId: string,
     containerId: string,
