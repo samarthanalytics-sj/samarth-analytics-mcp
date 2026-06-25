@@ -106,6 +106,19 @@ function fakeData(
       calls.push(`setWebServerUrl:${tagId}:${url}`);
       return { tagId, name: 'Google Tag', serverContainerUrl: url };
     },
+    getServerContainerSnapshot: async (a: string, c: string, w: string) => {
+      calls.push(`serverSnapshot:${a}:${c}:${w}`);
+      return {
+        taggingServerUrls: [] as string[],
+        clients: [] as Array<{ clientId: string; name: string; type: string }>,
+        transformations: [] as Array<{ transformationId: string; name: string; type: string }>,
+        tags: [{ tagId: '1', name: 'GA4 - Server', type: 'sgtmgaaw', firingTriggerId: [], blockingTriggerId: [], paused: false, parameter: [], consentSettings: null }],
+      };
+    },
+    verifyServerEndpoint: async (url: string) => {
+      calls.push(`verifyEndpoint:${url}`);
+      return { url: `${url}/healthy`, ok: true, status: 200, body: 'ok' };
+    },
     listGa4DataStreams: async (p: string) => {
       calls.push(`ga4Streams:${p}`);
       return [];
@@ -296,6 +309,7 @@ async function main(): Promise<void> {
       'audit_ga4_property',
       'audit_gtm_container',
       'audit_gtm_container_changes',
+      'audit_server_container',
       'check_gtm_measurement_ids',
       'diff_gtm_versions',
       'diff_gtm_workspace_vs_live',
@@ -331,6 +345,7 @@ async function main(): Promise<void> {
       'run_ga4_realtime_report',
       'run_ga4_report',
       'score_ga4_property',
+      'verify_server_endpoint',
     ]);
   });
 
@@ -351,11 +366,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 40, 'read-only registry has 40 tools');
+    assert.equal(readOnly.list().length, 42, 'read-only registry has 42 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 69, 'read + write registry has 69 tools');
+    assert.equal(withWrites.list().length, 71, 'read + write registry has 71 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1109,6 +1124,16 @@ async function main(): Promise<void> {
     assert.equal(xform.type, 'tf_allow_params', 'allowParams → tf_allow_params transformation');
     // neither allowParams nor a raw transformation → clear error
     await assert.rejects(() => reg.execute('create_gtm_transformation', { accountId: '1', containerId: '2', workspaceId: '3' }), /allowParams|transformation/);
+
+    // Phase 5: server-container audit (read) + runtime endpoint check (read) — use `ro`.
+    const srvAudit = JSON.parse(await ro.execute('audit_server_container', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    const am = srvAudit.findings.map((f: { message: string }) => f.message).join(' | ');
+    assert.ok(srvAudit.summary.critical >= 1, 'no client → critical');
+    assert.ok(/no client/i.test(am) && /no tagging server URL/i.test(am), 'flags missing client + tagging URL');
+    assert.ok(/NOT that the tagging server is deployed/i.test(srvAudit.boundary), 'server boundary statement');
+    const verify = JSON.parse(await ro.execute('verify_server_endpoint', { serverUrl: 'https://sgtm.example.com' }));
+    assert.equal(verify.ok, true);
+    assert.ok(verify.url.endsWith('/healthy'), 'probes the /healthy endpoint');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

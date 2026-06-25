@@ -751,7 +751,7 @@ export interface ContainerSnapshot {
   variables: AuditVariable[];
 }
 export interface AuditReport {
-  counts: { tags: number; triggers: number; variables: number; findings: number };
+  counts: { tags: number; triggers: number; variables: number; findings: number; clients?: number; transformations?: number };
   summary: { critical: number; high: number; medium: number; low: number; info: number };
   findings: AuditFinding[];
   /** Container-only boundary statement (state it before the findings). */
@@ -1291,5 +1291,108 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
     boundary: AUDIT_BOUNDARY,
     runtimeRequired: AUDIT_RUNTIME_REQUIRED,
     hasGa4Config: s.tags.some((t) => t.type === 'googtag' || t.type === 'gaawc'),
+  };
+}
+
+/* ───────────── Server-container audit (sGTM) ───────────── */
+
+export interface ServerContainerSnapshot {
+  /** The container's tagging server URL(s) — empty if the host isn't provisioned yet. */
+  taggingServerUrls: string[];
+  clients: Array<{ clientId: string; name: string; type: string }>;
+  tags: AuditTag[];
+  transformations: Array<{ transformationId: string; name: string; type: string }>;
+}
+
+export const AUDIT_SERVER_BOUNDARY =
+  'Server-container audit: this proves the server CONFIGURATION (a client to claim requests, server tags with their destination ids, no silent gaps) — NOT that the tagging server is deployed/reachable or that data actually flows. Confirm the live server with verify_server_endpoint, the web container\'s server_container_url, and GTM Preview on the server container.';
+
+export const AUDIT_SERVER_RUNTIME_REQUIRED: string[] = [
+  'Server reachable — is the tagging-server host deployed and responding (GET <url>/healthy)?',
+  'Web→server flow — is the web Google tag\'s server_container_url pointed at this server, so requests actually arrive?',
+  'Client claim — on a live request, does the GA4 client claim it and do the server tags fire (GTM Preview on the server container)?',
+];
+
+/** The Google destination server-tag types — each depends on the GA4 (gaaw) client
+ *  claiming the incoming gtag/GA4 request, so any of them implies a gaaw_client is needed. */
+const GOOGLE_SERVER_TAG_TYPES = new Set(['sgtmgaaw', 'sgtmadsct', 'sgtmadscl', 'sgtmadsremarket']);
+
+/** Audit a SERVER container: a client must claim requests, server tags need their
+ *  destination id + a firing trigger and shouldn't be paused, and the host should be
+ *  provisioned. Returns the same AuditReport shape as the web audit. PURE. */
+export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
+  const findings: AuditFinding[] = [];
+  const push = (f: Omit<AuditFinding, 'confidence'> & { confidence?: AuditFinding['confidence'] }): void => {
+    findings.push({ ...f, confidence: f.confidence ?? confidenceFor(f.category) });
+  };
+  const hasGa4Client = s.clients.some((c) => c.type === 'gaaw_client');
+
+  if (s.clients.length === 0) {
+    push({
+      severity: 'critical',
+      confidence: 'certain',
+      category: 'firing',
+      message: 'This server container has NO client — nothing claims incoming requests, so no server tag can ever run.',
+      recommendation: 'Add a client (a GA4 client claims GA4/gtag requests): bootstrap_server_side_tagging or create_gtm_client.',
+      autoFixable: false,
+    });
+  } else if (!hasGa4Client && s.tags.some((t) => GOOGLE_SERVER_TAG_TYPES.has(t.type))) {
+    push({
+      severity: 'high',
+      confidence: 'certain',
+      category: 'ga4',
+      // Ads server tags also depend on the GA4/gtag client claiming the incoming request —
+      // not just GA4 server tags. Without a gaaw_client none of them ever see an event.
+      message: 'Google server tags (GA4 / Ads) exist but there is no GA4 client (gaaw_client) to claim the incoming gtag/GA4 requests they react to — they will not be processed.',
+      recommendation: 'Add a GA4 client (create_gtm_client with type gaaw_client).',
+      autoFixable: false,
+    });
+  }
+
+  if (!s.taggingServerUrls.length) {
+    push({
+      severity: 'high',
+      confidence: 'likely',
+      category: 'firing',
+      message: 'The container has no tagging server URL — the tagging-server host may not be provisioned/deployed yet, so nothing receives requests.',
+      recommendation: 'Provision the tagging server (GTM "Automatically provision", or Cloud Run), then confirm it responds with verify_server_endpoint.',
+      autoFixable: false,
+    });
+  }
+
+  for (const t of s.tags) {
+    const resource = { kind: 'tag' as const, id: t.tagId, name: t.name };
+    const params = Array.isArray(t.parameter) ? t.parameter : [];
+    const has = (k: string): boolean => params.some((p) => (p as { key?: string; value?: unknown }).key === k && Boolean((p as { value?: unknown }).value));
+    if (!t.firingTriggerId || t.firingTriggerId.length === 0) {
+      push({ severity: 'high', category: 'firing', resource, message: `Server tag "${t.name}" has no firing trigger — it never fires.`, recommendation: 'Add a firing trigger (e.g. a Custom Event matching the events it should handle).', autoFixable: false });
+    }
+    if (t.paused) {
+      push({ severity: 'high', category: 'paused', resource, message: `Server tag "${t.name}" is PAUSED — it sends nothing while paused.`, recommendation: 'Unpause it if it should be live.', autoFixable: true, fix: { tool: 'set_gtm_tag_paused', args: { tagId: t.tagId, paused: false, name: t.name } } });
+    }
+    if (t.type === 'sgtmgaaw' && !has('measurementId')) {
+      push({ severity: 'high', category: 'ga4', resource, message: `GA4 server tag "${t.name}" has no Measurement ID — it forwards nothing to GA4.`, recommendation: 'Set its Measurement ID (G-XXXXXXX or a {{variable}}).', autoFixable: false });
+    }
+    if (t.type === 'sgtmadsct' && (!has('conversionId') || !has('conversionLabel'))) {
+      push({ severity: 'high', category: 'ga4', resource, message: `Google Ads conversion server tag "${t.name}" is missing its Conversion ID and/or Label — it records no conversion.`, recommendation: 'Set conversionId (AW-…) and conversionLabel.', autoFixable: false });
+    }
+    if (t.type === 'sgtmadsremarket' && !has('conversionId')) {
+      push({ severity: 'high', category: 'ga4', resource, message: `Google Ads remarketing server tag "${t.name}" has no Conversion ID.`, recommendation: 'Set its conversionId (AW-…).', autoFixable: false });
+    }
+  }
+
+  const nameCounts = new Map<string, number>();
+  for (const t of s.tags) nameCounts.set(t.name, (nameCounts.get(t.name) ?? 0) + 1);
+  for (const [name, c] of nameCounts) if (c > 1) push({ severity: 'medium', category: 'naming', message: `Duplicate server-tag name "${name}" (${c} tags) — hard to tell them apart.`, recommendation: 'Rename so each tag is uniquely identifiable.', autoFixable: false });
+
+  const summary = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  for (const f of findings) summary[f.severity]++;
+  return {
+    counts: { tags: s.tags.length, triggers: 0, variables: 0, clients: s.clients.length, transformations: s.transformations.length, findings: findings.length },
+    summary,
+    findings,
+    boundary: AUDIT_SERVER_BOUNDARY,
+    runtimeRequired: AUDIT_SERVER_RUNTIME_REQUIRED,
+    hasGa4Config: hasGa4Client,
   };
 }

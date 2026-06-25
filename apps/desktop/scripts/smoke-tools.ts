@@ -96,6 +96,14 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     bootstrapServerSideTagging: () =>
       r('bootstrapServerSideTagging', { container: { containerId: 'SC1', publicId: 'GTM-SERVER', name: 'Server', taggingServerUrls: [] }, workspaceId: 'w1', client: { clientId: 'CL1', name: 'GA4' }, serverTag: { tagId: 'T1', name: 'GA4 - Server' } }),
     setWebServerContainerUrl: () => r('setWebServerContainerUrl', { tagId: '1', name: 'Google Tag', serverContainerUrl: 'https://sgtm.example.com' }),
+    getServerContainerSnapshot: () =>
+      r('getServerContainerSnapshot', {
+        taggingServerUrls: ['https://sgtm.example.com'],
+        clients: [{ clientId: '1', name: 'GA4 Client', type: 'gaaw_client' }],
+        tags: [{ tagId: '1', name: 'GA4 - Server', type: 'sgtmgaaw', firingTriggerId: ['10'], blockingTriggerId: [], paused: false, parameter: [{ type: 'template', key: 'measurementId', value: 'G-1' }], consentSettings: null }],
+        transformations: [],
+      }),
+    verifyServerEndpoint: () => r('verifyServerEndpoint', { url: 'https://sgtm.example.com/healthy', ok: true, status: 200, body: 'ok' }),
     listGtmTriggers: () => r('listGtmTriggers', [] as Array<{ triggerId: string; name: string; type: string }>),
     getGtmContainerSnapshot: () => r('getGtmContainerSnapshot', structuredClone(SNAPSHOT)),
     listGa4Accounts: () => r('listGa4Accounts', []),
@@ -204,7 +212,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 40 read tools', readOnlyNames.size === 40, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 42 read tools', readOnlyNames.size === 42, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────

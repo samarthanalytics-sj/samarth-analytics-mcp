@@ -16,6 +16,7 @@ import {
   buildAdsConversionLinkerServerTag,
   buildAdsRemarketingServerTag,
   buildAllowParamsTransformation,
+  auditServerContainer,
   upsertGoogleTagConfig,
   consentTypesFor,
   evaluateConsentGate,
@@ -958,6 +959,53 @@ test('buildAllowParamsTransformation → tf_allow_params keeping only the listed
   const table = t.parameter.find((x) => x.key === 'allowedParamsTable');
   const kept = (table?.list ?? []).map((m) => m.map.find((x) => x.key === 'allowedParams')!.value);
   assert.deepEqual(kept, ['transaction_id', 'currency', 'value']);
+});
+
+test('auditServerContainer flags missing client, blank ids, no trigger, paused, no tagging URL', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: [],
+    clients: [],
+    transformations: [],
+    tags: [
+      // GA4 server tag with NO measurementId and NO firing trigger
+      { tagId: '1', name: 'GA4 - Server', type: 'sgtmgaaw', firingTriggerId: [], blockingTriggerId: [], paused: false, parameter: [], consentSettings: null },
+      // Ads conversion missing conversionLabel, and PAUSED
+      { tagId: '2', name: 'Ads - Purchase', type: 'sgtmadsct', firingTriggerId: ['9'], blockingTriggerId: [], paused: true, parameter: [{ type: 'template', key: 'conversionId', value: 'AW-1' }], consentSettings: null },
+    ],
+  });
+  const msgs = rep.findings.map((f) => f.message).join(' | ');
+  assert.ok(rep.summary.critical >= 1, 'no client → a critical');
+  assert.ok(/no client/i.test(msgs), 'names the missing-client problem');
+  assert.ok(/no tagging server URL/i.test(msgs), 'flags missing tagging URL');
+  assert.ok(/no Measurement ID/i.test(msgs), 'flags GA4 tag with blank measurement id');
+  assert.ok(/never fires/i.test(msgs), 'flags the tag with no firing trigger');
+  assert.ok(/Conversion ID and\/or Label/i.test(msgs), 'flags incomplete Ads conversion');
+  assert.ok(/PAUSED/i.test(msgs), 'flags the paused server tag');
+  // boundary makes the config-vs-runtime line explicit
+  assert.ok(/NOT that the tagging server is deployed/i.test(rep.boundary));
+});
+
+test('auditServerContainer catches an Ads-only container with a non-GA4 client (no gaaw_client)', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'Some other client', type: 'measurement_protocol' }], // not gaaw_client
+    transformations: [],
+    tags: [{ tagId: '2', name: 'Ads - Purchase', type: 'sgtmadsct', firingTriggerId: ['9'], blockingTriggerId: [], paused: false, parameter: [{ type: 'template', key: 'conversionId', value: 'AW-1' }, { type: 'template', key: 'conversionLabel', value: 'L' }], consentSettings: null }],
+  });
+  const msgs = rep.findings.map((f) => f.message).join(' | ');
+  assert.ok(/no GA4 client \(gaaw_client\)/i.test(msgs), 'flags missing gaaw_client even when only Ads server tags exist');
+});
+
+test('auditServerContainer is quiet on a healthy server container', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4 Client', type: 'gaaw_client' }],
+    transformations: [],
+    tags: [{ tagId: '1', name: 'GA4 - Server', type: 'sgtmgaaw', firingTriggerId: ['10'], blockingTriggerId: [], paused: false, parameter: [{ type: 'template', key: 'measurementId', value: 'G-1' }], consentSettings: null }],
+  });
+  assert.equal(rep.summary.critical, 0);
+  assert.equal(rep.summary.high, 0);
+  assert.equal(rep.hasGa4Config, true, 'GA4 client present');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
