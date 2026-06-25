@@ -1,3 +1,9 @@
+## [1.60.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.59.0...v1.60.0) (2026-06-25)
+
+### Features
+
+* **desktop:** sGTM Phase 4 — Event Data variables, allow-params transformation, consent note ([faf8371](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/faf837103fcc5fbb2dc14dbe3b2569cc6ceefb3d))
+
 ## [1.59.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.58.0...v1.59.0) (2026-06-25)
 
 ### Features
