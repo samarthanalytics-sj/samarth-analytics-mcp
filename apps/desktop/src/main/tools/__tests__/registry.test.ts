@@ -281,6 +281,7 @@ async function main(): Promise<void> {
       'list_ga4_properties',
       'list_gtm_accounts',
       'list_gtm_containers',
+      'list_gtm_environments',
       'list_gtm_folders',
       'list_gtm_tags',
       'list_gtm_triggers',
@@ -309,11 +310,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 36, 'read-only registry has 36 tools');
+    assert.equal(readOnly.list().length, 37, 'read-only registry has 37 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 58, 'read + write registry has 58 tools');
+    assert.equal(withWrites.list().length, 60, 'read + write registry has 60 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -951,6 +952,35 @@ async function main(): Promise<void> {
     const cd = seqConfirm(true, false);
     await buildToolRegistry(data, cd.fn, 'gtm').execute('delete_gtm_folder', { accountId: '1', containerId: '2', workspaceId: '3', folderId: 'f1' });
     assert.equal(calls.length, 0, 'no delete when the final confirmation is declined');
+  });
+
+  await test('environment tools: list (read) + create (write) return the install snippet', async () => {
+    const calls: string[] = [];
+    const env = (id: string, name: string) => ({
+      environmentId: id,
+      name,
+      type: 'user',
+      authorizationCode: 'AUTH_' + id,
+      url: '',
+      snippet: { head: `id=GTM-X&gtm_auth=AUTH_${id}&gtm_preview=env-${id}`, body: 'noscript' },
+    });
+    const data = {
+      listGtmEnvironments: async () => { calls.push('list'); return [env('5', 'Live'), env('7', 'Test')]; },
+      createGtmEnvironment: async (_a: string, _c: string, name: string) => { calls.push('create:' + name); return env('7', name); },
+    } as unknown as GoogleDataService;
+
+    // list is read-only (no confirm needed); create is a confirm-gated write.
+    const envs = JSON.parse(await buildToolRegistry(data).execute('list_gtm_environments', { accountId: '1', containerId: '2' }));
+    assert.equal(envs.length, 2);
+    assert.ok(envs[1].snippet.head.includes('gtm_preview=env-7'), 'snippet carries gtm_preview=env-<id>');
+    assert.equal(buildToolRegistry(data).list().some((t) => t.name === 'create_gtm_environment'), false, 'create is hidden read-only');
+
+    const created = JSON.parse(
+      await buildToolRegistry(data, approveAsIs, 'gtm').execute('create_gtm_environment', { accountId: '1', containerId: '2', name: 'Test' }),
+    );
+    assert.equal(created.environmentId, '7');
+    assert.ok(created.snippet.head.includes('gtm_auth=AUTH_7'), 'created env returns its install snippet');
+    assert.deepEqual(calls, ['list', 'create:Test']);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

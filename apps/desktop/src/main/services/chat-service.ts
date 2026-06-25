@@ -165,6 +165,7 @@ export class ChatService {
           '"Check Validation" (checkValidation) — leave them OFF/unticked by default (simply omit those fields, ' +
           'or set them to boolean "false"). Only enable them (boolean "true", and waitForTagsTimeout for the wait) ' +
           'if the user EXPLICITLY asks to wait for tags or check validation. ' +
+          'ENVIRONMENTS: the GTM API DOES manage environments — to create a Test/preview environment and return its install snippet (the container snippet plus gtm_auth, gtm_preview=env-<id>, gtm_cookies_win), call create_gtm_environment; to list existing environments with their tokens + snippets, list_gtm_environments. Never tell the user environments can only be set up in the GTM UI. ' +
           GA4_TAG_NAMING +
           GA4_ECOMMERCE_REFERENCE +
           GTM_AUDIT_METHODOLOGY +

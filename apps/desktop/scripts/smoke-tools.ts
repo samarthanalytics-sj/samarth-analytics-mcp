@@ -44,6 +44,7 @@ const MUTATIONS = new Set([
   'deleteGtmTag', 'deleteGtmTrigger', 'deleteGtmVariable',
   'enableGtmBuiltInVariables', 'createGtmTrigger', 'createGtmVariable',
   'createGtmFolder', 'moveEntitiesToFolder', 'renameGtmFolder', 'deleteGtmFolder',
+  'createGtmEnvironment',
 ]);
 
 // A snapshot crafted so the audit produces every kind of finding: a paused GA4
@@ -81,6 +82,8 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     listGtmContainers: () => r('listGtmContainers', [{ containerId: '2', name: 'Web', publicId: 'GTM-X', path: '' }]),
     listGtmWorkspaces: () => r('listGtmWorkspaces', [{ workspaceId: '3', name: 'Default', path: '' }]),
     listGtmFolders: () => r('listGtmFolders', [{ folderId: '12', name: 'Marketing', path: '' }]),
+    listGtmEnvironments: () => r('listGtmEnvironments', [{ environmentId: '7', name: 'Test', type: 'user', authorizationCode: 'A', url: '', snippet: { head: 'h', body: 'b' } }]),
+    createGtmEnvironment: () => r('createGtmEnvironment', { environmentId: '7', name: 'Test', type: 'user', authorizationCode: 'A', url: '', snippet: { head: 'h', body: 'b' } }),
     listGtmTags: () => r('listGtmTags', [{ tagId: '1', name: 'T', type: 'gaawe' }]),
     listGtmTriggers: () => r('listGtmTriggers', [] as Array<{ triggerId: string; name: string; type: string }>),
     getGtmContainerSnapshot: () => r('getGtmContainerSnapshot', structuredClone(SNAPSHOT)),
@@ -189,7 +192,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 36 read tools', readOnlyNames.size === 36, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 37 read tools', readOnlyNames.size === 37, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────
