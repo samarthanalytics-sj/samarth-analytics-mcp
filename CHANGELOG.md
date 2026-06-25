@@ -1,3 +1,9 @@
+## [1.55.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.54.0...v1.55.0) (2026-06-25)
+
+### Features
+
+* **desktop:** copyable code boxes for snippets in chat ([bb383e0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bb383e0399275fe210ddedc795f41940ea434eb7))
+
 ## [1.54.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.53.0...v1.54.0) (2026-06-25)
 
 ### Features
