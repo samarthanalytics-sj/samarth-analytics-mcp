@@ -984,6 +984,55 @@ export function buildToolRegistry(
       handler: (a) => data.createGtmWorkspace(s(a.accountId), s(a.containerId), s(a.name)),
     },
     {
+      name: 'create_gtm_folder',
+      description:
+        'Create a folder in a GTM workspace to organise tags/triggers/variables. Folders are PURELY organisational — they do not change what fires. Requires accountId, containerId, workspaceId, name. To then file items into it, call move_gtm_entities_to_folder with the returned folderId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'name'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create GTM folder "${s(a.name)}" in workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.createGtmFolder(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.name)),
+    },
+    {
+      name: 'move_gtm_entities_to_folder',
+      description:
+        'Move tags, triggers, and/or variables into a GTM folder (organisational only — does NOT change firing). Requires accountId, containerId, workspaceId, folderId, and at least one of tagIds / triggerIds / variableIds (arrays of ids). To file all GA4 tags: list_gtm_tags, keep the gaawe/gaawc/googtag ids, create_gtm_folder, then call this with those tagIds.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          folderId: { type: 'string' },
+          tagIds: { type: 'array', items: { type: 'string' } },
+          triggerIds: { type: 'array', items: { type: 'string' } },
+          variableIds: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'folderId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => {
+        const n = (v: unknown): number => (Array.isArray(v) ? v.length : 0);
+        return `Move ${n(a.tagIds)} tag(s), ${n(a.triggerIds)} trigger(s), ${n(a.variableIds)} variable(s) into folder ${s(a.folderId)}`;
+      },
+      handler: (a) =>
+        data.moveEntitiesToFolder(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.folderId), {
+          tagIds: Array.isArray(a.tagIds) ? a.tagIds.map(String) : [],
+          triggerIds: Array.isArray(a.triggerIds) ? a.triggerIds.map(String) : [],
+          variableIds: Array.isArray(a.variableIds) ? a.variableIds.map(String) : [],
+        }),
+    },
+    {
       name: 'create_gtm_tag',
       description:
         'Create a tag in a GTM workspace (draft). `tag` is a GTM API Tag resource ' +
