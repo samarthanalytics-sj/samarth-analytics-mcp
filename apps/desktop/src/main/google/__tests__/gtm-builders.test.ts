@@ -6,6 +6,7 @@ import {
   buildCustomHtmlTag,
   buildTrigger,
   applyTriggerWaitDefaults,
+  normalizeTimerTrigger,
   buildEnvironmentSnippet,
   consentTypesFor,
   evaluateConsentGate,
@@ -798,6 +799,36 @@ test('buildEnvironmentSnippet embeds gtm_auth + gtm_preview=env-<id> + the publi
   assert.ok(head.includes('&gtm_preview=env-7'), 'gtm_preview is env-<environmentId>');
   assert.ok(head.includes('&gtm_cookies_win=x'), 'gtm_cookies_win');
   assert.ok(body.includes('ns.html?id=GTM-ABC123') && body.includes('&gtm_auth=AUTH_TOKEN_XYZ'), 'noscript iframe carries the same params');
+});
+
+test('buildTrigger timer: interval + limit + eventName go into parameter[]', () => {
+  const t = buildTrigger({ name: 'Timer - 30s', kind: 'timer', intervalMs: 30000 });
+  assert.equal(t.type, 'timer');
+  const p = (t.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(p.find((x) => x.key === 'eventName')?.value, 'gtm.timer');
+  assert.equal(p.find((x) => x.key === 'interval')?.value, '30000');
+});
+
+test('normalizeTimerTrigger: migrates top-level interval/limit into parameter[] (the blank-field bug)', () => {
+  // The model put interval/limit at the TOP level → GTM showed blank fields. Normalize it.
+  const fixed = normalizeTimerTrigger({ name: 'T', type: 'timer', interval: '30000', limit: '5' }) as {
+    parameter?: Array<{ key: string; value: string }>;
+    interval?: unknown;
+    limit?: unknown;
+  };
+  const p = fixed.parameter ?? [];
+  assert.equal(p.find((x) => x.key === 'interval')?.value, '30000', 'interval moved into parameter[]');
+  assert.equal(p.find((x) => x.key === 'limit')?.value, '5', 'limit moved into parameter[]');
+  assert.equal(p.find((x) => x.key === 'eventName')?.value, 'gtm.timer', 'eventName defaulted');
+  assert.equal(fixed.interval, undefined, 'stray top-level interval removed');
+  assert.equal(fixed.limit, undefined, 'stray top-level limit removed');
+});
+
+test('normalizeTimerTrigger: no limit value → unlimited (no limit param); non-timer untouched', () => {
+  const noLimit = normalizeTimerTrigger({ name: 'T', type: 'timer', interval: '5000' }) as { parameter?: Array<{ key: string }> };
+  assert.equal((noLimit.parameter ?? []).some((x) => x.key === 'limit'), false, 'unlimited → no limit param');
+  const other = { name: 'X', type: 'customEvent', customEventFilter: [] };
+  assert.deepEqual(normalizeTimerTrigger(other), other, 'non-timer triggers pass through unchanged');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

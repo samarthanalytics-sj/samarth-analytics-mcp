@@ -229,7 +229,7 @@ function condition(variable: string, op: string, value: string): Param {
   };
 }
 
-export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video';
+export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video' | 'timer';
 
 /** The standard GTM "Video" built-in variables a YouTube Video tag reports. */
 export const VIDEO_BUILT_IN_VARS = [
@@ -251,6 +251,10 @@ export interface TriggerInput {
   formClassesOperator?: string;
   /** For custom_event: the dataLayer event name. */
   eventName?: string;
+  /** For timer: fire every N milliseconds (required). */
+  intervalMs?: number | string;
+  /** For timer: max number of times to fire (omit/empty = unlimited). */
+  limit?: number | string;
 }
 /** GTM defaults "Wait for Tags" + "Check Validation" to ON for linkClick ("Just Links")
  *  and formSubmission triggers — which delays the click/submit and skips some events.
@@ -328,10 +332,55 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
           boolean('fixMissingApi', true),
         ],
       };
+    case 'timer': {
+      // GTM Timer trigger: eventName (gtm.timer), interval (ms), limit (count; omit =
+      // unlimited) all live in parameter[] as template params. The conditions ("Some
+      // Timers") would go in autoEventFilter; the common case is All Timers (no filter).
+      const params: Param[] = [tpl('eventName', o.eventName || 'gtm.timer')];
+      if (o.intervalMs !== undefined && String(o.intervalMs) !== '') params.push(tpl('interval', String(o.intervalMs)));
+      if (o.limit !== undefined && String(o.limit) !== '') params.push(tpl('limit', String(o.limit)));
+      return { name: sanitizeName(o.name), type: 'timer', parameter: params };
+    }
     case 'pageview':
     default:
       return { name: sanitizeName(o.name), type: 'pageview' };
   }
+}
+
+/** Normalize a raw Timer trigger so interval/limit/eventName always end up where GTM reads
+ *  them — in parameter[] as template params — even if the model put them at the top level
+ *  (a common mistake that leaves the GTM UI's Interval/Limit fields BLANK). eventName
+ *  defaults to gtm.timer; interval/limit are kept only when a value is present (no value =
+ *  unlimited, matching the UI). PURE; applied at the create funnel for the raw tool path. */
+export function normalizeTimerTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
+  if (String((trigger as { type?: unknown }).type ?? '') !== 'timer') return trigger;
+  const out: Record<string, unknown> = { ...trigger };
+  const params = Array.isArray(out.parameter) ? [...(out.parameter as Param[])] : [];
+  const fromParam = (k: string): string | undefined => {
+    const p = params.find((x) => (x as { key?: unknown }).key === k) as { value?: unknown } | undefined;
+    return p && p.value != null ? String(p.value) : undefined;
+  };
+  const fromTop = (v: unknown): string | undefined => {
+    if (v == null) return undefined;
+    if (typeof v === 'object') {
+      const o = v as { value?: unknown };
+      return o.value != null ? String(o.value) : undefined;
+    }
+    return String(v);
+  };
+  const eventName = fromParam('eventName') ?? fromTop(out.eventName) ?? 'gtm.timer';
+  const interval = fromParam('interval') ?? fromTop(out.interval);
+  const limit = fromParam('limit') ?? fromTop(out.limit);
+  const others = params.filter((x) => !['eventName', 'interval', 'limit'].includes(String((x as { key?: unknown }).key ?? '')));
+  const rebuilt: Param[] = [...others, tpl('eventName', eventName)];
+  if (interval !== undefined && interval !== '') rebuilt.push(tpl('interval', interval));
+  if (limit !== undefined && limit !== '') rebuilt.push(tpl('limit', limit));
+  out.parameter = rebuilt;
+  // Remove the stray top-level fields GTM doesn't accept on a Trigger resource.
+  delete out.interval;
+  delete out.limit;
+  delete out.eventName;
+  return out;
 }
 
 /** Built-in variables a trigger needs (so we can auto-enable them). */
