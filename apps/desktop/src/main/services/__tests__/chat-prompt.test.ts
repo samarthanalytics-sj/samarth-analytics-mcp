@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { dateContextLine, GTM_AUDIT_METHODOLOGY } from '../chat-service';
+import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE } from '../chat-service';
 
 let passed = 0;
 let failed = 0;
@@ -39,6 +39,21 @@ test('GTM_AUDIT_METHODOLOGY carries the Audit-Brain essentials', () => {
   assert.ok(/Hygiene[\s\S]*NEVER leads/i.test(m), 'orders by impact — hygiene never leads');
   assert.ok(/denied consent signal correctly BLOCKING a tag is correct/i.test(m), 'has the denied-pass false-positive guard');
   assert.ok(/ad_user_data/.test(m) && /ad_personalization/.test(m), 'names the four Consent Mode v2 signals');
+});
+
+test('GA4_TAG_NAMING defines the "GA4 - Event - <Name> Tag" / "<Name> Trigger" format', () => {
+  const m = GA4_TAG_NAMING;
+  assert.ok(m.includes('GA4 - Event - <Name> Tag'), 'tag-name format');
+  assert.ok(m.includes('<Name> Trigger'), 'trigger-name format');
+  assert.ok(/Add To Cart Tag/.test(m) && /Add To Cart Trigger/.test(m), 'worked example');
+});
+
+test('GA4_ECOMMERCE_REFERENCE maps each ecommerce event to its parameters', () => {
+  const m = GA4_ECOMMERCE_REFERENCE;
+  assert.ok(/add_to_cart[\s\S]*items, value, currency/.test(m), 'add_to_cart → items/value/currency');
+  assert.ok(m.includes('purchase, refund → items, transaction_id, value, tax, shipping, currency, coupon'), 'purchase/refund row');
+  assert.ok(m.includes('view_promotion, select_promotion → creative_name, creative_slot, promotion_id, promotion_name, items'), 'promotion row');
+  assert.ok(/ecommerce\.items/.test(m) && /Custom Event trigger/i.test(m), 'reads from the ecommerce data layer + Custom Event trigger');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
