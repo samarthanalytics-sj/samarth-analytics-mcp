@@ -1,3 +1,9 @@
+## [1.58.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.57.0...v1.58.0) (2026-06-25)
+
+### Features
+
+* **desktop:** sGTM Phase 2 — web→server wiring (set_web_server_container_url) ([42d7fe1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/42d7fe1a71911ad4c93579be368d9e8cac6795ec))
+
 ## [1.57.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.56.0...v1.57.0) (2026-06-25)
 
 ### Features
