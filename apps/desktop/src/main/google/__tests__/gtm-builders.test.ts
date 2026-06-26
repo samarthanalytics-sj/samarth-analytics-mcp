@@ -15,6 +15,7 @@ import {
   buildServerAllEventsTrigger,
   buildMetaEmqVariables,
   buildMetaPixelTag,
+  buildMetaCapiServerTag,
   metaStandardEvent,
   META_EVENT_OBJECT_PROPERTIES,
   normalizeCustomEventName,
@@ -1113,6 +1114,23 @@ test('buildMetaPixelTag: objectProperties become an objectPropertyList of {name,
   assert.equal(list.length, 2, 'blank-name row dropped');
   assert.equal(list[0].map.find((m) => m.key === 'name')?.value, 'value');
   assert.equal(list[0].map.find((m) => m.key === 'value')?.value, '{{Ecommerce Value}}');
+});
+
+test('buildMetaCapiServerTag: Stape FB CAPI tag with EMQ-tuned defaults', () => {
+  const t = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - AddToCart Tag', '{{Facebook Pixel ID}}', '{{Facebook Api Token}}', 'add to cart', { firingTriggerId: ['5'] });
+  assert.equal(t.type, 'cvt_5TP8W');
+  const p = (t.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(p.find((x) => x.key === 'pixelId')?.value, '{{Facebook Pixel ID}}');
+  assert.equal(p.find((x) => x.key === 'accessToken')?.value, '{{Facebook Api Token}}');
+  assert.equal(p.find((x) => x.key === 'actionSource')?.value, 'website');
+  assert.equal(p.find((x) => x.key === 'enableEventEnhancement')?.value, 'true', 'Event Enhancement on for EMQ');
+  assert.equal(p.find((x) => x.key === 'generateFbp')?.value, 'true');
+  assert.equal(p.find((x) => x.key === 'inheritEventName')?.value, 'false', 'Override for a standard event');
+  assert.equal(p.find((x) => x.key === 'eventNameStandard')?.value, 'AddToCart', 'free text canonicalized');
+  assert.deepEqual(t.firingTriggerId, ['5']);
+  // non-standard event → inherit the incoming event_name
+  const c = buildMetaCapiServerTag('cvt_5TP8W', 'x', 'P', 'T', 'my_custom');
+  assert.equal(((c.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'inheritEventName')?.value, 'true');
 });
 
 test('buildMetaPixelTag: a non-standard event → eventName=custom + customEventName', () => {

@@ -405,7 +405,7 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 81, 'read + write registry has 81 tools');
+    assert.equal(withWrites.list().length, 82, 'read + write registry has 82 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1183,6 +1183,15 @@ async function main(): Promise<void> {
     assert.equal(metaTag.name, 'Meta - Event - ViewContent Tag', 'default name + canonicalized event');
     // a blank event is rejected (not silently created as an empty custom event)
     await assert.rejects(() => reg.execute('create_meta_pixel_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '1', event: '  ' }), /event is required/);
+
+    // create_meta_capi_server_tag imports the Stape template + creates the CAPI server tag.
+    const capi = JSON.parse(
+      await reg.execute('create_meta_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '{{Pixel}}', accessToken: '{{Token}}', event: 'Purchase', firingTriggerId: ['5'] }),
+    );
+    assert.equal(capi.type, 'cvt_5RM3Q', 'built on the imported Stape CAPI template type');
+    assert.equal(capi.name, 'Meta CAPI - Purchase Tag', 'default CAPI name');
+    assert.ok(fd.calls.includes('importTemplate:stape-io/facebook-tag'));
+    await assert.rejects(() => reg.execute('create_meta_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '1', accessToken: '', event: 'Purchase' }), /accessToken is required/);
 
     // update_gtm_trigger fixes a Custom Event trigger's Event name IN PLACE (no delete+recreate).
     const upd = JSON.parse(
