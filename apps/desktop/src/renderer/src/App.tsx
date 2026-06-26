@@ -2469,9 +2469,41 @@ function TagReviewPanel({
 
 /* ───────────────────── Container audit (existing tags) ───────────────────── */
 
-// Sentinel filter value for the "Orphaned triggers" dropdown entry — unused triggers are findings
-// about TRIGGERS, not a tag type, so they get their own option (won't collide with any GTM type).
+// Audit findings-filter values. Tag types use the bare GTM type string; everything else uses a
+// sentinel/prefix so the dropdown can span severity, issue type, auto-fixability, and the
+// trigger/variable cross-cuts without colliding with any GTM type.
 const ORPHAN_TRIGGER_FILTER = '__orphaned_triggers__';
+const UNUSED_VAR_FILTER = '__unused_variables__';
+const FIXABLE_FILTER = '__fixable__';
+// Issue-type (finding.category) → friendly label, in display order. The "unused" category is split
+// into the granular Orphaned-triggers / Unused-variables quick filters instead of a generic entry.
+const AUDIT_CATEGORY_LABELS: Array<[string, string]> = [
+  ['consent', 'Consent Mode'],
+  ['security', 'Security'],
+  ['firing', 'No firing trigger'],
+  ['paused', 'Paused tags'],
+  ['ga4', 'GA4 config'],
+  ['performance', 'Performance'],
+  ['deprecated', 'Deprecated'],
+  ['naming', 'Naming'],
+];
+const AUDIT_SEVERITIES: Array<[string, string]> = [
+  ['critical', 'Critical'],
+  ['high', 'High'],
+  ['medium', 'Medium'],
+  ['low', 'Low'],
+  ['info', 'Info'],
+];
+
+/** Human label for the active audit filter value — used in the "nothing matches" empty state. */
+function auditFilterLabel(v: string): string {
+  if (v === ORPHAN_TRIGGER_FILTER) return 'orphaned trigger';
+  if (v === UNUSED_VAR_FILTER) return 'unused variable';
+  if (v === FIXABLE_FILTER) return 'auto-fixable';
+  if (v.startsWith('sev:')) return v.slice(4);
+  if (v.startsWith('cat:')) return (AUDIT_CATEGORY_LABELS.find(([k]) => k === v.slice(4))?.[1] ?? v.slice(4)).toLowerCase();
+  return gtmTypeLabel(v);
+}
 
 const SEV_BADGE: Record<string, React.CSSProperties> = {
   high: { background: '#3a1416', color: '#fca5a5', border: '1px solid #7f1d1d' },
@@ -2550,13 +2582,27 @@ function ContainerAuditPanel({
   }
   const tagTypes = [...typeCounts.keys()].sort((a, b) => gtmTypeLabel(a).localeCompare(gtmTypeLabel(b)));
   const isOrphanTrigger = (f: AuditFindingView): boolean => f.category === 'unused' && f.resource?.kind === 'trigger';
+  const isUnusedVariable = (f: AuditFindingView): boolean => f.category === 'unused' && f.resource?.kind === 'variable';
   const orphanCount = findings.filter(isOrphanTrigger).length;
-  const typeMatches = (f: AuditFindingView): boolean =>
-    typeFilter === 'all'
-      ? true
-      : typeFilter === ORPHAN_TRIGGER_FILTER
-        ? isOrphanTrigger(f)
-        : f.resource?.type === typeFilter;
+  const unusedVarCount = findings.filter(isUnusedVariable).length;
+  // Counts per severity + per issue-type (category) so each dropdown option shows how many it covers.
+  const sevCounts = new Map<string, number>();
+  const catCounts = new Map<string, number>();
+  for (const f of findings) {
+    sevCounts.set(f.severity, (sevCounts.get(f.severity) ?? 0) + 1);
+    catCounts.set(f.category, (catCounts.get(f.category) ?? 0) + 1);
+  }
+  const sevOptions = AUDIT_SEVERITIES.filter(([k]) => (sevCounts.get(k) ?? 0) > 0);
+  const catOptions = AUDIT_CATEGORY_LABELS.filter(([k]) => (catCounts.get(k) ?? 0) > 0);
+  const typeMatches = (f: AuditFindingView): boolean => {
+    if (typeFilter === 'all') return true;
+    if (typeFilter === ORPHAN_TRIGGER_FILTER) return isOrphanTrigger(f);
+    if (typeFilter === UNUSED_VAR_FILTER) return isUnusedVariable(f);
+    if (typeFilter === FIXABLE_FILTER) return f.autoFixable;
+    if (typeFilter.startsWith('sev:')) return f.severity === typeFilter.slice(4);
+    if (typeFilter.startsWith('cat:')) return f.category === typeFilter.slice(4);
+    return f.resource?.type === typeFilter; // bare GTM tag type
+  };
 
   // Bulk apply: every non-destructive auto-fix not already applied (and matching the active
   // type filter). Deletes are EXCLUDED — they stay per-row behind an explicit confirm so
@@ -2672,24 +2718,50 @@ function ContainerAuditPanel({
               ({report.summary.critical} critical · {report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low ·{' '}
               {report.summary.info} info){fixable > 0 ? ` · ${fixable} auto-fixable` : ''}
             </div>
-            {(tagTypes.length > 0 || orphanCount > 0) && (
+            {findings.length > 0 && (
               <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Filter:</span>
                 <select
                   value={typeFilter}
                   onChange={(e) => setTypeFilter(e.target.value)}
                   style={styles.select}
-                  title="Filter findings — and scope the batch fixes — to one tag type, or to orphaned triggers"
+                  title="Filter findings — and scope the batch fixes — by severity, issue type, tag type, or fixability"
                 >
                   <option value="all">All findings ({findings.length})</option>
-                  {orphanCount > 0 && (
-                    <option value={ORPHAN_TRIGGER_FILTER}>Orphaned triggers ({orphanCount})</option>
+                  {sevOptions.length > 0 && (
+                    <optgroup label="Severity">
+                      {sevOptions.map(([k, label]) => (
+                        <option key={`sev:${k}`} value={`sev:${k}`}>
+                          {label} ({sevCounts.get(k)})
+                        </option>
+                      ))}
+                    </optgroup>
                   )}
-                  {tagTypes.map((t) => (
-                    <option key={t} value={t}>
-                      {gtmTypeLabel(t)} ({typeCounts.get(t)})
-                    </option>
-                  ))}
+                  {catOptions.length > 0 && (
+                    <optgroup label="Issue type">
+                      {catOptions.map(([k, label]) => (
+                        <option key={`cat:${k}`} value={`cat:${k}`}>
+                          {label} ({catCounts.get(k)})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {(fixable > 0 || orphanCount > 0 || unusedVarCount > 0) && (
+                    <optgroup label="Quick filters">
+                      {fixable > 0 && <option value={FIXABLE_FILTER}>Auto-fixable ({fixable})</option>}
+                      {orphanCount > 0 && <option value={ORPHAN_TRIGGER_FILTER}>Orphaned triggers ({orphanCount})</option>}
+                      {unusedVarCount > 0 && <option value={UNUSED_VAR_FILTER}>Unused variables ({unusedVarCount})</option>}
+                    </optgroup>
+                  )}
+                  {tagTypes.length > 0 && (
+                    <optgroup label="Tag type">
+                      {tagTypes.map((t) => (
+                        <option key={t} value={t}>
+                          {gtmTypeLabel(t)} ({typeCounts.get(t)})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
                 {typeFilter !== 'all' && (
                   <button style={styles.ghostBtn} onClick={() => setTypeFilter('all')} title="Clear the filter">
@@ -2775,7 +2847,7 @@ function ContainerAuditPanel({
         )}
 
         {findings.length > 0 && visible.length === 0 && (
-          <div style={styles.empty}>No {typeFilter === ORPHAN_TRIGGER_FILTER ? 'orphaned trigger' : gtmTypeLabel(typeFilter)} findings. Clear the filter to see the rest.</div>
+          <div style={styles.empty}>No {auditFilterLabel(typeFilter)} findings. Clear the filter to see the rest.</div>
         )}
 
         {visible.length > 0 && (
