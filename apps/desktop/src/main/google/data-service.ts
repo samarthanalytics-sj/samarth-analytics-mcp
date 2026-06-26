@@ -892,7 +892,7 @@ export class GoogleDataService {
     // orphaned= and each ifXUnused= is the number of triggers ONLY that rule keeps out of the set.
     const tb = triggerUsageBreakdown(snapshot);
     console.error(
-      `[trigger-usage] total=${tb.total} orphaned=${tb.orphanedStrict} | ifGroupMembersUnused=${tb.orphanedIfGroupMembersUnused} ifBlockingUnused=${tb.orphanedIfBlockingUnused} ifPausedFiringUnused=${tb.orphanedIfPausedFiringUnused}`
+      `[trigger-usage] total=${tb.total} orphaned=${tb.orphaned} | ifBlockingUnused=${tb.orphanedIfBlockingUnused} ifPausedFiringUnused=${tb.orphanedIfPausedFiringUnused}`
     );
     return snapshot;
   }
