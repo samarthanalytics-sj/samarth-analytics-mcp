@@ -63,6 +63,7 @@ export interface ChatReply {
 export type ChatStreamEvent =
   | { type: 'text'; delta: string }
   | { type: 'tool'; name: string }
+  | { type: 'tool_result'; name: string; ok: boolean; error?: string }
   | {
       type: 'confirm';
       confirmId: string;

@@ -42,6 +42,8 @@ export interface RunChatCallbacks {
   onDelta?: (text: string) => void;
   /** Fired when the model invokes a tool. */
   onToolCall?: (call: LlmToolCall) => void;
+  /** Fired after a tool runs — ok=false carries the error so the UI can show failures. */
+  onToolResult?: (result: { name: string; ok: boolean; error?: string }) => void;
 }
 
 /**
@@ -110,11 +112,13 @@ export async function runChat(
         callbacks.onToolCall?.(call);
         try {
           results.push({ id: call.id, name: call.name, content: await executor.execute(call.name, call.args) });
+          callbacks.onToolResult?.({ name: call.name, ok: true });
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           results.push({ id: call.id, name: call.name, content: message, isError: true });
           batchFailed = true;
           lastToolError = { name: call.name, message };
+          callbacks.onToolResult?.({ name: call.name, ok: false, error: message });
         }
       }
       messages.push({ role: 'tool', results });
