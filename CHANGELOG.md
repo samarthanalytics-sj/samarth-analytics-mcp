@@ -1,3 +1,9 @@
+## [1.83.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.83.0...v1.83.1) (2026-06-26)
+
+### Bug Fixes
+
+* **desktop:** TikTok server tag maps GA4 purchase to Purchase (not legacy CompletePayment) + per-event properties ([5548004](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/554800431a4fb11773317b4d09ac28ed77baacb4))
+
 ## [1.83.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.82.1...v1.83.0) (2026-06-26)
 
 ### Features
