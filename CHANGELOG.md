@@ -1,3 +1,9 @@
+## [1.76.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.75.0...v1.76.0) (2026-06-26)
+
+### Features
+
+* **desktop:** create_meta_pixel_tag — correct standard/custom Meta event fields ([74fb56e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/74fb56e339f13681af7f5f8cc6267e5657847c52))
+
 ## [1.75.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.74.1...v1.75.0) (2026-06-26)
 
 ### Features
