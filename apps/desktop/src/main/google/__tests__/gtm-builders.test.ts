@@ -26,6 +26,7 @@ import {
   setCustomEventName,
   findUnusedTriggers,
   collectUsedTriggerIds,
+  triggerUsageBreakdown,
   detectMetaTags,
   customTemplateType,
   buildAdsConversionServerTag,
@@ -1304,6 +1305,30 @@ test('findUnusedTriggers: only true orphans — firing/blocking/group-member/bui
     ['12', 'tg'],
     'only the orphan trigger + the group no tag uses; built-in and group-member excluded',
   );
+});
+
+test('triggerUsageBreakdown: explains the orphan count under looser definitions', () => {
+  const snap = {
+    tags: [
+      { tagId: 'a', name: 'Active', type: 'gaawe', firingTriggerId: ['10'], blockingTriggerId: ['11'], paused: false, parameter: [] },
+      { tagId: 'p', name: 'Paused', type: 'html', firingTriggerId: ['12'], paused: true, parameter: [] },
+    ],
+    triggers: [
+      { triggerId: '10', name: 'fires active tag', type: 'customEvent' },
+      { triggerId: '11', name: 'blocks a tag', type: 'customEvent' },
+      { triggerId: '12', name: 'fires a paused tag only', type: 'customEvent' },
+      { triggerId: '13', name: 'group member', type: 'customEvent' },
+      { triggerId: 'tg', name: 'group', type: 'triggerGroup', parameter: [{ type: 'list', key: 'x', list: [{ type: 'triggerReference', value: '13' }] }] },
+      { triggerId: '14', name: 'true orphan', type: 'customEvent' },
+    ],
+    variables: [],
+  };
+  const b = triggerUsageBreakdown(snap);
+  assert.equal(b.total, 6);
+  assert.equal(b.orphanedStrict, 2, 'the true orphan + the group that no tag uses');
+  assert.equal(b.orphanedIfGroupMembersUnused, 3, '+ the group member 13');
+  assert.equal(b.orphanedIfBlockingUnused, 3, '+ the blocking-only trigger 11');
+  assert.equal(b.orphanedIfPausedFiringUnused, 3, '+ the trigger that fires only a paused tag (12)');
 });
 
 test('setCustomEventName updates the {{_event}} value in place, preserving structure', () => {
