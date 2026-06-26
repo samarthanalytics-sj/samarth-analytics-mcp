@@ -1,3 +1,9 @@
+## [1.83.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.83.1...v1.83.2) (2026-06-26)
+
+### Bug Fixes
+
+* **desktop:** repair LLM-built custom-event triggers (strip timer-only eventName, guarantee one filter) ([5b0bb59](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5b0bb595da5bef29de5bc0bf84dfaa2deed81b39))
+
 ## [1.83.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.83.0...v1.83.1) (2026-06-26)
 
 ### Bug Fixes
