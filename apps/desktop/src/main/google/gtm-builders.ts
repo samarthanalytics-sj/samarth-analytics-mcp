@@ -1480,16 +1480,50 @@ export function metaStandardEvent(event: string): string | null {
   return null;
 }
 
+/** Recommended Meta Object Properties (event parameters) per STANDARD event — the keys Meta
+ *  expects for each event. Values are wired by the caller (variables off the page/dataLayer). */
+export const META_EVENT_OBJECT_PROPERTIES: Record<string, string[]> = {
+  ViewContent: ['content_ids', 'content_type', 'content_name', 'content_category', 'value', 'currency', 'contents'],
+  Search: ['search_string', 'content_ids', 'content_type', 'value', 'currency'],
+  AddToCart: ['content_ids', 'content_type', 'content_name', 'value', 'currency', 'contents'],
+  AddToWishlist: ['content_ids', 'content_type', 'content_name', 'value', 'currency'],
+  InitiateCheckout: ['content_ids', 'content_type', 'value', 'currency', 'num_items', 'contents'],
+  AddPaymentInfo: ['content_ids', 'content_type', 'value', 'currency', 'contents'],
+  Purchase: ['value', 'currency', 'content_ids', 'content_type', 'num_items', 'contents'],
+  Lead: ['value', 'currency', 'content_name', 'content_category'],
+  CompleteRegistration: ['value', 'currency', 'content_name', 'status'],
+  Donate: ['value', 'currency'],
+  Subscribe: ['value', 'currency', 'predicted_ltv'],
+  StartTrial: ['value', 'currency', 'predicted_ltv'],
+};
+
 /** Build a Meta (Facebook) Pixel tag from the imported community template (`type` = its cvt_
  *  code). A Meta STANDARD event sets eventName='standard' + standardEventName=<canonical>;
  *  anything else sets eventName='custom' + customEventName=<the event>. The eventName SELECTOR
  *  must always be set — omitting it (only setting standardEventName) makes the template fall
- *  back to its default (standard/PageView). Field shape corpus-validated (528 Meta tags). PURE. */
-export function buildMetaPixelTag(type: string, name: string, pixelId: string, event: string, firingTriggerId?: string[]): GtmTagResource {
+ *  back to its default (standard/PageView). `objectProperties` (name→value) become the Meta
+ *  Object Properties (objectPropertyList). Field shape corpus-validated (528 Meta tags). PURE. */
+export function buildMetaPixelTag(
+  type: string,
+  name: string,
+  pixelId: string,
+  event: string,
+  firingTriggerId?: string[],
+  objectProperties?: Array<{ name: string; value: string }>
+): GtmTagResource {
   const std = metaStandardEvent(event);
   const parameter: Param[] = [tpl('pixelId', pixelId), tpl('eventName', std ? 'standard' : 'custom')];
   if (std) parameter.push(tpl('standardEventName', std));
   else parameter.push(tpl('customEventName', event));
+  const props = (objectProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
+  if (props.length) {
+    parameter.push(boolean('objectPropertiesFromVariable', false));
+    parameter.push({
+      type: 'list',
+      key: 'objectPropertyList',
+      list: props.map((p) => ({ type: 'map', map: [tpl('name', p.name), tpl('value', p.value)] })),
+    });
+  }
   return {
     name: sanitizeName(name),
     type,

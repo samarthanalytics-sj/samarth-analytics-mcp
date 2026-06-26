@@ -20,6 +20,7 @@ import {
   buildAllowParamsTransformation,
   buildServerAllEventsTrigger,
   buildMetaPixelTag,
+  metaStandardEvent,
   auditServerContainer,
   detectMetaTags,
   type TriggerInput,
@@ -80,6 +81,15 @@ const EMPTY_SCHEMA = { type: 'object', properties: {}, additionalProperties: fal
 const s = (v: unknown): string => String(v ?? '');
 const obj = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+
+/** The Meta Pixel tag name: an explicit `name`, else the convention "Meta - Event - <Event> Tag"
+ *  (canonical standard event, or the custom event as typed). */
+const metaPixelTagName = (a: Record<string, unknown>): string => {
+  const provided = a.name != null ? s(a.name).trim() : '';
+  if (provided) return provided;
+  const ev = s(a.event).trim();
+  return `Meta - Event - ${metaStandardEvent(ev) ?? ev} Tag`;
+};
 
 /** One-line truncation for logging tool args/results without flooding the console. */
 const truncForLog = (str: string, n = 600): string => (str.length > n ? `${str.slice(0, n)}…(+${str.length - n} chars)` : str);
@@ -1449,24 +1459,34 @@ export function buildToolRegistry(
     {
       name: 'create_meta_pixel_tag',
       description:
-        'Create a Meta (Facebook) Pixel tag from the official community template with the CORRECT event fields — use this instead of hand-building a cvt_ template tag (which gets the event wrong). Pass the Meta `event`: a STANDARD event (PageView, ViewContent, Search, AddToCart, AddToWishlist, InitiateCheckout, AddPaymentInfo, Purchase, Lead, CompleteRegistration, Contact, CustomizeProduct, Donate, FindLocation, Schedule, StartTrial, SubmitApplication, Subscribe) is set as eventName=standard + standardEventName; ANY other value becomes a CUSTOM event (eventName=custom + customEventName=<event>). Free text like "add to cart" resolves to AddToCart. Imports Facebook\'s OFFICIAL Meta Pixel template if needed (you do NOT pass the cvt_ type; if you previously imported a different Meta template under another owner/repo, this still imports the official one). Optional firingTriggerId (create/identify the trigger first — without it the tag will not fire). Requires accountId, containerId, workspaceId, name, pixelId, event.',
+        'Create a Meta (Facebook) Pixel tag from the official community template with the CORRECT event fields — use this instead of hand-building a cvt_ template tag (which gets the event wrong). Pass the Meta `event`: a STANDARD event (PageView, ViewContent, Search, AddToCart, AddToWishlist, InitiateCheckout, AddPaymentInfo, Purchase, Lead, CompleteRegistration, Contact, CustomizeProduct, Donate, FindLocation, Schedule, StartTrial, SubmitApplication, Subscribe) is set as eventName=standard + standardEventName; ANY other value becomes a CUSTOM event (eventName=custom + customEventName=<event>). Free text like "add to cart" resolves to AddToCart. `objectProperties` is an array of {name, value} → the Meta Object Properties (event params) — pass the ones recommended for the event (e.g. Purchase: value, currency, content_ids, content_type; ViewContent: content_ids, content_type, value, currency) with values referencing the container\'s ecommerce variables (e.g. {{Ecommerce Value}}); use list_gtm_variables to find them. `name` is OPTIONAL — defaults to "Meta - Event - <Event> Tag". Imports Facebook\'s OFFICIAL Meta Pixel template if needed (you do NOT pass the cvt_ type). Optional firingTriggerId (create/identify the trigger first — without it the tag will not fire). Requires accountId, containerId, workspaceId, pixelId, event.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          name: { type: 'string' },
+          name: { type: 'string', description: 'Optional — defaults to "Meta - Event - <Event> Tag".' },
           pixelId: { type: 'string' },
           event: { type: 'string', description: 'Meta event, e.g. ViewContent / AddToCart / Purchase / Donate, or a custom name.' },
+          objectProperties: {
+            type: 'array',
+            description: 'Meta Object Properties (event params): {name, value} rows, e.g. {name:"value", value:"{{Ecommerce Value}}"}.',
+            items: {
+              type: 'object',
+              properties: { name: { type: 'string' }, value: { type: 'string' } },
+              required: ['name', 'value'],
+              additionalProperties: false,
+            },
+          },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
         },
-        required: ['accountId', 'containerId', 'workspaceId', 'name', 'pixelId', 'event'],
+        required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'event'],
         additionalProperties: false,
       },
       write: true,
-      summarize: (a) => `Create Meta Pixel tag "${s(a.name)}" (event ${s(a.event)})`,
-      precheck: (a) => findExistingByName(data, a, s(a.name), 'tag'),
+      summarize: (a) => `Create Meta Pixel tag "${metaPixelTagName(a)}" (event ${s(a.event)})`,
+      precheck: (a) => findExistingByName(data, a, metaPixelTagName(a), 'tag'),
       handler: async (a) => {
         const event = s(a.event).trim();
         if (!event) throw new Error('event is required (a Meta standard event like ViewContent/AddToCart/Purchase, or a custom name).');
@@ -1475,7 +1495,10 @@ export function buildToolRegistry(
           throw new Error(`Could not resolve the Meta Pixel template's tag type (got "${tmpl.type}"). Try import_gallery_template + list_gtm_templates to confirm it imported, then create_gtm_tag with its type.`);
         }
         const ftid = Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined;
-        const tag = buildMetaPixelTag(tmpl.type, s(a.name), s(a.pixelId), event, ftid);
+        const objProps = Array.isArray(a.objectProperties)
+          ? a.objectProperties.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name)
+          : undefined;
+        const tag = buildMetaPixelTag(tmpl.type, metaPixelTagName(a), s(a.pixelId), event, ftid, objProps);
         return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
       },
     },
