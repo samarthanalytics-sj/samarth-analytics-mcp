@@ -1,3 +1,9 @@
+## [1.74.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.73.0...v1.74.0) (2026-06-26)
+
+### Features
+
+* **desktop:** Prompts tab — Meta group (email/phone/ecommerce) + search & category filters ([66b1050](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/66b105059e37252a47c79e480c3a33aa050f4077))
+
 ## [1.73.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.72.0...v1.73.0) (2026-06-26)
 
 ### Features
