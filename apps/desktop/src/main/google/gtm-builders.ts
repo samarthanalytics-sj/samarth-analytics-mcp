@@ -1629,15 +1629,20 @@ export function buildMetaCapiServerTag(
   opts?: { actionSource?: string; eventEnhancement?: boolean; generateFbp?: boolean; firingTriggerId?: string[] }
 ): GtmTagResource {
   const std = metaStandardEvent(event);
+  // Event-name fields verified against the live stape-io/facebook-tag template: inheritEventName
+  // is a SELECT 'inherit'|'override' (NOT a boolean); under 'override', eventName is a RADIO
+  // 'standard'|'custom' choosing eventNameStandard vs eventNameCustom.
   const parameter: Param[] = [
     tpl('pixelId', pixelId),
     tpl('accessToken', accessToken),
     tpl('actionSource', opts?.actionSource && opts.actionSource.trim() ? opts.actionSource : 'website'),
     boolean('generateFbp', opts?.generateFbp ?? true),
     boolean('enableEventEnhancement', opts?.eventEnhancement ?? true),
+    tpl('inheritEventName', 'override'),
+    tpl('eventName', std ? 'standard' : 'custom'),
   ];
-  if (std) parameter.push(boolean('inheritEventName', false), tpl('eventNameStandard', std));
-  else parameter.push(boolean('inheritEventName', true)); // forward the incoming event_name for a non-standard event
+  if (std) parameter.push(tpl('eventNameStandard', std));
+  else parameter.push(tpl('eventNameCustom', event));
   return {
     name: sanitizeName(name),
     type,
