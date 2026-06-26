@@ -1449,6 +1449,55 @@ export function customTemplateType(
   return `cvt_${t.containerId ?? fallbackContainerId}_${t.templateId ?? ''}`;
 }
 
+/** Meta's STANDARD events (Pixel + CAPI). Anything else is a CUSTOM event. */
+export const META_STANDARD_EVENTS: string[] = [
+  'PageView',
+  'ViewContent',
+  'Search',
+  'AddToCart',
+  'AddToWishlist',
+  'InitiateCheckout',
+  'AddPaymentInfo',
+  'Purchase',
+  'Lead',
+  'CompleteRegistration',
+  'Contact',
+  'CustomizeProduct',
+  'Donate',
+  'FindLocation',
+  'Schedule',
+  'StartTrial',
+  'SubmitApplication',
+  'Subscribe',
+];
+
+/** Resolve free-text (e.g. "add to cart", "viewcontent", "Donate") to the CANONICAL Meta
+ *  standard event, or null if it isn't a standard event (→ treat as custom). PURE. */
+export function metaStandardEvent(event: string): string | null {
+  const norm = (event ?? '').trim().toLowerCase().replace(/[\s_-]/g, '');
+  if (!norm) return null;
+  for (const e of META_STANDARD_EVENTS) if (e.toLowerCase() === norm) return e;
+  return null;
+}
+
+/** Build a Meta (Facebook) Pixel tag from the imported community template (`type` = its cvt_
+ *  code). A Meta STANDARD event sets eventName='standard' + standardEventName=<canonical>;
+ *  anything else sets eventName='custom' + customEventName=<the event>. The eventName SELECTOR
+ *  must always be set — omitting it (only setting standardEventName) makes the template fall
+ *  back to its default (standard/PageView). Field shape corpus-validated (528 Meta tags). PURE. */
+export function buildMetaPixelTag(type: string, name: string, pixelId: string, event: string, firingTriggerId?: string[]): GtmTagResource {
+  const std = metaStandardEvent(event);
+  const parameter: Param[] = [tpl('pixelId', pixelId), tpl('eventName', std ? 'standard' : 'custom')];
+  if (std) parameter.push(tpl('standardEventName', std));
+  else parameter.push(tpl('customEventName', event));
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(firingTriggerId && firingTriggerId.length ? { firingTriggerId } : {}),
+    parameter,
+  };
+}
+
 /** Build the Meta EMQ Event Data variables (`ed - <key>`, type `ed`, keyPath `<key>`). PURE. */
 export function buildMetaEmqVariables(): GtmVariableResource[] {
   return META_EMQ_EVENT_DATA_KEYS.map((k) => buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));

@@ -401,7 +401,7 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 79, 'read + write registry has 79 tools');
+    assert.equal(withWrites.list().length, 80, 'read + write registry has 80 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1170,6 +1170,14 @@ async function main(): Promise<void> {
     );
     assert.equal(imp.type, 'cvt_5RM3Q', 'returns the gallery template tag-type code (cvt_<galleryTemplateId>)');
     assert.ok(fd.calls.includes('importTemplate:facebook/GoogleTagManager-WebTemplate-For-FacebookPixel'));
+
+    // create_meta_pixel_tag imports the template + creates a tag of its cvt_ type.
+    const metaTag = JSON.parse(
+      await reg.execute('create_meta_pixel_tag', { accountId: '1', containerId: '2', workspaceId: '3', name: 'Meta - ViewContent', pixelId: '123', event: 'ViewContent', firingTriggerId: ['9'] }),
+    );
+    assert.equal(metaTag.type, 'cvt_5RM3Q', 'built on the imported Meta Pixel template type');
+    // a blank event is rejected (not silently created as an empty custom event)
+    await assert.rejects(() => reg.execute('create_meta_pixel_tag', { accountId: '1', containerId: '2', workspaceId: '3', name: 'X', pixelId: '1', event: '  ' }), /event is required/);
 
     // copy_workspace_resources: recreate tags/triggers/variables from one workspace into another.
     const copied = JSON.parse(

@@ -14,6 +14,8 @@ import {
   buildGa4ServerTag,
   buildServerAllEventsTrigger,
   buildMetaEmqVariables,
+  buildMetaPixelTag,
+  metaStandardEvent,
   detectMetaTags,
   customTemplateType,
   buildAdsConversionServerTag,
@@ -1070,6 +1072,30 @@ test('customTemplateType: gallery template uses cvt_<galleryTemplateId>, local u
   // Locally-authored (no gallery reference) — cvt_<containerId>_<templateId>.
   assert.equal(customTemplateType({ containerId: '60340825', templateId: '34', galleryReference: null }, '60340825'), 'cvt_60340825_34');
   assert.equal(customTemplateType({ templateId: '34' }, '60340825'), 'cvt_60340825_34', 'falls back to the passed container id');
+});
+
+test('buildMetaPixelTag: standard event → eventName=standard + standardEventName; free text resolves', () => {
+  const vc = buildMetaPixelTag('cvt_5RM3Q', 'Meta - ViewContent', '123', 'ViewContent', ['9']);
+  assert.equal(vc.type, 'cvt_5RM3Q');
+  const p = (vc.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(p.find((x) => x.key === 'eventName')?.value, 'standard');
+  assert.equal(p.find((x) => x.key === 'standardEventName')?.value, 'ViewContent');
+  assert.equal(p.find((x) => x.key === 'customEventName'), undefined, 'no custom field for a standard event');
+  assert.deepEqual(vc.firingTriggerId, ['9']);
+  // free text + canonicalization
+  assert.equal(metaStandardEvent('add to cart'), 'AddToCart');
+  assert.equal(metaStandardEvent('donate'), 'Donate');
+  const atc = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'add to cart');
+  assert.equal(((atc.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'standardEventName')?.value, 'AddToCart');
+});
+
+test('buildMetaPixelTag: a non-standard event → eventName=custom + customEventName', () => {
+  assert.equal(metaStandardEvent('Newsletter Signup'), null);
+  const c = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'Newsletter Signup');
+  const p = (c.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(p.find((x) => x.key === 'eventName')?.value, 'custom');
+  assert.equal(p.find((x) => x.key === 'customEventName')?.value, 'Newsletter Signup');
+  assert.equal(p.find((x) => x.key === 'standardEventName'), undefined, 'no standard field for a custom event');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
