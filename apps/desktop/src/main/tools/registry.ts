@@ -287,6 +287,18 @@ export function buildToolRegistry(
       handler: (a) => data.listGtmClients(s(a.accountId), s(a.containerId), s(a.workspaceId)),
     },
     {
+      name: 'list_gtm_templates',
+      description:
+        'List the CUSTOM (community-gallery) templates imported into a workspace, each with its tag TYPE code (cvt_<containerId>_<templateId>) — the value to put in a tag\'s `type` to build a tag from that template — plus the gallery owner/repository. Use to find an imported template (e.g. Meta Pixel) before creating tags from it. Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: (a) => data.listGtmTemplates(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+    },
+    {
       name: 'list_gtm_transformations',
       description: 'List the TRANSFORMATIONS in a SERVER container workspace (server-side GTM — they enrich/redact event data before tags run). Requires accountId, containerId, workspaceId.',
       inputSchema: {
@@ -1432,6 +1444,27 @@ export function buildToolRegistry(
       write: true,
       summarize: () => `Create the Meta CAPI EMQ Event Data variables in the server container`,
       handler: (a) => data.createMetaEmqVariables(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+    },
+    {
+      name: 'import_gallery_template',
+      description:
+        'Import a Community Template Gallery template into a workspace by GitHub owner + repository — the GTM API DOES support this (templates.import_from_gallery); do NOT tell the user templates can only be imported in the GTM UI. For the official Meta Pixel template pass owner "facebook", repository "GoogleTagManager-WebTemplate-For-FacebookPixel". Idempotent (returns the existing one if already imported). Returns the template + its tag TYPE code (cvt_…). After importing, build a tag from it with create_gtm_tag using that returned `type` and the template\'s own field keys (e.g. Meta Pixel: pixelId, eventName, standardEventName) — those fields are template-specific, so check the template in GTM if a create is rejected. Requires accountId, containerId, workspaceId, owner, repository; optional sha (defaults to latest).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          owner: { type: 'string' },
+          repository: { type: 'string' },
+          sha: { type: 'string', description: 'Optional gallery SHA/version; defaults to latest.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'owner', 'repository'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Import gallery template ${s(a.owner)}/${s(a.repository)} into workspace ${s(a.workspaceId)}`,
+      handler: (a) => data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.owner), s(a.repository), a.sha != null && s(a.sha) ? s(a.sha) : undefined),
     },
     {
       name: 'create_gtm_folder',

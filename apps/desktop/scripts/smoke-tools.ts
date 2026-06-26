@@ -46,7 +46,7 @@ const MUTATIONS = new Set([
   'createGtmFolder', 'moveEntitiesToFolder', 'renameGtmFolder', 'deleteGtmFolder',
   'createGtmEnvironment',
   'createServerContainer', 'createGtmClient', 'deleteGtmClient', 'createGtmTransformation', 'bootstrapServerSideTagging',
-  'setWebServerContainerUrl', 'setServerContainerTaggingUrl', 'createMetaEmqVariables', 'copyWorkspaceResources',
+  'setWebServerContainerUrl', 'setServerContainerTaggingUrl', 'createMetaEmqVariables', 'copyWorkspaceResources', 'importGalleryTemplate',
 ]);
 
 // A snapshot crafted so the audit produces every kind of finding: a paused GA4
@@ -99,6 +99,8 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     setServerContainerTaggingUrl: () => r('setServerContainerTaggingUrl', { containerId: 'SC1', name: 'Server', taggingServerUrls: ['https://sgtm.example.com'] }),
     createMetaEmqVariables: () => r('createMetaEmqVariables', { created: ['ed - fbp', 'ed - fbc'], skipped: [] }),
     copyWorkspaceResources: () => r('copyWorkspaceResources', { variables: { created: [], skipped: [] }, triggers: { created: [], skipped: [] }, tags: { created: [], skipped: [] } }),
+    listGtmTemplates: () => r('listGtmTemplates', [{ templateId: '34', name: 'Meta Pixel', type: 'cvt_2_34', galleryOwner: 'facebook', galleryRepository: 'GoogleTagManager-WebTemplate-For-FacebookPixel' }]),
+    importGalleryTemplate: () => r('importGalleryTemplate', { templateId: '34', name: 'Meta Pixel', type: 'cvt_2_34', imported: true }),
     getServerContainerSnapshot: () =>
       r('getServerContainerSnapshot', {
         taggingServerUrls: ['https://sgtm.example.com'],
@@ -216,7 +218,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 43 read tools', readOnlyNames.size === 43, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 44 read tools', readOnlyNames.size === 44, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────
