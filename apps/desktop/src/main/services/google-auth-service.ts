@@ -64,6 +64,14 @@ export class GoogleAuthService {
     }
   }
 
+  /** Cancel an in-flight sign-in (the user clicked Cancel, or abandoned a consent
+   *  screen that never redirected back). Aborts the loopback flow, so the pending
+   *  connect() rejects with "Google sign-in cancelled." and the local server closes.
+   *  A no-op when nothing is in flight. */
+  cancelConnect(): void {
+    this.current?.abort();
+  }
+
   disconnect(id: string): void {
     this.registry.clearGoogleToken(id);
     this.onDisconnect?.(id);

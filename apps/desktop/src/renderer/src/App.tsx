@@ -634,9 +634,21 @@ export function App(): JSX.Element {
       await window.desktop.google.connect();
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      // A user-initiated cancel isn't an error — don't surface it as one.
+      if (!/cancel/i.test(msg)) setError(msg);
     } finally {
       setConnecting(false);
+    }
+  }
+
+  async function cancelConnect(): Promise<void> {
+    // Aborts the in-flight loopback flow; the pending connect() above then rejects
+    // with "cancelled" (swallowed there) and resets the connecting state.
+    try {
+      await window.desktop.google.cancelConnect();
+    } catch {
+      /* nothing in flight, or it already settled */
     }
   }
 
@@ -667,13 +679,20 @@ export function App(): JSX.Element {
           ))}
         </div>
 
-        <button
-          style={styles.connectBtn}
-          onClick={connect}
-          disabled={connecting || !google?.configured}
-        >
-          {connecting ? 'Signing in…' : '+ Connect account'}
-        </button>
+        {connecting ? (
+          <div style={styles.connectRow}>
+            <button style={{ ...styles.connectBtn, flex: 1, marginTop: 0 }} disabled>
+              Signing in…
+            </button>
+            <button style={styles.cancelBtn} onClick={cancelConnect} title="Cancel sign-in">
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button style={styles.connectBtn} onClick={connect} disabled={!google?.configured}>
+            + Connect account
+          </button>
+        )}
         {google && !google.configured && (
           <div style={styles.sideWarn}>OAuth client not set — see Settings.</div>
         )}
@@ -3070,6 +3089,8 @@ const styles: Record<string, React.CSSProperties> = {
   acctBtnActive: { background: 'var(--surface-3)', border: '1px solid var(--border-2)', color: '#fff' },
   acctEmail: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   connectBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer', marginTop: 8 },
+  connectRow: { display: 'flex', gap: 6, marginTop: 8, alignItems: 'stretch' },
+  cancelBtn: { background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer' },
   sideWarn: { color: '#fcd9a5', fontSize: 11, marginTop: 8 },
   sideNav: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 },
   navItem: { background: 'transparent', border: 'none', borderRadius: 8, padding: '8px 10px', color: 'var(--text-dim)', cursor: 'pointer', textAlign: 'left', fontSize: 14 },

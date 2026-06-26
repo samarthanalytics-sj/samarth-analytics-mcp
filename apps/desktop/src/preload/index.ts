@@ -74,6 +74,7 @@ const api = {
   google: {
     status: (): Promise<GoogleClientStatus> => ipcRenderer.invoke('google:status'),
     connect: (): Promise<AccountView> => ipcRenderer.invoke('google:connect'),
+    cancelConnect: (): Promise<void> => ipcRenderer.invoke('google:cancelConnect'),
     disconnect: (id: string): Promise<void> => ipcRenderer.invoke('google:disconnect', id),
   },
 
