@@ -16,6 +16,7 @@ import {
   buildMetaEmqVariables,
   buildMetaPixelTag,
   metaStandardEvent,
+  META_EVENT_OBJECT_PROPERTIES,
   detectMetaTags,
   customTemplateType,
   buildAdsConversionServerTag,
@@ -1087,6 +1088,14 @@ test('buildMetaPixelTag: standard event → eventName=standard + standardEventNa
   assert.equal(metaStandardEvent('donate'), 'Donate');
   const atc = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'add to cart');
   assert.equal(((atc.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'standardEventName')?.value, 'AddToCart');
+});
+
+test('META_EVENT_OBJECT_PROPERTIES carries the full per-event property set', () => {
+  assert.deepEqual(META_EVENT_OBJECT_PROPERTIES.Purchase, ['content_ids', 'contents', 'content_type', 'value', 'currency', 'num_items', 'order_id', 'event_id']);
+  assert.deepEqual(META_EVENT_OBJECT_PROPERTIES.ViewContent, ['content_ids', 'contents', 'content_type', 'content_name', 'content_category', 'value', 'currency']);
+  assert.deepEqual(META_EVENT_OBJECT_PROPERTIES.Search, ['search_string', 'content_ids', 'content_category']);
+  assert.deepEqual(META_EVENT_OBJECT_PROPERTIES.VideoPlay, ['video_title', 'video_duration', 'percent_viewed']);
+  assert.deepEqual(META_EVENT_OBJECT_PROPERTIES.UnlockAchievement, ['achievement_id', 'achievement_name']);
 });
 
 test('buildMetaPixelTag: objectProperties become an objectPropertyList of {name,value} maps', () => {
