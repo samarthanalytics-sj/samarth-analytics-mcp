@@ -268,9 +268,9 @@ function fakeData(
       calls.push(`listTemplates:${a}:${c}:${w}`);
       return [];
     },
-    importGalleryTemplate: async (_a: string, c: string, _w: string, owner: string, repo: string) => {
+    importGalleryTemplate: async (_a: string, _c: string, _w: string, owner: string, repo: string) => {
       calls.push(`importTemplate:${owner}/${repo}`);
-      return { templateId: '34', name: 'Meta Pixel', type: `cvt_${c}_34`, imported: true };
+      return { templateId: '261', name: 'Meta Pixel', type: 'cvt_5RM3Q', imported: true };
     },
     getGtmContainerSnapshot: async (a: string, c: string, w: string) => {
       calls.push(`snapshot:${a}:${c}:${w}`);
@@ -1168,7 +1168,7 @@ async function main(): Promise<void> {
     const imp = JSON.parse(
       await reg.execute('import_gallery_template', { accountId: '1', containerId: '2', workspaceId: '3', owner: 'facebook', repository: 'GoogleTagManager-WebTemplate-For-FacebookPixel' }),
     );
-    assert.equal(imp.type, 'cvt_2_34', 'returns the template tag-type code');
+    assert.equal(imp.type, 'cvt_5RM3Q', 'returns the gallery template tag-type code (cvt_<galleryTemplateId>)');
     assert.ok(fd.calls.includes('importTemplate:facebook/GoogleTagManager-WebTemplate-For-FacebookPixel'));
 
     // copy_workspace_resources: recreate tags/triggers/variables from one workspace into another.

@@ -289,7 +289,7 @@ export function buildToolRegistry(
     {
       name: 'list_gtm_templates',
       description:
-        'List the CUSTOM (community-gallery) templates imported into a workspace, each with its tag TYPE code (cvt_<containerId>_<templateId>) — the value to put in a tag\'s `type` to build a tag from that template — plus the gallery owner/repository. Use to find an imported template (e.g. Meta Pixel) before creating tags from it. Requires accountId, containerId, workspaceId.',
+        'List the CUSTOM (community-gallery) templates imported into a workspace, each with its tag TYPE code (cvt_… — for gallery templates this is cvt_<galleryTemplateId>, e.g. cvt_5RM3Q) — the value to put in a tag\'s `type` to build a tag from that template — plus the gallery owner/repository. Use to find an imported template (e.g. Meta Pixel) before creating tags from it. Requires accountId, containerId, workspaceId.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },

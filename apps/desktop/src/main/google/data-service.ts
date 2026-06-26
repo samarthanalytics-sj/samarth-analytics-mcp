@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, upsertGoogleTagConfig } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, customTemplateType, upsertGoogleTagConfig } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
@@ -1511,9 +1511,10 @@ export class GoogleDataService {
     return { created, skipped };
   }
 
-  /** List the CUSTOM (community-gallery) templates imported into a workspace, with their
-   *  derived tag/variable TYPE code (cvt_<containerId>_<templateId>) — the value to use as a
-   *  tag's `type` to build a tag from that template. */
+  /** List the CUSTOM (community-gallery) templates imported into a workspace, with the tag TYPE
+   *  code to use as a tag's `type` to build a tag from that template. A GALLERY template's type
+   *  is `cvt_<galleryTemplateId>` (e.g. cvt_MRQN8); a locally-authored template's is
+   *  `cvt_<containerId>_<templateId>`. */
   async listGtmTemplates(
     accountId: string,
     containerId: string,
@@ -1530,7 +1531,7 @@ export class GoogleDataService {
     return tmpls.map((t) => ({
       templateId: t.templateId ?? '',
       name: t.name ?? '(unnamed)',
-      type: `cvt_${t.containerId ?? containerId}_${t.templateId ?? ''}`,
+      type: customTemplateType(t, containerId),
       galleryOwner: t.galleryReference?.owner ?? '',
       galleryRepository: t.galleryReference?.repository ?? '',
     }));
@@ -1565,11 +1566,10 @@ export class GoogleDataService {
       ...(sha ? { gallerySha: sha } : {}),
       acknowledgePermissions: true,
     });
-    const templateId = res.data.templateId ?? '';
     return {
-      templateId,
+      templateId: res.data.templateId ?? '',
       name: res.data.name ?? repository,
-      type: `cvt_${res.data.containerId ?? containerId}_${templateId}`,
+      type: customTemplateType(res.data, containerId),
       imported: true,
     };
   }
