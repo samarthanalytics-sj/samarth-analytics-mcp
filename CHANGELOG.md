@@ -1,3 +1,9 @@
+## [1.85.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.84.0...v1.85.0) (2026-06-26)
+
+### Features
+
+* **desktop:** add a Cancel button to the Google sign-in flow ([9737807](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9737807bd04d3c5ad0e56be7e80288544ad64207))
+
 ## [1.84.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.83.3...v1.84.0) (2026-06-26)
 
 ### Features
