@@ -18,6 +18,7 @@ import {
   buildAdsConversionLinkerServerTag,
   buildAdsRemarketingServerTag,
   buildAllowParamsTransformation,
+  buildServerAllEventsTrigger,
   auditServerContainer,
   type TriggerInput,
   type VariableKind,
@@ -87,18 +88,25 @@ async function findExistingByName(
   data: GoogleDataService,
   a: Record<string, unknown>,
   name: string,
-  kind: 'tag' | 'variable'
+  kind: 'tag' | 'variable' | 'trigger'
 ): Promise<unknown> {
   const want = name.trim().toLowerCase();
   if (!want) return null;
   const list =
     kind === 'tag'
       ? await data.listGtmTags(s(a.accountId), s(a.containerId), s(a.workspaceId))
-      : await data.listGtmVariables(s(a.accountId), s(a.containerId), s(a.workspaceId));
+      : kind === 'variable'
+        ? await data.listGtmVariables(s(a.accountId), s(a.containerId), s(a.workspaceId))
+        : await data.listGtmTriggers(s(a.accountId), s(a.containerId), s(a.workspaceId));
   const match = list.find((x) => x.name.trim().toLowerCase() === want);
   if (!match) return null;
-  const id = kind === 'tag' ? (match as { tagId: string }).tagId : (match as { variableId: string }).variableId;
-  const label = kind === 'tag' ? 'Tag' : 'Variable';
+  const id =
+    kind === 'tag'
+      ? (match as { tagId: string }).tagId
+      : kind === 'variable'
+        ? (match as { variableId: string }).variableId
+        : (match as { triggerId: string }).triggerId;
+  const label = kind === 'tag' ? 'Tag' : kind === 'variable' ? 'Variable' : 'Trigger';
   return { alreadyExists: true, [kind]: match, message: `${label} "${match.name}" already exists (ID ${id}) — not created.` };
 }
 
@@ -1335,6 +1343,40 @@ export function buildToolRegistry(
             throw new Error(`Unknown server-tag platform "${s(a.platform)}" — use ga4 / ads_conversion / ads_conversion_linker / ads_remarketing.`);
         }
         return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_server_trigger',
+      description:
+        'Create the firing trigger for a SERVER container — a Custom Event trigger that fires on ALL events, optionally SCOPED to a client via "Client Name equals <clientName>". Use THIS (not create_gtm_trigger) for server triggers — it builds the exact customEvent shape GTM requires (a {{_event}} match-all custom-event filter plus the optional Client Name filter), which is easy to get wrong by hand. When clientName is given it also enables the Client Name built-in so the filter resolves. Requires accountId, containerId, workspaceId, name; optional clientName (e.g. "GA4").',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string' },
+          clientName: { type: 'string', description: 'Scope the trigger to this client (Client Name equals …). Omit to fire on all events.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'name'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) =>
+        `Create server trigger "${s(a.name)}"${s(a.clientName) ? ` scoped to Client Name = ${s(a.clientName)}` : ' (all events)'} in workspace ${s(a.workspaceId)}`,
+      precheck: (a) => findExistingByName(data, a, s(a.name), 'trigger'),
+      handler: async (a) => {
+        const clientName = a.clientName != null ? s(a.clientName) : '';
+        if (clientName) {
+          // Enable the Client Name built-in so {{Client Name}} resolves (best-effort).
+          try {
+            await data.enableGtmBuiltInVariables(s(a.accountId), s(a.containerId), s(a.workspaceId), ['clientName']);
+          } catch {
+            /* non-fatal */
+          }
+        }
+        const trigger = buildServerAllEventsTrigger(s(a.name), clientName || undefined);
+        return data.createGtmTrigger(s(a.accountId), s(a.containerId), s(a.workspaceId), trigger as unknown as Record<string, unknown>);
       },
     },
     {
