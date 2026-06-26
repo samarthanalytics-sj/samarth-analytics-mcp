@@ -1,3 +1,9 @@
+## [1.69.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.68.0...v1.69.0) (2026-06-26)
+
+### Features
+
+* **desktop:** copy_workspace_resources — recreate tags/triggers/variables across workspaces ([ae4f837](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ae4f8379d9a7d0fbe410bc8ed9bcb068b776cdc3))
+
 ## [1.68.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.67.0...v1.68.0) (2026-06-26)
 
 ### Features
