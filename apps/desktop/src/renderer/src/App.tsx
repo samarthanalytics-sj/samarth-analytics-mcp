@@ -2728,40 +2728,24 @@ function ContainerAuditPanel({
                   title="Filter findings — and scope the batch fixes — by severity, issue type, tag type, or fixability"
                 >
                   <option value="all">All findings ({findings.length})</option>
-                  {sevOptions.length > 0 && (
-                    <optgroup label="Severity">
-                      {sevOptions.map(([k, label]) => (
-                        <option key={`sev:${k}`} value={`sev:${k}`}>
-                          {label} ({sevCounts.get(k)})
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {catOptions.length > 0 && (
-                    <optgroup label="Issue type">
-                      {catOptions.map(([k, label]) => (
-                        <option key={`cat:${k}`} value={`cat:${k}`}>
-                          {label} ({catCounts.get(k)})
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {(fixable > 0 || orphanCount > 0 || unusedVarCount > 0) && (
-                    <optgroup label="Quick filters">
-                      {fixable > 0 && <option value={FIXABLE_FILTER}>Auto-fixable ({fixable})</option>}
-                      {orphanCount > 0 && <option value={ORPHAN_TRIGGER_FILTER}>Orphaned triggers ({orphanCount})</option>}
-                      {unusedVarCount > 0 && <option value={UNUSED_VAR_FILTER}>Unused variables ({unusedVarCount})</option>}
-                    </optgroup>
-                  )}
-                  {tagTypes.length > 0 && (
-                    <optgroup label="Tag type">
-                      {tagTypes.map((t) => (
-                        <option key={t} value={t}>
-                          {gtmTypeLabel(t)} ({typeCounts.get(t)})
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
+                  {sevOptions.map(([k, label]) => (
+                    <option key={`sev:${k}`} value={`sev:${k}`}>
+                      {label} ({sevCounts.get(k)})
+                    </option>
+                  ))}
+                  {catOptions.map(([k, label]) => (
+                    <option key={`cat:${k}`} value={`cat:${k}`}>
+                      {label} ({catCounts.get(k)})
+                    </option>
+                  ))}
+                  {fixable > 0 && <option value={FIXABLE_FILTER}>Auto-fixable ({fixable})</option>}
+                  {orphanCount > 0 && <option value={ORPHAN_TRIGGER_FILTER}>Orphaned triggers ({orphanCount})</option>}
+                  {unusedVarCount > 0 && <option value={UNUSED_VAR_FILTER}>Unused variables ({unusedVarCount})</option>}
+                  {tagTypes.map((t) => (
+                    <option key={t} value={t}>
+                      {gtmTypeLabel(t)} ({typeCounts.get(t)})
+                    </option>
+                  ))}
                 </select>
                 {typeFilter !== 'all' && (
                   <button style={styles.ghostBtn} onClick={() => setTypeFilter('all')} title="Clear the filter">
