@@ -26,7 +26,7 @@ const DEFAULT_MODEL: Record<LlmProvider, string> = {
   gemini: 'gemini-2.0-flash',
 };
 
-type View = 'chat' | 'gtm' | 'settings';
+type View = 'chat' | 'gtm' | 'prompts' | 'settings';
 type GtmTab = 'suggestions' | 'audit';
 
 /* Friendly labels for GTM type codes, so approvals read in plain English. */
@@ -593,6 +593,8 @@ export function App(): JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [selfTest, setSelfTest] = useState<SecretSelfTest | null>(null);
   const [view, setView] = useState<View>('chat');
+  // A prompt picked from the Prompts tab to drop into the chat input (nonce so re-picks fire).
+  const [chatSeed, setChatSeed] = useState<{ text: string; nonce: number } | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState('');
 
@@ -689,6 +691,12 @@ export function App(): JSX.Element {
             🗂 GTM Tools
           </button>
           <button
+            style={{ ...styles.navItem, ...(view === 'prompts' ? styles.navActive : {}) }}
+            onClick={() => setView('prompts')}
+          >
+            📖 Prompts
+          </button>
+          <button
             style={{ ...styles.navItem, ...(view === 'settings' ? styles.navActive : {}) }}
             onClick={() => setView('settings')}
           >
@@ -709,9 +717,16 @@ export function App(): JSX.Element {
         )}
 
         {view === 'chat' ? (
-          <ChatView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
+          <ChatView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} seed={chatSeed} />
         ) : view === 'gtm' ? (
           <GtmToolsView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
+        ) : view === 'prompts' ? (
+          <PromptsView
+            onUse={(text) => {
+              setChatSeed((s) => ({ text, nonce: (s?.nonce ?? 0) + 1 }));
+              setView('chat');
+            }}
+          />
         ) : (
           <SettingsView
             active={active}
@@ -740,10 +755,12 @@ function ChatView({
   active,
   onError,
   refresh,
+  seed,
 }: {
   active: AccountView | undefined;
   onError: (m: string) => void;
   refresh: () => Promise<void>;
+  seed?: { text: string; nonce: number } | null;
 }): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -771,6 +788,15 @@ function ChatView({
       ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
     }
   }, [input]);
+
+  // A prompt picked from the Prompts tab seeds the input (nonce makes re-picks re-apply).
+  useEffect(() => {
+    if (seed?.text) {
+      setInput(seed.text);
+      taRef.current?.focus();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.nonce]);
 
   const ready = Boolean(active?.hasGoogleToken && active?.llm?.hasApiKey);
   const hint = !active
@@ -1244,6 +1270,148 @@ function GtmToolsView({
       ) : (
         <ContainerAuditPanel key={(active?.id ?? 'none') + ':aud'} active={active} onError={onError} />
       )}
+    </div>
+  );
+}
+
+// Sample prompts grouped by task — a quick reference + launcher for the chat. Replace the
+// placeholder ids/names/URLs (G-…, container names, https URLs) with the user's own.
+const PROMPT_GROUPS: Array<{ title: string; icon: string; prompts: string[] }> = [
+  {
+    title: 'Audit & health',
+    icon: '🔍',
+    prompts: [
+      'Audit my GTM container and list the findings by severity, worst first.',
+      'What changed in my container since the last audit — any regressions?',
+      'Cross-check the GA4 measurement IDs in my container against my GA4 properties.',
+      'Audit my server container.',
+      'Verify my tagging server https://sgtm.example.com',
+    ],
+  },
+  {
+    title: 'Scope & filter (tag type + ecommerce event)',
+    icon: '🎯',
+    prompts: [
+      'List all tags that fire on the purchase event.',
+      'Show only the GA4 event tags in my container.',
+      'Require Consent Mode v2 on all GA4 event tags that fire on ecommerce events (purchase, add_to_cart, begin_checkout).',
+      'Pause every Custom HTML tag.',
+      'Which tags fire on add_to_cart but have no Consent Mode v2 settings?',
+    ],
+  },
+  {
+    title: 'GA4 ecommerce tags',
+    icon: '🛒',
+    prompts: [
+      'Create a GA4 event tag for add_to_cart with items, value and currency, firing on the add_to_cart custom event.',
+      'Create a GA4 purchase tag with items, transaction_id, value, tax, shipping, currency and coupon.',
+      'Create a GA4 view_item tag with the ecommerce items, value and currency.',
+      'Create a GA4 begin_checkout tag firing on the begin_checkout custom event.',
+    ],
+  },
+  {
+    title: 'Triggers & variables',
+    icon: '⚡',
+    prompts: [
+      'Create a Custom Event trigger for purchase.',
+      'Create a timer trigger that fires every 30 seconds.',
+      'Create a Data Layer variable for ecommerce.value.',
+      'Create a Constant variable named GA4 ID with value G-XXXXXXX.',
+    ],
+  },
+  {
+    title: 'Consent Mode v2',
+    icon: '🛡',
+    prompts: [
+      'Set Consent Mode v2 on all ad/analytics tags (ad_storage, analytics_storage, ad_user_data, ad_personalization).',
+      'Which tags are missing Consent Mode v2 settings?',
+    ],
+  },
+  {
+    title: 'Folders, environments & workspaces',
+    icon: '🗂',
+    prompts: [
+      'Create a folder called Ecommerce and move all GA4 event tags into it.',
+      'Create a Test environment and give me the install snippet.',
+      'Copy all tags, triggers and variables from MCP-E2E-TEST to Default Workspace.',
+    ],
+  },
+  {
+    title: 'Server-side GTM',
+    icon: '🖥',
+    prompts: [
+      'Set up a server container for this web container.',
+      'Create a GA4 server tag forwarding to G-XXXXXXX, firing on all events.',
+      'Set the tagging server URL on my server container to https://sgtm.example.com',
+      'Create the Meta CAPI EMQ event data variables in my server container.',
+    ],
+  },
+  {
+    title: 'Community templates (Meta / TikTok / LinkedIn)',
+    icon: '🧩',
+    prompts: [
+      'Import the Meta Pixel community template and create a Meta pixel tag with my Pixel ID.',
+      'Import the TikTok Pixel template and create the tag.',
+      'Import the LinkedIn Insight Tag template.',
+      'Detect Meta/Facebook pixel tags in my web container.',
+    ],
+  },
+  {
+    title: 'GA4 reporting & settings (read-only)',
+    icon: '📊',
+    prompts: [
+      'Run a GA4 report of sessions by default channel group for the last 28 days.',
+      'Show my GA4 property data retention and Google Signals settings.',
+      'Score my GA4 property setup.',
+    ],
+  },
+];
+
+function PromptsView({ onUse }: { onUse: (text: string) => void }): JSX.Element {
+  const [copied, setCopied] = useState('');
+  function copy(text: string): void {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(text)
+        .then(() => {
+          setCopied(text);
+          setTimeout(() => setCopied(''), 1200);
+        })
+        .catch(() => {});
+    }
+  }
+  return (
+    <div style={styles.promptsWrap}>
+      <div style={styles.promptsHead}>
+        <div style={styles.chatTitle}>Sample prompts</div>
+        <div style={styles.chatSub}>
+          Click “Use in chat” to drop a prompt into the chat box, or “Copy”. Replace placeholders (G-…, container/workspace names, https URLs) with yours.
+        </div>
+      </div>
+      <div style={styles.promptsBody}>
+        {PROMPT_GROUPS.map((g) => (
+          <div key={g.title}>
+            <div style={styles.promptGroupTitle}>
+              {g.icon} {g.title}
+            </div>
+            <div style={styles.promptList}>
+              {g.prompts.map((p) => (
+                <div key={p} style={styles.promptCard}>
+                  <div style={styles.promptText}>{p}</div>
+                  <div style={styles.promptActions}>
+                    <button style={styles.promptUse} onClick={() => onUse(p)}>
+                      Use in chat
+                    </button>
+                    <button style={styles.promptCopy} onClick={() => copy(p)}>
+                      {copied === p ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -2708,6 +2876,17 @@ const styles: Record<string, React.CSSProperties> = {
   subTabs: { display: 'flex', gap: 8, padding: '10px 20px', borderBottom: '1px solid #1f2937', flexShrink: 0 },
   subTabOn: { background: '#1e3a5f', color: '#e5e7eb', border: '1px solid #1e3a5f', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
   subTabOff: { background: 'transparent', color: '#93c5fd', border: '1px solid #334155', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13 },
+
+  promptsWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
+  promptsHead: { padding: '14px 20px', borderBottom: '1px solid #1f2937', flexShrink: 0 },
+  promptsBody: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 18 },
+  promptGroupTitle: { fontSize: 12, fontWeight: 700, color: '#93c5fd', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
+  promptList: { display: 'flex', flexDirection: 'column', gap: 8 },
+  promptCard: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, background: '#161e2e', border: '1px solid #1f2937', borderRadius: 10, padding: '10px 12px' },
+  promptText: { fontSize: 13, color: '#e5e7eb', lineHeight: 1.45 },
+  promptActions: { display: 'flex', gap: 6, flexShrink: 0 },
+  promptUse: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' },
+  promptCopy: { background: 'transparent', color: '#93c5fd', border: '1px solid #334155', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer' },
   errorBar: { background: '#1f1416', borderBottom: '1px solid #7f1d1d', color: '#fca5a5', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 },
   errorClose: { background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer' },
 
