@@ -19,6 +19,7 @@ import {
   metaStandardEvent,
   buildTikTokCapiServerTag,
   tikTokStandardEvent,
+  TIKTOK_EVENT_PROPERTIES,
   META_EVENT_OBJECT_PROPERTIES,
   normalizeCustomEventName,
   normalizeCustomEventTrigger,
@@ -1141,16 +1142,17 @@ test('buildMetaCapiServerTag: Stape FB CAPI tag with EMQ-tuned defaults', () => 
 });
 
 test('tikTokStandardEvent: GA4 aliases map, exact-case TikTok events pass through, junk → null', () => {
-  // GA4 purchase → CompletePayment (web-pixel-consistent for dedup); other GA4 aliases
-  assert.equal(tikTokStandardEvent('purchase'), 'CompletePayment');
+  // GA4 purchase → Purchase (the current event; CompletePayment is legacy "Use Purchase instead")
+  assert.equal(tikTokStandardEvent('purchase'), 'Purchase');
   assert.equal(tikTokStandardEvent('add_to_cart'), 'AddToCart');
   assert.equal(tikTokStandardEvent('view_item'), 'ViewContent');
   assert.equal(tikTokStandardEvent('begin_checkout'), 'InitiateCheckout');
-  assert.equal(tikTokStandardEvent('generate_lead'), 'Lead');
+  assert.equal(tikTokStandardEvent('generate_lead'), 'SubmitForm');
   assert.equal(tikTokStandardEvent('sign_up'), 'CompleteRegistration');
-  // exact-case escape hatch: a literal TikTok event is kept (so "Purchase" ≠ CompletePayment)
-  assert.equal(tikTokStandardEvent('Purchase'), 'Purchase');
+  assert.equal(tikTokStandardEvent('file_download'), 'Download');
+  // exact-case escape hatch: the legacy CompletePayment is still reachable when asked for explicitly
   assert.equal(tikTokStandardEvent('CompletePayment'), 'CompletePayment');
+  assert.equal(tikTokStandardEvent('Purchase'), 'Purchase');
   // case/separator-insensitive direct match
   assert.equal(tikTokStandardEvent('view content'), 'ViewContent');
   assert.equal(tikTokStandardEvent('completeregistration'), 'CompleteRegistration');
@@ -1159,8 +1161,17 @@ test('tikTokStandardEvent: GA4 aliases map, exact-case TikTok events pass throug
   assert.equal(tikTokStandardEvent('  '), null);
 });
 
+test('TIKTOK_EVENT_PROPERTIES: per-event recommended properties cover the commerce keys', () => {
+  assert.deepEqual(TIKTOK_EVENT_PROPERTIES.Purchase, ['contents', 'content_type', 'value', 'currency', 'order_id', 'description']);
+  assert.ok(TIKTOK_EVENT_PROPERTIES.ViewContent.includes('content_type') && TIKTOK_EVENT_PROPERTIES.ViewContent.includes('contents'));
+  assert.ok(TIKTOK_EVENT_PROPERTIES.InitiateCheckout.includes('num_items'));
+  assert.deepEqual(TIKTOK_EVENT_PROPERTIES.Search, ['query', 'content_type']);
+  // a non-commerce event's props (routed to additional properties — not in TIKTOK_CUSTOM_DATA_KEYS)
+  assert.deepEqual(TIKTOK_EVENT_PROPERTIES.SubmitForm, ['form_name', 'value']);
+});
+
 test('buildTikTokCapiServerTag: Stape TikTok Events API tag, standard event + match-quality wiring', () => {
-  const t = buildTikTokCapiServerTag('cvt_TT01', 'TikTok CAPI - CompletePayment Tag', '{{TikTok Pixel}}', '{{TikTok Token}}', 'purchase', {
+  const t = buildTikTokCapiServerTag('cvt_TT01', 'TikTok CAPI - Purchase Tag', '{{TikTok Pixel}}', '{{TikTok Token}}', 'purchase', {
     firingTriggerId: ['5'],
     eventId: '{{Event ID}}',
     userData: [
@@ -1182,7 +1193,7 @@ test('buildTikTokCapiServerTag: Stape TikTok Events API tag, standard event + ma
   // eventType RADIO is the inherit/override control (no Meta-style inheritEventName field)
   assert.equal(p.find((x) => x.key === 'inheritEventName'), undefined, 'no Meta inheritEventName key');
   assert.equal(p.find((x) => x.key === 'eventType')?.value, 'standard');
-  assert.equal(p.find((x) => x.key === 'eventName')?.value, 'CompletePayment', 'GA4 purchase mapped');
+  assert.equal(p.find((x) => x.key === 'eventName')?.value, 'Purchase', 'GA4 purchase mapped to the current Purchase event, not legacy CompletePayment');
   assert.equal(p.find((x) => x.key === 'enableEventEnhancement')?.value, 'true', 'Event Enhancement on');
   assert.equal(p.find((x) => x.key === 'generateTtp')?.value, 'true', 'generate _ttp on');
   assert.equal(p.find((x) => x.key === 'adStorageConsent')?.value, 'optional');

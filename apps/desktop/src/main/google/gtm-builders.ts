@@ -1665,18 +1665,44 @@ export const TIKTOK_STANDARD_EVENTS: string[] = [
   'CompletePayment', 'SubmitForm', 'ClickButton', 'PlaceAnOrder',
 ];
 
-/** Common GA4 (snake_case) event names → TikTok standard event, ONLY where the names differ.
- *  GA4 `purchase` → CompletePayment (TikTok's canonical purchase event, and what the WEB pixel
- *  template uses — so a web pixel + this server tag deduplicate). Keys are normalized
- *  (lowercased, separators stripped). An exact-case TikTok event bypasses this (see below). */
+/** Common GA4 (snake_case) event names → TikTok standard event, ONLY where the normalized names
+ *  differ. GA4 `purchase` is intentionally ABSENT so it resolves to the current TikTok `Purchase`
+ *  event by direct match — the live template marks CompletePayment "legacy - Use Purchase instead"
+ *  (pass 'CompletePayment' explicitly if you truly need the legacy event). Keys are normalized
+ *  (lowercased, separators stripped); an exact-case TikTok event bypasses this (see below). */
 const GA4_TO_TIKTOK: Record<string, string> = {
-  purchase: 'CompletePayment',
   viewitem: 'ViewContent',
   viewitemlist: 'ViewContent',
   begincheckout: 'InitiateCheckout',
   addshippinginfo: 'AddPaymentInfo',
-  generatelead: 'Lead',
+  generatelead: 'SubmitForm',
   signup: 'CompleteRegistration',
+  filedownload: 'Download',
+};
+
+/** Recommended TikTok Events API event properties per event (required + recommended combined), keyed
+ *  by the canonical TikTok event name. These are TOP-LEVEL properties (in-`contents` item keys like
+ *  content_id/brand/price are set inside the contents variable, not here). Keys in
+ *  TIKTOK_CUSTOM_DATA_KEYS go to `customDataList`; the rest (form_name, registration_method, …) the
+ *  builder routes to `additionalEventPropertiesList`. order_id is usually mapped from the GA4
+ *  transaction_id. Mirrors META_EVENT_OBJECT_PROPERTIES — the caller wires values from variables. */
+export const TIKTOK_EVENT_PROPERTIES: Record<string, string[]> = {
+  Pageview: ['page_url', 'referrer'],
+  ViewContent: ['content_type', 'contents', 'value', 'currency', 'description'],
+  Search: ['query', 'content_type'],
+  AddToCart: ['contents', 'content_type', 'value', 'currency'],
+  AddToWishlist: ['contents', 'content_type', 'value', 'currency'],
+  InitiateCheckout: ['contents', 'content_type', 'value', 'currency', 'num_items'],
+  AddPaymentInfo: ['contents', 'content_type', 'value', 'currency'],
+  Purchase: ['contents', 'content_type', 'value', 'currency', 'order_id', 'description'],
+  CompletePayment: ['contents', 'content_type', 'value', 'currency', 'order_id', 'description'],
+  CompleteRegistration: ['registration_method'],
+  SubmitForm: ['form_name', 'value'],
+  Contact: ['contact_method'],
+  Subscribe: ['value', 'currency', 'subscription_type'],
+  Download: ['file_name', 'file_type'],
+  ClickButton: ['button_name', 'page_url'],
+  Login: ['login_method'],
 };
 
 /** Keys the TikTok server template's `userDataList` SELECT accepts (advanced matching). */
@@ -1693,8 +1719,9 @@ export const TIKTOK_CUSTOM_DATA_KEYS: string[] = [
 ];
 
 /** Resolve a free-text/GA4 event to a TikTok STANDARD event, or null (→ custom). An EXACT
- *  (case-sensitive) TikTok event passes through (so "Purchase" stays Purchase); then a GA4 alias
- *  maps (purchase → CompletePayment); then a case/separator-insensitive match. PURE. */
+ *  (case-sensitive) TikTok event passes through; then a GA4 alias maps (view_item → ViewContent,
+ *  generate_lead → SubmitForm); then a case/separator-insensitive match (so GA4 `purchase` →
+ *  `Purchase`, NOT the legacy CompletePayment). PURE. */
 export function tikTokStandardEvent(event: string): string | null {
   const raw = (event ?? '').trim();
   if (!raw) return null;
