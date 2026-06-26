@@ -1,3 +1,9 @@
+## [1.88.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.88.0...v1.88.1) (2026-06-26)
+
+### Bug Fixes
+
+* **desktop:** orphaned-trigger detection counts members of an UNUSED trigger group as orphans ([e99a368](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e99a36899e4ef94b784ee4e32dea73e0ad2886b2))
+
 ## [1.88.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.87.0...v1.88.0) (2026-06-26)
 
 ### Features
