@@ -1409,6 +1409,24 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; prompts: string[] }> =
     ],
   },
   {
+    title: 'Meta — Pixel, CAPI & advanced matching',
+    icon: '📘',
+    prompts: [
+      'Import the Meta Pixel community template and create a Meta pixel base tag with my Pixel ID.',
+      'Create a Meta Purchase event tag with value, currency and content_ids.',
+      'Create a Meta AddToCart event tag firing on add_to_cart.',
+      'Create a Meta ViewContent event tag for product pages.',
+      'Create a Meta InitiateCheckout event tag firing on begin_checkout.',
+      'Create a Meta Lead event tag firing on form submissions.',
+      'Create the Meta CAPI EMQ event data variables in my server container (email_address, phone_number, first_name, last_name, fbp, fbc, event_id, value, currency).',
+      'Set up Meta advanced matching: feed raw email and phone into the Meta tag user_data so it hashes them for match quality.',
+      'Import the Meta Conversions API server template (stape-io / facebook-tag) into my server container.',
+      'Map email, phone, value, currency and event_id into my Meta CAPI tag for higher Event Match Quality.',
+      'Detect Meta/Facebook pixel tags in my web container and which ecommerce events they fire on.',
+      'How do I confirm my Meta CAPI events and Event Match Quality in Meta Events Manager?',
+    ],
+  },
+  {
     title: 'Test & verify a new tag',
     icon: '🧪',
     prompts: [
@@ -1441,8 +1459,16 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; prompts: string[] }> =
   },
 ];
 
+// Short chip label for a group's filter button (drop the parenthetical / "& …" tail).
+function shortLabel(title: string): string {
+  return title.split(/ \(| & |, /)[0];
+}
+
 function PromptsView({ onUse }: { onUse: (text: string) => void }): JSX.Element {
   const [copied, setCopied] = useState('');
+  const [query, setQuery] = useState('');
+  const [cat, setCat] = useState('all'); // group title, or 'all'
+
   function copy(text: string): void {
     if (navigator.clipboard?.writeText) {
       navigator.clipboard
@@ -1454,37 +1480,69 @@ function PromptsView({ onUse }: { onUse: (text: string) => void }): JSX.Element 
         .catch(() => {});
     }
   }
+
+  const q = query.trim().toLowerCase();
+  const groups = PROMPT_GROUPS.filter((g) => cat === 'all' || g.title === cat)
+    .map((g) => ({ ...g, prompts: q ? g.prompts.filter((p) => p.toLowerCase().includes(q)) : g.prompts }))
+    .filter((g) => g.prompts.length > 0);
+  const total = groups.reduce((n, g) => n + g.prompts.length, 0);
+
   return (
     <div style={styles.promptsWrap}>
       <div style={styles.promptsHead}>
         <div style={styles.chatTitle}>Sample prompts</div>
         <div style={styles.chatSub}>
-          Click “Use in chat” to drop a prompt into the chat box, or “Copy”. Replace placeholders (G-…, container/workspace names, https URLs) with yours.
+          “Use in chat” drops a prompt into the chat box; “Copy” copies it. Replace placeholders (G-…, IDs, names, https URLs) with yours.
+        </div>
+        <input
+          style={styles.promptSearch}
+          placeholder="Search prompts…  (e.g. meta, email, purchase, consent, server)"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <div style={styles.promptFilters}>
+          <button style={cat === 'all' ? styles.promptChipOn : styles.promptChip} onClick={() => setCat('all')}>
+            All
+          </button>
+          {PROMPT_GROUPS.map((g) => (
+            <button
+              key={g.title}
+              title={g.title}
+              style={cat === g.title ? styles.promptChipOn : styles.promptChip}
+              onClick={() => setCat(g.title)}
+            >
+              {g.icon} {shortLabel(g.title)}
+            </button>
+          ))}
         </div>
       </div>
       <div style={styles.promptsBody}>
-        {PROMPT_GROUPS.map((g) => (
-          <div key={g.title}>
-            <div style={styles.promptGroupTitle}>
-              {g.icon} {g.title}
-            </div>
-            <div style={styles.promptList}>
-              {g.prompts.map((p) => (
-                <div key={p} style={styles.promptCard}>
-                  <div style={styles.promptText}>{p}</div>
-                  <div style={styles.promptActions}>
-                    <button style={styles.promptUse} onClick={() => onUse(p)}>
-                      Use in chat
-                    </button>
-                    <button style={styles.promptCopy} onClick={() => copy(p)}>
-                      {copied === p ? 'Copied' : 'Copy'}
-                    </button>
+        {total === 0 ? (
+          <div style={styles.sideMuted}>No prompts match “{query}”. Try a different word or clear the filter.</div>
+        ) : (
+          groups.map((g) => (
+            <div key={g.title}>
+              <div style={styles.promptGroupTitle}>
+                {g.icon} {g.title}
+              </div>
+              <div style={styles.promptList}>
+                {g.prompts.map((p) => (
+                  <div key={p} style={styles.promptCard}>
+                    <div style={styles.promptText}>{p}</div>
+                    <div style={styles.promptActions}>
+                      <button style={styles.promptUse} onClick={() => onUse(p)}>
+                        Use in chat
+                      </button>
+                      <button style={styles.promptCopy} onClick={() => copy(p)}>
+                        {copied === p ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
     </div>
   );
@@ -2953,6 +3011,10 @@ const styles: Record<string, React.CSSProperties> = {
 
   promptsWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   promptsHead: { padding: '14px 20px', borderBottom: '1px solid #1f2937', flexShrink: 0 },
+  promptSearch: { width: '100%', boxSizing: 'border-box', marginTop: 10, background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit' },
+  promptFilters: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 },
+  promptChip: { background: 'transparent', color: '#93c5fd', border: '1px solid #334155', borderRadius: 999, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
+  promptChipOn: { background: '#1e3a5f', color: '#e5e7eb', border: '1px solid #1e3a5f', borderRadius: 999, padding: '4px 10px', fontSize: 12, cursor: 'pointer', fontWeight: 600 },
   promptsBody: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 18 },
   promptGroupTitle: { fontSize: 12, fontWeight: 700, color: '#93c5fd', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   promptList: { display: 'flex', flexDirection: 'column', gap: 8 },
