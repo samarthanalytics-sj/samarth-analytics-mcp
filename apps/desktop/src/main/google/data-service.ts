@@ -7,6 +7,7 @@ import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
 import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, upsertGoogleTagConfig } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
+import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
@@ -916,6 +917,11 @@ export class GoogleDataService {
     };
     const lc = (s2: string | null | undefined): string => (s2 ?? '').trim().toLowerCase();
     const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+    // A bulk copy fires dozens of writes in seconds and predictably trips GTM's low per-minute
+    // write quota — retry each create with backoff so the copy completes in ONE run instead of
+    // failing partway and needing a manual retry. Generous (6 tries, up to 60s) to outlast a
+    // quota-reset window; genuine errors still surface to `failed`.
+    const RETRY = { maxRetries: 6, baseDelayMs: 2_000, maxDelayMs: 60_000 };
 
     const result = {
       variables: { created: [] as string[], skipped: [] as string[] },
@@ -949,7 +955,7 @@ export class GoogleDataService {
     for (const v of src.variables) {
       if (dstVarNames.has(lc(v.name))) { result.variables.skipped.push(v.name ?? ''); continue; }
       try {
-        await gtm.accounts.containers.workspaces.variables.create({ parent: dstParent, requestBody: strip(v as Record<string, unknown>) });
+        await withQuotaRetry(() => gtm.accounts.containers.workspaces.variables.create({ parent: dstParent, requestBody: strip(v as Record<string, unknown>) }), RETRY);
         result.variables.created.push(v.name ?? '');
       } catch (e) {
         result.failed.push(`variable "${v.name ?? ''}": ${msg(e)}`);
@@ -966,7 +972,7 @@ export class GoogleDataService {
       const body = strip(t as Record<string, unknown>);
       if (isGroup(t) && Array.isArray(body.parameter)) body.parameter = (body.parameter as unknown[]).map(remapRefs);
       try {
-        const created = await gtm.accounts.containers.workspaces.triggers.create({ parent: dstParent, requestBody: body });
+        const created = await withQuotaRetry(() => gtm.accounts.containers.workspaces.triggers.create({ parent: dstParent, requestBody: body }), RETRY);
         if (t.triggerId && created.data.triggerId) trigIdMap.set(t.triggerId, created.data.triggerId);
         result.triggers.created.push(t.name ?? '');
       } catch (e) {
@@ -989,7 +995,7 @@ export class GoogleDataService {
       if (blocks) body.blockingTriggerId = blocks; else delete body.blockingTriggerId;
       if (Array.isArray(body.parameter)) body.parameter = (body.parameter as unknown[]).map(remapRefs);
       try {
-        await gtm.accounts.containers.workspaces.tags.create({ parent: dstParent, requestBody: body });
+        await withQuotaRetry(() => gtm.accounts.containers.workspaces.tags.create({ parent: dstParent, requestBody: body }), RETRY);
         result.tags.created.push(tag.name ?? '');
       } catch (e) {
         result.failed.push(`tag "${tag.name ?? ''}": ${msg(e)}`);
