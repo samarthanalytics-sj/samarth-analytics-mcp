@@ -1,3 +1,9 @@
+## [1.69.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.69.0...v1.69.1) (2026-06-26)
+
+### Bug Fixes
+
+* **desktop:** auto-retry copy_workspace_resources creates on GTM quota (429) ([38a2b5e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/38a2b5ebed812c256e94b2898c607d868aab59a2))
+
 ## [1.69.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.68.0...v1.69.0) (2026-06-26)
 
 ### Features
