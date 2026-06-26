@@ -1,3 +1,9 @@
+## [1.87.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.86.0...v1.87.0) (2026-06-26)
+
+### Features
+
+* **desktop:** expand the container-audit filter — severity, issue type, fixability, unused variables ([a27686a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a27686a6afab6f46f637d988cb7caab20836d3e5))
+
 ## [1.86.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.85.0...v1.86.0) (2026-06-26)
 
 ### Features
