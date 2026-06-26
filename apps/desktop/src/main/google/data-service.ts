@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, upsertGoogleTagConfig } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, upsertGoogleTagConfig } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
@@ -1353,6 +1353,29 @@ export class GoogleDataService {
     });
     this.journal('variable', accountId, containerId, workspaceId, res.data.variableId ?? '', `${res.data.name ?? 'variable'} (#${res.data.variableId})`);
     return { variableId: res.data.variableId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  /** Create the standard Meta CAPI EMQ Event Data variables (`ed - fbp/fbc/event_id/value/…`)
+   *  in a SERVER container, so they can be mapped into the Conversions API tag's Event
+   *  Parameters. Idempotent — skips any whose name already exists. */
+  async createMetaEmqVariables(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<{ created: string[]; skipped: string[] }> {
+    const existing = await this.listGtmVariables(accountId, containerId, workspaceId);
+    const existingNames = new Set(existing.map((v) => v.name.trim().toLowerCase()));
+    const created: string[] = [];
+    const skipped: string[] = [];
+    for (const v of buildMetaEmqVariables()) {
+      if (existingNames.has(v.name.trim().toLowerCase())) {
+        skipped.push(v.name);
+        continue;
+      }
+      await this.createGtmVariable(accountId, containerId, workspaceId, v as unknown as Record<string, unknown>);
+      created.push(v.name);
+    }
+    return { created, skipped };
   }
 
   async runGa4Report(input: {

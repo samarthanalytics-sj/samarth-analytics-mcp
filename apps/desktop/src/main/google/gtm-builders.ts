@@ -1412,3 +1412,62 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     hasGa4Config: hasGa4Client,
   };
 }
+
+/* ───────────── Meta CAPI (EMQ) helpers ───────────── */
+
+/** The standard Meta CAPI "Event Match Quality" event-data keys read off the incoming event,
+ *  for the Conversions API tag's Event Parameters + user_data. keyPath === the key (corpus-
+ *  validated: server containers store these as `ed - <key>` with keyPath `<key>`). The CAPI
+ *  tag hashes the user_data fields itself, so these source the RAW values. */
+export const META_EMQ_EVENT_DATA_KEYS: string[] = [
+  'fbp',
+  'fbc',
+  'event_id',
+  'value',
+  'currency',
+  'transaction_id',
+  'content_ids',
+  'email_address',
+  'phone_number',
+  'first_name',
+  'last_name',
+  'country',
+  'city',
+  'postal_code',
+];
+
+/** Build the Meta EMQ Event Data variables (`ed - <key>`, type `ed`, keyPath `<key>`). PURE. */
+export function buildMetaEmqVariables(): GtmVariableResource[] {
+  return META_EMQ_EVENT_DATA_KEYS.map((k) => buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
+}
+
+export interface MetaTagDetection {
+  metaTags: Array<{ id: string; name: string; type: string; ecommerceEvents: string[] }>;
+  hasMetaPixel: boolean;
+  hasEcommerce: boolean;
+}
+
+/** Detect Meta/Facebook pixel tags in a WEB container snapshot — Custom HTML with the fbq
+ *  pixel, or a tag named/typed for Facebook/Meta. Reports any standard ecommerce events
+ *  (Purchase, AddToCart, …) referenced, so callers can tell whether Meta ECOMMERCE is in use. PURE. */
+export function detectMetaTags(snapshot: ContainerSnapshot): MetaTagDetection {
+  const META_RE = /fbq\s*\(|fbevents|connect\.facebook\.net|facebook|meta[\s_-]?pixel|fb[\s_-]?pixel/i;
+  const ECOM_RE = /['"](Purchase|AddToCart|InitiateCheckout|AddPaymentInfo|ViewContent|AddToWishlist|Subscribe)['"]/g;
+  const metaTags: MetaTagDetection['metaTags'] = [];
+  for (const t of snapshot.tags) {
+    let html = '';
+    for (const p of t.parameter) {
+      const pp = p as { key?: string; value?: unknown };
+      if (pp.key === 'html') html = String(pp.value ?? '');
+    }
+    const hay = `${t.name} ${t.type}`;
+    if (!META_RE.test(hay) && !META_RE.test(html)) continue;
+    const ecommerceEvents = Array.from(new Set([...html.matchAll(ECOM_RE)].map((m) => m[1])));
+    metaTags.push({ id: t.tagId, name: t.name, type: t.type, ecommerceEvents });
+  }
+  return {
+    metaTags,
+    hasMetaPixel: metaTags.length > 0,
+    hasEcommerce: metaTags.some((m) => m.ecommerceEvents.length > 0),
+  };
+}

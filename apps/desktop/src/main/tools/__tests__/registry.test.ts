@@ -256,6 +256,10 @@ function fakeData(
       calls.push(`createVar:${a}:${c}:${w}:${String(v.type)}:${String(v.name)}`);
       return { variableId: 'V1', name: String(v.name ?? ''), type: String(v.type ?? '') };
     },
+    createMetaEmqVariables: async (a: string, c: string, w: string) => {
+      calls.push(`metaEmq:${a}:${c}:${w}`);
+      return { created: ['ed - fbp', 'ed - fbc', 'ed - event_id'], skipped: ['ed - value'] };
+    },
     getGtmContainerSnapshot: async (a: string, c: string, w: string) => {
       calls.push(`snapshot:${a}:${c}:${w}`);
       return (
@@ -324,6 +328,7 @@ async function main(): Promise<void> {
       'audit_gtm_container_changes',
       'audit_server_container',
       'check_gtm_measurement_ids',
+      'detect_meta_web_tags',
       'diff_gtm_versions',
       'diff_gtm_workspace_vs_live',
       'generate_analytics_report',
@@ -379,11 +384,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 42, 'read-only registry has 42 tools');
+    assert.equal(readOnly.list().length, 43, 'read-only registry has 43 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 74, 'read + write registry has 74 tools');
+    assert.equal(withWrites.list().length, 76, 'read + write registry has 76 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1145,6 +1150,28 @@ async function main(): Promise<void> {
     );
     assert.equal(srvTrig.type, 'customEvent', 'server trigger is a customEvent (built by the tool, not hand-rolled)');
     assert.ok(fd.calls.includes('enableVars:1:2:3:clientName'), 'enabled the Client Name built-in for the scoped filter');
+
+    // Meta CAPI: create the EMQ Event Data variables (write) + detect Meta web tags (read).
+    const emq = JSON.parse(await reg.execute('create_meta_emq_variables', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.ok(emq.created.includes('ed - fbp') && emq.created.includes('ed - event_id'), 'created the EMQ variables');
+    assert.ok(fd.calls.includes('metaEmq:1:2:3'));
+    const meta = JSON.parse(
+      await buildToolRegistry(
+        fakeData({
+          snapshot: {
+            tags: [
+              { tagId: '1', name: 'FB Pixel - Purchase', type: 'html', firingTriggerId: [], paused: false, parameter: [{ key: 'html', value: "fbq('track','Purchase',{value:9})" }] },
+              { tagId: '2', name: 'GA4 Config', type: 'gaawc', firingTriggerId: [], paused: false, parameter: [] },
+            ],
+            triggers: [],
+            variables: [],
+          },
+        }).data,
+      ).execute('detect_meta_web_tags', { accountId: '1', containerId: '2', workspaceId: '3' }),
+    );
+    assert.equal(meta.hasMetaPixel, true, 'detected the FB pixel tag');
+    assert.equal(meta.hasEcommerce, true, 'detected the Purchase event');
+    assert.deepEqual(meta.metaTags.map((t: { id: string }) => t.id), ['1'], 'only the Meta tag, not GA4');
 
     // Phase 4: Event Data variable (server) + allow-params transformation.
     const edVar = JSON.parse(

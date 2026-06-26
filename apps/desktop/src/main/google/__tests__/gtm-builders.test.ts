@@ -13,6 +13,8 @@ import {
   buildGa4Client,
   buildGa4ServerTag,
   buildServerAllEventsTrigger,
+  buildMetaEmqVariables,
+  detectMetaTags,
   buildAdsConversionServerTag,
   buildAdsConversionLinkerServerTag,
   buildAdsRemarketingServerTag,
@@ -1028,6 +1030,34 @@ test('auditServerContainer is quiet on a healthy server container', () => {
   assert.equal(rep.summary.critical, 0);
   assert.equal(rep.summary.high, 0);
   assert.equal(rep.hasGa4Config, true, 'GA4 client present');
+});
+
+test('buildMetaEmqVariables → ed variables with keyPath === key (corpus shape)', () => {
+  const vars = buildMetaEmqVariables();
+  const byName = new Map(vars.map((v) => [v.name, v]));
+  for (const key of ['fbp', 'fbc', 'event_id', 'value', 'currency', 'transaction_id', 'email_address']) {
+    const v = byName.get(`ed - ${key}`);
+    assert.ok(v, `has ed - ${key}`);
+    assert.equal(v!.type, 'ed');
+    const kp = (v!.parameter ?? []).find((p) => (p as { key?: string }).key === 'keyPath') as { value?: string };
+    assert.equal(kp?.value, key, `ed - ${key} reads keyPath "${key}"`);
+  }
+});
+
+test('detectMetaTags flags an fbq Purchase tag, ignores GA4', () => {
+  const snapshot = {
+    tags: [
+      { tagId: '1', name: 'FB Pixel', type: 'html', firingTriggerId: [], paused: false, parameter: [{ key: 'html', value: "fbq('track','Purchase',{value:9,currency:'USD'})" }] },
+      { tagId: '2', name: 'GA4 Config', type: 'gaawc', firingTriggerId: [], paused: false, parameter: [{ key: 'measurementId', value: 'G-1' }] },
+    ],
+    triggers: [],
+    variables: [],
+  } as never;
+  const r = detectMetaTags(snapshot);
+  assert.equal(r.hasMetaPixel, true);
+  assert.equal(r.hasEcommerce, true);
+  assert.deepEqual(r.metaTags.map((t) => t.id), ['1']);
+  assert.deepEqual(r.metaTags[0].ecommerceEvents, ['Purchase']);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

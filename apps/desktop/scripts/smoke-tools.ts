@@ -46,7 +46,7 @@ const MUTATIONS = new Set([
   'createGtmFolder', 'moveEntitiesToFolder', 'renameGtmFolder', 'deleteGtmFolder',
   'createGtmEnvironment',
   'createServerContainer', 'createGtmClient', 'deleteGtmClient', 'createGtmTransformation', 'bootstrapServerSideTagging',
-  'setWebServerContainerUrl', 'setServerContainerTaggingUrl',
+  'setWebServerContainerUrl', 'setServerContainerTaggingUrl', 'createMetaEmqVariables',
 ]);
 
 // A snapshot crafted so the audit produces every kind of finding: a paused GA4
@@ -97,6 +97,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
       r('bootstrapServerSideTagging', { container: { containerId: 'SC1', publicId: 'GTM-SERVER', name: 'Server', taggingServerUrls: [] }, workspaceId: 'w1', client: { clientId: 'CL1', name: 'GA4' }, trigger: { triggerId: 'TR1', name: 'All Events' }, serverTag: { tagId: 'T1', name: 'GA4 - Server' } }),
     setWebServerContainerUrl: () => r('setWebServerContainerUrl', { tagId: '1', name: 'Google Tag', serverContainerUrl: 'https://sgtm.example.com' }),
     setServerContainerTaggingUrl: () => r('setServerContainerTaggingUrl', { containerId: 'SC1', name: 'Server', taggingServerUrls: ['https://sgtm.example.com'] }),
+    createMetaEmqVariables: () => r('createMetaEmqVariables', { created: ['ed - fbp', 'ed - fbc'], skipped: [] }),
     getServerContainerSnapshot: () =>
       r('getServerContainerSnapshot', {
         taggingServerUrls: ['https://sgtm.example.com'],
@@ -214,7 +215,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 42 read tools', readOnlyNames.size === 42, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 43 read tools', readOnlyNames.size === 43, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────

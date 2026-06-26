@@ -20,6 +20,7 @@ import {
   buildAllowParamsTransformation,
   buildServerAllEventsTrigger,
   auditServerContainer,
+  detectMetaTags,
   type TriggerInput,
   type VariableKind,
   type GtmTagResource,
@@ -469,6 +470,22 @@ export function buildToolRegistry(
           accessible.map((x) => ({ measurementId: x.measurementId, property: x.property, propertyDisplayName: x.propertyDisplayName }))
         );
       },
+    },
+    {
+      name: 'detect_meta_web_tags',
+      description:
+        'Scan a WEB container for Meta/Facebook pixel tags (Custom HTML with the fbq pixel, or a tag named/typed for Facebook/Meta) and report any standard ecommerce events they reference (Purchase, AddToCart, …). Use to decide whether Meta ECOMMERCE tracking is in use before setting up Meta CAPI server-side. Returns the matching tags + hasMetaPixel / hasEcommerce flags. Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: async (a) => detectMetaTags(await data.getGtmContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId))),
     },
     {
       name: 'list_ga4_accounts',
@@ -1378,6 +1395,24 @@ export function buildToolRegistry(
         const trigger = buildServerAllEventsTrigger(s(a.name), clientName || undefined);
         return data.createGtmTrigger(s(a.accountId), s(a.containerId), s(a.workspaceId), trigger as unknown as Record<string, unknown>);
       },
+    },
+    {
+      name: 'create_meta_emq_variables',
+      description:
+        'Create the standard Meta CAPI "Event Match Quality" Event Data variables (ed - fbp, fbc, event_id, value, currency, transaction_id, content_ids, email_address, phone_number, first_name, last_name, country, city, postal_code) in a SERVER container, so you can map them into the Meta Conversions API tag\'s Event Parameters / user_data. Idempotent — skips variables that already exist. NOTE: the Meta Conversions API TAG itself is a gallery template (cvt_…) you import + configure (Pixel ID + Access Token) in the GTM UI — the API cannot build it; this just creates the variables it reads. The CAPI tag hashes user_data itself, so these source the RAW values. Requires accountId, containerId (the SERVER container), workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: () => `Create the Meta CAPI EMQ Event Data variables in the server container`,
+      handler: (a) => data.createMetaEmqVariables(s(a.accountId), s(a.containerId), s(a.workspaceId)),
     },
     {
       name: 'create_gtm_folder',
