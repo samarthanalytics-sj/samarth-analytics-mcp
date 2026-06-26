@@ -1,3 +1,9 @@
+## [1.79.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.78.0...v1.79.0) (2026-06-26)
+
+### Features
+
+* **desktop:** persist chat per account+container; keep it across tab switches ([d7ed169](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d7ed16985282c768adcff2694154ab09cc495d2b))
+
 ## [1.78.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.77.0...v1.78.0) (2026-06-26)
 
 ### Features
