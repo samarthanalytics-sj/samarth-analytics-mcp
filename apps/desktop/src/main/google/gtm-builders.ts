@@ -1614,6 +1614,38 @@ export function buildMetaPixelTag(
   };
 }
 
+/** Build a Stape "Facebook Conversion API" SERVER tag (gallery template stape-io/facebook-tag;
+ *  `type` = its cvt_ code), tuned for high Event Match Quality: action source = website, Event
+ *  Enhancement (the gtmeec cookie) ON, generate _fbp ON. A Meta STANDARD event sets
+ *  eventNameStandard with Override (inheritEventName=false); a non-standard event inherits the
+ *  incoming event_name. pixelId/accessToken are typically {{variables}}. Field keys
+ *  corpus-validated (cvt_5TP8W). The EMQ user-data params come from create_meta_emq_variables. PURE. */
+export function buildMetaCapiServerTag(
+  type: string,
+  name: string,
+  pixelId: string,
+  accessToken: string,
+  event: string,
+  opts?: { actionSource?: string; eventEnhancement?: boolean; generateFbp?: boolean; firingTriggerId?: string[] }
+): GtmTagResource {
+  const std = metaStandardEvent(event);
+  const parameter: Param[] = [
+    tpl('pixelId', pixelId),
+    tpl('accessToken', accessToken),
+    tpl('actionSource', opts?.actionSource && opts.actionSource.trim() ? opts.actionSource : 'website'),
+    boolean('generateFbp', opts?.generateFbp ?? true),
+    boolean('enableEventEnhancement', opts?.eventEnhancement ?? true),
+  ];
+  if (std) parameter.push(boolean('inheritEventName', false), tpl('eventNameStandard', std));
+  else parameter.push(boolean('inheritEventName', true)); // forward the incoming event_name for a non-standard event
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(opts?.firingTriggerId && opts.firingTriggerId.length ? { firingTriggerId: opts.firingTriggerId } : {}),
+    parameter,
+  };
+}
+
 /** Build the Meta EMQ Event Data variables (`ed - <key>`, type `ed`, keyPath `<key>`). PURE. */
 export function buildMetaEmqVariables(): GtmVariableResource[] {
   return META_EMQ_EVENT_DATA_KEYS.map((k) => buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));

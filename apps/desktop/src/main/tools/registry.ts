@@ -20,6 +20,7 @@ import {
   buildAllowParamsTransformation,
   buildServerAllEventsTrigger,
   buildMetaPixelTag,
+  buildMetaCapiServerTag,
   metaStandardEvent,
   auditServerContainer,
   detectMetaTags,
@@ -1499,6 +1500,49 @@ export function buildToolRegistry(
           ? a.objectProperties.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name)
           : undefined;
         const tag = buildMetaPixelTag(tmpl.type, metaPixelTagName(a), s(a.pixelId), event, ftid, objProps);
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_meta_capi_server_tag',
+      description:
+        'Create a Meta/Facebook Conversions API (CAPI) SERVER tag from the Stape "Facebook Conversion API" community template (stape-io / facebook-tag), tuned for high Event Match Quality: action source = website, Event Enhancement (gtmeec cookie) ON, generate _fbp ON. Pass pixelId + accessToken (typically {{Facebook Pixel ID}} / {{Facebook Api Token}} variables) and the Meta `event` — a STANDARD event (ViewContent, AddToCart, Purchase, Lead, …) sets eventNameStandard with Override; anything else inherits the incoming event_name. For EMQ, FIRST run create_meta_emq_variables (email/phone/fbp/fbc/etc.) and map them in the CAPI tag\'s user-data; the more PII you send (email + click-ID = high priority), the higher the score. Imports the Stape template if needed (you do NOT pass the cvt_ type). Optional firingTriggerId, eventEnhancement, generateFbp, actionSource, name (defaults to "Meta CAPI - <Event> Tag"). Requires accountId, containerId (SERVER), workspaceId, pixelId, accessToken, event.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional — defaults to "Meta CAPI - <Event> Tag".' },
+          pixelId: { type: 'string' },
+          accessToken: { type: 'string', description: 'Meta CAPI access token (usually a {{variable}}).' },
+          event: { type: 'string', description: 'Meta event, e.g. AddToCart / Purchase / ViewContent.' },
+          actionSource: { type: 'string', description: 'Default "website".' },
+          eventEnhancement: { type: 'boolean', description: 'Event Enhancement (gtmeec) — default true.' },
+          generateFbp: { type: 'boolean', description: 'Generate _fbp cookie — default true.' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'accessToken', 'event'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Meta CAPI server tag for ${s(a.event)} (pixel ${s(a.pixelId)})`,
+      precheck: (a) => findExistingByName(data, a, s(a.name) || `Meta CAPI - ${s(metaStandardEvent(s(a.event).trim()) ?? s(a.event).trim())} Tag`, 'tag'),
+      handler: async (a) => {
+        const event = s(a.event).trim();
+        if (!event) throw new Error('event is required (a Meta event like AddToCart/Purchase, or a custom name).');
+        if (!s(a.accessToken).trim()) throw new Error('accessToken is required (the Meta CAPI access token, usually a {{variable}}).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'facebook-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the Stape Facebook CAPI template's tag type (got "${tmpl.type}"). Import stape-io/facebook-tag and check list_gtm_templates.`);
+        }
+        const name = s(a.name).trim() || `Meta CAPI - ${metaStandardEvent(event) ?? event} Tag`;
+        const tag = buildMetaCapiServerTag(tmpl.type, name, s(a.pixelId), s(a.accessToken), event, {
+          actionSource: a.actionSource != null ? s(a.actionSource) : undefined,
+          eventEnhancement: a.eventEnhancement != null ? Boolean(a.eventEnhancement) : undefined,
+          generateFbp: a.generateFbp != null ? Boolean(a.generateFbp) : undefined,
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
         return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
       },
     },
