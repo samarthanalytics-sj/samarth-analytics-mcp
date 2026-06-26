@@ -1,3 +1,9 @@
+## [1.75.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.74.1...v1.75.0) (2026-06-26)
+
+### Features
+
+* **desktop:** surface tool failures in the chat UI ([3d03791](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3d037913f7727deb1dd602d739e6346cac096cf2))
+
 ## [1.74.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.74.0...v1.74.1) (2026-06-26)
 
 ### Bug Fixes
