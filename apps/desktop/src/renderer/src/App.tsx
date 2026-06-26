@@ -2528,6 +2528,7 @@ function ContainerAuditPanel({
   const cancelRef = useRef(false); // set by Cancel; the batch loop checks it between fixes
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [search, setSearch] = useState('');
 
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -2538,6 +2539,7 @@ function ContainerAuditPanel({
     setRunning(true);
     setFix({});
     setTypeFilter('all');
+    setSearch('');
     try {
       setReport(await window.desktop.gtm.audit(ctx.accountId!, ctx.containerId!, ctx.workspaceId!));
     } catch (e) {
@@ -2594,7 +2596,20 @@ function ContainerAuditPanel({
   }
   const sevOptions = AUDIT_SEVERITIES.filter(([k]) => (sevCounts.get(k) ?? 0) > 0);
   const catOptions = AUDIT_CATEGORY_LABELS.filter(([k]) => (catCounts.get(k) ?? 0) > 0);
+  // A finding is shown when it passes BOTH the free-text search and the dropdown filter. Folding the
+  // search in here means the list AND the batch fixes (which all call this) scope to it for free.
+  const q = search.trim().toLowerCase();
   const typeMatches = (f: AuditFindingView): boolean => {
+    if (
+      q &&
+      !(
+        (f.resource?.name ?? '').toLowerCase().includes(q) ||
+        f.message.toLowerCase().includes(q) ||
+        (f.resource?.type ? gtmTypeLabel(f.resource.type).toLowerCase().includes(q) : false)
+      )
+    ) {
+      return false;
+    }
     if (typeFilter === 'all') return true;
     if (typeFilter === ORPHAN_TRIGGER_FILTER) return isOrphanTrigger(f);
     if (typeFilter === UNUSED_VAR_FILTER) return isUnusedVariable(f);
@@ -2752,6 +2767,14 @@ function ContainerAuditPanel({
                     Clear filter
                   </button>
                 )}
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search tags, triggers, variables…"
+                  aria-label="Search audit findings by name or keyword"
+                  style={{ ...styles.input, flex: '0 1 240px' }}
+                />
               </div>
             )}
             {(bulkFixable > 0 || consentFixable > 0 || pausedFixable > 0 || applyingAll) && (
@@ -2831,7 +2854,9 @@ function ContainerAuditPanel({
         )}
 
         {findings.length > 0 && visible.length === 0 && (
-          <div style={styles.empty}>No {auditFilterLabel(typeFilter)} findings. Clear the filter to see the rest.</div>
+          <div style={styles.empty}>
+            {q ? `No findings match “${search.trim()}”.` : `No ${auditFilterLabel(typeFilter)} findings.`} Clear the filter or search to see the rest.
+          </div>
         )}
 
         {visible.length > 0 && (
