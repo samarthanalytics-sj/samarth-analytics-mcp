@@ -716,9 +716,12 @@ export function App(): JSX.Element {
           </div>
         )}
 
-        {view === 'chat' ? (
+        {/* ChatView stays MOUNTED across tab switches (hidden, not unmounted) so an in-flight
+            response keeps streaming and the conversation isn't lost when you pop into GTM Tools. */}
+        <div style={{ display: view === 'chat' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           <ChatView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} seed={chatSeed} />
-        ) : view === 'gtm' ? (
+        </div>
+        {view === 'gtm' ? (
           <GtmToolsView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
         ) : view === 'prompts' ? (
           <PromptsView
@@ -727,7 +730,7 @@ export function App(): JSX.Element {
               setView('chat');
             }}
           />
-        ) : (
+        ) : view === 'settings' ? (
           <SettingsView
             active={active}
             google={google}
@@ -737,7 +740,7 @@ export function App(): JSX.Element {
             run={run}
             refresh={refresh}
           />
-        )}
+        ) : null}
       </main>
     </div>
   );
@@ -753,6 +756,31 @@ interface ChatMessage {
   toolErrors?: Array<{ name: string; error: string }>;
 }
 
+// Per-account + per-container chat persistence (survives tab switches AND app restarts).
+const CHAT_THREADS_KEY = 'samarth.chatThreads.v1';
+/** Thread id: one conversation per account + product + (for GTM) container. */
+function chatThreadKey(accountId: string | undefined, product: 'gtm' | 'ga4', containerId: string | undefined): string {
+  return `${accountId ?? 'none'}|${product}|${product === 'gtm' ? containerId ?? 'na' : 'na'}`;
+}
+function loadChatThread(key: string): ChatMessage[] {
+  try {
+    const all = JSON.parse(localStorage.getItem(CHAT_THREADS_KEY) || '{}') as Record<string, ChatMessage[]>;
+    return Array.isArray(all[key]) ? all[key] : [];
+  } catch {
+    return [];
+  }
+}
+function saveChatThread(key: string, messages: ChatMessage[]): void {
+  try {
+    const all = JSON.parse(localStorage.getItem(CHAT_THREADS_KEY) || '{}') as Record<string, ChatMessage[]>;
+    if (messages.length) all[key] = messages;
+    else delete all[key];
+    localStorage.setItem(CHAT_THREADS_KEY, JSON.stringify(all));
+  } catch {
+    /* storage full/unavailable — non-fatal */
+  }
+}
+
 function ChatView({
   active,
   onError,
@@ -764,10 +792,24 @@ function ChatView({
   refresh: () => Promise<void>;
   seed?: { text: string; nonce: number } | null;
 }): JSX.Element {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [product, setProduct] = useState<'gtm' | 'ga4'>('gtm');
+  // One stored conversation per account + product + container; survives tab switches + restarts.
+  const threadKey = chatThreadKey(active?.id, product, active?.gtmContext?.containerId);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => loadChatThread(threadKey));
+  const threadKeyRef = useRef(threadKey);
+  // Load the right thread whenever the account / product / container changes.
+  useEffect(() => {
+    threadKeyRef.current = threadKey;
+    setMessages(loadChatThread(threadKey));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadKey]);
+  // Persist (debounced so streaming tokens don't thrash localStorage).
+  useEffect(() => {
+    const id = setTimeout(() => saveChatThread(threadKeyRef.current, messages), 400);
+    return () => clearTimeout(id);
+  }, [messages]);
   const [pendingConfirm, setPendingConfirm] = useState<
     {
       confirmId: string;
@@ -892,19 +934,13 @@ function ChatView({
           <div style={styles.toggle}>
             <button
               style={product === 'gtm' ? styles.toggleActive : styles.toggleBtn}
-              onClick={() => {
-                setProduct('gtm');
-                setMessages([]);
-              }}
+              onClick={() => setProduct('gtm')}
             >
               GTM
             </button>
             <button
               style={product === 'ga4' ? styles.toggleActive : styles.toggleBtn}
-              onClick={() => {
-                setProduct('ga4');
-                setMessages([]);
-              }}
+              onClick={() => setProduct('ga4')}
             >
               GA4
             </button>
