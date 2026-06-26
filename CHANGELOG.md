@@ -1,3 +1,9 @@
+## [1.73.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.72.0...v1.73.0) (2026-06-26)
+
+### Features
+
+* **desktop:** add a "Test & verify a new tag" group to the Prompts tab ([a0dd77e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a0dd77e149be13c1560f16068ebe56e1038d2378))
+
 ## [1.72.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.71.0...v1.72.0) (2026-06-26)
 
 ### Features
