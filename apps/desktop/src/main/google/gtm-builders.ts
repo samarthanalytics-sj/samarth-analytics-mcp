@@ -567,24 +567,68 @@ export function setCustomEventName(trigger: Record<string, unknown>, eventName: 
   return { ...trigger, type: 'customEvent', customEventFilter: updated };
 }
 
-/** Apply normalizeCustomEventName to a customEvent trigger's `{{_event}}` match value. PURE. */
+/** Normalize AND REPAIR a Custom Event trigger so the API always accepts it. The model often
+ *  hand-builds a customEvent trigger (via the raw create_gtm_trigger tool) with the event name at the
+ *  TOP-LEVEL `eventName` field — which is timer-only, so the API rejects `trigger.event_name` — and a
+ *  missing/malformed `customEventFilter` ("must have exactly one custom-event filter"). This repairs
+ *  both: (1) if a single valid `{{_event}}` condition exists, keep it and snake_case its match value
+ *  (the original behavior); (2) if it's missing or duplicated, REBUILD exactly one `{{_event}} equals
+ *  <name>` condition — taking the name from the top-level eventName (string or Parameter) or any arg1
+ *  already present — while preserving non-event conditions (e.g. a server trigger's {{Client Name}}
+ *  filter). A top-level `eventName` is ALWAYS stripped from a customEvent trigger. PURE. */
 export function normalizeCustomEventTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
-  const t = trigger as { type?: unknown; customEventFilter?: unknown };
-  if (String(t.type ?? '') !== 'customEvent' || !Array.isArray(t.customEventFilter)) return trigger;
-  const cef = (t.customEventFilter as Array<Record<string, unknown>>).map((cond) => {
+  const t = trigger as { type?: unknown; eventName?: unknown; customEventFilter?: unknown };
+  if (String(t.type ?? '') !== 'customEvent') return trigger;
+
+  const stripEventName = (o: Record<string, unknown>): Record<string, unknown> => {
+    if (!('eventName' in o)) return o;
+    const rest = { ...o };
+    delete rest.eventName;
+    return rest;
+  };
+  const isEventCond = (cond: Record<string, unknown>): boolean => {
     const params = (cond as { parameter?: unknown }).parameter;
-    if (!Array.isArray(params)) return cond;
-    const isEventCond = params.some((p) => (p as { key?: string; value?: unknown }).key === 'arg0' && (p as { value?: unknown }).value === '{{_event}}');
-    if (!isEventCond) return cond;
-    return {
-      ...cond,
-      parameter: params.map((p) => {
-        const pp = p as { key?: string; value?: unknown };
-        return pp.key === 'arg1' && typeof pp.value === 'string' ? { ...pp, value: normalizeCustomEventName(pp.value) } : p;
-      }),
-    };
+    return Array.isArray(params) && params.some((p) => (p as { key?: string; value?: unknown }).key === 'arg0' && (p as { value?: unknown }).value === '{{_event}}');
+  };
+  const valueOf = (v: unknown): string =>
+    typeof v === 'string' ? v : v && typeof v === 'object' && typeof (v as { value?: unknown }).value === 'string' ? (v as { value: string }).value : '';
+
+  const cefIn = Array.isArray(t.customEventFilter) ? (t.customEventFilter as Array<Record<string, unknown>>) : [];
+  const eventConds = cefIn.filter(isEventCond);
+
+  // (1) Exactly one {{_event}} condition → just snake_case its arg1 value; strip the top-level field.
+  if (eventConds.length === 1) {
+    const cef = cefIn.map((cond) => {
+      if (!isEventCond(cond)) return cond;
+      const params = (cond as { parameter: Array<Record<string, unknown>> }).parameter;
+      return {
+        ...cond,
+        parameter: params.map((p) => {
+          const pp = p as { key?: string; value?: unknown };
+          return pp.key === 'arg1' && typeof pp.value === 'string' ? { ...pp, value: normalizeCustomEventName(pp.value) } : p;
+        }),
+      };
+    });
+    return stripEventName({ ...trigger, customEventFilter: cef });
+  }
+
+  // (2) Missing or duplicated {{_event}} condition → rebuild exactly one, keeping any non-event
+  //     conditions. Derive the name from the top-level eventName, else any arg1 already present.
+  let arg1 = '';
+  for (const cond of cefIn) {
+    const params = (cond as { parameter?: unknown }).parameter;
+    if (Array.isArray(params)) {
+      const a1 = params.find((p) => (p as { key?: string }).key === 'arg1');
+      if (a1 && typeof (a1 as { value?: unknown }).value === 'string') { arg1 = (a1 as { value: string }).value; break; }
+    }
+  }
+  const name = normalizeCustomEventName(valueOf(t.eventName) || arg1);
+  const nonEventConds = cefIn.filter((cond) => !isEventCond(cond));
+  return stripEventName({
+    ...trigger,
+    type: 'customEvent',
+    customEventFilter: [condition('{{_event}}', 'equals', name), ...nonEventConds],
   });
-  return { ...trigger, customEventFilter: cef };
 }
 
 export function normalizeTimerTrigger(trigger: Record<string, unknown>): Record<string, unknown> {

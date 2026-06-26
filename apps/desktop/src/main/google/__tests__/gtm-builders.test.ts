@@ -1247,6 +1247,42 @@ test('normalizeCustomEventTrigger fixes the {{_event}} match value', () => {
   assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'purchase', 'event match value normalized');
 });
 
+test('normalizeCustomEventTrigger REPAIRS a top-level eventName + missing filter (the create_gtm_trigger bug)', () => {
+  // The model built a customEvent trigger with the event name at the TOP LEVEL (timer-only field) and
+  // no customEventFilter → the API rejected trigger.event_name + "must have exactly one custom-event filter".
+  const t = normalizeCustomEventTrigger({ name: 'Purchase Trigger', type: 'customEvent', eventName: 'purchase' }) as {
+    eventName?: unknown;
+    customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }>;
+  };
+  assert.equal('eventName' in t, false, 'invalid top-level eventName stripped');
+  assert.equal(t.customEventFilter.length, 1, 'exactly one custom-event filter');
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg0')?.value, '{{_event}}');
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'purchase');
+});
+
+test('normalizeCustomEventTrigger: top-level eventName as a Parameter + display name → snake_cased filter', () => {
+  const t = normalizeCustomEventTrigger({
+    name: 'X',
+    type: 'customEvent',
+    eventName: { type: 'template', value: 'Add To Cart' },
+  }) as { eventName?: unknown; customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }> };
+  assert.equal('eventName' in t, false);
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'add_to_cart');
+});
+
+test('normalizeCustomEventTrigger leaves a valid server all-events trigger (matchRegex .* + Client Name) intact', () => {
+  const server = buildServerAllEventsTrigger('All Events', 'GA4') as unknown as Record<string, unknown>;
+  const t = normalizeCustomEventTrigger(server) as {
+    customEventFilter: Array<{ type: string; parameter: Array<{ key: string; value: string }> }>;
+    filter?: Array<{ parameter: Array<{ key: string; value: string }> }>;
+  };
+  const evCond = t.customEventFilter.find((c) => c.parameter.some((p) => p.key === 'arg0' && p.value === '{{_event}}'));
+  assert.equal(evCond?.type, 'matchRegex', 'event condition preserved as match-all');
+  assert.equal(evCond?.parameter.find((p) => p.key === 'arg1')?.value, '.*', 'match-all value untouched');
+  // the {{Client Name}} scoping condition (in `filter`, not customEventFilter) survives untouched
+  assert.ok(t.filter?.some((c) => c.parameter.some((p) => p.key === 'arg0' && p.value === '{{Client Name}}')), 'client-name filter preserved');
+});
+
 test('setCustomEventName updates the {{_event}} value in place, preserving structure', () => {
   const t = setCustomEventName(
     { name: 'CE - Purchase', type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'CE - Purchase' }] }] },

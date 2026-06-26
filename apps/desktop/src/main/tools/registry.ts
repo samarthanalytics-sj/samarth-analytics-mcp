@@ -2150,7 +2150,13 @@ export function buildToolRegistry(
         '{"name":"Email link click","type":"linkClick","filter":[{"type":"contains",' +
         '"parameter":[{"type":"template","key":"arg0","value":"{{Click URL}}"},' +
         '{"type":"template","key":"arg1","value":"mailto:"}]}]}. ' +
-        'The {{Click URL}} built-in variable must be enabled in the container.',
+        'The {{Click URL}} built-in variable must be enabled in the container. ' +
+        'For a CUSTOM EVENT trigger (a dataLayer event like purchase / add_to_cart), use type ' +
+        '"customEvent" and put the event name in customEventFilter as {{_event}} equals <name> — ' +
+        'do NOT use a top-level "eventName" field (that is TIMER-only; the API rejects it on a ' +
+        'customEvent trigger). Example: {"name":"Purchase","type":"customEvent","customEventFilter":' +
+        '[{"type":"equals","parameter":[{"type":"template","key":"arg0","value":"{{_event}}"},' +
+        '{"type":"template","key":"arg1","value":"purchase"}]}]}.',
       inputSchema: {
         type: 'object',
         properties: {
