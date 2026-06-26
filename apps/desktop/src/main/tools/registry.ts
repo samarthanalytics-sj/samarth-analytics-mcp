@@ -2066,6 +2066,34 @@ export function buildToolRegistry(
       handler: (a) => data.createGtmTrigger(s(a.accountId), s(a.containerId), s(a.workspaceId), obj(a.trigger)),
     },
     {
+      name: 'update_gtm_trigger',
+      description:
+        'Update an existing trigger IN PLACE (read-modify-write) — the GTM API DOES support this; do NOT delete + recreate a trigger to change it (and you can\'t delete one that tags reference). Set its display `name` and/or, for a Custom Event trigger, its `eventName` — the dataLayer Event name it matches, normalized to snake_case (so "CE - Purchase" → "purchase"). Tags keep firing on the same trigger id. Requires accountId, containerId, workspaceId, triggerId; pass name and/or eventName.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          triggerId: { type: 'string' },
+          name: { type: 'string', description: 'New display name (optional).' },
+          eventName: { type: 'string', description: 'New Custom Event "Event name" — the dataLayer event it matches, e.g. purchase (optional).' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'triggerId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) =>
+        `Update trigger ${s(a.triggerId)}${a.eventName != null ? ` — Event name → ${s(a.eventName)}` : ''}${a.name != null ? ` — name → ${s(a.name)}` : ''}`,
+      handler: (a) => {
+        if (a.name == null && a.eventName == null) throw new Error('Pass name and/or eventName to update.');
+        return data.updateGtmTrigger(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.triggerId), {
+          name: a.name != null ? s(a.name) : undefined,
+          eventName: a.eventName != null ? s(a.eventName) : undefined,
+        });
+      },
+    },
+    {
       name: 'create_gtm_variable',
       description: 'Create a variable in a GTM workspace. Requires accountId, containerId, workspaceId, and a variable object {name, type, ...}.',
       inputSchema: {

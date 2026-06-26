@@ -248,6 +248,10 @@ function fakeData(
       calls.push(`createTrigger:${a}:${c}:${w}:${String(trig.name ?? '')}`);
       return { triggerId: 'NEW1', name: String(trig.name ?? ''), type: String(trig.type ?? '') };
     },
+    updateGtmTrigger: async (_a: string, _c: string, _w: string, triggerId: string, patch: { name?: string; eventName?: string }) => {
+      calls.push(`updateTrigger:${triggerId}:${patch.eventName ?? ''}:${patch.name ?? ''}`);
+      return { triggerId, name: patch.name ?? 'CE - Purchase', type: 'customEvent', customEventName: patch.eventName ?? '' };
+    },
     createGtmTag: async (a: string, c: string, w: string, tag: Record<string, unknown>) => {
       calls.push(`createTag:${a}:${c}:${w}:${JSON.stringify(tag.firingTriggerId ?? [])}`);
       return { tagId: 'TAG1', name: String(tag.name ?? ''), type: String(tag.type ?? '') };
@@ -401,7 +405,7 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 80, 'read + write registry has 80 tools');
+    assert.equal(withWrites.list().length, 81, 'read + write registry has 81 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1179,6 +1183,14 @@ async function main(): Promise<void> {
     assert.equal(metaTag.name, 'Meta - Event - ViewContent Tag', 'default name + canonicalized event');
     // a blank event is rejected (not silently created as an empty custom event)
     await assert.rejects(() => reg.execute('create_meta_pixel_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '1', event: '  ' }), /event is required/);
+
+    // update_gtm_trigger fixes a Custom Event trigger's Event name IN PLACE (no delete+recreate).
+    const upd = JSON.parse(
+      await reg.execute('update_gtm_trigger', { accountId: '1', containerId: '2', workspaceId: '3', triggerId: '224', eventName: 'purchase' }),
+    );
+    assert.equal(upd.customEventName, 'purchase');
+    assert.ok(fd.calls.includes('updateTrigger:224:purchase:'));
+    await assert.rejects(() => reg.execute('update_gtm_trigger', { accountId: '1', containerId: '2', workspaceId: '3', triggerId: '224' }), /name and\/or eventName/);
 
     // copy_workspace_resources: recreate tags/triggers/variables from one workspace into another.
     const copied = JSON.parse(
