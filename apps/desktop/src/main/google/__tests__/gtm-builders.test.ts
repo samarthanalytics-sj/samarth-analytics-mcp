@@ -19,6 +19,7 @@ import {
   META_EVENT_OBJECT_PROPERTIES,
   normalizeCustomEventName,
   normalizeCustomEventTrigger,
+  setCustomEventName,
   detectMetaTags,
   customTemplateType,
   buildAdsConversionServerTag,
@@ -1140,6 +1141,17 @@ test('normalizeCustomEventTrigger fixes the {{_event}} match value', () => {
   }) as { name: string; customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }> };
   assert.equal(t.name, 'CE - Purchase', 'display name unchanged');
   assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'purchase', 'event match value normalized');
+});
+
+test('setCustomEventName updates the {{_event}} value in place, preserving structure', () => {
+  const t = setCustomEventName(
+    { name: 'CE - Purchase', type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'CE - Purchase' }] }] },
+    'purchase',
+  ) as { customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }> };
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'purchase');
+  // adds the {{_event}} condition if missing
+  const t2 = setCustomEventName({ name: 'x', type: 'customEvent' }, 'add to cart') as { customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }> };
+  assert.equal(t2.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'add_to_cart');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

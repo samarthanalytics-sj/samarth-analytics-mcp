@@ -546,6 +546,27 @@ export function normalizeCustomEventName(name: string): string {
   return n.trim().toLowerCase().replace(/\s+/g, '_');
 }
 
+/** SET a customEvent trigger's `{{_event}}` match value to a new event (normalized to snake_case),
+ *  preserving the rest of the trigger and any other conditions. Used to UPDATE a trigger's Event
+ *  name in place (no delete+recreate). PURE. */
+export function setCustomEventName(trigger: Record<string, unknown>, eventName: string): Record<string, unknown> {
+  const ev = normalizeCustomEventName(eventName);
+  const cef = Array.isArray((trigger as { customEventFilter?: unknown }).customEventFilter)
+    ? [...(trigger as { customEventFilter: Array<Record<string, unknown>> }).customEventFilter]
+    : [];
+  let found = false;
+  const updated = cef.map((cond) => {
+    const params = (cond as { parameter?: unknown }).parameter;
+    if (Array.isArray(params) && params.some((p) => (p as { key?: string; value?: unknown }).key === 'arg0' && (p as { value?: unknown }).value === '{{_event}}')) {
+      found = true;
+      return { ...cond, parameter: params.map((p) => ((p as { key?: string }).key === 'arg1' ? { ...(p as object), value: ev } : p)) };
+    }
+    return cond;
+  });
+  if (!found) updated.push({ type: 'equals', parameter: [tpl('arg0', '{{_event}}'), tpl('arg1', ev)] });
+  return { ...trigger, type: 'customEvent', customEventFilter: updated };
+}
+
 /** Apply normalizeCustomEventName to a customEvent trigger's `{{_event}}` match value. PURE. */
 export function normalizeCustomEventTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
   const t = trigger as { type?: unknown; customEventFilter?: unknown };

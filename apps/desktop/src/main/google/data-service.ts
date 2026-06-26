@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, customTemplateType, upsertGoogleTagConfig } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, customTemplateType, upsertGoogleTagConfig } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
@@ -1470,6 +1470,33 @@ export class GoogleDataService {
     });
     this.journal('trigger', accountId, containerId, workspaceId, res.data.triggerId ?? '', `${res.data.name ?? 'trigger'} (#${res.data.triggerId})`);
     return { triggerId: res.data.triggerId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  /** UPDATE a trigger IN PLACE (read-modify-write) — the GTM API supports this; no delete+recreate
+   *  is needed, so tags keep referencing it. Sets the display `name` and/or, for a Custom Event
+   *  trigger, its Event name (the {{_event}} match value, normalized to snake_case). */
+  async updateGtmTrigger(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    triggerId: string,
+    patch: { name?: string; eventName?: string }
+  ): Promise<{ triggerId: string; name: string; type: string; customEventName: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/triggers/${triggerId}`;
+    const current = (await gtm.accounts.containers.workspaces.triggers.get({ path })).data;
+    let body: Record<string, unknown> = { ...(current as Record<string, unknown>) };
+    if (patch.name && patch.name.trim()) body.name = patch.name.trim();
+    if (patch.eventName !== undefined) body = setCustomEventName(body, patch.eventName);
+    const res = await gtm.accounts.containers.workspaces.triggers.update({ path, requestBody: body });
+    this.journal('trigger', accountId, containerId, workspaceId, res.data.triggerId ?? triggerId, `${res.data.name ?? 'trigger'} (#${triggerId})`);
+    return {
+      triggerId: res.data.triggerId ?? triggerId,
+      name: res.data.name ?? '',
+      type: res.data.type ?? '',
+      customEventName: customEventNameOf(res.data as unknown as Record<string, unknown>),
+    };
   }
 
   async createGtmVariable(

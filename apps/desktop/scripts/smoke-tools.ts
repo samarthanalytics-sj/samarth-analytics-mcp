@@ -42,7 +42,7 @@ const MUTATIONS = new Set([
   'addGa4EventParameters', 'setGa4MeasurementId', 'setGtmTagConsent',
   'addGa4EventParametersToAllTags', 'setGa4MeasurementIdOnAllTags',
   'deleteGtmTag', 'deleteGtmTrigger', 'deleteGtmVariable',
-  'enableGtmBuiltInVariables', 'createGtmTrigger', 'createGtmVariable',
+  'enableGtmBuiltInVariables', 'createGtmTrigger', 'updateGtmTrigger', 'createGtmVariable',
   'createGtmFolder', 'moveEntitiesToFolder', 'renameGtmFolder', 'deleteGtmFolder',
   'createGtmEnvironment',
   'createServerContainer', 'createGtmClient', 'deleteGtmClient', 'createGtmTransformation', 'bootstrapServerSideTagging',
@@ -158,6 +158,8 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     deleteGtmVariable: () => r('deleteGtmVariable', { deleted: true, variableId: 'V1' }),
     deleteGtmClient: () => r('deleteGtmClient', { deleted: true, clientId: '4' }),
     enableGtmBuiltInVariables: (_a: string, _b: string, _c: string, types: string[]) => r('enableGtmBuiltInVariables', types),
+    updateGtmTrigger: (_a: string, _b: string, _c: string, triggerId: string, patch: { name?: string; eventName?: string }) =>
+      r('updateGtmTrigger', { triggerId, name: patch.name ?? 'T', type: 'customEvent', customEventName: patch.eventName ?? '' }),
     createGtmTrigger: (_a: string, _b: string, _c: string, t: Record<string, unknown>) =>
       r('createGtmTrigger', { triggerId: 'NEW1', name: String(t?.name ?? ''), type: String(t?.type ?? '') }),
     createGtmVariable: (_a: string, _b: string, _c: string, v: Record<string, unknown>) =>
