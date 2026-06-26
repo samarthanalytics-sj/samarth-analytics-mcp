@@ -1,3 +1,9 @@
+## [1.74.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.74.0...v1.74.1) (2026-06-26)
+
+### Bug Fixes
+
+* **desktop:** use cvt_<galleryTemplateId> for gallery-imported template tag types ([5e4ddd0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5e4ddd077d39c9a02d8a2311ca489072551bc29d)), closes [#135](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/135)
+
 ## [1.74.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.73.0...v1.74.0) (2026-06-26)
 
 ### Features
