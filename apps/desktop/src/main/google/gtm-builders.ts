@@ -1436,6 +1436,19 @@ export const META_EMQ_EVENT_DATA_KEYS: string[] = [
   'postal_code',
 ];
 
+/** The tag `type` code for a custom template. A GALLERY-imported template is referenced by
+ *  `cvt_<galleryTemplateId>` (the id GTM resolves the vendor template by, e.g. cvt_MRQN8) —
+ *  NOT cvt_<containerId>_<templateId>, which only applies to locally-authored templates. Using
+ *  the wrong one makes tags.create reject the tag ("Unknown entity type"). PURE. */
+export function customTemplateType(
+  t: { containerId?: string | null; templateId?: string | null; galleryReference?: { galleryTemplateId?: string | null } | null },
+  fallbackContainerId: string
+): string {
+  const gid = t.galleryReference?.galleryTemplateId;
+  if (gid) return `cvt_${gid}`;
+  return `cvt_${t.containerId ?? fallbackContainerId}_${t.templateId ?? ''}`;
+}
+
 /** Build the Meta EMQ Event Data variables (`ed - <key>`, type `ed`, keyPath `<key>`). PURE. */
 export function buildMetaEmqVariables(): GtmVariableResource[] {
   return META_EMQ_EVENT_DATA_KEYS.map((k) => buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));

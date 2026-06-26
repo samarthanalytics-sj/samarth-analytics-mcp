@@ -15,6 +15,7 @@ import {
   buildServerAllEventsTrigger,
   buildMetaEmqVariables,
   detectMetaTags,
+  customTemplateType,
   buildAdsConversionServerTag,
   buildAdsConversionLinkerServerTag,
   buildAdsRemarketingServerTag,
@@ -1058,6 +1059,17 @@ test('detectMetaTags flags an fbq Purchase tag, ignores GA4', () => {
   assert.equal(r.hasEcommerce, true);
   assert.deepEqual(r.metaTags.map((t) => t.id), ['1']);
   assert.deepEqual(r.metaTags[0].ecommerceEvents, ['Purchase']);
+});
+
+test('customTemplateType: gallery template uses cvt_<galleryTemplateId>, local uses cvt_<containerId>_<templateId>', () => {
+  // Gallery-imported (Meta Pixel) — must be cvt_<galleryTemplateId>, NOT cvt_<containerId>_<templateId>.
+  assert.equal(
+    customTemplateType({ containerId: '256064206', templateId: '261', galleryReference: { galleryTemplateId: '5RM3Q' } }, '256064206'),
+    'cvt_5RM3Q',
+  );
+  // Locally-authored (no gallery reference) — cvt_<containerId>_<templateId>.
+  assert.equal(customTemplateType({ containerId: '60340825', templateId: '34', galleryReference: null }, '60340825'), 'cvt_60340825_34');
+  assert.equal(customTemplateType({ templateId: '34' }, '60340825'), 'cvt_60340825_34', 'falls back to the passed container id');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

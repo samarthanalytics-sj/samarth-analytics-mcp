@@ -99,8 +99,8 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     setServerContainerTaggingUrl: () => r('setServerContainerTaggingUrl', { containerId: 'SC1', name: 'Server', taggingServerUrls: ['https://sgtm.example.com'] }),
     createMetaEmqVariables: () => r('createMetaEmqVariables', { created: ['ed - fbp', 'ed - fbc'], skipped: [] }),
     copyWorkspaceResources: () => r('copyWorkspaceResources', { variables: { created: [], skipped: [] }, triggers: { created: [], skipped: [] }, tags: { created: [], skipped: [] } }),
-    listGtmTemplates: () => r('listGtmTemplates', [{ templateId: '34', name: 'Meta Pixel', type: 'cvt_2_34', galleryOwner: 'facebook', galleryRepository: 'GoogleTagManager-WebTemplate-For-FacebookPixel' }]),
-    importGalleryTemplate: () => r('importGalleryTemplate', { templateId: '34', name: 'Meta Pixel', type: 'cvt_2_34', imported: true }),
+    listGtmTemplates: () => r('listGtmTemplates', [{ templateId: '261', name: 'Meta Pixel', type: 'cvt_5RM3Q', galleryOwner: 'facebook', galleryRepository: 'GoogleTagManager-WebTemplate-For-FacebookPixel' }]),
+    importGalleryTemplate: () => r('importGalleryTemplate', { templateId: '261', name: 'Meta Pixel', type: 'cvt_5RM3Q', imported: true }),
     getServerContainerSnapshot: () =>
       r('getServerContainerSnapshot', {
         taggingServerUrls: ['https://sgtm.example.com'],
