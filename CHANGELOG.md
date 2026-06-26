@@ -1,3 +1,9 @@
+## [1.82.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.81.0...v1.82.0) (2026-06-26)
+
+### Features
+
+* **desktop:** create_meta_capi_server_tag (Stape FB CAPI) tuned for Event Match Quality ([9f6b551](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9f6b551da09f9ee94725ce2bef0e0bce4c8f0254))
+
 ## [1.81.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.80.1...v1.81.0) (2026-06-26)
 
 ### Features
