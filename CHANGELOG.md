@@ -1,3 +1,9 @@
+## [1.68.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.67.0...v1.68.0) (2026-06-26)
+
+### Features
+
+* **desktop:** Meta CAPI EMQ — variables helper + web Meta-tag detector ([861dfec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/861dfec20b099bc3848a57eccaed8192b6d7dcf6))
+
 ## [1.67.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.66.0...v1.67.0) (2026-06-26)
 
 ### Features
