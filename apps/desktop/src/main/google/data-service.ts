@@ -852,23 +852,41 @@ export class GoogleDataService {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    // Page counters so a "missing items" report can be localized: a count below the GTM UI with
+    // pages=1 means the API capped a single response (no nextPageToken); pages>1 with a low count
+    // means pagination ran but that workspace genuinely has fewer (e.g. the wrong workspace).
+    let tagPages = 0;
+    let triggerPages = 0;
+    let variablePages = 0;
     const [tags, triggers, variables] = await Promise.all([
       collectPages(
-        (pageToken) => gtm.accounts.containers.workspaces.tags.list({ parent, pageToken }),
+        (pageToken) => {
+          tagPages += 1;
+          return gtm.accounts.containers.workspaces.tags.list({ parent, pageToken });
+        },
         (r) => r.data.tag,
         (r) => r.data.nextPageToken
       ),
       collectPages(
-        (pageToken) => gtm.accounts.containers.workspaces.triggers.list({ parent, pageToken }),
+        (pageToken) => {
+          triggerPages += 1;
+          return gtm.accounts.containers.workspaces.triggers.list({ parent, pageToken });
+        },
         (r) => r.data.trigger,
         (r) => r.data.nextPageToken
       ),
       collectPages(
-        (pageToken) => gtm.accounts.containers.workspaces.variables.list({ parent, pageToken }),
+        (pageToken) => {
+          variablePages += 1;
+          return gtm.accounts.containers.workspaces.variables.list({ parent, pageToken });
+        },
         (r) => r.data.variable,
         (r) => r.data.nextPageToken
       ),
     ]);
+    console.error(
+      `[gtm-snapshot] ws ${workspaceId}: ${tags.length} tags (${tagPages}p) · ${triggers.length} triggers (${triggerPages}p) · ${variables.length} variables (${variablePages}p)`
+    );
     return toSnapshot(tags, triggers, variables);
   }
 
