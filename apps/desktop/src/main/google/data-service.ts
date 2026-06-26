@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, customTemplateType, upsertGoogleTagConfig } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, customTemplateType, upsertGoogleTagConfig } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
@@ -1466,7 +1466,7 @@ export class GoogleDataService {
     const gtm = tagmanager({ version: 'v2', auth });
     const res = await gtm.accounts.containers.workspaces.triggers.create({
       parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
-      requestBody: normalizeTimerTrigger(applyTriggerWaitDefaults(trigger)),
+      requestBody: normalizeCustomEventTrigger(normalizeTimerTrigger(applyTriggerWaitDefaults(trigger))),
     });
     this.journal('trigger', accountId, containerId, workspaceId, res.data.triggerId ?? '', `${res.data.name ?? 'trigger'} (#${res.data.triggerId})`);
     return { triggerId: res.data.triggerId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };

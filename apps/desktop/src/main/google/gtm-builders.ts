@@ -462,7 +462,7 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       return {
         name: sanitizeName(o.name),
         type: 'customEvent',
-        customEventFilter: [condition('{{_event}}', 'equals', o.eventName ?? '')],
+        customEventFilter: [condition('{{_event}}', 'equals', normalizeCustomEventName(o.eventName ?? ''))],
       };
     case 'form_submit': {
       // A formSubmission trigger with no `filter` fires on ALL forms; the
@@ -531,6 +531,41 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
  *  top-level field (raw string OR Parameter object) OR a parameter[] entry, and writes it to
  *  the top-level field. eventName defaults to gtm.timer; interval/limit are kept only when a
  *  value is present (no limit = unlimited). PURE; applied at the create funnel. */
+/** Normalize a Custom Event trigger's EVENT NAME (the dataLayer value it matches) to the real
+ *  event token: strip our display-name prefixes ("CE - ", "GA4 - Event - ", "Meta - ", …) and
+ *  snake_case a display phrase ("Add To Cart" → "add_to_cart"). A clean token (purchase,
+ *  add_to_cart, gtm.dom, .*) is left untouched. The dataLayer pushes `purchase`, never
+ *  "CE - Purchase" — using the display name as the event name means the trigger never fires. PURE. */
+export function normalizeCustomEventName(name: string): string {
+  const raw = (name ?? '').trim();
+  // A clean event token has no spaces and no " - " display separator — leave it as-is.
+  if (!raw.includes(' - ') && !/\s/.test(raw)) return raw;
+  let n = raw;
+  const i = n.lastIndexOf(' - ');
+  if (i >= 0) n = n.slice(i + 3);
+  return n.trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+/** Apply normalizeCustomEventName to a customEvent trigger's `{{_event}}` match value. PURE. */
+export function normalizeCustomEventTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
+  const t = trigger as { type?: unknown; customEventFilter?: unknown };
+  if (String(t.type ?? '') !== 'customEvent' || !Array.isArray(t.customEventFilter)) return trigger;
+  const cef = (t.customEventFilter as Array<Record<string, unknown>>).map((cond) => {
+    const params = (cond as { parameter?: unknown }).parameter;
+    if (!Array.isArray(params)) return cond;
+    const isEventCond = params.some((p) => (p as { key?: string; value?: unknown }).key === 'arg0' && (p as { value?: unknown }).value === '{{_event}}');
+    if (!isEventCond) return cond;
+    return {
+      ...cond,
+      parameter: params.map((p) => {
+        const pp = p as { key?: string; value?: unknown };
+        return pp.key === 'arg1' && typeof pp.value === 'string' ? { ...pp, value: normalizeCustomEventName(pp.value) } : p;
+      }),
+    };
+  });
+  return { ...trigger, customEventFilter: cef };
+}
+
 export function normalizeTimerTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
   if (String((trigger as { type?: unknown }).type ?? '') !== 'timer') return trigger;
   const out: Record<string, unknown> = { ...trigger };
