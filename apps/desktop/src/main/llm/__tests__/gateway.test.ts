@@ -104,7 +104,7 @@ await test('fail-fast: after one tool error, the rest of the batch is skipped (n
   assert.equal((toolTurn.results ?? []).every((r) => r.isError), true, 'the failed call + both skipped results are all errors');
 });
 
-await test('caps at maxSteps when the model keeps calling tools', async () => {
+await test('caps at maxSteps when the model keeps calling tools, and says the task is NOT done', async () => {
   const client = new ScriptedClient([{ toolCalls: [{ id: '1', name: 't', args: {} }] }]);
   const exec = executor(async () => 'ok');
   const res = await runChat(
@@ -115,7 +115,26 @@ await test('caps at maxSteps when the model keeps calling tools', async () => {
     2
   );
   assert.equal(res.steps, 2);
-  assert.match(res.text, /Stopped after/);
+  assert.match(res.text, /tool-call limit/);
+  assert.match(res.text, /NOT done/i);
+});
+
+await test('at the tool-call limit, surfaces the real tool error + names the tool', async () => {
+  // Model keeps retrying a tool that always fails — the final message must explain WHY.
+  const client = new ScriptedClient([{ toolCalls: [{ id: '1', name: 't', args: {} }] }]);
+  const exec = executor(async () => {
+    throw new Error('customEventFilter: must have exactly one custom-event filter');
+  });
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }] },
+    exec,
+    {},
+    2
+  );
+  assert.match(res.text, /NOT done/i, 'states the task did not complete');
+  assert.match(res.text, /customEventFilter: must have exactly one/, 'quotes the real error');
+  assert.match(res.text, /`t`/, 'names the failing tool');
 });
 
 await test('forwards streamed text deltas via onDelta', async () => {

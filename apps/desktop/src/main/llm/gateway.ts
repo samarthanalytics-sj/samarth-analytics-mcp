@@ -58,6 +58,7 @@ export async function runChat(
 ): Promise<RunChatResult> {
   const messages: LlmTurn[] = [...input.messages];
   const tools = executor.list();
+  let lastToolError: { name: string; message: string } | null = null;
 
   for (let step = 1; step <= maxSteps; step++) {
     if (input.signal?.aborted) {
@@ -110,13 +111,10 @@ export async function runChat(
         try {
           results.push({ id: call.id, name: call.name, content: await executor.execute(call.name, call.args) });
         } catch (e) {
-          results.push({
-            id: call.id,
-            name: call.name,
-            content: e instanceof Error ? e.message : String(e),
-            isError: true,
-          });
+          const message = e instanceof Error ? e.message : String(e);
+          results.push({ id: call.id, name: call.name, content: message, isError: true });
           batchFailed = true;
+          lastToolError = { name: call.name, message };
         }
       }
       messages.push({ role: 'tool', results });
@@ -127,6 +125,14 @@ export async function runChat(
     return { text: reply.text ?? '', steps: step };
   }
 
+  // Ran out of steps without the model giving a final answer — surface WHY (the real tool
+  // error) and make clear the task did NOT complete, instead of a vague "stopped".
   console.error(`[chat] stopped after ${maxSteps} steps without a final answer (tool-call limit)`);
-  return { text: 'Stopped after reaching the tool-call limit without a final answer.', steps: maxSteps };
+  const reason = lastToolError
+    ? ` The last error was — \`${lastToolError.name}\`: ${lastToolError.message}`
+    : '';
+  return {
+    text: `⚠️ I couldn't finish this — I reached the tool-call limit (${maxSteps} steps) without completing it, so **the task was NOT done.**${reason} Tell me how you'd like to proceed, or I can try a different approach.`,
+    steps: maxSteps,
+  };
 }

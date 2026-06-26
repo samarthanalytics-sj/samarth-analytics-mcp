@@ -383,7 +383,7 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 73, 'read + write registry has 73 tools');
+    assert.equal(withWrites.list().length, 74, 'read + write registry has 74 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1138,6 +1138,13 @@ async function main(): Promise<void> {
     assert.equal(ga4srv.type, 'sgtmgaaw', 'platform ga4 → sgtmgaaw server tag');
     // missing required field → clear error (no create)
     await assert.rejects(() => reg.execute('create_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', platform: 'ads_conversion', name: 'X' }), /requires conversionId/);
+
+    // create_server_trigger builds the correct customEvent shape + enables the Client Name built-in.
+    const srvTrig = JSON.parse(
+      await reg.execute('create_server_trigger', { accountId: '1', containerId: '2', workspaceId: '3', name: 'GA4 - Server Trigger', clientName: 'GA4' }),
+    );
+    assert.equal(srvTrig.type, 'customEvent', 'server trigger is a customEvent (built by the tool, not hand-rolled)');
+    assert.ok(fd.calls.includes('enableVars:1:2:3:clientName'), 'enabled the Client Name built-in for the scoped filter');
 
     // Phase 4: Event Data variable (server) + allow-params transformation.
     const edVar = JSON.parse(
