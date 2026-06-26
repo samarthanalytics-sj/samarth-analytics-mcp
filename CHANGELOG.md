@@ -1,3 +1,9 @@
+## [1.88.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.87.0...v1.88.0) (2026-06-26)
+
+### Features
+
+* **desktop:** add a search box to the container audit (find findings by tag/trigger/variable name) ([9ab26df](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9ab26dfb6ac1c49dd5e6f472b82513155bc05ca9))
+
 ## [1.87.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.86.0...v1.87.0) (2026-06-26)
 
 ### Features
