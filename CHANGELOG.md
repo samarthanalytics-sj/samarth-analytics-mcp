@@ -1,3 +1,9 @@
+## [1.86.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.85.0...v1.86.0) (2026-06-26)
+
+### Features
+
+* **desktop:** add an "Orphaned triggers" option to the container-audit filter dropdown ([2f49ff0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2f49ff0d24de3deaf6940685cc62144f3988aa81))
+
 ## [1.85.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.84.0...v1.85.0) (2026-06-26)
 
 ### Features
