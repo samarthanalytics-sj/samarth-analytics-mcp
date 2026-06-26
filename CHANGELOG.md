@@ -1,3 +1,9 @@
+## [1.81.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.80.1...v1.81.0) (2026-06-26)
+
+### Features
+
+* **desktop:** update_gtm_trigger — change a trigger's event name in place (no delete+recreate) ([c401af7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c401af74a8a9712c672234d68824c71dc0982bda))
+
 ## [1.80.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.80.0...v1.80.1) (2026-06-26)
 
 ### Bug Fixes
