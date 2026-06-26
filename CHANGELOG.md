@@ -1,3 +1,9 @@
+## [1.80.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.79.0...v1.80.0) (2026-06-26)
+
+### Features
+
+* **desktop:** light/dark theme toggle in Settings ([1dd1463](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1dd1463dd7e1d00b59dba5cc6fd37dec5ac61efa))
+
 ## [1.79.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.78.0...v1.79.0) (2026-06-26)
 
 ### Features
