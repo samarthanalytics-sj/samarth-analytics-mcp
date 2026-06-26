@@ -1480,21 +1480,47 @@ export function metaStandardEvent(event: string): string | null {
   return null;
 }
 
-/** Recommended Meta Object Properties (event parameters) per STANDARD event — the keys Meta
- *  expects for each event. Values are wired by the caller (variables off the page/dataLayer). */
+/** Recommended Meta Object Properties (event parameters) per event — the keys Meta expects for
+ *  each event. Covers the standard web events plus common app/custom events. Values are wired by
+ *  the caller (variables off the page/dataLayer). */
 export const META_EVENT_OBJECT_PROPERTIES: Record<string, string[]> = {
-  ViewContent: ['content_ids', 'content_type', 'content_name', 'content_category', 'value', 'currency', 'contents'],
-  Search: ['search_string', 'content_ids', 'content_type', 'value', 'currency'],
-  AddToCart: ['content_ids', 'content_type', 'content_name', 'value', 'currency', 'contents'],
-  AddToWishlist: ['content_ids', 'content_type', 'content_name', 'value', 'currency'],
-  InitiateCheckout: ['content_ids', 'content_type', 'value', 'currency', 'num_items', 'contents'],
-  AddPaymentInfo: ['content_ids', 'content_type', 'value', 'currency', 'contents'],
-  Purchase: ['value', 'currency', 'content_ids', 'content_type', 'num_items', 'contents'],
+  PageView: ['event_name', 'event_time', 'event_source_url', 'action_source'],
+  ViewContent: ['content_ids', 'contents', 'content_type', 'content_name', 'content_category', 'value', 'currency'],
+  Search: ['search_string', 'content_ids', 'content_category'],
+  AddToCart: ['content_ids', 'contents', 'content_type', 'value', 'currency', 'num_items'],
+  AddToWishlist: ['content_ids', 'contents', 'content_type', 'value', 'currency'],
+  InitiateCheckout: ['content_ids', 'contents', 'content_type', 'value', 'currency', 'num_items'],
+  AddPaymentInfo: ['content_ids', 'contents', 'content_type', 'value', 'currency'],
+  Purchase: ['content_ids', 'contents', 'content_type', 'value', 'currency', 'num_items', 'order_id', 'event_id'],
   Lead: ['value', 'currency', 'content_name', 'content_category'],
-  CompleteRegistration: ['value', 'currency', 'content_name', 'status'],
+  CompleteRegistration: ['registration_method', 'content_name', 'status', 'value', 'currency'],
+  Contact: ['content_name', 'content_category'],
+  CustomizeProduct: ['content_ids', 'contents', 'content_type', 'value', 'currency'],
   Donate: ['value', 'currency'],
-  Subscribe: ['value', 'currency', 'predicted_ltv'],
+  FindLocation: ['location', 'search_string'],
+  Schedule: ['content_name', 'value', 'currency'],
   StartTrial: ['value', 'currency', 'predicted_ltv'],
+  SubmitApplication: ['content_name', 'content_category'],
+  Subscribe: ['value', 'currency', 'predicted_ltv'],
+  CompleteTutorial: ['content_name', 'content_category', 'value'],
+  LevelAchieved: ['level', 'content_name'],
+  AchieveLevel: ['level', 'content_name'],
+  UnlockAchievement: ['achievement_id', 'achievement_name'],
+  Rate: ['rating_value', 'content_name', 'content_ids'],
+  SpendCredits: ['value', 'currency'],
+  EarnVirtualCurrency: ['value', 'virtual_currency_name'],
+  PurchaseVirtualGoods: ['content_ids', 'contents', 'value', 'currency'],
+  JoinGroup: ['group_name', 'group_id'],
+  CreateGroup: ['group_name', 'group_category'],
+  CompleteLevel: ['level', 'score'],
+  Share: ['content_name', 'content_type', 'content_id'],
+  Invite: ['method', 'content_name'],
+  Login: ['login_method'],
+  Logout: ['session_duration'],
+  SignUp: ['signup_method', 'plan_type'],
+  BookAppointment: ['appointment_type', 'value', 'currency'],
+  Download: ['file_name', 'file_type'],
+  VideoPlay: ['video_title', 'video_duration', 'percent_viewed'],
 };
 
 /** Build a Meta (Facebook) Pixel tag from the imported community template (`type` = its cvt_
