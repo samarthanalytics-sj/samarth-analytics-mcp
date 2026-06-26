@@ -26,10 +26,12 @@ import {
   tikTokStandardEvent,
   auditServerContainer,
   detectMetaTags,
+  findUnusedTriggers,
   type TriggerInput,
   type VariableKind,
   type GtmTagResource,
 } from '../google/gtm-builders';
+import { withQuotaRetry } from '../google/quota-retry';
 import { auditWorkspace, auditChanges } from '../google/audit-runner';
 import { diffSnapshots } from '../google/gtm-monitor';
 import { auditGa4 } from '../google/ga4-audit';
@@ -273,6 +275,25 @@ export function buildToolRegistry(
         additionalProperties: false,
       },
       handler: (a) => data.listGtmTriggers(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+    },
+    {
+      name: 'list_unused_gtm_triggers',
+      description:
+        'List the UNUSED (orphaned) triggers in a GTM workspace — triggers referenced by NO tag (neither a firing nor a blocking/exception trigger) and not a member of a Trigger Group. These are safe-to-delete clutter. Read-only — call this to show the user exactly what delete_unused_gtm_triggers would remove (returns each trigger\'s triggerId, name, type). Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const snap = await data.getGtmContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId));
+        return findUnusedTriggers(snap).map((t) => ({ triggerId: t.triggerId, name: t.name, type: t.type }));
+      },
     },
     {
       name: 'list_gtm_variables',
@@ -2014,6 +2035,62 @@ export function buildToolRegistry(
       summarize: (a) =>
         `Delete trigger ${a.name ? `"${s(a.name)}" (${s(a.triggerId)})` : s(a.triggerId)} from workspace ${s(a.workspaceId)}`,
       handler: (a) => data.deleteGtmTrigger(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.triggerId)),
+    },
+    {
+      name: 'delete_unused_gtm_triggers',
+      description:
+        'Bulk-delete the UNUSED (orphaned) triggers in a GTM workspace — those referenced by no tag (firing or blocking) and not a Trigger Group member. By DEFAULT deletes ALL unused triggers; pass triggerIds (the filter/selection) to delete only specific ones — any id you pass that is actually in use, or not found, is skipped and reported, NEVER deleted. It lists tags + triggers itself (you do NOT pass them); prefer calling list_unused_gtm_triggers first so the user can see what will go. Destructive — confirms twice. Requires accountId, containerId, workspaceId; optional triggerIds (string[]).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          triggerIds: { type: 'array', items: { type: 'string' }, description: 'Optional selection filter — only delete these ids (and only if actually unused). Omit to delete ALL unused triggers.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => {
+        const n = Array.isArray(a.triggerIds) && a.triggerIds.length ? `${a.triggerIds.length} selected` : 'all unlinked';
+        return `Delete unused triggers (${n}) in workspace ${s(a.workspaceId)}`;
+      },
+      handler: async (a) => {
+        const snap = await data.getGtmContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId));
+        const unused = findUnusedTriggers(snap);
+        const byId = new Map(unused.map((t) => [t.triggerId, t]));
+        const sel = Array.isArray(a.triggerIds) && a.triggerIds.length ? a.triggerIds.map(String) : null;
+        const skipped: Array<{ triggerId: string; name: string; reason: string }> = [];
+        let targets = unused;
+        if (sel) {
+          targets = [];
+          for (const id of sel) {
+            const u = byId.get(id);
+            if (u) targets.push(u);
+            else {
+              const tr = snap.triggers.find((t) => t.triggerId === id);
+              skipped.push({
+                triggerId: id,
+                name: tr?.name ?? '(unknown)',
+                reason: tr ? 'in use (referenced by a tag or Trigger Group) — not deleted' : 'not found in this workspace',
+              });
+            }
+          }
+        }
+        const deleted: Array<{ triggerId: string; name: string }> = [];
+        const failed: Array<{ triggerId: string; name: string; error: string }> = [];
+        for (const t of targets) {
+          try {
+            await withQuotaRetry(() => data.deleteGtmTrigger(s(a.accountId), s(a.containerId), s(a.workspaceId), t.triggerId));
+            deleted.push({ triggerId: t.triggerId, name: t.name });
+          } catch (e) {
+            failed.push({ triggerId: t.triggerId, name: t.name, error: e instanceof Error ? e.message : String(e) });
+          }
+        }
+        return { deletedCount: deleted.length, deleted, skipped, failed };
+      },
     },
     {
       name: 'delete_gtm_variable',

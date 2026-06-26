@@ -24,6 +24,8 @@ import {
   normalizeCustomEventName,
   normalizeCustomEventTrigger,
   setCustomEventName,
+  findUnusedTriggers,
+  collectUsedTriggerIds,
   detectMetaTags,
   customTemplateType,
   buildAdsConversionServerTag,
@@ -1281,6 +1283,27 @@ test('normalizeCustomEventTrigger leaves a valid server all-events trigger (matc
   assert.equal(evCond?.parameter.find((p) => p.key === 'arg1')?.value, '.*', 'match-all value untouched');
   // the {{Client Name}} scoping condition (in `filter`, not customEventFilter) survives untouched
   assert.ok(t.filter?.some((c) => c.parameter.some((p) => p.key === 'arg0' && p.value === '{{Client Name}}')), 'client-name filter preserved');
+});
+
+test('findUnusedTriggers: only true orphans — firing/blocking/group-member/built-in all count as used', () => {
+  const snap = {
+    tags: [{ tagId: 't1', name: 'GA4', type: 'gaawe', firingTriggerId: ['10'], blockingTriggerId: ['11'], paused: false, parameter: [] }],
+    triggers: [
+      { triggerId: '10', name: 'All Pages', type: 'pageview' }, // used: firing
+      { triggerId: '11', name: 'Block on X', type: 'customEvent' }, // used: blocking/exception
+      { triggerId: '12', name: 'Orphan', type: 'customEvent' }, // UNUSED
+      { triggerId: '14', name: 'Group Member', type: 'customEvent' }, // used: by the trigger group below
+      { triggerId: 'tg', name: 'My Group', type: 'triggerGroup', parameter: [{ type: 'list', key: 'triggerIds', list: [{ type: 'triggerReference', value: '14' }] }] }, // UNUSED by any tag
+      { triggerId: '2147479553', name: 'All Pages (built-in)', type: 'pageview' }, // reserved built-in — never offered
+    ],
+    variables: [],
+  };
+  assert.deepEqual([...collectUsedTriggerIds(snap)].sort(), ['10', '11', '14'], 'firing + blocking + group-member are used');
+  assert.deepEqual(
+    findUnusedTriggers(snap).map((t) => t.triggerId).sort(),
+    ['12', 'tg'],
+    'only the orphan trigger + the group no tag uses; built-in and group-member excluded',
+  );
 });
 
 test('setCustomEventName updates the {{_event}} value in place, preserving structure', () => {

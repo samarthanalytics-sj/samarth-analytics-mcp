@@ -177,6 +177,7 @@ export class ChatService {
           GA4_TAG_NAMING +
           GA4_ECOMMERCE_REFERENCE +
           GTM_AUDIT_METHODOLOGY +
+          'CLEANUP — UNUSED TRIGGERS: when the user wants to remove unwanted/orphaned triggers (triggers not linked to any tag), FIRST call list_unused_gtm_triggers to show them (it returns each orphan\'s triggerId + name — a trigger referenced by no tag as a firing OR blocking trigger, and not a Trigger Group member). Then, on the user\'s go-ahead, call delete_unused_gtm_triggers: with NO triggerIds it deletes ALL of them; pass triggerIds to delete only the ones the user selected (the filter). It is destructive (double-confirm) and never deletes a referenced trigger even if its id is passed (it is skipped + reported). Do NOT loop delete_gtm_trigger one-by-one for a cleanup — use the bulk tool. ' +
           'MONITORING / DRIFT: when the user asks what CHANGED, about regressions, or to monitor the ' +
           'container over time, call audit_gtm_container_changes — it reports NEW vs RESOLVED issues since ' +
           'the last audit (lead with the new ones and offer their fixes). When the user asks what a publish ' +
