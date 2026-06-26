@@ -19,6 +19,7 @@ import {
   buildAdsRemarketingServerTag,
   buildAllowParamsTransformation,
   buildServerAllEventsTrigger,
+  buildMetaPixelTag,
   auditServerContainer,
   detectMetaTags,
   type TriggerInput,
@@ -1444,6 +1445,39 @@ export function buildToolRegistry(
       write: true,
       summarize: () => `Create the Meta CAPI EMQ Event Data variables in the server container`,
       handler: (a) => data.createMetaEmqVariables(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+    },
+    {
+      name: 'create_meta_pixel_tag',
+      description:
+        'Create a Meta (Facebook) Pixel tag from the official community template with the CORRECT event fields — use this instead of hand-building a cvt_ template tag (which gets the event wrong). Pass the Meta `event`: a STANDARD event (PageView, ViewContent, Search, AddToCart, AddToWishlist, InitiateCheckout, AddPaymentInfo, Purchase, Lead, CompleteRegistration, Contact, CustomizeProduct, Donate, FindLocation, Schedule, StartTrial, SubmitApplication, Subscribe) is set as eventName=standard + standardEventName; ANY other value becomes a CUSTOM event (eventName=custom + customEventName=<event>). Free text like "add to cart" resolves to AddToCart. Imports Facebook\'s OFFICIAL Meta Pixel template if needed (you do NOT pass the cvt_ type; if you previously imported a different Meta template under another owner/repo, this still imports the official one). Optional firingTriggerId (create/identify the trigger first — without it the tag will not fire). Requires accountId, containerId, workspaceId, name, pixelId, event.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string' },
+          pixelId: { type: 'string' },
+          event: { type: 'string', description: 'Meta event, e.g. ViewContent / AddToCart / Purchase / Donate, or a custom name.' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'name', 'pixelId', 'event'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Meta Pixel tag "${s(a.name)}" (event ${s(a.event)})`,
+      precheck: (a) => findExistingByName(data, a, s(a.name), 'tag'),
+      handler: async (a) => {
+        const event = s(a.event).trim();
+        if (!event) throw new Error('event is required (a Meta standard event like ViewContent/AddToCart/Purchase, or a custom name).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'facebook', 'GoogleTagManager-WebTemplate-For-FacebookPixel');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the Meta Pixel template's tag type (got "${tmpl.type}"). Try import_gallery_template + list_gtm_templates to confirm it imported, then create_gtm_tag with its type.`);
+        }
+        const ftid = Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined;
+        const tag = buildMetaPixelTag(tmpl.type, s(a.name), s(a.pixelId), event, ftid);
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
     },
     {
       name: 'import_gallery_template',
