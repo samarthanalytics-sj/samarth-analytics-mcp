@@ -1,3 +1,9 @@
+## [1.67.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.66.0...v1.67.0) (2026-06-26)
+
+### Features
+
+* **desktop:** add create_server_trigger + surface tool failures in chat ([158dd97](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/158dd971f033e3fe2e1094699b25acd53303bbef))
+
 ## [1.66.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.65.0...v1.66.0) (2026-06-25)
 
 ### Features
