@@ -1198,7 +1198,7 @@ async function main(): Promise<void> {
       await reg.execute('create_tiktok_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '{{TT Pixel}}', accessToken: '{{TT Token}}', event: 'purchase', firingTriggerId: ['5'], userData: [{ name: 'email', value: '{{Email}}' }], eventProperties: [{ name: 'value', value: '{{Ecommerce Value}}' }], eventId: '{{Event ID}}' }),
     );
     // (fake createGtmTag echoes a stub; the parameter[] shape is asserted in gtm-builders.test.ts)
-    assert.equal(ttapi.name, 'TikTok CAPI - CompletePayment Tag', 'default name + GA4 purchase mapped to CompletePayment');
+    assert.equal(ttapi.name, 'TikTok CAPI - Purchase Tag', 'default name + GA4 purchase mapped to the current Purchase event');
     assert.ok(fd.calls.includes('importTemplate:stape-io/tiktok-tag'), 'imported the Stape TikTok server template');
     await assert.rejects(() => reg.execute('create_tiktok_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '1', accessToken: '', event: 'Purchase' }), /accessToken is required/);
 
