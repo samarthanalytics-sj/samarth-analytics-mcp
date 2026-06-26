@@ -1125,12 +1125,17 @@ test('buildMetaCapiServerTag: Stape FB CAPI tag with EMQ-tuned defaults', () => 
   assert.equal(p.find((x) => x.key === 'actionSource')?.value, 'website');
   assert.equal(p.find((x) => x.key === 'enableEventEnhancement')?.value, 'true', 'Event Enhancement on for EMQ');
   assert.equal(p.find((x) => x.key === 'generateFbp')?.value, 'true');
-  assert.equal(p.find((x) => x.key === 'inheritEventName')?.value, 'false', 'Override for a standard event');
+  // Verified against the live template: inheritEventName SELECT 'override', eventName RADIO 'standard'.
+  assert.equal(p.find((x) => x.key === 'inheritEventName')?.value, 'override');
+  assert.equal(p.find((x) => x.key === 'eventName')?.value, 'standard');
   assert.equal(p.find((x) => x.key === 'eventNameStandard')?.value, 'AddToCart', 'free text canonicalized');
   assert.deepEqual(t.firingTriggerId, ['5']);
-  // non-standard event → inherit the incoming event_name
+  // non-standard event → override + custom + eventNameCustom
   const c = buildMetaCapiServerTag('cvt_5TP8W', 'x', 'P', 'T', 'my_custom');
-  assert.equal(((c.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'inheritEventName')?.value, 'true');
+  const cp = (c.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(cp.find((x) => x.key === 'inheritEventName')?.value, 'override');
+  assert.equal(cp.find((x) => x.key === 'eventName')?.value, 'custom');
+  assert.equal(cp.find((x) => x.key === 'eventNameCustom')?.value, 'my_custom');
 });
 
 test('buildMetaPixelTag: a non-standard event → eventName=custom + customEventName', () => {
