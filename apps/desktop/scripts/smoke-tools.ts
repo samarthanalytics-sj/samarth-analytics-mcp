@@ -46,7 +46,7 @@ const MUTATIONS = new Set([
   'createGtmFolder', 'moveEntitiesToFolder', 'renameGtmFolder', 'deleteGtmFolder',
   'createGtmEnvironment',
   'createServerContainer', 'createGtmClient', 'deleteGtmClient', 'createGtmTransformation', 'bootstrapServerSideTagging',
-  'setWebServerContainerUrl', 'setServerContainerTaggingUrl', 'createMetaEmqVariables',
+  'setWebServerContainerUrl', 'setServerContainerTaggingUrl', 'createMetaEmqVariables', 'copyWorkspaceResources',
 ]);
 
 // A snapshot crafted so the audit produces every kind of finding: a paused GA4
@@ -98,6 +98,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     setWebServerContainerUrl: () => r('setWebServerContainerUrl', { tagId: '1', name: 'Google Tag', serverContainerUrl: 'https://sgtm.example.com' }),
     setServerContainerTaggingUrl: () => r('setServerContainerTaggingUrl', { containerId: 'SC1', name: 'Server', taggingServerUrls: ['https://sgtm.example.com'] }),
     createMetaEmqVariables: () => r('createMetaEmqVariables', { created: ['ed - fbp', 'ed - fbc'], skipped: [] }),
+    copyWorkspaceResources: () => r('copyWorkspaceResources', { variables: { created: [], skipped: [] }, triggers: { created: [], skipped: [] }, tags: { created: [], skipped: [] } }),
     getServerContainerSnapshot: () =>
       r('getServerContainerSnapshot', {
         taggingServerUrls: ['https://sgtm.example.com'],
