@@ -1,3 +1,9 @@
+## [1.72.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.71.0...v1.72.0) (2026-06-26)
+
+### Features
+
+* **desktop:** expand the Prompts tab — more sample prompts + Pinterest ([0fa78fb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0fa78fbb90509c8bdd817f4a3e34a8b4c6ea8020))
+
 ## [1.71.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.70.0...v1.71.0) (2026-06-26)
 
 ### Features
