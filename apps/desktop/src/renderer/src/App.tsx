@@ -2469,6 +2469,10 @@ function TagReviewPanel({
 
 /* ───────────────────── Container audit (existing tags) ───────────────────── */
 
+// Sentinel filter value for the "Orphaned triggers" dropdown entry — unused triggers are findings
+// about TRIGGERS, not a tag type, so they get their own option (won't collide with any GTM type).
+const ORPHAN_TRIGGER_FILTER = '__orphaned_triggers__';
+
 const SEV_BADGE: Record<string, React.CSSProperties> = {
   high: { background: '#3a1416', color: '#fca5a5', border: '1px solid #7f1d1d' },
   medium: { background: '#3a2c0a', color: '#fcd34d', border: '1px solid #92651a' },
@@ -2537,14 +2541,22 @@ function ContainerAuditPanel({
   const findings = [...(report?.findings ?? [])].sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
   const fixable = (report?.findings ?? []).filter((f) => f.autoFixable).length;
 
-  // Tag-type filter. The dropdown lists every tag type present in the findings (with counts);
-  // when one is picked, both the list and the batch buttons scope to it.
+  // Findings filter. The dropdown lists every tag type present in the findings (with counts), plus an
+  // "Orphaned triggers" entry for the unused-trigger findings (which are about triggers, not a tag
+  // type). When one is picked, both the list and the batch buttons scope to it.
   const typeCounts = new Map<string, number>();
   for (const f of findings) {
     if (f.resource?.kind === 'tag' && f.resource.type) typeCounts.set(f.resource.type, (typeCounts.get(f.resource.type) ?? 0) + 1);
   }
   const tagTypes = [...typeCounts.keys()].sort((a, b) => gtmTypeLabel(a).localeCompare(gtmTypeLabel(b)));
-  const typeMatches = (f: AuditFindingView): boolean => typeFilter === 'all' || f.resource?.type === typeFilter;
+  const isOrphanTrigger = (f: AuditFindingView): boolean => f.category === 'unused' && f.resource?.kind === 'trigger';
+  const orphanCount = findings.filter(isOrphanTrigger).length;
+  const typeMatches = (f: AuditFindingView): boolean =>
+    typeFilter === 'all'
+      ? true
+      : typeFilter === ORPHAN_TRIGGER_FILTER
+        ? isOrphanTrigger(f)
+        : f.resource?.type === typeFilter;
 
   // Bulk apply: every non-destructive auto-fix not already applied (and matching the active
   // type filter). Deletes are EXCLUDED — they stay per-row behind an explicit confirm so
@@ -2660,16 +2672,19 @@ function ContainerAuditPanel({
               ({report.summary.critical} critical · {report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low ·{' '}
               {report.summary.info} info){fixable > 0 ? ` · ${fixable} auto-fixable` : ''}
             </div>
-            {tagTypes.length > 0 && (
+            {(tagTypes.length > 0 || orphanCount > 0) && (
               <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Tag type:</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Filter:</span>
                 <select
                   value={typeFilter}
                   onChange={(e) => setTypeFilter(e.target.value)}
                   style={styles.select}
-                  title="Filter findings — and scope the batch fixes — to one tag type"
+                  title="Filter findings — and scope the batch fixes — to one tag type, or to orphaned triggers"
                 >
-                  <option value="all">All tag types ({findings.length})</option>
+                  <option value="all">All findings ({findings.length})</option>
+                  {orphanCount > 0 && (
+                    <option value={ORPHAN_TRIGGER_FILTER}>Orphaned triggers ({orphanCount})</option>
+                  )}
                   {tagTypes.map((t) => (
                     <option key={t} value={t}>
                       {gtmTypeLabel(t)} ({typeCounts.get(t)})
@@ -2677,7 +2692,7 @@ function ContainerAuditPanel({
                   ))}
                 </select>
                 {typeFilter !== 'all' && (
-                  <button style={styles.ghostBtn} onClick={() => setTypeFilter('all')} title="Clear the tag-type filter">
+                  <button style={styles.ghostBtn} onClick={() => setTypeFilter('all')} title="Clear the filter">
                     Clear filter
                   </button>
                 )}
@@ -2760,7 +2775,7 @@ function ContainerAuditPanel({
         )}
 
         {findings.length > 0 && visible.length === 0 && (
-          <div style={styles.empty}>No {gtmTypeLabel(typeFilter)} findings. Clear the tag-type filter to see the rest.</div>
+          <div style={styles.empty}>No {typeFilter === ORPHAN_TRIGGER_FILTER ? 'orphaned trigger' : gtmTypeLabel(typeFilter)} findings. Clear the filter to see the rest.</div>
         )}
 
         {visible.length > 0 && (
