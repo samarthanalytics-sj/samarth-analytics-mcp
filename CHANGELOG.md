@@ -1,3 +1,9 @@
+## [1.83.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.83.2...v1.83.3) (2026-06-26)
+
+### Bug Fixes
+
+* **desktop:** raise chat tool-call step limit 6 -> 40 so multi-item builds finish in one prompt ([d8b010b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d8b010b2de22f67cfb25eb11a7ddd026bade0da5))
+
 ## [1.83.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.83.1...v1.83.2) (2026-06-26)
 
 ### Bug Fixes
