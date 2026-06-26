@@ -1409,6 +1409,23 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; prompts: string[] }> =
     ],
   },
   {
+    title: 'Test & verify a new tag',
+    icon: '🧪',
+    prompts: [
+      "List the community templates imported into my container and show each one's tag type.",
+      'Audit my container and confirm the new tag has a firing trigger and Consent Mode v2 settings.',
+      'Cross-check my GA4 measurement IDs against my accessible GA4 properties.',
+      'Diff my draft workspace against the live version so I can see what is pending to publish.',
+      'Detect Meta/Facebook pixel tags in my web container and which ecommerce events they fire on.',
+      'Audit my server container to confirm the client, trigger and tag are wired correctly.',
+      'Verify my tagging server https://sgtm.example.com responds (GET /healthy).',
+      'Run a realtime GA4 report of active users by page to confirm hits are arriving.',
+      'How do I test my Pinterest / Meta pixel tag in GTM Preview before publishing?',
+      'Walk me through verifying server-side events in GTM Preview and GA4 DebugView.',
+      'How do I confirm my Meta CAPI events in Meta Events Manager (Test Events)?',
+    ],
+  },
+  {
     title: 'GA4 reporting & settings (read-only)',
     icon: '📊',
     prompts: [
