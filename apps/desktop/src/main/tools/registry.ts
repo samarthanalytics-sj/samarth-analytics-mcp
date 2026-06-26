@@ -22,6 +22,8 @@ import {
   buildMetaPixelTag,
   buildMetaCapiServerTag,
   metaStandardEvent,
+  buildTikTokCapiServerTag,
+  tikTokStandardEvent,
   auditServerContainer,
   detectMetaTags,
   type TriggerInput,
@@ -1547,9 +1549,72 @@ export function buildToolRegistry(
       },
     },
     {
+      name: 'create_tiktok_capi_server_tag',
+      description:
+        'Create a TikTok Events API SERVER tag from the Stape "TikTok Events API" community template (stape-io / tiktok-tag), tuned for match quality: Event Enhancement ON, generate _ttp ON. This is the SERVER-side Events API tag — DISTINCT from the TikTok WEB pixel (tiktok / gtm-template-pixel) and it uses DIFFERENT field keys (pixelId / accessToken / eventName, NOT the web pixel_code / event). Pass pixelId + accessToken (the TikTok Events Manager access token, usually {{variables}}) and the `event`. A TikTok STANDARD event sets eventName (CompletePayment, AddToCart, ViewContent, InitiateCheckout, Lead, CompleteRegistration, SubmitForm, Search, …); GA4 names are mapped (purchase→CompletePayment, add_to_cart→AddToCart, view_item→ViewContent, begin_checkout→InitiateCheckout, generate_lead→Lead); anything unrecognised becomes a custom event. For match quality, pass userData rows (name ∈ email/phone/external_id/ttclid/ttp/ip/user_agent/first_name/last_name/city/state/country/zip_code — values usually {{variables}}) and eventId for deduplication with the web pixel. eventProperties (currency/value/contents/content_ids/order_id/…) populate the event data. Imports the Stape template if needed (you do NOT pass the cvt_ type). The tag needs a SERVER trigger (create_server_trigger) scoped to the client that claims the events. Optional eventSource (web/app/offline/crm, default web), testEventCode, generateTtp, eventEnhancement, requireConsent, firingTriggerId, name (defaults to "TikTok CAPI - <Event> Tag"). Requires accountId, containerId (SERVER), workspaceId, pixelId, accessToken, event.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional — defaults to "TikTok CAPI - <Event> Tag".' },
+          pixelId: { type: 'string', description: 'TikTok Pixel ID (usually a {{variable}}).' },
+          accessToken: { type: 'string', description: 'TikTok Events API access token (usually a {{variable}}).' },
+          event: { type: 'string', description: 'Event, e.g. purchase / AddToCart / ViewContent / a custom name.' },
+          eventSource: { type: 'string', description: 'web | app | offline | crm — default web.' },
+          eventId: { type: 'string', description: 'Event ID for dedup with the web pixel (usually a {{variable}}).' },
+          userData: {
+            type: 'array',
+            description: 'Advanced-matching rows { name, value }; name ∈ email/phone/external_id/ttclid/ttp/ip/user_agent/first_name/last_name/city/state/country/zip_code.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          eventProperties: {
+            type: 'array',
+            description: 'Event-data rows { name, value } (currency/value/contents/content_ids/content_type/num_items/order_id/…).',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          testEventCode: { type: 'string' },
+          generateTtp: { type: 'boolean', description: 'Generate _ttp cookie — default true.' },
+          eventEnhancement: { type: 'boolean', description: 'Event Enhancement — default true.' },
+          requireConsent: { type: 'boolean', description: 'Gate on ad_storage consent — default false (optional).' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'accessToken', 'event'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create TikTok Events API server tag for ${s(a.event)} (pixel ${s(a.pixelId)})`,
+      precheck: (a) => findExistingByName(data, a, s(a.name) || `TikTok CAPI - ${s(tikTokStandardEvent(s(a.event).trim()) ?? s(a.event).trim())} Tag`, 'tag'),
+      handler: async (a) => {
+        const event = s(a.event).trim();
+        if (!event) throw new Error('event is required (a TikTok event like AddToCart/CompletePayment/ViewContent, or a custom name).');
+        if (!s(a.accessToken).trim()) throw new Error('accessToken is required (the TikTok Events API access token, usually a {{variable}}).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'tiktok-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the Stape TikTok Events API template's tag type (got "${tmpl.type}"). Import stape-io/tiktok-tag and check list_gtm_templates.`);
+        }
+        const name = s(a.name).trim() || `TikTok CAPI - ${tikTokStandardEvent(event) ?? event} Tag`;
+        const mapRows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildTikTokCapiServerTag(tmpl.type, name, s(a.pixelId), s(a.accessToken), event, {
+          eventSource: a.eventSource != null ? s(a.eventSource) : undefined,
+          eventId: a.eventId != null ? s(a.eventId) : undefined,
+          userData: mapRows(a.userData),
+          eventProperties: mapRows(a.eventProperties),
+          testEventCode: a.testEventCode != null ? s(a.testEventCode) : undefined,
+          generateTtp: a.generateTtp != null ? Boolean(a.generateTtp) : undefined,
+          eventEnhancement: a.eventEnhancement != null ? Boolean(a.eventEnhancement) : undefined,
+          requireConsent: a.requireConsent != null ? Boolean(a.requireConsent) : undefined,
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
       name: 'import_gallery_template',
       description:
-        'Import a Community Template Gallery template into a workspace by GitHub owner + repository — the GTM API DOES support this (templates.import_from_gallery); do NOT tell the user templates can only be imported in the GTM UI. Works for ANY gallery template. Common pixel templates (owner / repository): Meta Pixel = facebook / GoogleTagManager-WebTemplate-For-FacebookPixel; TikTok Pixel = tiktok / gtm-template-pixel; LinkedIn Insight Tag = linkedin / linkedin-gtm-community-template; Snap Pixel = Snapchat / snapchat-google-tag-manager; Pinterest Tag = pinterest / ws-gtm-template (Pinterest server CAPI = pinterest / ss-gtm-template); Meta CAPI (server) = stape-io / facebook-tag. Idempotent (returns the existing one if already imported). Returns the template + its tag TYPE code (cvt_…). After importing, build a tag from it with create_gtm_tag using that returned `type` and the template\'s own field keys (e.g. Meta Pixel: pixelId, eventName, standardEventName) — those fields are template-specific, so check the template in GTM if a create is rejected. Requires accountId, containerId, workspaceId, owner, repository; optional sha (defaults to latest).',
+        'Import a Community Template Gallery template into a workspace by GitHub owner + repository — the GTM API DOES support this (templates.import_from_gallery); do NOT tell the user templates can only be imported in the GTM UI. Works for ANY gallery template. Common pixel templates (owner / repository): Meta Pixel = facebook / GoogleTagManager-WebTemplate-For-FacebookPixel; TikTok Pixel = tiktok / gtm-template-pixel; LinkedIn Insight Tag = linkedin / linkedin-gtm-community-template; Snap Pixel = Snapchat / snapchat-google-tag-manager; Pinterest Tag = pinterest / ws-gtm-template (Pinterest server CAPI = pinterest / ss-gtm-template); Meta CAPI (server) = stape-io / facebook-tag; TikTok Events API (server) = stape-io / tiktok-tag (official alt = tiktok / gtm-template-eapi). Idempotent (returns the existing one if already imported). Returns the template + its tag TYPE code (cvt_…). After importing, build a tag from it with create_gtm_tag using that returned `type` and the template\'s own field keys (e.g. Meta Pixel: pixelId, eventName, standardEventName) — those fields are template-specific, so check the template in GTM if a create is rejected. Requires accountId, containerId, workspaceId, owner, repository; optional sha (defaults to latest).',
       inputSchema: {
         type: 'object',
         properties: {

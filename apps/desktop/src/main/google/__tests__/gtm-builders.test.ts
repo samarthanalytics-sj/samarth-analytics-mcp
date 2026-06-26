@@ -17,6 +17,8 @@ import {
   buildMetaPixelTag,
   buildMetaCapiServerTag,
   metaStandardEvent,
+  buildTikTokCapiServerTag,
+  tikTokStandardEvent,
   META_EVENT_OBJECT_PROPERTIES,
   normalizeCustomEventName,
   normalizeCustomEventTrigger,
@@ -1136,6 +1138,74 @@ test('buildMetaCapiServerTag: Stape FB CAPI tag with EMQ-tuned defaults', () => 
   assert.equal(cp.find((x) => x.key === 'inheritEventName')?.value, 'override');
   assert.equal(cp.find((x) => x.key === 'eventName')?.value, 'custom');
   assert.equal(cp.find((x) => x.key === 'eventNameCustom')?.value, 'my_custom');
+});
+
+test('tikTokStandardEvent: GA4 aliases map, exact-case TikTok events pass through, junk → null', () => {
+  // GA4 purchase → CompletePayment (web-pixel-consistent for dedup); other GA4 aliases
+  assert.equal(tikTokStandardEvent('purchase'), 'CompletePayment');
+  assert.equal(tikTokStandardEvent('add_to_cart'), 'AddToCart');
+  assert.equal(tikTokStandardEvent('view_item'), 'ViewContent');
+  assert.equal(tikTokStandardEvent('begin_checkout'), 'InitiateCheckout');
+  assert.equal(tikTokStandardEvent('generate_lead'), 'Lead');
+  assert.equal(tikTokStandardEvent('sign_up'), 'CompleteRegistration');
+  // exact-case escape hatch: a literal TikTok event is kept (so "Purchase" ≠ CompletePayment)
+  assert.equal(tikTokStandardEvent('Purchase'), 'Purchase');
+  assert.equal(tikTokStandardEvent('CompletePayment'), 'CompletePayment');
+  // case/separator-insensitive direct match
+  assert.equal(tikTokStandardEvent('view content'), 'ViewContent');
+  assert.equal(tikTokStandardEvent('completeregistration'), 'CompleteRegistration');
+  // unknown → custom
+  assert.equal(tikTokStandardEvent('Newsletter Signup'), null);
+  assert.equal(tikTokStandardEvent('  '), null);
+});
+
+test('buildTikTokCapiServerTag: Stape TikTok Events API tag, standard event + match-quality wiring', () => {
+  const t = buildTikTokCapiServerTag('cvt_TT01', 'TikTok CAPI - CompletePayment Tag', '{{TikTok Pixel}}', '{{TikTok Token}}', 'purchase', {
+    firingTriggerId: ['5'],
+    eventId: '{{Event ID}}',
+    userData: [
+      { name: 'Email', value: '{{Email}}' },
+      { name: 'phone', value: '{{Phone}}' },
+      { name: '', value: 'dropped' },
+    ],
+    eventProperties: [
+      { name: 'value', value: '{{Ecom Value}}' },
+      { name: 'currency', value: '{{Ecom Currency}}' },
+      { name: 'made_up_prop', value: '{{X}}' },
+    ],
+  });
+  assert.equal(t.type, 'cvt_TT01');
+  const p = (t.parameter ?? []) as Array<{ key: string; value: string; type?: string; list?: unknown[] }>;
+  assert.equal(p.find((x) => x.key === 'pixelId')?.value, '{{TikTok Pixel}}');
+  assert.equal(p.find((x) => x.key === 'accessToken')?.value, '{{TikTok Token}}');
+  assert.equal(p.find((x) => x.key === 'eventSource')?.value, 'web', 'default source web');
+  // eventType RADIO is the inherit/override control (no Meta-style inheritEventName field)
+  assert.equal(p.find((x) => x.key === 'inheritEventName'), undefined, 'no Meta inheritEventName key');
+  assert.equal(p.find((x) => x.key === 'eventType')?.value, 'standard');
+  assert.equal(p.find((x) => x.key === 'eventName')?.value, 'CompletePayment', 'GA4 purchase mapped');
+  assert.equal(p.find((x) => x.key === 'enableEventEnhancement')?.value, 'true', 'Event Enhancement on');
+  assert.equal(p.find((x) => x.key === 'generateTtp')?.value, 'true', 'generate _ttp on');
+  assert.equal(p.find((x) => x.key === 'adStorageConsent')?.value, 'optional');
+  assert.equal(p.find((x) => x.key === 'eventId')?.value, '{{Event ID}}', 'dedup id wired');
+  assert.deepEqual(t.firingTriggerId, ['5']);
+  // userDataList: a list-of-maps; blank-name row dropped; "Email" canonicalized to "email"
+  const ud = p.find((x) => x.key === 'userDataList') as { list: Array<{ map: Array<{ key: string; value: string }> }> } | undefined;
+  assert.ok(ud, 'userDataList present');
+  assert.equal(ud!.list.length, 2, 'blank-name row dropped');
+  assert.equal(ud!.list[0].map.find((m) => m.key === 'name')?.value, 'email', 'name canonicalized to SELECT key');
+  // known props → customDataList; unknown prop → additionalEventPropertiesList (not rejected)
+  const cd = p.find((x) => x.key === 'customDataList') as { list: unknown[] } | undefined;
+  const extra = p.find((x) => x.key === 'additionalEventPropertiesList') as { list: unknown[] } | undefined;
+  assert.equal(cd?.list.length, 2, 'value + currency are known custom-data keys');
+  assert.equal(extra?.list.length, 1, 'made_up_prop routed to additional properties');
+});
+
+test('buildTikTokCapiServerTag: a non-standard event → eventType=custom + eventNameCustom', () => {
+  const c = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'my_custom_event');
+  const p = (c.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(p.find((x) => x.key === 'eventType')?.value, 'custom');
+  assert.equal(p.find((x) => x.key === 'eventNameCustom')?.value, 'my_custom_event');
+  assert.equal(p.find((x) => x.key === 'eventName'), undefined, 'no standard eventName for a custom event');
 });
 
 test('buildMetaPixelTag: a non-standard event → eventName=custom + customEventName', () => {
