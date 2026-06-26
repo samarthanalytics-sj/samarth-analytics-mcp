@@ -264,6 +264,14 @@ function fakeData(
       calls.push(`metaEmq:${a}:${c}:${w}`);
       return { created: ['ed - fbp', 'ed - fbc', 'ed - event_id'], skipped: ['ed - value'] };
     },
+    listGtmTemplates: async (a: string, c: string, w: string) => {
+      calls.push(`listTemplates:${a}:${c}:${w}`);
+      return [];
+    },
+    importGalleryTemplate: async (_a: string, c: string, _w: string, owner: string, repo: string) => {
+      calls.push(`importTemplate:${owner}/${repo}`);
+      return { templateId: '34', name: 'Meta Pixel', type: `cvt_${c}_34`, imported: true };
+    },
     getGtmContainerSnapshot: async (a: string, c: string, w: string) => {
       calls.push(`snapshot:${a}:${c}:${w}`);
       return (
@@ -359,6 +367,7 @@ async function main(): Promise<void> {
       'list_gtm_environments',
       'list_gtm_folders',
       'list_gtm_tags',
+      'list_gtm_templates',
       'list_gtm_transformations',
       'list_gtm_triggers',
       'list_gtm_variables',
@@ -388,11 +397,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 43, 'read-only registry has 43 tools');
+    assert.equal(readOnly.list().length, 44, 'read-only registry has 44 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 77, 'read + write registry has 77 tools');
+    assert.equal(withWrites.list().length, 79, 'read + write registry has 79 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1154,6 +1163,13 @@ async function main(): Promise<void> {
     );
     assert.equal(srvTrig.type, 'customEvent', 'server trigger is a customEvent (built by the tool, not hand-rolled)');
     assert.ok(fd.calls.includes('enableVars:1:2:3:clientName'), 'enabled the Client Name built-in for the scoped filter');
+
+    // import_gallery_template: bring in the Meta Pixel community template (write) → returns its cvt_ type.
+    const imp = JSON.parse(
+      await reg.execute('import_gallery_template', { accountId: '1', containerId: '2', workspaceId: '3', owner: 'facebook', repository: 'GoogleTagManager-WebTemplate-For-FacebookPixel' }),
+    );
+    assert.equal(imp.type, 'cvt_2_34', 'returns the template tag-type code');
+    assert.ok(fd.calls.includes('importTemplate:facebook/GoogleTagManager-WebTemplate-For-FacebookPixel'));
 
     // copy_workspace_resources: recreate tags/triggers/variables from one workspace into another.
     const copied = JSON.parse(

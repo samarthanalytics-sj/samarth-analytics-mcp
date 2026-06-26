@@ -1511,6 +1511,69 @@ export class GoogleDataService {
     return { created, skipped };
   }
 
+  /** List the CUSTOM (community-gallery) templates imported into a workspace, with their
+   *  derived tag/variable TYPE code (cvt_<containerId>_<templateId>) — the value to use as a
+   *  tag's `type` to build a tag from that template. */
+  async listGtmTemplates(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<Array<{ templateId: string; name: string; type: string; galleryOwner: string; galleryRepository: string }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const tmpls = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.templates.list({ parent, pageToken }),
+      (r) => r.data.template,
+      (r) => r.data.nextPageToken
+    );
+    return tmpls.map((t) => ({
+      templateId: t.templateId ?? '',
+      name: t.name ?? '(unnamed)',
+      type: `cvt_${t.containerId ?? containerId}_${t.templateId ?? ''}`,
+      galleryOwner: t.galleryReference?.owner ?? '',
+      galleryRepository: t.galleryReference?.repository ?? '',
+    }));
+  }
+
+  /** Import a community-gallery template into a workspace (e.g. the Meta Pixel template:
+   *  owner "facebook", repository "GoogleTagManager-WebTemplate-For-FacebookPixel"). The GTM
+   *  API DOES support this (templates.import_from_gallery). Idempotent — if a template from the
+   *  same owner/repository is already imported, returns it without re-importing. Returns the
+   *  template + its tag TYPE code (use as a tag's `type` to build a tag from it). */
+  async importGalleryTemplate(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    owner: string,
+    repository: string,
+    sha?: string
+  ): Promise<{ templateId: string; name: string; type: string; imported: boolean }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const wantOwner = owner.trim().toLowerCase();
+    const wantRepo = repository.trim().toLowerCase();
+    const existing = (await this.listGtmTemplates(accountId, containerId, workspaceId)).find(
+      (t) => t.galleryOwner.toLowerCase() === wantOwner && t.galleryRepository.toLowerCase() === wantRepo
+    );
+    if (existing) return { templateId: existing.templateId, name: existing.name, type: existing.type, imported: false };
+    const res = await gtm.accounts.containers.workspaces.templates.import_from_gallery({
+      parent,
+      galleryOwner: owner,
+      galleryRepository: repository,
+      ...(sha ? { gallerySha: sha } : {}),
+      acknowledgePermissions: true,
+    });
+    const templateId = res.data.templateId ?? '';
+    return {
+      templateId,
+      name: res.data.name ?? repository,
+      type: `cvt_${res.data.containerId ?? containerId}_${templateId}`,
+      imported: true,
+    };
+  }
+
   async runGa4Report(input: {
     property: string;
     startDate: string;
