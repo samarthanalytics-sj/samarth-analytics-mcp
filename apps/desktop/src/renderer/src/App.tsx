@@ -1347,12 +1347,13 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; prompts: string[] }> =
     ],
   },
   {
-    title: 'Community templates (Meta / TikTok / LinkedIn)',
+    title: 'Community templates (Meta / TikTok / LinkedIn / Pinterest)',
     icon: '🧩',
     prompts: [
       'Import the Meta Pixel community template and create a Meta pixel tag with my Pixel ID.',
       'Import the TikTok Pixel template and create the tag.',
       'Import the LinkedIn Insight Tag template.',
+      'Import the Pinterest Tag template (pinterest / ws-gtm-template) and create the tag with my Tag ID.',
       'Detect Meta/Facebook pixel tags in my web container.',
     ],
   },
