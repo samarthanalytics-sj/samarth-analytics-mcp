@@ -1089,6 +1089,20 @@ test('buildMetaPixelTag: standard event → eventName=standard + standardEventNa
   assert.equal(((atc.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'standardEventName')?.value, 'AddToCart');
 });
 
+test('buildMetaPixelTag: objectProperties become an objectPropertyList of {name,value} maps', () => {
+  const t = buildMetaPixelTag('cvt_5RM3Q', 'Meta - Event - Purchase Tag', '123', 'Purchase', ['9'], [
+    { name: 'value', value: '{{Ecommerce Value}}' },
+    { name: 'currency', value: '{{Ecommerce Currency}}' },
+    { name: '', value: 'dropped' },
+  ]);
+  const p = (t.parameter ?? []) as Array<{ key: string; value?: string; list?: Array<{ map: Array<{ key: string; value: string }> }> }>;
+  assert.equal(p.find((x) => x.key === 'objectPropertiesFromVariable')?.value, 'false');
+  const list = p.find((x) => x.key === 'objectPropertyList')?.list ?? [];
+  assert.equal(list.length, 2, 'blank-name row dropped');
+  assert.equal(list[0].map.find((m) => m.key === 'name')?.value, 'value');
+  assert.equal(list[0].map.find((m) => m.key === 'value')?.value, '{{Ecommerce Value}}');
+});
+
 test('buildMetaPixelTag: a non-standard event → eventName=custom + customEventName', () => {
   assert.equal(metaStandardEvent('Newsletter Signup'), null);
   const c = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'Newsletter Signup');

@@ -1171,13 +1171,14 @@ async function main(): Promise<void> {
     assert.equal(imp.type, 'cvt_5RM3Q', 'returns the gallery template tag-type code (cvt_<galleryTemplateId>)');
     assert.ok(fd.calls.includes('importTemplate:facebook/GoogleTagManager-WebTemplate-For-FacebookPixel'));
 
-    // create_meta_pixel_tag imports the template + creates a tag of its cvt_ type.
+    // create_meta_pixel_tag imports the template + creates a tag of its cvt_ type; name optional.
     const metaTag = JSON.parse(
-      await reg.execute('create_meta_pixel_tag', { accountId: '1', containerId: '2', workspaceId: '3', name: 'Meta - ViewContent', pixelId: '123', event: 'ViewContent', firingTriggerId: ['9'] }),
+      await reg.execute('create_meta_pixel_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '123', event: 'view content', firingTriggerId: ['9'], objectProperties: [{ name: 'value', value: '{{Ecommerce Value}}' }] }),
     );
     assert.equal(metaTag.type, 'cvt_5RM3Q', 'built on the imported Meta Pixel template type');
+    assert.equal(metaTag.name, 'Meta - Event - ViewContent Tag', 'default name + canonicalized event');
     // a blank event is rejected (not silently created as an empty custom event)
-    await assert.rejects(() => reg.execute('create_meta_pixel_tag', { accountId: '1', containerId: '2', workspaceId: '3', name: 'X', pixelId: '1', event: '  ' }), /event is required/);
+    await assert.rejects(() => reg.execute('create_meta_pixel_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '1', event: '  ' }), /event is required/);
 
     // copy_workspace_resources: recreate tags/triggers/variables from one workspace into another.
     const copied = JSON.parse(
