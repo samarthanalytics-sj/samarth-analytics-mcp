@@ -1,3 +1,9 @@
+## [1.84.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.83.3...v1.84.0) (2026-06-26)
+
+### Features
+
+* **desktop:** list + bulk-delete unused (orphaned) GTM triggers with selection filter ([73be844](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/73be8440839650a636c527a681945cb65e1ac29b))
+
 ## [1.83.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.83.2...v1.83.3) (2026-06-26)
 
 ### Bug Fixes
