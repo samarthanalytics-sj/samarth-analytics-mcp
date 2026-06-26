@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, customTemplateType, upsertGoogleTagConfig } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
@@ -884,10 +884,17 @@ export class GoogleDataService {
         (r) => r.data.nextPageToken
       ),
     ]);
+    const snapshot = toSnapshot(tags, triggers, variables);
     console.error(
       `[gtm-snapshot] ws ${workspaceId}: ${tags.length} tags (${tagPages}p) · ${triggers.length} triggers (${triggerPages}p) · ${variables.length} variables (${variablePages}p)`
     );
-    return toSnapshot(tags, triggers, variables);
+    // Breakdown so an orphaned-trigger count that looks "too low" can be explained: the gap between
+    // orphaned= and each ifXUnused= is the number of triggers ONLY that rule keeps out of the set.
+    const tb = triggerUsageBreakdown(snapshot);
+    console.error(
+      `[trigger-usage] total=${tb.total} orphaned=${tb.orphanedStrict} | ifGroupMembersUnused=${tb.orphanedIfGroupMembersUnused} ifBlockingUnused=${tb.orphanedIfBlockingUnused} ifPausedFiringUnused=${tb.orphanedIfPausedFiringUnused}`
+    );
+    return snapshot;
   }
 
   /** COPY all tags/triggers/variables from one workspace into another in the SAME container.

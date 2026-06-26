@@ -919,6 +919,41 @@ export function findUnusedTriggers(snapshot: ContainerSnapshot): AuditTrigger[] 
   return snapshot.triggers.filter((tr) => tr.triggerId !== '' && !used.has(tr.triggerId) && !isBuiltinTriggerId(tr.triggerId));
 }
 
+/** Diagnostic: explain the orphaned-trigger count by showing how it would change under looser
+ *  definitions. `orphanedStrict` is what the audit reports today (not firing/blocking/group, not
+ *  built-in). The "…IfXUnused" variants relax one rule, so the gap between strict and a variant is
+ *  exactly the triggers that ONLY that rule keeps out of the orphan set — which pinpoints why a
+ *  manual count differs. PURE. */
+export function triggerUsageBreakdown(s: ContainerSnapshot): {
+  total: number;
+  orphanedStrict: number;
+  orphanedIfGroupMembersUnused: number;
+  orphanedIfBlockingUnused: number;
+  orphanedIfPausedFiringUnused: number;
+} {
+  const firing = new Set<string>();
+  const firingActive = new Set<string>(); // firing trigger of a NON-paused tag
+  const blocking = new Set<string>();
+  for (const t of s.tags) {
+    for (const id of t.firingTriggerId ?? []) {
+      firing.add(id);
+      if (!t.paused) firingActive.add(id);
+    }
+    for (const id of t.blockingTriggerId ?? []) blocking.add(id);
+  }
+  const group = new Set<string>();
+  for (const tr of s.triggers) collectTriggerReferences(tr.parameter, group);
+  const real = s.triggers.filter((tr) => tr.triggerId !== '' && !isBuiltinTriggerId(tr.triggerId));
+  const count = (pred: (id: string) => boolean): number => real.filter((tr) => pred(tr.triggerId)).length;
+  return {
+    total: s.triggers.length,
+    orphanedStrict: count((id) => !firing.has(id) && !blocking.has(id) && !group.has(id)),
+    orphanedIfGroupMembersUnused: count((id) => !firing.has(id) && !blocking.has(id)),
+    orphanedIfBlockingUnused: count((id) => !firing.has(id) && !group.has(id)),
+    orphanedIfPausedFiringUnused: count((id) => !firingActive.has(id) && !blocking.has(id) && !group.has(id)),
+  };
+}
+
 // GTM tag types that send data to ad/analytics platforms and therefore should
 // declare Consent Mode v2 settings: GA4 event, the Google tag, Google Ads
 // conversion/remarketing, Conversion Linker, Floodlight counter/sales, plus the
