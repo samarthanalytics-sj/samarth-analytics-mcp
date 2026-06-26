@@ -1,3 +1,9 @@
+## [1.71.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.70.0...v1.71.0) (2026-06-26)
+
+### Features
+
+* **desktop:** add a "Prompts" tab with categorized sample prompts ([d0998d1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d0998d1a18af05f40844d5487989100f37814a75))
+
 ## [1.70.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.69.1...v1.70.0) (2026-06-26)
 
 ### Features
