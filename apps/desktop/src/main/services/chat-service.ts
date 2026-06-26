@@ -249,6 +249,12 @@ export class ChatService {
     const toolCalls: ChatToolCall[] = [];
     // Open a fresh change-journal turn so the user can revert this query's GTM writes.
     if (product === 'gtm') changeJournal.beginTurn();
+    // A real build is many tool calls: e.g. a Meta Pixel tag = list reads + a trigger + ~8 ecommerce
+    // variables + import template + the tag (~13-16). Reasoning models (o4-mini) issue ONE tool call
+    // per step, so a low cap truncated multi-item builds mid-flow ("stopped after N steps"). This is a
+    // SAFETY ceiling, not a target — a normal turn returns a final answer well before it; it only bites
+    // pathological loops. Idempotent precheck (findExistingByName) means a re-run safely resumes.
+    const MAX_TOOL_STEPS = 40;
     const result = await runChat(client, { system, model: active.llm.model, apiKey, messages, signal }, tools, {
       onDelta: emit ? (delta) => emit({ type: 'text', delta }) : undefined,
       onToolCall: (call) => {
@@ -256,7 +262,7 @@ export class ChatService {
         emit?.({ type: 'tool', name: call.name });
       },
       onToolResult: emit ? (r) => emit({ type: 'tool_result', name: r.name, ok: r.ok, error: r.error }) : undefined,
-    });
+    }, MAX_TOOL_STEPS);
 
     return { text: result.text, toolCalls };
   }
