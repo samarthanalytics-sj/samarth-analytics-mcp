@@ -1,3 +1,9 @@
+## [1.70.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.69.1...v1.70.0) (2026-06-26)
+
+### Features
+
+* **desktop:** import community gallery templates (Meta Pixel etc.) via the API ([5ceab97](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5ceab9701ca4d04325b51a43b672a5c18a823b12))
+
 ## [1.69.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.69.0...v1.69.1) (2026-06-26)
 
 ### Bug Fixes
