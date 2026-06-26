@@ -1,6 +1,10 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './App';
+import { applyTheme, loadTheme } from './theme';
+
+// Apply the saved theme before first paint so there's no flash of the wrong palette.
+applyTheme(loadTheme());
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
