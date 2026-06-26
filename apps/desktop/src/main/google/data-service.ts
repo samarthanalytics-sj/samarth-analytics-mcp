@@ -871,6 +871,133 @@ export class GoogleDataService {
     return toSnapshot(tags, triggers, variables);
   }
 
+  /** COPY all tags/triggers/variables from one workspace into another in the SAME container.
+   *  GTM has no atomic "move", so this recreates the resources in the destination: variables,
+   *  then triggers (non-group first, then trigger GROUPS whose member triggerReferences are
+   *  remapped), then tags (whose firingTriggerId/blockingTriggerId — and built-in trigger ids
+   *  — are remapped to the destination). Skips any resource whose NAME already exists in the
+   *  destination (non-destructive — never overwrites). Variable {{references}} carry over by
+   *  name. NOT copied: folders, built-in variables (may need enabling), and tags that use
+   *  legacy firing/blocking RULES (reported in `unsupported`). A create that throws is recorded
+   *  in `failed` and the copy CONTINUES — so the result is a complete inventory of what landed. */
+  async copyWorkspaceResources(
+    accountId: string,
+    containerId: string,
+    fromWorkspaceId: string,
+    toWorkspaceId: string
+  ): Promise<{
+    variables: { created: string[]; skipped: string[] };
+    triggers: { created: string[]; skipped: string[] };
+    tags: { created: string[]; skipped: string[] };
+    unsupported: string[];
+    failed: string[];
+  }> {
+    if (fromWorkspaceId === toWorkspaceId) throw new Error('Source and destination workspaces are the same.');
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const srcParent = `accounts/${accountId}/containers/${containerId}/workspaces/${fromWorkspaceId}`;
+    const dstParent = `accounts/${accountId}/containers/${containerId}/workspaces/${toWorkspaceId}`;
+    const listAll = async (parent: string): Promise<{ tags: RawTag[]; triggers: RawTrigger[]; variables: RawVariable[] }> => {
+      const [tags, triggers, variables] = await Promise.all([
+        collectPages((pageToken) => gtm.accounts.containers.workspaces.tags.list({ parent, pageToken }), (r) => r.data.tag, (r) => r.data.nextPageToken),
+        collectPages((pageToken) => gtm.accounts.containers.workspaces.triggers.list({ parent, pageToken }), (r) => r.data.trigger, (r) => r.data.nextPageToken),
+        collectPages((pageToken) => gtm.accounts.containers.workspaces.variables.list({ parent, pageToken }), (r) => r.data.variable, (r) => r.data.nextPageToken),
+      ]);
+      return { tags, triggers, variables };
+    };
+    const [src, dst] = await Promise.all([listAll(srcParent), listAll(dstParent)]);
+
+    // Drop server-assigned / workspace-bound fields so a resource can be re-created cleanly.
+    // uniqueTriggerId/parentFolderId are workspace-bound and must not carry over.
+    const strip = (o: Record<string, unknown>): Record<string, unknown> => {
+      const { tagId, triggerId, variableId, fingerprint, path, accountId: _a, containerId: _c, workspaceId: _w, tagManagerUrl, parentFolderId, uniqueTriggerId, ...rest } = o as Record<string, unknown>;
+      void tagId; void triggerId; void variableId; void fingerprint; void path; void _a; void _c; void _w; void tagManagerUrl; void parentFolderId; void uniqueTriggerId;
+      return rest;
+    };
+    const lc = (s2: string | null | undefined): string => (s2 ?? '').trim().toLowerCase();
+    const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+    const result = {
+      variables: { created: [] as string[], skipped: [] as string[] },
+      triggers: { created: [] as string[], skipped: [] as string[] },
+      tags: { created: [] as string[], skipped: [] as string[] },
+      unsupported: [] as string[],
+      failed: [] as string[],
+    };
+
+    const dstTrigByName = new Map(dst.triggers.map((t) => [lc(t.name), t.triggerId ?? '']));
+    const trigIdMap = new Map<string, string>();
+    // Rewrite triggerReference parameter VALUES (e.g. a Trigger Group's member list) through the
+    // id map; PASS THROUGH unmapped ids (built-in triggers keep the same reserved id). Recurses
+    // into list/map params.
+    const remapRefs = (param: unknown): unknown => {
+      if (!param || typeof param !== 'object') return param;
+      if (Array.isArray(param)) return param.map(remapRefs);
+      const p = { ...(param as Record<string, unknown>) };
+      if (p.type === 'triggerReference' && typeof p.value === 'string') p.value = trigIdMap.get(p.value) ?? p.value;
+      if (Array.isArray(p.list)) p.list = p.list.map(remapRefs);
+      if (Array.isArray(p.map)) p.map = p.map.map(remapRefs);
+      return p;
+    };
+    const remap = (ids: string[] | null | undefined): string[] | undefined => {
+      if (!Array.isArray(ids) || ids.length === 0) return undefined;
+      return ids.map((id) => trigIdMap.get(id) ?? id);
+    };
+
+    // 1) Variables — referenced by name, so no id remapping needed.
+    const dstVarNames = new Set(dst.variables.map((v) => lc(v.name)));
+    for (const v of src.variables) {
+      if (dstVarNames.has(lc(v.name))) { result.variables.skipped.push(v.name ?? ''); continue; }
+      try {
+        await gtm.accounts.containers.workspaces.variables.create({ parent: dstParent, requestBody: strip(v as Record<string, unknown>) });
+        result.variables.created.push(v.name ?? '');
+      } catch (e) {
+        result.failed.push(`variable "${v.name ?? ''}": ${msg(e)}`);
+      }
+    }
+
+    // 2) Triggers — NON-group first (so the id map is built), then trigger GROUPS (remap their
+    //    member triggerReference params via the now-complete map).
+    const isGroup = (t: RawTrigger): boolean => (t.type ?? '') === 'triggerGroup';
+    const orderedTriggers = [...src.triggers.filter((t) => !isGroup(t)), ...src.triggers.filter(isGroup)];
+    for (const t of orderedTriggers) {
+      const existing = dstTrigByName.get(lc(t.name));
+      if (existing) { if (t.triggerId) trigIdMap.set(t.triggerId, existing); result.triggers.skipped.push(t.name ?? ''); continue; }
+      const body = strip(t as Record<string, unknown>);
+      if (isGroup(t) && Array.isArray(body.parameter)) body.parameter = (body.parameter as unknown[]).map(remapRefs);
+      try {
+        const created = await gtm.accounts.containers.workspaces.triggers.create({ parent: dstParent, requestBody: body });
+        if (t.triggerId && created.data.triggerId) trigIdMap.set(t.triggerId, created.data.triggerId);
+        result.triggers.created.push(t.name ?? '');
+      } catch (e) {
+        result.failed.push(`trigger "${t.name ?? ''}": ${msg(e)}`);
+      }
+    }
+
+    // 3) Tags — remap firing/blocking trigger ids; skip tags using legacy RULES (the rules
+    //    resource isn't copied, so their references would dangle).
+    const dstTagNames = new Set(dst.tags.map((t) => lc(t.name)));
+    for (const tag of src.tags) {
+      if (dstTagNames.has(lc(tag.name))) { result.tags.skipped.push(tag.name ?? ''); continue; }
+      const raw = tag as unknown as Record<string, unknown>;
+      const usesRules = (Array.isArray(raw.firingRuleId) && raw.firingRuleId.length > 0) || (Array.isArray(raw.blockingRuleId) && raw.blockingRuleId.length > 0);
+      if (usesRules) { result.unsupported.push(`tag "${tag.name ?? ''}" (uses legacy firing rules — recreate manually)`); continue; }
+      const body = strip(raw);
+      const fires = remap(tag.firingTriggerId);
+      const blocks = remap(tag.blockingTriggerId);
+      if (fires) body.firingTriggerId = fires; else delete body.firingTriggerId;
+      if (blocks) body.blockingTriggerId = blocks; else delete body.blockingTriggerId;
+      if (Array.isArray(body.parameter)) body.parameter = (body.parameter as unknown[]).map(remapRefs);
+      try {
+        await gtm.accounts.containers.workspaces.tags.create({ parent: dstParent, requestBody: body });
+        result.tags.created.push(tag.name ?? '');
+      } catch (e) {
+        result.failed.push(`tag "${tag.name ?? ''}": ${msg(e)}`);
+      }
+    }
+    return result;
+  }
+
   /** The PUBLISHED (live) container version as a snapshot, for drift detection
    *  against the draft workspace. Returns null when the container has no
    *  published version yet (a fresh container) — callers treat that as "nothing

@@ -224,6 +224,10 @@ function fakeData(
       calls.push(`createWorkspace:${a}:${c}:${name}`);
       return { workspaceId: 'w9', name, path: 'p' };
     },
+    copyWorkspaceResources: async (a: string, c: string, from: string, to: string) => {
+      calls.push(`copyWorkspace:${a}:${c}:${from}:${to}`);
+      return { variables: { created: ['V'], skipped: [] }, triggers: { created: ['T'], skipped: [] }, tags: { created: ['Tag'], skipped: ['Existing'] }, unsupported: [], failed: [] };
+    },
     deleteGtmTag: async (a: string, c: string, w: string, t: string) => {
       calls.push(`deleteTag:${a}:${c}:${w}:${t}`);
       return { deleted: true, tagId: t };
@@ -388,7 +392,7 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 76, 'read + write registry has 76 tools');
+    assert.equal(withWrites.list().length, 77, 'read + write registry has 77 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1150,6 +1154,14 @@ async function main(): Promise<void> {
     );
     assert.equal(srvTrig.type, 'customEvent', 'server trigger is a customEvent (built by the tool, not hand-rolled)');
     assert.ok(fd.calls.includes('enableVars:1:2:3:clientName'), 'enabled the Client Name built-in for the scoped filter');
+
+    // copy_workspace_resources: recreate tags/triggers/variables from one workspace into another.
+    const copied = JSON.parse(
+      await reg.execute('copy_workspace_resources', { accountId: '1', containerId: '2', fromWorkspaceId: '4', toWorkspaceId: '2' }),
+    );
+    assert.deepEqual(copied.tags.created, ['Tag']);
+    assert.deepEqual(copied.tags.skipped, ['Existing'], 'name collisions are skipped, not overwritten');
+    assert.ok(fd.calls.includes('copyWorkspace:1:2:4:2'));
 
     // Meta CAPI: create the EMQ Event Data variables (write) + detect Meta web tags (read).
     const emq = JSON.parse(await reg.execute('create_meta_emq_variables', { accountId: '1', containerId: '2', workspaceId: '3' }));

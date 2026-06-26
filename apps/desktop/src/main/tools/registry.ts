@@ -1138,6 +1138,25 @@ export function buildToolRegistry(
       handler: (a) => data.createGtmWorkspace(s(a.accountId), s(a.containerId), s(a.name)),
     },
     {
+      name: 'copy_workspace_resources',
+      description:
+        'COPY all tags, triggers, and variables from one workspace into another in the SAME container. GTM has no atomic "move", so this RECREATES the resources in the destination (variables, then triggers incl. trigger groups, then tags — remapping firing/blocking trigger references, built-in trigger ids, and trigger-group members to the destination). Non-destructive: any resource whose NAME already exists in the destination is SKIPPED, never overwritten. Variable {{references}} carry over by name. NOT copied: folders, built-in variables (may need enabling), clients/transformations (server-only), and tags using legacy firing/blocking RULES — those are listed in `unsupported`. A create that fails is recorded in `failed` and the copy CONTINUES; re-running is safe (skips what already exists) and resolves setup/teardown-tag ordering. Returns created/skipped per type plus unsupported + failed. Requires accountId, containerId, fromWorkspaceId, toWorkspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          fromWorkspaceId: { type: 'string' },
+          toWorkspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'fromWorkspaceId', 'toWorkspaceId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Copy all tags/triggers/variables from workspace ${s(a.fromWorkspaceId)} → ${s(a.toWorkspaceId)} in container ${s(a.containerId)}`,
+      handler: (a) => data.copyWorkspaceResources(s(a.accountId), s(a.containerId), s(a.fromWorkspaceId), s(a.toWorkspaceId)),
+    },
+    {
       name: 'create_gtm_environment',
       description:
         'Create a GTM ENVIRONMENT (e.g. a "Test" preview-and-debug environment) and return its environmentId, gtm_auth token (authorizationCode), and the ready-to-paste install snippet (head <script> + body <noscript>, with gtm_auth/gtm_preview/gtm_cookies_win filled in). This is a config write (not a publish) — it does not change the live container. Requires accountId, containerId, name; optional url and enableDebug (boolean). Use this instead of telling the user to create the environment in the GTM UI.',
