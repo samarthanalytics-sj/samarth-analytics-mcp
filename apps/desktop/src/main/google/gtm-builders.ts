@@ -1656,6 +1656,135 @@ export function buildMetaEmqVariables(): GtmVariableResource[] {
   return META_EMQ_EVENT_DATA_KEYS.map((k) => buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
 }
 
+/** TikTok Events API STANDARD events — the Stape stape-io/tiktok-tag `eventName` SELECT, verified
+ *  field-for-field against the live template.tpl. Anything else is a CUSTOM event. */
+export const TIKTOK_STANDARD_EVENTS: string[] = [
+  'AddPaymentInfo', 'AddToCart', 'AddToWishlist', 'ApplicationApproval', 'CompleteRegistration',
+  'Contact', 'CustomizeProduct', 'Download', 'FindLocation', 'InitiateCheckout', 'Lead', 'Pageview',
+  'Purchase', 'Schedule', 'Search', 'StartTrial', 'SubmitApplication', 'Subscribe', 'ViewContent',
+  'CompletePayment', 'SubmitForm', 'ClickButton', 'PlaceAnOrder',
+];
+
+/** Common GA4 (snake_case) event names → TikTok standard event, ONLY where the names differ.
+ *  GA4 `purchase` → CompletePayment (TikTok's canonical purchase event, and what the WEB pixel
+ *  template uses — so a web pixel + this server tag deduplicate). Keys are normalized
+ *  (lowercased, separators stripped). An exact-case TikTok event bypasses this (see below). */
+const GA4_TO_TIKTOK: Record<string, string> = {
+  purchase: 'CompletePayment',
+  viewitem: 'ViewContent',
+  viewitemlist: 'ViewContent',
+  begincheckout: 'InitiateCheckout',
+  addshippinginfo: 'AddPaymentInfo',
+  generatelead: 'Lead',
+  signup: 'CompleteRegistration',
+};
+
+/** Keys the TikTok server template's `userDataList` SELECT accepts (advanced matching). */
+export const TIKTOK_USER_DATA_KEYS: string[] = [
+  'email', 'phone', 'external_id', 'ip', 'user_agent', 'ttclid', 'ttp', 'locale', 'idfa', 'idfv',
+  'gaid', 'att_status', 'first_name', 'last_name', 'city', 'state', 'country', 'zip_code',
+];
+
+/** Keys the TikTok server template's `customDataList` SELECT accepts (event properties). Anything
+ *  else is routed to the free-form `additionalEventPropertiesList` so it isn't rejected. */
+export const TIKTOK_CUSTOM_DATA_KEYS: string[] = [
+  'contents', 'content_ids', 'content_type', 'num_items', 'currency', 'value', 'description',
+  'search_string', 'query', 'order_id', 'shop_id',
+];
+
+/** Resolve a free-text/GA4 event to a TikTok STANDARD event, or null (→ custom). An EXACT
+ *  (case-sensitive) TikTok event passes through (so "Purchase" stays Purchase); then a GA4 alias
+ *  maps (purchase → CompletePayment); then a case/separator-insensitive match. PURE. */
+export function tikTokStandardEvent(event: string): string | null {
+  const raw = (event ?? '').trim();
+  if (!raw) return null;
+  if (TIKTOK_STANDARD_EVENTS.includes(raw)) return raw; // exact-case escape hatch
+  const norm = raw.toLowerCase().replace(/[\s_-]/g, '');
+  if (GA4_TO_TIKTOK[norm]) return GA4_TO_TIKTOK[norm];
+  for (const e of TIKTOK_STANDARD_EVENTS) if (e.toLowerCase() === norm) return e;
+  return null;
+}
+
+/** Build a Stape "TikTok Events API" SERVER tag (gallery template stape-io/tiktok-tag; `type` = its
+ *  cvt_ code), tuned for match quality: Event Enhancement ON, generate _ttp ON. A TikTok STANDARD
+ *  event sets eventType='standard' + eventName=<canonical>; anything else sets eventType='custom' +
+ *  eventNameCustom=<the event>. `eventName` is a literal SELECT (macrosInSelect=false — never a
+ *  {{variable}}). `userData` → the `userDataList` advanced-matching table; `eventProperties` →
+ *  `customDataList` for known keys, else `additionalEventPropertiesList`. pixelId/accessToken are
+ *  typically {{variables}}. Field keys verified against the live template.tpl. NOTE vs Meta CAPI:
+ *  eventType IS the inherit/override control (no inheritEventName), and TikTok uses
+ *  generateTtp/eventSource (not generateFbp/actionSource). PURE. */
+export function buildTikTokCapiServerTag(
+  type: string,
+  name: string,
+  pixelId: string,
+  accessToken: string,
+  event: string,
+  opts?: {
+    eventSource?: string;
+    eventId?: string;
+    userData?: Array<{ name: string; value: string }>;
+    eventProperties?: Array<{ name: string; value: string }>;
+    testEventCode?: string;
+    generateTtp?: boolean;
+    eventEnhancement?: boolean;
+    requireConsent?: boolean;
+    firingTriggerId?: string[];
+  }
+): GtmTagResource {
+  const std = tikTokStandardEvent(event);
+  const canon = (keys: string[], n: string): string => {
+    const low = n.trim().toLowerCase();
+    return keys.includes(low) ? low : n.trim();
+  };
+  const parameter: Param[] = [
+    tpl('eventSource', opts?.eventSource && opts.eventSource.trim() ? opts.eventSource.trim() : 'web'),
+    tpl('accessToken', accessToken),
+    tpl('pixelId', pixelId),
+    tpl('eventType', std ? 'standard' : 'custom'),
+    std ? tpl('eventName', std) : tpl('eventNameCustom', event),
+    boolean('enableEventEnhancement', opts?.eventEnhancement ?? true),
+    boolean('generateTtp', opts?.generateTtp ?? true),
+    tpl('adStorageConsent', opts?.requireConsent ? 'required' : 'optional'),
+  ];
+  if (opts?.eventId && opts.eventId.trim()) parameter.push(tpl('eventId', opts.eventId));
+  if (opts?.testEventCode && opts.testEventCode.trim()) parameter.push(tpl('testEventCode', opts.testEventCode));
+
+  const ud = (opts?.userData ?? []).filter((u) => u.name && u.name.trim() !== '');
+  if (ud.length) {
+    parameter.push({
+      type: 'list',
+      key: 'userDataList',
+      list: ud.map((u) => ({ type: 'map', map: [tpl('name', canon(TIKTOK_USER_DATA_KEYS, u.name)), tpl('value', u.value)] })),
+    });
+  }
+
+  const props = (opts?.eventProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
+  const known = props.filter((p) => TIKTOK_CUSTOM_DATA_KEYS.includes(p.name.trim().toLowerCase()));
+  const extra = props.filter((p) => !TIKTOK_CUSTOM_DATA_KEYS.includes(p.name.trim().toLowerCase()));
+  if (known.length) {
+    parameter.push({
+      type: 'list',
+      key: 'customDataList',
+      list: known.map((p) => ({ type: 'map', map: [tpl('name', p.name.trim().toLowerCase()), tpl('value', p.value)] })),
+    });
+  }
+  if (extra.length) {
+    parameter.push({
+      type: 'list',
+      key: 'additionalEventPropertiesList',
+      list: extra.map((p) => ({ type: 'map', map: [tpl('name', p.name.trim()), tpl('value', p.value)] })),
+    });
+  }
+
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(opts?.firingTriggerId && opts.firingTriggerId.length ? { firingTriggerId: opts.firingTriggerId } : {}),
+    parameter,
+  };
+}
+
 export interface MetaTagDetection {
   metaTags: Array<{ id: string; name: string; type: string; ecommerceEvents: string[] }>;
   hasMetaPixel: boolean;

@@ -405,7 +405,7 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 82, 'read + write registry has 82 tools');
+    assert.equal(withWrites.list().length, 83, 'read + write registry has 83 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1192,6 +1192,15 @@ async function main(): Promise<void> {
     assert.equal(capi.name, 'Meta CAPI - Purchase Tag', 'default CAPI name');
     assert.ok(fd.calls.includes('importTemplate:stape-io/facebook-tag'));
     await assert.rejects(() => reg.execute('create_meta_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '1', accessToken: '', event: 'Purchase' }), /accessToken is required/);
+
+    // create_tiktok_capi_server_tag imports the Stape TikTok template + creates the Events API server tag.
+    const ttapi = JSON.parse(
+      await reg.execute('create_tiktok_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '{{TT Pixel}}', accessToken: '{{TT Token}}', event: 'purchase', firingTriggerId: ['5'], userData: [{ name: 'email', value: '{{Email}}' }], eventProperties: [{ name: 'value', value: '{{Ecommerce Value}}' }], eventId: '{{Event ID}}' }),
+    );
+    // (fake createGtmTag echoes a stub; the parameter[] shape is asserted in gtm-builders.test.ts)
+    assert.equal(ttapi.name, 'TikTok CAPI - CompletePayment Tag', 'default name + GA4 purchase mapped to CompletePayment');
+    assert.ok(fd.calls.includes('importTemplate:stape-io/tiktok-tag'), 'imported the Stape TikTok server template');
+    await assert.rejects(() => reg.execute('create_tiktok_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '1', accessToken: '', event: 'Purchase' }), /accessToken is required/);
 
     // update_gtm_trigger fixes a Custom Event trigger's Event name IN PLACE (no delete+recreate).
     const upd = JSON.parse(
