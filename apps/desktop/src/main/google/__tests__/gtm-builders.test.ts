@@ -17,6 +17,8 @@ import {
   buildMetaPixelTag,
   metaStandardEvent,
   META_EVENT_OBJECT_PROPERTIES,
+  normalizeCustomEventName,
+  normalizeCustomEventTrigger,
   detectMetaTags,
   customTemplateType,
   buildAdsConversionServerTag,
@@ -1119,6 +1121,25 @@ test('buildMetaPixelTag: a non-standard event → eventName=custom + customEvent
   assert.equal(p.find((x) => x.key === 'eventName')?.value, 'custom');
   assert.equal(p.find((x) => x.key === 'customEventName')?.value, 'Newsletter Signup');
   assert.equal(p.find((x) => x.key === 'standardEventName'), undefined, 'no standard field for a custom event');
+});
+
+test('normalizeCustomEventName strips display prefixes + snake_cases, leaves clean tokens', () => {
+  assert.equal(normalizeCustomEventName('CE - Purchase'), 'purchase');
+  assert.equal(normalizeCustomEventName('GA4 - Event - Add To Cart'), 'add_to_cart');
+  assert.equal(normalizeCustomEventName('Add To Cart'), 'add_to_cart');
+  assert.equal(normalizeCustomEventName('purchase'), 'purchase', 'clean token unchanged');
+  assert.equal(normalizeCustomEventName('add_to_cart'), 'add_to_cart', 'snake token unchanged');
+  assert.equal(normalizeCustomEventName('gtm.dom'), 'gtm.dom', 'gtm.* event unchanged');
+});
+
+test('normalizeCustomEventTrigger fixes the {{_event}} match value', () => {
+  const t = normalizeCustomEventTrigger({
+    name: 'CE - Purchase',
+    type: 'customEvent',
+    customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'CE - Purchase' }] }],
+  }) as { name: string; customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }> };
+  assert.equal(t.name, 'CE - Purchase', 'display name unchanged');
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'purchase', 'event match value normalized');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
