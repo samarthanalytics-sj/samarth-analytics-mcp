@@ -887,7 +887,7 @@ function isBuiltinTriggerId(id: string): boolean {
 }
 
 /** Walk a parameter tree and collect every `triggerReference` value — e.g. a Trigger Group's member
- *  trigger ids. Those triggers ARE in use (the group fires them), so they must not be deleted. */
+ *  trigger ids. */
 function collectTriggerReferences(value: unknown, into: Set<string>): void {
   if (Array.isArray(value)) {
     for (const v of value) collectTriggerReferences(v, into);
@@ -899,21 +899,52 @@ function collectTriggerReferences(value: unknown, into: Set<string>): void {
   }
 }
 
-/** Every trigger id REFERENCED in the container: by a tag as a FIRING or a BLOCKING (exception)
- *  trigger, or as a Trigger Group member. A trigger in this set is in use. PURE. */
-export function collectUsedTriggerIds(snapshot: ContainerSnapshot): Set<string> {
-  const used = new Set<string>();
-  for (const t of snapshot.tags) {
-    for (const id of t.firingTriggerId ?? []) used.add(id);
-    for (const id of t.blockingTriggerId ?? []) used.add(id);
+/** Map each trigger id → the trigger ids it references (a Trigger Group → its member triggers). */
+function triggerGroupEdges(snapshot: ContainerSnapshot): Map<string, string[]> {
+  const edges = new Map<string, string[]>();
+  for (const tr of snapshot.triggers) {
+    const refs = new Set<string>();
+    collectTriggerReferences(tr.parameter, refs);
+    if (refs.size) edges.set(tr.triggerId, [...refs]);
   }
-  for (const tr of snapshot.triggers) collectTriggerReferences(tr.parameter, used);
+  return edges;
+}
+
+/** Expand a seed set of USED trigger ids through Trigger Group membership: a group's members count
+ *  as used ONLY when the group itself is reached (used). So a trigger referenced solely by a group
+ *  that NO tag uses is NOT marked used — it's a real orphan, since nothing live reaches it.
+ *  Cycle-safe (a member already in the set is never re-queued). PURE. */
+function expandUsedThroughGroups(seed: Set<string>, edges: Map<string, string[]>): Set<string> {
+  const used = new Set(seed);
+  const queue = [...seed];
+  while (queue.length) {
+    const id = queue.pop() as string;
+    for (const member of edges.get(id) ?? []) {
+      if (!used.has(member)) {
+        used.add(member);
+        queue.push(member);
+      }
+    }
+  }
   return used;
 }
 
-/** Triggers referenced by NO tag (firing or blocking) and no Trigger Group — orphaned clutter that
- *  is safe to delete — excluding reserved built-in ids. (The GTM API also refuses to delete a
- *  referenced trigger, so deletion is the final safety net.) PURE. */
+/** Every trigger id in USE: referenced by a tag as a FIRING or BLOCKING (exception) trigger, OR a
+ *  member of a Trigger Group that is itself used (transitively). A trigger referenced ONLY by an
+ *  UNUSED group is NOT in this set — it's an orphan, because nothing live reaches it (the previous
+ *  version wrongly marked every group member used regardless of whether the group was). PURE. */
+export function collectUsedTriggerIds(snapshot: ContainerSnapshot): Set<string> {
+  const seed = new Set<string>();
+  for (const t of snapshot.tags) {
+    for (const id of t.firingTriggerId ?? []) seed.add(id);
+    for (const id of t.blockingTriggerId ?? []) seed.add(id);
+  }
+  return expandUsedThroughGroups(seed, triggerGroupEdges(snapshot));
+}
+
+/** Triggers referenced by NO tag (firing or blocking) and by no USED Trigger Group — orphaned
+ *  clutter that is safe to delete — excluding reserved built-in ids. (The GTM API also refuses to
+ *  delete a referenced trigger, so deletion is the final safety net.) PURE. */
 export function findUnusedTriggers(snapshot: ContainerSnapshot): AuditTrigger[] {
   const used = collectUsedTriggerIds(snapshot);
   return snapshot.triggers.filter((tr) => tr.triggerId !== '' && !used.has(tr.triggerId) && !isBuiltinTriggerId(tr.triggerId));
@@ -926,31 +957,34 @@ export function findUnusedTriggers(snapshot: ContainerSnapshot): AuditTrigger[] 
  *  manual count differs. PURE. */
 export function triggerUsageBreakdown(s: ContainerSnapshot): {
   total: number;
-  orphanedStrict: number;
-  orphanedIfGroupMembersUnused: number;
+  orphaned: number;
   orphanedIfBlockingUnused: number;
   orphanedIfPausedFiringUnused: number;
 } {
-  const firing = new Set<string>();
+  const firingAny = new Set<string>();
   const firingActive = new Set<string>(); // firing trigger of a NON-paused tag
   const blocking = new Set<string>();
   for (const t of s.tags) {
     for (const id of t.firingTriggerId ?? []) {
-      firing.add(id);
+      firingAny.add(id);
       if (!t.paused) firingActive.add(id);
     }
     for (const id of t.blockingTriggerId ?? []) blocking.add(id);
   }
-  const group = new Set<string>();
-  for (const tr of s.triggers) collectTriggerReferences(tr.parameter, group);
+  const edges = triggerGroupEdges(s);
   const real = s.triggers.filter((tr) => tr.triggerId !== '' && !isBuiltinTriggerId(tr.triggerId));
-  const count = (pred: (id: string) => boolean): number => real.filter((tr) => pred(tr.triggerId)).length;
+  const orphansFor = (seed: Set<string>): number => {
+    const used = expandUsedThroughGroups(seed, edges);
+    return real.filter((tr) => !used.has(tr.triggerId)).length;
+  };
   return {
     total: s.triggers.length,
-    orphanedStrict: count((id) => !firing.has(id) && !blocking.has(id) && !group.has(id)),
-    orphanedIfGroupMembersUnused: count((id) => !firing.has(id) && !blocking.has(id)),
-    orphanedIfBlockingUnused: count((id) => !firing.has(id) && !group.has(id)),
-    orphanedIfPausedFiringUnused: count((id) => !firingActive.has(id) && !blocking.has(id) && !group.has(id)),
+    // Matches findUnusedTriggers: seed = firing ∪ blocking, expanded through USED groups.
+    orphaned: orphansFor(new Set([...firingAny, ...blocking])),
+    // Drop blocking from the seed → reveals triggers used ONLY as an exception/blocking trigger.
+    orphanedIfBlockingUnused: orphansFor(new Set(firingAny)),
+    // Count only firing triggers of UNPAUSED tags → reveals triggers that fire only paused tags.
+    orphanedIfPausedFiringUnused: orphansFor(new Set([...firingActive, ...blocking])),
   };
 }
 

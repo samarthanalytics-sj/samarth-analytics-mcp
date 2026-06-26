@@ -1286,49 +1286,59 @@ test('normalizeCustomEventTrigger leaves a valid server all-events trigger (matc
   assert.ok(t.filter?.some((c) => c.parameter.some((p) => p.key === 'arg0' && p.value === '{{Client Name}}')), 'client-name filter preserved');
 });
 
-test('findUnusedTriggers: only true orphans — firing/blocking/group-member/built-in all count as used', () => {
+test('findUnusedTriggers: firing/blocking used; a DEAD trigger group does NOT keep its member used', () => {
   const snap = {
     tags: [{ tagId: 't1', name: 'GA4', type: 'gaawe', firingTriggerId: ['10'], blockingTriggerId: ['11'], paused: false, parameter: [] }],
     triggers: [
       { triggerId: '10', name: 'All Pages', type: 'pageview' }, // used: firing
       { triggerId: '11', name: 'Block on X', type: 'customEvent' }, // used: blocking/exception
       { triggerId: '12', name: 'Orphan', type: 'customEvent' }, // UNUSED
-      { triggerId: '14', name: 'Group Member', type: 'customEvent' }, // used: by the trigger group below
+      { triggerId: '14', name: 'Member of a DEAD group', type: 'customEvent' }, // orphan: its only referrer (tg) is unused
       { triggerId: 'tg', name: 'My Group', type: 'triggerGroup', parameter: [{ type: 'list', key: 'triggerIds', list: [{ type: 'triggerReference', value: '14' }] }] }, // UNUSED by any tag
       { triggerId: '2147479553', name: 'All Pages (built-in)', type: 'pageview' }, // reserved built-in — never offered
     ],
     variables: [],
   };
-  assert.deepEqual([...collectUsedTriggerIds(snap)].sort(), ['10', '11', '14'], 'firing + blocking + group-member are used');
+  assert.deepEqual([...collectUsedTriggerIds(snap)].sort(), ['10', '11'], 'firing + blocking; a dead group does NOT make its member used');
   assert.deepEqual(
     findUnusedTriggers(snap).map((t) => t.triggerId).sort(),
-    ['12', 'tg'],
-    'only the orphan trigger + the group no tag uses; built-in and group-member excluded',
+    ['12', '14', 'tg'],
+    'the orphan, the unused group, AND the dead group\'s member; built-in excluded',
   );
 });
 
-test('triggerUsageBreakdown: explains the orphan count under looser definitions', () => {
+test('findUnusedTriggers: a LIVE trigger group keeps its members used; a DEAD one does not', () => {
+  const make = (groupFired: boolean) => ({
+    tags: [{ tagId: 't', name: 'T', type: 'html', firingTriggerId: groupFired ? ['tg'] : [], blockingTriggerId: [], paused: false, parameter: [] }],
+    triggers: [
+      { triggerId: '20', name: 'member', type: 'customEvent' },
+      { triggerId: 'tg', name: 'group', type: 'triggerGroup', parameter: [{ type: 'list', key: 'x', list: [{ type: 'triggerReference', value: '20' }] }] },
+    ],
+    variables: [],
+  });
+  assert.deepEqual(findUnusedTriggers(make(true)).map((t) => t.triggerId).sort(), [], 'tag fires the group → group + member both used');
+  assert.deepEqual(findUnusedTriggers(make(false)).map((t) => t.triggerId).sort(), ['20', 'tg'], 'no tag uses the group → BOTH the group and its member are orphans');
+});
+
+test('triggerUsageBreakdown: orphaned count + how blocking / paused-firing would change it', () => {
   const snap = {
     tags: [
       { tagId: 'a', name: 'Active', type: 'gaawe', firingTriggerId: ['10'], blockingTriggerId: ['11'], paused: false, parameter: [] },
-      { tagId: 'p', name: 'Paused', type: 'html', firingTriggerId: ['12'], paused: true, parameter: [] },
+      { tagId: 'p', name: 'Paused', type: 'html', firingTriggerId: ['12'], blockingTriggerId: [], paused: true, parameter: [] },
     ],
     triggers: [
       { triggerId: '10', name: 'fires active tag', type: 'customEvent' },
       { triggerId: '11', name: 'blocks a tag', type: 'customEvent' },
       { triggerId: '12', name: 'fires a paused tag only', type: 'customEvent' },
-      { triggerId: '13', name: 'group member', type: 'customEvent' },
-      { triggerId: 'tg', name: 'group', type: 'triggerGroup', parameter: [{ type: 'list', key: 'x', list: [{ type: 'triggerReference', value: '13' }] }] },
       { triggerId: '14', name: 'true orphan', type: 'customEvent' },
     ],
     variables: [],
   };
   const b = triggerUsageBreakdown(snap);
-  assert.equal(b.total, 6);
-  assert.equal(b.orphanedStrict, 2, 'the true orphan + the group that no tag uses');
-  assert.equal(b.orphanedIfGroupMembersUnused, 3, '+ the group member 13');
-  assert.equal(b.orphanedIfBlockingUnused, 3, '+ the blocking-only trigger 11');
-  assert.equal(b.orphanedIfPausedFiringUnused, 3, '+ the trigger that fires only a paused tag (12)');
+  assert.equal(b.total, 4);
+  assert.equal(b.orphaned, 1, 'only the true orphan (14)');
+  assert.equal(b.orphanedIfBlockingUnused, 2, '+ the blocking-only trigger 11');
+  assert.equal(b.orphanedIfPausedFiringUnused, 2, '+ the trigger that fires only a paused tag (12)');
 });
 
 test('setCustomEventName updates the {{_event}} value in place, preserving structure', () => {
