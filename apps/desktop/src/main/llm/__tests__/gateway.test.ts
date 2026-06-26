@@ -137,6 +137,27 @@ await test('at the tool-call limit, surfaces the real tool error + names the too
   assert.match(res.text, /`t`/, 'names the failing tool');
 });
 
+await test('onToolResult fires with ok=false + the error message when a tool fails', async () => {
+  const results: Array<{ name: string; ok: boolean; error?: string }> = [];
+  const client = new ScriptedClient([
+    { toolCalls: [{ id: '1', name: 't', args: {} }] },
+    { text: 'done' },
+  ]);
+  const exec = executor(async () => {
+    throw new Error('vendorTemplate.key: Unknown entity type');
+  });
+  await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }] },
+    exec,
+    { onToolResult: (r) => results.push(r) }
+  );
+  assert.equal(results.length, 1);
+  assert.equal(results[0].ok, false);
+  assert.equal(results[0].name, 't');
+  assert.match(results[0].error ?? '', /Unknown entity type/);
+});
+
 await test('forwards streamed text deltas via onDelta', async () => {
   const deltas: string[] = [];
   const client = new ScriptedClient([{ text: 'streamed reply' }]);

@@ -749,6 +749,8 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   tools?: string[];
+  /** Tool failures surfaced in the UI even if the model doesn't mention them. */
+  toolErrors?: Array<{ name: string; error: string }>;
 }
 
 function ChatView({
@@ -827,6 +829,8 @@ function ChatView({
           if (ev.type === 'text') copy[copy.length - 1] = { ...last, text: last.text + ev.delta };
           else if (ev.type === 'tool')
             copy[copy.length - 1] = { ...last, tools: [...(last.tools ?? []), ev.name] };
+          else if (ev.type === 'tool_result' && !ev.ok)
+            copy[copy.length - 1] = { ...last, toolErrors: [...(last.toolErrors ?? []), { name: ev.name, error: ev.error ?? 'failed' }] };
           return copy;
         });
         if (ev.type === 'confirm') {
@@ -926,7 +930,18 @@ function ChatView({
         {messages.map((m, i) => (
           <div key={i} style={m.role === 'user' ? styles.userMsg : styles.asstMsg}>
             {m.role === 'assistant' ? (
-              m.text ? <Markdown text={m.text} /> : <span style={{ opacity: 0.6 }}>…</span>
+              <>
+                {m.text ? <Markdown text={m.text} /> : m.toolErrors?.length ? null : <span style={{ opacity: 0.6 }}>…</span>}
+                {m.toolErrors?.length ? (
+                  <div style={styles.toolErrors}>
+                    {m.toolErrors.map((te, j) => (
+                      <div key={j} style={styles.toolErrorLine}>
+                        ⚠️ <strong>{te.name}</strong> failed — {te.error}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </>
             ) : (
               <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
             )}
@@ -3041,6 +3056,8 @@ const styles: Record<string, React.CSSProperties> = {
   userMsg: { alignSelf: 'flex-end', background: '#2563eb', color: '#fff', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14 },
   asstMsg: { alignSelf: 'flex-start', background: '#161e2e', color: '#e5e7eb', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14, border: '1px solid #1f2937' },
   toolTrace: { color: '#93c5fd', fontSize: 11, marginBottom: 4 },
+  toolErrors: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 },
+  toolErrorLine: { background: '#2a1416', border: '1px solid #7f1d1d', color: '#fca5a5', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
   composer: { display: 'flex', gap: 8, padding: 16, borderTop: '1px solid #1f2937', alignItems: 'flex-end' },
   composerInput: {
     flex: 1,

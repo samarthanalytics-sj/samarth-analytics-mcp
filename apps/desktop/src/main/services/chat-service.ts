@@ -253,6 +253,7 @@ export class ChatService {
         toolCalls.push({ name: call.name, args: call.args });
         emit?.({ type: 'tool', name: call.name });
       },
+      onToolResult: emit ? (r) => emit({ type: 'tool_result', name: r.name, ok: r.ok, error: r.error }) : undefined,
     });
 
     return { text: result.text, toolCalls };
