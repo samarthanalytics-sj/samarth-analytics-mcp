@@ -879,6 +879,46 @@ export interface AuditReport {
   hasGa4Config: boolean;
 }
 
+/** Reserved GTM built-in trigger ids (All Pages, Initialization, Consent Initialization, DOM Ready,
+ *  Window Loaded) live in the 2147479xxx range and are never user-deletable. triggers.list doesn't
+ *  return them, but guard anyway so a cleanup never targets one. PURE. */
+function isBuiltinTriggerId(id: string): boolean {
+  return /^2147479\d{3}$/.test(id);
+}
+
+/** Walk a parameter tree and collect every `triggerReference` value — e.g. a Trigger Group's member
+ *  trigger ids. Those triggers ARE in use (the group fires them), so they must not be deleted. */
+function collectTriggerReferences(value: unknown, into: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const v of value) collectTriggerReferences(v, into);
+  } else if (value && typeof value === 'object') {
+    const p = value as { type?: unknown; value?: unknown; list?: unknown; map?: unknown };
+    if (p.type === 'triggerReference' && typeof p.value === 'string') into.add(p.value);
+    collectTriggerReferences(p.list, into);
+    collectTriggerReferences(p.map, into);
+  }
+}
+
+/** Every trigger id REFERENCED in the container: by a tag as a FIRING or a BLOCKING (exception)
+ *  trigger, or as a Trigger Group member. A trigger in this set is in use. PURE. */
+export function collectUsedTriggerIds(snapshot: ContainerSnapshot): Set<string> {
+  const used = new Set<string>();
+  for (const t of snapshot.tags) {
+    for (const id of t.firingTriggerId ?? []) used.add(id);
+    for (const id of t.blockingTriggerId ?? []) used.add(id);
+  }
+  for (const tr of snapshot.triggers) collectTriggerReferences(tr.parameter, used);
+  return used;
+}
+
+/** Triggers referenced by NO tag (firing or blocking) and no Trigger Group — orphaned clutter that
+ *  is safe to delete — excluding reserved built-in ids. (The GTM API also refuses to delete a
+ *  referenced trigger, so deletion is the final safety net.) PURE. */
+export function findUnusedTriggers(snapshot: ContainerSnapshot): AuditTrigger[] {
+  const used = collectUsedTriggerIds(snapshot);
+  return snapshot.triggers.filter((tr) => tr.triggerId !== '' && !used.has(tr.triggerId) && !isBuiltinTriggerId(tr.triggerId));
+}
+
 // GTM tag types that send data to ad/analytics platforms and therefore should
 // declare Consent Mode v2 settings: GA4 event, the Google tag, Google Ads
 // conversion/remarketing, Conversion Linker, Floodlight counter/sales, plus the
@@ -1274,23 +1314,18 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
     });
   }
 
-  // Unused triggers — referenced by no tag as either a FIRING or a BLOCKING
-  // (exception) trigger. Both link a tag to a trigger, so both count as "used".
-  const usedTriggers = new Set(
-    s.tags.flatMap((t) => [...(t.firingTriggerId ?? []), ...(t.blockingTriggerId ?? [])])
-  );
-  for (const tr of s.triggers) {
-    if (!usedTriggers.has(tr.triggerId)) {
-      findings.push({
-        severity: 'low',
-        category: 'unused',
-        resource: { kind: 'trigger', id: tr.triggerId, name: tr.name },
-        message: `Trigger "${tr.name}" isn't used by any tag.`,
-        recommendation: 'Delete it if it is not needed — unused triggers add clutter and unnecessary listeners.',
-        autoFixable: true,
-        fix: { tool: 'delete_gtm_trigger', args: { triggerId: tr.triggerId, name: tr.name } },
-      });
-    }
+  // Unused triggers — orphans referenced by no tag (as a FIRING or a BLOCKING/exception trigger)
+  // and not a Trigger Group member (findUnusedTriggers also skips reserved built-in ids).
+  for (const tr of findUnusedTriggers(s)) {
+    findings.push({
+      severity: 'low',
+      category: 'unused',
+      resource: { kind: 'trigger', id: tr.triggerId, name: tr.name },
+      message: `Trigger "${tr.name}" isn't used by any tag.`,
+      recommendation: 'Delete it if it is not needed — unused triggers add clutter and unnecessary listeners. Use delete_unused_gtm_triggers to remove all orphans at once (or a selected subset).',
+      autoFixable: true,
+      fix: { tool: 'delete_gtm_trigger', args: { triggerId: tr.triggerId, name: tr.name } },
+    });
   }
 
   // Unused variables — referenced by no tag, trigger, or other variable. We scan

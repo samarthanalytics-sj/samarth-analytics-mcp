@@ -377,6 +377,7 @@ async function main(): Promise<void> {
       'list_gtm_variables',
       'list_gtm_versions',
       'list_gtm_workspaces',
+      'list_unused_gtm_triggers',
       'run_ga4_realtime_report',
       'run_ga4_report',
       'score_ga4_property',
@@ -401,11 +402,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 44, 'read-only registry has 44 tools');
+    assert.equal(readOnly.list().length, 45, 'read-only registry has 45 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 83, 'read + write registry has 83 tools');
+    assert.equal(withWrites.list().length, 85, 'read + write registry has 85 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1043,6 +1044,45 @@ async function main(): Promise<void> {
     const cd = seqConfirm(true, false);
     await buildToolRegistry(data, cd.fn, 'gtm').execute('delete_gtm_folder', { accountId: '1', containerId: '2', workspaceId: '3', folderId: 'f1' });
     assert.equal(calls.length, 0, 'no delete when the final confirmation is declined');
+  });
+
+  await test('unused-trigger cleanup: list finds orphans; delete removes only unused, filter-aware', async () => {
+    const snapshot = {
+      tags: [{ tagId: 't1', name: 'GA4', type: 'gaawe', firingTriggerId: ['10'], blockingTriggerId: ['11'], paused: false, parameter: [] }],
+      triggers: [
+        { triggerId: '10', name: 'All Pages', type: 'pageview', parameter: [] }, // used: firing
+        { triggerId: '11', name: 'Block on X', type: 'customEvent', parameter: [] }, // used: blocking
+        { triggerId: '12', name: 'Orphan A', type: 'customEvent', parameter: [] }, // UNUSED
+        { triggerId: '13', name: 'Orphan B', type: 'click', parameter: [] }, // UNUSED
+      ],
+      variables: [],
+    };
+
+    // list_unused is read-only and returns only the two orphans.
+    const fd0 = fakeData({ snapshot });
+    const listed = JSON.parse(await buildToolRegistry(fd0.data).execute('list_unused_gtm_triggers', { accountId: '1', containerId: '2', workspaceId: '3' })) as Array<{ triggerId: string }>;
+    assert.deepEqual(listed.map((t) => t.triggerId).sort(), ['12', '13']);
+
+    // delete ALL unused → removes 12 + 13, never the used 10/11.
+    const fd1 = fakeData({ snapshot });
+    const all = JSON.parse(await buildToolRegistry(fd1.data, approveAsIs, 'gtm').execute('delete_unused_gtm_triggers', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(all.deletedCount, 2);
+    assert.ok(fd1.calls.includes('deleteTrigger:1:2:3:12') && fd1.calls.includes('deleteTrigger:1:2:3:13'));
+    assert.ok(!fd1.calls.some((c) => c === 'deleteTrigger:1:2:3:10' || c === 'deleteTrigger:1:2:3:11'), 'used triggers never deleted');
+
+    // filter/selection: ask for 12 + a USED id 10 → deletes only 12, skips 10 (reported, not deleted).
+    const fd2 = fakeData({ snapshot });
+    const sel = JSON.parse(await buildToolRegistry(fd2.data, approveAsIs, 'gtm').execute('delete_unused_gtm_triggers', { accountId: '1', containerId: '2', workspaceId: '3', triggerIds: ['12', '10'] }));
+    assert.equal(sel.deletedCount, 1);
+    assert.ok(fd2.calls.includes('deleteTrigger:1:2:3:12'));
+    assert.ok(!fd2.calls.includes('deleteTrigger:1:2:3:10'), 'a referenced id in the selection is skipped, never deleted');
+    assert.equal(sel.skipped[0].triggerId, '10');
+
+    // no-op: when nothing is unused, precheck short-circuits — no confirm, no delete.
+    const fd3 = fakeData({ snapshot: { tags: [{ tagId: 't', name: 'T', type: 'html', firingTriggerId: ['10'], paused: false, parameter: [] }], triggers: [{ triggerId: '10', name: 'Used', type: 'pageview', parameter: [] }], variables: [] } });
+    const none = JSON.parse(await buildToolRegistry(fd3.data, approveAsIs, 'gtm').execute('delete_unused_gtm_triggers', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(none.deletedCount, 0, 'clean no-op when nothing is unused');
+    assert.equal(fd3.calls.filter((c) => c.startsWith('deleteTrigger')).length, 0, 'no deletes when nothing is unused');
   });
 
   await test('environment tools: list (read) + create (write) return the install snippet', async () => {
