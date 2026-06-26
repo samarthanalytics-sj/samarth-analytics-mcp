@@ -1,3 +1,9 @@
+## [1.78.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.77.0...v1.78.0) (2026-06-26)
+
+### Features
+
+* **desktop:** expand Meta per-event Object Properties to the full event table ([201e6b8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/201e6b82073e28d8f838a5fde18e992a6380f45a))
+
 ## [1.77.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.76.0...v1.77.0) (2026-06-26)
 
 ### Features
