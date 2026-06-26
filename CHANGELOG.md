@@ -1,3 +1,9 @@
+## [1.80.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.80.0...v1.80.1) (2026-06-26)
+
+### Bug Fixes
+
+* **desktop:** Custom Event trigger event name → snake_case (not the display label) ([8f57143](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8f5714367e5574e24d328be1851c4b7297bcf5f8))
+
 ## [1.80.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.79.0...v1.80.0) (2026-06-26)
 
 ### Features
