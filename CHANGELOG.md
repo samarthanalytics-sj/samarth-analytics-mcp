@@ -1,3 +1,9 @@
+## [1.82.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.82.0...v1.82.1) (2026-06-26)
+
+### Bug Fixes
+
+* **desktop:** Meta CAPI server tag event fields (verified against live Stape template) ([5e88f80](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5e88f80c6e381da1a686a0383652e1b7d773decb))
+
 ## [1.82.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.81.0...v1.82.0) (2026-06-26)
 
 ### Features
