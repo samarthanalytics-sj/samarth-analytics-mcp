@@ -1,3 +1,9 @@
+## [1.77.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.76.0...v1.77.0) (2026-06-26)
+
+### Features
+
+* **desktop:** Meta tags — per-event Object Properties + "Meta - Event - <Event> Tag" naming ([10345a4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/10345a4d5eb70f4d66fef214190685393b6bbbde))
+
 ## [1.76.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.75.0...v1.76.0) (2026-06-26)
 
 ### Features
