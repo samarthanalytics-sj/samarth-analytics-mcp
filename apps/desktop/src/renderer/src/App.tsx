@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { applyTheme, loadTheme, saveTheme, type Theme } from './theme';
 import type { AppInfo } from '../../preload';
 import type {
   AccountView,
@@ -316,7 +317,7 @@ const mdStyles: Record<string, React.CSSProperties> = {
   codeWrap: { position: 'relative', margin: '8px 0' },
   copyBtn: {
     position: 'absolute', top: 6, right: 6, zIndex: 1, padding: '2px 9px', fontSize: 11,
-    background: 'rgba(255,255,255,0.10)', color: '#cbd5e1', border: '1px solid rgba(255,255,255,0.18)',
+    background: 'rgba(255,255,255,0.10)', color: 'var(--text-dim)', border: '1px solid rgba(255,255,255,0.18)',
     borderRadius: 6, cursor: 'pointer',
   },
   h: { margin: '10px 0 4px', fontWeight: 600, lineHeight: 1.3 },
@@ -543,7 +544,7 @@ function ConfirmCard({
               <span style={styles.proposalValue}>{r.value}</span>
             </div>
           ))}
-          {rows.length === 0 && <div style={{ color: '#9ca3af' }}>{proposal.summary}</div>}
+          {rows.length === 0 && <div style={{ color: 'var(--text-muted)' }}>{proposal.summary}</div>}
         </div>
       )}
 
@@ -551,7 +552,7 @@ function ConfirmCard({
         <div style={styles.editRow}>
           <span style={styles.proposalLabel}>Type “{needType}” to confirm</span>
           <input
-            style={{ ...styles.editInput, borderColor: typeOk ? '#7f1d1d' : '#334155' }}
+            style={{ ...styles.editInput, borderColor: typeOk ? '#7f1d1d' : 'var(--border-2)' }}
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             placeholder={needType}
@@ -660,7 +661,7 @@ export function App(): JSX.Element {
               onClick={() => run(() => window.desktop.accounts.setActive(a.id))}
               title={a.email}
             >
-              <span style={{ ...styles.dot, background: a.hasGoogleToken ? '#34d399' : '#6b7280' }} />
+              <span style={{ ...styles.dot, background: a.hasGoogleToken ? '#34d399' : 'var(--text-faint)' }} />
               <span style={styles.acctEmail}>{a.displayName || a.email}</span>
             </button>
           ))}
@@ -1123,7 +1124,7 @@ function GtmContextBar({
       <div style={styles.ctxBar}>
         <span>
           📁 {ctx.accountName} › {ctx.containerName} ›{' '}
-          <b style={{ color: '#e5e7eb' }}>{ctx.workspaceName ?? 'workspace?'}</b>
+          <b style={{ color: 'var(--text)' }}>{ctx.workspaceName ?? 'workspace?'}</b>
         </span>
         <button style={styles.linkBtn} onClick={() => { setSel(ctx); setEditing(true); }}>
           change
@@ -1175,7 +1176,7 @@ interface TagEdit {
 const CONF_BADGE: Record<'high' | 'medium' | 'low', React.CSSProperties> = {
   high: { background: '#064e3b', color: '#6ee7b7', border: '1px solid #065f46' },
   medium: { background: '#3a2c0a', color: '#fcd34d', border: '1px solid #92651a' },
-  low: { background: '#1b2433', color: '#9ca3af', border: '1px solid #334155' },
+  low: { background: '#1b2433', color: 'var(--text-muted)', border: '1px solid var(--border-2)' },
 };
 
 const TRIGGER_TYPE_LABEL: Record<string, string> = {
@@ -1209,11 +1210,11 @@ function triggerCondition(s: SuggestedTagView): string {
 // one block per tag (tag + trigger on the first row; one row per event parameter /
 // trigger condition). Same data the CSV download writes — via suggestionToGroup.
 const tplStyles: Record<string, React.CSSProperties> = {
-  wrap: { overflowX: 'auto', border: '1px solid #1f2937', borderRadius: 12 },
-  table: { borderCollapse: 'collapse', width: '100%', fontSize: 12, color: '#cbd5e1' },
-  th: { textAlign: 'left', padding: '8px 10px', background: '#0f1623', color: '#9ca3af', fontWeight: 600, borderBottom: '1px solid #1f2937', whiteSpace: 'nowrap' },
+  wrap: { overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 12 },
+  table: { borderCollapse: 'collapse', width: '100%', fontSize: 12, color: 'var(--text-dim)' },
+  th: { textAlign: 'left', padding: '8px 10px', background: '#0f1623', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' },
   td: { padding: '6px 10px', borderBottom: '1px solid #16202e', verticalAlign: 'top' },
-  tdTag: { padding: '6px 10px', borderBottom: '1px solid #1f2937', borderLeft: '2px solid #1e3a5f', verticalAlign: 'top', background: '#101a28' },
+  tdTag: { padding: '6px 10px', borderBottom: '1px solid var(--border)', borderLeft: '2px solid #1e3a5f', verticalAlign: 'top', background: '#101a28' },
 };
 function SuggestionTemplateTable({ suggestions }: { suggestions: SuggestedTagView[] }): JSX.Element {
   return (
@@ -1232,7 +1233,7 @@ function SuggestionTemplateTable({ suggestions }: { suggestions: SuggestedTagVie
               return (
                 <tr key={s.id + ':' + i}>
                   {first && <td rowSpan={g.rowCount} style={tplStyles.tdTag}>{g.tagType}</td>}
-                  {first && <td rowSpan={g.rowCount} style={{ ...tplStyles.td, color: '#e5e7eb', fontWeight: 600 }}>{g.tagName}</td>}
+                  {first && <td rowSpan={g.rowCount} style={{ ...tplStyles.td, color: 'var(--text)', fontWeight: 600 }}>{g.tagName}</td>}
                   {first && <td rowSpan={g.rowCount} style={tplStyles.td}><code style={mdStyles.code}>{g.eventName}</code></td>}
                   <td style={tplStyles.td}>{p?.name ?? ''}</td>
                   <td style={tplStyles.td}>{p ? <code style={mdStyles.code}>{p.variable}</code> : ''}</td>
@@ -2028,7 +2029,7 @@ function TagReviewPanel({
           <div style={styles.card}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <div style={styles.muted}>
-                Found <b style={{ color: '#e5e7eb' }}>{discovered.total}</b> page(s){' '}
+                Found <b style={{ color: 'var(--text)' }}>{discovered.total}</b> page(s){' '}
                 {discovered.viaSitemap ? 'via sitemap' : 'via link-crawl'} · {selectedPageCount} selected
               </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -2051,7 +2052,7 @@ function TagReviewPanel({
                   ))}
                 </>
               ) : (
-                <span style={{ color: '#9ca3af' }}>none detected</span>
+                <span style={{ color: 'var(--text-muted)' }}>none detected</span>
               )}
             </div>
             {discovered.urls.length > 0 ? (
@@ -2085,7 +2086,7 @@ function TagReviewPanel({
           <div style={styles.h2}>Create into</div>
           {targetReady && ctx ? (
             <div style={styles.muted}>
-              📁 {ctx.accountName} › {ctx.containerName} › <b style={{ color: '#e5e7eb' }}>{ctx.workspaceName}</b>
+              📁 {ctx.accountName} › {ctx.containerName} › <b style={{ color: 'var(--text)' }}>{ctx.workspaceName}</b>
               &nbsp;·&nbsp; {active?.email}
             </div>
           ) : (
@@ -2167,7 +2168,7 @@ function TagReviewPanel({
                 <div style={{ ...styles.h2, marginTop: 14 }}>
                   All trackable elements ({scanLog.inventory.elements.length})
                   {scanLog.inventory.elements.length > 0 && (
-                    <span style={{ textTransform: 'none', color: '#6b7280', fontWeight: 400, letterSpacing: 0 }}>
+                    <span style={{ textTransform: 'none', color: 'var(--text-faint)', fontWeight: 400, letterSpacing: 0 }}>
                       {' '}— {kindCountsLabel(scanLog.inventory.elements)}
                     </span>
                   )}
@@ -2337,7 +2338,7 @@ function TagReviewPanel({
                         <span>{s.platform === 'google_tag' ? 'Google tag (googtag)' : 'GA4 Event (gaawe)'}</span>
                         <span style={styles.detailKey}>Trigger</span>
                         <span>
-                          <b style={{ color: '#e5e7eb' }}>{s.trigger.name}</b> · {triggerTypeLabel(s.trigger.kind)}
+                          <b style={{ color: 'var(--text)' }}>{s.trigger.name}</b> · {triggerTypeLabel(s.trigger.kind)}
                         </span>
                         <span style={styles.detailKey}>Condition</span>
                         <span>{triggerCondition(s)}</span>
@@ -2365,7 +2366,7 @@ function TagReviewPanel({
                           style={{
                             fontSize: 12,
                             marginTop: 4,
-                            color: st.state === 'ok' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : st.state === 'exists' ? '#7dd3fc' : '#9ca3af',
+                            color: st.state === 'ok' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : st.state === 'exists' ? '#7dd3fc' : 'var(--text-muted)',
                           }}
                         >
                           {st.state === 'creating' ? 'Creating…' : st.state === 'ok' ? `✓ ${st.msg}` : `✗ ${st.msg}`}
@@ -2452,7 +2453,7 @@ function TagReviewPanel({
 const SEV_BADGE: Record<string, React.CSSProperties> = {
   high: { background: '#3a1416', color: '#fca5a5', border: '1px solid #7f1d1d' },
   medium: { background: '#3a2c0a', color: '#fcd34d', border: '1px solid #92651a' },
-  low: { background: '#1b2433', color: '#9ca3af', border: '1px solid #334155' },
+  low: { background: '#1b2433', color: 'var(--text-muted)', border: '1px solid var(--border-2)' },
   info: { background: '#10233f', color: '#93c5fd', border: '1px solid #1e3a5f' },
 };
 const SEV_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2, info: 3 };
@@ -2608,7 +2609,7 @@ function ContainerAuditPanel({
           <div style={styles.muted}>
             Container:{' '}
             {ctx?.containerId ? (
-              <b style={{ color: '#e5e7eb' }}>
+              <b style={{ color: 'var(--text)' }}>
                 {ctx.accountName} › {ctx.containerName} › {ctx.workspaceName ?? 'workspace?'}
               </b>
             ) : (
@@ -2642,7 +2643,7 @@ function ContainerAuditPanel({
             </div>
             {tagTypes.length > 0 && (
               <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ color: '#9ca3af', fontSize: 13 }}>Tag type:</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Tag type:</span>
                 <select
                   value={typeFilter}
                   onChange={(e) => setTypeFilter(e.target.value)}
@@ -2720,7 +2721,7 @@ function ContainerAuditPanel({
                     {canceling ? 'Stopping…' : 'Cancel'}
                   </button>
                 )}
-                <span style={{ color: '#9ca3af', fontSize: 12 }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
                   {applyingAll
                     ? canceling
                       ? `Stopping after the current fix… (${batchProgress?.done ?? 0}/${batchProgress?.total ?? 0})`
@@ -2754,17 +2755,17 @@ function ContainerAuditPanel({
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600 }}>
                       {f.resource ? `${f.resource.name} ` : ''}
-                      <span style={{ fontWeight: 400, color: '#9ca3af', fontSize: 12 }}>
+                      <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 12 }}>
                         {f.resource ? `(${f.resource.kind})` : f.category}
                       </span>
                       {f.category === 'paused' && (
                         <span style={{ fontWeight: 700, color: '#fbbf24', fontSize: 14, marginLeft: 6 }}>(Paused)</span>
                       )}
                     </div>
-                    <div style={{ ...styles.reviewMetaLine, color: '#cbd5e1' }}>{f.message}</div>
-                    <div style={{ ...styles.reviewEvidence, fontSize: 13, color: '#cbd5e1', fontStyle: 'normal', lineHeight: 1.55, background: 'rgba(255, 255, 255, 0.05)', padding: '6px 9px', borderRadius: 6, marginTop: 6 }}>{f.recommendation}</div>
+                    <div style={{ ...styles.reviewMetaLine, color: 'var(--text-dim)' }}>{f.message}</div>
+                    <div style={{ ...styles.reviewEvidence, fontSize: 13, color: 'var(--text-dim)', fontStyle: 'normal', lineHeight: 1.55, background: 'rgba(255, 255, 255, 0.05)', padding: '6px 9px', borderRadius: 6, marginTop: 6 }}>{f.recommendation}</div>
                     {st && st.state !== 'idle' && st.state !== 'confirm' && (
-                      <div style={{ fontSize: 12, marginTop: 4, color: st.state === 'done' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : '#9ca3af' }}>
+                      <div style={{ fontSize: 12, marginTop: 4, color: st.state === 'done' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : 'var(--text-muted)' }}>
                         {st.state === 'fixing' ? 'Applying…' : st.state === 'done' ? '✓ applied — re-run to confirm' : `✗ ${st.msg}`}
                       </div>
                     )}
@@ -2836,9 +2837,30 @@ function SettingsView({
   run: (fn: () => Promise<unknown>) => Promise<void>;
   refresh: () => Promise<void>;
 }): JSX.Element {
+  const [theme, setThemeState] = useState<Theme>(loadTheme());
+  const setTheme = (t: Theme): void => {
+    setThemeState(t);
+    saveTheme(t);
+    applyTheme(t);
+  };
   return (
     <div style={styles.settings}>
       <h1 style={styles.settingsTitle}>Settings</h1>
+
+      <section style={styles.card}>
+        <h2 style={styles.h2}>Appearance</h2>
+        <div style={styles.kv}>
+          <span>Theme</span>
+          <div style={styles.toggle}>
+            <button style={theme === 'dark' ? styles.toggleActive : styles.toggleBtn} onClick={() => setTheme('dark')}>
+              🌙 Dark
+            </button>
+            <button style={theme === 'light' ? styles.toggleActive : styles.toggleBtn} onClick={() => setTheme('light')}>
+              ☀ Light
+            </button>
+          </div>
+        </div>
+      </section>
 
       {google && !google.configured && (
         <section style={styles.warn}>
@@ -3024,14 +3046,14 @@ const styles: Record<string, React.CSSProperties> = {
     height: '100vh',
     margin: 0,
     fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
-    color: '#e5e7eb',
-    background: '#0b0f17',
+    color: 'var(--text)',
+    background: 'var(--bg)',
   },
   sidebar: {
     width: 248,
     flexShrink: 0,
-    background: '#0d1320',
-    borderRight: '1px solid #1f2937',
+    background: 'var(--surface)',
+    borderRight: '1px solid var(--border)',
     display: 'flex',
     flexDirection: 'column',
     padding: 16,
@@ -3040,66 +3062,66 @@ const styles: Record<string, React.CSSProperties> = {
   brand: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 },
   logo: { width: 34, height: 34, borderRadius: 9, background: '#2563eb', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 },
   brandName: { fontWeight: 700 },
-  brandSub: { fontSize: 11, color: '#6b7280' },
-  sideLabel: { fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, color: '#6b7280', margin: '4px 0 8px' },
+  brandSub: { fontSize: 11, color: 'var(--text-faint)' },
+  sideLabel: { fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-faint)', margin: '4px 0 8px' },
   accountList: { display: 'flex', flexDirection: 'column', gap: 4, overflowY: 'auto', flex: 1 },
-  sideMuted: { color: '#6b7280', fontSize: 13, padding: '6px 4px' },
-  acctBtn: { display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: '1px solid transparent', borderRadius: 8, padding: '8px 10px', color: '#cbd5e1', cursor: 'pointer', textAlign: 'left', fontSize: 13 },
-  acctBtnActive: { background: '#16223a', border: '1px solid #2c3e5e', color: '#fff' },
+  sideMuted: { color: 'var(--text-faint)', fontSize: 13, padding: '6px 4px' },
+  acctBtn: { display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: '1px solid transparent', borderRadius: 8, padding: '8px 10px', color: 'var(--text-dim)', cursor: 'pointer', textAlign: 'left', fontSize: 13 },
+  acctBtnActive: { background: 'var(--surface-3)', border: '1px solid var(--border-2)', color: '#fff' },
   acctEmail: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   connectBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer', marginTop: 8 },
   sideWarn: { color: '#fcd9a5', fontSize: 11, marginTop: 8 },
-  sideNav: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 16, borderTop: '1px solid #1f2937', paddingTop: 12 },
-  navItem: { background: 'transparent', border: 'none', borderRadius: 8, padding: '8px 10px', color: '#cbd5e1', cursor: 'pointer', textAlign: 'left', fontSize: 14 },
-  navActive: { background: '#16223a', color: '#fff' },
-  sideVersion: { color: '#4b5563', fontSize: 11, marginTop: 10 },
+  sideNav: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 },
+  navItem: { background: 'transparent', border: 'none', borderRadius: 8, padding: '8px 10px', color: 'var(--text-dim)', cursor: 'pointer', textAlign: 'left', fontSize: 14 },
+  navActive: { background: 'var(--surface-3)', color: '#fff' },
+  sideVersion: { color: 'var(--text-faint)', fontSize: 11, marginTop: 10 },
 
   main: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 },
   gtmWorkspace: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
-  subTabs: { display: 'flex', gap: 8, padding: '10px 20px', borderBottom: '1px solid #1f2937', flexShrink: 0 },
-  subTabOn: { background: '#1e3a5f', color: '#e5e7eb', border: '1px solid #1e3a5f', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
-  subTabOff: { background: 'transparent', color: '#93c5fd', border: '1px solid #334155', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13 },
+  subTabs: { display: 'flex', gap: 8, padding: '10px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 },
+  subTabOn: { background: '#1e3a5f', color: 'var(--text)', border: '1px solid #1e3a5f', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
+  subTabOff: { background: 'transparent', color: '#93c5fd', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13 },
 
   promptsWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
-  promptsHead: { padding: '14px 20px', borderBottom: '1px solid #1f2937', flexShrink: 0 },
-  promptSearch: { width: '100%', boxSizing: 'border-box', marginTop: 10, background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit' },
+  promptsHead: { padding: '14px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 },
+  promptSearch: { width: '100%', boxSizing: 'border-box', marginTop: 10, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit' },
   promptFilters: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 },
-  promptChip: { background: 'transparent', color: '#93c5fd', border: '1px solid #334155', borderRadius: 999, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
-  promptChipOn: { background: '#1e3a5f', color: '#e5e7eb', border: '1px solid #1e3a5f', borderRadius: 999, padding: '4px 10px', fontSize: 12, cursor: 'pointer', fontWeight: 600 },
+  promptChip: { background: 'transparent', color: '#93c5fd', border: '1px solid var(--border-2)', borderRadius: 999, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
+  promptChipOn: { background: '#1e3a5f', color: 'var(--text)', border: '1px solid #1e3a5f', borderRadius: 999, padding: '4px 10px', fontSize: 12, cursor: 'pointer', fontWeight: 600 },
   promptsBody: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 18 },
   promptGroupTitle: { fontSize: 12, fontWeight: 700, color: '#93c5fd', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   promptList: { display: 'flex', flexDirection: 'column', gap: 8 },
-  promptCard: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, background: '#161e2e', border: '1px solid #1f2937', borderRadius: 10, padding: '10px 12px' },
-  promptText: { fontSize: 13, color: '#e5e7eb', lineHeight: 1.45 },
+  promptCard: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' },
+  promptText: { fontSize: 13, color: 'var(--text)', lineHeight: 1.45 },
   promptActions: { display: 'flex', gap: 6, flexShrink: 0 },
   promptUse: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' },
-  promptCopy: { background: 'transparent', color: '#93c5fd', border: '1px solid #334155', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer' },
+  promptCopy: { background: 'transparent', color: '#93c5fd', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer' },
   errorBar: { background: '#1f1416', borderBottom: '1px solid #7f1d1d', color: '#fca5a5', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 },
   errorClose: { background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer' },
 
   chatWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
-  chatHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid #1f2937' },
-  toggle: { display: 'flex', background: '#0d1320', border: '1px solid #334155', borderRadius: 8, overflow: 'hidden' },
-  toggleBtn: { background: 'transparent', color: '#9ca3af', border: 'none', padding: '6px 14px', fontSize: 12, cursor: 'pointer' },
+  chatHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border)' },
+  toggle: { display: 'flex', background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 8, overflow: 'hidden' },
+  toggleBtn: { background: 'transparent', color: 'var(--text-muted)', border: 'none', padding: '6px 14px', fontSize: 12, cursor: 'pointer' },
   toggleActive: { background: '#2563eb', color: '#fff', border: 'none', padding: '6px 14px', fontSize: 12, cursor: 'pointer' },
   chatTitle: { fontWeight: 600 },
-  chatSub: { fontSize: 12, color: '#6b7280', marginTop: 2 },
-  ctxBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 20px', background: '#0d1320', borderBottom: '1px solid #1f2937', fontSize: 13, color: '#9ca3af' },
-  ctxBarEdit: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: '#0d1320', borderBottom: '1px solid #1f2937', flexWrap: 'wrap' },
-  ctxSelect: { background: '#161e2e', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 6, padding: '6px 8px', fontSize: 13, maxWidth: 200 },
+  chatSub: { fontSize: 12, color: 'var(--text-faint)', marginTop: 2 },
+  ctxBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text-muted)' },
+  ctxBarEdit: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' },
+  ctxSelect: { background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '6px 8px', fontSize: 13, maxWidth: 200 },
   chatLog: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 10 },
-  empty: { color: '#6b7280', textAlign: 'center', maxWidth: 420, margin: '60px auto', lineHeight: 1.6, flexShrink: 0 },
+  empty: { color: 'var(--text-faint)', textAlign: 'center', maxWidth: 420, margin: '60px auto', lineHeight: 1.6, flexShrink: 0 },
   userMsg: { alignSelf: 'flex-end', background: '#2563eb', color: '#fff', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14 },
-  asstMsg: { alignSelf: 'flex-start', background: '#161e2e', color: '#e5e7eb', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14, border: '1px solid #1f2937' },
+  asstMsg: { alignSelf: 'flex-start', background: 'var(--surface-2)', color: 'var(--text)', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14, border: '1px solid var(--border)' },
   toolTrace: { color: '#93c5fd', fontSize: 11, marginBottom: 4 },
   toolErrors: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 },
   toolErrorLine: { background: '#2a1416', border: '1px solid #7f1d1d', color: '#fca5a5', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
-  composer: { display: 'flex', gap: 8, padding: 16, borderTop: '1px solid #1f2937', alignItems: 'flex-end' },
+  composer: { display: 'flex', gap: 8, padding: 16, borderTop: '1px solid var(--border)', alignItems: 'flex-end' },
   composerInput: {
     flex: 1,
-    background: '#0d1320',
-    color: '#e5e7eb',
-    border: '1px solid #334155',
+    background: 'var(--surface)',
+    color: 'var(--text)',
+    border: '1px solid var(--border-2)',
     borderRadius: 12,
     padding: '11px 14px',
     fontSize: 14,
@@ -3112,44 +3134,44 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sendBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
   stopBtn: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
-  revertBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', margin: '0 0 8px', background: '#1f2937', border: '1px solid #374151', borderRadius: 10 },
-  revertText: { fontSize: 13, color: '#cbd5e1' },
+  revertBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', margin: '0 0 8px', background: 'var(--border)', border: '1px solid var(--border)', borderRadius: 10 },
+  revertText: { fontSize: 13, color: 'var(--text-dim)' },
   revertBtn: { background: 'transparent', color: '#f59e0b', border: '1px solid #f59e0b', borderRadius: 8, padding: '6px 12px', fontSize: 13, cursor: 'pointer' },
 
   confirm: { background: '#251c10', border: '1px solid #92651a', borderRadius: 10, padding: 12, margin: '0 16px 8px', color: '#fcd9a5' },
   confirmDanger: { background: '#2a1416', border: '1px solid #b91c1c', borderRadius: 10, padding: 12, margin: '0 16px 8px', color: '#fca5a5' },
   confirmHead: { fontWeight: 700 },
-  proposalRows: { background: '#0b0f17', borderRadius: 8, padding: '4px 12px', margin: '6px 0 10px' },
-  proposalRow: { display: 'flex', justifyContent: 'space-between', gap: 16, padding: '7px 0', borderBottom: '1px solid #1f2937', fontSize: 13 },
-  proposalLabel: { color: '#9ca3af' },
-  proposalValue: { color: '#e5e7eb', fontWeight: 600, textAlign: 'right', wordBreak: 'break-word' },
-  editRow: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #1f2937', flexWrap: 'wrap' },
-  editInput: { flex: 1, maxWidth: 320, background: '#161e2e', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 6, padding: '6px 9px', fontSize: 13 },
-  confirmNote: { color: '#9ca3af', fontSize: 11, marginTop: 8 },
-  viewToggle: { display: 'inline-flex', border: '1px solid #334155', borderRadius: 7, overflow: 'hidden' },
-  viewToggleOn: { background: '#1e3a5f', color: '#e5e7eb', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
+  proposalRows: { background: 'var(--bg)', borderRadius: 8, padding: '4px 12px', margin: '6px 0 10px' },
+  proposalRow: { display: 'flex', justifyContent: 'space-between', gap: 16, padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 13 },
+  proposalLabel: { color: 'var(--text-muted)' },
+  proposalValue: { color: 'var(--text)', fontWeight: 600, textAlign: 'right', wordBreak: 'break-word' },
+  editRow: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' },
+  editInput: { flex: 1, maxWidth: 320, background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '6px 9px', fontSize: 13 },
+  confirmNote: { color: 'var(--text-muted)', fontSize: 11, marginTop: 8 },
+  viewToggle: { display: 'inline-flex', border: '1px solid var(--border-2)', borderRadius: 7, overflow: 'hidden' },
+  viewToggleOn: { background: '#1e3a5f', color: 'var(--text)', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
   viewToggleOff: { background: 'transparent', color: '#93c5fd', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
 
   settings: { flex: 1, overflowY: 'auto', padding: 24, maxWidth: 720 },
   settingsTitle: { fontSize: 22, fontWeight: 700, margin: '0 0 16px' },
-  card: { background: '#111827', border: '1px solid #1f2937', borderRadius: 12, padding: 18, marginBottom: 16, flexShrink: 0 },
-  h2: { fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, color: '#9ca3af', margin: '0 0 12px' },
-  kv: { display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid #1f2937', fontSize: 14 },
+  card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 18, marginBottom: 16, flexShrink: 0 },
+  h2: { fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-muted)', margin: '0 0 12px' },
+  kv: { display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border)', fontSize: 14 },
   warn: { background: '#251c10', border: '1px solid #92651a', borderRadius: 10, padding: 14, marginBottom: 16, color: '#fcd9a5', lineHeight: 1.5 },
-  diag: { background: '#0f1722', border: '1px solid #1f2937', borderRadius: 10, padding: '10px 14px', marginBottom: 16, color: '#9ca3af', fontSize: 12 },
-  codeBlock: { background: '#0b0f17', padding: '6px 8px', borderRadius: 6, color: '#e5e7eb', overflowX: 'auto' },
+  diag: { background: '#0f1722', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px', marginBottom: 16, color: 'var(--text-muted)', fontSize: 12 },
+  codeBlock: { background: 'var(--bg)', padding: '6px 8px', borderRadius: 6, color: 'var(--text)', overflowX: 'auto' },
   formRow: { display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
-  select: { background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
-  input: { flex: 1, minWidth: 120, background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
+  select: { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
+  input: { flex: 1, minWidth: 120, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
   primaryBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
-  ghostBtn: { background: '#1f2937', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
+  ghostBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
   toggleOn: { background: '#1d4ed8', color: '#fff', border: '1px solid #2563eb', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
-  toggleOff: { background: 'transparent', color: '#9ca3af', border: '1px solid #334155', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
+  toggleOff: { background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
   dangerGhost: { background: 'transparent', color: '#fca5a5', border: '1px solid #7f1d1d', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
   dangerSolid: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
   resultList: { listStyle: 'none', margin: '12px 0 0', padding: 0 },
-  resultRow: { padding: '6px 0', borderBottom: '1px solid #1f2937', fontSize: 13, fontFamily: 'ui-monospace, monospace' },
-  muted: { color: '#6b7280', fontSize: 13 },
+  resultRow: { padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 13, fontFamily: 'ui-monospace, monospace' },
+  muted: { color: 'var(--text-faint)', fontSize: 13 },
   dot: { width: 9, height: 9, borderRadius: 999, display: 'inline-block', flexShrink: 0 },
   linkBtn: { background: 'transparent', border: 'none', color: '#93c5fd', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' },
 
@@ -3160,9 +3182,9 @@ const styles: Record<string, React.CSSProperties> = {
     width: '100%',
     boxSizing: 'border-box',
     minHeight: 120,
-    background: '#0d1320',
-    color: '#e5e7eb',
-    border: '1px solid #334155',
+    background: 'var(--surface)',
+    color: 'var(--text)',
+    border: '1px solid var(--border-2)',
     borderRadius: 10,
     padding: '10px 12px',
     fontSize: 12,
@@ -3170,29 +3192,29 @@ const styles: Record<string, React.CSSProperties> = {
     resize: 'vertical',
     marginBottom: 8,
   },
-  scanNum: { display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#9ca3af', flex: '0 0 auto' },
-  scanNumInput: { width: 52, background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 8px', fontSize: 13 },
-  scanSelect: { background: '#0d1320', color: '#e5e7eb', border: '1px solid #334155', borderRadius: 8, padding: '8px 8px', fontSize: 13 },
+  scanNum: { display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)', flex: '0 0 auto' },
+  scanNumInput: { width: 52, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 8px', fontSize: 13 },
+  scanSelect: { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 8px', fontSize: 13 },
   scanBanner: { fontSize: 13, color: '#7dd3fc', background: '#0c2030', border: '1px solid #1e4258', borderRadius: 8, padding: '8px 12px', flexShrink: 0 },
   reviewToolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', flexShrink: 0 },
-  reviewList: { display: 'flex', flexDirection: 'column', border: '1px solid #1f2937', borderRadius: 12, overflow: 'hidden', flexShrink: 0 },
-  reviewRow: { display: 'flex', gap: 12, alignItems: 'flex-start', padding: '12px 14px', borderBottom: '1px solid #1f2937', background: '#111827' },
+  reviewList: { display: 'flex', flexDirection: 'column', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', flexShrink: 0 },
+  reviewRow: { display: 'flex', gap: 12, alignItems: 'flex-start', padding: '12px 14px', borderBottom: '1px solid var(--border)', background: 'var(--surface-alt)' },
   reviewRowOk: { borderLeft: '3px solid #34d399', background: '#0f1b16' },
   reviewRowHead: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  reviewMetaLine: { color: '#9ca3af', fontSize: 13, marginTop: 3, lineHeight: 1.5 },
-  reviewEvidence: { color: '#6b7280', fontSize: 12, marginTop: 3, fontStyle: 'italic' },
+  reviewMetaLine: { color: 'var(--text-muted)', fontSize: 13, marginTop: 3, lineHeight: 1.5 },
+  reviewEvidence: { color: 'var(--text-faint)', fontSize: 12, marginTop: 3, fontStyle: 'italic' },
   badge: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, borderRadius: 6, padding: '1px 7px' },
   typeChip: { fontSize: 11, color: '#93c5fd', background: '#10233f', border: '1px solid #1e3a5f', borderRadius: 6, padding: '1px 7px' },
   emChip: { fontSize: 11, color: '#fcd34d', background: '#3a2c0a', border: '1px solid #92651a', borderRadius: 6, padding: '1px 7px' },
   existsChip: { fontSize: 11, color: '#7dd3fc', background: '#0c2a3a', border: '1px solid #1e5570', borderRadius: 6, padding: '1px 7px' },
-  editGrid: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8, background: '#0b0f17', borderRadius: 8, padding: '4px 12px' },
-  detailGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 12, rowGap: 3, marginTop: 5, fontSize: 12.5, color: '#cbd5e1', alignItems: 'start' },
-  detailKey: { color: '#6b7280', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, paddingTop: 1 },
-  invScroll: { maxHeight: 320, overflowY: 'auto', border: '1px solid #1f2937', borderRadius: 8 },
+  editGrid: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8, background: 'var(--bg)', borderRadius: 8, padding: '4px 12px' },
+  detailGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 12, rowGap: 3, marginTop: 5, fontSize: 12.5, color: 'var(--text-dim)', alignItems: 'start' },
+  detailKey: { color: 'var(--text-faint)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, paddingTop: 1 },
+  invScroll: { maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 },
   invTable: { width: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' },
-  invTh: { textAlign: 'left', padding: '5px 8px', color: '#6b7280', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.4, borderBottom: '1px solid #1f2937', position: 'sticky', top: 0, background: '#111827' },
-  invTd: { padding: '4px 8px', borderBottom: '1px solid #161e2e', color: '#cbd5e1', verticalAlign: 'top', overflow: 'hidden', textOverflow: 'ellipsis' },
-  pageListScroll: { maxHeight: 300, overflowY: 'auto', border: '1px solid #1f2937', borderRadius: 8, marginTop: 8, padding: '4px 0' },
+  invTh: { textAlign: 'left', padding: '5px 8px', color: 'var(--text-faint)', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.4, borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--surface-alt)' },
+  invTd: { padding: '4px 8px', borderBottom: '1px solid var(--surface-2)', color: 'var(--text-dim)', verticalAlign: 'top', overflow: 'hidden', textOverflow: 'ellipsis' },
+  pageListScroll: { maxHeight: 300, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, marginTop: 8, padding: '4px 0' },
   pageRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', fontSize: 12.5, cursor: 'pointer' },
-  pagePath: { fontFamily: 'ui-monospace, monospace', color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  pagePath: { fontFamily: 'ui-monospace, monospace', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 };
