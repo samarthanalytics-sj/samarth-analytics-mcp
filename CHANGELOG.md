@@ -1,3 +1,9 @@
+## [1.83.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.82.1...v1.83.0) (2026-06-26)
+
+### Features
+
+* **desktop:** create_tiktok_capi_server_tag (Stape TikTok Events API, match-quality tuned) ([e00514c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e00514c491aa7e13bce2d26df0c8385a3c1d2df9))
+
 ## [1.82.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.82.0...v1.82.1) (2026-06-26)
 
 ### Bug Fixes
