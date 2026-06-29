@@ -1,3 +1,9 @@
+## [1.89.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.88.1...v1.89.0) (2026-06-29)
+
+### Features
+
+* **desktop:** GA4 prompts open the chat's GA4 toggle (not GTM) ([9d82da4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9d82da4bc52925bb893f232fa5fa1b1f27e166df))
+
 ## [1.88.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.88.0...v1.88.1) (2026-06-26)
 
 ### Bug Fixes
