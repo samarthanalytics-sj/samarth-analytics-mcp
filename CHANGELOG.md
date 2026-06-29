@@ -1,3 +1,9 @@
+## [1.90.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.89.0...v1.90.0) (2026-06-29)
+
+### Features
+
+* **desktop:** add a "Beta" badge to the Tag suggestions tab ([0ec00a7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0ec00a7dd7aaef76750cbb469bed96bd08f91179))
+
 ## [1.89.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.88.1...v1.89.0) (2026-06-29)
 
 ### Features
