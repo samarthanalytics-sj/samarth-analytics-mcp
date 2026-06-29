@@ -1231,7 +1231,9 @@ function triggerCondition(s: SuggestedTagView): string {
 // one block per tag (tag + trigger on the first row; one row per event parameter /
 // trigger condition). Same data the CSV download writes — via suggestionToGroup.
 const tplStyles: Record<string, React.CSSProperties> = {
-  wrap: { overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 12 },
+  // flexShrink:0 + maxWidth:100% so the table keeps its full height inside the scrolling flex column
+  // (otherwise it gets compressed and rows are clipped) and scrolls horizontally instead of overflowing.
+  wrap: { overflowX: 'auto', maxWidth: '100%', border: '1px solid var(--border)', borderRadius: 12, flexShrink: 0 },
   table: { borderCollapse: 'collapse', width: '100%', fontSize: 12, color: 'var(--text-dim)' },
   th: { textAlign: 'left', padding: '8px 10px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' },
   td: { padding: '6px 10px', borderBottom: '1px solid var(--border)', verticalAlign: 'top' },
