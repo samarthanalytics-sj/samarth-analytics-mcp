@@ -54,6 +54,14 @@ const YT_VIDEO_EVENT = 'video_{{Video Status}}';
 // detection regex and this GTM trigger filter are both built from it, so a
 // detected download always matches the tag we suggest for it.
 export const DOWNLOAD_EXT = 'pdf|zip|docx?|xlsx?|pptx?|csv|dmg|exe|rar|7z|mp4|mp3|pkg|apk';
+/** A download URL's file extension (lower-case, no dot), ignoring any ?query / #fragment — used to
+ *  name the tag ("PDF Download") and build a readable "{{Click URL}} contains .<ext>" trigger.
+ *  null when there's no clear extension → the trigger falls back to the multi-extension regex. */
+const fileExt = (href?: string): string | null => {
+  const path = (href ?? '').split(/[?#]/)[0];
+  const m = /\.([a-z0-9]{1,5})$/i.exec(path);
+  return m ? m[1].toLowerCase() : null;
+};
 const cap = (s: string): string => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 // GTM rejects some characters in resource names (notably ":"), which fails tag
@@ -291,14 +299,27 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         eventParameters: CLICK_PARAMS,
         trigger: { name: trigNameOf('Phone'), kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
       };
-    case 'download':
+    case 'download': {
+      // Name + scope the tag for the ACTUAL file type ("PDF Download") with a plain
+      // "{{Click URL}} ends with .pdf" condition instead of a multi-extension regex. "ends with"
+      // anchors at the end of the URL, so it never false-fires on a mid-string match (a /our-services
+      // .pdf-guide nav link, ?ref=brochure.pdf) and ".doc" can't match ".docx". Same extension on many
+      // pages collapses (dedup key is the click-URL value). The trade-off is a download URL carrying a
+      // ?query/#fragment after the extension; those are rare, and no clear extension (e.g. a
+      // /download?file= route) → the multi-ext regex fallback, the only place a regex remains.
+      const ext = fileExt(el.href);
+      const extLabel = ext ? ext.toUpperCase() : 'File';
       return {
         ...base('file_download', 'medium', true), // EM already auto-tracks downloads
-        label: 'File download → GA4 "file_download"  ⚠ Enhanced Measurement already covers this',
+        tagName: tagNameOf(`${extLabel} Download`),
+        label: `${extLabel} download → GA4 "file_download"  ⚠ Enhanced Measurement already covers this`,
         evidence: `download link ${el.href ?? ''}`.trim(),
         eventParameters: CLICK_PARAMS,
-        trigger: { name: trigNameOf('File Download'), kind: 'link_click', clickUrlValue: `(?i)\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
+        trigger: ext
+          ? { name: trigNameOf(`${extLabel} Download`), kind: 'link_click', clickUrlValue: `.${ext}`, clickUrlOperator: 'endsWith' }
+          : { name: trigNameOf('File Download'), kind: 'link_click', clickUrlValue: `(?i)\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
       };
+    }
     case 'outbound':
       return {
         ...base('outbound_click', 'medium', true), // EM already auto-tracks outbound
@@ -321,18 +342,23 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
     case 'cta': {
       const def = CTA_BY_INTENT[el.intent ?? 'generic'];
       const isSpecific = def.intent !== 'generic';
-      // Name the tag + trigger for the ACTUAL button/link text the user sees on the site
-      // ("Schedule Strategy Call"), NOT the generic intent label ("Book Demo Click") — so the
-      // tag reads like the website. For a NAMED intent the trigger still fires on the SAME
-      // case-insensitive, word-bounded intent regex that classified it (so detection ⇔ the live
-      // trigger always agree, every variant fires, none over-fire, and substring CTAs don't
-      // double-fire — variants of one intent still collapse to ONE tag). A GENERIC CTA fires on
-      // its own literal text. The GA4 EVENT stays the semantic intent event (book_demo_click, …),
-      // with cta_text={{Click Text}} carrying the exact label for drill-down.
-      const displayLabel = el.text.replace(/\s+/g, ' ').trim().slice(0, 60) || def.label;
-      const trigger: SuggestedTag['trigger'] = isSpecific
-        ? { name: trigNameOf(displayLabel), kind: 'all_clicks', clickTextValue: `(?i)${def.pattern}`, clickTextOperator: 'matchRegex' }
-        : { name: trigNameOf(displayLabel), kind: 'all_clicks', clickTextValue: el.text, clickTextOperator: 'contains' };
+      // Trigger on the button/link text the user sees with a plain "{{Click Text}} contains <text>"
+      // condition — readable in GTM and the label from the page ("Schedule Strategy Call") — instead
+      // of a big intent regex. "contains" (not "equals") because GTM's {{Click Text}} is the RENDERED
+      // text of the clicked node, while the scan captures the element's full textContent: equals would
+      // miss buttons with an icon / hidden accessibility span, or whose text was truncated at scan
+      // time. The intent still selects the semantic GA4 event (book_demo_click, …) + confidence; a CTA
+      // with different text becomes its OWN tag (per-button clarity over one regex collapsing
+      // variants), and the SAME text on multiple pages still collapses site-wide (dedup key is the
+      // click-text value). cta_text={{Click Text}} carries the exact clicked label for GA4 drill-down.
+      const ctaText = el.text.replace(/\s+/g, ' ').trim();
+      const displayLabel = ctaText.slice(0, 60) || def.label;
+      const trigger: SuggestedTag['trigger'] = {
+        name: trigNameOf(displayLabel),
+        kind: 'all_clicks',
+        clickTextValue: ctaText || def.label,
+        clickTextOperator: 'contains',
+      };
       return {
         ...base(def.event, isSpecific ? 'medium' : 'low', false),
         tagName: tagNameOf(displayLabel),
@@ -424,32 +450,12 @@ export function allFormsSuggestion(): SuggestedTag {
   };
 }
 
-/** One catch-all tag firing on every PDF link click. */
-export function allPdfSuggestion(): SuggestedTag {
-  return {
-    id: 'all-pdf',
-    page: 'site-wide',
-    label: 'All PDF downloads → GA4 "file_download"',
-    evidence: 'one tag firing on every PDF link click  ⚠ Enhanced Measurement may already cover this',
-    note: 'Overlaps the general "File Download" tag (which also covers PDFs) — pick one, not both.',
-    confidence: 'medium',
-    enhancedMeasurementOverlap: true,
-    platform: 'ga4_event',
-    tagName: tagNameOf('All PDF Downloads'),
-    measurementId: GA4_VAR,
-    eventName: 'file_download',
-    eventParameters: CLICK_PARAMS,
-    trigger: { name: trigNameOf('All PDF Downloads'), kind: 'link_click', clickUrlValue: '(?i)\\.pdf(\\?|#|$)', clickUrlOperator: 'matchRegex' },
-  };
-}
-
-const isPdf = (href: string | undefined): boolean => /\.pdf(\?|#|$)/i.test(href ?? '');
-
 const CONF = { high: 0, medium: 1, low: 2 } as const;
 
-/** opts.full prepends the GA4 Configuration tag (always) and the All-form /
- *  All-PDF catch-alls (when the site has any form / any PDF), so the review list
- *  is the COMPLETE set of creatable tags — not only the scan-derived ones. */
+/** opts.full prepends the GA4 Configuration tag (always) and the All-form catch-all
+ *  (when the site has any form), so the review list is the COMPLETE set of creatable
+ *  tags — not only the scan-derived ones. (PDF downloads need no separate catch-all:
+ *  the per-file "PDF Download" tag's {{Click URL}} contains .pdf already fires site-wide.) */
 export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } = {}): SuggestedTag[] {
   const scopeCtx = nonUniqueFormScopes(input.forms);
   // Social trigger fires on ONLY the exact domains scraped from the site's links.
@@ -468,11 +474,12 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
   // marked "site-wide", instead of N copies.
   const byKey = new Map<string, SuggestedTag>();
   for (const s of raw) {
-    // CTAs are distinguished by their click-text filter — keep distinct CTAs
-    // distinct; every other kind genuinely collapses to one tag (one mailto:,
-    // one regex file_download, one outbound, etc.). The eventParameters are now
-    // all GTM-variable refs (identical across instances), so the trigger filter
-    // is the discriminator, not the parameter value.
+    // CTAs are distinguished by their click-text filter, and downloads by their
+    // per-file-type click-URL filter (one PDF tag, one ZIP tag, …) — distinct ones
+    // stay distinct; everything else genuinely collapses to one tag (one mailto:,
+    // one outbound, etc.). The eventParameters are now all GTM-variable refs
+    // (identical across instances), so the trigger filter is the discriminator,
+    // not the parameter value.
     const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}`;
     const seen = byKey.get(key);
     if (!seen) byKey.set(key, { ...s });
@@ -487,8 +494,8 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
       a.label.localeCompare(b.label)
   );
   if (!opts.full) return ranked;
-  // COMPLETE list: the GA4 Configuration base tag (always) + the All-form /
-  // All-PDF catch-alls (when applicable), surfaced ABOVE the scan-derived tags.
+  // COMPLETE list: the GA4 Configuration base tag (always) + the All-form catch-all
+  // (when the site has any form), surfaced ABOVE the scan-derived tags.
   const head: SuggestedTag[] = [ga4ConfigSuggestion()];
   let body = ranked;
   if (input.forms.length > 0) {
@@ -499,6 +506,5 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
     // (contact_form, signup_form, …) are KEPT — they send a different event.
     body = body.filter((s) => !(s.trigger.kind === 'form_submit' && s.eventName === 'form_submission' && !s.trigger.formIdValue && !s.trigger.formClassesValue));
   }
-  if (input.elements.some((e) => e.kind === 'download' && isPdf(e.href))) head.push(allPdfSuggestion());
   return [...head, ...body];
 }
