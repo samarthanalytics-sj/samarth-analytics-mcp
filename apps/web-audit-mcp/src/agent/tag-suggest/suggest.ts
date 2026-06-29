@@ -321,21 +321,22 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
     case 'cta': {
       const def = CTA_BY_INTENT[el.intent ?? 'generic'];
       const isSpecific = def.intent !== 'generic';
-      // Named intent → the trigger fires on {{Click Text}} matching the SAME
-      // case-insensitive, word-bounded pattern that classified it, so detection
-      // and the live GTM trigger always agree (every variant fires, none over-fire,
-      // case doesn't matter). All variants of an intent share this pattern, so they
-      // collapse to ONE tag. Generic → the element's own literal text (a
-      // case-preserved 'contains', so two distinct generic CTAs stay distinct).
-      const trigName = isSpecific ? trigNameOf(def.label.replace(/ Click$/, '')) : trigNameOf(el.text.slice(0, 40));
+      // Name the tag + trigger for the ACTUAL button/link text the user sees on the site
+      // ("Schedule Strategy Call"), NOT the generic intent label ("Book Demo Click") — so the
+      // tag reads like the website. For a NAMED intent the trigger still fires on the SAME
+      // case-insensitive, word-bounded intent regex that classified it (so detection ⇔ the live
+      // trigger always agree, every variant fires, none over-fire, and substring CTAs don't
+      // double-fire — variants of one intent still collapse to ONE tag). A GENERIC CTA fires on
+      // its own literal text. The GA4 EVENT stays the semantic intent event (book_demo_click, …),
+      // with cta_text={{Click Text}} carrying the exact label for drill-down.
+      const displayLabel = el.text.replace(/\s+/g, ' ').trim().slice(0, 60) || def.label;
       const trigger: SuggestedTag['trigger'] = isSpecific
-        ? { name: trigName, kind: 'all_clicks', clickTextValue: `(?i)${def.pattern}`, clickTextOperator: 'matchRegex' }
-        : { name: trigName, kind: 'all_clicks', clickTextValue: el.text, clickTextOperator: 'contains' };
+        ? { name: trigNameOf(displayLabel), kind: 'all_clicks', clickTextValue: `(?i)${def.pattern}`, clickTextOperator: 'matchRegex' }
+        : { name: trigNameOf(displayLabel), kind: 'all_clicks', clickTextValue: el.text, clickTextOperator: 'contains' };
       return {
         ...base(def.event, isSpecific ? 'medium' : 'low', false),
-        // Name the tag for what the click IS, not the raw event id.
-        tagName: tagNameOf(def.label),
-        label: `${def.label} "${el.text}" → GA4 "${def.event}"`,
+        tagName: tagNameOf(displayLabel),
+        label: `"${displayLabel}" → GA4 "${def.event}"`,
         evidence: `button/link text "${el.text}"` + (isSpecific ? ` (intent: ${el.intent})` : ''),
         // cta_text is the DYNAMIC clicked text ({{Click Text}}), not the value
         // baked in at scan time; link_url captures the href when the CTA is a link.
