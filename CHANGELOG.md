@@ -1,3 +1,9 @@
+## [1.96.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.95.0...v1.96.0) (2026-06-29)
+
+### Features
+
+* **desktop:** custom date range for the GA4 Audit data window ([58d4969](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/58d4969b9b6dcbf16166a4604df0fb5e99198ecf))
+
 ## [1.95.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.94.0...v1.95.0) (2026-06-29)
 
 ### Features
