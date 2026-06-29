@@ -1,3 +1,21 @@
+## [1.92.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.91.0...v1.92.0) (2026-06-29)
+
+### Features
+
+* **desktop:** bulk delete orphaned triggers & unused variables in the audit ([c8428a1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c8428a1359c6d23adf96cd775e1df5f44cedbfa4))
+* **desktop:** list + bulk-delete unused (orphaned) GTM variables — parallel to triggers ([226efd3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/226efd37ae973c5086c72d00c2e98bc25ebd787d))
+* **suggestions:** readable trigger conditions instead of giant regexes ([432854f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/432854f56c43d968c76dd11f81f2643e17ab83f2))
+
+### Bug Fixes
+
+* **desktop:** de-duplicate AI-scan suggestions against the engine scan (+ drop unsafe unscoped CTAs) ([d708f63](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d708f63ed2ef6a57aa6014a9ec9a7a3dbc0bb2c0))
+* **desktop:** drop cookie-consent-banner CTAs from the AI scan ([67ae24a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/67ae24a06d68aa887d39e8ddf6d336c30a0cb35d))
+* **desktop:** scroll the page during scan so below-fold lazy-mounted forms are detected ([4e7da39](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4e7da397c6c29adb8c2de0813ceea9bf14aa2ab4))
+* **desktop:** show the full Tag-suggestions table view ([099d557](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/099d55763450009a9c29cfe9701461eaf4649918))
+* **desktop:** theme accent colors so light mode reads correctly ([7a7f20f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7a7f20fc41e48e0077e049c925e9e16d517719bc)), closes [6ee7b7/#fca5a5](https://github.com/6ee7b7/samarth-analytics-mcp/issues/fca5a5) [3a2c0a/#3a1416](https://github.com/3a2c0a/samarth-analytics-mcp/issues/3a1416) [#fff-on-light-surface](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/fff-on-light-surface)
+* **web-audit:** detect div forms by field cluster (submit may be a <div onClick>) + form DOM probe ([15d5418](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/15d54187e37c3d261b5eda13390ca34b7782417b))
+* **web-audit:** name CTA tags/triggers for the actual website button text, not the intent label ([a03e574](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a03e57440acdda1155154913c5ddd468a518968b))
+
 ## [1.91.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.90.0...v1.91.0) (2026-06-29)
 
 ### Features
