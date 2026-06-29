@@ -3332,13 +3332,13 @@ function Ga4AuditPanel({
     }
   }
 
-  async function downloadReport(): Promise<void> {
+  async function downloadReport(format: 'pdf' | 'doc' | 'md'): Promise<void> {
     if (!result || !selected || downloading) return;
     setDownloading(true);
     setExportNote('');
     try {
       const safe = selected.displayName.replace(/[^\w .-]+/g, ' ').replace(/\s{2,}/g, ' ').trim() || 'GA4 property';
-      const saved = await window.desktop.ga4.exportReport(`${safe} - GA4 audit.md`, result.markdown);
+      const saved = await window.desktop.ga4.exportReport(format, `${safe} - GA4 audit`, result.markdown);
       setExportNote(saved ? `✓ Saved to ${saved}` : 'Save cancelled');
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -3531,13 +3531,14 @@ function Ga4AuditPanel({
                   </div>
                 </div>
 
-                {/* Full templated report (doc format) + download. */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                  <button style={styles.primaryBtn} onClick={() => void downloadReport()} disabled={downloading}>
-                    {downloading ? 'Saving…' : '⬇ Download report (.md)'}
-                  </button>
+                {/* Full templated report (doc format) + download as PDF / Word / Markdown. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 13, marginRight: 2 }}>Download report:</span>
+                  <button style={styles.primaryBtn} onClick={() => void downloadReport('pdf')} disabled={downloading}>⬇ PDF</button>
+                  <button style={styles.ghostBtn} onClick={() => void downloadReport('doc')} disabled={downloading}>⬇ Word (.doc)</button>
+                  <button style={styles.ghostBtn} onClick={() => void downloadReport('md')} disabled={downloading}>⬇ Markdown</button>
+                  {downloading && <span style={styles.muted}>Saving…</span>}
                   {exportNote && <span style={styles.muted}>{exportNote}</span>}
-                  <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>Read-only — apply each change in the GA4 Admin UI.</span>
                 </div>
                 <div style={{ ...styles.card, lineHeight: 1.5 }}>
                   <Markdown text={result.markdown} />
