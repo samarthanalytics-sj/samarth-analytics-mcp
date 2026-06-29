@@ -1,3 +1,9 @@
+## [1.93.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.93.0...v1.93.1) (2026-06-29)
+
+### Bug Fixes
+
+* **desktop:** wrap long values in the Tag-suggestions Table view ([d487786](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d48778655b7522980213200713f2b41a45e76e49))
+
 ## [1.93.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.92.0...v1.93.0) (2026-06-29)
 
 ### Features
