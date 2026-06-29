@@ -1,3 +1,9 @@
+## [1.99.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.98.0...v1.99.0) (2026-06-29)
+
+### Features
+
+* **desktop:** export the GA4 audit report as PDF and Word (.doc), not just Markdown ([ec62893](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ec6289353296a3e9fa0b4ad5bae098f298bde12a))
+
 ## [1.98.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.97.0...v1.98.0) (2026-06-29)
 
 ### Features
