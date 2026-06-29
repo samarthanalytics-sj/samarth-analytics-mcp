@@ -1,3 +1,9 @@
+## [1.97.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.96.0...v1.97.0) (2026-06-29)
+
+### Features
+
+* **desktop:** make the GA4 property audit proper — coverage view + deeper checks ([f9beb44](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f9beb4417f52f5de9e54b5e21982ea41bbbedf94))
+
 ## [1.96.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.95.0...v1.96.0) (2026-06-29)
 
 ### Features
