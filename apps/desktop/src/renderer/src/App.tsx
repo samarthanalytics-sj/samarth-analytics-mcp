@@ -1239,12 +1239,39 @@ const tplStyles: Record<string, React.CSSProperties> = {
   wrap: { overflowX: 'auto', maxWidth: '100%', border: '1px solid var(--border)', borderRadius: 12, flexShrink: 0 },
   table: { borderCollapse: 'collapse', width: '100%', fontSize: 12, color: 'var(--text-dim)' },
   th: { textAlign: 'left', padding: '8px 10px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' },
-  td: { padding: '6px 10px', borderBottom: '1px solid var(--border)', verticalAlign: 'top' },
+  td: { padding: '6px 10px', borderBottom: '1px solid var(--border)', verticalAlign: 'top', whiteSpace: 'normal', wordBreak: 'break-word' },
   tdTag: { padding: '6px 10px', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--c-blue-bg)', verticalAlign: 'top', background: 'var(--surface-2)' },
   selTh: { width: 56, textAlign: 'center', padding: '8px 8px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)' },
   selTd: { padding: '6px 8px', textAlign: 'center', verticalAlign: 'top', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', whiteSpace: 'nowrap' },
-  cellInput: { width: '100%', boxSizing: 'border-box', background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 6px', fontSize: 12, fontFamily: 'inherit' },
+  // Editable cells are auto-growing WRAPPING textareas (see GrowCell) so a long tag name / regex
+  // value wraps to multiple lines and stays fully visible instead of being clipped in a 1-line input.
+  cellInput: { width: '100%', minWidth: 150, boxSizing: 'border-box', background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 6px', fontSize: 12, fontFamily: 'inherit', lineHeight: 1.35, resize: 'none', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word', display: 'block' },
 };
+
+/** Auto-growing, wrapping textarea for the editable Table cells: long values (a full tag name, a
+ *  regex trigger value) WRAP and stay fully visible instead of being clipped in a single-line input.
+ *  Resizes to its content height whenever the value changes. */
+function GrowCell({ value, disabled, onChange, ariaLabel }: { value: string; disabled?: boolean; onChange: (v: string) => void; ariaLabel: string }): JSX.Element {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const ta = ref.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${ta.scrollHeight}px`;
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      style={tplStyles.cellInput}
+      value={value}
+      disabled={disabled}
+      rows={1}
+      spellCheck={false}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={ariaLabel}
+    />
+  );
+}
 // The template table is interactive (parity with the Cards view): a leading checkbox selects a tag
 // to create in GTM, and the Tag name / GA4 event / trigger-Value cells are inline-editable (writing
 // into the same `edits`/`selected` state the Cards view + the create flow use). Rows already in the
@@ -1318,14 +1345,14 @@ function SuggestionTemplateTable({
                   {first && (
                     <td rowSpan={g.rowCount} style={{ ...tplStyles.td, color: 'var(--text)', fontWeight: 600 }}>
                       {editable ? (
-                        <input style={tplStyles.cellInput} value={g.tagName} disabled={creating} onChange={(e) => onEdit(s.id, { tagName: e.target.value })} aria-label="Tag name" />
+                        <GrowCell value={g.tagName} disabled={creating} onChange={(v) => onEdit(s.id, { tagName: v })} ariaLabel="Tag name" />
                       ) : g.tagName}
                     </td>
                   )}
                   {first && (
                     <td rowSpan={g.rowCount} style={tplStyles.td}>
                       {s.platform === 'ga4_event' && editable ? (
-                        <input style={tplStyles.cellInput} value={g.eventName} disabled={creating} onChange={(e) => onEdit(s.id, { eventName: e.target.value })} aria-label="GA4 event name" />
+                        <GrowCell value={g.eventName} disabled={creating} onChange={(v) => onEdit(s.id, { eventName: v })} ariaLabel="GA4 event name" />
                       ) : g.eventName ? (
                         <code style={mdStyles.code}>{g.eventName}</code>
                       ) : (
@@ -1342,7 +1369,7 @@ function SuggestionTemplateTable({
                   <td style={tplStyles.td}>
                     {w ? (
                       i === 0 && editable ? (
-                        <input style={tplStyles.cellInput} value={w.value} disabled={creating} onChange={(e) => onEdit(s.id, { triggerValue: e.target.value })} aria-label="Trigger condition value" />
+                        <GrowCell value={w.value} disabled={creating} onChange={(v) => onEdit(s.id, { triggerValue: v })} ariaLabel="Trigger condition value" />
                       ) : (
                         w.value
                       )
