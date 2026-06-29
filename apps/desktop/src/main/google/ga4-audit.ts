@@ -201,6 +201,21 @@ export function auditGa4(s: Ga4PropertySnapshot): Ga4AuditReport {
     });
   }
 
+  // Under-instrumentation: a property that actively measures conversions (has key events) but has
+  // ZERO custom dimensions AND ZERO custom metrics is limited to GA4's default fields — item
+  // attributes, user properties and marketing parameters never reach reports/explorations. Absence
+  // of config is not the same as a clean pass, so flag it (gated on key events so a brochure site
+  // with nothing to measure isn't nagged).
+  const activelyMeasuring = (s.keyEvents?.length ?? 0) > 0;
+  if (s.customDimensions !== null && dims.length === 0 && s.customMetrics.length === 0 && activelyMeasuring) {
+    findings.push({
+      severity: 'low',
+      category: 'customdef',
+      message: 'No custom dimensions or metrics are configured, yet the property marks key events — analysis is limited to GA4 default fields (no item attributes, user properties or marketing parameters in reports).',
+      recommendation: 'Register custom dimensions/metrics for the event and user parameters you already send so they appear in reports and explorations.',
+    });
+  }
+
   // Per-area coverage (Pass / Partial / Fail / Not Verified) — so the audit reports WHAT it checked,
   // not only the problems. not_verified = the backing config sub-resource couldn't be read.
   const areaStatus = (categories: string[]): Ga4AreaStatus['status'] => {
@@ -211,11 +226,23 @@ export function auditGa4(s: Ga4PropertySnapshot): Ga4AuditReport {
   };
   const areaOf = (categories: string[], verified: boolean): Ga4AreaStatus['status'] =>
     verified ? areaStatus(categories) : 'not_verified';
+  // Data collection: a stream existing is necessary but NOT sufficient for "collection is healthy".
+  // Internal-traffic filters, hostname allow-listing, bot filtering and actual double-tagging are not
+  // verifiable via the config API, so a configured stream is at most Partial (Fail if none exist).
+  const collectionStatus: Ga4AreaStatus['status'] = s.dataStreams.length === 0 ? 'fail' : 'partial';
+  // Custom definitions: zero configured isn't a clean pass — nothing was verified, and on a property
+  // marking key events it's under-instrumentation → Partial. null = sub-resource couldn't be read.
+  const customDefStatus: Ga4AreaStatus['status'] =
+    s.customDimensions === null
+      ? 'not_verified'
+      : dims.length === 0 && s.customMetrics.length === 0
+        ? 'partial'
+        : areaStatus(['customdef']);
   const areas: Ga4AreaStatus[] = [
-    { area: 'Data collection', status: areaOf(['collection', 'measurement'], true) },
+    { area: 'Data collection', status: collectionStatus },
     { area: 'Data retention', status: areaOf(['retention'], s.dataRetention !== null) },
     { area: 'Key events', status: areaOf(['conversions'], s.keyEvents !== null) },
-    { area: 'Custom definitions', status: areaOf(['customdef'], s.customDimensions !== null) },
+    { area: 'Custom definitions', status: customDefStatus },
     { area: 'Privacy (PII)', status: areaOf(['privacy'], s.customDimensions !== null) },
     { area: 'Integrations', status: areaOf(['integrations'], s.googleAdsLinks !== null || s.googleSignals !== null) },
     { area: 'Benchmarking', status: areaOf(['benchmarking'], true) },

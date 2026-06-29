@@ -126,6 +126,12 @@ export interface Ga4Baseline {
   priorEndDate: string;
   sessions: number;
   priorSessions: number;
+  /** Key-event (conversion) count — window and prior — so growth can be correlated with outcomes. */
+  keyEvents: number;
+  priorKeyEvents: number;
+  /** Total revenue — window and prior — for the same correlation. */
+  revenue: number;
+  priorRevenue: number;
   /** % change vs the prior period (rounded); null if the prior period had no sessions. */
   trendPct: number | null;
   /** Highest-session day in the window (GA4 "date" = YYYYMMDD); null if no data. */
@@ -1680,23 +1686,33 @@ export class GoogleDataService {
     const n = (v: string): number => Number(v) || 0;
     const pairs = (r: Ga4ReportResult): Array<{ name: string; sessions: number }> =>
       r.rows.map((x) => ({ name: x.dimensions[0] || '(not set)', sessions: n(x.metrics[0]) }));
-    const oneTotal = (r: Ga4ReportResult): number => (r.rows[0] ? n(r.rows[0].metrics[0]) : 0);
+    // Merge rows that map to the same display name (e.g. a literal "(not set)" AND an empty value
+    // both become "(not set)") so they don't appear as duplicate lines downstream.
+    const merge = (rows: Array<{ name: string; sessions: number }>): Array<{ name: string; sessions: number }> => {
+      const m = new Map<string, number>();
+      for (const r of rows) m.set(r.name, (m.get(r.name) ?? 0) + r.sessions);
+      return [...m].map(([name, sessions]) => ({ name, sessions }));
+    };
+    /** i-th metric of the single row of a no-dimension report (0=sessions, 1=keyEvents, 2=revenue). */
+    const oneMetric = (r: Ga4ReportResult, i: number): number => (r.rows[0] ? n(r.rows[0].metrics[i] ?? '0') : 0);
     const byMetricDesc = [{ metric: { metricName: 'sessions' }, desc: true }];
+    // Sessions + the outcomes that should move with real growth, current and prior, in one row each.
+    const TREND_METRICS = ['sessions', 'keyEvents', 'totalRevenue'];
 
     // Totals come from NO-dimension reports (one exact row each) — never the per-day report, which a
     // 100-row cap would truncate for windows > 100 days. Peak day = top day ordered by sessions
     // (limit 1). Country = top-N ordered (limit 250, like the data-quality source/medium pull).
     const [curTotal, priorTotal, peak, byDevice, byNvR, byCountry] = await Promise.all([
-      this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: ['sessions'] }),
-      this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: ['sessions'] }),
+      this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: TREND_METRICS }),
+      this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['date'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '1' }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['deviceCategory'], metrics: ['sessions'] }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['newVsReturning'], metrics: ['sessions'] }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['country'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '250' }),
     ]);
 
-    const sessions = oneTotal(curTotal);
-    const priorSessions = oneTotal(priorTotal);
+    const sessions = oneMetric(curTotal, 0);
+    const priorSessions = oneMetric(priorTotal, 0);
     const peakDay = peak.rows[0] ? { date: peak.rows[0].dimensions[0] ?? '', sessions: n(peak.rows[0].metrics[0]) } : null;
     return {
       startDate,
@@ -1705,11 +1721,15 @@ export class GoogleDataService {
       priorEndDate,
       sessions,
       priorSessions,
+      keyEvents: oneMetric(curTotal, 1),
+      priorKeyEvents: oneMetric(priorTotal, 1),
+      revenue: oneMetric(curTotal, 2),
+      priorRevenue: oneMetric(priorTotal, 2),
       trendPct: priorSessions > 0 ? Math.round(((sessions - priorSessions) / priorSessions) * 100) : null,
       peakDay,
-      devices: pairs(byDevice).sort((a, b) => b.sessions - a.sessions),
-      newVsReturning: pairs(byNvR),
-      topCountries: pairs(byCountry).slice(0, 5),
+      devices: merge(pairs(byDevice)).sort((a, b) => b.sessions - a.sessions),
+      newVsReturning: merge(pairs(byNvR)),
+      topCountries: merge(pairs(byCountry)).sort((a, b) => b.sessions - a.sessions).slice(0, 5),
     };
   }
 
@@ -1803,10 +1823,17 @@ export class GoogleDataService {
         sessions: Number(r.metricValues?.[0]?.value ?? 0),
       }));
     };
-    // Channel groups partition all sessions, so their sum is the true total.
     const channelGroups = await run('sessionDefaultChannelGroup', false);
     const sourceMediums = await run('sessionSourceMedium', true);
-    const totalSessions = channelGroups.reduce((s, c) => s + c.sessions, 0);
+    // Use the EXACT total from a no-dimension sessions query — the same query the baseline uses — so
+    // the two never disagree in the report. (Summing a dimensioned report can drift from the true
+    // total via GA4's metric estimation; fall back to the channel sum only if the total query is empty.)
+    const totalRes = await data.properties.runReport({
+      property,
+      requestBody: { dateRanges: [{ startDate, endDate }], metrics: [{ name: 'sessions' }], limit: '1' },
+    });
+    const totalSessions =
+      Number(totalRes.data.rows?.[0]?.metricValues?.[0]?.value ?? 0) || channelGroups.reduce((s, c) => s + c.sessions, 0);
     return { totalSessions, channelGroups, sourceMediums, windowDays, startDate, endDate };
   }
 
