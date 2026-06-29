@@ -1,3 +1,9 @@
+## [1.91.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.90.0...v1.91.0) (2026-06-29)
+
+### Features
+
+* **web-audit:** broaden CTA-intent + div-form detection (call/audit/results CTAs + anchor-button forms) ([4fddeed](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4fddeedb3b1c55ebc6a0b82e25e8476d3dd745bb))
+
 ## [1.90.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.89.0...v1.90.0) (2026-06-29)
 
 ### Features
