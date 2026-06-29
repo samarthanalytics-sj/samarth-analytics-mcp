@@ -391,8 +391,8 @@ function CodeBlock({ code }: { code: string }): JSX.Element {
   );
 }
 
-function Markdown({ text }: { text: string }): JSX.Element {
-  const lines = text.replace(/\r\n/g, '\n').split('\n');
+function Markdown({ text }: { text?: string | null }): JSX.Element {
+  const lines = (text ?? '').replace(/\r\n/g, '\n').split('\n');
   const blocks: JSX.Element[] = [];
   let i = 0;
   let key = 0;
@@ -3354,8 +3354,8 @@ function Ga4AuditPanel({
   // Config + data-quality findings merged and sorted worst-first.
   const findings = result
     ? [
-        ...result.config.findings.map((f) => ({ ...f, area: 'Config' })),
-        ...result.dataQuality.findings.map((f) => ({ ...f, area: 'Data quality' })),
+        ...(result.config.findings ?? []).map((f) => ({ ...f, area: 'Config' })),
+        ...(result.dataQuality.findings ?? []).map((f) => ({ ...f, area: 'Data quality' })),
       ].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9))
     : [];
   const hasSerious = findings.some((f) => f.severity === 'critical' || f.severity === 'high');
@@ -3367,7 +3367,9 @@ function Ga4AuditPanel({
     : dqf.some((f) => f.severity === 'medium' || f.severity === 'low')
       ? 'partial'
       : 'pass';
-  const coverage = result ? [...result.config.areas, { area: 'Data quality', status: dqStatus }] : [];
+  // `areas` is a newer field (PR #185); a stale Electron main can omit it, so default to [] rather
+  // than crash on the spread (the ErrorBoundary is a backstop, but the panel should degrade in place).
+  const coverage = result ? [...(result.config.areas ?? []), { area: 'Data quality', status: dqStatus }] : [];
 
   return (
     <div style={styles.reviewWrap}>
@@ -3532,17 +3534,27 @@ function Ga4AuditPanel({
                 </div>
 
                 {/* Full templated report (doc format) + download as PDF / Word / Markdown. */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 13, marginRight: 2 }}>Download report:</span>
-                  <button style={styles.primaryBtn} onClick={() => void downloadReport('pdf')} disabled={downloading}>⬇ PDF</button>
-                  <button style={styles.ghostBtn} onClick={() => void downloadReport('doc')} disabled={downloading}>⬇ Word (.doc)</button>
-                  <button style={styles.ghostBtn} onClick={() => void downloadReport('md')} disabled={downloading}>⬇ Markdown</button>
-                  {downloading && <span style={styles.muted}>Saving…</span>}
-                  {exportNote && <span style={styles.muted}>{exportNote}</span>}
-                </div>
-                <div style={{ ...styles.card, lineHeight: 1.5 }}>
-                  <Markdown text={result.markdown} />
-                </div>
+                {result.markdown ? (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ color: 'var(--text-muted)', fontSize: 13, marginRight: 2 }}>Download report:</span>
+                      <button style={styles.primaryBtn} onClick={() => void downloadReport('pdf')} disabled={downloading}>⬇ PDF</button>
+                      <button style={styles.ghostBtn} onClick={() => void downloadReport('doc')} disabled={downloading}>⬇ Word (.doc)</button>
+                      <button style={styles.ghostBtn} onClick={() => void downloadReport('md')} disabled={downloading}>⬇ Markdown</button>
+                      {downloading && <span style={styles.muted}>Saving…</span>}
+                      {exportNote && <span style={styles.muted}>{exportNote}</span>}
+                    </div>
+                    <div style={{ ...styles.card, lineHeight: 1.5 }}>
+                      <Markdown text={result.markdown} />
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ ...styles.card, ...styles.muted, lineHeight: 1.5 }}>
+                    The full report document isn’t available from this audit run. Fully close the app and
+                    restart <code>npm run dev</code> (the Electron main process doesn’t hot-reload after a
+                    pull), then run the audit again to get the downloadable report.
+                  </div>
+                )}
               </>
             )}
           </>
