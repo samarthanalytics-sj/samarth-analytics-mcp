@@ -54,19 +54,29 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     const attribution = await data.getGa4AttributionSettings(p).catch(() => null);
     const audienceCount = await data.listGa4Audiences(p).then((a) => a.length).catch(() => null);
     // Growth/anomaly: correlate the session change with the outcomes that should move with real
-    // growth (key events, revenue). Only when we have a baseline; the largest channel names the driver.
+    // growth (key events, revenue). Only when we have a baseline; the largest channel names the driver,
+    // returning-user share weighs bot-vs-real, and the no-source share links the spike to attribution loss.
     const topChannel = [...dqCounts.channelGroups].sort((x, y) => y.sessions - x.sessions)[0]?.name ?? null;
-    const growth = baseline
-      ? auditGa4Growth({
-          sessions: baseline.sessions,
-          priorSessions: baseline.priorSessions,
-          keyEvents: baseline.keyEvents,
-          priorKeyEvents: baseline.priorKeyEvents,
-          revenue: baseline.revenue,
-          priorRevenue: baseline.priorRevenue,
-          topChannel,
-        })
-      : null;
+    let growth = null;
+    if (baseline) {
+      const nvrTotal = baseline.newVsReturning.reduce((a, r) => a + r.sessions, 0);
+      const returning = baseline.newVsReturning.find((r) => /return/i.test(r.name))?.sessions ?? 0;
+      const dqTotal = dqCounts.totalSessions || 0;
+      const unassigned = dqCounts.channelGroups.filter((c) => /unassigned/i.test(c.name)).reduce((a, c) => a + c.sessions, 0);
+      const notSet = dqCounts.sourceMediums.filter((c) => /\(not set\)/i.test(c.name)).reduce((a, c) => a + c.sessions, 0);
+      growth = auditGa4Growth({
+        sessions: baseline.sessions,
+        priorSessions: baseline.priorSessions,
+        keyEvents: baseline.keyEvents,
+        priorKeyEvents: baseline.priorKeyEvents,
+        revenue: baseline.revenue,
+        priorRevenue: baseline.priorRevenue,
+        topChannel,
+        returningSharePct: nvrTotal > 0 ? (returning / nvrTotal) * 100 : null,
+        // Clamp: numerator (dimensioned) and denominator (no-dimension total) are separate GA4 queries.
+        noSourceSharePct: dqTotal > 0 ? Math.min(100, (Math.max(unassigned, notSet) / dqTotal) * 100) : null,
+      });
+    }
     const markdown = buildGa4AuditReport({
       property: p,
       displayName: snap.displayName,
