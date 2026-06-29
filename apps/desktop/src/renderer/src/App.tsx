@@ -1192,6 +1192,9 @@ interface TagEdit {
   tagName?: string;
   eventName?: string;
   measurementId?: string;
+  /** Override the trigger's PRIMARY condition value (the table's editable "Value" cell) — e.g. the
+   *  Click Text a CTA fires on, the Click URL extension, or the Form ID. */
+  triggerValue?: string;
 }
 
 const CONF_BADGE: Record<'high' | 'medium' | 'low', React.CSSProperties> = {
@@ -1238,33 +1241,115 @@ const tplStyles: Record<string, React.CSSProperties> = {
   th: { textAlign: 'left', padding: '8px 10px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' },
   td: { padding: '6px 10px', borderBottom: '1px solid var(--border)', verticalAlign: 'top' },
   tdTag: { padding: '6px 10px', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--c-blue-bg)', verticalAlign: 'top', background: 'var(--surface-2)' },
+  selTh: { width: 56, textAlign: 'center', padding: '8px 8px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)' },
+  selTd: { padding: '6px 8px', textAlign: 'center', verticalAlign: 'top', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', whiteSpace: 'nowrap' },
+  cellInput: { width: '100%', boxSizing: 'border-box', background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 6px', fontSize: 12, fontFamily: 'inherit' },
 };
-function SuggestionTemplateTable({ suggestions }: { suggestions: SuggestedTagView[] }): JSX.Element {
+// The template table is interactive (parity with the Cards view): a leading checkbox selects a tag
+// to create in GTM, and the Tag name / GA4 event / trigger-Value cells are inline-editable (writing
+// into the same `edits`/`selected` state the Cards view + the create flow use). Rows already in the
+// container (or just created) lock — no checkbox, no edit — so a tag can't be re-created.
+function SuggestionTemplateTable({
+  suggestions,
+  selected,
+  statuses,
+  creating,
+  alreadyExists,
+  onToggle,
+  onEdit,
+}: {
+  suggestions: SuggestedTagView[];
+  selected: Record<string, boolean>;
+  statuses: Record<string, RowStatus>;
+  creating: boolean;
+  alreadyExists: (s: SuggestedTagView) => boolean;
+  onToggle: (id: string, v: boolean) => void;
+  onEdit: (id: string, patch: TagEdit) => void;
+}): JSX.Element {
   return (
     <div style={tplStyles.wrap}>
       <table style={tplStyles.table}>
         <thead>
-          <tr>{TEMPLATE_HEADERS.map((h) => <th key={h} style={tplStyles.th}>{h}</th>)}</tr>
+          <tr>
+            <th style={tplStyles.selTh} title="Tick to create this tag in GTM">✓</th>
+            {TEMPLATE_HEADERS.map((h) => <th key={h} style={tplStyles.th}>{h}</th>)}
+          </tr>
         </thead>
         <tbody>
           {suggestions.flatMap((s) => {
             const g = suggestionToGroup(s);
+            const exists = alreadyExists(s);
+            const st = statuses[s.id];
+            const created = st?.state === 'ok';
+            // Inputs stay editable unless the tag was just created (or a create is running) — NOT gated
+            // on `exists`, so typing a name that happens to match a container tag doesn't yank the input
+            // out from under the cursor mid-keystroke. Renaming an "exists" row to a unique name re-shows
+            // its checkbox. Selection itself still respects `exists` (shows "✓ exists", no checkbox).
+            const editable = !created;
             return Array.from({ length: g.rowCount }, (_, i) => {
               const first = i === 0;
               const p = g.params[i];
               const w = g.whens[i];
               return (
                 <tr key={s.id + ':' + i}>
+                  {first && (
+                    <td rowSpan={g.rowCount} style={tplStyles.selTd}>
+                      {exists ? (
+                        <span style={styles.existsChip} title="A tag with this name already exists in the container">✓ exists</span>
+                      ) : created ? (
+                        <span style={{ color: 'var(--c-green)', fontSize: 11 }} title={st?.msg}>✓ created</span>
+                      ) : (
+                        <>
+                          <input
+                            type="checkbox"
+                            style={{ accentColor: 'var(--c-blue)', cursor: 'pointer' }}
+                            checked={!!selected[s.id]}
+                            disabled={creating || st?.state === 'creating'}
+                            onChange={(e) => onToggle(s.id, e.target.checked)}
+                            aria-label={`Select ${g.tagName} to create in GTM`}
+                          />
+                          {st?.state === 'creating' && <div style={{ color: 'var(--text-muted)', fontSize: 10, marginTop: 2 }}>…</div>}
+                          {st?.state === 'err' && <div style={{ color: 'var(--c-red)', fontSize: 10, marginTop: 2 }} title={st?.msg}>✗ failed</div>}
+                        </>
+                      )}
+                    </td>
+                  )}
                   {first && <td rowSpan={g.rowCount} style={tplStyles.tdTag}>{g.tagType}</td>}
-                  {first && <td rowSpan={g.rowCount} style={{ ...tplStyles.td, color: 'var(--text)', fontWeight: 600 }}>{g.tagName}</td>}
-                  {first && <td rowSpan={g.rowCount} style={tplStyles.td}><code style={mdStyles.code}>{g.eventName}</code></td>}
+                  {first && (
+                    <td rowSpan={g.rowCount} style={{ ...tplStyles.td, color: 'var(--text)', fontWeight: 600 }}>
+                      {editable ? (
+                        <input style={tplStyles.cellInput} value={g.tagName} disabled={creating} onChange={(e) => onEdit(s.id, { tagName: e.target.value })} aria-label="Tag name" />
+                      ) : g.tagName}
+                    </td>
+                  )}
+                  {first && (
+                    <td rowSpan={g.rowCount} style={tplStyles.td}>
+                      {s.platform === 'ga4_event' && editable ? (
+                        <input style={tplStyles.cellInput} value={g.eventName} disabled={creating} onChange={(e) => onEdit(s.id, { eventName: e.target.value })} aria-label="GA4 event name" />
+                      ) : g.eventName ? (
+                        <code style={mdStyles.code}>{g.eventName}</code>
+                      ) : (
+                        <span style={{ color: 'var(--text-faint)' }}>—</span>
+                      )}
+                    </td>
+                  )}
                   <td style={tplStyles.td}>{p?.name ?? ''}</td>
                   <td style={tplStyles.td}>{p ? <code style={mdStyles.code}>{p.variable}</code> : ''}</td>
                   {first && <td rowSpan={g.rowCount} style={tplStyles.td}>{g.triggerName}</td>}
                   {first && <td rowSpan={g.rowCount} style={tplStyles.td}>{g.triggerType}</td>}
                   <td style={tplStyles.td}>{w ? <code style={mdStyles.code}>{w.variable}</code> : ''}</td>
                   <td style={tplStyles.td}>{w?.condition ?? ''}</td>
-                  <td style={tplStyles.td}>{w?.value ?? ''}</td>
+                  <td style={tplStyles.td}>
+                    {w ? (
+                      i === 0 && editable ? (
+                        <input style={tplStyles.cellInput} value={w.value} disabled={creating} onChange={(e) => onEdit(s.id, { triggerValue: e.target.value })} aria-label="Trigger condition value" />
+                      ) : (
+                        w.value
+                      )
+                    ) : (
+                      ''
+                    )}
+                  </td>
                 </tr>
               );
             });
@@ -1846,12 +1931,26 @@ function TagReviewPanel({
   function effective(s: SuggestedTagView): SuggestedTagView {
     const e = edits[s.id];
     if (!e) return s;
-    return {
+    const next: SuggestedTagView = {
       ...s,
       tagName: e.tagName ?? s.tagName,
       eventName: e.eventName ?? s.eventName,
       measurementId: e.measurementId ?? s.measurementId,
     };
+    if (e.triggerValue !== undefined && e.triggerValue.trim() !== '') {
+      // Write the edited "Value" cell back to the trigger's primary condition — same priority order
+      // as triggerWhens (Click URL → Click Text → Form ID → Form Classes), so the edited cell maps
+      // to the field it was rendered from. The create flow sends this effective trigger. An EMPTY
+      // edit is ignored (falls back to the original value) — a blank condition would drop the filter
+      // and make the trigger fire on EVERYTHING, and would also remove the cell's own input.
+      const t = { ...s.trigger };
+      if (t.clickUrlValue) t.clickUrlValue = e.triggerValue;
+      else if (t.clickTextValue) t.clickTextValue = e.triggerValue;
+      else if (t.formIdValue) t.formIdValue = e.triggerValue;
+      else if (t.formClassesValue) t.formClassesValue = e.triggerValue;
+      next.trigger = t;
+    }
+    return next;
   }
 
   // A suggestion already exists in the container if a tag of its (effective) name is
@@ -2281,19 +2380,16 @@ function TagReviewPanel({
                 selected
               </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                {tagView === 'cards' && (
-                  <>
-                    <button style={styles.linkBtn} onClick={() => setAll(() => true)}>
-                      Select all
-                    </button>
-                    <button style={styles.linkBtn} onClick={() => setAll(() => false)}>
-                      Select none
-                    </button>
-                    <button style={styles.linkBtn} onClick={() => setAll((s) => !s.enhancedMeasurementOverlap)}>
-                      Select new only
-                    </button>
-                  </>
-                )}
+                {/* Selection controls apply to both Cards and Table views (shared `selected` state). */}
+                <button style={styles.linkBtn} onClick={() => setAll(() => true)}>
+                  Select all
+                </button>
+                <button style={styles.linkBtn} onClick={() => setAll(() => false)}>
+                  Select none
+                </button>
+                <button style={styles.linkBtn} onClick={() => setAll((s) => !s.enhancedMeasurementOverlap)}>
+                  Select new only
+                </button>
                 {/* Cards = review & create; Table = the GTM-structure template layout. */}
                 <span style={styles.viewToggle}>
                   <button
@@ -2317,7 +2413,20 @@ function TagReviewPanel({
             {exportNote && <div style={{ ...styles.muted, marginTop: -4 }}>{exportNote}</div>}
 
             {tagView === 'table' ? (
-              <SuggestionTemplateTable suggestions={suggestions.map(effective)} />
+              <>
+                <div style={{ ...styles.muted, marginTop: -4 }}>
+                  Tick a row to create it in GTM; edit the Tag name, GA4 event, or trigger value inline.
+                </div>
+                <SuggestionTemplateTable
+                  suggestions={suggestions.map(effective)}
+                  selected={selected}
+                  statuses={statuses}
+                  creating={creating}
+                  alreadyExists={alreadyExists}
+                  onToggle={(id, v) => setSelected((sel) => ({ ...sel, [id]: v }))}
+                  onEdit={(id, patch) => setEdits((m) => ({ ...m, [id]: { ...m[id], ...patch } }))}
+                />
+              </>
             ) : (
             <div style={styles.reviewList}>
               {suggestions.map((s) => {
