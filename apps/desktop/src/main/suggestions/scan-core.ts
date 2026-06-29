@@ -240,6 +240,12 @@ export function assembleResult(
     byConfidence[sug.confidence] += 1;
     if (sug.enhancedMeasurementOverlap) em += 1;
   }
+  // Diagnostic: what the scan actually DETECTED (so a "missing form/CTA" report can be localized —
+  // 0 forms here means the extractor never saw it, not that a later step dropped it).
+  console.error(
+    `[tag-scan] ${siteHost}: ${pageScans.length} page(s) · forms=${input.forms.length} [${input.forms.map((f) => f.purpose).join(',')}] · ` +
+      `elements=${input.elements.length} [${[...new Set(input.elements.map((e) => e.kind))].join(',')}] · suggestions=${suggestions.length}`,
+  );
   return {
     site,
     siteHost,

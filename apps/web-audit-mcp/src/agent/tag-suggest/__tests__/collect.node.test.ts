@@ -84,6 +84,14 @@ check('cta intent: "Get a free quote"/"Request your quote" → request_quote', c
 check('cta intent: "Get a free demo"/"Book a demo"/"Request a demo" → book_demo', classifyCtaIntent('Get a free demo') === 'book_demo' && classifyCtaIntent('Book a demo') === 'book_demo' && classifyCtaIntent('Request a demo') === 'book_demo');
 // "view" dropped from book_demo: "View demo reel/gallery/video" is product content, not a booking.
 check('cta intent: "View demo reel"/"View demo gallery" are NOT book_demo (product content)', classifyCtaIntent('View demo reel') === null && classifyCtaIntent('View the product demo video') === null);
+// book a CALL (not just a demo): "Schedule Strategy Call" / "Book a Call" / "Schedule a Free Call".
+check('cta intent: schedule/book a CALL → book_demo', ['Schedule Strategy Call', 'Book a Call', 'Schedule a Free Call', 'Schedule a Meeting', 'Request a Callback', 'Book a Consultation'].every((t) => classifyCtaIntent(t) === 'book_demo'));
+check('cta intent: "Get the meeting notes" is NOT a call CTA (verb-restricted)', classifyCtaIntent('Get the meeting notes') === null);
+// the "free audit" family — the conversion CTA on tag-audit / consulting sites.
+check('cta intent: "Get Free Audit"/"Start a free audit"/"Free audit" → get_started', ['Get Free Audit', 'Start a free audit', 'Run a free audit', 'Free audit', 'Get your free audit'].every((t) => classifyCtaIntent(t) === 'get_started'));
+// NARROW proof CTA — requires client/customer/our so the excluded noise stays out.
+check('cta intent: "View Client Results"/"View our work"/"Client results" → learn_more', ['View Client Results', 'View our work', 'Client results', 'Customer results'].every((t) => classifyCtaIntent(t) === 'learn_more'));
+check('cta intent: generic "View results"/"View all"/"Case studies" still NOT tracked (noise)', ['View results', 'View all', 'Case studies', 'See results'].every((t) => classifyCtaIntent(t) === null));
 
 // ── social-link classification ───────────────────────────────────────────────
 check('social: facebook link → social', classifyElement(a('https://facebook.com/acme', { text: 'Facebook' }), 'acme.com')?.kind === 'social');
