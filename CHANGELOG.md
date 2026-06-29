@@ -1,3 +1,9 @@
+## [1.95.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.94.0...v1.95.0) (2026-06-29)
+
+### Features
+
+* **desktop:** GA4 Audit panel — pick a property, choose a window, run a read-only audit ([28ef347](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/28ef3477fef9ae29cd06c970edf7b60506ce7780))
+
 ## [1.94.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.93.1...v1.94.0) (2026-06-29)
 
 ### Features
