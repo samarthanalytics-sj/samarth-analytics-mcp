@@ -310,14 +310,14 @@ function summarizeProposal(tool: string, details: Record<string, unknown>): Arra
 const mdStyles: Record<string, React.CSSProperties> = {
   tableWrap: { overflowX: 'auto', margin: '8px 0' },
   table: { borderCollapse: 'collapse', width: '100%', fontSize: 13 },
-  th: { border: '1px solid rgba(255,255,255,0.18)', padding: '6px 10px', textAlign: 'left', verticalAlign: 'top', background: 'rgba(255,255,255,0.06)', fontWeight: 600 },
-  td: { border: '1px solid rgba(255,255,255,0.18)', padding: '6px 10px', textAlign: 'left', verticalAlign: 'top' },
-  code: { background: 'rgba(255,255,255,0.10)', borderRadius: 4, padding: '1px 5px', fontFamily: 'ui-monospace, monospace', fontSize: 12 },
-  pre: { background: 'rgba(0,0,0,0.30)', borderRadius: 6, padding: 10, paddingTop: 28, overflowX: 'auto', margin: 0, fontFamily: 'ui-monospace, monospace', fontSize: 12 },
+  th: { border: '1px solid var(--border)', padding: '6px 10px', textAlign: 'left', verticalAlign: 'top', background: 'var(--surface-3)', fontWeight: 600 },
+  td: { border: '1px solid var(--border)', padding: '6px 10px', textAlign: 'left', verticalAlign: 'top' },
+  code: { background: 'var(--surface-3)', borderRadius: 4, padding: '1px 5px', fontFamily: 'ui-monospace, monospace', fontSize: 12 },
+  pre: { background: 'var(--surface-alt)', borderRadius: 6, padding: 10, paddingTop: 28, overflowX: 'auto', margin: 0, fontFamily: 'ui-monospace, monospace', fontSize: 12 },
   codeWrap: { position: 'relative', margin: '8px 0' },
   copyBtn: {
     position: 'absolute', top: 6, right: 6, zIndex: 1, padding: '2px 9px', fontSize: 11,
-    background: 'rgba(255,255,255,0.10)', color: 'var(--text-dim)', border: '1px solid rgba(255,255,255,0.18)',
+    background: 'var(--surface-3)', color: 'var(--text-dim)', border: '1px solid var(--border)',
     borderRadius: 6, cursor: 'pointer',
   },
   h: { margin: '10px 0 4px', fontWeight: 600, lineHeight: 1.3 },
@@ -552,7 +552,7 @@ function ConfirmCard({
         <div style={styles.editRow}>
           <span style={styles.proposalLabel}>Type “{needType}” to confirm</span>
           <input
-            style={{ ...styles.editInput, borderColor: typeOk ? '#7f1d1d' : 'var(--border-2)' }}
+            style={{ ...styles.editInput, borderColor: typeOk ? 'var(--c-red-border)' : 'var(--border-2)' }}
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             placeholder={needType}
@@ -673,7 +673,7 @@ export function App(): JSX.Element {
               onClick={() => run(() => window.desktop.accounts.setActive(a.id))}
               title={a.email}
             >
-              <span style={{ ...styles.dot, background: a.hasGoogleToken ? '#34d399' : 'var(--text-faint)' }} />
+              <span style={{ ...styles.dot, background: a.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
               <span style={styles.acctEmail}>{a.displayName || a.email}</span>
             </button>
           ))}
@@ -1195,9 +1195,9 @@ interface TagEdit {
 }
 
 const CONF_BADGE: Record<'high' | 'medium' | 'low', React.CSSProperties> = {
-  high: { background: '#064e3b', color: '#6ee7b7', border: '1px solid #065f46' },
-  medium: { background: '#3a2c0a', color: '#fcd34d', border: '1px solid #92651a' },
-  low: { background: '#1b2433', color: 'var(--text-muted)', border: '1px solid var(--border-2)' },
+  high: { background: 'var(--c-green-bg)', color: 'var(--c-green)', border: '1px solid var(--c-green-border)' },
+  medium: { background: 'var(--c-amber-bg)', color: 'var(--c-amber)', border: '1px solid var(--c-amber-border)' },
+  low: { background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border-2)' },
 };
 
 const TRIGGER_TYPE_LABEL: Record<string, string> = {
@@ -1233,9 +1233,9 @@ function triggerCondition(s: SuggestedTagView): string {
 const tplStyles: Record<string, React.CSSProperties> = {
   wrap: { overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 12 },
   table: { borderCollapse: 'collapse', width: '100%', fontSize: 12, color: 'var(--text-dim)' },
-  th: { textAlign: 'left', padding: '8px 10px', background: '#0f1623', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' },
-  td: { padding: '6px 10px', borderBottom: '1px solid #16202e', verticalAlign: 'top' },
-  tdTag: { padding: '6px 10px', borderBottom: '1px solid var(--border)', borderLeft: '2px solid #1e3a5f', verticalAlign: 'top', background: '#101a28' },
+  th: { textAlign: 'left', padding: '8px 10px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' },
+  td: { padding: '6px 10px', borderBottom: '1px solid var(--border)', verticalAlign: 'top' },
+  tdTag: { padding: '6px 10px', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--c-blue-bg)', verticalAlign: 'top', background: 'var(--surface-2)' },
 };
 function SuggestionTemplateTable({ suggestions }: { suggestions: SuggestedTagView[] }): JSX.Element {
   return (
@@ -2099,7 +2099,7 @@ function TagReviewPanel({
               <button style={styles.primaryBtn} onClick={doScanSelected} disabled={selectedPageCount === 0 || scanning}>
                 {scanning ? 'Scanning…' : `Scan selected (${selectedPageCount})`}
               </button>
-              {selectedPageCount > 60 && <span style={{ color: '#fcd9a5', fontSize: 13 }}>Up to 60 pages are scanned per run.</span>}
+              {selectedPageCount > 60 && <span style={{ color: 'var(--c-amber)', fontSize: 13 }}>Up to 60 pages are scanned per run.</span>}
             </div>
           </div>
         )}
@@ -2113,7 +2113,7 @@ function TagReviewPanel({
               &nbsp;·&nbsp; {active?.email}
             </div>
           ) : (
-            <div style={{ color: '#fcd9a5', fontSize: 13 }}>
+            <div style={{ color: 'var(--c-amber)', fontSize: 13 }}>
               Pick a GTM account, container and draft workspace in <b>Chat</b> (the bar above the messages) first, then
               return here.
             </div>
@@ -2126,7 +2126,7 @@ function TagReviewPanel({
 
         {/* Warnings (scan or paste) */}
         {warnings.map((w, i) => (
-          <div key={i} style={{ ...styles.muted, color: '#fcd9a5' }}>
+          <div key={i} style={{ ...styles.muted, color: 'var(--c-amber)' }}>
             ⚠ {w}
           </div>
         ))}
@@ -2379,7 +2379,7 @@ function TagReviewPanel({
                       </div>
                       <div style={styles.reviewEvidence}>{s.evidence}</div>
                       {s.note && (
-                        <div style={{ fontSize: 12, marginTop: 4, color: '#fcd9a5', display: 'flex', gap: 6 }}>
+                        <div style={{ fontSize: 12, marginTop: 4, color: 'var(--c-amber)', display: 'flex', gap: 6 }}>
                           <span>⚠</span>
                           <span>{s.note}</span>
                         </div>
@@ -2389,7 +2389,7 @@ function TagReviewPanel({
                           style={{
                             fontSize: 12,
                             marginTop: 4,
-                            color: st.state === 'ok' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : st.state === 'exists' ? '#7dd3fc' : 'var(--text-muted)',
+                            color: st.state === 'ok' ? 'var(--c-green)' : st.state === 'err' ? 'var(--c-red)' : st.state === 'exists' ? 'var(--c-cyan)' : 'var(--text-muted)',
                           }}
                         >
                           {st.state === 'creating' ? 'Creating…' : st.state === 'ok' ? `✓ ${st.msg}` : `✗ ${st.msg}`}
@@ -2431,7 +2431,7 @@ function TagReviewPanel({
             {confirming ? (
               <div style={styles.confirm}>
                 <div style={styles.confirmHead}>Create {selectedIds.length} draft tag(s)?</div>
-                <div style={{ ...styles.muted, margin: '6px 0', color: '#fcd9a5' }}>
+                <div style={{ ...styles.muted, margin: '6px 0', color: 'var(--c-amber)' }}>
                   Into {ctx?.containerName} › {ctx?.workspaceName}. Applies to a DRAFT workspace only — not published. You
                   publish in GTM yourself.
                   {selectedHasEmOverlap && ' Some selected tags duplicate GA4 Enhanced Measurement auto-tracking.'}
@@ -2455,9 +2455,9 @@ function TagReviewPanel({
                 >
                   Approve &amp; create selected ({selectedIds.length})
                 </button>
-                {!targetReady && <span style={{ color: '#fcd9a5', fontSize: 13 }}>Pick a draft workspace first.</span>}
+                {!targetReady && <span style={{ color: 'var(--c-amber)', fontSize: 13 }}>Pick a draft workspace first.</span>}
                 {done && (
-                  <span style={{ color: done.failed ? '#fcd9a5' : '#6ee7b7', fontSize: 13 }}>
+                  <span style={{ color: done.failed ? 'var(--c-amber)' : 'var(--c-green)', fontSize: 13 }}>
                     {done.created} created{done.failed ? `, ${done.failed} failed` : ''} — open GTM to review &amp;
                     publish.
                   </span>
@@ -2510,10 +2510,10 @@ function auditFilterLabel(v: string): string {
 }
 
 const SEV_BADGE: Record<string, React.CSSProperties> = {
-  high: { background: '#3a1416', color: '#fca5a5', border: '1px solid #7f1d1d' },
-  medium: { background: '#3a2c0a', color: '#fcd34d', border: '1px solid #92651a' },
-  low: { background: '#1b2433', color: 'var(--text-muted)', border: '1px solid var(--border-2)' },
-  info: { background: '#10233f', color: '#93c5fd', border: '1px solid #1e3a5f' },
+  high: { background: 'var(--c-red-bg)', color: 'var(--c-red)', border: '1px solid var(--c-red-border)' },
+  medium: { background: 'var(--c-amber-bg)', color: 'var(--c-amber)', border: '1px solid var(--c-amber-border)' },
+  low: { background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border-2)' },
+  info: { background: 'var(--c-blue-bg)', color: 'var(--c-blue)', border: '1px solid var(--c-blue-bg)' },
 };
 const SEV_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2, info: 3 };
 
@@ -2709,12 +2709,12 @@ function ContainerAuditPanel({
                 {ctx.accountName} › {ctx.containerName} › {ctx.workspaceName ?? 'workspace?'}
               </b>
             ) : (
-              <b style={{ color: '#fcd9a5' }}>none</b>
+              <b style={{ color: 'var(--c-amber)' }}>none</b>
             )}
             {active?.email ? ` · ${active.email}` : ''}
           </div>
           {!ready && (
-            <div style={{ color: '#fcd9a5', fontSize: 13, marginTop: 4 }}>
+            <div style={{ color: 'var(--c-amber)', fontSize: 13, marginTop: 4 }}>
               {!active?.hasGoogleToken
                 ? 'Sign this account into Google first.'
                 : 'Pick a GTM account, container and draft workspace in the Chat tab (the GTM bar), then return here.'}
@@ -2731,7 +2731,7 @@ function ContainerAuditPanel({
           <div style={styles.card}>
             <div style={styles.muted}>
               {report.counts.tags} tag(s) · {report.counts.triggers} trigger(s) · {report.counts.variables} variable(s) ·{' '}
-              <b style={{ color: report.summary.critical ? '#fca5a5' : report.counts.findings ? '#fcd34d' : '#6ee7b7' }}>
+              <b style={{ color: report.summary.critical ? 'var(--c-red)' : report.counts.findings ? 'var(--c-amber)' : 'var(--c-green)' }}>
                 {report.counts.findings} issue(s)
               </b>{' '}
               ({report.summary.critical} critical · {report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low ·{' '}
@@ -2878,13 +2878,13 @@ function ContainerAuditPanel({
                         {f.resource ? `(${f.resource.kind})` : f.category}
                       </span>
                       {f.category === 'paused' && (
-                        <span style={{ fontWeight: 700, color: '#fbbf24', fontSize: 14, marginLeft: 6 }}>(Paused)</span>
+                        <span style={{ fontWeight: 700, color: 'var(--c-amber)', fontSize: 14, marginLeft: 6 }}>(Paused)</span>
                       )}
                     </div>
                     <div style={{ ...styles.reviewMetaLine, color: 'var(--text-dim)' }}>{f.message}</div>
-                    <div style={{ ...styles.reviewEvidence, fontSize: 13, color: 'var(--text-dim)', fontStyle: 'normal', lineHeight: 1.55, background: 'rgba(255, 255, 255, 0.05)', padding: '6px 9px', borderRadius: 6, marginTop: 6 }}>{f.recommendation}</div>
+                    <div style={{ ...styles.reviewEvidence, fontSize: 13, color: 'var(--text-dim)', fontStyle: 'normal', lineHeight: 1.55, background: 'var(--surface-2)', padding: '6px 9px', borderRadius: 6, marginTop: 6 }}>{f.recommendation}</div>
                     {st && st.state !== 'idle' && st.state !== 'confirm' && (
-                      <div style={{ fontSize: 12, marginTop: 4, color: st.state === 'done' ? '#6ee7b7' : st.state === 'err' ? '#fca5a5' : 'var(--text-muted)' }}>
+                      <div style={{ fontSize: 12, marginTop: 4, color: st.state === 'done' ? 'var(--c-green)' : st.state === 'err' ? 'var(--c-red)' : 'var(--text-muted)' }}>
                         {st.state === 'fixing' ? 'Applying…' : st.state === 'done' ? '✓ applied — re-run to confirm' : `✗ ${st.msg}`}
                       </div>
                     )}
@@ -3026,7 +3026,7 @@ function SettingsView({
       <section style={styles.card}>
         <h2 style={styles.h2}>Diagnostics</h2>
         {selfTest && (
-          <div style={{ color: selfTest.ok ? '#34d399' : '#fca5a5', marginBottom: 8 }}>
+          <div style={{ color: selfTest.ok ? 'var(--c-green)' : 'var(--c-red)', marginBottom: 8 }}>
             Secret store (DPAPI): {selfTest.ok ? '✓ working' : `✗ ${selfTest.detail}`}
           </div>
         )}
@@ -3087,7 +3087,7 @@ function LlmEditor({
       </div>
       <div style={styles.muted}>
         API key: {account.llm?.hasApiKey ? `✓ using the app-level ${account.llm.provider} key` : '✗ not set — add it under Providers below'}
-        {saved && <span style={{ color: '#34d399' }}> · {saved}</span>}
+        {saved && <span style={{ color: 'var(--c-green)' }}> · {saved}</span>}
       </div>
     </div>
   );
@@ -3186,40 +3186,40 @@ const styles: Record<string, React.CSSProperties> = {
   accountList: { display: 'flex', flexDirection: 'column', gap: 4, overflowY: 'auto', flex: 1 },
   sideMuted: { color: 'var(--text-faint)', fontSize: 13, padding: '6px 4px' },
   acctBtn: { display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: '1px solid transparent', borderRadius: 8, padding: '8px 10px', color: 'var(--text-dim)', cursor: 'pointer', textAlign: 'left', fontSize: 13 },
-  acctBtnActive: { background: 'var(--surface-3)', border: '1px solid var(--border-2)', color: '#fff' },
+  acctBtnActive: { background: 'var(--surface-3)', border: '1px solid var(--border-2)', color: 'var(--text)' },
   acctEmail: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   connectBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer', marginTop: 8 },
   connectRow: { display: 'flex', gap: 6, marginTop: 8, alignItems: 'stretch' },
   cancelBtn: { background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer' },
-  sideWarn: { color: '#fcd9a5', fontSize: 11, marginTop: 8 },
+  sideWarn: { color: 'var(--c-amber)', fontSize: 11, marginTop: 8 },
   sideNav: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 },
   navItem: { background: 'transparent', border: 'none', borderRadius: 8, padding: '8px 10px', color: 'var(--text-dim)', cursor: 'pointer', textAlign: 'left', fontSize: 14 },
-  navActive: { background: 'var(--surface-3)', color: '#fff' },
+  navActive: { background: 'var(--surface-3)', color: 'var(--text)' },
   sideVersion: { color: 'var(--text-faint)', fontSize: 11, marginTop: 10 },
 
   main: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 },
   gtmWorkspace: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   subTabs: { display: 'flex', gap: 8, padding: '10px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 },
-  subTabOn: { background: '#1e3a5f', color: 'var(--text)', border: '1px solid #1e3a5f', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
-  subTabOff: { background: 'transparent', color: '#93c5fd', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13 },
-  betaBadge: { marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: '#fcd34d', background: '#3a2c0a', border: '1px solid #92651a', borderRadius: 6, padding: '1px 5px', verticalAlign: 'middle' },
+  subTabOn: { background: 'var(--c-blue-bg)', color: 'var(--text)', border: '1px solid var(--c-blue-bg)', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
+  subTabOff: { background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13 },
+  betaBadge: { marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: 'var(--c-amber)', background: 'var(--c-amber-bg)', border: '1px solid var(--c-amber-border)', borderRadius: 6, padding: '1px 5px', verticalAlign: 'middle' },
 
   promptsWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   promptsHead: { padding: '14px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 },
   promptSearch: { width: '100%', boxSizing: 'border-box', marginTop: 10, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit' },
   promptFilters: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 },
-  promptChip: { background: 'transparent', color: '#93c5fd', border: '1px solid var(--border-2)', borderRadius: 999, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
-  promptChipOn: { background: '#1e3a5f', color: 'var(--text)', border: '1px solid #1e3a5f', borderRadius: 999, padding: '4px 10px', fontSize: 12, cursor: 'pointer', fontWeight: 600 },
+  promptChip: { background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--border-2)', borderRadius: 999, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
+  promptChipOn: { background: 'var(--c-blue-bg)', color: 'var(--text)', border: '1px solid var(--c-blue-bg)', borderRadius: 999, padding: '4px 10px', fontSize: 12, cursor: 'pointer', fontWeight: 600 },
   promptsBody: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 18 },
-  promptGroupTitle: { fontSize: 12, fontWeight: 700, color: '#93c5fd', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
+  promptGroupTitle: { fontSize: 12, fontWeight: 700, color: 'var(--c-blue)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   promptList: { display: 'flex', flexDirection: 'column', gap: 8 },
   promptCard: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' },
   promptText: { fontSize: 13, color: 'var(--text)', lineHeight: 1.45 },
   promptActions: { display: 'flex', gap: 6, flexShrink: 0 },
   promptUse: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' },
-  promptCopy: { background: 'transparent', color: '#93c5fd', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer' },
-  errorBar: { background: '#1f1416', borderBottom: '1px solid #7f1d1d', color: '#fca5a5', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 },
-  errorClose: { background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer' },
+  promptCopy: { background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer' },
+  errorBar: { background: 'var(--c-red-bg)', borderBottom: '1px solid var(--c-red-border)', color: 'var(--c-red)', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 },
+  errorClose: { background: 'transparent', border: 'none', color: 'var(--c-red)', cursor: 'pointer' },
 
   chatWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   chatHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border)' },
@@ -3235,9 +3235,9 @@ const styles: Record<string, React.CSSProperties> = {
   empty: { color: 'var(--text-faint)', textAlign: 'center', maxWidth: 420, margin: '60px auto', lineHeight: 1.6, flexShrink: 0 },
   userMsg: { alignSelf: 'flex-end', background: '#2563eb', color: '#fff', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14 },
   asstMsg: { alignSelf: 'flex-start', background: 'var(--surface-2)', color: 'var(--text)', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14, border: '1px solid var(--border)' },
-  toolTrace: { color: '#93c5fd', fontSize: 11, marginBottom: 4 },
+  toolTrace: { color: 'var(--c-blue)', fontSize: 11, marginBottom: 4 },
   toolErrors: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 },
-  toolErrorLine: { background: '#2a1416', border: '1px solid #7f1d1d', color: '#fca5a5', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
+  toolErrorLine: { background: 'var(--c-red-bg)', border: '1px solid var(--c-red-border)', color: 'var(--c-red)', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
   composer: { display: 'flex', gap: 8, padding: 16, borderTop: '1px solid var(--border)', alignItems: 'flex-end' },
   composerInput: {
     flex: 1,
@@ -3258,10 +3258,10 @@ const styles: Record<string, React.CSSProperties> = {
   stopBtn: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
   revertBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', margin: '0 0 8px', background: 'var(--border)', border: '1px solid var(--border)', borderRadius: 10 },
   revertText: { fontSize: 13, color: 'var(--text-dim)' },
-  revertBtn: { background: 'transparent', color: '#f59e0b', border: '1px solid #f59e0b', borderRadius: 8, padding: '6px 12px', fontSize: 13, cursor: 'pointer' },
+  revertBtn: { background: 'transparent', color: 'var(--c-amber)', border: '1px solid var(--c-amber)', borderRadius: 8, padding: '6px 12px', fontSize: 13, cursor: 'pointer' },
 
-  confirm: { background: '#251c10', border: '1px solid #92651a', borderRadius: 10, padding: 12, margin: '0 16px 8px', color: '#fcd9a5' },
-  confirmDanger: { background: '#2a1416', border: '1px solid #b91c1c', borderRadius: 10, padding: 12, margin: '0 16px 8px', color: '#fca5a5' },
+  confirm: { background: 'var(--c-amber-bg)', border: '1px solid var(--c-amber-border)', borderRadius: 10, padding: 12, margin: '0 16px 8px', color: 'var(--c-amber)' },
+  confirmDanger: { background: 'var(--c-red-bg)', border: '1px solid var(--c-red-border)', borderRadius: 10, padding: 12, margin: '0 16px 8px', color: 'var(--c-red)' },
   confirmHead: { fontWeight: 700 },
   proposalRows: { background: 'var(--bg)', borderRadius: 8, padding: '4px 12px', margin: '6px 0 10px' },
   proposalRow: { display: 'flex', justifyContent: 'space-between', gap: 16, padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 13 },
@@ -3271,16 +3271,16 @@ const styles: Record<string, React.CSSProperties> = {
   editInput: { flex: 1, maxWidth: 320, background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '6px 9px', fontSize: 13 },
   confirmNote: { color: 'var(--text-muted)', fontSize: 11, marginTop: 8 },
   viewToggle: { display: 'inline-flex', border: '1px solid var(--border-2)', borderRadius: 7, overflow: 'hidden' },
-  viewToggleOn: { background: '#1e3a5f', color: 'var(--text)', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
-  viewToggleOff: { background: 'transparent', color: '#93c5fd', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
+  viewToggleOn: { background: 'var(--c-blue-bg)', color: 'var(--text)', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
+  viewToggleOff: { background: 'transparent', color: 'var(--c-blue)', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
 
   settings: { flex: 1, overflowY: 'auto', padding: 24, maxWidth: 720 },
   settingsTitle: { fontSize: 22, fontWeight: 700, margin: '0 0 16px' },
   card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 18, marginBottom: 16, flexShrink: 0 },
   h2: { fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-muted)', margin: '0 0 12px' },
   kv: { display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border)', fontSize: 14 },
-  warn: { background: '#251c10', border: '1px solid #92651a', borderRadius: 10, padding: 14, marginBottom: 16, color: '#fcd9a5', lineHeight: 1.5 },
-  diag: { background: '#0f1722', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px', marginBottom: 16, color: 'var(--text-muted)', fontSize: 12 },
+  warn: { background: 'var(--c-amber-bg)', border: '1px solid var(--c-amber-border)', borderRadius: 10, padding: 14, marginBottom: 16, color: 'var(--c-amber)', lineHeight: 1.5 },
+  diag: { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px', marginBottom: 16, color: 'var(--text-muted)', fontSize: 12 },
   codeBlock: { background: 'var(--bg)', padding: '6px 8px', borderRadius: 6, color: 'var(--text)', overflowX: 'auto' },
   formRow: { display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
   select: { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
@@ -3289,13 +3289,13 @@ const styles: Record<string, React.CSSProperties> = {
   ghostBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
   toggleOn: { background: '#1d4ed8', color: '#fff', border: '1px solid #2563eb', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
   toggleOff: { background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
-  dangerGhost: { background: 'transparent', color: '#fca5a5', border: '1px solid #7f1d1d', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
+  dangerGhost: { background: 'transparent', color: 'var(--c-red)', border: '1px solid var(--c-red-border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
   dangerSolid: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
   resultList: { listStyle: 'none', margin: '12px 0 0', padding: 0 },
   resultRow: { padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 13, fontFamily: 'ui-monospace, monospace' },
   muted: { color: 'var(--text-faint)', fontSize: 13 },
   dot: { width: 9, height: 9, borderRadius: 999, display: 'inline-block', flexShrink: 0 },
-  linkBtn: { background: 'transparent', border: 'none', color: '#93c5fd', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' },
+  linkBtn: { background: 'transparent', border: 'none', color: 'var(--c-blue)', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' },
 
   // Tag-suggestion review panel.
   reviewWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
@@ -3317,18 +3317,18 @@ const styles: Record<string, React.CSSProperties> = {
   scanNum: { display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)', flex: '0 0 auto' },
   scanNumInput: { width: 52, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 8px', fontSize: 13 },
   scanSelect: { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 8px', fontSize: 13 },
-  scanBanner: { fontSize: 13, color: '#7dd3fc', background: '#0c2030', border: '1px solid #1e4258', borderRadius: 8, padding: '8px 12px', flexShrink: 0 },
+  scanBanner: { fontSize: 13, color: 'var(--c-cyan)', background: 'var(--c-cyan-bg)', border: '1px solid var(--c-cyan-border)', borderRadius: 8, padding: '8px 12px', flexShrink: 0 },
   reviewToolbar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', flexShrink: 0 },
   reviewList: { display: 'flex', flexDirection: 'column', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', flexShrink: 0 },
   reviewRow: { display: 'flex', gap: 12, alignItems: 'flex-start', padding: '12px 14px', borderBottom: '1px solid var(--border)', background: 'var(--surface-alt)' },
-  reviewRowOk: { borderLeft: '3px solid #34d399', background: '#0f1b16' },
+  reviewRowOk: { borderLeft: '3px solid var(--c-green)', background: 'var(--c-green-bg)' },
   reviewRowHead: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   reviewMetaLine: { color: 'var(--text-muted)', fontSize: 13, marginTop: 3, lineHeight: 1.5 },
   reviewEvidence: { color: 'var(--text-faint)', fontSize: 12, marginTop: 3, fontStyle: 'italic' },
   badge: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, borderRadius: 6, padding: '1px 7px' },
-  typeChip: { fontSize: 11, color: '#93c5fd', background: '#10233f', border: '1px solid #1e3a5f', borderRadius: 6, padding: '1px 7px' },
-  emChip: { fontSize: 11, color: '#fcd34d', background: '#3a2c0a', border: '1px solid #92651a', borderRadius: 6, padding: '1px 7px' },
-  existsChip: { fontSize: 11, color: '#7dd3fc', background: '#0c2a3a', border: '1px solid #1e5570', borderRadius: 6, padding: '1px 7px' },
+  typeChip: { fontSize: 11, color: 'var(--c-blue)', background: 'var(--c-blue-bg)', border: '1px solid var(--c-blue-bg)', borderRadius: 6, padding: '1px 7px' },
+  emChip: { fontSize: 11, color: 'var(--c-amber)', background: 'var(--c-amber-bg)', border: '1px solid var(--c-amber-border)', borderRadius: 6, padding: '1px 7px' },
+  existsChip: { fontSize: 11, color: 'var(--c-cyan)', background: 'var(--c-cyan-bg)', border: '1px solid var(--c-cyan-border)', borderRadius: 6, padding: '1px 7px' },
   editGrid: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8, background: 'var(--bg)', borderRadius: 8, padding: '4px 12px' },
   detailGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 12, rowGap: 3, marginTop: 5, fontSize: 12.5, color: 'var(--text-dim)', alignItems: 'start' },
   detailKey: { color: 'var(--text-faint)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, paddingTop: 1 },

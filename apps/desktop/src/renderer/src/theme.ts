@@ -1,7 +1,9 @@
-// Light/dark theming via CSS custom properties. The styles object references var(--…) for all
-// structural colors (backgrounds, surfaces, text, borders); switching a theme just rewrites
-// those variables on :root, which updates every inline var() instantly (no React re-render).
-// Semantic accents (blue/green/red/amber) are intentionally NOT themed — they read on both.
+// Light/dark theming via CSS custom properties. The styles object references var(--…) for ALL
+// colors — structural (backgrounds, surfaces, text, borders) AND semantic accents (blue/cyan/amber/
+// red/green, each with a text / soft-bg / soft-border variant). Switching a theme just rewrites
+// these variables on :root, which updates every inline var() instantly (no React re-render).
+// The dark accent values are the originals; the light ones are darker text on tinted backgrounds so
+// chips/badges/banners read on a light surface instead of staying dark-on-light.
 
 export type Theme = 'dark' | 'light';
 
@@ -20,6 +22,22 @@ const VARS: Record<Theme, Record<string, string>> = {
     '--text-dim': '#cbd5e1',
     '--text-muted': '#9ca3af',
     '--text-faint': '#6b7280',
+    // semantic accents — text / soft background / soft border
+    '--c-blue': '#93c5fd',
+    '--c-blue-bg': '#1e3a5f',
+    '--c-blue-border': '#1e3a5f',
+    '--c-cyan': '#7dd3fc',
+    '--c-cyan-bg': '#0c2030',
+    '--c-cyan-border': '#1e4258',
+    '--c-amber': '#fcd34d',
+    '--c-amber-bg': '#3a2c0a',
+    '--c-amber-border': '#92651a',
+    '--c-red': '#fca5a5',
+    '--c-red-bg': '#3a1416',
+    '--c-red-border': '#7f1d1d',
+    '--c-green': '#6ee7b7',
+    '--c-green-bg': '#064e3b',
+    '--c-green-border': '#065f46',
   },
   light: {
     '--bg': '#f4f6f9',
@@ -33,6 +51,22 @@ const VARS: Record<Theme, Record<string, string>> = {
     '--text-dim': '#334155',
     '--text-muted': '#5b6776',
     '--text-faint': '#94a3b8',
+    // semantic accents — darker text on a tinted bg so they read on a light surface
+    '--c-blue': '#1d4ed8',
+    '--c-blue-bg': '#dbeafe',
+    '--c-blue-border': '#bfdbfe',
+    '--c-cyan': '#0369a1',
+    '--c-cyan-bg': '#e0f2fe',
+    '--c-cyan-border': '#bae6fd',
+    '--c-amber': '#b45309',
+    '--c-amber-bg': '#fef3c7',
+    '--c-amber-border': '#fcd34d',
+    '--c-red': '#b91c1c',
+    '--c-red-bg': '#fee2e2',
+    '--c-red-border': '#fecaca',
+    '--c-green': '#047857',
+    '--c-green-bg': '#d1fae5',
+    '--c-green-border': '#a7f3d0',
   },
 };
 
