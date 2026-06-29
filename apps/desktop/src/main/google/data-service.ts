@@ -1677,29 +1677,44 @@ export class GoogleDataService {
     };
   }
 
-  /** Session counts by channel group and by source/medium over the last `days`,
-   *  for the pure data-quality engine. Read-only (analytics.readonly via the
-   *  Data API). */
-  async getGa4DataQuality(property: string, days = 28): Promise<DataQualityCounts> {
+  /** Session counts by channel group and by source/medium over a window — either the last `days`
+   *  (default 28) or an explicit { startDate, endDate } custom range — for the pure data-quality
+   *  engine. Read-only (analytics.readonly via the Data API). */
+  async getGa4DataQuality(
+    property: string,
+    window: number | { startDate: string; endDate: string } = 28
+  ): Promise<DataQualityCounts> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
     const data = analyticsdata({ version: 'v1beta', auth });
-    // Resolve the window in the PROPERTY's timezone (UTC fallback) so "today"
-    // matches GA4's day boundaries, then query EXPLICIT dates for exactly `days`
-    // inclusive days. Explicit bounds mean the displayed range == the queried
-    // range (no relative-token / local-clock drift).
-    const admin = analyticsadmin({ version: 'v1beta', auth });
-    const tz = await admin.properties
-      .get({ name: property })
-      .then((r) => r.data.timeZone || 'UTC')
-      .catch(() => 'UTC');
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).formatToParts(new Date());
-    const part = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
-    const { startDate, endDate } = windowDates(`${part('year')}-${part('month')}-${part('day')}`, days);
+    let startDate: string;
+    let endDate: string;
+    let windowDays: number;
+    if (typeof window === 'object') {
+      // Explicit custom range — query exactly these dates (interpreted in the property's timezone
+      // by the Data API), so the displayed range == the queried range. windowDays = inclusive span.
+      startDate = window.startDate;
+      endDate = window.endDate;
+      const a = Date.parse(`${startDate}T00:00:00Z`);
+      const b = Date.parse(`${endDate}T00:00:00Z`);
+      windowDays = Number.isFinite(a) && Number.isFinite(b) ? Math.max(1, Math.round((b - a) / 86400000) + 1) : 0;
+    } else {
+      // Trailing N days: resolve "today" in the PROPERTY's timezone (UTC fallback) so the window
+      // matches GA4's day boundaries, then query EXPLICIT dates (no relative-token / local-clock drift).
+      const admin = analyticsadmin({ version: 'v1beta', auth });
+      const tz = await admin.properties
+        .get({ name: property })
+        .then((r) => r.data.timeZone || 'UTC')
+        .catch(() => 'UTC');
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(new Date());
+      const part = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+      ({ startDate, endDate } = windowDates(`${part('year')}-${part('month')}-${part('day')}`, window));
+      windowDays = window;
+    }
     const run = async (dimension: string, ordered: boolean) => {
       const res = await data.properties.runReport({
         property,
@@ -1722,7 +1737,7 @@ export class GoogleDataService {
     const channelGroups = await run('sessionDefaultChannelGroup', false);
     const sourceMediums = await run('sessionSourceMedium', true);
     const totalSessions = channelGroups.reduce((s, c) => s + c.sessions, 0);
-    return { totalSessions, channelGroups, sourceMediums, windowDays: days, startDate, endDate };
+    return { totalSessions, channelGroups, sourceMediums, windowDays, startDate, endDate };
   }
 
   /** Every GA4 WEB-stream measurement id (G-XXXX) the user can access, with its

@@ -145,6 +145,9 @@ export interface Ga4PropertyAuditResult {
   config: Ga4AuditReportView;
   dataQuality: Ga4DataQualityView;
 }
+/** The data-quality window for a GA4 audit: a count of trailing days (default 28), or an explicit
+ *  custom range (YYYY-MM-DD, inclusive, interpreted in the property's timezone). */
+export type Ga4AuditWindow = number | { startDate: string; endDate: string };
 
 /* ── Tag suggestions (the "measurement plan from a URL" review/approve panel) ──
    SuggestedTagView mirrors web-audit's SuggestedTag, declared locally so the
