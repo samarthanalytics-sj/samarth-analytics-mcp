@@ -1,3 +1,9 @@
+## [1.98.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.97.0...v1.98.0) (2026-06-29)
+
+### Features
+
+* **desktop:** GA4 Audit panel produces a downloadable doc-format report ([4f4572b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4f4572b0d68662d55c0cf4c2db91260ca2e0d114))
+
 ## [1.97.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.96.0...v1.97.0) (2026-06-29)
 
 ### Features
