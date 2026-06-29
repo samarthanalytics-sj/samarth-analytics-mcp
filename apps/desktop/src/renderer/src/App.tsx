@@ -1144,8 +1144,9 @@ function GtmContextBar({
     return (
       <div style={styles.ctxBar}>
         <span>
-          📁 {ctx.accountName} › {ctx.containerName} ›{' '}
-          <b style={{ color: 'var(--text)' }}>{ctx.workspaceName ?? 'workspace?'}</b>
+          <span style={{ color: 'var(--text-muted)' }}>Working in: </span>
+          📁 {ctx.accountName} › <b style={{ color: 'var(--text)' }}>{ctx.containerName}</b> ›{' '}
+          <b style={{ color: 'var(--c-blue)' }}>{ctx.workspaceName ?? 'workspace?'}</b>
         </span>
         <button style={styles.linkBtn} onClick={() => { setSel(ctx); setEditing(true); }}>
           change
@@ -1629,6 +1630,18 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
       'How do I test my Pinterest / Meta pixel tag in GTM Preview before publishing?',
       'Walk me through verifying server-side events in GTM Preview and GA4 DebugView.',
       'How do I confirm my Meta CAPI events in Meta Events Manager (Test Events)?',
+    ],
+  },
+  {
+    title: 'GA4 property audit (read-only)',
+    icon: '🔬',
+    product: 'ga4', // runs the evidence-based GA4 audit framework via the read-only GA4 tools
+    prompts: [
+      'Run a full GA4 property audit of this property. Gather the real config + last-90-days data via the GA4 tools, then output the templated audit: area-status table (Pass / Partial / Fail / Not Verified), property baseline, decision readiness, parameter-coverage bars, and findings sorted by severity with evidence, business risk and the exact fix.',
+      "Audit this GA4 property's data quality for the last 28 days — (not set) / Unassigned / (direct) bloat and any anomalies — with real values and a Pass / Partial / Fail / Not Verified status, worst first.",
+      'Decision readiness: can this GA4 property answer which campaigns generate revenue, CAC by channel, abandonment, lead quality, LTV, refund rate, and repeat/churn within 90 days? Mark each Answerable / Partial / Not answerable, and list what it cannot measure and the missing input.',
+      'Audit the ecommerce setup: which funnel steps fire (view_item → add_to_cart → begin_checkout → purchase), purchase parameter coverage (value, transaction_id, currency, items) as bars, plus any duplicate-transaction or revenue-gap risk.',
+      'Score this GA4 property 0–100 with a letter grade, the reasons behind the score, and the top 3 fixes.',
     ],
   },
   {
@@ -3516,12 +3529,14 @@ const styles: Record<string, React.CSSProperties> = {
 
   chatWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   chatHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border)' },
-  toggle: { display: 'flex', background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 8, overflow: 'hidden' },
-  toggleBtn: { background: 'transparent', color: 'var(--text-muted)', border: 'none', padding: '6px 14px', fontSize: 12, cursor: 'pointer' },
-  toggleActive: { background: '#2563eb', color: '#fff', border: 'none', padding: '6px 14px', fontSize: 12, cursor: 'pointer' },
+  // Segmented control (chat GTM/GA4 switch + Settings theme): inner padding + gap so the active
+  // option reads as a distinct blue pill inside the track — the selected side is unmistakable.
+  toggle: { display: 'inline-flex', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 9, overflow: 'hidden', padding: 2, gap: 2 },
+  toggleBtn: { background: 'transparent', color: 'var(--text-dim)', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', borderRadius: 7 },
+  toggleActive: { background: '#2563eb', color: '#fff', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', borderRadius: 7, boxShadow: '0 1px 3px rgba(37,99,235,0.45)' },
   chatTitle: { fontWeight: 600 },
   chatSub: { fontSize: 12, color: 'var(--text-faint)', marginTop: 2 },
-  ctxBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text-muted)' },
+  ctxBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 20px', background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text-dim)' },
   ctxBarEdit: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' },
   ctxSelect: { background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '6px 8px', fontSize: 13, maxWidth: 200 },
   chatLog: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 10 },
