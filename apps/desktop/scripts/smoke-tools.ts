@@ -12,7 +12,7 @@
 //      throw, no hang.
 //   D. Audit: audit_gtm_container returns counts + severity summary + findings,
 //      auto-fixable findings carry a runnable fix with the workspace ids
-//      injected, and the unused-variable finding stays advisory (no auto-fix).
+//      injected, and the unused-variable finding offers a delete_gtm_variable fix.
 //
 // Run: npm --prefix apps/desktop run smoke   (tsx scripts/smoke-tools.ts)
 
@@ -51,7 +51,7 @@ const MUTATIONS = new Set([
 
 // A snapshot crafted so the audit produces every kind of finding: a paused GA4
 // tag (auto-fix), an orphan Custom-HTML tag with document.write, an unused
-// trigger (auto-fix), and an unused variable (advisory).
+// trigger (auto-fix), and an unused variable (auto-fix: delete).
 const SNAPSHOT = {
   tags: [
     {
@@ -265,7 +265,7 @@ async function main(): Promise<void> {
     rmSync(histDir, { recursive: true, force: true });
   }
 
-  // ── D. Audit: structured, actionable, ids-injected, variable-delete advisory. ─
+  // ── D. Audit: structured, actionable, ids-injected, variable-delete offered. ─
   {
     const reg = buildToolRegistry(makeFakeData().data); // audit is read-only
     const report = JSON.parse(
@@ -287,11 +287,15 @@ async function main(): Promise<void> {
     record('unused trigger → delete_gtm_trigger fix offered', tools.includes('delete_gtm_trigger'));
 
     const unusedVar = (report.findings ?? []).find(
-      (f: { category: string; resource?: { kind: string } }) => f.category === 'unused' && f.resource?.kind === 'variable'
+      (f: { category: string; resource?: { kind: string }; fix?: { tool: string; args?: Record<string, string> }; autoFixable?: boolean }) =>
+        f.category === 'unused' && f.resource?.kind === 'variable'
     );
     record(
-      'unused variable is advisory (no destructive auto-fix)',
-      Boolean(unusedVar) && !unusedVar.fix && unusedVar.autoFixable === false
+      'unused variable → delete_gtm_variable fix offered (per-row delete)',
+      Boolean(unusedVar) &&
+        unusedVar.autoFixable === true &&
+        unusedVar.fix?.tool === 'delete_gtm_variable' &&
+        Boolean(unusedVar.fix?.args?.variableId)
     );
   }
 
