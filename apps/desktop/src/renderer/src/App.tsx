@@ -595,7 +595,7 @@ export function App(): JSX.Element {
   const [selfTest, setSelfTest] = useState<SecretSelfTest | null>(null);
   const [view, setView] = useState<View>('chat');
   // A prompt picked from the Prompts tab to drop into the chat input (nonce so re-picks fire).
-  const [chatSeed, setChatSeed] = useState<{ text: string; nonce: number } | null>(null);
+  const [chatSeed, setChatSeed] = useState<{ text: string; nonce: number; product?: 'gtm' | 'ga4' } | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState('');
 
@@ -745,8 +745,8 @@ export function App(): JSX.Element {
           <GtmToolsView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
         ) : view === 'prompts' ? (
           <PromptsView
-            onUse={(text) => {
-              setChatSeed((s) => ({ text, nonce: (s?.nonce ?? 0) + 1 }));
+            onUse={(text, product) => {
+              setChatSeed((s) => ({ text, product, nonce: (s?.nonce ?? 0) + 1 }));
               setView('chat');
             }}
           />
@@ -810,7 +810,7 @@ function ChatView({
   active: AccountView | undefined;
   onError: (m: string) => void;
   refresh: () => Promise<void>;
-  seed?: { text: string; nonce: number } | null;
+  seed?: { text: string; nonce: number; product?: 'gtm' | 'ga4' } | null;
 }): JSX.Element {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -853,10 +853,12 @@ function ChatView({
     }
   }, [input]);
 
-  // A prompt picked from the Prompts tab seeds the input (nonce makes re-picks re-apply).
+  // A prompt picked from the Prompts tab seeds the input (nonce makes re-picks re-apply). A GA4
+  // prompt also flips the chat to its GA4 toggle so it runs against the GA4 API, not GTM.
   useEffect(() => {
     if (seed?.text) {
       setInput(seed.text);
+      if (seed.product) setProduct(seed.product);
       taRef.current?.focus();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1347,7 +1349,7 @@ function GtmToolsView({
 
 // Sample prompts grouped by task — a quick reference + launcher for the chat. Replace the
 // placeholder ids/names/URLs (G-…, container names, https URLs) with the user's own.
-const PROMPT_GROUPS: Array<{ title: string; icon: string; prompts: string[] }> = [
+const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4'; prompts: string[] }> = [
   {
     title: 'Audit & health',
     icon: '🔍',
@@ -1517,6 +1519,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; prompts: string[] }> =
   {
     title: 'GA4 reporting & settings (read-only)',
     icon: '📊',
+    product: 'ga4', // these query the GA4 Admin/Data API → open the chat's GA4 toggle, not GTM
     prompts: [
       'Run a GA4 report of sessions by default channel group for the last 28 days.',
       'Run a realtime GA4 report of active users by page.',
@@ -1535,7 +1538,7 @@ function shortLabel(title: string): string {
   return title.split(/ \(| & |, /)[0];
 }
 
-function PromptsView({ onUse }: { onUse: (text: string) => void }): JSX.Element {
+function PromptsView({ onUse }: { onUse: (text: string, product: 'gtm' | 'ga4') => void }): JSX.Element {
   const [copied, setCopied] = useState('');
   const [query, setQuery] = useState('');
   const [cat, setCat] = useState('all'); // group title, or 'all'
@@ -1601,7 +1604,7 @@ function PromptsView({ onUse }: { onUse: (text: string) => void }): JSX.Element 
                   <div key={p} style={styles.promptCard}>
                     <div style={styles.promptText}>{p}</div>
                     <div style={styles.promptActions}>
-                      <button style={styles.promptUse} onClick={() => onUse(p)}>
+                      <button style={styles.promptUse} onClick={() => onUse(p, g.product ?? 'gtm')}>
                         Use in chat
                       </button>
                       <button style={styles.promptCopy} onClick={() => copy(p)}>
