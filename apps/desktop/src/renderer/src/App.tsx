@@ -3286,6 +3286,8 @@ function Ga4AuditPanel({
   const [endDate, setEndDate] = useState('');
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<Ga4PropertyAuditResult | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [exportNote, setExportNote] = useState('');
 
   const signedIn = Boolean(active?.hasGoogleToken);
   // A custom range needs both bounds, start on/before end; a preset window is always valid.
@@ -3319,6 +3321,7 @@ function Ga4AuditPanel({
     setRunning(true);
     onError('');
     setResult(null);
+    setExportNote('');
     try {
       const win = custom ? { startDate, endDate } : days;
       setResult(await window.desktop.ga4.audit(selected.property, win));
@@ -3326,6 +3329,21 @@ function Ga4AuditPanel({
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function downloadReport(): Promise<void> {
+    if (!result || !selected || downloading) return;
+    setDownloading(true);
+    setExportNote('');
+    try {
+      const safe = selected.displayName.replace(/[^\w .-]+/g, ' ').replace(/\s{2,}/g, ' ').trim() || 'GA4 property';
+      const saved = await window.desktop.ga4.exportReport(`${safe} - GA4 audit.md`, result.markdown);
+      setExportNote(saved ? `✓ Saved to ${saved}` : 'Save cancelled');
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloading(false);
     }
   }
 
@@ -3513,32 +3531,16 @@ function Ga4AuditPanel({
                   </div>
                 </div>
 
-                {findings.length === 0 ? (
-                  <div style={styles.empty}>
-                    <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
-                    No issues found — config and data quality look clean for this window.
-                  </div>
-                ) : (
-                  <div style={styles.reviewList}>
-                    {findings.map((f, i) => (
-                      <div key={i} style={styles.reviewRow}>
-                        <span style={{ ...styles.badge, ...(SEV_BADGE[f.severity] ?? SEV_BADGE.info), marginTop: 2 }}>{f.severity}</span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 600 }}>
-                            {f.message}{' '}
-                            <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 12 }}>({f.area}{f.category && f.category !== 'data_quality' ? ` · ${f.category}` : ''})</span>
-                          </div>
-                          {f.recommendation && (
-                            <div style={{ ...styles.reviewMetaLine, color: 'var(--text-dim)' }}>{f.recommendation}</div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div style={{ ...styles.muted, fontSize: 12 }}>
-                  Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI. For the full templated report
-                  (charts, decision readiness), run a “GA4 property audit” prompt in Chat.
+                {/* Full templated report (doc format) + download. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <button style={styles.primaryBtn} onClick={() => void downloadReport()} disabled={downloading}>
+                    {downloading ? 'Saving…' : '⬇ Download report (.md)'}
+                  </button>
+                  {exportNote && <span style={styles.muted}>{exportNote}</span>}
+                  <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>Read-only — apply each change in the GA4 Admin UI.</span>
+                </div>
+                <div style={{ ...styles.card, lineHeight: 1.5 }}>
+                  <Markdown text={result.markdown} />
                 </div>
               </>
             )}

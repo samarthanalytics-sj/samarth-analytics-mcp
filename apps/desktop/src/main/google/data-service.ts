@@ -118,6 +118,23 @@ export interface Ga4PropertyView {
   displayName: string;
 }
 
+/** Traffic baseline for the GA4 audit report — current window vs the immediately-prior window. */
+export interface Ga4Baseline {
+  startDate: string;
+  endDate: string;
+  priorStartDate: string;
+  priorEndDate: string;
+  sessions: number;
+  priorSessions: number;
+  /** % change vs the prior period (rounded); null if the prior period had no sessions. */
+  trendPct: number | null;
+  /** Highest-session day in the window (GA4 "date" = YYYYMMDD); null if no data. */
+  peakDay: { date: string; sessions: number } | null;
+  devices: Array<{ name: string; sessions: number }>;
+  newVsReturning: Array<{ name: string; sessions: number }>;
+  topCountries: Array<{ name: string; sessions: number }>;
+}
+
 export interface GtmWorkspaceView {
   workspaceId: string;
   name: string;
@@ -1649,12 +1666,64 @@ export class GoogleDataService {
     };
   }
 
+  /** Traffic baseline for the audit report over [startDate, endDate] (the data-quality window),
+   *  compared to the immediately-prior window of the same length. Pulls sessions-by-date (total +
+   *  peak day), device split, new-vs-returning, and top countries via the Data API. Read-only. */
+  async getGa4Baseline(property: string, startDate: string, endDate: string): Promise<Ga4Baseline> {
+    const DAY = 86400000;
+    const sd = Date.parse(`${startDate}T00:00:00Z`);
+    const ed = Date.parse(`${endDate}T00:00:00Z`);
+    const span = Number.isFinite(sd) && Number.isFinite(ed) ? Math.max(1, Math.round((ed - sd) / DAY) + 1) : 1;
+    const ymd = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
+    const priorEndDate = ymd(sd - DAY);
+    const priorStartDate = ymd(sd - span * DAY);
+    const n = (v: string): number => Number(v) || 0;
+    const pairs = (r: Ga4ReportResult): Array<{ name: string; sessions: number }> =>
+      r.rows.map((x) => ({ name: x.dimensions[0] || '(not set)', sessions: n(x.metrics[0]) }));
+    const oneTotal = (r: Ga4ReportResult): number => (r.rows[0] ? n(r.rows[0].metrics[0]) : 0);
+    const byMetricDesc = [{ metric: { metricName: 'sessions' }, desc: true }];
+
+    // Totals come from NO-dimension reports (one exact row each) — never the per-day report, which a
+    // 100-row cap would truncate for windows > 100 days. Peak day = top day ordered by sessions
+    // (limit 1). Country = top-N ordered (limit 250, like the data-quality source/medium pull).
+    const [curTotal, priorTotal, peak, byDevice, byNvR, byCountry] = await Promise.all([
+      this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: ['sessions'] }),
+      this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: ['sessions'] }),
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['date'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '1' }),
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['deviceCategory'], metrics: ['sessions'] }),
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['newVsReturning'], metrics: ['sessions'] }),
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['country'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '250' }),
+    ]);
+
+    const sessions = oneTotal(curTotal);
+    const priorSessions = oneTotal(priorTotal);
+    const peakDay = peak.rows[0] ? { date: peak.rows[0].dimensions[0] ?? '', sessions: n(peak.rows[0].metrics[0]) } : null;
+    return {
+      startDate,
+      endDate,
+      priorStartDate,
+      priorEndDate,
+      sessions,
+      priorSessions,
+      trendPct: priorSessions > 0 ? Math.round(((sessions - priorSessions) / priorSessions) * 100) : null,
+      peakDay,
+      devices: pairs(byDevice).sort((a, b) => b.sessions - a.sessions),
+      newVsReturning: pairs(byNvR),
+      topCountries: pairs(byCountry).slice(0, 5),
+    };
+  }
+
   async runGa4Report(input: {
     property: string;
     startDate: string;
     endDate: string;
     dimensions: string[];
     metrics: string[];
+    /** Row cap (default '100'). Raise it for high-cardinality dimensions (date/country) so the
+     *  report isn't silently truncated. */
+    limit?: string;
+    /** GA4 orderBys passthrough — pair with a small limit to fetch the top-N by a metric. */
+    orderBys?: Array<{ metric?: { metricName: string }; dimension?: { dimensionName: string }; desc?: boolean }>;
   }): Promise<Ga4ReportResult> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
     const data = analyticsdata({ version: 'v1beta', auth });
@@ -1664,7 +1733,8 @@ export class GoogleDataService {
         dateRanges: [{ startDate: input.startDate, endDate: input.endDate }],
         dimensions: input.dimensions.map((name) => ({ name })),
         metrics: input.metrics.map((name) => ({ name })),
-        limit: '100',
+        ...(input.orderBys ? { orderBys: input.orderBys } : {}),
+        limit: input.limit ?? '100',
       },
     });
     return {
