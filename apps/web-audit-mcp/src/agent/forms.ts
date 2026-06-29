@@ -195,6 +195,46 @@ export function extractFormsInPage(): RawForm[] {
         text: ((host.textContent || '') + ' ' + label).toLowerCase().replace(/\s+/g, ' ').slice(0, 1500),
       });
     }
+    // 3. Field-CLUSTER "forms": catch a form whose submit control is a plain <div onClick> (no
+    //    <button>/<a>/role — common in React), which step 2's submit anchor can't find. Anchor on a
+    //    text-ish field, climb to the smallest container holding >=2 text-ish fields, and accept it
+    //    only if it looks form-like (has an email or textarea, or >=3 text-ish fields) so a bare
+    //    2-input filter/search bar isn't a false positive.
+    const TEXTISH_SEL =
+      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="image"]):not([type="reset"]), textarea';
+    for (const fld of Array.from(doc.querySelectorAll(TEXTISH_SEL))) {
+      if (out.length >= MAX_FORMS) break;
+      if (fld.closest('form')) continue;
+      if (seen.some((h) => h.contains(fld))) continue; // already inside a detected div-form
+      let host: Element | null = null;
+      let node: Element | null = fld.parentElement;
+      for (let i = 0; node && i < 10; i++, node = node.parentElement) {
+        if (node.tagName === 'FORM') break;
+        if (fieldsIn(node).filter((f) => TEXTISH.has(f.type)).length >= 2) {
+          host = node;
+          break;
+        }
+      }
+      if (!host || host.closest('form')) continue;
+      if (seen.some((h) => h.contains(host!) || host!.contains(h))) continue;
+      const fields = fieldsIn(host);
+      const textish = fields.filter((f) => TEXTISH.has(f.type));
+      if (!(textish.some((f) => f.type === 'email' || f.type === 'textarea') || textish.length >= 3)) continue;
+      seen.push(host);
+      out.push({
+        index: out.length,
+        action: '',
+        method: 'js',
+        formId: host.getAttribute('id') || '',
+        formName: '',
+        formClasses: host.getAttribute('class') || '',
+        title: titleOf(host),
+        fieldCount: fields.length,
+        fields,
+        hasPrivacyLink: privacyIn(host),
+        text: (host.textContent || '').toLowerCase().replace(/\s+/g, ' ').slice(0, 1500),
+      });
+    }
   };
 
   scanDoc(document);
