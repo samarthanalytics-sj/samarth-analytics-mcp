@@ -63,6 +63,29 @@ function inPage(fn: () => unknown): string {
   return `(${fn.toString()})()`;
 }
 
+// Scroll the page top→bottom in steps so below-the-fold sections that only MOUNT on scroll
+// (IntersectionObserver / "animate-in-view" — very common for contact/newsletter forms + FAQ on
+// React/marketing landing pages) actually render before we read the DOM, then return to the top.
+// Self-contained for executeJavaScript serialization (DOM globals only); resolves when done.
+function autoScrollPage(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const step = Math.max(300, Math.floor(window.innerHeight * 0.85));
+    const maxY = Math.min(document.documentElement.scrollHeight, 40000);
+    let y = 0;
+    const tick = (): void => {
+      window.scrollTo(0, y);
+      y += step;
+      if (y <= maxY) {
+        setTimeout(tick, 120);
+      } else {
+        window.scrollTo(0, 0);
+        setTimeout(resolve, 200);
+      }
+    };
+    tick();
+  });
+}
+
 export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriver {
   const navTimeoutMs = opts.navTimeoutMs ?? 20_000;
   const evalTimeoutMs = opts.evalTimeoutMs ?? 5_000;
@@ -164,6 +187,17 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
 
       if (autoSettle) await waitNetworkIdle(600, 700, Math.min(navTimeoutMs, 9_000));
       else await delay(fixedSettleMs);
+      if (!win || win.isDestroyed()) return { ok: false, httpStatus: lastStatus, finalUrl: null, error: 'driver closed' };
+      // Scroll top→bottom so scroll-mounted below-fold content (contact/newsletter forms, FAQ)
+      // renders, then briefly re-settle for any lazy fetch/animation. Best-effort — if it times
+      // out we read whatever rendered (above-fold content is already there).
+      try {
+        await withTimeout(wc.executeJavaScript(inPage(autoScrollPage), true), 8_000, 'scroll');
+        if (autoSettle) await waitNetworkIdle(0, 500, 4_000);
+        else await delay(Math.min(fixedSettleMs, 800));
+      } catch {
+        /* scrolling failed/timed out — proceed with whatever rendered */
+      }
       if (!win || win.isDestroyed()) return { ok: false, httpStatus: lastStatus, finalUrl: null, error: 'driver closed' };
       try {
         const raw = (await withTimeout(
