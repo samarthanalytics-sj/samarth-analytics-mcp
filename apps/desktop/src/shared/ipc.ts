@@ -110,6 +110,42 @@ export interface Ga4AccountView {
   propertyCount: number;
 }
 
+/* ── GA4 property audit (the "GA4 Audit" panel) ── */
+/** A GA4 property in the panel's picker — flattened across all accessible accounts. */
+export interface Ga4PropertyListItem {
+  property: string; // "properties/123456"
+  displayName: string;
+  accountName: string;
+}
+/** One advisory GA4 audit finding (config or data-quality). GA4 is read-only — no auto-fix. */
+export interface Ga4AuditFindingView {
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  category: string;
+  message: string;
+  recommendation?: string;
+}
+/** GA4 property CONFIG audit (mirrors the main-process Ga4AuditReport). */
+export interface Ga4AuditReportView {
+  counts: { dataStreams: number; keyEvents: number; customDimensions: number; customMetrics: number; findings: number };
+  summary: { high: number; medium: number; low: number; info: number };
+  findings: Ga4AuditFindingView[];
+}
+/** GA4 DATA-QUALITY audit over a chosen window (mirrors Ga4DataQualityResult). */
+export interface Ga4DataQualityView {
+  totalSessions: number;
+  windowDays: number;
+  startDate?: string;
+  endDate?: string;
+  /** Human span e.g. "Jan 1 – Jan 28, 2026", or null if the dates are unavailable. */
+  dateRange: string | null;
+  findings: Ga4AuditFindingView[];
+}
+/** Combined GA4 property audit (config + data quality) returned to the GA4 Audit panel. */
+export interface Ga4PropertyAuditResult {
+  config: Ga4AuditReportView;
+  dataQuality: Ga4DataQualityView;
+}
+
 /* ── Tag suggestions (the "measurement plan from a URL" review/approve panel) ──
    SuggestedTagView mirrors web-audit's SuggestedTag, declared locally so the
    renderer/shared layer stays dependency-free. It is the create_gtm_tracking_tag

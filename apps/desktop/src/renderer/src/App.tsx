@@ -8,6 +8,8 @@ import type {
   ChatTurn,
   CreateTagOutcome,
   DiscoverResult,
+  Ga4PropertyAuditResult,
+  Ga4PropertyListItem,
   GoogleClientStatus,
   GtmAccountView,
   GtmContainerView,
@@ -27,7 +29,7 @@ const DEFAULT_MODEL: Record<LlmProvider, string> = {
   gemini: 'gemini-2.0-flash',
 };
 
-type View = 'chat' | 'gtm' | 'prompts' | 'settings';
+type View = 'chat' | 'gtm' | 'ga4audit' | 'prompts' | 'settings';
 type GtmTab = 'suggestions' | 'audit';
 
 /* Friendly labels for GTM type codes, so approvals read in plain English. */
@@ -711,6 +713,12 @@ export function App(): JSX.Element {
             🗂 GTM Tools
           </button>
           <button
+            style={{ ...styles.navItem, ...(view === 'ga4audit' ? styles.navActive : {}) }}
+            onClick={() => setView('ga4audit')}
+          >
+            📊 GA4 Audit
+          </button>
+          <button
             style={{ ...styles.navItem, ...(view === 'prompts' ? styles.navActive : {}) }}
             onClick={() => setView('prompts')}
           >
@@ -743,6 +751,8 @@ export function App(): JSX.Element {
         </div>
         {view === 'gtm' ? (
           <GtmToolsView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
+        ) : view === 'ga4audit' ? (
+          <Ga4AuditPanel key={active?.id ?? 'none'} active={active} onError={setError} />
         ) : view === 'prompts' ? (
           <PromptsView
             onUse={(text, product) => {
@@ -2661,12 +2671,13 @@ function auditFilterLabel(v: string): string {
 }
 
 const SEV_BADGE: Record<string, React.CSSProperties> = {
+  critical: { background: 'var(--c-red-bg)', color: 'var(--c-red)', border: '1px solid var(--c-red-border)', fontWeight: 800 },
   high: { background: 'var(--c-red-bg)', color: 'var(--c-red)', border: '1px solid var(--c-red-border)' },
   medium: { background: 'var(--c-amber-bg)', color: 'var(--c-amber)', border: '1px solid var(--c-amber-border)' },
   low: { background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border-2)' },
   info: { background: 'var(--c-blue-bg)', color: 'var(--c-blue)', border: '1px solid var(--c-blue-bg)' },
 };
-const SEV_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2, info: 3 };
+const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
 function ContainerAuditPanel({
   active,
@@ -3243,6 +3254,216 @@ function ContainerAuditPanel({
   );
 }
 
+/* ───────────────────── GA4 property audit (read-only) ───────────────────── */
+
+// Pick a GA4 property (search across all accessible accounts), choose a data window,
+// and run the read-only config + data-quality audit (the same ga4-audit / data-quality
+// engines the chat tools use) — findings shown by severity. Mirrors ContainerAuditPanel,
+// but GA4 has no auto-fixes (every finding is advisory).
+function Ga4AuditPanel({
+  active,
+  onError,
+}: {
+  active: AccountView | undefined;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const [properties, setProperties] = useState<Ga4PropertyListItem[] | null>(null);
+  const [loadingProps, setLoadingProps] = useState(false);
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<{ property: string; displayName: string } | null>(null);
+  const [days, setDays] = useState(28);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<Ga4PropertyAuditResult | null>(null);
+
+  const signedIn = Boolean(active?.hasGoogleToken);
+
+  async function loadProps(): Promise<void> {
+    if (!signedIn) return;
+    setLoadingProps(true);
+    onError('');
+    try {
+      const next = await window.desktop.ga4.listProperties();
+      setProperties(next);
+      // Drop a selection that's no longer in the refreshed list (revoked/deleted) so Run audit
+      // can't target a property the user can no longer see.
+      setSelected((cur) => (cur && next.some((p) => p.property === cur.property) ? cur : null));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+      setProperties([]);
+    } finally {
+      setLoadingProps(false);
+    }
+  }
+  useEffect(() => {
+    void loadProps();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id]);
+
+  async function runAudit(): Promise<void> {
+    if (!selected || running) return;
+    setRunning(true);
+    onError('');
+    setResult(null);
+    try {
+      setResult(await window.desktop.ga4.audit(selected.property, days));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const q = query.trim().toLowerCase();
+  const filtered = (properties ?? []).filter(
+    (p) => !q || p.displayName.toLowerCase().includes(q) || p.accountName.toLowerCase().includes(q) || p.property.includes(q),
+  );
+  // Config + data-quality findings merged and sorted worst-first.
+  const findings = result
+    ? [
+        ...result.config.findings.map((f) => ({ ...f, area: 'Config' })),
+        ...result.dataQuality.findings.map((f) => ({ ...f, area: 'Data quality' })),
+      ].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9))
+    : [];
+  const hasSerious = findings.some((f) => f.severity === 'critical' || f.severity === 'high');
+
+  return (
+    <div style={styles.reviewWrap}>
+      <div style={styles.chatHeader}>
+        <div>
+          <div style={styles.chatTitle}>GA4 property audit</div>
+          <div style={styles.chatSub}>Pick a GA4 property, choose a data window, and run a read-only config + data-quality audit.</div>
+        </div>
+      </div>
+
+      <div style={styles.reviewBody}>
+        {!signedIn ? (
+          <div style={{ color: 'var(--c-amber)', fontSize: 13 }}>Sign this account into Google first (Settings).</div>
+        ) : (
+          <>
+            {/* Property picker — search + select */}
+            <div style={styles.card}>
+              <div style={styles.h2}>Property</div>
+              <div style={styles.formRow}>
+                <input
+                  style={styles.input}
+                  type="search"
+                  placeholder="Search GA4 properties by name…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  aria-label="Search GA4 properties"
+                />
+                <button style={styles.ghostBtn} onClick={() => void loadProps()} disabled={loadingProps}>
+                  {loadingProps ? 'Loading…' : 'Refresh'}
+                </button>
+              </div>
+              {selected && (
+                <div style={{ ...styles.muted, marginTop: 6 }}>
+                  Selected: <b style={{ color: 'var(--text)' }}>{selected.displayName}</b>{' '}
+                  <code style={mdStyles.code}>{selected.property.replace('properties/', '')}</code>
+                </div>
+              )}
+              {properties === null ? (
+                <div style={{ ...styles.muted, marginTop: 8 }}>{loadingProps ? 'Loading properties…' : ''}</div>
+              ) : (
+                <div style={styles.ga4PropList}>
+                  {filtered.length === 0 ? (
+                    <div style={{ ...styles.muted, padding: '8px 12px' }}>
+                      {q ? `No properties match “${query.trim()}”.` : 'No GA4 properties found for this account.'}
+                    </div>
+                  ) : (
+                    filtered.map((p) => (
+                      <button
+                        key={p.property}
+                        style={{ ...styles.ga4PropRow, ...(selected?.property === p.property ? styles.ga4PropRowOn : {}) }}
+                        onClick={() => { setSelected({ property: p.property, displayName: p.displayName }); setResult(null); }}
+                        title={p.property}
+                      >
+                        <span style={{ fontWeight: 600 }}>{p.displayName}</span>
+                        <span style={{ color: 'var(--text-faint)', fontSize: 11 }}>
+                          {p.accountName} · {p.property.replace('properties/', '')}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Data window + run */}
+            <div style={styles.card}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Data window:</span>
+                <select style={styles.select} value={days} onChange={(e) => { setDays(Number(e.target.value)); setResult(null); }} aria-label="Data window for the audit">
+                  <option value={7}>Last 7 days</option>
+                  <option value={14}>Last 14 days</option>
+                  <option value={28}>Last 28 days</option>
+                  <option value={30}>Last 30 days</option>
+                  <option value={90}>Last 90 days</option>
+                  <option value={180}>Last 180 days</option>
+                  <option value={365}>Last 365 days</option>
+                </select>
+                <button style={styles.primaryBtn} onClick={() => void runAudit()} disabled={!selected || running}>
+                  {running ? 'Auditing…' : 'Run audit'}
+                </button>
+                <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>
+                  Config checks ignore the window; it scopes the data-quality pass.
+                </span>
+              </div>
+            </div>
+
+            {/* Results */}
+            {result && (
+              <>
+                <div style={styles.card}>
+                  <div style={styles.muted}>
+                    {result.config.counts.dataStreams} stream(s) · {result.config.counts.keyEvents} key event(s) ·{' '}
+                    {result.config.counts.customDimensions} dimension(s) · {result.config.counts.customMetrics} metric(s) ·{' '}
+                    <b style={{ color: hasSerious ? 'var(--c-red)' : findings.length ? 'var(--c-amber)' : 'var(--c-green)' }}>
+                      {findings.length} finding(s)
+                    </b>
+                  </div>
+                  <div style={{ ...styles.muted, marginTop: 4 }}>
+                    Data quality: {result.dataQuality.totalSessions.toLocaleString()} sessions over{' '}
+                    {result.dataQuality.dateRange ?? `${result.dataQuality.windowDays} days`}.
+                  </div>
+                </div>
+
+                {findings.length === 0 ? (
+                  <div style={styles.empty}>
+                    <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
+                    No issues found — config and data quality look clean for this window.
+                  </div>
+                ) : (
+                  <div style={styles.reviewList}>
+                    {findings.map((f, i) => (
+                      <div key={i} style={styles.reviewRow}>
+                        <span style={{ ...styles.badge, ...(SEV_BADGE[f.severity] ?? SEV_BADGE.info), marginTop: 2 }}>{f.severity}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600 }}>
+                            {f.message}{' '}
+                            <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 12 }}>({f.area}{f.category && f.category !== 'data_quality' ? ` · ${f.category}` : ''})</span>
+                          </div>
+                          {f.recommendation && (
+                            <div style={{ ...styles.reviewMetaLine, color: 'var(--text-dim)' }}>{f.recommendation}</div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ ...styles.muted, fontSize: 12 }}>
+                  Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI. For the full templated report
+                  (charts, decision readiness), run a “GA4 property audit” prompt in Chat.
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────────────────── Settings ─────────────────────────── */
 
 function SettingsView({
@@ -3647,4 +3868,9 @@ const styles: Record<string, React.CSSProperties> = {
   pageListScroll: { maxHeight: 300, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, marginTop: 8, padding: '4px 0' },
   pageRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', fontSize: 12.5, cursor: 'pointer' },
   pagePath: { fontFamily: 'ui-monospace, monospace', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+
+  // GA4 Audit panel — property picker list.
+  ga4PropList: { maxHeight: 260, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, marginTop: 8, display: 'flex', flexDirection: 'column' },
+  ga4PropRow: { display: 'flex', flexDirection: 'column', gap: 2, textAlign: 'left', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', padding: '8px 12px', cursor: 'pointer', color: 'var(--text)', fontSize: 13 },
+  ga4PropRowOn: { background: 'var(--c-blue-bg)' },
 };
