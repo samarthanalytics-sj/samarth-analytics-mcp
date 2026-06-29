@@ -225,9 +225,10 @@ const api = {
     // window: trailing-day count (number) OR an explicit { startDate, endDate } custom range.
     audit: (property: string, window: Ga4AuditWindow): Promise<Ga4PropertyAuditResult> =>
       ipcRenderer.invoke('ga4:audit', property, window),
-    // Save the audit report (Markdown) to a user-chosen file → saved path, or null if cancelled.
-    exportReport: (defaultName: string, content: string): Promise<string | null> =>
-      ipcRenderer.invoke('ga4:exportReport', defaultName, content),
+    // Save the audit report to a user-chosen file as Markdown / PDF / Word (.doc) → saved path, or
+    // null if cancelled. `content` is the report Markdown; PDF/DOC are rendered from it in main.
+    exportReport: (format: 'md' | 'pdf' | 'doc', defaultName: string, content: string): Promise<string | null> =>
+      ipcRenderer.invoke('ga4:exportReport', format, defaultName, content),
   },
 
   // Continuous monitoring: schedule auto re-audits of the active container and

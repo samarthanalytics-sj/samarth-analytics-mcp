@@ -121,7 +121,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push('');
   const limits = ['per-event parameter coverage not computed', 'Consent Mode not assessed (needs DebugView)'];
   if (!hasEcommerce(s)) limits.push('no ecommerce events detected');
-  L.push(`_Data limitations: ${limits.join('; ')}._`);
+  L.push(`*Data limitations: ${limits.join('; ')}.*`);
   L.push('');
 
   // ── Executive summary ──
@@ -227,7 +227,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   for (const f of findings) counts[f.severity] = (counts[f.severity] ?? 0) + 1;
   L.push(`Critical: ${counts.critical} · High: ${counts.high} · Medium: ${counts.medium} · Low: ${counts.low} · Info: ${counts.info}`);
   L.push('');
-  L.push('_Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI._');
+  L.push('*Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.*');
 
   return L.join('\n');
 }

@@ -8,6 +8,7 @@ import type { GoogleDataService } from './data-service';
 import { auditGa4 } from './ga4-audit';
 import { auditGa4DataQuality } from './ga4-data-quality';
 import { buildGa4AuditReport } from './ga4-report';
+import { reportHtmlDocument } from './ga4-report-export';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertyAuditResult, Ga4PropertyListItem } from '../../shared/ipc';
 
@@ -66,22 +67,42 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     return { config, dataQuality, markdown };
   });
 
-  // Save the (renderer-displayed) GA4 audit report to a user-chosen file. Mirrors
-  // suggestions:exportCsv — a save dialog + writeFile; returns the path or null if cancelled.
-  ipcMain.handle('ga4:exportReport', async (e, defaultName: unknown, content: unknown): Promise<string | null> => {
+  // Save the (renderer-displayed) GA4 audit report to a user-chosen file in the requested format:
+  //   md  → the raw Markdown
+  //   doc → a styled HTML document with the MS-Office namespaces (Word / Google Docs open it)
+  //   pdf → the same HTML rendered in a hidden, script-free window via Electron printToPDF
+  // A save dialog picks the path; returns the path or null if cancelled.
+  ipcMain.handle('ga4:exportReport', async (e, format: unknown, defaultName: unknown, markdown: unknown): Promise<string | null> => {
+    const fmt = format === 'pdf' ? 'pdf' : format === 'doc' ? 'doc' : 'md';
+    const md = String(markdown ?? '');
+    const base = String(defaultName ?? 'GA4 audit report')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\.(md|pdf|docx?|txt)$/i, '')
+      .trim() || 'GA4 audit report';
     const win = BrowserWindow.fromWebContents(e.sender);
-    const name = String(defaultName ?? 'GA4 audit report.md').replace(/[\\/:*?"<>|]/g, '_');
-    const opts = {
-      title: 'Save GA4 audit report',
-      defaultPath: name,
-      filters: [
-        { name: 'Markdown', extensions: ['md'] },
-        { name: 'Text', extensions: ['txt'] },
-      ],
-    };
+    const filterName = fmt === 'pdf' ? 'PDF' : fmt === 'doc' ? 'Word document' : 'Markdown';
+    const opts = { title: 'Save GA4 audit report', defaultPath: `${base}.${fmt}`, filters: [{ name: filterName, extensions: [fmt] }] };
     const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (canceled || !filePath) return null;
-    await writeFile(filePath, String(content ?? ''), 'utf8');
+
+    if (fmt === 'md') {
+      await writeFile(filePath, md, 'utf8');
+    } else if (fmt === 'doc') {
+      await writeFile(filePath, reportHtmlDocument(base, md, { word: true }), 'utf8');
+    } else {
+      // PDF — render the report HTML in a hidden, script-disabled window and print it to PDF.
+      const pdfWin = new BrowserWindow({
+        show: false,
+        webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false },
+      });
+      try {
+        await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(reportHtmlDocument(base, md)));
+        const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+        await writeFile(filePath, pdf);
+      } finally {
+        if (!pdfWin.isDestroyed()) pdfWin.destroy();
+      }
+    }
     return filePath;
   });
 }
