@@ -24,8 +24,9 @@ const base = (over: Partial<Ga4PropertySnapshot> = {}): Ga4PropertySnapshot => (
   industryCategory: 'TECHNOLOGY',
   dataRetention: { eventDataRetention: 'FOURTEEN_MONTHS', resetOnNewActivity: true },
   keyEvents: [{ eventName: 'purchase' }],
-  customDimensions: [],
-  customMetrics: [],
+  // Fully instrumented by default (a dimension + a metric) so "healthy" means no under-instrumentation.
+  customDimensions: [{ parameterName: 'membership_tier', displayName: 'Membership Tier', scope: 'USER' }],
+  customMetrics: [{ parameterName: 'loyalty_points', displayName: 'Loyalty Points' }],
   dataStreams: [{ name: 'properties/1/dataStreams/9', displayName: 'Web', type: 'WEB_DATA_STREAM', enhancedMeasurementEnabled: true }],
   googleAdsLinks: 1,
   googleSignals: 'GOOGLE_SIGNALS_ENABLED',
@@ -129,11 +130,27 @@ test('industry category unset → info benchmarking finding', () => {
   assert.ok(cats(base({ industryCategory: 'INDUSTRY_CATEGORY_UNSPECIFIED' })).includes('benchmarking'));
 });
 
-test('a healthy property: coverage is all Pass', () => {
+test('a fully-instrumented healthy property: every area Pass except Data collection (Partial — deep health not API-verifiable)', () => {
   const r = auditGa4(base());
-  assert.equal(r.findings.length, 0);
-  assert.ok(r.areas.length >= 6);
-  assert.ok(r.areas.every((a) => a.status === 'pass'), JSON.stringify(r.areas));
+  assert.equal(r.findings.length, 0, JSON.stringify(r.findings));
+  const st = (a: string) => r.areas.find((x) => x.area === a)?.status;
+  assert.equal(st('Data collection'), 'partial', 'collection is Partial, never a blind Pass');
+  for (const a of ['Data retention', 'Key events', 'Custom definitions', 'Privacy (PII)', 'Integrations', 'Benchmarking']) {
+    assert.equal(st(a), 'pass', `${a} should pass`);
+  }
+});
+
+test('Data collection grading: Partial when a stream exists (deep health unverifiable), Fail when none', () => {
+  assert.equal(auditGa4(base()).areas.find((a) => a.area === 'Data collection')?.status, 'partial');
+  assert.equal(auditGa4(base({ dataStreams: [] })).areas.find((a) => a.area === 'Data collection')?.status, 'fail');
+});
+
+test('zero custom definitions on a property that marks key events → under-instrumentation finding + Partial', () => {
+  const r = auditGa4(base({ customDimensions: [], customMetrics: [] }));
+  assert.ok(r.findings.some((f) => f.category === 'customdef' && /No custom dimensions or metrics/.test(f.message)));
+  assert.equal(r.areas.find((a) => a.area === 'Custom definitions')?.status, 'partial');
+  // A property with NO key events (nothing to measure) is not nagged about missing custom defs.
+  assert.ok(!auditGa4(base({ customDimensions: [], customMetrics: [], keyEvents: [] })).findings.some((f) => /No custom dimensions or metrics/.test(f.message)));
 });
 
 test('custom-dimension slot usage near the cap → low customdef finding + Partial coverage', () => {
@@ -168,8 +185,8 @@ test('coverage marks unread (null) sub-resources Not Verified, never a silent Pa
   assert.equal(st('Custom definitions'), 'not_verified');
   assert.equal(st('Privacy (PII)'), 'not_verified');
   assert.equal(st('Integrations'), 'not_verified');
-  // Collection always reads (data streams) → still Pass.
-  assert.equal(st('Data collection'), 'pass');
+  // Collection always reads (data streams exist) → Partial (deep health unverifiable), never Not Verified.
+  assert.equal(st('Data collection'), 'partial');
 });
 
 test('coverage reflects severity: Fail on a high finding, Partial on medium/low', () => {

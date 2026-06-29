@@ -8,6 +8,7 @@ import type { GoogleDataService } from './data-service';
 import { auditGa4 } from './ga4-audit';
 import { auditGa4DataQuality } from './ga4-data-quality';
 import { buildGa4AuditReport } from './ga4-report';
+import { auditGa4Growth } from './ga4-growth';
 import { reportHtmlDocument } from './ga4-report-export';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertyAuditResult, Ga4PropertyListItem } from '../../shared/ipc';
@@ -52,6 +53,20 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     const baseline = await withQuotaRetry(() => data.getGa4Baseline(p, dqCounts.startDate ?? '', dqCounts.endDate ?? '')).catch(() => null);
     const attribution = await data.getGa4AttributionSettings(p).catch(() => null);
     const audienceCount = await data.listGa4Audiences(p).then((a) => a.length).catch(() => null);
+    // Growth/anomaly: correlate the session change with the outcomes that should move with real
+    // growth (key events, revenue). Only when we have a baseline; the largest channel names the driver.
+    const topChannel = [...dqCounts.channelGroups].sort((x, y) => y.sessions - x.sessions)[0]?.name ?? null;
+    const growth = baseline
+      ? auditGa4Growth({
+          sessions: baseline.sessions,
+          priorSessions: baseline.priorSessions,
+          keyEvents: baseline.keyEvents,
+          priorKeyEvents: baseline.priorKeyEvents,
+          revenue: baseline.revenue,
+          priorRevenue: baseline.priorRevenue,
+          topChannel,
+        })
+      : null;
     const markdown = buildGa4AuditReport({
       property: p,
       displayName: snap.displayName,
@@ -61,6 +76,7 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
       dataQuality,
       dqCounts,
       baseline,
+      growth,
       attribution,
       audienceCount,
     });

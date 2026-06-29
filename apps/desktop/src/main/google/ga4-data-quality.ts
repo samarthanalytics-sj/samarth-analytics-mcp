@@ -8,7 +8,8 @@
 import type { ScorecardFinding, Severity } from './scorecard';
 
 export interface DataQualityCounts {
-  /** Total sessions in the window (sum over channel groups — the true total). */
+  /** Total sessions in the window — an exact no-dimension sessions query (matches the baseline's
+   *  session total; the data layer falls back to the channel-group sum only if that query is empty). */
   totalSessions: number;
   /** sessionDefaultChannelGroup → sessions (complete; channel groups are few). */
   channelGroups: Array<{ name: string; sessions: number }>;
@@ -61,7 +62,9 @@ export function windowDates(todayYmd: string, days: number): { startDate: string
 }
 
 function share(part: number, total: number): number {
-  return total > 0 ? (part / total) * 100 : 0;
+  // Clamp to 100: the numerator (a channel/source bucket) and the denominator (a separate no-dimension
+  // sessions query) come from different GA4 requests, so estimation drift could otherwise print >100%.
+  return total > 0 ? Math.min(100, (part / total) * 100) : 0;
 }
 
 // A share of total sessions → severity. Below 5% isn't worth flagging.
@@ -102,7 +105,7 @@ export function auditGa4DataQuality(counts: DataQualityCounts): Ga4DataQualityRe
     findings.push({
       severity: uSev,
       category: DQ,
-      message: `${uShare.toFixed(1)}% of sessions are in the "Unassigned" channel (${unassigned}/${total}).`,
+      message: `${uShare.toFixed(1)}% of sessions are in the "Unassigned" channel (${Math.min(unassigned, total)}/${total}).`,
       recommendation: 'Unassigned traffic usually means missing/incorrect UTMs or tags firing before consent — check campaign tagging and that the GA4 tag gets referrer/source data.',
     });
   }
@@ -114,7 +117,7 @@ export function auditGa4DataQuality(counts: DataQualityCounts): Ga4DataQualityRe
     findings.push({
       severity: nSev,
       category: DQ,
-      message: `${nShare.toFixed(1)}% of sessions have a "(not set)" source/medium (${notSet}/${total}).`,
+      message: `${nShare.toFixed(1)}% of sessions have a "(not set)" source/medium (${Math.min(notSet, total)}/${total}).`,
       recommendation: 'A high "(not set)" source/medium share points to sessions starting without referrer/UTM data — often pre-consent tag fires or redirect loss. Verify Consent Mode and landing-page redirects.',
     });
   }

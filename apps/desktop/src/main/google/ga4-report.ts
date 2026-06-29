@@ -7,6 +7,7 @@
 
 import type { Ga4AuditReport, Ga4PropertySnapshot } from './ga4-audit';
 import type { Ga4DataQualityResult, DataQualityCounts } from './ga4-data-quality';
+import type { Ga4GrowthResult } from './ga4-growth';
 import type { Ga4Baseline } from './data-service';
 
 export interface Ga4ReportInput {
@@ -18,8 +19,21 @@ export interface Ga4ReportInput {
   dataQuality: Ga4DataQualityResult;
   dqCounts: DataQualityCounts; // for channel-mix bars
   baseline: Ga4Baseline | null; // null = couldn't pull → baseline marked Not Verified
+  growth: Ga4GrowthResult | null; // null = no baseline → growth not assessed
   attribution: { reportingAttributionModel: string; acquisitionConversionEventLookbackWindow: string; otherConversionEventLookbackWindow: string } | null;
   audienceCount: number | null;
+}
+
+interface AreaRow {
+  area: string;
+  statusKey: 'pass' | 'partial' | 'fail' | 'not_verified';
+  evidence: string;
+}
+interface FindingRow {
+  severity: string;
+  area: string;
+  message: string;
+  recommendation?: string;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -94,18 +108,54 @@ function decisionReadiness(s: Ga4PropertySnapshot): Array<{ q: string; status: s
   ];
 }
 
-function execState(config: Ga4AuditReport, dq: Ga4DataQualityResult): string {
-  const high = config.summary.high + dq.findings.filter((f) => f.severity === 'critical' || f.severity === 'high').length;
-  const midLow = config.summary.medium + config.summary.low + dq.findings.filter((f) => f.severity === 'medium' || f.severity === 'low').length;
-  if (high > 0) return `${high} high-impact issue(s) need attention.`;
-  if (midLow > 0) return `${midLow} minor gap(s); no high-impact issues.`;
-  return 'Well-configured — no critical, high, medium or low issues detected.';
+const confidenceFor = (k: AreaRow['statusKey']): string =>
+  k === 'not_verified' ? 'Guessing' : k === 'partial' ? 'Likely' : 'Certain';
+
+// Overall verdict — factors in findings AND coverage. A property is NOT "well-configured" while
+// areas remain unverified/partial (the Brain's "never assume a pass" rule applied to the headline).
+function execState(allFindings: FindingRow[], areaRows: AreaRow[]): string {
+  const sev = (s: string): number => allFindings.filter((f) => f.severity === s).length;
+  const high = sev('critical') + sev('high');
+  const med = sev('medium');
+  const low = sev('low');
+  const unverified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
+  const partial = areaRows.filter((a) => a.statusKey === 'partial').length;
+  const tail = `${unverified} area(s) unverified, ${partial} partially verified — confirm those before sign-off.`;
+  if (high > 0) return `${high} high-impact issue(s) need attention${med + low > 0 ? `, plus ${med + low} smaller gap(s)` : ''}; ${tail}`;
+  if (med > 0) return `${med} issue(s) to address${low ? ` and ${low} minor gap(s)` : ''}; ${tail}`;
+  if (low > 0) return `${low} minor gap(s); ${tail}`;
+  return `No critical/high/medium/low issues found, but ${tail} Not a clean bill of health on its own.`;
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
-  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, attribution, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
   const pid = input.property.replace('properties/', '');
+  const ecom = hasEcommerce(s);
   const L: string[] = [];
+
+  // ── Single source of truth: combined findings (config + data quality + growth/anomaly) and the
+  // area-coverage rows. The exec verdict, Findings table and Summary all derive from these. ──
+  const allFindings: FindingRow[] = [
+    ...config.findings.map((f) => ({ severity: f.severity, area: 'Config', message: f.message, recommendation: f.recommendation })),
+    ...dq.findings.map((f) => ({ severity: f.severity, area: 'Data quality', message: f.message, recommendation: f.recommendation })),
+    ...(growth?.findings ?? []).map((f) => ({ severity: f.severity, area: 'Growth', message: f.message, recommendation: f.recommendation })),
+  ].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9));
+
+  const areaRows: AreaRow[] = config.areas.map((a) => ({ area: a.area, statusKey: a.status, evidence: areaEvidence(a.area, s, config) }));
+  if (attribution) {
+    areaRows.push({ area: 'Attribution', statusKey: 'pass', evidence: `${attribution.reportingAttributionModel}; lookback ${attribution.acquisitionConversionEventLookbackWindow}/${attribution.otherConversionEventLookbackWindow}` });
+  }
+  if (audienceCount !== null) {
+    areaRows.push({ area: 'Audiences', statusKey: audienceCount > 0 ? 'pass' : 'partial', evidence: `${audienceCount} audience(s)` });
+  }
+  // Ecommerce is never a clean Pass: even with purchase/item key events, per-event parameter coverage
+  // and duplicate-transaction checks are not computed here → Partial at best.
+  areaRows.push({
+    area: 'Ecommerce',
+    statusKey: ecom ? 'partial' : 'not_verified',
+    evidence: ecom ? 'purchase/item key events present; item params & duplicate transactions not verified' : 'no purchase/item key events found',
+  });
+  areaRows.push({ area: 'Consent', statusKey: 'not_verified', evidence: 'consent mode not retrievable via the Admin API' });
 
   // ── Header ──
   L.push(`# GA4 Property Audit — ${input.displayName}`);
@@ -120,16 +170,23 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push(`**Generated:** ${input.generatedAt}`);
   L.push('');
   const limits = ['per-event parameter coverage not computed', 'Consent Mode not assessed (needs DebugView)'];
-  if (!hasEcommerce(s)) limits.push('no ecommerce events detected');
+  if (!ecom) limits.push('no ecommerce events detected');
   L.push(`*Data limitations: ${limits.join('; ')}.*`);
   L.push('');
 
   // ── Executive summary ──
+  const trendPctText = (p: number | null): string => (p === null ? 'n/a' : `${p >= 0 ? '+' : ''}${p}%`);
   L.push('## Executive summary');
   L.push('');
-  L.push(`- **Overall:** ${execState(config, dq)}`);
-  L.push(`- **Findings:** ${config.counts.findings + dq.findings.length} total — ${config.counts.findings} config, ${dq.findings.length} data quality`);
+  L.push(`- **Overall:** ${execState(allFindings, areaRows)}`);
+  const fc = config.counts.findings;
+  const fd = dq.findings.length;
+  const fg = growth?.findings.length ?? 0;
+  L.push(`- **Findings:** ${fc + fd + fg} total — ${fc} config, ${fd} data quality, ${fg} growth/anomaly`);
   L.push(`- **Sessions (window):** ${num(baseline ? baseline.sessions : dq.totalSessions)}${trendLabel(baseline)}`);
+  if (growth && growth.assessed) {
+    L.push(`- **Outcomes vs prior:** key events ${trendPctText(growth.keyEventsTrendPct)}, revenue ${trendPctText(growth.revenueTrendPct)} (sessions ${trendPctText(growth.sessionsTrendPct)})`);
+  }
   L.push('');
 
   // ── Area status ──
@@ -137,17 +194,9 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push('');
   L.push('| Area | Status | Confidence | Evidence |');
   L.push('| --- | --- | --- | --- |');
-  for (const a of config.areas) {
-    L.push(`| ${a.area} | ${STATUS_LABEL[a.status] ?? a.status} | ${a.status === 'not_verified' ? 'Guessing' : 'Certain'} | ${cell(areaEvidence(a.area, s, config))} |`);
+  for (const a of areaRows) {
+    L.push(`| ${a.area} | ${STATUS_LABEL[a.statusKey] ?? a.statusKey} | ${confidenceFor(a.statusKey)} | ${cell(a.evidence)} |`);
   }
-  if (attribution) {
-    L.push(`| Attribution | Pass | Certain | ${cell(`${attribution.reportingAttributionModel}; lookback ${attribution.acquisitionConversionEventLookbackWindow}/${attribution.otherConversionEventLookbackWindow}`)} |`);
-  }
-  if (audienceCount !== null) {
-    L.push(`| Audiences | ${audienceCount > 0 ? 'Pass' : 'Partial'} | Certain | ${audienceCount} audience(s) |`);
-  }
-  L.push(`| Ecommerce | ${hasEcommerce(s) ? 'Pass' : 'Not Verified'} | ${hasEcommerce(s) ? 'Likely' : 'Guessing'} | ${hasEcommerce(s) ? 'ecommerce key events present' : 'no purchase/item key events found'} |`);
-  L.push('| Consent | Not Verified | Guessing | consent mode not retrievable via the Admin API |');
   L.push('');
 
   // ── Property baseline ──
@@ -155,6 +204,9 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push('');
   if (baseline) {
     L.push(`- **Sessions:** ${num(baseline.sessions)} (prior period ${num(baseline.priorSessions)}${trendLabel(baseline)})`);
+    if (growth && growth.assessed) {
+      L.push(`- **Growth signals (vs prior):** sessions ${trendPctText(growth.sessionsTrendPct)} · key events ${trendPctText(growth.keyEventsTrendPct)} · revenue ${trendPctText(growth.revenueTrendPct)}`);
+    }
     L.push(`- **Peak day:** ${baseline.peakDay ? `${fmtDay(baseline.peakDay.date)} — ${num(baseline.peakDay.sessions)} sessions` : 'Not Verified'}`);
     L.push(`- **New vs returning:** ${shareLabel(baseline.newVsReturning)}`);
     L.push(`- **Top markets:** ${baseline.topCountries.length ? baseline.topCountries.map((c) => `${c.name || '(not set)'} ${pct(c.sessions, baseline.sessions)}%`).join(', ') : 'Not Verified'}`);
@@ -173,13 +225,15 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     L.push('- Baseline traffic metrics could not be retrieved — **Not Verified**.');
     L.push('');
   }
-  const total = dqCounts.totalSessions || 1;
+  // Channel-mix bars divide by the channel report's OWN sum (not the headline total, which comes
+  // from a separate no-dimension query) so the shares are internally consistent and sum to ~100%.
+  const channelTotal = dqCounts.channelGroups.reduce((acc, c) => acc + c.sessions, 0) || 1;
   const channels = [...dqCounts.channelGroups].sort((a, b) => b.sessions - a.sessions).slice(0, 8);
   if (channels.length) {
     L.push('**Channel mix (sessions)**');
     L.push('');
     L.push('```');
-    for (const ch of channels) L.push(`${(ch.name || '(not set)').padEnd(20)} ${bar(pct(ch.sessions, total))}`);
+    for (const ch of channels) L.push(`${(ch.name || '(not set)').padEnd(20)} ${bar(pct(ch.sessions, channelTotal))}`);
     L.push('```');
     L.push('');
   }
@@ -192,19 +246,18 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   for (const r of decisionReadiness(s)) L.push(`| ${cell(r.q)} | ${r.status} | ${cell(r.note)} |`);
   L.push('');
 
-  // ── Findings (by severity) ──
+  // ── Findings & fixes (by severity) ──
   L.push('## Findings (by severity)');
   L.push('');
-  const findings = [
-    ...config.findings.map((f) => ({ ...f, area: 'Config' })),
-    ...dq.findings.map((f) => ({ ...f, area: 'Data quality' })),
-  ].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9));
-  if (findings.length === 0) {
-    L.push('No config or data-quality issues found for this window. ✅');
+  if (allFindings.length === 0) {
+    L.push('No config, data-quality or growth issues found for this window. ✅');
   } else {
+    const actNow = allFindings.filter((f) => f.severity === 'critical' || f.severity === 'high' || f.severity === 'medium').length;
+    L.push(`${allFindings.length} item(s) — ${actNow} warning(s)/fix(es) to act on, ${allFindings.length - actNow} advisory. Highest severity first.`);
+    L.push('');
     L.push('| Severity | Area | Issue | Recommended fix |');
     L.push('| --- | --- | --- | --- |');
-    for (const f of findings) L.push(`| ${f.severity.toUpperCase()} | ${f.area} | ${cell(f.message)} | ${cell(f.recommendation ?? '—')} |`);
+    for (const f of allFindings) L.push(`| ${f.severity.toUpperCase()} | ${f.area} | ${cell(f.message)} | ${cell(f.recommendation ?? '—')} |`);
   }
   L.push('');
 
@@ -215,7 +268,8 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     'Per-event parameter coverage — needs per-event Data API analysis',
     'Consent Mode v2 signals — needs GA4 DebugView / a live /collect hit capture',
   ];
-  if (!hasEcommerce(s)) nv.push('Ecommerce funnel — no purchase/add_to_cart key events detected');
+  if (!ecom) nv.push('Ecommerce funnel — no purchase/add_to_cart key events detected');
+  else nv.push('Ecommerce item parameters & duplicate transactions — needs per-event Data API analysis');
   for (const a of config.areas.filter((x) => x.status === 'not_verified')) nv.push(`${a.area} — config sub-resource could not be read`);
   for (const item of nv) L.push(`- ${item}`);
   L.push('');
@@ -224,7 +278,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push('## Summary');
   L.push('');
   const counts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-  for (const f of findings) counts[f.severity] = (counts[f.severity] ?? 0) + 1;
+  for (const f of allFindings) counts[f.severity] = (counts[f.severity] ?? 0) + 1;
   L.push(`Critical: ${counts.critical} · High: ${counts.high} · Medium: ${counts.medium} · Low: ${counts.low} · Info: ${counts.info}`);
   L.push('');
   L.push('*Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.*');
