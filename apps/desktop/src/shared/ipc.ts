@@ -151,6 +151,8 @@ export interface Ga4DataQualityView {
 export interface Ga4PropertyAuditResult {
   config: Ga4AuditReportView;
   dataQuality: Ga4DataQualityView;
+  /** Full templated audit as a Markdown document (rendered in the panel + downloadable). */
+  markdown: string;
 }
 /** The data-quality window for a GA4 audit: a count of trailing days (default 28), or an explicit
  *  custom range (YYYY-MM-DD, inclusive, interpreted in the property's timezone). */
