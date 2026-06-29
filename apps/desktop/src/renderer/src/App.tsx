@@ -1333,6 +1333,7 @@ function GtmToolsView({
       <div style={styles.subTabs} role="tablist">
         <button style={tab === 'suggestions' ? styles.subTabOn : styles.subTabOff} onClick={() => setTab('suggestions')} role="tab" aria-selected={tab === 'suggestions'}>
           🏷 Tag suggestions
+          <span style={styles.betaBadge}>Beta</span>
         </button>
         <button style={tab === 'audit' ? styles.subTabOn : styles.subTabOff} onClick={() => setTab('audit')} role="tab" aria-selected={tab === 'audit'}>
           🔍 Container audit
@@ -3201,6 +3202,7 @@ const styles: Record<string, React.CSSProperties> = {
   subTabs: { display: 'flex', gap: 8, padding: '10px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 },
   subTabOn: { background: '#1e3a5f', color: 'var(--text)', border: '1px solid #1e3a5f', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
   subTabOff: { background: 'transparent', color: '#93c5fd', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13 },
+  betaBadge: { marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: '#fcd34d', background: '#3a2c0a', border: '1px solid #92651a', borderRadius: 6, padding: '1px 5px', verticalAlign: 'middle' },
 
   promptsWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   promptsHead: { padding: '14px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 },
