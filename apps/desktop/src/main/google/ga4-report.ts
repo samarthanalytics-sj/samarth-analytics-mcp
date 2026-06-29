@@ -1,13 +1,14 @@
 // Pure GA4 property-audit REPORT builder — turns the config audit + data-quality audit + baseline
-// metrics into a templated Markdown document (the GA4 Property Audit Brain layout: header → exec
-// summary → area-status table → property baseline + Unicode bars → decision readiness → findings →
-// not-verified → summary). No I/O, so it's fully unit-testable; the IPC gathers the data and feeds
-// it in. Sections that can't be computed deterministically (per-event parameter coverage, consent)
-// are reported as Not Verified — never a silent pass.
+// metrics into a templated Markdown document in the verdict-first Audit Brain layout:
+//   1 Verdict → 2 What is wrong → 3 Outcomes vs traffic → 4 All findings → 5 Area status →
+//   6 Property baseline → 7 Decision readiness → 8 Not verified → 9 Scope & metadata.
+// No I/O, so it's fully unit-testable; the IPC gathers the data and feeds it in. Sections that can't
+// be computed deterministically (per-event parameter coverage, consent) are Not Verified — never a
+// silent pass — and findings are graded to the worst unverified branch.
 
 import type { Ga4AuditReport, Ga4PropertySnapshot } from './ga4-audit';
 import type { Ga4DataQualityResult, DataQualityCounts } from './ga4-data-quality';
-import type { Ga4GrowthResult } from './ga4-growth';
+import type { Ga4GrowthResult, Ga4GrowthFinding } from './ga4-growth';
 import type { Ga4Baseline } from './data-service';
 
 export interface Ga4ReportInput {
@@ -31,14 +32,35 @@ interface AreaRow {
 }
 interface FindingRow {
   severity: string;
+  category: string;
   area: string;
   message: string;
   recommendation?: string;
+  // Optional structured fields (populated by the growth engine) for the expanded "What is wrong" block.
+  evidence?: string;
+  whyItMatters?: string;
+  ifUnconfirmed?: string;
+  businessRisk?: string;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 const STATUS_LABEL: Record<string, string> = { pass: 'Pass', partial: 'Partial', fail: 'Fail', not_verified: 'Not Verified' };
+// Colour the status at a glance (the GFM table renderer can't colour cells, so use dots).
+const STATUS_DOT: Record<string, string> = { pass: '🟢', partial: '🟡', fail: '🔴', not_verified: '⚪' };
+// Per-category business-risk fallback for findings that don't carry their own (config + data quality).
+const RISK_BY_CATEGORY: Record<string, string> = {
+  growth: 'Revenue/ROAS and growth claims unreliable until confirmed',
+  data_quality: 'Channel/source attribution is unreliable for the affected sessions',
+  collection: 'Collected data may be incomplete or double-counted',
+  conversions: 'Conversion outcomes are not being measured',
+  measurement: 'Auto-collected interactions are missing',
+  retention: 'Historical analysis window is limited',
+  privacy: 'GA4 ToS / privacy exposure',
+  customdef: "Reports/explorations can't segment by your event or user parameters",
+  integrations: 'Cross-product features (Ads, Signals) unavailable',
+  benchmarking: 'Industry benchmarks unavailable',
+};
 
 const pct = (part: number, total: number): number => (total > 0 ? Math.round((part / total) * 100) : 0);
 /** Unicode bar (Audit Brain rule): filled = round(value/5) of 20, then the number. Clamped to
@@ -110,21 +132,20 @@ function decisionReadiness(s: Ga4PropertySnapshot): Array<{ q: string; status: s
 
 const confidenceFor = (k: AreaRow['statusKey']): string =>
   k === 'not_verified' ? 'Guessing' : k === 'partial' ? 'Likely' : 'Certain';
+const trendPctText = (p: number | null): string => (p === null ? 'n/a' : `${p >= 0 ? '+' : ''}${p}%`);
+const firstSentence = (t: string): string => {
+  const m = /^(.*?[.!?])(\s|$)/.exec(t.trim());
+  return (m ? m[1] : t).trim();
+};
+// Info findings are advisories/all-clears, not problems — never attach a business risk to them.
+const riskFor = (f: FindingRow): string => (f.severity === 'info' ? '—' : f.businessRisk ?? RISK_BY_CATEGORY[f.category] ?? '—');
 
-// Overall verdict — factors in findings AND coverage. A property is NOT "well-configured" while
-// areas remain unverified/partial (the Brain's "never assume a pass" rule applied to the headline).
-function execState(allFindings: FindingRow[], areaRows: AreaRow[]): string {
-  const sev = (s: string): number => allFindings.filter((f) => f.severity === s).length;
-  const high = sev('critical') + sev('high');
-  const med = sev('medium');
-  const low = sev('low');
-  const unverified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
-  const partial = areaRows.filter((a) => a.statusKey === 'partial').length;
-  const tail = `${unverified} area(s) unverified, ${partial} partially verified — confirm those before sign-off.`;
-  if (high > 0) return `${high} high-impact issue(s) need attention${med + low > 0 ? `, plus ${med + low} smaller gap(s)` : ''}; ${tail}`;
-  if (med > 0) return `${med} issue(s) to address${low ? ` and ${low} minor gap(s)` : ''}; ${tail}`;
-  if (low > 0) return `${low} minor gap(s); ${tail}`;
-  return `No critical/high/medium/low issues found, but ${tail} Not a clean bill of health on its own.`;
+// Read-first trust verdict. critical/high → "Do not trust yet"; any finding or unverified/partial
+// coverage → "Trust with caveats"; only a fully clean + fully verified property is "Trustworthy".
+function trustVerdict(allFindings: FindingRow[], areaRows: AreaRow[]): string {
+  if (allFindings.some((f) => f.severity === 'critical' || f.severity === 'high')) return 'Do not trust yet';
+  const gaps = allFindings.length > 0 || areaRows.some((a) => a.statusKey !== 'pass');
+  return gaps ? 'Trust with caveats' : 'Trustworthy';
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
@@ -134,12 +155,28 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   const L: string[] = [];
 
   // ── Single source of truth: combined findings (config + data quality + growth/anomaly) and the
-  // area-coverage rows. The exec verdict, Findings table and Summary all derive from these. ──
+  // area-coverage rows. The verdict, All-findings table and counts all derive from these. ──
   const allFindings: FindingRow[] = [
-    ...config.findings.map((f) => ({ severity: f.severity, area: 'Config', message: f.message, recommendation: f.recommendation })),
-    ...dq.findings.map((f) => ({ severity: f.severity, area: 'Data quality', message: f.message, recommendation: f.recommendation })),
-    ...(growth?.findings ?? []).map((f) => ({ severity: f.severity, area: 'Growth', message: f.message, recommendation: f.recommendation })),
+    ...config.findings.map((f) => ({ severity: f.severity, category: f.category, area: 'Config', message: f.message, recommendation: f.recommendation })),
+    ...dq.findings.map((f) => ({ severity: f.severity, category: f.category, area: 'Data quality', message: f.message, recommendation: f.recommendation })),
+    ...(growth?.findings ?? []).map((f: Ga4GrowthFinding) => ({
+      severity: f.severity,
+      category: f.category,
+      area: 'Growth',
+      message: f.message,
+      recommendation: f.recommendation,
+      evidence: f.evidence,
+      whyItMatters: f.whyItMatters,
+      ifUnconfirmed: f.ifUnconfirmed,
+      businessRisk: f.businessRisk,
+    })),
   ].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9));
+  // The "top finding" that drives the Verdict + "What is wrong" is the worst ACTIONABLE one. An
+  // info-only result (e.g. the data-quality "no major issues" advisory on a clean property) has no
+  // top finding, so those sections take their clean-property fallbacks instead of mislabelling an
+  // all-clear as a problem.
+  const actionable = allFindings.filter((f) => f.severity !== 'info');
+  const top = actionable[0];
 
   const areaRows: AreaRow[] = config.areas.map((a) => ({ area: a.area, statusKey: a.status, evidence: areaEvidence(a.area, s, config) }));
   if (attribution) {
@@ -157,50 +194,92 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   });
   areaRows.push({ area: 'Consent', statusKey: 'not_verified', evidence: 'consent mode not retrievable via the Admin API' });
 
-  // ── Header ──
-  L.push(`# GA4 Property Audit — ${input.displayName}`);
-  L.push('');
-  L.push(`**Property:** ${input.displayName} (${pid})  `);
   const windowLabel = dq.dateRange ?? `${dq.windowDays} days`;
   const cmp = baseline ? ` vs prior ${baseline.priorStartDate} – ${baseline.priorEndDate}` : '';
-  L.push(`**Data window:** ${windowLabel}${cmp}  `);
-  L.push(`**Data retention:** ${retentionLabel(s.dataRetention)}  `);
-  L.push(`**Timezone / currency:** ${s.timeZone || '—'} / ${s.currencyCode || '—'}  `);
-  L.push(`**Access:** GA4 Admin + Data API (read-only)  `);
-  L.push(`**Generated:** ${input.generatedAt}`);
+  const nPartial = areaRows.filter((a) => a.statusKey === 'partial').length;
+  const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
+  const dqAttrib = allFindings.find((f) => f.category === 'data_quality' && f.severity !== 'info' && /source data|Unassigned|\(not set\)/.test(f.message));
+
+  // ── 1 · Verdict (read-first) ──
+  L.push(`# GA4 Property Audit — ${input.displayName} (${pid})`);
   L.push('');
-  const limits = ['per-event parameter coverage not computed', 'Consent Mode not assessed (needs DebugView)'];
-  if (!ecom) limits.push('no ecommerce events detected');
-  L.push(`*Data limitations: ${limits.join('; ')}.*`);
+  L.push('## 1 · Verdict');
+  L.push('');
+  L.push(`**Trust:** ${trustVerdict(allFindings, areaRows)}  `);
+  L.push(`**Why:** ${top ? firstSentence(top.whyItMatters ?? top.message) : `No blocking issues found; ${nNotVerified} area(s) remain unverified.`}  `);
+  L.push(`**Do first:** ${top ? firstSentence(top.recommendation ?? 'Confirm the unverified areas.') : 'Confirm the unverified areas (consent, ecommerce parameters) before sign-off.'}  `);
+  L.push(`**At stake:** ${top ? riskFor(top) : 'Sign-off depends on the unverified areas below.'}  `);
+  L.push(`**Coverage:** ${areaRows.length} areas checked · ${nPartial} partial · ${nNotVerified} not verified`);
   L.push('');
 
-  // ── Executive summary ──
-  const trendPctText = (p: number | null): string => (p === null ? 'n/a' : `${p >= 0 ? '+' : ''}${p}%`);
-  L.push('## Executive summary');
+  // ── 2 · What is wrong (top finding, expanded) ──
+  L.push('## 2 · What is wrong');
   L.push('');
-  L.push(`- **Overall:** ${execState(allFindings, areaRows)}`);
-  const fc = config.counts.findings;
-  const fd = dq.findings.length;
-  const fg = growth?.findings.length ?? 0;
-  L.push(`- **Findings:** ${fc + fd + fg} total — ${fc} config, ${fd} data quality, ${fg} growth/anomaly`);
-  L.push(`- **Sessions (window):** ${num(baseline ? baseline.sessions : dq.totalSessions)}${trendLabel(baseline)}`);
+  if (top) {
+    L.push(`**[${top.severity.toUpperCase()}] ${top.area} — ${firstSentence(top.message)}**`);
+    L.push('');
+    L.push(`- **Evidence:** ${top.evidence ?? top.message}`);
+    if (top.whyItMatters) L.push(`- **Why it matters:** ${top.whyItMatters}`);
+    L.push(`- **If unconfirmed:** ${top.ifUnconfirmed ?? 'Graded at face value — no worse unverified branch.'}`);
+    L.push(`- **Fix:** ${top.recommendation ?? '—'}`);
+    if (dqAttrib && top.category === 'growth') L.push(`- **Related:** ${dqAttrib.message} (likely the same sessions behind the spike)`);
+    L.push('');
+  } else {
+    L.push(`No high-severity issue. The ceiling on trust is coverage — ${nNotVerified} area(s) are unverified; see section 8.`);
+    L.push('');
+  }
+
+  // ── 3 · Outcomes vs traffic (the growth check) ──
+  L.push('## 3 · Outcomes vs traffic');
+  L.push('');
   if (growth && growth.assessed) {
-    L.push(`- **Outcomes vs prior:** key events ${trendPctText(growth.keyEventsTrendPct)}, revenue ${trendPctText(growth.revenueTrendPct)} (sessions ${trendPctText(growth.sessionsTrendPct)})`);
+    L.push('```');
+    L.push(`Sessions    ${trendPctText(growth.sessionsTrendPct)}`);
+    L.push(`Key events  ${trendPctText(growth.keyEventsTrendPct)}`);
+    L.push(`Revenue     ${trendPctText(growth.revenueTrendPct)}`);
+    L.push('```');
+    const gf = growth.findings[0];
+    const read =
+      !gf || gf.category !== 'growth'
+        ? 'Sessions are within normal variation vs the prior period.'
+        : gf.severity === 'info'
+          ? 'Outcomes tracked the traffic — consistent with real growth.'
+          : gf.severity === 'medium'
+            ? "Sessions moved sharply, but there isn't enough conversion signal to confirm what's behind it."
+            : 'Outcomes did NOT keep pace with traffic — the spike is unconfirmed and revenue/ROAS may be wrong right now.';
+    L.push(`**Read:** ${read}`);
+  } else {
+    L.push('Not enough prior traffic to assess growth for this window.');
   }
   L.push('');
 
-  // ── Area status ──
-  L.push('## Area status');
+  // ── 4 · All findings (severity high → low) ──
+  L.push('## 4 · All findings');
+  L.push('');
+  if (allFindings.length === 0) {
+    L.push('No config, data-quality or growth issues found for this window. ✅');
+  } else {
+    const actNow = actionable.length;
+    L.push(`${allFindings.length} item(s) — ${actNow} to act on, ${allFindings.length - actNow} advisory. Highest severity first.`);
+    L.push('');
+    L.push('| Severity | Area | Issue | Business risk | Fix |');
+    L.push('| --- | --- | --- | --- | --- |');
+    for (const f of allFindings) L.push(`| ${f.severity.toUpperCase()} | ${f.area} | ${cell(f.message)} | ${cell(riskFor(f))} | ${cell(f.recommendation ?? '—')} |`);
+  }
+  L.push('');
+
+  // ── 5 · Area status (evidence layer; coloured dot per status) ──
+  L.push('## 5 · Area status');
   L.push('');
   L.push('| Area | Status | Confidence | Evidence |');
   L.push('| --- | --- | --- | --- |');
   for (const a of areaRows) {
-    L.push(`| ${a.area} | ${STATUS_LABEL[a.statusKey] ?? a.statusKey} | ${confidenceFor(a.statusKey)} | ${cell(a.evidence)} |`);
+    L.push(`| ${a.area} | ${STATUS_DOT[a.statusKey] ?? ''} ${STATUS_LABEL[a.statusKey] ?? a.statusKey} | ${confidenceFor(a.statusKey)} | ${cell(a.evidence)} |`);
   }
   L.push('');
 
-  // ── Property baseline ──
-  L.push('## Property baseline');
+  // ── 6 · Property baseline (context) ──
+  L.push('## 6 · Property baseline');
   L.push('');
   if (baseline) {
     L.push(`- **Sessions:** ${num(baseline.sessions)} (prior period ${num(baseline.priorSessions)}${trendLabel(baseline)})`);
@@ -238,48 +317,48 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     L.push('');
   }
 
-  // ── Decision readiness ──
-  L.push('## Decision readiness');
+  // ── 7 · Decision readiness ──
+  L.push('## 7 · Decision readiness');
   L.push('');
-  L.push('| Business question | Status | Notes |');
+  L.push('| Business question | Status | Missing input |');
   L.push('| --- | --- | --- |');
   for (const r of decisionReadiness(s)) L.push(`| ${cell(r.q)} | ${r.status} | ${cell(r.note)} |`);
   L.push('');
 
-  // ── Findings & fixes (by severity) ──
-  L.push('## Findings (by severity)');
+  // ── 8 · Not verified (honesty layer) ──
+  L.push('## 8 · Not verified');
   L.push('');
-  if (allFindings.length === 0) {
-    L.push('No config, data-quality or growth issues found for this window. ✅');
-  } else {
-    const actNow = allFindings.filter((f) => f.severity === 'critical' || f.severity === 'high' || f.severity === 'medium').length;
-    L.push(`${allFindings.length} item(s) — ${actNow} warning(s)/fix(es) to act on, ${allFindings.length - actNow} advisory. Highest severity first.`);
-    L.push('');
-    L.push('| Severity | Area | Issue | Recommended fix |');
-    L.push('| --- | --- | --- | --- |');
-    for (const f of allFindings) L.push(`| ${f.severity.toUpperCase()} | ${f.area} | ${cell(f.message)} | ${cell(f.recommendation ?? '—')} |`);
-  }
-  L.push('');
-
-  // ── Not verified ──
-  L.push('## Not verified');
-  L.push('');
-  const nv = [
-    'Per-event parameter coverage — needs per-event Data API analysis',
-    'Consent Mode v2 signals — needs GA4 DebugView / a live /collect hit capture',
+  const nv: Array<{ item: string; blocks: string }> = [
+    { item: 'Per-event parameter coverage', blocks: 'whether events carry the parameters reports & funnels rely on' },
+    { item: 'Consent Mode v2 signals', blocks: 'whether consent-gated loss is inflating "(not set)"/Unassigned' },
   ];
-  if (!ecom) nv.push('Ecommerce funnel — no purchase/add_to_cart key events detected');
-  else nv.push('Ecommerce item parameters & duplicate transactions — needs per-event Data API analysis');
-  for (const a of config.areas.filter((x) => x.status === 'not_verified')) nv.push(`${a.area} — config sub-resource could not be read`);
-  for (const item of nv) L.push(`- ${item}`);
+  if (ecom) nv.push({ item: 'Ecommerce item parameters & duplicate transactions', blocks: 'whether revenue and abandonment figures are accurate' });
+  else nv.push({ item: 'Ecommerce funnel (no purchase/add_to_cart key events)', blocks: 'product/checkout funnel analysis' });
+  for (const a of config.areas.filter((x) => x.status === 'not_verified')) nv.push({ item: `${a.area} (config sub-resource unreadable)`, blocks: `the ${a.area} checks` });
+  const gate =
+    top && (top.severity === 'critical' || top.severity === 'high') && top.category === 'growth'
+      ? 'whether conversion tracking actually fires for the new traffic — needs GA4 DebugView + a per-event Data API pass'
+      : nv[0].blocks;
+  L.push(`**Gates sign-off:** ${gate}.`);
+  L.push('');
+  for (const x of nv) L.push(`- ${x.item} → blocks: ${x.blocks}`);
   L.push('');
 
-  // ── Summary ──
-  L.push('## Summary');
+  // ── 9 · Scope & metadata (appendix) ──
+  L.push('## 9 · Scope & metadata');
   L.push('');
+  L.push(`**Window:** ${windowLabel}${cmp}  `);
+  L.push(`**Retention:** ${retentionLabel(s.dataRetention)}  `);
+  L.push(`**Timezone / currency:** ${s.timeZone || '—'} / ${s.currencyCode || '—'}  `);
+  L.push(`**Access:** GA4 Admin + Data API (read-only)  `);
+  L.push(`**Generated:** ${input.generatedAt}  `);
+  L.push(`**Property:** ${input.displayName} (${pid})  `);
+  const limits = ['per-event parameter coverage not computed', 'Consent Mode not assessed (needs DebugView)'];
+  if (!ecom) limits.push('no ecommerce events detected');
+  L.push(`**Limitations:** ${limits.join('; ')}.  `);
   const counts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const f of allFindings) counts[f.severity] = (counts[f.severity] ?? 0) + 1;
-  L.push(`Critical: ${counts.critical} · High: ${counts.high} · Medium: ${counts.medium} · Low: ${counts.low} · Info: ${counts.info}`);
+  L.push(`**Findings:** Critical ${counts.critical} · High ${counts.high} · Medium ${counts.medium} · Low ${counts.low} · Info ${counts.info}`);
   L.push('');
   L.push('*Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.*');
 

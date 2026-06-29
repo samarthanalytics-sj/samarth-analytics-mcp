@@ -23,7 +23,7 @@ test('no sessions → a single high "not collecting" finding', () => {
   assert.match(r.findings[0].message, /not be collecting/);
 });
 
-test('high Unassigned share and a (not set) source/medium are both flagged with shares', () => {
+test('Unassigned + (not set) share a root cause → ONE merged finding at the worse severity', () => {
   const r = auditGa4DataQuality({
     totalSessions: 1000,
     channelGroups: [
@@ -38,13 +38,25 @@ test('high Unassigned share and a (not set) source/medium are both flagged with 
     ],
     windowDays: 28,
   });
-  const unassigned = r.findings.find((f) => /Unassigned/.test(f.message))!;
-  assert.equal(unassigned.severity, 'high', '30% Unassigned → high');
-  assert.match(unassigned.message, /30\.0%/);
-  const notSet = r.findings.find((f) => /\(not set\)/.test(f.message))!;
-  assert.equal(notSet.severity, 'medium', '12% (not set) → medium');
-  assert.match(notSet.message, /12\.0%/);
-  assert.ok(r.findings.every((f) => f.category === 'data_quality'));
+  assert.equal(r.findings.length, 1, 'merged, not two separate advisories');
+  const f = r.findings[0];
+  assert.equal(f.severity, 'high', 'merged severity = worse of the two (high)');
+  assert.match(f.message, /30\.0%/);
+  assert.match(f.message, /12\.0%/);
+  assert.match(f.message, /without usable source data|overlap/);
+  assert.equal(f.category, 'data_quality');
+});
+
+test('only one of Unassigned / (not set) flagged → that single finding (no spurious merge)', () => {
+  const r = auditGa4DataQuality({
+    totalSessions: 1000,
+    channelGroups: [{ name: 'Unassigned', sessions: 300 }, { name: 'Direct', sessions: 700 }], // 30% → high
+    sourceMediums: [{ name: 'google / organic', sessions: 1000 }], // no (not set)
+    windowDays: 28,
+  });
+  assert.equal(r.findings.length, 1);
+  assert.match(r.findings[0].message, /Unassigned/);
+  assert.equal(r.findings[0].severity, 'high');
 });
 
 test('shares below 5% produce no problem findings, just an info "looks healthy"', () => {

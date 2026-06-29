@@ -27,14 +27,22 @@ const inp = (over: Partial<Ga4GrowthInput> = {}): Ga4GrowthInput => ({
 
 console.log('\nGA4 growth:');
 
-test('a spike that conversions and revenue did NOT track → HIGH finding', () => {
+test('a >=2x spike that conversions and revenue did NOT track → CRITICAL (worst unverified branch)', () => {
   const r = auditGa4Growth(inp({ sessions: 32000, priorSessions: 8800, keyEvents: 205, priorKeyEvents: 200, revenue: 1000, priorRevenue: 980 }));
   assert.equal(r.findings.length, 1);
-  assert.equal(r.findings[0].severity, 'high');
+  assert.equal(r.findings[0].severity, 'critical', 'a doubled spike with flat conversions grades to the worse branch');
   assert.equal(r.findings[0].category, 'growth');
-  assert.ok(/did not track/.test(r.findings[0].message));
+  assert.ok(/revenue\/ROAS may be wrong/.test(r.findings[0].message), 'leads with the live-reporting stake');
+  assert.ok(/worse branch/.test(r.findings[0].ifUnconfirmed ?? ''), 'documents the escalation');
   assert.ok(/Organic Social/.test(r.findings[0].recommendation ?? ''), 'names the driver channel');
   assert.equal(r.sessionsTrendPct, 264);
+});
+
+test('returning-user share weighs the verdict (held-up returning share argues against pure bot)', () => {
+  const held = auditGa4Growth(inp({ sessions: 32000, priorSessions: 8800, keyEvents: 205, priorKeyEvents: 200, revenue: 1000, priorRevenue: 980, returningSharePct: 21 }));
+  assert.ok(/unlikely to be pure bot/.test(held.findings[0].whyItMatters ?? ''));
+  const collapsed = auditGa4Growth(inp({ sessions: 32000, priorSessions: 8800, keyEvents: 205, priorKeyEvents: 200, revenue: 1000, priorRevenue: 980, returningSharePct: 2 }));
+  assert.ok(/consistent with bot/.test(collapsed.findings[0].whyItMatters ?? ''));
 });
 
 test('a spike where key events and revenue scale with it → INFO (healthy growth, not a gap)', () => {

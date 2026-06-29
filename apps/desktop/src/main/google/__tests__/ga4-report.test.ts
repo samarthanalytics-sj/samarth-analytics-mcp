@@ -111,22 +111,36 @@ const input = (over: Partial<Ga4ReportInput> = {}): Ga4ReportInput => {
 
 console.log('\nGA4 report:');
 
-test('report has all the templated sections', () => {
+test('report has all 9 verdict-first sections', () => {
   const md = buildGa4AuditReport(input());
-  for (const h of ['# GA4 Property Audit', '## Executive summary', '## Area status', '## Property baseline', '## Decision readiness', '## Findings', '## Not verified', '## Summary']) {
+  for (const h of [
+    '# GA4 Property Audit',
+    '## 1 · Verdict',
+    '## 2 · What is wrong',
+    '## 3 · Outcomes vs traffic',
+    '## 4 · All findings',
+    '## 5 · Area status',
+    '## 6 · Property baseline',
+    '## 7 · Decision readiness',
+    '## 8 · Not verified',
+    '## 9 · Scope & metadata',
+  ]) {
     assert.ok(md.includes(h), `missing section: ${h}`);
   }
-  assert.ok(md.includes('353451709'), 'property id');
+  assert.ok(md.includes('353451709'), 'property id (in title + scope)');
   assert.ok(md.includes('14 months'), 'retention label');
+  // Verdict is read-first: it precedes the metadata appendix.
+  assert.ok(md.indexOf('## 1 · Verdict') < md.indexOf('## 9 · Scope'), 'verdict before metadata');
 });
 
-test('area-status table grades on evidence: Data collection + zero-config Custom definitions are Partial, not a blind Pass', () => {
+test('area-status grades on evidence with coloured dots: Data collection + zero-config Custom definitions are Partial', () => {
   const md = buildGa4AuditReport(input());
-  assert.ok(md.includes('| Data collection | Partial | Likely |'), 'collection Partial (deep health unverifiable)');
-  assert.ok(/\| Custom definitions \| Partial \| Likely \|/.test(md), 'zero custom defs → Partial');
+  assert.ok(/\| Data collection \| 🟡 Partial \| Likely \|/.test(md), 'collection Partial (deep health unverifiable)');
+  assert.ok(/\| Custom definitions \| 🟡 Partial \| Likely \|/.test(md), 'zero custom defs → Partial');
+  assert.ok(/🟢 Pass/.test(md), 'pass rows carry the green dot');
   // Ecommerce is never a clean Pass while item params are unverified.
   const ecomMd = buildGa4AuditReport(input({ snapshot: snap({ keyEvents: [{ eventName: 'purchase' }, { eventName: 'add_to_cart' }] }) }));
-  assert.ok(/\| Ecommerce \| Partial \| Likely \|/.test(ecomMd), 'ecommerce present → Partial, not Pass');
+  assert.ok(/\| Ecommerce \| 🟡 Partial \| Likely \|/.test(ecomMd), 'ecommerce present → Partial, not Pass');
 });
 
 test('property baseline renders Unicode bars + channel mix', () => {
@@ -149,39 +163,62 @@ test('decision readiness derives from config (ecommerce absent → abandonment N
   assert.ok(/Which campaigns generate revenue\? \| Answerable/.test(md)); // Ads linked
 });
 
-test('a data-quality finding lands in the Findings table; counts in Summary', () => {
+test('a data-quality finding lands in the All-findings table with a business-risk column', () => {
   const counts = dqCounts({
     totalSessions: 100,
     channelGroups: [{ name: 'Unassigned', sessions: 40 }, { name: 'Direct', sessions: 60 }],
   });
   const md = buildGa4AuditReport(input({ dqCounts: counts, dataQuality: auditGa4DataQuality(counts) }));
-  assert.ok(/\| Findings \(by severity\)|Recommended fix/.test(md));
+  assert.ok(/## 4 · All findings/.test(md));
+  assert.ok(/Business risk/.test(md), 'findings table has a business-risk column');
   assert.ok(/Unassigned/.test(md));
 });
 
-test('a traffic spike conversions did not track → HIGH growth finding, exec flags it, no false all-clear', () => {
+test('a doubled-traffic spike conversions did not track → CRITICAL (worst unverified branch), "Do not trust yet"', () => {
   const b = baseline({ sessions: 32165, priorSessions: 8819, keyEvents: 210, priorKeyEvents: 200, revenue: 1000, priorRevenue: 950 });
   const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b, 'Organic Social') }));
-  assert.ok(/\| HIGH \| Growth \|/.test(md), 'high growth finding in the table');
-  assert.ok(/high-impact issue/.test(md), 'exec flags the high finding');
+  assert.ok(/\| CRITICAL \| Growth \|/.test(md), 'a >=2x spike not tracked by conversions is CRITICAL, not HIGH');
+  assert.ok(/\*\*Trust:\*\* Do not trust yet/.test(md), 'verdict reflects the critical finding');
+  assert.ok(/revenue\/ROAS may be wrong/.test(md), 'leads with the live-reporting stake');
   assert.ok(!/Well-configured/.test(md), 'never a false all-clear');
+  assert.ok(/## 2 · What is wrong/.test(md) && /If unconfirmed:/.test(md), 'top finding is expanded with the worse branch');
   assert.ok(/Growth signals \(vs prior\)/.test(md), 'growth signals shown in baseline');
 });
 
-test('healthy growth (sessions, key events and revenue move together) → no growth finding', () => {
-  const md = buildGa4AuditReport(input()); // baseline trends are all ~+11%
-  assert.ok(!/\| (HIGH|MEDIUM) \| Growth \|/.test(md), 'no spike/drop finding when outcomes track sessions');
+test('a 50–99% spike not tracked is HIGH (not escalated to CRITICAL)', () => {
+  const b = baseline({ sessions: 14000, priorSessions: 9000, keyEvents: 460, priorKeyEvents: 450, revenue: 1000, priorRevenue: 980 }); // +56%
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(/\| HIGH \| Growth \|/.test(md));
+  assert.ok(!/\| CRITICAL \| Growth \|/.test(md));
 });
 
-test('exec summary never claims "Well-configured" while areas are unverified/partial', () => {
+test('healthy growth (sessions, key events and revenue move together) → no actionable growth finding', () => {
+  const md = buildGa4AuditReport(input()); // baseline trends are all ~+11%
+  assert.ok(!/\| (CRITICAL|HIGH|MEDIUM) \| Growth \|/.test(md), 'no spike/drop finding when outcomes track sessions');
+});
+
+test('verdict never claims "Well-configured" and discloses coverage', () => {
   const md = buildGa4AuditReport(input());
   assert.ok(!/Well-configured/.test(md));
-  assert.ok(/area\(s\) unverified/.test(md), 'exec discloses unverified coverage');
+  assert.ok(/## 1 · Verdict/.test(md) && /\*\*Trust:\*\*/.test(md), 'read-first verdict present');
+  assert.ok(/not verified/.test(md), 'coverage discloses unverified areas');
+});
+
+test('a genuinely clean property (only an info advisory) does not manufacture a risk', () => {
+  // Fully instrumented + clean config + clean data quality + healthy growth → no actionable finding.
+  const s = snap({
+    customDimensions: [{ parameterName: 'tier', displayName: 'Tier', scope: 'USER' }],
+    customMetrics: [{ parameterName: 'pts', displayName: 'Pts' }],
+  });
+  const md = buildGa4AuditReport(input({ snapshot: s, config: auditGa4(s) }));
+  assert.ok(/No high-severity issue/.test(md), 'section 2 takes the clean-property branch');
+  assert.ok(!/\*\*At stake:\*\* Channel\/source attribution is unreliable/.test(md), 'no fabricated risk in the verdict');
+  assert.ok(!/\| INFO \| Data quality \| No major data-quality issues[^|]*\| Channel\/source/.test(md), 'info row carries no business risk');
 });
 
 test('missing baseline → Not Verified, no crash', () => {
   const md = buildGa4AuditReport(input({ baseline: null }));
-  assert.ok(md.includes('## Property baseline'));
+  assert.ok(md.includes('## 6 · Property baseline'));
   assert.ok(/Not Verified/.test(md));
 });
 

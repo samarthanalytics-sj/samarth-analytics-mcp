@@ -101,19 +101,32 @@ export function auditGa4DataQuality(counts: DataQualityCounts): Ga4DataQualityRe
   const unassigned = sumWhere(counts.channelGroups, /unassigned/i);
   const uShare = share(unassigned, total);
   const uSev = severityForShare(uShare);
-  if (uSev) {
+  const notSet = sumWhere(counts.sourceMediums, /\(not set\)/i);
+  const nShare = share(notSet, total);
+  const nSev = severityForShare(nShare);
+
+  // "Unassigned" channel and a "(not set)" source/medium are almost always the SAME sessions losing
+  // their referrer/UTM, so when both fire, merge them into one root-cause finding instead of two
+  // separate advisories that inflate the count and hide the shared cause.
+  const attribFix =
+    'Usually social in-app browsers stripping the referrer, tags firing before consent, or redirect loss. Check campaign UTM tagging, Consent Mode and landing-page redirects — and treat this as direct evidence about the true source of any traffic spike.';
+  if (uSev && nSev) {
+    const sevRank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+    const worse: Severity = sevRank[uSev] >= sevRank[nSev] ? uSev : nSev;
+    findings.push({
+      severity: worse,
+      category: DQ,
+      message: `Sessions are arriving without usable source data: the "Unassigned" channel is ${uShare.toFixed(1)}% (${Math.min(unassigned, total)}/${total}) and "(not set)" source/medium is ${nShare.toFixed(1)}% (${Math.min(notSet, total)}/${total}). These almost certainly overlap (the same sessions losing referrer/UTM), so source attribution is unreliable for roughly ${Math.round(Math.max(uShare, nShare))}% of traffic.`,
+      recommendation: attribFix,
+    });
+  } else if (uSev) {
     findings.push({
       severity: uSev,
       category: DQ,
       message: `${uShare.toFixed(1)}% of sessions are in the "Unassigned" channel (${Math.min(unassigned, total)}/${total}).`,
       recommendation: 'Unassigned traffic usually means missing/incorrect UTMs or tags firing before consent — check campaign tagging and that the GA4 tag gets referrer/source data.',
     });
-  }
-
-  const notSet = sumWhere(counts.sourceMediums, /\(not set\)/i);
-  const nShare = share(notSet, total);
-  const nSev = severityForShare(nShare);
-  if (nSev) {
+  } else if (nSev) {
     findings.push({
       severity: nSev,
       category: DQ,
