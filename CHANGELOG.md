@@ -1,3 +1,9 @@
+## [1.99.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.99.0...v1.99.1) (2026-06-29)
+
+### Bug Fixes
+
+* **desktop:** GA4 Audit tab no longer white-screens the app ([d0681c5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d0681c54d436ad9325508d7a2fe7e2f8c1b493f7)), closes [#185](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/185)
+
 ## [1.99.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.98.0...v1.99.0) (2026-06-29)
 
 ### Features
