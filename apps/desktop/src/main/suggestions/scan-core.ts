@@ -198,6 +198,41 @@ async function scanTarget(
 const suggestionKey = (s: SuggestedTag): string =>
   `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}`;
 
+/** Does a CTA trigger fire on the given click text? Mirrors GTM's matchRegex (RE2 (?i)) / contains /
+ *  equals, so we can tell whether an engine tag ALREADY covers an AI-suggested button. PURE. */
+function ctaTriggerFiresOn(trigger: SuggestedTag['trigger'], text: string): boolean {
+  const v = trigger.clickTextValue ?? '';
+  if (!v || !text) return false;
+  if (trigger.clickTextOperator === 'matchRegex') {
+    try {
+      return new RegExp(v.replace(/^\(\?i\)/, ''), 'i').test(text);
+    } catch {
+      return false;
+    }
+  }
+  if (trigger.clickTextOperator === 'contains') return text.toLowerCase().includes(v.toLowerCase());
+  if (trigger.clickTextOperator === 'equals') return text.trim().toLowerCase() === v.trim().toLowerCase();
+  return false;
+}
+
+// Events where ONE engine tag covers EVERY instance (a single mailto:/tel:/social/outbound/download
+// trigger), so an AI tag re-proposing the same event is always a duplicate of it.
+const AI_GLOBAL_EVENTS = new Set(['email_click', 'phone_click', 'social_click', 'outbound_click', 'file_download']);
+
+/** Whether an AI-suggested tag should be DROPPED when merged onto the engine scan: it's UNSAFE (an
+ *  all-clicks CTA with no scope → fires on every click), or it DUPLICATES the engine — a global
+ *  click event the engine already tracks once, or a CTA whose literal button text an engine CTA
+ *  trigger already fires on (so the AI's "Get Free Audit Click" drops because the engine's "Get Free
+ *  Audit" tag already matches it, even though the event names differ). PURE. */
+export function dropAiSuggestion(a: SuggestedTag, engine: SuggestedTag[]): boolean {
+  if (a.trigger.kind === 'all_clicks' && !a.trigger.clickTextValue && !a.trigger.clickUrlValue) return true;
+  if (AI_GLOBAL_EVENTS.has(a.eventName) && engine.some((e) => e.eventName === a.eventName)) return true;
+  if (a.trigger.kind === 'all_clicks' && a.trigger.clickTextOperator !== 'matchRegex' && a.trigger.clickTextValue) {
+    return engine.some((e) => e.trigger.kind === 'all_clicks' && ctaTriggerFiresOn(e.trigger, a.trigger.clickTextValue ?? ''));
+  }
+  return false;
+}
+
 /** Build a PageScan from an ALREADY-opened page (mirrors scanTarget's assembly,
  *  minus the link extraction) — so the AI scan can open once, screenshot, and scan. */
 export function pageScanFromDriven(driven: DrivenPage, url: string, siteHost: string): PageScan | null {
@@ -233,7 +268,9 @@ export function assembleResult(
   // so the review list is the COMPLETE set of creatable tags, not only scan-derived.
   const scanned: SuggestedTag[] = buildSuggestions(input, { full: true });
   const seen = new Set(scanned.map(suggestionKey));
-  const suggestions = [...scanned, ...extra.filter((s) => !seen.has(suggestionKey(s)))];
+  // Merge AI-derived `extra`: drop exact-key dupes, semantic dupes of an engine tag (same global
+  // event, or a CTA the engine already fires on), and unsafe unscoped all-clicks suggestions.
+  const suggestions = [...scanned, ...extra.filter((s) => !seen.has(suggestionKey(s)) && !dropAiSuggestion(s, scanned))];
   const byConfidence = { high: 0, medium: 0, low: 0 };
   let em = 0;
   for (const sug of suggestions) {

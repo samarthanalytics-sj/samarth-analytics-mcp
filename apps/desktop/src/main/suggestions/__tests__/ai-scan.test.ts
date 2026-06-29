@@ -2,8 +2,10 @@
 // network, no browser). Run: tsx src/main/suggestions/__tests__/ai-scan.test.ts
 
 import { aiTagsToSuggestions, openaiVisionSuggest, type AiTagPick } from '../ai-scan';
+import { dropAiSuggestion } from '../scan-core';
 import type { RawElement } from '../../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm } from '../../../../../web-audit-mcp/src/agent/forms.js';
+import type { SuggestedTag } from '../../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 
 let passed = 0;
 let failed = 0;
@@ -38,6 +40,23 @@ check('ai-map: pageview pick → pageview trigger', sugs.some((s) => s.eventName
 check('ai-map: a pick with a bad reference and an empty-name pick are DROPPED (4 valid)', sugs.length === 4 && !sugs.some((s) => /Bad Form/.test(s.tagName)));
 check('ai-map: every AI suggestion is a creatable ga4_event with the AI note', sugs.every((s) => s.platform === 'ga4_event' && s.measurementId === '{{GA4 Measurement ID}}' && /AI-suggested/.test(s.note ?? '')));
 check('ai-map: tag + trigger names are sanitized (no GTM-invalid ":")', sugs.every((s) => !s.tagName.includes(':') && !s.trigger.name.includes(':')));
+
+// ── dropAiSuggestion: drop AI tags that duplicate the engine scan, or are unsafe ──
+const trig = (over: Partial<SuggestedTag['trigger']>): SuggestedTag['trigger'] => ({ name: 'n', kind: 'all_clicks', ...over });
+const sug = (eventName: string, t: SuggestedTag['trigger']): SuggestedTag =>
+  ({ id: 'i', page: '/', label: '', evidence: '', confidence: 'medium', enhancedMeasurementOverlap: false, platform: 'ga4_event', tagName: 'x', measurementId: '{{m}}', eventName, trigger: t } as SuggestedTag);
+const engineScan: SuggestedTag[] = [
+  sug('get_started_click', trig({ name: 'Get Free Audit Trigger', clickTextValue: '(?i)\\bfree\\s+audit\\b', clickTextOperator: 'matchRegex' })),
+  sug('email_click', trig({ name: 'Email Trigger', kind: 'link_click', clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' })),
+];
+check('dedup: AI CTA dropped when an engine regex already fires on its literal text ("Get Free Audit")',
+  dropAiSuggestion(sug('get_free_audit_click', trig({ clickTextValue: 'Get Free Audit', clickTextOperator: 'contains' })), engineScan) === true);
+check('dedup: AI global-event tag dropped when the engine already tracks it once (email_click)',
+  dropAiSuggestion(sug('email_click', trig({ clickTextValue: 'admin@x.com', clickTextOperator: 'contains' })), engineScan) === true);
+check('dedup: AI unscoped all-clicks tag dropped (would fire on EVERY click)',
+  dropAiSuggestion(sug('linkedin_click', trig({})), engineScan) === true);
+check('dedup: a genuinely NEW AI CTA the engine does not cover is KEPT',
+  dropAiSuggestion(sug('pricing_click', trig({ clickTextValue: 'See Pricing', clickTextOperator: 'contains' })), engineScan) === false);
 
 // ── openaiVisionSuggest: response parsing with an injected fetch ──────────────
 const asResp = (o: Partial<Response> & { json: () => Promise<unknown> }): Response => o as unknown as Response;
