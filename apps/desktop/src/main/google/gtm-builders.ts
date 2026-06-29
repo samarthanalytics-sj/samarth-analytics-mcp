@@ -950,6 +950,35 @@ export function findUnusedTriggers(snapshot: ContainerSnapshot): AuditTrigger[] 
   return snapshot.triggers.filter((tr) => tr.triggerId !== '' && !used.has(tr.triggerId) && !isBuiltinTriggerId(tr.triggerId));
 }
 
+/** All variable NAMES referenced by a {{...}} token anywhere we can read — tag parameters +
+ *  consentType, every trigger filter/parameter, and OTHER variables' parameters. ADVISORY: GTM has
+ *  more variable-bearing fields than we capture and we can't see published versions, so absence here
+ *  is a strong HINT a variable is unused, not proof. PURE. */
+export function collectReferencedVariableNames(snapshot: ContainerSnapshot): Set<string> {
+  const refs = new Set<string>();
+  for (const t of snapshot.tags) {
+    refsIn(t.parameter, refs);
+    refsIn(t.consentSettings?.consentType, refs);
+  }
+  for (const tr of snapshot.triggers) {
+    refsIn(tr.filter, refs);
+    refsIn(tr.autoEventFilter, refs);
+    refsIn(tr.customEventFilter, refs);
+    refsIn(tr.parameter, refs);
+  }
+  for (const v of snapshot.variables) refsIn(v.parameter, refs);
+  return refs;
+}
+
+/** Variables referenced by NO tag, trigger, or other variable in the workspace — likely orphans.
+ *  ADVISORY (see collectReferencedVariableNames): unlike triggers, the GTM API does NOT refuse to
+ *  delete a referenced variable, so deletion is best-effort — a variable referenced only in a field
+ *  this audit can't read, or by a published version, would be wrongly flagged. PURE. */
+export function findUnusedVariables(snapshot: ContainerSnapshot): AuditVariable[] {
+  const refs = collectReferencedVariableNames(snapshot);
+  return snapshot.variables.filter((v) => v.variableId !== '' && !refs.has(v.name));
+}
+
 /** Diagnostic: explain the orphaned-trigger count by showing how it would change under looser
  *  definitions. `orphanedStrict` is what the audit reports today (not firing/blocking/group, not
  *  built-in). The "…IfXUnused" variants relax one rule, so the gap between strict and a variant is
@@ -1404,18 +1433,7 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
   // versions, and GTM has more variable-bearing fields than we capture, so a
   // "no references found" result is a strong hint — not proof — that a variable
   // is safe to delete. Deleting is left to the user via delete_gtm_variable.
-  const refs = new Set<string>();
-  for (const t of s.tags) {
-    refsIn(t.parameter, refs);
-    refsIn(t.consentSettings?.consentType, refs);
-  }
-  for (const tr of s.triggers) {
-    refsIn(tr.filter, refs);
-    refsIn(tr.autoEventFilter, refs);
-    refsIn(tr.customEventFilter, refs);
-    refsIn(tr.parameter, refs);
-  }
-  for (const v of s.variables) refsIn(v.parameter, refs);
+  const refs = collectReferencedVariableNames(s);
   // C5: Custom JavaScript variables (jsm) run wherever referenced — not on a trigger — so
   // they execute broadly and are a wider risk surface than a Custom HTML tag.
   // Unused-vs-risk precedence: an UNUSED jsm variable runs nowhere, so it cannot be a
@@ -1434,18 +1452,18 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
       });
     }
   }
-  for (const v of s.variables) {
-    if (!refs.has(v.name)) {
-      findings.push({
-        severity: 'low',
-        category: 'unused',
-        checkId: 'unused-variable',
-        resource: { kind: 'variable', id: v.variableId, name: v.name },
-        message: `Variable "${v.name}" appears unused — no tag, trigger, or variable in this workspace references it.`,
-        recommendation: 'Review it in GTM and delete it (delete_gtm_variable) if truly unused — first confirm it is not relied on by a published version or a field this audit does not inspect.',
-        autoFixable: false,
-      });
-    }
+  for (const v of findUnusedVariables(s)) {
+    findings.push({
+      severity: 'low',
+      category: 'unused',
+      checkId: 'unused-variable',
+      resource: { kind: 'variable', id: v.variableId, name: v.name },
+      message: `Variable "${v.name}" appears unused — no tag, trigger, or variable in this workspace references it.`,
+      recommendation:
+        'Delete it if it is truly unused — delete_unused_gtm_variables removes all orphans at once (or a selected subset). First confirm it is NOT relied on by a published version or a field this audit cannot inspect (unlike triggers, GTM lets you delete a referenced variable, which silently breaks that reference).',
+      autoFixable: true,
+      fix: { tool: 'delete_gtm_variable', args: { variableId: v.variableId, name: v.name } },
+    });
   }
 
   // Duplicate names.

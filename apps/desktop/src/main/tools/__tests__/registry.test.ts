@@ -378,6 +378,7 @@ async function main(): Promise<void> {
       'list_gtm_versions',
       'list_gtm_workspaces',
       'list_unused_gtm_triggers',
+      'list_unused_gtm_variables',
       'run_ga4_realtime_report',
       'run_ga4_report',
       'score_ga4_property',
@@ -402,11 +403,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 45, 'read-only registry has 45 tools');
+    assert.equal(readOnly.list().length, 46, 'read-only registry has 46 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 85, 'read + write registry has 85 tools');
+    assert.equal(withWrites.list().length, 87, 'read + write registry has 87 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1083,6 +1084,35 @@ async function main(): Promise<void> {
     const none = JSON.parse(await buildToolRegistry(fd3.data, approveAsIs, 'gtm').execute('delete_unused_gtm_triggers', { accountId: '1', containerId: '2', workspaceId: '3' }));
     assert.equal(none.deletedCount, 0, 'clean no-op when nothing is unused');
     assert.equal(fd3.calls.filter((c) => c.startsWith('deleteTrigger')).length, 0, 'no deletes when nothing is unused');
+  });
+
+  await test('unused-variable cleanup: list finds orphans; delete removes only unreferenced, filter-aware', async () => {
+    const snapshot = {
+      tags: [{ tagId: 't1', name: 'GA4', type: 'gaawe', firingTriggerId: [], paused: false, parameter: [{ type: 'template', key: 'm', value: '{{Used Var}}' }] }],
+      triggers: [],
+      variables: [
+        { variableId: '10', name: 'Used Var', type: 'c', parameter: [] }, // referenced by the tag
+        { variableId: '11', name: 'Orphan A', type: 'v', parameter: [] }, // UNUSED
+        { variableId: '12', name: 'Orphan B', type: 'jsm', parameter: [] }, // UNUSED
+      ],
+    };
+
+    const fd0 = fakeData({ snapshot });
+    const listed = JSON.parse(await buildToolRegistry(fd0.data).execute('list_unused_gtm_variables', { accountId: '1', containerId: '2', workspaceId: '3' })) as Array<{ variableId: string }>;
+    assert.deepEqual(listed.map((v) => v.variableId).sort(), ['11', '12']);
+
+    const fd1 = fakeData({ snapshot });
+    const all = JSON.parse(await buildToolRegistry(fd1.data, approveAsIs, 'gtm').execute('delete_unused_gtm_variables', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(all.deletedCount, 2);
+    assert.ok(fd1.calls.includes('deleteVar:1:2:3:11') && fd1.calls.includes('deleteVar:1:2:3:12'));
+    assert.ok(!fd1.calls.includes('deleteVar:1:2:3:10'), 'a referenced variable is never deleted');
+
+    const fd2 = fakeData({ snapshot });
+    const sel = JSON.parse(await buildToolRegistry(fd2.data, approveAsIs, 'gtm').execute('delete_unused_gtm_variables', { accountId: '1', containerId: '2', workspaceId: '3', variableIds: ['11', '10'] }));
+    assert.equal(sel.deletedCount, 1);
+    assert.ok(fd2.calls.includes('deleteVar:1:2:3:11'));
+    assert.ok(!fd2.calls.includes('deleteVar:1:2:3:10'), 'a referenced id in the selection is skipped, never deleted');
+    assert.equal(sel.skipped[0].variableId, '10');
   });
 
   await test('environment tools: list (read) + create (write) return the install snippet', async () => {

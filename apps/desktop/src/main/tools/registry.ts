@@ -27,6 +27,7 @@ import {
   auditServerContainer,
   detectMetaTags,
   findUnusedTriggers,
+  findUnusedVariables,
   type TriggerInput,
   type VariableKind,
   type GtmTagResource,
@@ -293,6 +294,25 @@ export function buildToolRegistry(
       handler: async (a) => {
         const snap = await data.getGtmContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId));
         return findUnusedTriggers(snap).map((t) => ({ triggerId: t.triggerId, name: t.name, type: t.type }));
+      },
+    },
+    {
+      name: 'list_unused_gtm_variables',
+      description:
+        'List the UNUSED (orphaned) variables in a GTM workspace — variables whose {{name}} is referenced by NO tag, trigger, or other variable in the fields this audit can read. Read-only — call this to show the user what delete_unused_gtm_variables would remove (returns each variable\'s variableId, name, type). ADVISORY: this is a strong hint, not proof — a variable referenced only in a published version, or in a field the audit cannot inspect, may appear here even though it IS used. Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const snap = await data.getGtmContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId));
+        return findUnusedVariables(snap).map((v) => ({ variableId: v.variableId, name: v.name, type: v.type }));
       },
     },
     {
@@ -2087,6 +2107,62 @@ export function buildToolRegistry(
             deleted.push({ triggerId: t.triggerId, name: t.name });
           } catch (e) {
             failed.push({ triggerId: t.triggerId, name: t.name, error: e instanceof Error ? e.message : String(e) });
+          }
+        }
+        return { deletedCount: deleted.length, deleted, skipped, failed };
+      },
+    },
+    {
+      name: 'delete_unused_gtm_variables',
+      description:
+        'Bulk-delete the UNUSED (orphaned) variables in a GTM workspace — variables whose {{name}} is referenced by no tag, trigger, or other variable in the readable fields. By DEFAULT deletes ALL unused variables; pass variableIds (the filter/selection) to delete only specific ones — any id you pass that is actually referenced (or not found) is skipped and reported. It lists the container itself (you do NOT pass it); prefer calling list_unused_gtm_variables first so the user can see what will go. CAUTION: unlike triggers, the GTM API does NOT refuse to delete a REFERENCED variable, and this detection is a strong hint (not proof) — a variable used only in a published version or a field the audit cannot read could be wrongly deleted, silently breaking that {{reference}}. Destructive — confirms twice. Requires accountId, containerId, workspaceId; optional variableIds (string[]).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          variableIds: { type: 'array', items: { type: 'string' }, description: 'Optional selection filter — only delete these ids (and only if actually unused). Omit to delete ALL unused variables.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      write: true,
+      destructive: true,
+      summarize: (a) => {
+        const n = Array.isArray(a.variableIds) && a.variableIds.length ? `${a.variableIds.length} selected` : 'all unreferenced';
+        return `Delete unused variables (${n}) in workspace ${s(a.workspaceId)}`;
+      },
+      handler: async (a) => {
+        const snap = await data.getGtmContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId));
+        const unused = findUnusedVariables(snap);
+        const byId = new Map(unused.map((v) => [v.variableId, v]));
+        const sel = Array.isArray(a.variableIds) && a.variableIds.length ? a.variableIds.map(String) : null;
+        const skipped: Array<{ variableId: string; name: string; reason: string }> = [];
+        let targets = unused;
+        if (sel) {
+          targets = [];
+          for (const id of sel) {
+            const u = byId.get(id);
+            if (u) targets.push(u);
+            else {
+              const v = snap.variables.find((x) => x.variableId === id);
+              skipped.push({
+                variableId: id,
+                name: v?.name ?? '(unknown)',
+                reason: v ? 'referenced (in use) — not deleted' : 'not found in this workspace',
+              });
+            }
+          }
+        }
+        const deleted: Array<{ variableId: string; name: string }> = [];
+        const failed: Array<{ variableId: string; name: string; error: string }> = [];
+        for (const v of targets) {
+          try {
+            await withQuotaRetry(() => data.deleteGtmVariable(s(a.accountId), s(a.containerId), s(a.workspaceId), v.variableId));
+            deleted.push({ variableId: v.variableId, name: v.name });
+          } catch (e) {
+            failed.push({ variableId: v.variableId, name: v.name, error: e instanceof Error ? e.message : String(e) });
           }
         }
         return { deletedCount: deleted.length, deleted, skipped, failed };
