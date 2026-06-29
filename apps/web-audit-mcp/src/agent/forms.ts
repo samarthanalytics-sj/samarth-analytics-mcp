@@ -157,14 +157,18 @@ export function extractFormsInPage(): RawForm[] {
     //    ancestor that also holds a text-ish field. Requires a real text input
     //    (not just selects) so filter/search widgets aren't mistaken for forms.
     const seen: Element[] = [];
-    for (const btn of Array.from(doc.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]'))) {
+    // Include <a> — many React/marketing forms use an anchor or styled <div role=button>
+    // as the "Send Message" / "Subscribe" control rather than a real <button>.
+    for (const btn of Array.from(doc.querySelectorAll('button, [role="button"], a, input[type="submit"], input[type="button"]'))) {
       if (out.length >= MAX_FORMS) break;
       if (btn.closest('form')) continue;
       const label = ((btn.textContent || '') + ' ' + ((btn as HTMLInputElement).value || '')).trim();
       if (!SUBMIT_RE.test(label)) continue;
+      // Climb up to 10 ancestors (deeply-nested React layouts put the submit control
+      // several wrappers away from the fields) to find the smallest container holding a field.
       let host: Element | null = null;
       let node: Element | null = btn.parentElement;
-      for (let i = 0; node && i < 6; i++, node = node.parentElement) {
+      for (let i = 0; node && i < 10; i++, node = node.parentElement) {
         if (node.tagName === 'FORM') break;
         if (fieldsIn(node).length >= 1) {
           host = node;

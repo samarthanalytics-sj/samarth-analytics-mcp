@@ -38,17 +38,24 @@ export interface CtaIntentDef {
 // product content, not a booking — and "View demo" is a rare button vs the cost.
 export const CTA_INTENTS: CtaIntentDef[] = [
   { intent: 'add_to_cart', pattern: '\\badd\\s+to\\s+(cart|bag|basket)\\b', event: 'add_to_cart_click', label: 'Add to Cart Click' },
-  { intent: 'book_demo', pattern: '\\b(book|request|schedule|get)\\s+(?:(?:a|an|your|the|free|quick|live|personalized|product)\\s+){0,2}demo\\b|\\bbook\\s+a\\s+(call|meeting|consultation)\\b', event: 'book_demo_click', label: 'Book Demo Click' },
+  // demo OR a sales/discovery CALL — "Book/Schedule/Request a [strategy/intro/…] call|meeting|
+  // consultation" (so "Schedule Strategy Call", "Book a Call", "Schedule a Free Call" all classify).
+  { intent: 'book_demo', pattern: '\\b(book|request|schedule|get)\\s+(?:(?:a|an|your|the|free|quick|live|personalized|product)\\s+){0,2}demo\\b|\\b(book|schedule|request)\\s+(?:(?:a|an|your|the|free|quick|live|intro|strategy|discovery|sales|brief)\\s+){0,2}(call|meeting|consultation|consult|appointment|callback)\\b', event: 'book_demo_click', label: 'Book Demo Click' },
   { intent: 'request_quote', pattern: '\\b(request|get)\\s+(?:(?:a|an|your|my|the|free|instant|fast|quick|custom|online)\\s+){0,2}quote\\b', event: 'request_quote_click', label: 'Request Quote Click' },
   { intent: 'contact_sales', pattern: '\\b(contact|talk\\s+to)\\s+sales\\b', event: 'contact_sales_click', label: 'Contact Sales Click' },
   { intent: 'subscribe', pattern: '\\bsubscribe\\b|\\bsign\\s*me\\s*up\\b', event: 'subscribe_click', label: 'Subscribe Click' },
-  { intent: 'get_started', pattern: '\\b(get\\s+started|start\\s+(free|now|your\\s+(free\\s+)?trial)|free\\s+trial|try\\s+(it\\s+)?free|start\\s+for\\s+free)\\b', event: 'get_started_click', label: 'Get Started Click' },
+  // "Get started"/free-trial AND the "free audit" family — "Get Free Audit", "Start a free audit",
+  // "Run a free audit", "Free audit" (the audit is the conversion CTA on tag-audit / consulting sites).
+  { intent: 'get_started', pattern: '\\b(get\\s+started|start\\s+(free|now|your\\s+(free\\s+)?trial)|free\\s+trial|try\\s+(it\\s+)?free|start\\s+for\\s+free|free\\s+audit|(get|start|run|claim|request|book)\\s+(?:(?:a|an|your|my|the|free|instant)\\s+){0,2}audit)\\b', event: 'get_started_click', label: 'Get Started Click' },
   { intent: 'login', pattern: '\\b(log\\s*in|login|sign\\s*in)\\b', event: 'login_click', label: 'Login Click' },
   // event is 'search_click' (NOT bare 'search'): the search FORM's submit tag uses
   // the GA4 'search' event, and clicking a "Search" submit button raises BOTH
   // gtm.click and gtm.formSubmit — a shared event name would double-count.
   { intent: 'search', pattern: '\\bsearch\\b', event: 'search_click', label: 'Search' },
-  { intent: 'learn_more', pattern: '\\b(learn\\s+more|find\\s+out\\s+more|discover\\s+more)\\b', event: 'learn_more_click', label: 'Learn More Click' },
+  // "Learn more" + a NARROW proof CTA: "View Client Results", "View our work", "Client results".
+  // Requires client/customer/our so the deliberately-excluded noise ("Case studies", "View all",
+  // "See more", "Read more") stays out — only the specific results/work proof CTA is tracked.
+  { intent: 'learn_more', pattern: '\\b(learn\\s+more|find\\s+out\\s+more|discover\\s+more|view\\s+(?:client|customer|our)\\s+(?:results|work|stories)|(?:client|customer)\\s+results)\\b', event: 'learn_more_click', label: 'Learn More Click' },
   { intent: 'faq', pattern: '\\b(faqs?|frequently\\s+asked\\s+questions?)\\b', event: 'faq_click', label: 'FAQ Click' },
   { intent: 'generic', pattern: '\\b(buy\\s+now|create\\s+(an\\s+)?account|sign\\s*up|join\\s+(now|today)|order\\s+now|shop\\s+now|donate|apply\\s+now|register\\s+(now|today))\\b', event: 'cta_click', label: 'CTA Click' },
 ];
