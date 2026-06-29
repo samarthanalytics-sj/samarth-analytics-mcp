@@ -219,12 +219,21 @@ function ctaTriggerFiresOn(trigger: SuggestedTag['trigger'], text: string): bool
 // trigger), so an AI tag re-proposing the same event is always a duplicate of it.
 const AI_GLOBAL_EVENTS = new Set(['email_click', 'phone_click', 'social_click', 'outbound_click', 'file_download']);
 
-/** Whether an AI-suggested tag should be DROPPED when merged onto the engine scan: it's UNSAFE (an
- *  all-clicks CTA with no scope → fires on every click), or it DUPLICATES the engine — a global
+// Cookie-consent-banner / CMP controls ("Accept All", "Decline All", "Manage Preferences", "Cookie
+// Settings") — the vision pass picks these out of the banner in the screenshot, but they're CMP UI,
+// not conversions, so a GA4 click tag on them is noise. Tested against a haystack with underscores
+// normalized to spaces, so it matches both "Accept All Cookies" and the snake_case event name.
+const COOKIE_BANNER_RE =
+  /\b(accept|reject|decline|allow|deny|manage|customi[sz]e)\s+(all|cookies?|consent|preferences?|settings?|choices?)\b|\bcookie\s+(settings?|preferences?|consent|policy|choices?)\b|\bconsent\s+(settings?|preferences?|manager?)\b/i;
+
+/** Whether an AI-suggested tag should be DROPPED when merged onto the engine scan: it's a
+ *  cookie-consent-banner control (CMP UI, not a conversion), it's UNSAFE (an all-clicks CTA with no
+ *  scope → fires on every click), or it DUPLICATES the engine — a global
  *  click event the engine already tracks once, or a CTA whose literal button text an engine CTA
  *  trigger already fires on (so the AI's "Get Free Audit Click" drops because the engine's "Get Free
  *  Audit" tag already matches it, even though the event names differ). PURE. */
 export function dropAiSuggestion(a: SuggestedTag, engine: SuggestedTag[]): boolean {
+  if (COOKIE_BANNER_RE.test(`${a.tagName} ${a.eventName} ${a.trigger.clickTextValue ?? ''}`.replace(/_/g, ' '))) return true;
   if (a.trigger.kind === 'all_clicks' && !a.trigger.clickTextValue && !a.trigger.clickUrlValue) return true;
   if (AI_GLOBAL_EVENTS.has(a.eventName) && engine.some((e) => e.eventName === a.eventName)) return true;
   if (a.trigger.kind === 'all_clicks' && a.trigger.clickTextOperator !== 'matchRegex' && a.trigger.clickTextValue) {
