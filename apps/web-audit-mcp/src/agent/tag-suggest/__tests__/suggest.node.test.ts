@@ -216,24 +216,30 @@ const ctaInput = buildSuggestions({
     { page: '/pricing', kind: 'cta', text: 'Buy now', intent: 'generic' }, // same generic text → collapses
   ],
 });
-const sub = ctaInput.find((s) => s.eventName === 'subscribe_click');
-check('cta: subscribe variants still collapse to ONE tag, NAMED for the actual button text', ctaInput.filter((s) => s.eventName === 'subscribe_click').length === 1 && sub?.tagName === 'GA4 Event - Subscribe now Tag');
-check('cta: named-intent trigger is named for the website text + keeps the case-insensitive matchRegex, site-wide', sub?.trigger.clickTextOperator === 'matchRegex' && sub?.trigger.name === 'Subscribe now Trigger' && sub?.page === 'site-wide');
-// The trigger must actually FIRE on every variant the classifier accepts — incl.
-// different casing and a synonym whose keyword wasn't in the text (the bug the
-// review caught). And it must NOT fire on unrelated text.
-check('cta: subscribe trigger fires on "Subscribe", "SUBSCRIBE NOW", "Sign me up"',
-  ['Subscribe', 'SUBSCRIBE NOW', 'Sign me up'].every((t) => reTest(sub?.trigger.clickTextValue ?? '', t)));
+// Each distinct button TEXT becomes its own tag, named for that text, with a plain
+// "{{Click Text}} contains <text>" trigger (no intent regex). Different text → different tag (the
+// user prefers per-button clarity); the SAME text on multiple pages still collapses site-wide.
+// "contains" (not "equals") so the trigger still fires when GTM's rendered Click Text differs from
+// the scanned textContent (icon / hidden a11y span / scan-time truncation).
+const subs = ctaInput.filter((s) => s.eventName === 'subscribe_click');
+check('cta: each distinct subscribe text → its OWN tag named for that exact text (no regex collapse)',
+  subs.length === 2 &&
+  subs.some((s) => s.tagName === 'GA4 Event - Subscribe now Tag' && s.trigger.name === 'Subscribe now Trigger') &&
+  subs.some((s) => s.tagName === 'GA4 Event - Subscribe Tag'));
+check('cta: named-intent trigger is a plain {{Click Text}} contains <text> (not matchRegex)',
+  subs.every((s) => s.trigger.clickTextOperator === 'contains') &&
+  ctaInput.find((s) => s.tagName === 'GA4 Event - Subscribe now Tag')?.trigger.clickTextValue === 'Subscribe now');
 const demo = ctaInput.find((s) => s.eventName === 'book_demo_click');
-check('cta: tag named for the actual button text "Request a demo", not the intent label', demo?.tagName === 'GA4 Event - Request a demo Tag' && demo?.trigger.name === 'Request a demo Trigger');
-check('cta: book_demo trigger fires on "Book a Demo" but NOT "product demonstration"/"demo reel"',
-  reTest(demo?.trigger.clickTextValue ?? '', 'Book a Demo') && !reTest(demo?.trigger.clickTextValue ?? '', 'Watch our product demonstration') && !reTest(demo?.trigger.clickTextValue ?? '', 'demo reel'));
+check('cta: tag named for the actual button text "Request a demo", trigger {{Click Text}} contains it',
+  demo?.tagName === 'GA4 Event - Request a demo Tag' && demo?.trigger.name === 'Request a demo Trigger' &&
+  demo?.trigger.clickTextValue === 'Request a demo' && demo?.trigger.clickTextOperator === 'contains');
 check('cta: Learn More tag named for the button text + own event', ctaInput.find((s) => s.eventName === 'learn_more_click')?.tagName === 'GA4 Event - Learn more Tag');
 check('cta: Add to Cart uses non-reserved add_to_cart_click event (not the GA4 ecommerce add_to_cart)',
   ctaInput.find((s) => s.eventName === 'add_to_cart_click')?.tagName === 'GA4 Event - Add to cart Tag' && !ctaInput.some((s) => s.eventName === 'add_to_cart'));
 const genericCtas = ctaInput.filter((s) => s.eventName === 'cta_click');
-check('cta: generic "Buy now" stays generic (literal text, contains) + "Buy now Trigger" + collapses', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'contains' && genericCtas[0].trigger.name === 'Buy now Trigger');
+check('cta: generic "Buy now" → {{Click Text}} contains "Buy now" + "Buy now Trigger" + same text collapses site-wide', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'contains' && genericCtas[0].trigger.name === 'Buy now Trigger');
 check('cta: every CTA carries dynamic cta_text={{Click Text}}', ctaInput.every((s) => s.eventParameters?.some((p) => p.name === 'cta_text' && p.value === '{{Click Text}}')));
+check('cta: ALL CTA triggers use a plain "contains" condition (no regex)', ctaInput.every((s) => s.trigger.clickTextOperator === 'contains'));
 
 // Newly tracked CTAs: login + search.
 const moreCtas = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
@@ -241,11 +247,11 @@ const moreCtas = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
   { page: '/', kind: 'cta', text: 'Search', intent: 'search' },
 ] });
 const loginCta = moreCtas.find((s) => s.eventName === 'login_click');
-check('cta: login → "GA4 Event - Login Click Tag" + fires on "Login"/"Sign In"', loginCta?.tagName === 'GA4 Event - Login Click Tag' && reTest(loginCta?.trigger.clickTextValue ?? '', 'Login') && reTest(loginCta?.trigger.clickTextValue ?? '', 'Sign In'));
+check('cta: login button → "GA4 Event - Login Tag" (named for the text), {{Click Text}} contains "Login"', loginCta?.tagName === 'GA4 Event - Login Tag' && loginCta?.trigger.clickTextValue === 'Login' && loginCta?.trigger.clickTextOperator === 'contains');
 const searchCta = moreCtas.find((s) => s.eventName === 'search_click');
 // search CTA uses 'search_click' (NOT bare 'search') so a "Search" submit button
 // can't double-count with the search FORM tag (which keeps the GA4 'search' event).
-check('cta: search button → "GA4 Event - Search Tag", event search_click, fires on "Search"', searchCta?.tagName === 'GA4 Event - Search Tag' && searchCta?.eventName === 'search_click' && reTest(searchCta?.trigger.clickTextValue ?? '', 'Search'));
+check('cta: search button → "GA4 Event - Search Tag", event search_click, {{Click Text}} contains "Search"', searchCta?.tagName === 'GA4 Event - Search Tag' && searchCta?.eventName === 'search_click' && searchCta?.trigger.clickTextValue === 'Search' && searchCta?.trigger.clickTextOperator === 'contains');
 check('cta: search button event (search_click) is DISTINCT from search FORM event (search) — no double-count', searchForm[0].eventName === 'search' && searchCta?.eventName === 'search_click');
 
 // ── YouTube video → GA4 video tag (built-in YouTube Video trigger) ───────────
@@ -260,18 +266,28 @@ check('video: carries the standard video_* params valued by the Video built-ins'
 check('video: flagged as EM-overlap (GA4 Video engagement) but still suggested', ytTag?.enhancedMeasurementOverlap === true);
 check('video: no embed → no video tag', buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }).length === 0);
 
-// ── full mode: GA4 Configuration + All-form / All-PDF catch-alls ─────────────
+// ── full mode: GA4 Configuration + All-form catch-all ────────────────────────
 const fullForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, formId: 'c' }], elements: [] }, { full: true });
 check('full: GA4 Configuration (google_tag) is always FIRST, on All Pages', fullForm[0].platform === 'google_tag' && fullForm[0].tagName === 'GA4 Configuration' && fullForm[0].trigger.kind === 'pageview' && fullForm[0].tagId === '{{GA4 Measurement ID}}');
 check('full: "All Form Submissions" catch-all when a form exists (form_submit, no scope)', fullForm.some((s) => s.tagName === 'GA4 Event - All Form Submissions Tag' && s.eventName === 'form_submission' && s.trigger.kind === 'form_submit' && !s.trigger.formIdValue));
 const fullPdf = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Guide', href: 'https://a.com/g.pdf' }] }, { full: true });
-check('full: "All PDF Downloads" catch-all when a PDF exists (\\.pdf matchRegex)', fullPdf.some((s) => s.tagName === 'GA4 Event - All PDF Downloads Tag' && /\\\.pdf/.test(s.trigger.clickUrlValue ?? '') && s.trigger.clickUrlOperator === 'matchRegex'));
+check('full: PDF download tag uses a readable {{Click URL}} ends with .pdf — and there is NO separate "All PDF Downloads" catch-all (the per-file tag already fires site-wide)',
+  fullPdf.some((s) => s.eventName === 'file_download' && s.tagName === 'GA4 Event - PDF Download Tag' && s.trigger.clickUrlValue === '.pdf' && s.trigger.clickUrlOperator === 'endsWith') &&
+  !fullPdf.some((s) => s.tagName === 'GA4 Event - All PDF Downloads Tag'));
 check('full: no PDF → no "All PDF Downloads" tag; no form → no "All Form Submissions"', (() => { const x = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }, { full: true }); return !x.some((s) => s.tagName === 'GA4 Event - All PDF Downloads Tag') && !x.some((s) => s.tagName === 'GA4 Event - All Form Submissions Tag'); })());
 check('full: GA4 Configuration is still present even with nothing found', buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }, { full: true }).some((s) => s.platform === 'google_tag'));
 check('default (no opts): NO google_tag / catch-alls added (scan output unchanged)', !buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, formId: 'c' }], elements: [] }).some((s) => s.platform === 'google_tag' || s.tagName.startsWith('GA4 Event - All ')));
 // Review fixes: real-id placeholder, case-insensitive regex, no double-fire.
 check('full: GA4 Configuration defaults to a valid-shaped Measurement ID (G-1234567890) the user can keep or edit', fullForm[0].measurementId === 'G-1234567890');
-check('full: All PDF + File Download regexes are CASE-INSENSITIVE ((?i) so .PDF matches)', (fullPdf.find((s) => s.tagName === 'GA4 Event - All PDF Downloads Tag')?.trigger.clickUrlValue ?? '').startsWith('(?i)') && (fullPdf.find((s) => s.eventName === 'file_download' && s.tagName !== 'GA4 Event - All PDF Downloads Tag')?.trigger.clickUrlValue ?? '').startsWith('(?i)'));
+check('full: the PDF download trigger is a plain "ends with" condition, NOT a regex', fullPdf.find((s) => s.eventName === 'file_download')?.trigger.clickUrlOperator === 'endsWith');
+// Non-PDF extensions get their own readable per-type tag (ZIP), and "ends with" anchors so .doc
+// can't over-match .docx; a download URL with no clear extension falls back to the multi-ext regex.
+const zipDl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Bundle', href: 'https://a.com/pack.zip' }] }).find((s) => s.eventName === 'file_download');
+check('download: .zip → "GA4 Event - ZIP Download Tag", {{Click URL}} ends with .zip', zipDl?.tagName === 'GA4 Event - ZIP Download Tag' && zipDl?.trigger.clickUrlValue === '.zip' && zipDl?.trigger.clickUrlOperator === 'endsWith');
+const docDl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Doc', href: 'https://a.com/f.doc' }] }).find((s) => s.eventName === 'file_download');
+check('download: ".doc" ends-with does NOT over-match ".docx"', docDl?.trigger.clickUrlValue === '.doc' && docDl?.trigger.clickUrlOperator === 'endsWith');
+const noExtDl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Get file', href: 'https://a.com/download' }] }).find((s) => s.eventName === 'file_download');
+check('download: no clear extension → multi-ext regex fallback ("File Download")', noExtDl?.tagName === 'GA4 Event - File Download Tag' && noExtDl?.trigger.clickUrlOperator === 'matchRegex' && /pdf\|zip/.test(noExtDl?.trigger.clickUrlValue ?? ''));
 check('full: SCOPED / purpose form tag is KEPT (contact_form not dropped by the catch-all)', fullForm.some((s) => s.eventName === 'contact_form'));
 const fullOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'other', action: '', provider: prov0 }], elements: [] }, { full: true });
 check('full: an UNSCOPED generic form_submission scan tag is dropped (the All-Form catch-all is the only form_submission)', fullOther.filter((s) => s.eventName === 'form_submission' && s.trigger.kind === 'form_submit').length === 1 && fullOther.some((s) => s.tagName === 'GA4 Event - All Form Submissions Tag'));

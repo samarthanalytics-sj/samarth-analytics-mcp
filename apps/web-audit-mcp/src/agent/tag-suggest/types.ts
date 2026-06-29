@@ -107,7 +107,7 @@ export interface SuggestInput {
 }
 
 export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video';
-export type FilterOp = 'equals' | 'contains' | 'startsWith' | 'matchRegex';
+export type FilterOp = 'equals' | 'contains' | 'startsWith' | 'endsWith' | 'matchRegex';
 
 /** SAME shape as the desktop create_gtm_tracking_tag input → directly creatable. */
 export interface SuggestedTag {

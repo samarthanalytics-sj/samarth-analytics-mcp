@@ -34,6 +34,7 @@ const CONDITION: Record<string, string> = {
   equals: 'equals to',
   contains: 'Contains',
   startsWith: 'Starts with',
+  endsWith: 'Ends with',
   matchRegex: 'matches RegEx',
 };
 

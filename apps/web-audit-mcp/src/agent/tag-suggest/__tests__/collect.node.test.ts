@@ -63,7 +63,7 @@ check('siteHost passed with a scheme still matches internal links', classifyElem
 // Download regex shared with the engine trigger (apk/mp3/# now covered)
 check('collector detects .apk / .mp3 / #fragment as download', kindOf('https://acme.com/app.apk') === 'download' && kindOf('https://acme.com/t.mp3') === 'download' && kindOf('https://acme.com/a.pdf#s') === 'download');
 const dl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: classifyPageElements([a('https://a.com/app.apk')], 'a.com', '/d') }).find((s) => s.eventName === 'file_download');
-check('engine file_download trigger regex covers the same extensions (apk, #)', !!dl && /apk/.test(dl.trigger.clickUrlValue ?? '') && /#/.test(dl.trigger.clickUrlValue ?? ''));
+check('engine file_download trigger uses a readable {{Click URL}} ends with .apk (no regex)', !!dl && dl.trigger.clickUrlValue === '.apk' && dl.trigger.clickUrlOperator === 'endsWith');
 // "Login / Register" is now a tracked login CTA (was excluded); bare "register"
 // still stays out of the generic bucket.
 check('CTA: "Login / Register" → login CTA (tracked)', (() => { const d = classifyElement({ tag: 'button', href: '', text: 'Login / Register', hasDownload: false, region: '' }, 'a.com'); return d?.kind === 'cta' && d?.intent === 'login'; })());
