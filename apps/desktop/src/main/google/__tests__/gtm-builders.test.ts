@@ -27,6 +27,8 @@ import {
   findUnusedTriggers,
   collectUsedTriggerIds,
   triggerUsageBreakdown,
+  findUnusedVariables,
+  collectReferencedVariableNames,
   detectMetaTags,
   customTemplateType,
   buildAdsConversionServerTag,
@@ -351,10 +353,11 @@ test('audit: structured findings carry resource + recommendation + machine fix',
   // Variable reference scan: "Lonely" is unused; "Referenced" (used by the tag) is not.
   const unusedVars = r.findings.filter((f) => f.category === 'unused' && f.resource?.kind === 'variable');
   assert.deepEqual(unusedVars.map((f) => f.resource?.name), ['Lonely']);
-  // Unused-variable is ADVISORY ONLY — no destructive auto-fix (the workspace
-  // snapshot can't see published versions or every variable-bearing field).
-  assert.equal(unusedVars[0]?.autoFixable, false);
-  assert.equal(unusedVars[0]?.fix, undefined);
+  // Unused-variable now carries a delete fix (advisory still — the recommendation warns it's a hint,
+  // not proof, and that GTM lets you delete a referenced variable).
+  assert.equal(unusedVars[0]?.autoFixable, true);
+  assert.equal(unusedVars[0]?.fix?.tool, 'delete_gtm_variable');
+  assert.deepEqual(unusedVars[0]?.fix?.args, { variableId: 'V2', name: 'Lonely' });
 
   // Healthy GA4 tag (mid + eventName + consent needed) raises no ga4/consent finding.
   assert.equal(r.findings.some((f) => f.category === 'ga4' || f.category === 'consent'), false);
@@ -1318,6 +1321,24 @@ test('findUnusedTriggers: a LIVE trigger group keeps its members used; a DEAD on
   });
   assert.deepEqual(findUnusedTriggers(make(true)).map((t) => t.triggerId).sort(), [], 'tag fires the group → group + member both used');
   assert.deepEqual(findUnusedTriggers(make(false)).map((t) => t.triggerId).sort(), ['20', 'tg'], 'no tag uses the group → BOTH the group and its member are orphans');
+});
+
+test('findUnusedVariables: variables referenced by no tag/trigger/other-variable are orphans', () => {
+  const snap = {
+    tags: [{ tagId: 't', name: 'GA4', type: 'gaawe', firingTriggerId: [], paused: false, parameter: [{ type: 'template', key: 'measurementId', value: '{{GA4 ID}}' }] }],
+    triggers: [],
+    variables: [
+      { variableId: '10', name: 'GA4 ID', type: 'c', parameter: [] }, // referenced by the tag
+      { variableId: '11', name: 'Page Path', type: 'v', parameter: [] }, // referenced by nothing → orphan
+      { variableId: '12', name: 'Wrapper', type: 'jsm', parameter: [{ type: 'template', key: 'javascript', value: 'return {{GA4 ID}};' }] }, // refs GA4 ID, itself unused → orphan
+    ],
+  };
+  assert.deepEqual([...collectReferencedVariableNames(snap)].sort(), ['GA4 ID'], 'only GA4 ID is referenced (tag param + Wrapper body)');
+  assert.deepEqual(
+    findUnusedVariables(snap).map((v) => v.variableId).sort(),
+    ['11', '12'],
+    'Page Path + the unused Wrapper; GA4 ID is referenced so it is kept',
+  );
 });
 
 test('triggerUsageBreakdown: orphaned count + how blocking / paused-firing would change it', () => {
