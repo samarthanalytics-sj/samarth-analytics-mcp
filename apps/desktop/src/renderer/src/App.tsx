@@ -2533,6 +2533,10 @@ function ContainerAuditPanel({
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+  // Bulk-delete selection (orphaned triggers + unused variables), keyed by finding index, plus the
+  // one-shot confirmation that gates a bulk delete (the captured index list to remove).
+  const [selectedDel, setSelectedDel] = useState<Record<number, boolean>>({});
+  const [delConfirm, setDelConfirm] = useState<{ indices: number[] } | null>(null);
 
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -2544,6 +2548,8 @@ function ContainerAuditPanel({
     setFix({});
     setTypeFilter('all');
     setSearch('');
+    setSelectedDel({});
+    setDelConfirm(null);
     try {
       setReport(await window.desktop.gtm.audit(ctx.accountId!, ctx.containerId!, ctx.workspaceId!));
     } catch (e) {
@@ -2556,12 +2562,16 @@ function ContainerAuditPanel({
   async function applyFix(
     i: number,
     f: AuditFindingView,
-    override?: { tool: string; args: Record<string, unknown> }
+    override?: { tool: string; args: Record<string, unknown> },
+    opts?: { skipConfirm?: boolean }
   ): Promise<void> {
+    if (fix[i]?.state === 'fixing') return; // already in flight — never double-issue a write
     const toRun = override ?? f.fix;
     if (!toRun) return;
     const destructive = toRun.tool.startsWith('delete');
-    if (destructive && fix[i]?.state !== 'confirm') {
+    // A single delete needs its two-click per-row confirm; a bulk delete is confirmed once for the
+    // whole batch up front, so it passes skipConfirm to run each one straight away.
+    if (destructive && !opts?.skipConfirm && fix[i]?.state !== 'confirm') {
       setFix((s) => ({ ...s, [i]: { state: 'confirm' } }));
       return;
     }
@@ -2624,9 +2634,10 @@ function ContainerAuditPanel({
   };
 
   // Bulk apply: every non-destructive auto-fix not already applied (and matching the active
-  // type filter). Deletes are EXCLUDED — they stay per-row behind an explicit confirm so
-  // nothing irreversible happens in bulk. Consent fixes apply their default ("require
-  // consent" — conservative, reversible); use a row's "No extra consent" for the exceptions.
+  // type filter). Deletes are EXCLUDED from THIS batch — they have their own confirmed bulk path
+  // (applyDeleteBatch / the "Bulk delete" toolbar) plus a per-row two-click confirm. Consent fixes
+  // apply their default ("require consent" — conservative, reversible); use a row's "No extra
+  // consent" for the exceptions.
   const bulkFixable = findings.filter(
     (f, i) => typeMatches(f) && f.autoFixable && f.fix && !f.fix.tool.startsWith('delete') && fix[i]?.state !== 'done'
   ).length;
@@ -2644,6 +2655,32 @@ function ContainerAuditPanel({
   const pausedFixable = findings.filter((f, i) => typeMatches(f) && f.autoFixable && isUnpauseFix(f) && fix[i]?.state !== 'done').length;
   // Rows to render — keep each finding's ORIGINAL index so the per-row fix state still aligns.
   const visible = findings.map((f, i) => ({ f, i })).filter(({ f }) => typeMatches(f));
+
+  // ── Bulk delete (orphaned triggers + unused variables) ──────────────────────
+  // The audit's two destructive fixes — delete_gtm_trigger (orphaned triggers) and
+  // delete_gtm_variable (unused variables) — get selection checkboxes plus "Delete selected" /
+  // "Delete all" buttons. Both scope to the current filter + search via `visible`, exactly like the
+  // non-destructive batches. Single deletes keep their per-row two-click confirm; a bulk delete
+  // asks ONE combined confirmation instead.
+  const isDeletable = (f: AuditFindingView): boolean =>
+    Boolean(f.autoFixable && f.fix && f.fix.tool.startsWith('delete'));
+  const deletableTargets = visible
+    .filter(({ f, i }) => isDeletable(f) && fix[i]?.state !== 'done' && fix[i]?.state !== 'fixing')
+    .map(({ i }) => i);
+  const selectedDelTargets = deletableTargets.filter((i) => selectedDel[i]);
+  // True while any per-row delete is mid-flight — used to disable the bulk entry points so a single
+  // in-flight delete can't be re-issued by a bulk run (applyDeleteBatch also re-validates at run time).
+  const anyFixing = Object.values(fix).some((s) => s?.state === 'fixing');
+  const delTriggerCount = (idxs: number[]): number => idxs.filter((i) => findings[i].fix?.tool === 'delete_gtm_trigger').length;
+  const delVariableCount = (idxs: number[]): number => idxs.filter((i) => findings[i].fix?.tool === 'delete_gtm_variable').length;
+  // "X orphaned trigger(s) · Y unused variable(s)" — the kind breakdown for a set of delete targets.
+  const delBreakdown = (idxs: number[]): string =>
+    [
+      delTriggerCount(idxs) > 0 ? `${delTriggerCount(idxs)} orphaned trigger(s)` : '',
+      delVariableCount(idxs) > 0 ? `${delVariableCount(idxs)} unused variable(s)` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
 
   // Apply every non-destructive fix matching `pred`, sequentially, with per-row status and a
   // live m/n counter. Deletes are always excluded (per-row confirm only). A small pace
@@ -2690,6 +2727,42 @@ function ContainerAuditPanel({
     cancelRef.current = true;
     setCanceling(true);
   }
+
+  // Delete every finding in `indices` (already resolved from the visible set + user-confirmed),
+  // sequentially, reusing applyBatch's pacing / m-of-n counter / Cancel. This is the ONLY path that
+  // runs destructive fixes in bulk, so it never auto-includes anything — the caller passes an
+  // explicit list and each delete runs with skipConfirm (the batch was confirmed once already).
+  async function applyDeleteBatch(indices: number[]): Promise<void> {
+    // Re-validate at execution time (mirrors applyBatch): drop any captured index already deleted or
+    // in flight, so a row removed via a single per-row delete while the confirm banner was open is
+    // never re-issued against an already-gone resource (and the m/n total stays honest).
+    const live = indices.filter((i) => fix[i]?.state !== 'done' && fix[i]?.state !== 'fixing');
+    if (applyingAll || live.length === 0) return;
+    cancelRef.current = false;
+    setCanceling(false);
+    setApplyingAll(true);
+    setBatchProgress({ done: 0, total: live.length });
+    try {
+      let done = 0;
+      for (const i of live) {
+        if (cancelRef.current) break; // Cancel stops launching further deletes
+        if (done > 0) await new Promise((r) => setTimeout(r, 400)); // pace under the per-minute quota
+        await applyFix(i, findings[i], undefined, { skipConfirm: true });
+        done += 1;
+        setBatchProgress({ done, total: live.length });
+      }
+    } finally {
+      setApplyingAll(false);
+      setCanceling(false);
+      cancelRef.current = false;
+      setBatchProgress(null);
+      setSelectedDel((s) => { const n = { ...s }; for (const i of live) delete n[i]; return n; }); // clear handled selection
+    }
+  }
+
+  // A disabled button keeps its inline background, so Chromium won't auto-fade it — apply this when
+  // a control is disabled so destructive buttons never look armed when they're inert.
+  const disabledStyle = (d: boolean): React.CSSProperties => (d ? { opacity: 0.5, cursor: 'not-allowed' } : {});
 
   return (
     <div style={styles.reviewWrap}>
@@ -2742,7 +2815,7 @@ function ContainerAuditPanel({
                 <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Filter:</span>
                 <select
                   value={typeFilter}
-                  onChange={(e) => setTypeFilter(e.target.value)}
+                  onChange={(e) => { setTypeFilter(e.target.value); setDelConfirm(null); }}
                   style={styles.select}
                   title="Filter findings — and scope the batch fixes — by severity, issue type, tag type, or fixability"
                 >
@@ -2774,7 +2847,7 @@ function ContainerAuditPanel({
                 <input
                   type="search"
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => { setSearch(e.target.value); setDelConfirm(null); }}
                   placeholder="Search tags, triggers, variables…"
                   aria-label="Search audit findings by name or keyword"
                   style={{ ...styles.input, flex: '0 1 240px' }}
@@ -2843,8 +2916,77 @@ function ContainerAuditPanel({
                     ? canceling
                       ? `Stopping after the current fix… (${batchProgress?.done ?? 0}/${batchProgress?.total ?? 0})`
                       : `Applying ${batchProgress?.done ?? 0}/${batchProgress?.total ?? 0}… click Cancel to stop after the current fix.`
-                    : 'Non-destructive only — deletes stay per-row; “No extra consent” skips ad pixels.'}
+                    : 'Non-destructive fixes only — bulk delete for orphaned triggers / unused variables is below; “No extra consent” skips ad pixels.'}
                 </span>
+              </div>
+            )}
+            {deletableTargets.length > 0 && (
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Bulk delete:</span>
+                <button
+                  style={{ ...styles.dangerSolid, ...disabledStyle(applyingAll || anyFixing || selectedDelTargets.length === 0) }}
+                  disabled={applyingAll || anyFixing || selectedDelTargets.length === 0}
+                  onClick={() => setDelConfirm({ indices: selectedDelTargets })}
+                  title="Delete the checked orphaned triggers / unused variables — one confirmation, then each is removed from the draft workspace."
+                >
+                  Delete selected ({selectedDelTargets.length})
+                </button>
+                <button
+                  style={{ ...styles.dangerGhost, ...disabledStyle(applyingAll || anyFixing) }}
+                  disabled={applyingAll || anyFixing}
+                  onClick={() => setDelConfirm({ indices: deletableTargets })}
+                  title="Delete every orphaned trigger / unused variable matching the current filter + search (the rows shown below)."
+                >
+                  Delete all in view ({deletableTargets.length})
+                </button>
+                {selectedDelTargets.length < deletableTargets.length ? (
+                  <button
+                    style={{ ...styles.linkBtn, ...disabledStyle(applyingAll || anyFixing) }}
+                    disabled={applyingAll || anyFixing}
+                    onClick={() => setSelectedDel((s) => { const n = { ...s }; for (const i of deletableTargets) n[i] = true; return n; })}
+                  >
+                    Select all
+                  </button>
+                ) : (
+                  <button style={{ ...styles.linkBtn, ...disabledStyle(applyingAll || anyFixing) }} disabled={applyingAll || anyFixing} onClick={() => setSelectedDel({})}>
+                    Select none
+                  </button>
+                )}
+                {delBreakdown(deletableTargets) && (
+                  <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{delBreakdown(deletableTargets)} in view</span>
+                )}
+              </div>
+            )}
+            {delConfirm && (
+              <div style={{ ...styles.confirmDanger, marginTop: 10, marginLeft: 0, marginRight: 0 }}>
+                <div style={styles.confirmHead}>🗑 Delete {delConfirm.indices.length} item(s)?</div>
+                <div style={{ fontSize: 13, margin: '6px 0', lineHeight: 1.5 }}>
+                  {delBreakdown(delConfirm.indices) ? `${delBreakdown(delConfirm.indices)} ` : ''}
+                  will be removed from the <b>draft</b> workspace (nothing is published until you publish in GTM).
+                  {delVariableCount(delConfirm.indices) > 0 && (
+                    <>
+                      {' '}<b>Note on variables:</b> GTM refuses to delete a trigger still referenced by a tag, but it does{' '}
+                      <b>not</b> refuse a referenced variable — one used only in a published version or a field the audit
+                      can't read will look unused. Review before deleting.
+                    </>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    style={{ ...styles.dangerSolid, ...disabledStyle(applyingAll) }}
+                    disabled={applyingAll}
+                    onClick={() => {
+                      const idxs = delConfirm.indices;
+                      setDelConfirm(null);
+                      void applyDeleteBatch(idxs);
+                    }}
+                  >
+                    Yes, delete {delConfirm.indices.length}
+                  </button>
+                  <button style={styles.ghostBtn} onClick={() => setDelConfirm(null)}>
+                    Cancel
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -2913,19 +3055,32 @@ function ContainerAuditPanel({
                       </button>
                     </div>
                   ) : f.autoFixable && f.fix && !done ? (
-                    <button
-                      style={f.fix.tool.startsWith('delete') ? styles.dangerGhost : styles.ghostBtn}
-                      disabled={st?.state === 'fixing'}
-                      onClick={() => applyFix(i, f)}
-                    >
-                      {st?.state === 'fixing'
-                        ? '…'
-                        : st?.state === 'confirm'
-                          ? 'Confirm delete'
-                          : f.fix.tool.startsWith('delete')
-                            ? 'Delete'
-                            : 'Apply fix'}
-                    </button>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+                      {f.fix.tool.startsWith('delete') && (
+                        <input
+                          type="checkbox"
+                          style={{ accentColor: 'var(--c-red)', cursor: 'pointer' }}
+                          checked={!!selectedDel[i]}
+                          disabled={applyingAll || anyFixing}
+                          onChange={(e) => setSelectedDel((s) => ({ ...s, [i]: e.target.checked }))}
+                          title="Select for bulk delete"
+                          aria-label={`Select ${f.resource?.name ?? 'item'} for bulk delete`}
+                        />
+                      )}
+                      <button
+                        style={f.fix.tool.startsWith('delete') ? styles.dangerGhost : styles.ghostBtn}
+                        disabled={st?.state === 'fixing' || applyingAll}
+                        onClick={() => applyFix(i, f)}
+                      >
+                        {st?.state === 'fixing'
+                          ? '…'
+                          : st?.state === 'confirm'
+                            ? 'Confirm delete'
+                            : f.fix.tool.startsWith('delete')
+                              ? 'Delete'
+                              : 'Apply fix'}
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               );
