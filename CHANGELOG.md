@@ -1,3 +1,9 @@
+## [1.99.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.99.1...v1.99.2) (2026-06-29)
+
+### Bug Fixes
+
+* **desktop:** GA4 audit applies its own anomaly rule, grades on evidence, stops contradicting itself ([2a39593](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2a39593f8b533321451c840e874a6e033954a518))
+
 ## [1.99.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.99.0...v1.99.1) (2026-06-29)
 
 ### Bug Fixes
