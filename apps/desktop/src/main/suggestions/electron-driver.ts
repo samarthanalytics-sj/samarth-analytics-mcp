@@ -67,6 +67,19 @@ function inPage(fn: () => unknown): string {
 // (IntersectionObserver / "animate-in-view" — very common for contact/newsletter forms + FAQ on
 // React/marketing landing pages) actually render before we read the DOM, then return to the top.
 // Self-contained for executeJavaScript serialization (DOM globals only); resolves when done.
+// Diagnostic probe: count the form-relevant DOM the scan can see, so a "0 forms" result is
+// localizable — inputs=0 means the form fields aren't standard <input>/<textarea> (custom widgets)
+// or didn't render; inputs>0 with rawForms=0 means the extractor structure-missed them.
+function probeFormsDom(): { forms: number; inputs: number; textareas: number; selects: number; submitish: number } {
+  const n = (sel: string): number => document.querySelectorAll(sel).length;
+  let submitish = 0;
+  for (const b of Array.from(document.querySelectorAll('button, [role="button"], a, input[type="submit"], input[type="button"]'))) {
+    const t = ((b.textContent || '') + ' ' + ((b as HTMLInputElement).value || '')).toLowerCase();
+    if (/\b(submit|send|subscribe|sign\s*up|get\s+started|register|join|contact|book|request|message|get\s+in\s+touch)\b/.test(t)) submitish += 1;
+  }
+  return { forms: n('form'), inputs: n('input'), textareas: n('textarea'), selects: n('select'), submitish };
+}
+
 function autoScrollPage(): Promise<void> {
   return new Promise<void>((resolve) => {
     const step = Math.max(300, Math.floor(window.innerHeight * 0.85));
@@ -210,6 +223,20 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
           evalTimeoutMs,
           'form scan',
         )) as RawForm[];
+        try {
+          const p = (await withTimeout(wc.executeJavaScript(inPage(probeFormsDom), true), 2_000, 'form probe')) as {
+            forms: number;
+            inputs: number;
+            textareas: number;
+            selects: number;
+            submitish: number;
+          };
+          console.error(
+            `[form-probe] ${wc.getURL() || url}: <form>=${p.forms} input=${p.inputs} textarea=${p.textareas} select=${p.selects} submitish=${p.submitish} → extracted ${Array.isArray(rawForms) ? rawForms.length : 0} form(s)`,
+          );
+        } catch {
+          /* probe is best-effort diagnostics */
+        }
         return {
           ok: true,
           httpStatus: lastStatus,
