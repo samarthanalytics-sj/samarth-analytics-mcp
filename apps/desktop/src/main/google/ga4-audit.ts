@@ -35,10 +35,17 @@ export interface Ga4PropertySnapshot {
 
 export interface Ga4Finding {
   severity: 'high' | 'medium' | 'low' | 'info';
-  /** collection | retention | conversions | measurement | privacy | integrations | benchmarking */
+  /** collection | retention | conversions | measurement | privacy | integrations | benchmarking | customdef */
   category: string;
   message: string;
   recommendation: string;
+}
+/** Per-area coverage so the audit shows WHAT it checked, not only the problems.
+ *  pass = checked, clean · partial = a low/medium issue · fail = a high issue ·
+ *  not_verified = the backing config sub-resource couldn't be read (no access). */
+export interface Ga4AreaStatus {
+  area: string;
+  status: 'pass' | 'partial' | 'fail' | 'not_verified';
 }
 export interface Ga4AuditReport {
   counts: {
@@ -50,6 +57,8 @@ export interface Ga4AuditReport {
   };
   summary: { high: number; medium: number; low: number; info: number };
   findings: Ga4Finding[];
+  /** Coverage table (Pass/Partial/Fail/Not Verified per area). */
+  areas: Ga4AreaStatus[];
 }
 
 // Tokens that strongly indicate personal data in a custom dimension. GA4's terms
@@ -150,6 +159,68 @@ export function auditGa4(s: Ga4PropertySnapshot): Ga4AuditReport {
     });
   }
 
+  // Custom-definition slot usage — you cannot create more once the cap is hit, so warn near it.
+  const dims = s.customDimensions ?? [];
+  const eventDims = dims.filter((d) => d.scope === 'EVENT').length;
+  const userDims = dims.filter((d) => d.scope === 'USER').length;
+  if (eventDims >= 45) {
+    findings.push({
+      severity: 'low',
+      category: 'customdef',
+      message: `${eventDims} of 50 event-scoped custom dimension slots are in use.`,
+      recommendation: 'Archive unused event-scoped custom dimensions before you hit the 50-slot cap (you cannot create more once it is full).',
+    });
+  }
+  if (userDims >= 22) {
+    findings.push({
+      severity: 'low',
+      category: 'customdef',
+      message: `${userDims} of 25 user-scoped custom dimension slots are in use.`,
+      recommendation: 'Archive unused user-scoped custom dimensions before you hit the 25-slot cap.',
+    });
+  }
+
+  // More than one WEB stream usually means the same site double-counts users/sessions.
+  const webStreams = s.dataStreams.filter((d) => d.type === 'WEB_DATA_STREAM').length;
+  if (webStreams > 1) {
+    findings.push({
+      severity: 'info',
+      category: 'collection',
+      message: `${webStreams} web data streams are configured — the same site sending to more than one stream double-counts users and sessions.`,
+      recommendation: 'Keep one web stream per site; remove or repurpose extra streams unless they are genuinely separate sites.',
+    });
+  }
+
+  // A retention timer that does NOT reset on activity expires a returning user's earliest data.
+  if (s.dataRetention && s.dataRetention.resetOnNewActivity === false) {
+    findings.push({
+      severity: 'low',
+      category: 'retention',
+      message: "User-data retention does not reset on new activity — a returning user's earliest data still expires on the original timer.",
+      recommendation: 'Enable "Reset user data on new activity" in Admin → Data settings → Data retention so active users are retained.',
+    });
+  }
+
+  // Per-area coverage (Pass / Partial / Fail / Not Verified) — so the audit reports WHAT it checked,
+  // not only the problems. not_verified = the backing config sub-resource couldn't be read.
+  const areaStatus = (categories: string[]): Ga4AreaStatus['status'] => {
+    const fs = findings.filter((f) => categories.includes(f.category));
+    if (fs.some((f) => f.severity === 'high')) return 'fail';
+    if (fs.some((f) => f.severity === 'medium' || f.severity === 'low')) return 'partial';
+    return 'pass';
+  };
+  const areaOf = (categories: string[], verified: boolean): Ga4AreaStatus['status'] =>
+    verified ? areaStatus(categories) : 'not_verified';
+  const areas: Ga4AreaStatus[] = [
+    { area: 'Data collection', status: areaOf(['collection', 'measurement'], true) },
+    { area: 'Data retention', status: areaOf(['retention'], s.dataRetention !== null) },
+    { area: 'Key events', status: areaOf(['conversions'], s.keyEvents !== null) },
+    { area: 'Custom definitions', status: areaOf(['customdef'], s.customDimensions !== null) },
+    { area: 'Privacy (PII)', status: areaOf(['privacy'], s.customDimensions !== null) },
+    { area: 'Integrations', status: areaOf(['integrations'], s.googleAdsLinks !== null || s.googleSignals !== null) },
+    { area: 'Benchmarking', status: areaOf(['benchmarking'], true) },
+  ];
+
   const summary = { high: 0, medium: 0, low: 0, info: 0 };
   for (const f of findings) summary[f.severity]++;
 
@@ -163,5 +234,6 @@ export function auditGa4(s: Ga4PropertySnapshot): Ga4AuditReport {
     },
     summary,
     findings,
+    areas,
   };
 }

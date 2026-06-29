@@ -3256,9 +3256,17 @@ function ContainerAuditPanel({
 
 /* ───────────────────── GA4 property audit (read-only) ───────────────────── */
 
+// Area-status chip styling for the coverage row (Pass / Partial / Fail / Not Verified).
+const GA4_AREA_STATUS: Record<string, { label: string; style: React.CSSProperties }> = {
+  pass: { label: 'Pass', style: { background: 'var(--c-green-bg)', color: 'var(--c-green)', border: '1px solid var(--c-green-border)' } },
+  partial: { label: 'Partial', style: { background: 'var(--c-amber-bg)', color: 'var(--c-amber)', border: '1px solid var(--c-amber-border)' } },
+  fail: { label: 'Fail', style: { background: 'var(--c-red-bg)', color: 'var(--c-red)', border: '1px solid var(--c-red-border)' } },
+  not_verified: { label: 'Not Verified', style: { background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border-2)' } },
+};
+
 // Pick a GA4 property (search across all accessible accounts), choose a data window,
 // and run the read-only config + data-quality audit (the same ga4-audit / data-quality
-// engines the chat tools use) — findings shown by severity. Mirrors ContainerAuditPanel,
+// engines the chat tools use) — coverage + findings by severity. Mirrors ContainerAuditPanel,
 // but GA4 has no auto-fixes (every finding is advisory).
 function Ga4AuditPanel({
   active,
@@ -3333,6 +3341,15 @@ function Ga4AuditPanel({
       ].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9))
     : [];
   const hasSerious = findings.some((f) => f.severity === 'critical' || f.severity === 'high');
+  // Coverage = the config areas + a Data-quality area derived from its findings, so the result
+  // shows WHAT was checked (Pass / Partial / Fail / Not Verified), not only the problems.
+  const dqf = result?.dataQuality.findings ?? [];
+  const dqStatus: 'pass' | 'partial' | 'fail' | 'not_verified' = dqf.some((f) => f.severity === 'critical' || f.severity === 'high')
+    ? 'fail'
+    : dqf.some((f) => f.severity === 'medium' || f.severity === 'low')
+      ? 'partial'
+      : 'pass';
+  const coverage = result ? [...result.config.areas, { area: 'Data quality', status: dqStatus }] : [];
 
   return (
     <div style={styles.reviewWrap}>
@@ -3478,6 +3495,21 @@ function Ga4AuditPanel({
                   <div style={{ ...styles.muted, marginTop: 4 }}>
                     Data quality: {result.dataQuality.totalSessions.toLocaleString()} sessions over{' '}
                     {result.dataQuality.dateRange ?? `${result.dataQuality.windowDays} days`}.
+                  </div>
+                </div>
+
+                {/* Coverage — what was checked + its status (Pass / Partial / Fail / Not Verified). */}
+                <div style={styles.card}>
+                  <div style={{ ...styles.muted, marginBottom: 8 }}>Coverage</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {coverage.map((a) => {
+                      const st = GA4_AREA_STATUS[a.status] ?? GA4_AREA_STATUS.not_verified;
+                      return (
+                        <span key={a.area} style={{ ...styles.ga4AreaChip, ...st.style }}>
+                          {a.area}: {st.label}
+                        </span>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -3927,4 +3959,5 @@ const styles: Record<string, React.CSSProperties> = {
   ga4PropRow: { display: 'flex', flexDirection: 'column', gap: 2, textAlign: 'left', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', padding: '8px 12px', cursor: 'pointer', color: 'var(--text)', fontSize: 13 },
   ga4PropRowOn: { background: 'var(--c-blue-bg)' },
   ga4DateInput: { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '7px 9px', fontSize: 13, fontFamily: 'inherit', colorScheme: 'light dark' },
+  ga4AreaChip: { fontSize: 11.5, borderRadius: 7, padding: '3px 9px', fontWeight: 600, whiteSpace: 'nowrap' },
 };
