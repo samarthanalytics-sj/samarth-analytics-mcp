@@ -57,6 +57,17 @@ check('dedup: AI unscoped all-clicks tag dropped (would fire on EVERY click)',
   dropAiSuggestion(sug('linkedin_click', trig({})), engineScan) === true);
 check('dedup: a genuinely NEW AI CTA the engine does not cover is KEPT',
   dropAiSuggestion(sug('pricing_click', trig({ clickTextValue: 'See Pricing', clickTextOperator: 'contains' })), engineScan) === false);
+// Cookie-consent-banner CTAs (CMP UI) are dropped — by click text or by snake_case event name.
+const cookieDropped = (['Accept All Cookies', 'Decline All', 'Manage Preferences', 'Cookie Settings', 'Reject All', 'Accept Cookies'] as const).every(
+  (t) => dropAiSuggestion(sug('cta_click', trig({ name: t, clickTextValue: t, clickTextOperator: 'contains' })), []) === true,
+);
+check('cookie: banner CTAs dropped by click text', cookieDropped);
+check('cookie: banner CTAs dropped by snake_case event name',
+  dropAiSuggestion(sug('accept_all_cookies', trig({ clickTextValue: 'X', clickTextOperator: 'contains' })), []) === true &&
+    dropAiSuggestion(sug('manage_preferences_click', trig({ clickTextValue: 'X', clickTextOperator: 'contains' })), []) === true);
+check('cookie: a normal CTA is NOT mistaken for a cookie banner',
+  dropAiSuggestion(sug('book_demo_click', trig({ clickTextValue: 'Manage subscription', clickTextOperator: 'contains' })), []) === false &&
+    dropAiSuggestion(sug('signup_click', trig({ clickTextValue: 'Accept terms and continue', clickTextOperator: 'contains' })), []) === false);
 
 // ── openaiVisionSuggest: response parsing with an injected fetch ──────────────
 const asResp = (o: Partial<Response> & { json: () => Promise<unknown> }): Response => o as unknown as Response;
