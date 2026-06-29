@@ -217,20 +217,20 @@ const ctaInput = buildSuggestions({
   ],
 });
 const sub = ctaInput.find((s) => s.eventName === 'subscribe_click');
-check('cta: subscribe variants collapse to ONE "Subscribe Click Tag"', ctaInput.filter((s) => s.eventName === 'subscribe_click').length === 1 && sub?.tagName === 'GA4 Event - Subscribe Click Tag');
-check('cta: named-intent trigger is "<Action> Trigger" + case-insensitive matchRegex, site-wide', sub?.trigger.clickTextOperator === 'matchRegex' && sub?.trigger.name === 'Subscribe Trigger' && sub?.page === 'site-wide');
+check('cta: subscribe variants still collapse to ONE tag, NAMED for the actual button text', ctaInput.filter((s) => s.eventName === 'subscribe_click').length === 1 && sub?.tagName === 'GA4 Event - Subscribe now Tag');
+check('cta: named-intent trigger is named for the website text + keeps the case-insensitive matchRegex, site-wide', sub?.trigger.clickTextOperator === 'matchRegex' && sub?.trigger.name === 'Subscribe now Trigger' && sub?.page === 'site-wide');
 // The trigger must actually FIRE on every variant the classifier accepts — incl.
 // different casing and a synonym whose keyword wasn't in the text (the bug the
 // review caught). And it must NOT fire on unrelated text.
 check('cta: subscribe trigger fires on "Subscribe", "SUBSCRIBE NOW", "Sign me up"',
   ['Subscribe', 'SUBSCRIBE NOW', 'Sign me up'].every((t) => reTest(sub?.trigger.clickTextValue ?? '', t)));
 const demo = ctaInput.find((s) => s.eventName === 'book_demo_click');
-check('cta: Book Demo named tag + "Book Demo Trigger"', demo?.tagName === 'GA4 Event - Book Demo Click Tag' && demo?.trigger.name === 'Book Demo Trigger');
+check('cta: tag named for the actual button text "Request a demo", not the intent label', demo?.tagName === 'GA4 Event - Request a demo Tag' && demo?.trigger.name === 'Request a demo Trigger');
 check('cta: book_demo trigger fires on "Book a Demo" but NOT "product demonstration"/"demo reel"',
   reTest(demo?.trigger.clickTextValue ?? '', 'Book a Demo') && !reTest(demo?.trigger.clickTextValue ?? '', 'Watch our product demonstration') && !reTest(demo?.trigger.clickTextValue ?? '', 'demo reel'));
-check('cta: Learn More named + own event', ctaInput.find((s) => s.eventName === 'learn_more_click')?.tagName === 'GA4 Event - Learn More Click Tag');
+check('cta: Learn More tag named for the button text + own event', ctaInput.find((s) => s.eventName === 'learn_more_click')?.tagName === 'GA4 Event - Learn more Tag');
 check('cta: Add to Cart uses non-reserved add_to_cart_click event (not the GA4 ecommerce add_to_cart)',
-  ctaInput.find((s) => s.eventName === 'add_to_cart_click')?.tagName === 'GA4 Event - Add to Cart Click Tag' && !ctaInput.some((s) => s.eventName === 'add_to_cart'));
+  ctaInput.find((s) => s.eventName === 'add_to_cart_click')?.tagName === 'GA4 Event - Add to cart Tag' && !ctaInput.some((s) => s.eventName === 'add_to_cart'));
 const genericCtas = ctaInput.filter((s) => s.eventName === 'cta_click');
 check('cta: generic "Buy now" stays generic (literal text, contains) + "Buy now Trigger" + collapses', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'contains' && genericCtas[0].trigger.name === 'Buy now Trigger');
 check('cta: every CTA carries dynamic cta_text={{Click Text}}', ctaInput.every((s) => s.eventParameters?.some((p) => p.name === 'cta_text' && p.value === '{{Click Text}}')));
