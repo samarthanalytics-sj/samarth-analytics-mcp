@@ -1,3 +1,9 @@
+## [1.100.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.99.2...v1.100.0) (2026-06-29)
+
+### Features
+
+* **desktop:** verdict-first GA4 audit report, worst-branch severity, root-cause merge ([fc70961](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fc709617de475c1c736a771519be74307c5d19b7))
+
 ## [1.99.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.99.1...v1.99.2) (2026-06-29)
 
 ### Bug Fixes
