@@ -1,3 +1,9 @@
+## [1.94.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.93.1...v1.94.0) (2026-06-29)
+
+### Features
+
+* **desktop:** GA4 property audit option + clearer GTM/GA4 switch ([eff5bbd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/eff5bbd0704a64ee898a60058fe4d6b48d413f7b))
+
 ## [1.93.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.93.0...v1.93.1) (2026-06-29)
 
 ### Bug Fixes
