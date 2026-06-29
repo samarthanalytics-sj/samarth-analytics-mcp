@@ -3272,10 +3272,17 @@ function Ga4AuditPanel({
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<{ property: string; displayName: string } | null>(null);
   const [days, setDays] = useState(28);
+  // Custom date range (data-quality window) — used instead of `days` when `custom` is on.
+  const [custom, setCustom] = useState(false);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<Ga4PropertyAuditResult | null>(null);
 
   const signedIn = Boolean(active?.hasGoogleToken);
+  // A custom range needs both bounds, start on/before end; a preset window is always valid.
+  const windowValid = !custom || Boolean(startDate && endDate && startDate <= endDate);
+  const todayIso = new Date().toISOString().slice(0, 10); // cap the pickers — GA4 has no future data
 
   async function loadProps(): Promise<void> {
     if (!signedIn) return;
@@ -3300,12 +3307,13 @@ function Ga4AuditPanel({
   }, [active?.id]);
 
   async function runAudit(): Promise<void> {
-    if (!selected || running) return;
+    if (!selected || running || !windowValid) return;
     setRunning(true);
     onError('');
     setResult(null);
     try {
-      setResult(await window.desktop.ga4.audit(selected.property, days));
+      const win = custom ? { startDate, endDate } : days;
+      setResult(await window.desktop.ga4.audit(selected.property, win));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -3393,20 +3401,65 @@ function Ga4AuditPanel({
             <div style={styles.card}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Data window:</span>
-                <select style={styles.select} value={days} onChange={(e) => { setDays(Number(e.target.value)); setResult(null); }} aria-label="Data window for the audit">
-                  <option value={7}>Last 7 days</option>
-                  <option value={14}>Last 14 days</option>
-                  <option value={28}>Last 28 days</option>
-                  <option value={30}>Last 30 days</option>
-                  <option value={90}>Last 90 days</option>
-                  <option value={180}>Last 180 days</option>
-                  <option value={365}>Last 365 days</option>
+                <select
+                  style={styles.select}
+                  value={custom ? 'custom' : String(days)}
+                  onChange={(e) => {
+                    setResult(null);
+                    if (e.target.value === 'custom') {
+                      setCustom(true);
+                      // Prefill a sensible default range (the last 28 days) the first time.
+                      if (!startDate || !endDate) {
+                        const today = new Date();
+                        const iso = (d: Date): string => d.toISOString().slice(0, 10);
+                        setStartDate(iso(new Date(today.getTime() - 27 * 86400000)));
+                        setEndDate(iso(today));
+                      }
+                    } else {
+                      setCustom(false);
+                      setDays(Number(e.target.value));
+                    }
+                  }}
+                  aria-label="Data window for the audit"
+                >
+                  <option value="7">Last 7 days</option>
+                  <option value="14">Last 14 days</option>
+                  <option value="28">Last 28 days</option>
+                  <option value="30">Last 30 days</option>
+                  <option value="90">Last 90 days</option>
+                  <option value="180">Last 180 days</option>
+                  <option value="365">Last 365 days</option>
+                  <option value="custom">Custom range…</option>
                 </select>
-                <button style={styles.primaryBtn} onClick={() => void runAudit()} disabled={!selected || running}>
+                {custom && (
+                  <>
+                    <input
+                      type="date"
+                      style={styles.ga4DateInput}
+                      value={startDate}
+                      max={endDate || todayIso}
+                      onChange={(e) => { setStartDate(e.target.value); setResult(null); }}
+                      aria-label="Start date"
+                    />
+                    <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>to</span>
+                    <input
+                      type="date"
+                      style={styles.ga4DateInput}
+                      value={endDate}
+                      min={startDate || undefined}
+                      max={todayIso}
+                      onChange={(e) => { setEndDate(e.target.value); setResult(null); }}
+                      aria-label="End date"
+                    />
+                  </>
+                )}
+                <button style={styles.primaryBtn} onClick={() => void runAudit()} disabled={!selected || running || !windowValid}>
                   {running ? 'Auditing…' : 'Run audit'}
                 </button>
                 <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>
-                  Config checks ignore the window; it scopes the data-quality pass.
+                  {custom && !windowValid
+                    ? 'Pick a start and end date (start on or before end).'
+                    : 'Config checks ignore the window; it scopes the data-quality pass.'}
                 </span>
               </div>
             </div>
@@ -3873,4 +3926,5 @@ const styles: Record<string, React.CSSProperties> = {
   ga4PropList: { maxHeight: 260, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, marginTop: 8, display: 'flex', flexDirection: 'column' },
   ga4PropRow: { display: 'flex', flexDirection: 'column', gap: 2, textAlign: 'left', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', padding: '8px 12px', cursor: 'pointer', color: 'var(--text)', fontSize: 13 },
   ga4PropRowOn: { background: 'var(--c-blue-bg)' },
+  ga4DateInput: { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '7px 9px', fontSize: 13, fontFamily: 'inherit', colorScheme: 'light dark' },
 };

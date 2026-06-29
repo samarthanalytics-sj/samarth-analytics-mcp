@@ -8,6 +8,7 @@ import type {
   ChatTurn,
   CreateTagOutcome,
   Ga4AccountView,
+  Ga4AuditWindow,
   Ga4PropertyAuditResult,
   Ga4PropertyListItem,
   GoogleClientStatus,
@@ -221,8 +222,9 @@ const api = {
   // data-quality audit on a chosen property/window.
   ga4: {
     listProperties: (): Promise<Ga4PropertyListItem[]> => ipcRenderer.invoke('ga4:listProperties'),
-    audit: (property: string, days: number): Promise<Ga4PropertyAuditResult> =>
-      ipcRenderer.invoke('ga4:audit', property, days),
+    // window: trailing-day count (number) OR an explicit { startDate, endDate } custom range.
+    audit: (property: string, window: Ga4AuditWindow): Promise<Ga4PropertyAuditResult> =>
+      ipcRenderer.invoke('ga4:audit', property, window),
   },
 
   // Continuous monitoring: schedule auto re-audits of the active container and
