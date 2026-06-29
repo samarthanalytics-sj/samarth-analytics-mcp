@@ -13,7 +13,7 @@ import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
 import { mergeParametersByKey, addEventParameters, setTemplateParam, type GtmParam } from './tag-params';
 import { changeJournal, type EntityKind } from './change-journal';
-import type { Ga4AccountView, GtmAccountView } from '../../shared/ipc';
+import type { Ga4AccountView, Ga4PropertyListItem, GtmAccountView } from '../../shared/ipc';
 
 // Follows nextPageToken so large containers/accounts return EVERY item, not just
 // the first API page. Without this, big workspaces silently truncate (and audits
@@ -224,6 +224,29 @@ export class GoogleDataService {
       displayName: s.displayName ?? '(unnamed)',
       propertyCount: (s.propertySummaries ?? []).length,
     }));
+  }
+
+  /** Every GA4 property the active user can reach (id + name + parent-account name), built from
+   *  accountSummaries in ONE call — each summary already carries its propertySummaries, so there's
+   *  no per-account fan-out. For the GA4 Audit panel's picker. A failure propagates (not swallowed),
+   *  so the panel can distinguish "no access" from "no properties". */
+  async listGa4PropertySummaries(): Promise<Ga4PropertyListItem[]> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const summaries = await collectPages(
+      (pageToken) => admin.accountSummaries.list({ pageSize: 200, pageToken }),
+      (r) => r.data.accountSummaries,
+      (r) => r.data.nextPageToken
+    );
+    return summaries
+      .flatMap((s) =>
+        (s.propertySummaries ?? []).map((p) => ({
+          property: p.property ?? '',
+          displayName: p.displayName ?? '(unnamed)',
+          accountName: s.displayName ?? '(unnamed)',
+        }))
+      )
+      .filter((p) => p.property);
   }
 
   async listGa4Properties(account: string): Promise<Ga4PropertyView[]> {

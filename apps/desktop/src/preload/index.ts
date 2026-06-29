@@ -8,6 +8,8 @@ import type {
   ChatTurn,
   CreateTagOutcome,
   Ga4AccountView,
+  Ga4PropertyAuditResult,
+  Ga4PropertyListItem,
   GoogleClientStatus,
   GoogleProduct,
   GtmAccountView,
@@ -213,6 +215,14 @@ const api = {
       tagName?: string;
     }): Promise<{ created: boolean; present: boolean; existingTag?: string; variableCreated?: boolean; variableName: string; measurementId: string; tagName: string }> =>
       ipcRenderer.invoke('gtm:ensureGa4Config', ctx),
+  },
+
+  // GA4 Audit panel: list GA4 properties (picker) + run a read-only config +
+  // data-quality audit on a chosen property/window.
+  ga4: {
+    listProperties: (): Promise<Ga4PropertyListItem[]> => ipcRenderer.invoke('ga4:listProperties'),
+    audit: (property: string, days: number): Promise<Ga4PropertyAuditResult> =>
+      ipcRenderer.invoke('ga4:audit', property, days),
   },
 
   // Continuous monitoring: schedule auto re-audits of the active container and
