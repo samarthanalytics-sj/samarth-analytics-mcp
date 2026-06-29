@@ -124,11 +124,18 @@ export interface Ga4AuditFindingView {
   message: string;
   recommendation?: string;
 }
+/** Per-area coverage for the audit (Pass / Partial / Fail / Not Verified). */
+export interface Ga4AreaStatusView {
+  area: string;
+  status: 'pass' | 'partial' | 'fail' | 'not_verified';
+}
 /** GA4 property CONFIG audit (mirrors the main-process Ga4AuditReport). */
 export interface Ga4AuditReportView {
   counts: { dataStreams: number; keyEvents: number; customDimensions: number; customMetrics: number; findings: number };
   summary: { high: number; medium: number; low: number; info: number };
   findings: Ga4AuditFindingView[];
+  /** Coverage table — what was checked + its status. */
+  areas: Ga4AreaStatusView[];
 }
 /** GA4 DATA-QUALITY audit over a chosen window (mirrors Ga4DataQualityResult). */
 export interface Ga4DataQualityView {

@@ -129,6 +129,54 @@ test('industry category unset → info benchmarking finding', () => {
   assert.ok(cats(base({ industryCategory: 'INDUSTRY_CATEGORY_UNSPECIFIED' })).includes('benchmarking'));
 });
 
+test('a healthy property: coverage is all Pass', () => {
+  const r = auditGa4(base());
+  assert.equal(r.findings.length, 0);
+  assert.ok(r.areas.length >= 6);
+  assert.ok(r.areas.every((a) => a.status === 'pass'), JSON.stringify(r.areas));
+});
+
+test('custom-dimension slot usage near the cap → low customdef finding + Partial coverage', () => {
+  const ev = Array.from({ length: 46 }, (_, i) => ({ parameterName: `p${i}`, displayName: `P${i}`, scope: 'EVENT' }));
+  const r = auditGa4(base({ customDimensions: ev }));
+  assert.ok(r.findings.some((f) => f.category === 'customdef' && f.severity === 'low' && /50/.test(f.message)));
+  assert.equal(r.areas.find((a) => a.area === 'Custom definitions')?.status, 'partial');
+  const us = Array.from({ length: 23 }, (_, i) => ({ parameterName: `u${i}`, displayName: `U${i}`, scope: 'USER' }));
+  assert.ok(auditGa4(base({ customDimensions: us })).findings.some((f) => f.category === 'customdef' && /25/.test(f.message)));
+  // Well under the cap → no slot finding.
+  assert.ok(!cats(base({ customDimensions: [{ parameterName: 'a', displayName: 'A', scope: 'EVENT' }] })).includes('customdef'));
+});
+
+test('more than one WEB data stream → info collection finding', () => {
+  const r = auditGa4(base({ dataStreams: [
+    { name: 'p/1/dataStreams/1', displayName: 'A', type: 'WEB_DATA_STREAM', enhancedMeasurementEnabled: true },
+    { name: 'p/1/dataStreams/2', displayName: 'B', type: 'WEB_DATA_STREAM', enhancedMeasurementEnabled: true },
+  ] }));
+  assert.ok(r.findings.some((f) => f.category === 'collection' && f.severity === 'info' && /web data streams/i.test(f.message)));
+});
+
+test('retention not resetting on new activity → low retention finding', () => {
+  const r = auditGa4(base({ dataRetention: { eventDataRetention: 'FOURTEEN_MONTHS', resetOnNewActivity: false } }));
+  assert.ok(r.findings.some((f) => f.category === 'retention' && f.severity === 'low' && /reset/i.test(f.message)));
+});
+
+test('coverage marks unread (null) sub-resources Not Verified, never a silent Pass', () => {
+  const r = auditGa4(base({ keyEvents: null, dataRetention: null, customDimensions: null, googleAdsLinks: null, googleSignals: null }));
+  const st = (area: string) => r.areas.find((a) => a.area === area)?.status;
+  assert.equal(st('Key events'), 'not_verified');
+  assert.equal(st('Data retention'), 'not_verified');
+  assert.equal(st('Custom definitions'), 'not_verified');
+  assert.equal(st('Privacy (PII)'), 'not_verified');
+  assert.equal(st('Integrations'), 'not_verified');
+  // Collection always reads (data streams) → still Pass.
+  assert.equal(st('Data collection'), 'pass');
+});
+
+test('coverage reflects severity: Fail on a high finding, Partial on medium/low', () => {
+  assert.equal(auditGa4(base({ dataStreams: [] })).areas.find((a) => a.area === 'Data collection')?.status, 'fail');
+  assert.equal(auditGa4(base({ keyEvents: [] })).areas.find((a) => a.area === 'Key events')?.status, 'partial');
+});
+
 test('counts + severity summary are consistent', () => {
   const r = auditGa4(base({ dataStreams: [], keyEvents: [], googleAdsLinks: 0 }));
   assert.equal(r.counts.findings, r.findings.length);
