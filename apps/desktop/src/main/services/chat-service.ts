@@ -45,6 +45,19 @@ export const GA4_ECOMMERCE_REFERENCE =
   'view_promotion, select_promotion → creative_name, creative_slot, promotion_id, promotion_name, items. ' +
   '(items always maps to {{Ecommerce Items}} / ecommerce.items.) MATCH the user\'s requested event to its row — e.g. "add to cart" → add_to_cart with items+value+currency; "checkout" → begin_checkout with items+value+currency+coupon; "purchase" → purchase with items+transaction_id+value+tax+shipping+currency+coupon. Use the same parameter set for the matching event; do not invent parameters not listed for that event. ';
 
+/** Evidence-based GA4 PROPERTY AUDIT framework — appended to the GA4 system prompt so a
+ *  "property audit" produces the same structured, chart-ready, non-templated-prose output on any
+ *  model (a faithful condensation of the GA4 Property Audit Brain). Exported for testing. */
+export const GA4_PROPERTY_AUDIT =
+  'GA4 PROPERTY AUDIT — when the user asks to "audit" / "property audit" / "full audit" / review / health-check this GA4 property, run this structured, evidence-based audit (ONE property at a time; never carry assumptions between properties):\n' +
+  '1) GATHER REAL VALUES FIRST, before writing any finding: call audit_ga4_property and audit_ga4_data_quality, PLUS get_ga4_data_retention, get_ga4_property_details, get_ga4_google_signals, get_ga4_attribution_settings, get_ga4_enhanced_measurement, list_ga4_key_events, list_ga4_custom_dimensions, list_ga4_custom_metrics, list_ga4_audiences, list_ga4_google_ads_links, list_ga4_bigquery_links, list_ga4_firebase_links, and run_ga4_report over ~90 days WITH a comparison (channel mix, top pages, key-event trend, new vs returning, device). Check the data-retention window first and never run a trend longer than retention. ' +
+  '2) EVIDENCE RULES: every finding carries a REAL number or exact config value from THIS property — no generic statements ("events look fine"). If a tool cannot verify something, mark it "Not Verified" (its own state) — never assume a pass or a fail. Separate observed from inferred (label inferences). Rank by impact on decisions/spend, not ease of fix. State data limitations (retention, sampling, thresholding, Google Signals on). ' +
+  '3) FIXED WORDS ONLY: area status is exactly one of Pass / Partial / Fail / Not Verified; finding confidence is exactly one of Certain / Likely / Guessing, tied to the evidence. Do NOT invent maturity scores or confidence percentages. ' +
+  '4) SEVERITY: Critical (data wrong/missing in a way that misleads decisions or spend, PII, a collection gap) → High → Medium → Low; hygiene is listed LAST and never reported as a data/legal issue. Add to EVERY finding: who is affected (marketing/finance/leadership/product/paid media), the decision or number that becomes unreliable, and an estimated data-loss %. ' +
+  '5) CHARTS: render every percentage (parameter coverage, data loss, channel share) as a Unicode bar — filled blocks = round(value/5) out of 20, full block "█" for filled + light "░" for empty, the number printed after the bar — AND include the raw JSON data block behind it (e.g. {"chart":"parameter_coverage","event":"purchase","series":[{"param":"value","pct":100}]}). Never show a chart without the number and the data block. ' +
+  '6) DECISION READINESS: for the key business questions (which campaigns generate revenue; abandonment by product/page; CAC by channel; lead quality; LTV; refund/return rate; repeat/churn within 90 days) mark each Answerable / Partial / Not answerable with the data required, then list what the property CANNOT measure at all and the missing input (e.g. LTV — no User-ID/server data). ' +
+  '7) OUTPUT this fixed template, with NO free-form prose outside it: header (property + id, date window + comparison + retention, access level, data limitations) -> Executive summary -> Area-status table (Collection, Configuration, Events, Custom definitions, Ecommerce, Attribution, Audiences, Integrations, Consent, Identity, Marketing readiness, Reporting; each = Status + Confidence + evidence note) -> Property baseline (trend vs comparison, peak/low day, channel-mix shift, new vs returning, device split, geo flags) -> Decision-readiness table -> Parameter coverage (Unicode bars + JSON) -> Funnel if ecommerce is in scope (mark missing steps MISSING) -> Findings sorted by severity (each: evidence, observed-vs-inferred, cause + cause-confidence, business risk, data-loss bar + reports affected, fix) -> Not Verified list -> summary counts (Critical/High/Medium/Low + top 3 to fix). Only if the user demands a single headline number, compute it by rule (Pass=2, Partial=1, Fail=0 over SCORED areas only; score = points / (2 x scored areas) x 100, rounded) and ALWAYS print the count of Not Verified areas beside it; otherwise omit it. ';
+
 /**
  * A system-prompt line telling the model the ACTUAL current date. Without this
  * the model assumes its training-cutoff date (e.g. "October 2023"), which breaks
@@ -224,7 +237,8 @@ export class ChatService {
             'never assume the year. GA4 has NO data for dates after today, and the most recent 1–2 days ' +
             'may still be processing (partial); report dates resolve in the property\'s timezone. ' +
             'GA4 is READ-ONLY — you cannot apply fixes; give the user ' +
-            'the exact change to make in the GA4 Admin UI. ') +
+            'the exact change to make in the GA4 Admin UI. ' +
+            GA4_PROPERTY_AUDIT) +
       (product === 'gtm' && active.gtmContext?.containerId
         ? `The user is working in GTM account ${active.gtmContext.accountId} ` +
           `(${active.gtmContext.accountName ?? ''}), container ${active.gtmContext.containerId} ` +
