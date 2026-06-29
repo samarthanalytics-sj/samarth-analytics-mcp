@@ -1,3 +1,9 @@
+## [1.93.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.92.0...v1.93.0) (2026-06-29)
+
+### Features
+
+* **desktop:** make the Tag-suggestions Table view selectable + editable ([5224919](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5224919655b8c0f40e44abf0bbd5100b1bcecb59))
+
 ## [1.92.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.91.0...v1.92.0) (2026-06-29)
 
 ### Features
