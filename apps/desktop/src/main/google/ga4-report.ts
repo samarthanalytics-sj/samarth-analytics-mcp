@@ -379,7 +379,9 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
           ? 'Outcomes tracked the traffic — consistent with real growth.'
           : gf.severity === 'medium'
             ? "Sessions moved sharply, but there isn't enough conversion signal to confirm what's behind it."
-            : 'Outcomes did NOT keep pace with traffic — the spike is unconfirmed and revenue/ROAS may be wrong right now.';
+            : gf.severity === 'low'
+              ? 'Conversions grew with the traffic but slower than sessions — the conversion rate diluted (typical of a lower-converting channel mix), not a tracking break.'
+              : 'Outcomes did NOT keep pace with traffic — the spike is unconfirmed and revenue/ROAS may be wrong right now.';
     L.push(`**Read:** ${read}`);
     if (!keSafe || !revSafe) {
       L.push('');
