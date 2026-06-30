@@ -1,3 +1,9 @@
+## [1.103.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.102.0...v1.103.0) (2026-06-30)
+
+### Features
+
+* **desktop:** designed GA4 Executive Summary (cards, reliability gauge, scorecard, trust-matrix badges) on screen + in PDF/Word ([b068b89](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b068b897f692ea9f2b225044e23c86bd4b70364f))
+
 ## [1.102.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.101.0...v1.102.0) (2026-06-30)
 
 ### Features
