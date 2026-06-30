@@ -22,6 +22,7 @@ import type {
   TagScanResult,
 } from '../../shared/ipc';
 import { suggestionToGroup, suggestionsToTemplateCsv, TEMPLATE_HEADERS } from '../../shared/tag-template';
+import { parseCsvUrls, CSV_URL_CAP } from '../../shared/csv-urls';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
@@ -1794,7 +1795,10 @@ function TagReviewPanel({
   const [showLog, setShowLog] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
-  const [discoverMode, setDiscoverMode] = useState<'site' | 'single' | 'ai'>('site');
+  const [discoverMode, setDiscoverMode] = useState<'site' | 'single' | 'ai' | 'csv'>('site');
+  // CSV mode: paste / load a list of landing-page URLs and scan them all directly (no discovery).
+  const [csvText, setCsvText] = useState('');
+  const csvFileRef = useRef<HTMLInputElement>(null);
   // OpenAI key presence — gates the experimental AI (screenshot + vision) mode.
   const [hasOpenAi, setHasOpenAi] = useState(false);
   useEffect(() => {
@@ -1977,7 +1981,45 @@ function TagReviewPanel({
     }
   }
 
+  // CSV mode: read a chosen .csv file into the textarea (parsed on scan). Read locally in the renderer.
+  function onCsvFile(e: React.ChangeEvent<HTMLInputElement>): void {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // let the same file be re-chosen later
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setCsvText(String(reader.result ?? ''));
+    reader.onerror = () => onError('Could not read that CSV file.');
+    reader.readAsText(file);
+  }
+
+  // Scan every landing-page URL in the CSV directly (no discovery), streaming suggestions as they land.
+  async function doCsvScan(): Promise<void> {
+    if (scanning || discovering) return;
+    const urls = parseCsvUrls(csvText);
+    if (!urls.length) {
+      onError('No valid URLs found. Put one landing-page URL per line (or "url,label" per row).');
+      return;
+    }
+    const capped = urls.slice(0, CSV_URL_CAP);
+    onError('');
+    setScanning(true);
+    setScanProgress(null);
+    setDiscovered(null);
+    loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
+    try {
+      applyScanResult(await window.desktop.tags.scanUrlsStream(capped, { settleMs: effSettleMs() }, onScanProgress));
+      if (capped.length < urls.length) setWarnings((w) => [`Only the first ${CSV_URL_CAP} of ${urls.length} URLs were scanned (CSV cap).`, ...w]);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setScanning(false);
+      setScanProgress(null);
+    }
+  }
+
   const selectedIds = suggestions.filter((s) => selected[s.id]).map((s) => s.id);
+  // Live count of valid URLs in the CSV box (drives the "Scan N pages" button + the detected-count hint).
+  const csvUrlCount = useMemo(() => (discoverMode === 'csv' ? parseCsvUrls(csvText).length : 0), [discoverMode, csvText]);
   // "Select all / new" never selects a tag that already exists in the container.
   const setAll = (pred: (s: SuggestedTagView) => boolean): void =>
     setSelected(Object.fromEntries(suggestions.map((s) => [s.id, pred(s) && !alreadyExists(s)])));
@@ -2126,7 +2168,7 @@ function TagReviewPanel({
         {/* Source */}
         <div style={styles.card}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
-            {(['site', 'single', 'ai'] as const).map((m) => (
+            {(['site', 'single', 'ai', 'csv'] as const).map((m) => (
               <button
                 key={m}
                 style={discoverMode === m ? styles.toggleOn : styles.toggleOff}
@@ -2134,59 +2176,99 @@ function TagReviewPanel({
                 disabled={scanning || discovering || (m === 'ai' && !hasOpenAi)}
                 title={m === 'ai' && !hasOpenAi ? 'Add an OpenAI API key in Settings → Providers to use this' : undefined}
               >
-                {m === 'site' ? 'Main website' : m === 'single' ? 'Single page' : '🤖 AI (single page)'}
+                {m === 'site' ? 'Main website' : m === 'single' ? 'Single page' : m === 'ai' ? '🤖 AI (single page)' : '📄 Landing pages (CSV)'}
               </button>
             ))}
             {discoverMode === 'ai' && <span style={styles.muted}>experimental · screenshots the page + reads it with OpenAI vision</span>}
+            {discoverMode === 'csv' && <span style={styles.muted}>scan a list of landing-page URLs directly (no crawl)</span>}
           </div>
-          <div style={styles.formRow}>
-            <input
-              style={styles.input}
-              placeholder={discoverMode === 'single' ? 'https://example.com/pricing' : 'https://example.com'}
-              value={url}
-              disabled={scanning || discovering}
-              onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void doDiscover();
-              }}
-            />
-            <label style={styles.scanNum} title="Auto = wait until the page's network goes quiet (adapts per page). Untick to force a fixed wait in ms.">
-              <input type="checkbox" checked={settleAuto} disabled={scanning} onChange={(e) => setSettleAuto(e.target.checked)} />
-              settle: auto
-              {!settleAuto && (
-                <input style={styles.scanNumInput} type="number" min={0} max={10000} step={500} value={settleMs} disabled={scanning} onChange={(e) => setSettleMs(e.target.value)} title="Fixed wait after load (ms)" />
-              )}
-            </label>
-            <button style={styles.primaryBtn} onClick={doDiscover} disabled={!url.trim() || discovering || scanning}>
-              {discoverMode === 'ai'
-                ? scanning
-                  ? 'Analyzing…'
-                  : '🤖 Analyze with AI'
-                : discoverMode === 'single'
-                  ? scanning
-                    ? 'Scanning…'
-                    : 'Scan page'
-                  : discovering
-                    ? 'Discovering…'
-                    : 'Discover pages'}
-            </button>
-          </div>
-          <div style={styles.muted}>
-            {discoverMode === 'ai'
-              ? 'Screenshots this page and asks OpenAI vision which tags to create, wired to the page’s real elements (the screenshot is sent to OpenAI). Experimental.'
-              : discoverMode === 'single'
-                ? 'Scans ONLY this page (no crawl, no sitemap) and shows its tags directly'
-                : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan'}
-            {' '}— merging Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
-            approve.{' '}
-            <button style={styles.linkBtn} onClick={doQuickScan} disabled={!url.trim() || scanning || discovering}>
-              quick scan (~25 pages)
-            </button>{' '}
-            ·{' '}
-            <button style={styles.linkBtn} onClick={() => setPasteOpen((o) => !o)}>
-              {pasteOpen ? 'hide paste' : 'paste a report'}
-            </button>
-          </div>
+          {discoverMode === 'csv' ? (
+            <>
+              <textarea
+                style={styles.pasteArea}
+                placeholder={'Paste landing-page URLs — one per line (or "url,label" per row):\nhttps://example.com/pricing\nhttps://example.com/demo, Demo page\nexample.com/contact'}
+                value={csvText}
+                disabled={scanning}
+                onChange={(e) => setCsvText(e.target.value)}
+              />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+                <input ref={csvFileRef} type="file" accept=".csv,text/csv,text/plain" style={{ display: 'none' }} onChange={onCsvFile} />
+                <button style={styles.ghostBtn} onClick={() => csvFileRef.current?.click()} disabled={scanning}>
+                  Load .csv file
+                </button>
+                <label style={styles.scanNum} title="Auto = wait until each page's network goes quiet. Untick to force a fixed wait in ms.">
+                  <input type="checkbox" checked={settleAuto} disabled={scanning} onChange={(e) => setSettleAuto(e.target.checked)} />
+                  settle: auto
+                  {!settleAuto && (
+                    <input style={styles.scanNumInput} type="number" min={0} max={10000} step={500} value={settleMs} disabled={scanning} onChange={(e) => setSettleMs(e.target.value)} title="Fixed wait after load (ms)" />
+                  )}
+                </label>
+                <button style={styles.primaryBtn} onClick={doCsvScan} disabled={scanning || csvUrlCount === 0}>
+                  {scanning ? 'Scanning…' : `Scan ${Math.min(csvUrlCount, CSV_URL_CAP)} page${Math.min(csvUrlCount, CSV_URL_CAP) === 1 ? '' : 's'}`}
+                </button>
+                {csvText.trim() !== '' && (
+                  <span style={styles.muted}>
+                    {csvUrlCount} valid URL{csvUrlCount === 1 ? '' : 's'} detected{csvUrlCount > CSV_URL_CAP ? ` (first ${CSV_URL_CAP} scanned)` : ''}
+                  </span>
+                )}
+              </div>
+              <div style={{ ...styles.muted, marginTop: 8 }}>
+                Scans each listed landing page directly (no crawl), merging Electron’s browser <i>and</i> a static parse
+                (Cheerio). Read-only; nothing is created until you approve.
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={styles.formRow}>
+                <input
+                  style={styles.input}
+                  placeholder={discoverMode === 'single' ? 'https://example.com/pricing' : 'https://example.com'}
+                  value={url}
+                  disabled={scanning || discovering}
+                  onChange={(e) => setUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void doDiscover();
+                  }}
+                />
+                <label style={styles.scanNum} title="Auto = wait until the page's network goes quiet (adapts per page). Untick to force a fixed wait in ms.">
+                  <input type="checkbox" checked={settleAuto} disabled={scanning} onChange={(e) => setSettleAuto(e.target.checked)} />
+                  settle: auto
+                  {!settleAuto && (
+                    <input style={styles.scanNumInput} type="number" min={0} max={10000} step={500} value={settleMs} disabled={scanning} onChange={(e) => setSettleMs(e.target.value)} title="Fixed wait after load (ms)" />
+                  )}
+                </label>
+                <button style={styles.primaryBtn} onClick={doDiscover} disabled={!url.trim() || discovering || scanning}>
+                  {discoverMode === 'ai'
+                    ? scanning
+                      ? 'Analyzing…'
+                      : '🤖 Analyze with AI'
+                    : discoverMode === 'single'
+                      ? scanning
+                        ? 'Scanning…'
+                        : 'Scan page'
+                      : discovering
+                        ? 'Discovering…'
+                        : 'Discover pages'}
+                </button>
+              </div>
+              <div style={styles.muted}>
+                {discoverMode === 'ai'
+                  ? 'Screenshots this page and asks OpenAI vision which tags to create, wired to the page’s real elements (the screenshot is sent to OpenAI). Experimental.'
+                  : discoverMode === 'single'
+                    ? 'Scans ONLY this page (no crawl, no sitemap) and shows its tags directly'
+                    : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan'}
+                {' '}— merging Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
+                approve.{' '}
+                <button style={styles.linkBtn} onClick={doQuickScan} disabled={!url.trim() || scanning || discovering}>
+                  quick scan (~25 pages)
+                </button>{' '}
+                ·{' '}
+                <button style={styles.linkBtn} onClick={() => setPasteOpen((o) => !o)}>
+                  {pasteOpen ? 'hide paste' : 'paste a report'}
+                </button>
+              </div>
+            </>
+          )}
           {pasteOpen && (
             <div style={{ marginTop: 8 }}>
               <textarea
