@@ -7,13 +7,14 @@ import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from './data-service';
 import { auditGa4 } from './ga4-audit';
 import { auditGa4DataQuality } from './ga4-data-quality';
-import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Visuals } from './ga4-report';
+import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Visuals, buildGa4Sections } from './ga4-report';
 import { auditGa4Growth } from './ga4-growth';
 import { reportHtmlDocument } from './ga4-report-export';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { ga4VisualsHtml, stripDuplicateCharts } from '../../shared/ga4-visuals-html';
+import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
 import { withQuotaRetry } from './quota-retry';
-import type { Ga4ExecSummaryView, Ga4PropertyAuditResult, Ga4PropertyListItem, Ga4VisualsView } from '../../shared/ipc';
+import type { Ga4ExecSummaryView, Ga4PropertyAuditResult, Ga4PropertyListItem, Ga4VisualsView, Ga4SectionsView } from '../../shared/ipc';
 
 export function registerGa4AuditIpc(data: GoogleDataService): void {
   // Flat list of every GA4 property (id + name + parent account) the active user can
@@ -95,7 +96,8 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     const markdown = buildGa4AuditReport(reportInput);
     const exec = buildGa4ExecSummary(reportInput);
     const visuals = buildGa4Visuals(reportInput);
-    return { config, dataQuality, markdown, exec, visuals };
+    const sections = buildGa4Sections(reportInput);
+    return { config, dataQuality, markdown, exec, visuals, sections };
   });
 
   // Save the (renderer-displayed) GA4 audit report to a user-chosen file in the requested format:
@@ -103,7 +105,7 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
   //   doc → a styled HTML document with the MS-Office namespaces (Word / Google Docs open it)
   //   pdf → the same HTML rendered in a hidden, script-free window via Electron printToPDF
   // A save dialog picks the path; returns the path or null if cancelled.
-  ipcMain.handle('ga4:exportReport', async (e, format: unknown, defaultName: unknown, markdown: unknown, exec: unknown, visuals: unknown): Promise<string | null> => {
+  ipcMain.handle('ga4:exportReport', async (e, format: unknown, defaultName: unknown, markdown: unknown, exec: unknown, visuals: unknown, sections: unknown): Promise<string | null> => {
     const fmt = format === 'pdf' ? 'pdf' : format === 'doc' ? 'doc' : 'md';
     const md = String(markdown ?? '');
     const base = String(defaultName ?? 'GA4 audit report')
@@ -116,8 +118,11 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     // keeps the full plain-text markdown unchanged.
     const execHtml = exec ? execSummaryHtml(exec as Ga4ExecSummaryView) : '';
     const visualsHtml = fmt === 'pdf' && visuals ? ga4VisualsHtml(visuals as Ga4VisualsView) : '';
-    const topHtml = execHtml + visualsHtml;
-    const bodyIdx = md.indexOf('## 2 ·');
+    // Sections 2-4 are rendered as styled HTML cards (pure HTML, so safe for Word too); the markdown
+    // body then continues from section 5. Without the structured sections, fall back to the full body.
+    const sectionsHtml = sections ? ga4SectionsHtml(sections as Ga4SectionsView) : '';
+    const topHtml = execHtml + visualsHtml + sectionsHtml;
+    const bodyIdx = md.indexOf(sectionsHtml ? '## 5 ·' : '## 2 ·');
     let bodyMd = topHtml && bodyIdx >= 0 ? md.slice(bodyIdx) : md;
     // PDF renders the colourful visuals panel, so strip the duplicate Unicode device/channel bars
     // from its body. Word/.md keep them (no panel there).

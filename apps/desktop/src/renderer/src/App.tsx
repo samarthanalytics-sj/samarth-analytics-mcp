@@ -24,6 +24,7 @@ import type {
 import { suggestionToGroup, suggestionsToTemplateCsv, TEMPLATE_HEADERS } from '../../shared/tag-template';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
+import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
 import { Ga4Charts } from './Ga4Charts';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
@@ -3361,7 +3362,7 @@ function Ga4AuditPanel({
     setExportNote('');
     try {
       const safe = selected.displayName.replace(/[^\w .-]+/g, ' ').replace(/\s{2,}/g, ' ').trim() || 'GA4 property';
-      const saved = await window.desktop.ga4.exportReport(format, `${safe} - GA4 audit`, result.markdown, result.exec ?? null, result.visuals ?? null);
+      const saved = await window.desktop.ga4.exportReport(format, `${safe} - GA4 audit`, result.markdown, result.exec ?? null, result.visuals ?? null, result.sections ?? null);
       setExportNote(saved ? `✓ Saved to ${saved}` : 'Save cancelled');
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -3396,7 +3397,10 @@ function Ga4AuditPanel({
   // The interactive visuals panel (React) + the report body (sections 2+). When the panel renders, the
   // body's duplicate Unicode Device split / Channel mix bars are stripped so the same data isn't shown twice.
   const hasVisuals = Boolean(result?.visuals && ((result.visuals.daily?.length ?? 0) > 0 || (result.visuals.devices?.length ?? 0) > 0 || (result.visuals.channels?.length ?? 0) > 0));
-  const ga4Body = result ? (result.exec && result.markdown.includes('## 2 ·') ? result.markdown.slice(result.markdown.indexOf('## 2 ·')) : result.markdown) : '';
+  // Sections 2-4 render as styled cards (result.sections); the markdown body then continues from
+  // section 5. Without structured sections, fall back to the full body from section 2.
+  const bodyMarker = result?.sections && result.markdown.includes('## 5 ·') ? '## 5 ·' : '## 2 ·';
+  const ga4Body = result ? (result.exec && result.markdown.includes(bodyMarker) ? result.markdown.slice(result.markdown.indexOf(bodyMarker)) : result.markdown) : '';
 
   return (
     <div style={styles.reviewWrap}>
@@ -3604,6 +3608,9 @@ function Ga4AuditPanel({
                       <div style={{ ...styles.card }}>
                         <Ga4Charts visuals={result.visuals} />
                       </div>
+                    )}
+                    {result.sections && (
+                      <div style={{ ...styles.card }} dangerouslySetInnerHTML={{ __html: ga4SectionsHtml(result.sections) }} />
                     )}
                     <div style={{ ...styles.card, lineHeight: 1.5 }}>
                       <Markdown text={hasVisuals ? stripDuplicateCharts(ga4Body) : ga4Body} />
