@@ -24,6 +24,10 @@ export interface RawElement {
   text: string;
   hasDownload: boolean;
   region: '' | 'header' | 'footer' | 'nav' | 'main';
+  /** Looks like a clickable CTA control — a <button>/[role=button], an [onclick], or a
+   *  btn/button/cta-classed element. Lets a prominent button surface as a (low-confidence)
+   *  CTA even when its label isn't a known intent; a plain nav <a> stays unflagged. */
+  cta?: boolean;
 }
 export interface PageScanRaw {
   elements: RawElement[];
@@ -47,19 +51,40 @@ export function collectPageInBrowser(): PageScanRaw {
     return t === 'header' || t === 'footer' || t === 'nav' || t === 'main' ? t : '';
   };
   const txt = (el: Element): string => (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  // A control that LOOKS clickable: a button role, an onclick handler, or a btn/button/cta class
+  // token. Used to surface a styled CTA ("Talk to our experts") that isn't a known intent phrase.
+  const looksCta = (el: Element): boolean => {
+    if (el.getAttribute('role') === 'button' || el.hasAttribute('onclick')) return true;
+    const cls = (el.getAttribute('class') || '').toLowerCase();
+    return /(^|[\s_-])(btn|button|cta)([\s_-]|$)/.test(cls);
+  };
 
   const scanDoc = (doc: Document): void => {
+    const seen = new Set<Element>();
     for (const a of Array.from(doc.querySelectorAll('a[href]')).slice(0, MAX)) {
       if (elements.length >= MAX * 2) break;
       const el = a as HTMLAnchorElement;
-      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el) });
+      seen.add(el);
+      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el), cta: looksCta(el) });
     }
     // :not(a) — an <a href role="button"> is already captured (with its href) by
     // the anchor query above; without this it would be emitted again as a hrefless
     // "button" and double-classified.
     for (const b of Array.from(doc.querySelectorAll('button, [role="button"]:not(a)')).slice(0, MAX)) {
       if (elements.length >= MAX * 2) break;
-      elements.push({ tag: 'button', href: '', text: txt(b), hasDownload: false, region: regionOf(b) });
+      seen.add(b);
+      elements.push({ tag: 'button', href: '', text: txt(b), hasDownload: false, region: regionOf(b), cta: true });
+    }
+    // Non-semantic clickable controls: a bare <a> (no href, JS-routed), an [onclick], or a
+    // btn/button/cta-classed div/span — emitted as a hrefless "button" so a styled CTA that isn't a
+    // <button> or known intent still surfaces (low confidence). Skips anything already captured above.
+    for (const c of Array.from(doc.querySelectorAll('a:not([href]), [onclick], [class*="btn"], [class*="button"], [class*="cta"]')).slice(0, MAX)) {
+      if (elements.length >= MAX * 2) break;
+      if (seen.has(c) || !looksCta(c)) continue;
+      const label = txt(c);
+      if (!label) continue;
+      seen.add(c);
+      elements.push({ tag: 'button', href: '', text: label, hasDownload: false, region: regionOf(c), cta: true });
     }
     for (const s of Array.from(doc.querySelectorAll('script[src]')).slice(0, 200)) scriptSrcs.push((s as HTMLScriptElement).src);
     for (const fr of Array.from(doc.querySelectorAll('iframe[src]')).slice(0, 50)) {
@@ -151,12 +176,34 @@ export function classifyElement(raw: RawElement, siteHost: string): DetectedElem
       return make('outbound');
     }
   }
-  // CTA: a button, or a non-tracked anchor whose text reads like a call to action.
+  // CTA: a known-intent button/link, OR (low confidence) any prominent button / CTA-styled control
+  // whose label reads like an action — so a styled CTA ("Talk to our experts") surfaces instead of
+  // being dropped. A plain nav <a> (not a <button>, not CTA-styled) stays untracked, so nav menus
+  // don't flood the list.
   if (raw.tag === 'button' || raw.tag === 'a') {
     const intent = raw.text ? classifyCtaIntent(raw.text) : null;
     if (intent) return { ...make('cta'), intent };
+    // A button-styled link inside the NAV is almost always a menu item, not a conversion — so the
+    // generic fallback skips region 'nav' (a real <button> or a header/main CTA still surfaces).
+    if ((raw.tag === 'button' || raw.cta) && raw.region !== 'nav' && isPromptableCtaText(raw.text)) return { ...make('cta'), intent: 'generic' };
   }
   return null;
+}
+
+// Pure UI chrome (menu / dialog / pagination / expanders) — excluded from the generic CTA bucket.
+// Anchored to the WHOLE label so a real CTA that merely starts with one of these words is KEPT
+// ("Open account", "Show pricing", "Read the guide", "Close the deal"), while the common multi-word
+// chrome IS dropped ("Toggle navigation", "Show more", "Load more", "Back to top", "Next page").
+const CTA_CHROME_RE = /^(menu|open\s+menu|toggle(\s+\w+)?|expand|collapse|skip\b.*|(previous|prev|next)(\s+(page|post|slide|step|item|»|›|>))?|back(\s+to\s+\w+)?|(show|load|view|see|read)\s+(more|less|all)|scroll(\s+to\s+\w+)?|go\s+to\s+\w+|first|last|[«»‹›<>×✕|–—\s-]+)$/i;
+// Cookie / consent-banner controls — a GA4 click tag on these is noise, not a conversion.
+const CONSENT_RE = /\b(cookies?|consent|gdpr|ccpa)\b|\b(accept|reject|decline|allow|deny|manage|customi[sz]e)\s+(all|preferences?|tracking|choices?)\b|^(accept|reject|decline|allow|deny|got\s+it|i\s+(agree|accept|understand)|ok(ay)?)$/i;
+// A button label worth surfacing as a generic (low-confidence) CTA: real visible text, not UI chrome
+// or a consent control, and not a whole sentence. Keeps the generic bucket to button-like LABELS.
+function isPromptableCtaText(text: string): boolean {
+  const t = (text || '').replace(/\s+/g, ' ').trim();
+  if (t.length < 2 || t.length > 48) return false;
+  if (CTA_CHROME_RE.test(t) || CONSENT_RE.test(t)) return false;
+  return /[a-z0-9]/i.test(t); // has an actual word/character, not just an icon/punctuation
 }
 
 export function classifyPageElements(raws: RawElement[], siteHost: string, page: string): DetectedElement[] {
@@ -219,8 +266,20 @@ export function buildSuggestInput(pages: PageScan[], siteHost: string): SuggestI
     // (not page-level signals, which would mis-attribute the embed to an unrelated form).
     const embed = detectEmbeddedForm(p.signals);
     if (embed) {
-      const isSameProviderForm = (f: { formClasses?: string; action: string }): boolean =>
-        detectFormProvider({ scriptSrcs: [], classNames: (f.formClasses ?? '').split(/\s+/).filter(Boolean), selectorsPresent: [], iframeSrcs: [] }, f.action).vendor === embed.vendor;
+      // Judge each readable form by ITS OWN action + classes + id (the form's action host is fed as a
+      // script/iframe src so detectFormProvider's host regexes match, e.g. a js.hsforms.net action →
+      // hubspot). So a same-provider readable form suppresses the synth (no double), while an unrelated
+      // form (a search box) on a page that merely embeds a provider does NOT.
+      const isSameProviderForm = (f: { formClasses?: string; formId?: string; action: string }): boolean =>
+        detectFormProvider(
+          {
+            scriptSrcs: f.action ? [f.action] : [],
+            classNames: (f.formClasses ?? '').split(/\s+/).filter(Boolean),
+            selectorsPresent: f.formId ? ['#' + f.formId] : [],
+            iframeSrcs: f.action ? [f.action] : [],
+          },
+          f.action,
+        ).vendor === embed.vendor;
       if (!p.forms.some(isSameProviderForm)) {
         forms.push({ page: p.page, purpose: 'contact', action: '', provider: embed });
       }
