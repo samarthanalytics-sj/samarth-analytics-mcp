@@ -117,16 +117,19 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     // also embeds the SVG charts (Word can't render SVG, so it's skipped there). The .md download
     // keeps the full plain-text markdown unchanged.
     const execHtml = exec ? execSummaryHtml(exec as Ga4ExecSummaryView) : '';
-    const visualsHtml = fmt === 'pdf' && visuals ? ga4VisualsHtml(visuals as Ga4VisualsView) : '';
-    // Sections 2-4 are rendered as styled HTML cards (pure HTML, so safe for Word too); the markdown
-    // body then continues from section 5. Without the structured sections, fall back to the full body.
+    // Charts panel for pdf AND doc: the styled section-6 card omits the device/channel bars (the panel
+    // carries them), so Word needs the panel too or that data would be lost. (Only the inline line-chart
+    // SVGs don't render in Word; the device/channel bars + insights are HTML and do.)
+    const visualsHtml = (fmt === 'pdf' || fmt === 'doc') && visuals ? ga4VisualsHtml(visuals as Ga4VisualsView) : '';
+    // Sections 2-9 render as styled HTML cards (pure HTML, safe for Word too); when present they ARE
+    // the whole body, so no markdown body follows. Without them, fall back to the full markdown body.
     const sectionsHtml = sections ? ga4SectionsHtml(sections as Ga4SectionsView) : '';
     const topHtml = execHtml + visualsHtml + sectionsHtml;
-    const bodyIdx = md.indexOf(sectionsHtml ? '## 5 ·' : '## 2 ·');
-    let bodyMd = topHtml && bodyIdx >= 0 ? md.slice(bodyIdx) : md;
+    const bodyIdx = md.indexOf('## 2 ·');
+    let bodyMd = sectionsHtml ? '' : topHtml && bodyIdx >= 0 ? md.slice(bodyIdx) : md;
     // PDF renders the colourful visuals panel, so strip the duplicate Unicode device/channel bars
     // from its body. Word/.md keep them (no panel there).
-    if (visualsHtml) bodyMd = stripDuplicateCharts(bodyMd);
+    if (visualsHtml && bodyMd) bodyMd = stripDuplicateCharts(bodyMd);
     const win = BrowserWindow.fromWebContents(e.sender);
     const filterName = fmt === 'pdf' ? 'PDF' : fmt === 'doc' ? 'Word document' : 'Markdown';
     const opts = { title: 'Save GA4 audit report', defaultPath: `${base}.${fmt}`, filters: [{ name: filterName, extensions: [fmt] }] };

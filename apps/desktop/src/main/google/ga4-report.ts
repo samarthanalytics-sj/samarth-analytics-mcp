@@ -331,7 +331,63 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
 
   const findings = allFindings.map((f) => ({ severity: f.severity, area: f.area, message: f.message, businessRisk: riskFor(f), recommendation: f.recommendation ?? '—' }));
 
-  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length };
+  // ── Section 5 · Area status ──
+  const areas = areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey, confidence: confidenceFor(a.statusKey), evidence: a.evidence }));
+
+  // ── Section 6 · Property baseline ──
+  const baselineView = baseline
+    ? {
+        sessions: num(baseline.sessions),
+        priorSessions: num(baseline.priorSessions),
+        trend: trendLabel(baseline),
+        growth: growth && growth.assessed ? { sessionsPct: growth.sessionsTrendPct, keyEventsPct: growth.keyEventsTrendPct, revenuePct: growth.revenueTrendPct, keSafe, revSafe } : null,
+        peakDay: baseline.peakDay ? `${fmtDay(baseline.peakDay.date)} — ${num(baseline.peakDay.sessions)} sessions` : null,
+        newVsReturning: shareLabel(baseline.newVsReturning),
+        topMarkets: baseline.topCountries.length ? baseline.topCountries.map((c) => `${c.name || '(not set)'} ${pct(c.sessions, baseline.sessions)}%`).join(', ') : null,
+      }
+    : null;
+
+  // ── Section 7 · Decision readiness ──
+  const decisions = decisionReadiness(s);
+
+  // ── Section 8 · Not verified ──
+  const nv: Array<{ item: string; blocks: string }> = [
+    { item: 'Per-event parameter coverage', blocks: 'whether events carry the parameters reports & funnels rely on' },
+    { item: 'Consent Mode v2 signals', blocks: 'whether consent-gated loss is inflating "(not set)"/Unassigned' },
+  ];
+  if (ecom) nv.push({ item: 'Ecommerce item parameters & duplicate transactions', blocks: 'whether revenue and abandonment figures are accurate' });
+  else nv.push({ item: 'Ecommerce funnel (no purchase/add_to_cart key events)', blocks: 'product/checkout funnel analysis' });
+  for (const a of config.areas.filter((x) => x.status === 'not_verified')) nv.push({ item: `${a.area} (config sub-resource unreadable)`, blocks: `the ${a.area} checks` });
+  const gate =
+    top && (top.severity === 'critical' || top.severity === 'high') && top.category === 'growth'
+      ? 'whether conversion tracking actually fires for the new traffic — needs GA4 DebugView + a per-event Data API pass'
+      : nv[0].blocks;
+
+  // ── Section 9 · Scope & metadata ──
+  const pid = input.property.replace('properties/', '');
+  const auditId = `GA4-${pid}-${(dq.endDate ?? '').replace(/-/g, '') || 'na'}`;
+  const cmp = baseline ? ` vs prior ${baseline.priorStartDate} – ${baseline.priorEndDate}` : '';
+  const limits = ['per-event parameter coverage not computed', 'Consent Mode not assessed (needs DebugView)'];
+  if (!ecom) limits.push('no ecommerce events detected');
+  const counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  for (const f of allFindings) counts[f.severity as keyof typeof counts] = (counts[f.severity as keyof typeof counts] ?? 0) + 1;
+  const scope = {
+    auditId,
+    composite: score.composite,
+    grade: score.grade,
+    reliabilityPct: score.reliabilityPct,
+    window: `${auditWindowLabel(dq)}${cmp}`,
+    retention: retentionLabel(s.dataRetention),
+    timezone: s.timeZone || '—',
+    currency: s.currencyCode || '—',
+    generated: input.generatedAt,
+    property: `${input.displayName} (${pid})`,
+    limitations: `${limits.join('; ')}.`,
+    findings: counts,
+    footer: 'Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.',
+  };
+
+  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, decisions, notVerified: { gate, items: nv }, scope };
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
@@ -351,7 +407,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   const top = actionable[0];
   const areaRows = buildAreaRows(s, config, attribution, audienceCount, ecom);
 
-  const windowLabel = dq.dateRange ?? `${dq.windowDays} days`;
+  const windowLabel = auditWindowLabel(dq); // same label as section 1 + the styled section 9 card
   const cmp = baseline ? ` vs prior ${baseline.priorStartDate} – ${baseline.priorEndDate}` : '';
   const nPartial = areaRows.filter((a) => a.statusKey === 'partial').length;
   const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
