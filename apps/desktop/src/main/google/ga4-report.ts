@@ -231,9 +231,17 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
 /** Structured visualisations payload (daily trend line + colour-coded device/channel bars) for the
  *  panel + PDF charts. */
 export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
-  const { baseline, dqCounts } = input;
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
   const daily = baseline?.dailySessions ?? [];
   const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups });
+  // Channel-attribution trust comes from the same Data Trust Matrix the Executive Summary uses.
+  const allFindings = buildAllFindings(config, dq, growth);
+  const areaRows = buildAreaRows(s, config, attribution, audienceCount, hasEcommerce(s));
+  const score = buildGa4Scorecard({
+    areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
+    findings: allFindings.map((f) => ({ severity: f.severity, category: f.category })),
+    growthAssessed: Boolean(growth?.assessed),
+  });
   return {
     daily,
     peakIndex: trend.peakIndex,
@@ -242,6 +250,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
     channelDaily: baseline?.channelDaily ?? [],
     devices: baseline?.devices ?? [],
     channels: [...dqCounts.channelGroups].sort((a, b) => b.sessions - a.sessions).slice(0, 8),
+    channelTrusted: score.trust.find((t) => t.metric === 'Channel attribution')?.safe ?? true,
   };
 }
 
@@ -275,6 +284,13 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     growthAssessed: Boolean(growth?.assessed),
   });
   const auditId = `GA4-${pid}-${(dq.endDate ?? '').replace(/-/g, '') || 'na'}`;
+  // Foreground only fully-trusted figures: flag the outcome metrics the Data Trust Matrix marks
+  // "do not quote" (the numbers stay, but are clearly tagged so they aren't read as fact).
+  const safeOf = (metric: string): boolean => score.trust.find((t) => t.metric === metric)?.safe ?? true;
+  const keSafe = safeOf('Conversion counts');
+  const revSafe = safeOf('Revenue / AOV / ROAS');
+  const sesSafe = safeOf('Sessions, users, engagement rate');
+  const quoteTag = (safe: boolean): string => (safe ? '' : ' (not safe to quote)');
 
   // ── 1 · Executive summary (read-first) ──
   L.push(`# GA4 Property Audit — ${input.displayName} (${pid})`);
@@ -348,6 +364,10 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
             ? "Sessions moved sharply, but there isn't enough conversion signal to confirm what's behind it."
             : 'Outcomes did NOT keep pace with traffic — the spike is unconfirmed and revenue/ROAS may be wrong right now.';
     L.push(`**Read:** ${read}`);
+    if (!keSafe || !revSafe) {
+      L.push('');
+      L.push(`*Per the data trust matrix, the key-event and revenue figures above are NOT safe to quote until conversion tracking is confirmed${sesSafe ? '; sessions are safe to quote' : ''}.*`);
+    }
   } else {
     L.push('Not enough prior traffic to assess growth for this window.');
   }
@@ -390,7 +410,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   if (baseline) {
     L.push(`- **Sessions:** ${num(baseline.sessions)} (prior period ${num(baseline.priorSessions)}${trendLabel(baseline)})`);
     if (growth && growth.assessed) {
-      L.push(`- **Growth signals (vs prior):** sessions ${trendPctText(growth.sessionsTrendPct)} · key events ${trendPctText(growth.keyEventsTrendPct)} · revenue ${trendPctText(growth.revenueTrendPct)}`);
+      L.push(`- **Growth signals (vs prior):** sessions ${trendPctText(growth.sessionsTrendPct)} · key events ${trendPctText(growth.keyEventsTrendPct)}${quoteTag(keSafe)} · revenue ${trendPctText(growth.revenueTrendPct)}${quoteTag(revSafe)}`);
     }
     L.push(`- **Peak day:** ${baseline.peakDay ? `${fmtDay(baseline.peakDay.date)} — ${num(baseline.peakDay.sessions)} sessions` : 'Not Verified'}`);
     L.push(`- **New vs returning:** ${shareLabel(baseline.newVsReturning)}`);

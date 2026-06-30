@@ -205,6 +205,16 @@ test('a doubled-traffic spike conversions did not track → CRITICAL (worst unve
   assert.ok(/Growth signals \(vs prior\)/.test(md), 'growth signals shown in baseline');
 });
 
+test('untrusted outcome metrics are flagged "not safe to quote" in the report; sessions are not', () => {
+  const b = baseline({ sessions: 32165, priorSessions: 8819, keyEvents: 210, priorKeyEvents: 200, revenue: 1000, priorRevenue: 950 });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b, 'Organic Social') }));
+  assert.ok(/key events [+\-]\d+% \(not safe to quote\)/.test(md), 'key events tagged');
+  assert.ok(/revenue [+\-]\d+% \(not safe to quote\)/.test(md), 'revenue tagged');
+  assert.ok(!/sessions [+\-]\d+% \(not safe to quote\)/.test(md), 'sessions stay quotable');
+  // healthy growth (default fixture, ~+11%) → no tags
+  assert.ok(!/\(not safe to quote\)/.test(buildGa4AuditReport(input())));
+});
+
 test('a 50–99% spike not tracked is HIGH (not escalated to CRITICAL)', () => {
   const b = baseline({ sessions: 14000, priorSessions: 9000, keyEvents: 460, priorKeyEvents: 450, revenue: 1000, priorRevenue: 980 }); // +56%
   const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));

@@ -166,17 +166,26 @@ export function ga4VisualsHtml(v: Ga4VisualsView): string {
       `${esc(v.trendSummary)}</div>` +
       lineChartSvg(v.daily, v.peakIndex)
     : '';
+  // Channel attribution is not safe to quote → grey the channel charts and show a caveat, so only the
+  // fully-trusted data (sessions trend, device split) is foregrounded.
+  const untrusted = v.channelTrusted === false;
+  const greyOpen = untrusted ? '<div style="opacity:.5">' : '';
+  const greyClose = untrusted ? '</div>' : '';
+  const caveat = untrusted
+    ? `<div style="font-size:11.5px;color:var(--c-amber,#b45309);background:var(--c-amber-bg,#fef3c7);border:1px solid var(--c-amber-border,#fde68a);border-radius:6px;padding:6px 10px;margin:8px 0">⚠ Channel attribution is not safe to quote yet - a material share of sessions lack source data (see the Data Trust Matrix). The channel charts below are greyed for that reason.</div>`
+    : '';
   const byChannelChart = multiLineChartSvg(v.channelDaily ?? []);
-  const byChannel = byChannelChart ? label('Sessions by channel') + byChannelChart + legendHtml(v.channelDaily ?? []) : '';
+  const byChannel = byChannelChart ? greyOpen + label('Sessions by channel') + byChannelChart + legendHtml(v.channelDaily ?? []) + greyClose : '';
   return (
     `<section style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${TEXT};line-height:1.5">` +
     `<div style="font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#2563eb">Traffic trend</div>` +
     `<h2 style="font-size:18px;margin:2px 0 2px;color:${TEXT}">Traffic trend &amp; visualisations</h2>` +
     trend +
+    caveat +
     byChannel +
     `<table role="presentation" style="border-collapse:separate;border-spacing:0;width:100%;margin-top:8px;table-layout:fixed"><tbody><tr>` +
     cardTd(label('Device split') + barList(v.devices ?? [])) +
-    cardTd(label('Channel mix (sessions)') + barList(v.channels ?? [])) +
+    cardTd(greyOpen + label('Channel mix (sessions)') + barList(v.channels ?? []) + greyClose) +
     `</tr></tbody></table>` +
     `</section>`
   ).replace(/—/g, '-');

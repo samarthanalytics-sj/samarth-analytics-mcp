@@ -188,6 +188,8 @@ export interface Ga4VisualsView {
   channelDaily: Array<{ channel: string; series: Array<{ date: string; sessions: number }> }>;
   devices: Array<{ name: string; sessions: number }>;
   channels: Array<{ name: string; sessions: number }>;
+  /** Whether channel attribution is safe to quote (Data Trust Matrix); false greys the channel charts. */
+  channelTrusted: boolean;
 }
 /** Combined GA4 property audit (config + data quality) returned to the GA4 Audit panel. */
 export interface Ga4PropertyAuditResult {

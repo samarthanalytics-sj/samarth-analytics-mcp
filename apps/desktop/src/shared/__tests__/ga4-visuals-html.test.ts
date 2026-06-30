@@ -32,6 +32,7 @@ const view = (over: Partial<Ga4VisualsView> = {}): Ga4VisualsView => ({
   ],
   devices: [{ name: 'mobile', sessions: 800 }, { name: 'desktop', sessions: 200 }],
   channels: [{ name: 'Organic Social', sessions: 700 }, { name: 'Direct', sessions: 300 }],
+  channelTrusted: true,
   ...over,
 });
 
@@ -63,6 +64,14 @@ test('renders colour-coded device + channel bars', () => {
   assert.ok(h.includes('Device split') && h.includes('Channel mix'));
   assert.ok(h.includes('mobile') && h.includes('Organic Social'));
   assert.ok(h.includes('#3b82f6') || h.includes('#22c55e'), 'palette colours present');
+});
+
+test('untrusted channel attribution greys the channel charts and shows a caveat', () => {
+  const h = ga4VisualsHtml(view({ channelTrusted: false }));
+  assert.ok(/not safe to quote/i.test(h), 'caveat shown');
+  assert.ok(/opacity:\.5/.test(h), 'channel charts greyed');
+  const ok = ga4VisualsHtml(view({ channelTrusted: true }));
+  assert.ok(!/opacity:\.5/.test(ok), 'trusted → not greyed');
 });
 
 test('dynamic text is HTML-escaped (no injection)', () => {
