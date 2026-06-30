@@ -22,6 +22,7 @@ import type {
   TagScanResult,
 } from '../../shared/ipc';
 import { suggestionToGroup, suggestionsToTemplateCsv, TEMPLATE_HEADERS } from '../../shared/tag-template';
+import { execSummaryHtml } from '../../shared/ga4-exec-html';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: 'claude-opus-4-8',
@@ -3358,7 +3359,7 @@ function Ga4AuditPanel({
     setExportNote('');
     try {
       const safe = selected.displayName.replace(/[^\w .-]+/g, ' ').replace(/\s{2,}/g, ' ').trim() || 'GA4 property';
-      const saved = await window.desktop.ga4.exportReport(format, `${safe} - GA4 audit`, result.markdown);
+      const saved = await window.desktop.ga4.exportReport(format, `${safe} - GA4 audit`, result.markdown, result.exec ?? null);
       setExportNote(saved ? `✓ Saved to ${saved}` : 'Save cancelled');
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -3592,8 +3593,11 @@ function Ga4AuditPanel({
                       {downloading && <span style={styles.muted}>Saving…</span>}
                       {exportNote && <span style={styles.muted}>{exportNote}</span>}
                     </div>
+                    {result.exec && (
+                      <div style={{ ...styles.card }} dangerouslySetInnerHTML={{ __html: execSummaryHtml(result.exec) }} />
+                    )}
                     <div style={{ ...styles.card, lineHeight: 1.5 }}>
-                      <Markdown text={result.markdown} />
+                      <Markdown text={result.exec && result.markdown.includes('## 2 ·') ? result.markdown.slice(result.markdown.indexOf('## 2 ·')) : result.markdown} />
                     </div>
                   </>
                 ) : (

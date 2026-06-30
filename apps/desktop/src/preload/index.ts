@@ -9,6 +9,7 @@ import type {
   CreateTagOutcome,
   Ga4AccountView,
   Ga4AuditWindow,
+  Ga4ExecSummaryView,
   Ga4PropertyAuditResult,
   Ga4PropertyListItem,
   GoogleClientStatus,
@@ -226,9 +227,10 @@ const api = {
     audit: (property: string, window: Ga4AuditWindow): Promise<Ga4PropertyAuditResult> =>
       ipcRenderer.invoke('ga4:audit', property, window),
     // Save the audit report to a user-chosen file as Markdown / PDF / Word (.doc) → saved path, or
-    // null if cancelled. `content` is the report Markdown; PDF/DOC are rendered from it in main.
-    exportReport: (format: 'md' | 'pdf' | 'doc', defaultName: string, content: string): Promise<string | null> =>
-      ipcRenderer.invoke('ga4:exportReport', format, defaultName, content),
+    // null if cancelled. `content` is the report Markdown; PDF/DOC lead with the designed Executive
+    // Summary rendered from `exec`, then the markdown body.
+    exportReport: (format: 'md' | 'pdf' | 'doc', defaultName: string, content: string, exec: Ga4ExecSummaryView | null): Promise<string | null> =>
+      ipcRenderer.invoke('ga4:exportReport', format, defaultName, content, exec),
   },
 
   // Continuous monitoring: schedule auto re-audits of the active container and

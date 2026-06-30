@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildGa4AuditReport, type Ga4ReportInput } from '../ga4-report';
+import { buildGa4AuditReport, buildGa4ExecSummary, type Ga4ReportInput } from '../ga4-report';
 import { auditGa4, type Ga4PropertySnapshot } from '../ga4-audit';
 import { auditGa4DataQuality } from '../ga4-data-quality';
 import { auditGa4Growth } from '../ga4-growth';
@@ -219,6 +219,21 @@ test('a genuinely clean property (only an info advisory) does not manufacture a 
   assert.ok(/No high-severity issue/.test(md), 'section 2 takes the clean-property branch');
   assert.ok(!/\*\*At stake:\*\* Channel\/source attribution is unreliable/.test(md), 'no fabricated risk in the verdict');
   assert.ok(!/\| INFO \| Data quality \| No major data-quality issues[^|]*\| Channel\/source/.test(md), 'info row carries no business risk');
+});
+
+test('buildGa4ExecSummary returns the structured exec used by the panel + styled export', () => {
+  const b = baseline({ sessions: 32165, priorSessions: 8819, keyEvents: 210, priorKeyEvents: 200, revenue: 1000, priorRevenue: 950 });
+  const exec = buildGa4ExecSummary(input({ baseline: b, growth: growthOf(b, 'Organic Social') }));
+  assert.ok(exec.composite !== null && exec.composite < 80, 'a critical spike drags the composite down');
+  assert.ok(/^[A-F]$/.test(exec.grade));
+  assert.match(exec.verdict, /Action required/);
+  assert.equal(exec.categories.length, 6);
+  assert.equal(exec.trust.length, 5);
+  assert.equal(exec.trust.find((t) => t.metric === 'Revenue / AOV / ROAS')!.safe, false, 'revenue do-not-quote under a spike');
+  assert.equal(exec.coverage.checked, 11);
+  // The markdown section 1 and the structured exec agree on the headline number.
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b, 'Organic Social') }));
+  assert.ok(md.includes(`${exec.composite}/100`), 'markdown + structured exec share the composite');
 });
 
 test('missing baseline → Not Verified, no crash', () => {
