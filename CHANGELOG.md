@@ -1,3 +1,9 @@
+## [1.106.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.105.1...v1.106.0) (2026-06-30)
+
+### Features
+
+* **desktop:** GA4 report foregrounds only fully-trusted data (flag/grey the "do not quote" metrics) ([63a3307](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/63a3307e2ce8c4868c2af54395f59584ff7733fc))
+
 ## [1.105.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.105.0...v1.105.1) (2026-06-30)
 
 ### Bug Fixes
