@@ -39,13 +39,13 @@ const label = (t: string): string =>
 // Adaptive grouping: keep the chart readable (and meaningful) as the window grows. Up to ~6 weeks is
 // shown per day; up to ~7 months per week; longer windows roll up to months. Daily values are summed
 // into each bucket. The bucket label is what the hover tooltip and axis show.
-type Gran = 'day' | 'week' | 'month';
-interface GPoint {
+export type Gran = 'day' | 'week' | 'month';
+export interface GPoint {
   label: string;
   value: number;
 }
-const granularityFor = (n: number): Gran => (n <= 45 ? 'day' : n <= 210 ? 'week' : 'month');
-const granLabel = (g: Gran): string => (g === 'day' ? 'daily' : g === 'week' ? 'weekly' : 'monthly');
+export const granularityFor = (n: number): Gran => (n <= 45 ? 'day' : n <= 210 ? 'week' : 'month');
+export const granLabel = (g: Gran): string => (g === 'day' ? 'daily' : g === 'week' ? 'weekly' : 'monthly');
 
 // YYYYMMDD <-> epoch-day, using Date.UTC (a pure function, no clock) so the bucketing is deterministic.
 const dayNum = (ymd: string): number => {
@@ -61,7 +61,7 @@ const ymdFromNum = (epochDay: number): string => {
 // Bucket the daily series by CALENDAR period (not array position — GA4 omits zero-session days, so
 // array index ≠ calendar day). `anchor` is the shared first date so weekly buckets line up across the
 // trend and per-channel charts.
-function groupSeries(daily: Array<{ date: string; sessions: number }>, gran: Gran, anchor: string): GPoint[] {
+export function groupSeries(daily: Array<{ date: string; sessions: number }>, gran: Gran, anchor: string): GPoint[] {
   if (gran === 'day') return daily.map((d) => ({ label: fmtDay(d.date), value: d.sessions }));
   if (gran === 'month') {
     const out: GPoint[] = [];
