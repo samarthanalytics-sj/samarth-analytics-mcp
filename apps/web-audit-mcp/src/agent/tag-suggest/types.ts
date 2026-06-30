@@ -21,7 +21,9 @@ export interface PageSignals {
 
 export type FormProvider =
   | 'hubspot' | 'typeform' | 'paperform' | 'mailchimp' | 'gravityforms' | 'contactform7'
-  | 'wpforms' | 'marketo' | 'pardot' | 'unknown';
+  | 'wpforms' | 'marketo' | 'pardot'
+  | 'calendly' | 'jotform' | 'formstack' | 'tally' | 'googleforms' | 'wufoo'
+  | 'embed' | 'unknown';
 
 export interface ProviderMatch {
   vendor: FormProvider;

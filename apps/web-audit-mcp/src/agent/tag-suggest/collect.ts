@@ -211,12 +211,19 @@ export function buildSuggestInput(pages: PageScan[], siteHost: string): SuggestI
         fields: f.fields,
       });
     }
-    // No readable <form> here, but a provider form is EMBEDDED (often a
-    // cross-origin iframe whose fields we can't read) → synthesize a lead form
-    // so it still gets a suggestion (these embeds are typically lead/contact).
-    if (p.forms.length === 0) {
-      const embed = detectEmbeddedForm(p.signals);
-      if (embed) forms.push({ page: p.page, purpose: 'contact', action: '', provider: embed });
+    // A provider form is EMBEDDED (often a cross-origin iframe whose fields we can't
+    // read) → synthesize a lead form so it still gets a suggestion (these embeds are
+    // typically lead/contact). Runs even when the page has other readable forms, so a
+    // HubSpot/Calendly embed beside a search box isn't suppressed. Skip only if a READABLE
+    // form on this page is ITSELF that provider — judged by THAT form's own classes/action
+    // (not page-level signals, which would mis-attribute the embed to an unrelated form).
+    const embed = detectEmbeddedForm(p.signals);
+    if (embed) {
+      const isSameProviderForm = (f: { formClasses?: string; action: string }): boolean =>
+        detectFormProvider({ scriptSrcs: [], classNames: (f.formClasses ?? '').split(/\s+/).filter(Boolean), selectorsPresent: [], iframeSrcs: [] }, f.action).vendor === embed.vendor;
+      if (!p.forms.some(isSameProviderForm)) {
+        forms.push({ page: p.page, purpose: 'contact', action: '', provider: embed });
+      }
     }
   }
   return { siteHost, forms, elements, ...(videoEmbeds.length ? { videoEmbeds } : {}) };

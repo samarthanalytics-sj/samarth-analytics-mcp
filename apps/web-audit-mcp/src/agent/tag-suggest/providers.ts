@@ -95,6 +95,24 @@ const FORM_EMBED: Signature[] = [
   { vendor: 'contactform7', test: (s) => (hasClass(s, 'wpcf7') || hasClass(s, 'wpcf7-form') ? 'class .wpcf7' : null) },
   { vendor: 'wpforms', test: (s) => (hasClass(s, 'wpforms-form') || hasClass(s, 'wpforms-container') ? 'class .wpforms-form' : null) },
   { vendor: 'pardot', test: (s) => some(s.iframeSrcs ?? [], /pardot\.com/i) ?? some(s.scriptSrcs, /pi\.pardot\.com/i) },
+  // Cross-origin form/scheduling embeds whose fields can't be read but are clearly a conversion.
+  {
+    vendor: 'calendly',
+    test: (s) =>
+      some(s.iframeSrcs ?? [], /calendly\.com/i) ??
+      some(s.scriptSrcs, /assets\.calendly\.com/i) ??
+      (hasClass(s, 'calendly-inline-widget') || hasSel(s, '.calendly-inline-widget') || hasSel(s, '[data-url*="calendly.com"]') ? 'calendly widget' : null),
+  },
+  {
+    vendor: 'jotform',
+    test: (s) => some(s.iframeSrcs ?? [], /(form|submit)\.jotform\.com|jotfor\.ms/i) ?? some(s.scriptSrcs, /cdn\.jotfor\.ms|js\.jotform\.com/i),
+  },
+  // iframe-only: a bare scriptSrcs match would synth a phantom form when the SDK loads without a form
+  // (Formstack Documents/Sign, a stray wufoo.com script), violating "never synthesize a form that isn't there".
+  { vendor: 'formstack', test: (s) => some(s.iframeSrcs ?? [], /formstack\.(com|io)/i) },
+  { vendor: 'tally', test: (s) => some(s.iframeSrcs ?? [], /tally\.so/i) ?? (hasSel(s, '[data-tally-src]') ? 'data-tally-src' : null) },
+  { vendor: 'googleforms', test: (s) => some(s.iframeSrcs ?? [], /docs\.google\.com\/forms/i) },
+  { vendor: 'wufoo', test: (s) => some(s.iframeSrcs ?? [], /wufoo\.com/i) },
 ];
 
 /** A provider whose form is EMBEDDED on the page (often cross-origin), or null.
