@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { ga4VisualsHtml, stripDuplicateCharts } from '../ga4-visuals-html';
+import { ga4VisualsHtml, stripDuplicateCharts, buildTrendInsights } from '../ga4-visuals-html';
 import type { Ga4VisualsView } from '../ipc';
 
 let passed = 0;
@@ -32,6 +32,7 @@ const view = (over: Partial<Ga4VisualsView> = {}): Ga4VisualsView => ({
   ],
   devices: [{ name: 'mobile', sessions: 800 }, { name: 'desktop', sessions: 200 }],
   channels: [{ name: 'Organic Social', sessions: 700 }, { name: 'Direct', sessions: 300 }],
+  drivingChannel: { name: 'Organic Social', dayShare: 0.75, windowShare: 0.7 },
   channelTrusted: true,
   ...over,
 });
@@ -99,6 +100,29 @@ test('no daily data and no bars → empty string (panel renders nothing)', () =>
 
 test('output uses no em dashes (house style)', () => {
   assert.ok(!ga4VisualsHtml(view({ trendSummary: 'A — B spike.' })).includes('—'));
+});
+
+test('buildTrendInsights derives peak, driving channel, concentration and device from the graph data', () => {
+  const ins = buildTrendInsights(view());
+  const by = (t: string): { tone: string; body: string } | undefined => ins.find((i) => i.title === t);
+  assert.ok(by('Peak') && /2,000 sessions/.test(by('Peak')!.body), 'peak day + value');
+  const drv = by('What drove it');
+  assert.ok(drv && /Organic Social/.test(drv.body) && /peak day/.test(drv.body), 'names the peak-day driving channel (same source as the chart marker)');
+  assert.ok(drv && /75% of that day/.test(drv.body), 'quotes the peak-day share from the shared driving-channel signal');
+  const conc = by('Concentration risk');
+  assert.ok(conc && conc.tone === 'watch' && /70%/.test(conc.body), 'flags single-channel concentration');
+  assert.ok(by('Device') && /80% mobile/.test(by('Device')!.body), 'device skew');
+});
+
+test('buildTrendInsights flags an untrusted channel split with a caveat', () => {
+  const ins = buildTrendInsights(view({ channelTrusted: false }));
+  assert.ok(ins.some((i) => i.title === 'Caveat' && i.tone === 'watch'), 'caveat insight when channel attribution is unsafe');
+});
+
+test('ga4VisualsHtml renders the deep-insights panel beside the charts', () => {
+  const h = ga4VisualsHtml(view());
+  assert.ok(/What the data shows/.test(h), 'insights panel header');
+  assert.ok(/What drove it/.test(h) && /Organic Social/.test(h), 'driver insight rendered in the panel');
 });
 
 test('stripDuplicateCharts removes the baseline Unicode device + channel blocks, keeps the rest', () => {
