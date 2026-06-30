@@ -1,3 +1,9 @@
+## [1.107.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.107.0...v1.107.1) (2026-06-30)
+
+### Bug Fixes
+
+* **desktop:** GA4 Audit report download offers PDF only ([286f67d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/286f67d8e8d4ec4b08aef8e407f99ead3c79dfaa))
+
 ## [1.107.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.106.0...v1.107.0) (2026-06-30)
 
 ### Features
