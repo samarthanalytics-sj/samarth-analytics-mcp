@@ -235,6 +235,38 @@ export interface Ga4SectionsView {
   /** Section 4 — every finding, highest severity first. */
   findings: Ga4FindingCardView[];
   actionableCount: number;
+  /** Section 5 — area coverage (status + confidence + evidence). */
+  areas: Array<{ area: string; statusKey: string; confidence: string; evidence: string }>;
+  /** Section 6 — property baseline context. */
+  baseline: {
+    sessions: string;
+    priorSessions: string;
+    trend: string;
+    growth: { sessionsPct: number | null; keyEventsPct: number | null; revenuePct: number | null; keSafe: boolean; revSafe: boolean } | null;
+    peakDay: string | null;
+    newVsReturning: string;
+    topMarkets: string | null;
+  } | null;
+  /** Section 7 — decision readiness (which business questions the data can answer). */
+  decisions: Array<{ q: string; status: string; note: string }>;
+  /** Section 8 — what was not verified, and what gates sign-off. */
+  notVerified: { gate: string; items: Array<{ item: string; blocks: string }> };
+  /** Section 9 — scope & metadata appendix. */
+  scope: {
+    auditId: string;
+    composite: number | null;
+    grade: string;
+    reliabilityPct: number;
+    window: string;
+    retention: string;
+    timezone: string;
+    currency: string;
+    generated: string;
+    property: string;
+    limitations: string;
+    findings: { critical: number; high: number; medium: number; low: number; info: number };
+    footer: string;
+  };
 }
 /** Combined GA4 property audit (config + data quality) returned to the GA4 Audit panel. */
 export interface Ga4PropertyAuditResult {

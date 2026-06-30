@@ -3609,12 +3609,14 @@ function Ga4AuditPanel({
                         <Ga4Charts visuals={result.visuals} />
                       </div>
                     )}
-                    {result.sections && (
+                    {result.sections ? (
+                      // Sections 2-9 render as styled cards; the markdown body is only a fallback.
                       <div style={{ ...styles.card }} dangerouslySetInnerHTML={{ __html: ga4SectionsHtml(result.sections) }} />
+                    ) : (
+                      <div style={{ ...styles.card, lineHeight: 1.5 }}>
+                        <Markdown text={hasVisuals ? stripDuplicateCharts(ga4Body) : ga4Body} />
+                      </div>
                     )}
-                    <div style={{ ...styles.card, lineHeight: 1.5 }}>
-                      <Markdown text={hasVisuals ? stripDuplicateCharts(ga4Body) : ga4Body} />
-                    </div>
                   </>
                 ) : (
                   <div style={{ ...styles.card, ...styles.muted, lineHeight: 1.5 }}>

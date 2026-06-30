@@ -27,6 +27,29 @@ const sevOf = (s: string): { bar: string; bg: string; txt: string } => SEV[s] ??
 const badge = (s: { bar: string; bg: string; txt: string }): string =>
   `<span style="display:inline-block;white-space:nowrap;font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 8px;border-radius:999px;background:${s.bg};color:${s.bar}">${s.txt}</span>`;
 
+// Area-status (section 5) chips: a coloured dot + label per coverage status.
+const STATUS: Record<string, { dot: string; label: string }> = {
+  pass: { dot: '#16a34a', label: 'Pass' },
+  partial: { dot: '#d97706', label: 'Partial' },
+  fail: { dot: '#dc2626', label: 'Fail' },
+  not_verified: { dot: '#94a3b8', label: 'Not Verified' },
+};
+const statusChip = (key: string): string => {
+  const s = STATUS[key] ?? STATUS.not_verified;
+  return `<span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;font-weight:600;color:${TEXT}"><span style="width:9px;height:9px;border-radius:50%;background:${s.dot};display:inline-block;flex:0 0 auto"></span>${s.label}</span>`;
+};
+// Decision-readiness (section 7) status pill: green when answerable, grey otherwise.
+const decisionPill = (status: string): string => {
+  const ok = /^answer/i.test(status);
+  const c = ok ? GREEN : MUTED;
+  const bg = ok ? v('--c-green-bg', '#f0fdf4') : 'rgba(148,163,184,.14)';
+  return `<span style="display:inline-block;white-space:nowrap;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:${bg};color:${c}">${esc(status)}</span>`;
+};
+const TH = `style="text-align:left;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:${FAINT};padding:6px 10px;border-bottom:2px solid ${BORDER}"`;
+const TD = `style="padding:7px 10px;border-bottom:1px solid ${BORDER};font-size:12.5px;color:${TEXT};vertical-align:top"`;
+const metaRow = (lbl: string, val: string): string =>
+  `<div style="font-size:12.5px;color:${TEXT};margin:3px 0;line-height:1.45"><span style="font-weight:700;color:${MUTED}">${esc(lbl)}:</span> ${esc(val)}</div>`;
+
 const eyebrow = (t: string): string =>
   `<div style="font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:${BLUE};margin-top:20px">${esc(t)}</div>`;
 const h2 = (t: string): string => `<h2 style="font-size:18px;margin:2px 0 6px;color:${TEXT}">${esc(t)}</h2>`;
@@ -111,5 +134,84 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       .join('');
   }
 
-  return (`<section style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${TEXT};line-height:1.5">` + s2 + s3 + s4 + `</section>`).replace(/—/g, '-');
+  // ── Section 5 · Area status ──
+  let s5 = eyebrow('Section 5') + h2('Area status');
+  if (x.areas.length) {
+    const rows = x.areas
+      .map((a) => `<tr><td ${TD}><span style="font-weight:600">${esc(a.area)}</span></td><td ${TD}>${statusChip(a.statusKey)}</td><td ${TD}>${esc(a.confidence)}</td><td ${TD}>${esc(a.evidence)}</td></tr>`)
+      .join('');
+    s5 +=
+      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow:hidden;margin:6px 0">` +
+      `<table style="border-collapse:collapse;width:100%"><thead><tr><th ${TH}>Area</th><th ${TH}>Status</th><th ${TH}>Confidence</th><th ${TH}>Evidence</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  // ── Section 6 · Property baseline ──
+  let s6 = eyebrow('Section 6') + h2('Property baseline');
+  if (x.baseline) {
+    const b = x.baseline;
+    const g = b.growth;
+    const growthLine = g
+      ? `<div style="font-size:12.5px;color:${TEXT};margin:3px 0"><span style="font-weight:700;color:${MUTED}">Growth signals (vs prior):</span> sessions ${esc(signed(g.sessionsPct))} &middot; key events ${esc(signed(g.keyEventsPct))}${g.keSafe ? '' : ' *'} &middot; revenue ${esc(signed(g.revenuePct))}${g.revSafe ? '' : ' *'}${g.keSafe && g.revSafe ? '' : `<span style="color:${AMBER}"> (* not safe to quote)</span>`}</div>`
+      : '';
+    s6 += card(
+      metaRow('Sessions', `${b.sessions} (prior period ${b.priorSessions}${b.trend})`) +
+        growthLine +
+        metaRow('Peak day', b.peakDay ?? 'Not Verified') +
+        metaRow('New vs returning', b.newVsReturning) +
+        metaRow('Top markets', b.topMarkets ?? 'Not Verified'),
+      BLUE,
+    );
+  } else {
+    s6 += card(`<div style="font-size:13px;color:${MUTED}">Baseline traffic metrics could not be retrieved - Not Verified.</div>`, BORDER);
+  }
+
+  // ── Section 7 · Decision readiness ──
+  let s7 = eyebrow('Section 7') + h2('Decision readiness');
+  if (x.decisions.length) {
+    const rows = x.decisions
+      .map((d) => `<tr><td ${TD}><span style="font-weight:600">${esc(d.q)}</span></td><td ${TD}>${decisionPill(d.status)}</td><td ${TD}>${esc(d.note)}</td></tr>`)
+      .join('');
+    s7 +=
+      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow:hidden;margin:6px 0">` +
+      `<table style="border-collapse:collapse;width:100%"><thead><tr><th ${TH}>Business question</th><th ${TH}>Status</th><th ${TH}>Missing input</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  // ── Section 8 · Not verified ──
+  let s8 = eyebrow('Section 8') + h2('Not verified');
+  const nvItems = x.notVerified.items.map((i) => `<li style="margin:3px 0"><span style="font-weight:600;color:${TEXT}">${esc(i.item)}</span> <span style="color:${MUTED}">- blocks: ${esc(i.blocks)}</span></li>`).join('');
+  s8 += card(
+    `<div style="font-size:13px;color:${TEXT};margin-bottom:6px"><span style="font-weight:700;color:${AMBER}">Gates sign-off:</span> ${esc(x.notVerified.gate)}.</div>` +
+      `<ul style="margin:4px 0 0;padding-left:18px;font-size:12.5px;line-height:1.5">${nvItems}</ul>`,
+    AMBER,
+  );
+
+  // ── Section 9 · Scope & metadata ──
+  const sc = x.scope;
+  const fc = sc.findings;
+  const sevPill = (label: string, n: number, key: string): string => {
+    const s = sevOf(key);
+    return `<span style="display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:${s.bg};color:${s.bar};margin:0 6px 4px 0">${esc(label)} ${n}</span>`;
+  };
+  const s9 =
+    eyebrow('Section 9') +
+    h2('Scope & metadata') +
+    card(
+      metaRow('Audit ID', sc.auditId) +
+        metaRow('Reliability score', `${sc.composite ?? '—'}/100 (Grade ${sc.grade}) · Reporting reliability ${sc.reliabilityPct}%`) +
+        metaRow('Window', sc.window) +
+        metaRow('Retention', sc.retention) +
+        metaRow('Timezone / currency', `${sc.timezone} / ${sc.currency}`) +
+        metaRow('Access', 'GA4 Admin + Data API (read-only)') +
+        metaRow('Generated', sc.generated) +
+        metaRow('Property', sc.property) +
+        metaRow('Limitations', sc.limitations) +
+        `<div style="margin-top:8px">${sevPill('Critical', fc.critical, 'critical')}${sevPill('High', fc.high, 'high')}${sevPill('Medium', fc.medium, 'medium')}${sevPill('Low', fc.low, 'low')}${sevPill('Info', fc.info, 'info')}</div>` +
+        `<div style="font-size:11.5px;color:${FAINT};font-style:italic;margin-top:6px">${esc(sc.footer)}</div>`,
+      BORDER,
+    );
+
+  return (`<section style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${TEXT};line-height:1.5">` + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + `</section>`).replace(/—/g, '-');
 }
+
+// Signed percentage for the baseline growth line (matches the markdown's trendPctText).
+const signed = (p: number | null): string => (p === null ? 'n/a' : `${p >= 0 ? '+' : ''}${p}%`);
