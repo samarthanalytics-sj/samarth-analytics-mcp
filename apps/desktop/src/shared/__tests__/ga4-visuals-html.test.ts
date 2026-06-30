@@ -26,6 +26,10 @@ const view = (over: Partial<Ga4VisualsView> = {}): Ga4VisualsView => ({
   peakIndex: 3,
   trendLabel: 'One-day spike',
   trendSummary: 'A single spike on Jun 13 driven by <Organic Social>.',
+  channelDaily: [
+    { channel: 'Organic Social', series: [{ date: '20260610', sessions: 50 }, { date: '20260611', sessions: 60 }, { date: '20260612', sessions: 55 }, { date: '20260613', sessions: 1500 }, { date: '20260614', sessions: 58 }] },
+    { channel: 'Direct', series: [{ date: '20260610', sessions: 50 }, { date: '20260611', sessions: 60 }, { date: '20260612', sessions: 55 }, { date: '20260613', sessions: 500 }, { date: '20260614', sessions: 57 }] },
+  ],
   devices: [{ name: 'mobile', sessions: 800 }, { name: 'desktop', sessions: 200 }],
   channels: [{ name: 'Organic Social', sessions: 700 }, { name: 'Direct', sessions: 300 }],
   ...over,
@@ -39,6 +43,19 @@ test('renders an SVG line chart with the peak marked', () => {
   assert.ok(h.includes('<polyline'), 'the trend line');
   assert.ok(h.includes('peak'), 'peak marker');
   assert.ok(h.includes('One-day spike'), 'trend label pill');
+});
+
+test('renders a per-channel multi-line chart with a legend', () => {
+  const h = ga4VisualsHtml(view());
+  assert.ok(h.includes('Sessions by channel'), 'multi-line chart heading');
+  // two channel polylines (total trend line is one; multi-line adds one per channel)
+  assert.ok((h.match(/<polyline/g) ?? []).length >= 3, 'a line per channel plus the trend line');
+  assert.ok(h.includes('Organic Social') && h.includes('Direct'), 'channel legend names');
+});
+
+test('a single channel (or none) → no multi-line chart (needs >=2 series)', () => {
+  const one = ga4VisualsHtml(view({ channelDaily: [{ channel: 'Direct', series: [{ date: '20260610', sessions: 10 }, { date: '20260611', sessions: 12 }] }] }));
+  assert.ok(!one.includes('Sessions by channel'));
 });
 
 test('renders colour-coded device + channel bars', () => {

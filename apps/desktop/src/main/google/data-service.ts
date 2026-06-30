@@ -140,6 +140,8 @@ export interface Ga4Baseline {
   dailySessions: Array<{ date: string; sessions: number }>;
   /** Channel mix ON the peak day, to attribute a spike to a platform (null if no clear peak). */
   peakDayChannels: Array<{ name: string; sessions: number }> | null;
+  /** Top channels' daily sessions, aligned to the dailySessions date axis — the per-channel line chart. */
+  channelDaily: Array<{ channel: string; series: Array<{ date: string; sessions: number }> }>;
   devices: Array<{ name: string; sessions: number }>;
   newVsReturning: Array<{ name: string; sessions: number }>;
   topCountries: Array<{ name: string; sessions: number }>;
@@ -1708,13 +1710,16 @@ export class GoogleDataService {
     // 100-row cap would truncate for windows > 100 days. The daily series is the per-day report ordered
     // NEWEST-FIRST at limit 1000, then reversed to chronological — so a custom range longer than the cap
     // keeps the MOST-RECENT days (what spike/trend cares about), not the oldest. Country = top-N (250).
-    const [curTotal, priorTotal, byDate, byDevice, byNvR, byCountry] = await Promise.all([
+    const emptyResult: Ga4ReportResult = { dimensionHeaders: [], metricHeaders: [], rows: [] };
+    const [curTotal, priorTotal, byDate, byDevice, byNvR, byCountry, byChannelDate] = await Promise.all([
       this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['date'], metrics: ['sessions'], orderBys: byDateDesc, limit: '1000' }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['deviceCategory'], metrics: ['sessions'] }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['newVsReturning'], metrics: ['sessions'] }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['country'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '250' }),
+      // Per-channel daily sessions for the multi-line chart (newest-first, then aligned to the date axis).
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['date', 'sessionDefaultChannelGroup'], metrics: ['sessions'], orderBys: byDateDesc, limit: '5000' }).catch(() => emptyResult),
     ]);
 
     const sessions = oneMetric(curTotal, 0);
@@ -1732,6 +1737,34 @@ export class GoogleDataService {
       if (chanRes) peakDayChannels = merge(pairs(chanRes)).sort((a, b) => b.sessions - a.sessions);
     }
 
+    // Pivot date × channel into the top-5 channels' daily series, aligned to the dailySessions date axis.
+    const chTotals = new Map<string, number>();
+    const chByDate = new Map<string, Map<string, number>>();
+    const coveredDates = new Set<string>();
+    for (const row of byChannelDate.rows) {
+      const date = row.dimensions[0] ?? '';
+      const ch = row.dimensions[1] || '(not set)';
+      const s = n(row.metrics[0]);
+      chTotals.set(ch, (chTotals.get(ch) ?? 0) + s);
+      coveredDates.add(date);
+      let m = chByDate.get(ch);
+      if (!m) {
+        m = new Map();
+        chByDate.set(ch, m);
+      }
+      m.set(date, (m.get(date) ?? 0) + s);
+    }
+    // Build the channel chart's axis from the dates the channel query ACTUALLY returned — never
+    // fabricate 0s past a truncation point. A custom range longer than the 5000-row channel cap (~600
+    // days) is truncated newest-first; when that happens the oldest covered date is partial, so drop it.
+    const truncated = byChannelDate.rows.length >= 5000;
+    const oldestCovered = truncated && coveredDates.size ? [...coveredDates].sort()[0] : null;
+    const channelDateAxis = dailySessions.map((d) => d.date).filter((date) => coveredDates.has(date) && date !== oldestCovered);
+    const channelDaily = [...chTotals]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([ch]) => ({ channel: ch, series: channelDateAxis.map((date) => ({ date, sessions: chByDate.get(ch)?.get(date) ?? 0 })) }));
+
     return {
       startDate,
       endDate,
@@ -1747,6 +1780,7 @@ export class GoogleDataService {
       peakDay,
       dailySessions,
       peakDayChannels,
+      channelDaily,
       devices: merge(pairs(byDevice)).sort((a, b) => b.sessions - a.sessions),
       newVsReturning: merge(pairs(byNvR)),
       topCountries: merge(pairs(byCountry)).sort((a, b) => b.sessions - a.sessions).slice(0, 5),

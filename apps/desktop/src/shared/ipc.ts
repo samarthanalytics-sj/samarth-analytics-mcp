@@ -184,6 +184,8 @@ export interface Ga4VisualsView {
   peakIndex: number;
   trendLabel: string;
   trendSummary: string;
+  /** Top channels' daily sessions (aligned date axis) for the per-channel multi-line chart. */
+  channelDaily: Array<{ channel: string; series: Array<{ date: string; sessions: number }> }>;
   devices: Array<{ name: string; sessions: number }>;
   channels: Array<{ name: string; sessions: number }>;
 }

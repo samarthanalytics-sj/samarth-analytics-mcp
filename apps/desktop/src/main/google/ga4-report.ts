@@ -239,6 +239,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
     peakIndex: trend.peakIndex,
     trendLabel: trend.patternLabel,
     trendSummary: trend.summary,
+    channelDaily: baseline?.channelDaily ?? [],
     devices: baseline?.devices ?? [],
     channels: [...dqCounts.channelGroups].sort((a, b) => b.sessions - a.sessions).slice(0, 8),
   };
