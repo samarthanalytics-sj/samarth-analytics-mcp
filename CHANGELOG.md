@@ -1,3 +1,9 @@
+## [1.109.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.109.0...v1.109.1) (2026-06-30)
+
+### Bug Fixes
+
+* **desktop:** grade a growing-but-diluted GA4 traffic spike as LOW, not CRITICAL ([71b4ca6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/71b4ca66e3920d5a47060e8ebc09ced0882477ed))
+
 ## [1.109.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.108.0...v1.109.0) (2026-06-30)
 
 ### Features
