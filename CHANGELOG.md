@@ -1,3 +1,9 @@
+## [1.115.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.114.0...v1.115.0) (2026-06-30)
+
+### Features
+
+* **web-audit:** GA4 tag/trigger naming convention for tag suggestions ([c62e1e1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c62e1e11735ad3e29068e603fc5403a37163411f))
+
 ## [1.114.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.113.0...v1.114.0) (2026-06-30)
 
 ### Features
