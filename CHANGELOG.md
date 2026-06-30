@@ -1,3 +1,9 @@
+## [1.104.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.103.1...v1.104.0) (2026-06-30)
+
+### Features
+
+* **desktop:** GA4 report trend-pattern detection + colourful charts (daily line graph, channel attribution) ([1293926](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1293926f9a739be1b784e253f1333acd495fcabd))
+
 ## [1.103.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.103.0...v1.103.1) (2026-06-30)
 
 ### Bug Fixes
