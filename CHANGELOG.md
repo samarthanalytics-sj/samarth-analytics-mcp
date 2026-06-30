@@ -1,3 +1,13 @@
+## [1.114.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.113.0...v1.114.0) (2026-06-30)
+
+### Features
+
+* **web-audit:** surface every prominent button as a tag suggestion ([6844bf5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6844bf50ececd5c45d471084499ab755c1247ae0))
+
+### Bug Fixes
+
+* **web-audit:** detect more embedded-form providers for tag suggestions ([4b3ba25](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4b3ba256741a1e9b87d16fd409c37f2a09d35a3a))
+
 ## [1.113.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.112.0...v1.113.0) (2026-06-30)
 
 ### Features
