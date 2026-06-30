@@ -1,3 +1,9 @@
+## [1.108.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.107.1...v1.108.0) (2026-06-30)
+
+### Features
+
+* **desktop:** interactive React GA4 charts + honest "trustworthy" verdict ([ce4b0d3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ce4b0d358af3e11f7c9d08e6532ac995f7fc6808))
+
 ## [1.107.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.107.0...v1.107.1) (2026-06-30)
 
 ### Bug Fixes
