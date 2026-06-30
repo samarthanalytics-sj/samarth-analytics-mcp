@@ -196,6 +196,46 @@ export interface Ga4VisualsView {
   /** Whether channel attribution is safe to quote (Data Trust Matrix); false greys the channel charts. */
   channelTrusted: boolean;
 }
+/** One finding as a colour-coded card (section 4). */
+export interface Ga4FindingCardView {
+  severity: string; // critical | high | medium | low | info
+  area: string;
+  message: string;
+  businessRisk: string;
+  recommendation: string;
+}
+/** Structured body sections (2-4 so far) for the designed card panel + styled export, mirroring the
+ *  markdown report so the on-screen panel and the PDF render the same content as Section 1. */
+export interface Ga4SectionsView {
+  /** Section 2 — the single highest-severity ("what is wrong") finding, expanded. */
+  topFinding: {
+    severity: string;
+    area: string;
+    message: string;
+    evidence?: string;
+    whyItMatters?: string;
+    ifUnconfirmed?: string;
+    recommendation?: string;
+    related?: string;
+  } | null;
+  /** Shown in section 2 when there is no actionable finding. */
+  noIssueNote: string | null;
+  /** Section 3 — outcomes (sessions/key-events/revenue growth) vs traffic. */
+  outcomes: {
+    assessed: boolean;
+    sessionsPct: number | null;
+    keyEventsPct: number | null;
+    revenuePct: number | null;
+    keSafe: boolean;
+    revSafe: boolean;
+    sesSafe: boolean;
+    read: string;
+    trendPattern: string | null;
+  } | null;
+  /** Section 4 — every finding, highest severity first. */
+  findings: Ga4FindingCardView[];
+  actionableCount: number;
+}
 /** Combined GA4 property audit (config + data quality) returned to the GA4 Audit panel. */
 export interface Ga4PropertyAuditResult {
   config: Ga4AuditReportView;
@@ -206,6 +246,8 @@ export interface Ga4PropertyAuditResult {
   exec: Ga4ExecSummaryView;
   /** Charts payload (daily trend line + colourful bars) for the panel + PDF. */
   visuals: Ga4VisualsView;
+  /** Structured body sections (2-4) for the designed card panel + styled export. */
+  sections: Ga4SectionsView;
 }
 /** The data-quality window for a GA4 audit: a count of trailing days (default 28), or an explicit
  *  custom range (YYYY-MM-DD, inclusive, interpreted in the property's timezone). */

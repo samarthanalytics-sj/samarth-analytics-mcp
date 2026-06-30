@@ -12,7 +12,7 @@ import type { Ga4GrowthResult, Ga4GrowthFinding } from './ga4-growth';
 import type { Ga4Baseline } from './data-service';
 import { buildGa4Scorecard } from './ga4-scorecard';
 import { analyzeGa4Trend } from './ga4-trend';
-import type { Ga4ExecSummaryView, Ga4VisualsView } from '../../shared/ipc';
+import type { Ga4ExecSummaryView, Ga4VisualsView, Ga4SectionsView } from '../../shared/ipc';
 
 export interface Ga4ReportInput {
   property: string; // "properties/123456"
@@ -167,6 +167,19 @@ function auditWindowLabel(dq: Ga4DataQualityResult): string {
   return 'window not specified';
 }
 
+// The section-3 "Read" line for a growth finding, shared by the markdown report and the structured
+// sections view so the two surfaces never word it differently.
+const growthReadLine = (gf: { category: string; severity: string } | undefined): string =>
+  !gf || gf.category !== 'growth'
+    ? 'Sessions are within normal variation vs the prior period.'
+    : gf.severity === 'info'
+      ? 'Outcomes tracked the traffic — consistent with real growth.'
+      : gf.severity === 'medium'
+        ? "Sessions moved sharply, but there isn't enough conversion signal to confirm what's behind it."
+        : gf.severity === 'low'
+          ? 'Conversions grew with the traffic but slower than sessions — the conversion rate diluted (typical of a lower-converting channel mix), not a tracking break.'
+          : 'Outcomes did NOT keep pace with traffic — the spike is unconfirmed and revenue/ROAS may be wrong right now.';
+
 // Combined findings (config + data quality + growth) — the single source of truth for the report.
 function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, growth: Ga4GrowthResult | null): FindingRow[] {
   return [
@@ -271,6 +284,56 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
   };
 }
 
+/** Structured body sections (2-4) for the designed card panel + styled export. Computed from the same
+ *  pure builders the markdown report uses, so the two surfaces can't drift. */
+export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
+  const ecom = hasEcommerce(s);
+  const allFindings = buildAllFindings(config, dq, growth);
+  const actionable = allFindings.filter((f) => f.severity !== 'info');
+  const top = actionable[0];
+  const dqAttrib = allFindings.find((f) => f.category === 'data_quality' && f.severity !== 'info' && /source data|Unassigned|\(not set\)/.test(f.message));
+  const areaRows = buildAreaRows(s, config, attribution, audienceCount, ecom);
+  const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
+  const score = buildGa4Scorecard({
+    areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
+    findings: allFindings.map((f) => ({ severity: f.severity, category: f.category })),
+    growthAssessed: Boolean(growth?.assessed),
+  });
+  const safeOf = (metric: string): boolean => score.trust.find((t) => t.metric === metric)?.safe ?? true;
+  const keSafe = safeOf('Conversion counts');
+  const revSafe = safeOf('Revenue / AOV / ROAS');
+  const sesSafe = safeOf('Sessions, users, engagement rate');
+
+  const topFinding = top
+    ? {
+        severity: top.severity,
+        area: top.area,
+        message: firstSentence(top.message),
+        evidence: top.evidence ?? top.message,
+        whyItMatters: top.whyItMatters,
+        ifUnconfirmed: top.ifUnconfirmed ?? 'Graded at face value — no worse unverified branch.',
+        recommendation: top.recommendation ?? '—', // always show a Fix row, matching the markdown's "Fix: —"
+        related: dqAttrib && top.category === 'growth' ? `${dqAttrib.message} (likely the same sessions behind the spike)` : undefined,
+      }
+    : null;
+  const noIssueNote = top ? null : `No high-severity issue. The ceiling on trust is coverage — ${nNotVerified} area(s) are unverified; see Not verified.`;
+
+  let trendPattern: string | null = null;
+  if (baseline && baseline.dailySessions.length >= 5) {
+    const trend = analyzeGa4Trend({ dailySessions: baseline.dailySessions, peakDayChannels: baseline.peakDayChannels, windowChannels: dqCounts.channelGroups });
+    trendPattern = `${trend.patternLabel}. ${trend.summary}`;
+  }
+  const outcomes =
+    growth && growth.assessed
+      ? { assessed: true, sessionsPct: growth.sessionsTrendPct, keyEventsPct: growth.keyEventsTrendPct, revenuePct: growth.revenueTrendPct, keSafe, revSafe, sesSafe, read: growthReadLine(growth.findings[0]), trendPattern }
+      : { assessed: false, sessionsPct: null, keyEventsPct: null, revenuePct: null, keSafe, revSafe, sesSafe, read: 'Not enough prior traffic to assess growth for this window.', trendPattern };
+
+  const findings = allFindings.map((f) => ({ severity: f.severity, area: f.area, message: f.message, businessRisk: riskFor(f), recommendation: f.recommendation ?? '—' }));
+
+  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length };
+}
+
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
   const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
   const pid = input.property.replace('properties/', '');
@@ -372,18 +435,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     L.push(`Key events  ${trendPctText(growth.keyEventsTrendPct)}`);
     L.push(`Revenue     ${trendPctText(growth.revenueTrendPct)}`);
     L.push('```');
-    const gf = growth.findings[0];
-    const read =
-      !gf || gf.category !== 'growth'
-        ? 'Sessions are within normal variation vs the prior period.'
-        : gf.severity === 'info'
-          ? 'Outcomes tracked the traffic — consistent with real growth.'
-          : gf.severity === 'medium'
-            ? "Sessions moved sharply, but there isn't enough conversion signal to confirm what's behind it."
-            : gf.severity === 'low'
-              ? 'Conversions grew with the traffic but slower than sessions — the conversion rate diluted (typical of a lower-converting channel mix), not a tracking break.'
-              : 'Outcomes did NOT keep pace with traffic — the spike is unconfirmed and revenue/ROAS may be wrong right now.';
-    L.push(`**Read:** ${read}`);
+    L.push(`**Read:** ${growthReadLine(growth.findings[0])}`);
     if (!keSafe || !revSafe) {
       L.push('');
       L.push(`*Per the data trust matrix, the key-event and revenue figures above are NOT safe to quote until conversion tracking is confirmed${sesSafe ? '; sessions are safe to quote' : ''}.*`);
