@@ -1,3 +1,9 @@
+## [1.105.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.105.0...v1.105.1) (2026-06-30)
+
+### Bug Fixes
+
+* **desktop:** drop the duplicate Unicode device/channel bars where the colourful visuals render ([c9925dc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c9925dc0cb2d80aac69b59e390617e1d03d30169))
+
 ## [1.105.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.104.0...v1.105.0) (2026-06-30)
 
 ### Features
