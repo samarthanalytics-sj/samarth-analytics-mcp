@@ -53,9 +53,13 @@ const MIN_PRIOR_SESSIONS = 100;
 const SPIKE_PCT = 50;
 const BIG_SPIKE_PCT = 100;
 const DROP_PCT = -40;
-// "Scaled" = the outcome grew at least half as fast as sessions. Below that, conversions did not
-// track the traffic and the spike is suspect (junk/bot traffic or broken conversion tracking).
+// "Scaled" = the outcome grew at least half as fast as sessions: outcomes moved with the traffic.
 const SCALE_RATIO = 0.5;
+// "Responded" = a weaker bar (a quarter as fast): conversions clearly grew WITH the traffic, just
+// sub-proportionally. That is conversion-rate dilution (a lower-converting channel mix), not a
+// tracking break — a break shows flat/near-zero outcomes, not materially positive growth. Graded LOW.
+// Only below this bar (outcomes barely moved despite a spike) is the spike a revenue-integrity risk.
+const DILUTION_RATIO = 0.25;
 // Minimum absolute key-event volume before a percentage "scaled" verdict is trusted — a +1-on-1
 // conversion delta reads as +100% but is noise, not evidence the spike converted.
 const MIN_KEY_EVENTS = 30;
@@ -82,6 +86,24 @@ export function auditGa4Growth(input: Ga4GrowthInput): Ga4GrowthResult {
       const scaled = convScaled || revScaled;
       const enoughToJudge =
         input.keyEvents >= MIN_KEY_EVENTS || input.priorKeyEvents >= MIN_KEY_EVENTS || input.revenue > 0 || input.priorRevenue > 0;
+      // Did conversions grow WITH the traffic (>= a quarter as fast) even if below the "scaled" bar?
+      // Require BOTH tracked outcomes to respond — a lagging or declining metric still escalates to
+      // the worse branch — so we only soften when the whole conversion picture clearly grew.
+      const convResponded =
+        input.priorKeyEvents === 0
+          ? input.keyEvents >= MIN_KEY_EVENTS
+          : kt !== null && kt >= st * DILUTION_RATIO && input.keyEvents >= MIN_KEY_EVENTS;
+      const revResponded: boolean | null =
+        input.revenue <= 0
+          ? input.priorRevenue > 0
+            ? false // revenue existed and collapsed to ~0 — a revenue-tracking break, not dilution: escalate
+            : null // never had revenue — ignore it and judge on key events
+          : input.priorRevenue === 0
+            ? true // brand-new revenue stream is real growth
+            : rt !== null
+              ? rt >= st * DILUTION_RATIO
+              : false;
+      const responded = convResponded && revResponded !== false;
 
       if (scaled) {
         const parts: string[] = [];
@@ -92,6 +114,22 @@ export function auditGa4Growth(input: Ga4GrowthInput): Ga4GrowthResult {
           category: GROWTH,
           message: `${movement} and ${parts.join(' and ')} moved with it — consistent with a real launch or campaign rather than a tracking artifact.`,
           recommendation: `Confirm the driver${driver} is an intended campaign; no fix needed if expected.`,
+        });
+      } else if (responded) {
+        // Conversions DID grow with the traffic, just slower than sessions — conversion-rate dilution
+        // from a lower-converting channel mix, not a tracking break (a break shows flat/near-zero
+        // outcomes, not materially positive growth). Flag LOW: a quick confirm, not a revenue alarm.
+        const kPart = kt !== null ? `key events ${sign(kt)}` : 'key events n/a';
+        const rPart = rt !== null ? `revenue ${sign(rt)}` : input.revenue > 0 ? 'revenue grew' : 'no revenue tracked';
+        findings.push({
+          severity: 'low',
+          category: GROWTH,
+          message: `${movement}; conversions grew with it but slower (${kPart}, ${rPart}) — the conversion rate diluted as the spike scaled, typical of a lower-converting channel mix${driver}, not a tracking break.`,
+          evidence: `Sessions ${sign(st)} (${fnum(input.priorSessions)} → ${fnum(input.sessions)}); key events ${kt === null ? 'n/a' : sign(kt)}; revenue ${rt === null ? 'n/a' : sign(rt)}. Conversions responded (they grew materially), which argues against broken tracking.`,
+          whyItMatters: `Outcomes grew, so conversion tracking is most likely working; the open question is whether the new ${input.topChannel ?? 'channel'} traffic converts as well as your baseline — not whether revenue is being lost.`,
+          ifUnconfirmed: `Graded LOW, not critical: both tracked outcomes grew with the traffic (sub-proportionally), which is conversion-rate dilution, not a tracking failure.`,
+          businessRisk: `Conversion rate diluted by the traffic mix; the revenue figures remain usable.`,
+          recommendation: `Optional: in GA4 DebugView/Realtime, spot-check that key events/purchase fire for the new traffic and the tag isn't partially dropping; otherwise treat the spike as real, lower-converting traffic.`,
         });
       } else if (enoughToJudge) {
         // Grade to the WORSE branch: broken conversion tracking (revenue under-reported now) outranks

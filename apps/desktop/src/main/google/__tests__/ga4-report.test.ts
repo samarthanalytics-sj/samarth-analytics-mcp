@@ -222,6 +222,18 @@ test('a 50–99% spike not tracked is HIGH (not escalated to CRITICAL)', () => {
   assert.ok(!/\| CRITICAL \| Growth \|/.test(md));
 });
 
+test('a diluted-but-growing spike is graded LOW, not "Action required", and revenue stays quotable', () => {
+  // sessions +276%, key events +112%, revenue +69% — conversions grew with the traffic (just slower).
+  const b = baseline({ sessions: 33453, priorSessions: 8904, keyEvents: 1060, priorKeyEvents: 500, revenue: 169000, priorRevenue: 100000 });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(!/Action required/.test(md), 'no false CRITICAL verdict when conversions grew with the traffic');
+  assert.ok(/\| LOW \| Growth \|/.test(md), 'growth graded LOW (channel-mix dilution)');
+  assert.ok(!/\| (CRITICAL|HIGH) \| Growth \|/.test(md), 'not escalated to critical/high');
+  assert.ok(!/revenue\/ROAS may be wrong/.test(md), 'drops the "revenue may be wrong" alarm');
+  // growth no longer "serious" → revenue + conversions flip back to safe to quote
+  assert.ok(/Revenue \/ AOV \/ ROAS \| ✅ Safe to quote/.test(md), 'revenue safe to quote again');
+});
+
 test('healthy growth (sessions, key events and revenue move together) → no actionable growth finding', () => {
   const md = buildGa4AuditReport(input()); // baseline trends are all ~+11%
   assert.ok(!/\| (CRITICAL|HIGH|MEDIUM) \| Growth \|/.test(md), 'no spike/drop finding when outcomes track sessions');

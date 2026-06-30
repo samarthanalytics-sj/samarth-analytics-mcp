@@ -45,6 +45,34 @@ test('returning-user share weighs the verdict (held-up returning share argues ag
   assert.ok(/consistent with bot/.test(collapsed.findings[0].whyItMatters ?? ''));
 });
 
+test('a big spike where conversions grew but slower than traffic → LOW (channel-mix dilution, not a break)', () => {
+  // sessions +276%, key events +112%, revenue +69% — conversions clearly responded, just diluted.
+  const r = auditGa4Growth(inp({ sessions: 33453, priorSessions: 8904, keyEvents: 1060, priorKeyEvents: 500, revenue: 169000, priorRevenue: 100000 }));
+  assert.equal(r.findings.length, 1);
+  assert.equal(r.findings[0].severity, 'low', 'diluted-but-growing conversions are not a CRITICAL break');
+  assert.equal(r.findings[0].category, 'growth');
+  assert.ok(/dilut/.test(r.findings[0].message), 'frames it as conversion-rate dilution');
+  assert.ok(!/may be wrong/.test(r.findings[0].message), 'does not assert revenue is wrong when it grew');
+});
+
+test('a spike where ONLY sessions grow and revenue lags badly stays CRITICAL (revenue did not respond)', () => {
+  // sessions +276%, key events +112% but revenue only +10% (ratio 0.036) → revenue lagged → worse branch.
+  const r = auditGa4Growth(inp({ sessions: 33453, priorSessions: 8904, keyEvents: 1060, priorKeyEvents: 500, revenue: 110000, priorRevenue: 100000 }));
+  assert.equal(r.findings[0].severity, 'critical', 'a lagging revenue metric still escalates');
+});
+
+test('a spike where revenue COLLAPSES to zero stays CRITICAL (a revenue break, never softened to LOW)', () => {
+  // sessions +276%, key events +112%, but revenue 100k → 0 (a -100% wipeout) — the strongest break signal.
+  const r = auditGa4Growth(inp({ sessions: 33453, priorSessions: 8904, keyEvents: 1060, priorKeyEvents: 500, revenue: 0, priorRevenue: 100000 }));
+  assert.equal(r.findings[0].severity, 'critical', 'a revenue collapse must not be graded as dilution');
+});
+
+test('a NEW revenue stream (prior 0 → now positive) with diluted key events is not falsely escalated', () => {
+  // prior revenue 0 → 90k is real new growth; key events +112% respond → LOW dilution, not critical.
+  const r = auditGa4Growth(inp({ sessions: 33453, priorSessions: 8904, keyEvents: 1060, priorKeyEvents: 500, revenue: 90000, priorRevenue: 0 }));
+  assert.notEqual(r.findings[0].severity, 'critical', 'a brand-new revenue stream is not a collapse');
+});
+
 test('a spike where key events and revenue scale with it → INFO (healthy growth, not a gap)', () => {
   const r = auditGa4Growth(inp({ sessions: 32000, priorSessions: 8800, keyEvents: 1800, priorKeyEvents: 500, revenue: 360000, priorRevenue: 100000 }));
   assert.equal(r.findings.length, 1);
