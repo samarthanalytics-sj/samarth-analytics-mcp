@@ -90,5 +90,5 @@ export function execSummaryHtml(x: Ga4ExecSummaryView): string {
     sectionHead('Data trust matrix · what to quote from this audit') +
     trustMatrix +
     `</section>`
-  );
+  ).replace(/—/g, '-'); // house style: no em dashes in the report
 }
