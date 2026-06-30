@@ -157,9 +157,9 @@ export function extractFormsInPage(): RawForm[] {
     //    ancestor that also holds a text-ish field. Requires a real text input
     //    (not just selects) so filter/search widgets aren't mistaken for forms.
     const seen: Element[] = [];
-    // Include <a> — many React/marketing forms use an anchor or styled <div role=button>
-    // as the "Send Message" / "Subscribe" control rather than a real <button>.
-    for (const btn of Array.from(doc.querySelectorAll('button, [role="button"], a, input[type="submit"], input[type="button"]'))) {
+    // Include <a> + [onclick] — many React/marketing forms use an anchor, a styled <div role=button>,
+    // or a bare <div onclick> as the "Send Message" / "Subscribe" control rather than a real <button>.
+    for (const btn of Array.from(doc.querySelectorAll('button, [role="button"], a, [onclick], input[type="submit"], input[type="button"]'))) {
       if (out.length >= MAX_FORMS) break;
       if (btn.closest('form')) continue;
       const label = ((btn.textContent || '') + ' ' + ((btn as HTMLInputElement).value || '')).trim();
@@ -324,7 +324,9 @@ export function classifyFieldPii(field: RawFormField): PiiCategory | null {
 
 function guessPurpose(form: RawForm, pii: PiiField[]): FormPurpose {
   const textInputs = form.fields.filter((f) => !['checkbox', 'radio', 'select'].includes(f.type));
-  if (textInputs.length === 1 && (SEARCH_RE.test(textInputs[0].name) || /search/i.test(form.action))) return 'search';
+  // A lone EMAIL input is a signup/newsletter capture, never a search box (which is type text/search) —
+  // so don't let a name like "s"/"q" misroute it to 'search' before the email checks below run.
+  if (textInputs.length === 1 && textInputs[0].type !== 'email' && (SEARCH_RE.test(textInputs[0].name) || /search/i.test(form.action))) return 'search';
   const hasPassword = form.fields.some((f) => f.type === 'password');
   if (hasPassword) {
     return /sign.?up|register|create.?account/i.test(form.text + ' ' + form.action) ? 'signup' : 'login';

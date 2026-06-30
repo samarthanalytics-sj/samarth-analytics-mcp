@@ -147,6 +147,12 @@ const contactAnalysis = analyzeForms([contactForm], 'https://example.com/contact
 check('forms: contact purpose', contactAnalysis.purpose === 'contact');
 check('forms: pii without notice flagged', contactAnalysis.issues.some((i) => i.id.includes('pii_no_notice')));
 
+// A single EMAIL input (newsletter signup) must NOT be misread as a search box, even if named "s"/"q".
+const loneEmailMkt = form({ index: 9, fields: [field({ type: 'email', name: 's' })], fieldCount: 1, text: 'subscribe to our newsletter for product updates' });
+check('forms: lone email signup → newsletter, not search', analyzeForms([loneEmailMkt], 'https://example.com')[0].purpose === 'newsletter');
+const loneEmailPlain = form({ index: 10, fields: [field({ type: 'email', name: 'q' })], fieldCount: 1, text: '' });
+check('forms: lone email (no marketing copy) → contact, not search', analyzeForms([loneEmailPlain], 'https://example.com')[0].purpose === 'contact');
+
 const noticedForm = form({ index: 1, fields: contactForm.fields, hasPrivacyLink: true });
 check(
   'forms: privacy link suppresses notice issue',
