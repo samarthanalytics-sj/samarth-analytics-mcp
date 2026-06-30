@@ -1,3 +1,9 @@
+## [1.103.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.103.0...v1.103.1) (2026-06-30)
+
+### Bug Fixes
+
+* **desktop:** no em dashes in the GA4 report or the Chat output (house style) ([3c01698](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3c016989ae5f370c8168f95473fc4416641b6233))
+
 ## [1.103.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.102.0...v1.103.0) (2026-06-30)
 
 ### Features
