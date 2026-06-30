@@ -1,3 +1,9 @@
+## [1.110.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.109.1...v1.110.0) (2026-06-30)
+
+### Features
+
+* **desktop:** deep-insights panel beside the GA4 traffic-trend charts ([519a57a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/519a57acf6ff4df0a9b64e2c76b36e67fd29173d))
+
 ## [1.109.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.109.0...v1.109.1) (2026-06-30)
 
 ### Bug Fixes
