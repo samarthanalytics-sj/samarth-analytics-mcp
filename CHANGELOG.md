@@ -1,3 +1,9 @@
+## [1.107.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.106.0...v1.107.0) (2026-06-30)
+
+### Features
+
+* **desktop:** interactive, adaptive GA4 charts (date grouping + data points + hover tooltips) ([5670a8f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5670a8fa4a15d2fb532897558bdf5f1232a946ee))
+
 ## [1.106.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.105.1...v1.106.0) (2026-06-30)
 
 ### Features
