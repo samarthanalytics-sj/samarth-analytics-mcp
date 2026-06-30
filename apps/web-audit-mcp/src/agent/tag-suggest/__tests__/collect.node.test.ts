@@ -29,6 +29,30 @@ check('www normalization → internal', kindOf('https://www.acme.com/x', 'acme.c
 check('CTA anchor text → cta', classifyElement(a('https://acme.com/demo', { text: 'Book a demo' }), 'acme.com')?.kind === 'cta');
 check('CTA button → cta', classifyElement({ tag: 'button', href: '', text: 'Request a quote', hasDownload: false, region: '' }, 'acme.com')?.kind === 'cta');
 check('plain internal anchor (no CTA text) → null', classifyElement(a('https://acme.com/team', { text: 'Our team' }), 'acme.com') === null);
+// Generic CTA fallback: a prominent button / CTA-styled control surfaces even without a known intent.
+check('button with non-intent label → generic cta', (() => { const d = classifyElement({ tag: 'button', href: '', text: 'Talk to our experts', hasDownload: false, region: '' }, 'acme.com'); return d?.kind === 'cta' && d?.intent === 'generic'; })());
+check('CTA-styled internal anchor (cta flag) → generic cta', (() => { const d = classifyElement(a('https://acme.com/contact', { text: 'Talk to our experts', cta: true }), 'acme.com'); return d?.kind === 'cta' && d?.intent === 'generic'; })());
+check('plain internal anchor (no cta flag) with non-intent text stays null', classifyElement(a('https://acme.com/team', { text: 'Our team' }), 'acme.com') === null);
+check('UI chrome label on a button → null (not surfaced)', classifyElement({ tag: 'button', href: '', text: 'Menu', hasDownload: false, region: '' }, 'acme.com') === null);
+check('empty-label button → null', classifyElement({ tag: 'button', href: '', text: '', hasDownload: false, region: '' }, 'acme.com') === null);
+// Multi-word UI chrome must NOT leak into the generic bucket.
+const btn = (text: string, over: Partial<RawElement> = {}): RawElement => ({ tag: 'button', href: '', text, hasDownload: false, region: '', ...over });
+for (const chrome of ['Toggle navigation', 'Open menu', 'Show more', 'Load more', 'Back to top', 'Next page', 'Previous post', 'Read more', 'See all']) {
+  check(`chrome "${chrome}" → null`, classifyElement(btn(chrome), 'acme.com') === null);
+}
+// Cookie/consent controls are noise, not conversions.
+for (const consent of ['Accept all cookies', 'Reject all', 'Manage preferences', 'Accept', 'Got it', 'Cookie settings']) {
+  check(`consent "${consent}" → null`, classifyElement(btn(consent), 'acme.com') === null);
+}
+// Genuine CTAs that merely start with a chrome-ish word are KEPT.
+for (const real of ['Talk to our experts', 'Open account', 'Show pricing', 'Read the guide', 'Accept invitation']) {
+  const d = classifyElement(btn(real), 'acme.com');
+  check(`real CTA "${real}" → generic cta`, d?.kind === 'cta' && d?.intent === 'generic');
+}
+// A button-STYLED nav link (cta flag, region nav) stays out of the generic bucket (menu item, not a CTA).
+check('button-styled NAV link → null (not a conversion)', classifyElement(a('https://acme.com/products', { text: 'Products', cta: true, region: 'nav' }), 'acme.com') === null);
+// But the same styled CTA in main/header DOES surface.
+check('button-styled MAIN cta → generic', (() => { const d = classifyElement(a('https://acme.com/contact', { text: 'Talk to our experts', cta: true, region: 'main' }), 'acme.com'); return d?.kind === 'cta' && d?.intent === 'generic'; })());
 check('email beats outbound (mailto not treated as link)', kindOf('mailto:x@partner.com') === 'email');
 check('region carried through', classifyElement(a('mailto:hi@acme.com', { region: 'footer' }), 'acme.com')?.region === 'footer');
 
@@ -116,8 +140,13 @@ check('social: internal "discord.acme.com" subdomain → null (internal nav)', c
   check('embed: cross-origin HubSpot iframe (no readable form) → synthesized contact form',
     embedInput.forms.length === 1 && embedInput.forms[0].provider.vendor === 'hubspot' && embedInput.forms[0].purpose === 'contact');
   check('embed: synthesized form → contact_form suggestion', buildSuggestions(embedInput).some((s) => s.eventName === 'contact_form'));
-  const realPlusEmbed: PageScan = { ...embedPage, forms: [{ purpose: 'contact', action: 'https://acme.com/x' }] };
-  check('embed: a readable form suppresses synthesis (no duplicate)', buildSuggestInput([realPlusEmbed], 'acme.com').forms.length === 1);
+  // A readable form that is ITSELF the provider (HubSpot action) suppresses the synth (no duplicate).
+  const sameProvider: PageScan = { ...embedPage, forms: [{ purpose: 'contact', action: 'https://js.hsforms.net/x' }] };
+  check('embed: same-provider readable form suppresses synthesis (no duplicate)', buildSuggestInput([sameProvider], 'acme.com').forms.length === 1);
+  // But an UNRELATED readable form (acme.com action) does NOT suppress the cross-origin HubSpot embed.
+  const unrelatedPlusEmbed: PageScan = { ...embedPage, forms: [{ purpose: 'contact', action: 'https://acme.com/x' }] };
+  const upe = buildSuggestInput([unrelatedPlusEmbed], 'acme.com');
+  check('embed: unrelated readable form does NOT suppress a real provider embed', upe.forms.length === 2 && upe.forms.some((f) => f.provider.vendor === 'hubspot'));
 }
 
 // ── YouTube embed detection → video suggestion (end-to-end) ──────────────────

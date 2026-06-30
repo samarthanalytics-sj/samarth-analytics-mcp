@@ -1842,9 +1842,10 @@ function TagReviewPanel({
 
   function loadSuggestions(list: SuggestedTagView[]): void {
     setSuggestions(list);
-    // Default-select the real gaps; leave what GA4 Enhanced Measurement already
-    // tracks unticked so the user opts in deliberately.
-    setSelected(Object.fromEntries(list.map((s) => [s.id, !s.enhancedMeasurementOverlap])));
+    // Default-select the real gaps; leave unticked what GA4 Enhanced Measurement already tracks AND
+    // low-confidence guesses (e.g. generic "any prominent button" CTAs) so the user opts in deliberately
+    // and isn't nudged into creating dozens of speculative tags.
+    setSelected(Object.fromEntries(list.map((s) => [s.id, !s.enhancedMeasurementOverlap && s.confidence !== 'low'])));
     setEdits({});
     setExpanded({});
     setStatuses({});
