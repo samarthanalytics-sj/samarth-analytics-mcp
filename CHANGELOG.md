@@ -1,3 +1,9 @@
+## [1.101.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.100.0...v1.101.0) (2026-06-30)
+
+### Features
+
+* **desktop:** GA4 Audit property picker is a dropdown that shows the selection ([b3b2bdb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b3b2bdb25b61a5a3ee431af843bcb9dac901c86b))
+
 ## [1.100.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.99.2...v1.100.0) (2026-06-29)
 
 ### Features
