@@ -5,7 +5,7 @@
 // we don't suggest redundant tags. Output is directly creatable via the existing
 // create_gtm_tracking_tag tool.
 
-import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, FormProvider, VideoEmbed } from './types.js';
+import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, FormProvider, VideoEmbed, TriggerKind } from './types.js';
 import { CTA_BY_INTENT } from './cta-intents.js';
 import { buildSocialUrlPattern } from './social.js';
 
@@ -69,10 +69,32 @@ const cap = (s: string): string => (s ? s[0].toUpperCase() + s.slice(1) : s);
 // scraped page text (a CTA label) is always creatable. Mirrors gtm-builders
 // sanitizeName (defence-in-depth at the create boundary).
 const clean = (s: string): string => s.replace(/[<>:]/g, ' ').replace(/\s{2,}/g, ' ').trim();
-// Naming convention: tags read "GA4 Event - <Name> Tag"; triggers read
-// "<Action> Trigger" (no "All Clicks -"/"Link Click -" prefix, no "Click" suffix).
-const tagNameOf = (label: string): string => clean(`GA4 Event - ${label} Tag`);
-const trigNameOf = (action: string): string => clean(`${action} Trigger`);
+// Title-case a label for tag/trigger names, preserving acronyms (PDF/CTA/FAQ/GA4…) and known
+// mixed-case brands (YouTube/LinkedIn/WhatsApp). e.g. "talk to our experts" → "Talk To Our Experts".
+const TITLE_ACRONYMS = new Set(['ga4', 'cta', 'faq', 'pdf', 'aov', 'roas', 'ai', 'seo', 'sms', 'url', 'api', 'b2b', 'b2c', 'crm', 'ppc', 'roi']);
+const TITLE_MIXED: Record<string, string> = { youtube: 'YouTube', linkedin: 'LinkedIn', whatsapp: 'WhatsApp', github: 'GitHub', tiktok: 'TikTok', paypal: 'PayPal' };
+const titleCase = (s: string): string =>
+  clean(s)
+    .split(/\s+/)
+    .map((w) => {
+      const lw = w.toLowerCase();
+      if (TITLE_ACRONYMS.has(lw)) return w.toUpperCase();
+      if (TITLE_MIXED[lw]) return TITLE_MIXED[lw];
+      if (/^[A-Z0-9][A-Z0-9]+$/.test(w)) return w; // already an acronym (PDF, ZIP)
+      if (/[a-z]/.test(w) && /[A-Z]/.test(w.slice(1))) return w; // keep intercaps (iOS, eBook, iPhone, macOS, SaaS)
+      return w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w;
+    })
+    .join(' ');
+
+// Naming convention: tags read "GA4 – Event – <Event Name in Title Case>"; triggers read
+// "<Event Name> Click Trigger" (click-based) or "<Event Name> Form Trigger" (form submits).
+export const tagNameOf = (label: string): string => clean(`GA4 – Event – ${titleCase(label)}`);
+export const trigNameOf = (label: string, kind: TriggerKind): string => {
+  const d = titleCase(label);
+  if (kind === 'form_submit') return clean(/\bform(s)?$/i.test(d) || /submission/i.test(d) ? `${d} Trigger` : `${d} Form Trigger`);
+  if (kind === 'link_click' || kind === 'all_clicks') return clean(/\bclick$/i.test(d) ? `${d} Trigger` : `${d} Click Trigger`);
+  return clean(`${d} Trigger`); // youtube_video / pageview / custom_event — neither click nor form
+};
 
 // Human-readable label for a GA4 event name, used in tag names (elements only —
 // forms use FORM_LABEL, CTAs use their intent label).
@@ -189,7 +211,7 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // Scope the trigger to THIS form via its id (preferred) or an instance-unique
   // class — but ONLY if that id/class isn't shared with another form (else it
   // would fire for both). Otherwise it stays unscoped (fires on every form).
-  const trigger: SuggestedTag['trigger'] = { name: trigNameOf(displayLabel), kind: 'form_submit' };
+  const trigger: SuggestedTag['trigger'] = { name: trigNameOf(displayLabel, 'form_submit'), kind: 'form_submit' };
   const rawClass = pickFormClass(f.formClasses);
   const idUnique = !!f.formId && !ctx.nonUniqueIds.has(f.formId);
   const classUnique = !!rawClass && !ctx.nonUniqueClasses.has(rawClass);
@@ -298,7 +320,7 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         label: 'Email link (mailto) → GA4 "email_click"',
         evidence: `mailto link${el.region ? ' in ' + el.region : ''}`,
         eventParameters: CLICK_PARAMS,
-        trigger: { name: trigNameOf('Email'), kind: 'link_click', clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' },
+        trigger: { name: trigNameOf('Email', 'link_click'), kind: 'link_click', clickUrlValue: 'mailto:', clickUrlOperator: 'startsWith' },
       };
     case 'phone':
       return {
@@ -306,7 +328,7 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         label: 'Phone link (tel) → GA4 "phone_click"',
         evidence: `tel link${el.region ? ' in ' + el.region : ''}`,
         eventParameters: CLICK_PARAMS,
-        trigger: { name: trigNameOf('Phone'), kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
+        trigger: { name: trigNameOf('Phone', 'link_click'), kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
       };
     case 'download': {
       // Name + scope the tag for the ACTUAL file type ("PDF Download") with a plain
@@ -325,8 +347,8 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         evidence: `download link ${el.href ?? ''}`.trim(),
         eventParameters: CLICK_PARAMS,
         trigger: ext
-          ? { name: trigNameOf(`${extLabel} Download`), kind: 'link_click', clickUrlValue: `.${ext}`, clickUrlOperator: 'endsWith' }
-          : { name: trigNameOf('File Download'), kind: 'link_click', clickUrlValue: `(?i)\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
+          ? { name: trigNameOf(`${extLabel} Download`, 'link_click'), kind: 'link_click', clickUrlValue: `.${ext}`, clickUrlOperator: 'endsWith' }
+          : { name: trigNameOf('File Download', 'link_click'), kind: 'link_click', clickUrlValue: `(?i)\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
       };
     }
     case 'outbound':
@@ -335,7 +357,7 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         label: 'Outbound link → GA4 "outbound_click"  ⚠ Enhanced Measurement already covers this',
         evidence: `outbound link ${el.href ?? ''}`.trim(),
         eventParameters: CLICK_PARAMS,
-        trigger: { name: trigNameOf('Outbound'), kind: 'link_click' },
+        trigger: { name: trigNameOf('Outbound', 'link_click'), kind: 'link_click' },
       };
     case 'social':
       return {
@@ -346,7 +368,7 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         evidence: `social media link ${el.href ?? ''}`.trim() + ' (note: EM also tracks this as an outbound click)',
         eventParameters: CLICK_PARAMS,
         // Fires ONLY on the social networks actually found on the site.
-        trigger: { name: trigNameOf('Social Media'), kind: 'link_click', clickUrlValue: socialPattern, clickUrlOperator: 'matchRegex' },
+        trigger: { name: trigNameOf('Social Media', 'link_click'), kind: 'link_click', clickUrlValue: socialPattern, clickUrlOperator: 'matchRegex' },
       };
     case 'cta': {
       const def = CTA_BY_INTENT[el.intent ?? 'generic'];
@@ -363,7 +385,7 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
       const ctaText = el.text.replace(/\s+/g, ' ').trim();
       const displayLabel = ctaText.slice(0, 60) || def.label;
       const trigger: SuggestedTag['trigger'] = {
-        name: trigNameOf(displayLabel),
+        name: trigNameOf(displayLabel, 'all_clicks'),
         kind: 'all_clicks',
         clickTextValue: ctaText || def.label,
         clickTextOperator: 'contains',
@@ -405,7 +427,7 @@ function videoSuggestion(embeds: VideoEmbed[]): SuggestedTag | null {
     label: 'YouTube video → GA4 "video_start / video_progress / video_complete"  ⚠ Enhanced Measurement may already cover this',
     evidence: `embedded YouTube player on ${pages.join(', ')} (note: GA4 EM "Video engagement" also tracks this when enabled)`,
     eventParameters: VIDEO_PARAMS,
-    trigger: { name: trigNameOf('YouTube Video'), kind: 'youtube_video' },
+    trigger: { name: trigNameOf('YouTube Video', 'youtube_video'), kind: 'youtube_video' },
   };
 }
 
@@ -455,7 +477,7 @@ export function allFormsSuggestion(): SuggestedTag {
     measurementId: GA4_VAR,
     eventName: 'form_submission',
     eventParameters: [{ name: 'form_id', value: FORM_ID }, { name: 'form_url', value: FORM_URL }, ...PAGE_PARAMS],
-    trigger: { name: trigNameOf('All Form Submissions'), kind: 'form_submit' },
+    trigger: { name: trigNameOf('All Form Submissions', 'form_submit'), kind: 'form_submit' },
   };
 }
 
