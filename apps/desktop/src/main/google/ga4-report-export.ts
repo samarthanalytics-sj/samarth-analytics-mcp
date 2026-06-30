@@ -109,11 +109,13 @@ const REPORT_CSS = `
   p { margin: 6px 0; }
 `;
 
-/** Wrap the report Markdown in a full styled HTML document. `word: true` adds the MS-Office
- *  namespaces so a file saved as .doc opens as a formatted document in Word / Google Docs. */
-export function reportHtmlDocument(title: string, md: string, opts: { word?: boolean } = {}): string {
+/** Wrap the report in a full styled HTML document. `execHtml` (the designed Executive Summary) is
+ *  placed first, then the markdown body. `word: true` adds the MS-Office namespaces so a file saved
+ *  as .doc opens as a formatted document in Word / Google Docs. */
+export function reportHtmlDocument(title: string, md: string, opts: { word?: boolean; execHtml?: string } = {}): string {
   const ns = opts.word
     ? " xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'"
     : '';
-  return `<!DOCTYPE html><html${ns}><head><meta charset="utf-8"><title>${esc(title)}</title><style>${REPORT_CSS}</style></head><body>${markdownToHtml(md)}</body></html>`;
+  const body = `${opts.execHtml ?? ''}${markdownToHtml(md)}`;
+  return `<!DOCTYPE html><html${ns}><head><meta charset="utf-8"><title>${esc(title)}</title><style>${REPORT_CSS}</style></head><body>${body}</body></html>`;
 }

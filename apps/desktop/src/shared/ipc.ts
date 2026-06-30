@@ -147,12 +147,45 @@ export interface Ga4DataQualityView {
   dateRange: string | null;
   findings: Ga4AuditFindingView[];
 }
+/** Per-category row of the weighted scorecard (subscore null = Not Verified, excluded from the composite). */
+export interface Ga4ScorecardCategoryView {
+  name: string;
+  subscore: number | null;
+  weight: number;
+  contribution: number;
+  status: string;
+}
+/** One row of the Data Trust Matrix — what a client can safely quote from this audit. */
+export interface Ga4TrustRowView {
+  metric: string;
+  safe: boolean;
+  reason: string;
+}
+/** Structured Executive Summary — renders as the designed card panel on-screen and the styled
+ *  PDF/Word export, from one rule-based computation. */
+export interface Ga4ExecSummaryView {
+  propertyName: string;
+  propertyId: string;
+  auditId: string;
+  composite: number | null;
+  grade: string;
+  reliabilityPct: number;
+  reliabilityConfidence: string;
+  verdict: string;
+  biggestRisk: string;
+  highestImpactFix: string;
+  coverage: { checked: number; partial: number; notVerified: number };
+  categories: Ga4ScorecardCategoryView[];
+  trust: Ga4TrustRowView[];
+}
 /** Combined GA4 property audit (config + data quality) returned to the GA4 Audit panel. */
 export interface Ga4PropertyAuditResult {
   config: Ga4AuditReportView;
   dataQuality: Ga4DataQualityView;
   /** Full templated audit as a Markdown document (rendered in the panel + downloadable). */
   markdown: string;
+  /** Structured Executive Summary for the designed card panel + styled export. */
+  exec: Ga4ExecSummaryView;
 }
 /** The data-quality window for a GA4 audit: a count of trailing days (default 28), or an explicit
  *  custom range (YYYY-MM-DD, inclusive, interpreted in the property's timezone). */

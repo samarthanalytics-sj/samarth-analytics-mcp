@@ -11,6 +11,7 @@ import type { Ga4DataQualityResult, DataQualityCounts } from './ga4-data-quality
 import type { Ga4GrowthResult, Ga4GrowthFinding } from './ga4-growth';
 import type { Ga4Baseline } from './data-service';
 import { buildGa4Scorecard } from './ga4-scorecard';
+import type { Ga4ExecSummaryView } from '../../shared/ipc';
 
 export interface Ga4ReportInput {
   property: string; // "properties/123456"
@@ -150,15 +151,9 @@ function overallVerdict(allFindings: FindingRow[], nNotVerified: number): string
   return `No blocking issues found; confirm the ${nNotVerified} unverified area(s) before sign-off.`;
 }
 
-export function buildGa4AuditReport(input: Ga4ReportInput): string {
-  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
-  const pid = input.property.replace('properties/', '');
-  const ecom = hasEcommerce(s);
-  const L: string[] = [];
-
-  // ── Single source of truth: combined findings (config + data quality + growth/anomaly) and the
-  // area-coverage rows. The verdict, All-findings table and counts all derive from these. ──
-  const allFindings: FindingRow[] = [
+// Combined findings (config + data quality + growth) — the single source of truth for the report.
+function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, growth: Ga4GrowthResult | null): FindingRow[] {
+  return [
     ...config.findings.map((f) => ({ severity: f.severity, category: f.category, area: 'Config', message: f.message, recommendation: f.recommendation })),
     ...dq.findings.map((f) => ({ severity: f.severity, category: f.category, area: 'Data quality', message: f.message, recommendation: f.recommendation })),
     ...(growth?.findings ?? []).map((f: Ga4GrowthFinding) => ({
@@ -173,28 +168,81 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
       businessRisk: f.businessRisk,
     })),
   ].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9));
+}
+
+// Area-coverage rows = config areas + the report-level Attribution/Audiences/Ecommerce/Consent.
+function buildAreaRows(
+  s: Ga4PropertySnapshot,
+  config: Ga4AuditReport,
+  attribution: Ga4ReportInput['attribution'],
+  audienceCount: number | null,
+  ecom: boolean,
+): AreaRow[] {
+  const rows: AreaRow[] = config.areas.map((a) => ({ area: a.area, statusKey: a.status, evidence: areaEvidence(a.area, s, config) }));
+  if (attribution) {
+    rows.push({ area: 'Attribution', statusKey: 'pass', evidence: `${attribution.reportingAttributionModel}; lookback ${attribution.acquisitionConversionEventLookbackWindow}/${attribution.otherConversionEventLookbackWindow}` });
+  }
+  if (audienceCount !== null) {
+    rows.push({ area: 'Audiences', statusKey: audienceCount > 0 ? 'pass' : 'partial', evidence: `${audienceCount} audience(s)` });
+  }
+  rows.push({
+    area: 'Ecommerce',
+    statusKey: ecom ? 'partial' : 'not_verified',
+    evidence: ecom ? 'purchase/item key events present; item params & duplicate transactions not verified' : 'no purchase/item key events found',
+  });
+  rows.push({ area: 'Consent', statusKey: 'not_verified', evidence: 'consent mode not retrievable via the Admin API' });
+  return rows;
+}
+
+/** Structured Executive Summary (section 1) — drives the markdown report, the on-screen card panel
+ *  and the styled PDF/Word export from one rule-based computation. */
+export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
+  const { snapshot: s, config, dataQuality: dq, growth, attribution, audienceCount } = input;
+  const pid = input.property.replace('properties/', '');
+  const ecom = hasEcommerce(s);
+  const allFindings = buildAllFindings(config, dq, growth);
+  const top = allFindings.filter((f) => f.severity !== 'info')[0];
+  const areaRows = buildAreaRows(s, config, attribution, audienceCount, ecom);
+  const nPartial = areaRows.filter((a) => a.statusKey === 'partial').length;
+  const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
+  const scoreModel = buildGa4Scorecard({
+    areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
+    findings: allFindings.map((f) => ({ severity: f.severity, category: f.category })),
+    growthAssessed: Boolean(growth?.assessed),
+  });
+  return {
+    propertyName: input.displayName,
+    propertyId: pid,
+    auditId: `GA4-${pid}-${(dq.endDate ?? '').replace(/-/g, '') || 'na'}`,
+    composite: scoreModel.composite,
+    grade: scoreModel.grade,
+    reliabilityPct: scoreModel.reliabilityPct,
+    reliabilityConfidence: scoreModel.reliabilityConfidence,
+    verdict: overallVerdict(allFindings, nNotVerified),
+    biggestRisk: top ? firstSentence(top.whyItMatters ?? top.message) : 'No high-severity risk; the ceiling on trust is coverage.',
+    highestImpactFix: top ? firstSentence(top.recommendation ?? 'Confirm the unverified areas.') : 'Confirm the unverified areas (consent, ecommerce parameters) before sign-off.',
+    coverage: { checked: areaRows.length, partial: nPartial, notVerified: nNotVerified },
+    categories: scoreModel.categories.map((c) => ({ name: c.name, subscore: c.subscore, weight: c.weight, contribution: c.contribution, status: c.status })),
+    trust: scoreModel.trust.map((t) => ({ metric: t.metric, safe: t.safe, reason: t.reason })),
+  };
+}
+
+export function buildGa4AuditReport(input: Ga4ReportInput): string {
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
+  const pid = input.property.replace('properties/', '');
+  const ecom = hasEcommerce(s);
+  const L: string[] = [];
+
+  // ── Single source of truth: combined findings (config + data quality + growth/anomaly) and the
+  // area-coverage rows. The verdict, All-findings table and counts all derive from these. ──
+  const allFindings = buildAllFindings(config, dq, growth);
   // The "top finding" that drives the Verdict + "What is wrong" is the worst ACTIONABLE one. An
   // info-only result (e.g. the data-quality "no major issues" advisory on a clean property) has no
   // top finding, so those sections take their clean-property fallbacks instead of mislabelling an
   // all-clear as a problem.
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
-
-  const areaRows: AreaRow[] = config.areas.map((a) => ({ area: a.area, statusKey: a.status, evidence: areaEvidence(a.area, s, config) }));
-  if (attribution) {
-    areaRows.push({ area: 'Attribution', statusKey: 'pass', evidence: `${attribution.reportingAttributionModel}; lookback ${attribution.acquisitionConversionEventLookbackWindow}/${attribution.otherConversionEventLookbackWindow}` });
-  }
-  if (audienceCount !== null) {
-    areaRows.push({ area: 'Audiences', statusKey: audienceCount > 0 ? 'pass' : 'partial', evidence: `${audienceCount} audience(s)` });
-  }
-  // Ecommerce is never a clean Pass: even with purchase/item key events, per-event parameter coverage
-  // and duplicate-transaction checks are not computed here → Partial at best.
-  areaRows.push({
-    area: 'Ecommerce',
-    statusKey: ecom ? 'partial' : 'not_verified',
-    evidence: ecom ? 'purchase/item key events present; item params & duplicate transactions not verified' : 'no purchase/item key events found',
-  });
-  areaRows.push({ area: 'Consent', statusKey: 'not_verified', evidence: 'consent mode not retrievable via the Admin API' });
+  const areaRows = buildAreaRows(s, config, attribution, audienceCount, ecom);
 
   const windowLabel = dq.dateRange ?? `${dq.windowDays} days`;
   const cmp = baseline ? ` vs prior ${baseline.priorStartDate} – ${baseline.priorEndDate}` : '';
