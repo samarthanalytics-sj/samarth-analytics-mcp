@@ -255,7 +255,8 @@ export class ChatService {
       'return the COMPLETE paginated set — present EVERY item (a compact table is ideal) and ' +
       'never truncate, sample, or say "and more"; if a count is asked, count the full list. ' +
       'Put any code, install snippet, or multi-line technical output in a fenced ``` code block so it renders as a copyable code box. ' +
-      'Be concise and factual.';
+      'Be concise and factual. ' +
+      'Style: do NOT use em dashes (the "—" character) anywhere in your replies; use commas, colons, parentheses, or a hyphen "-" instead.';
 
     const messages: LlmTurn[] = [
       ...history.map((h): LlmTurn => ({ role: h.role, text: h.text })),
@@ -272,7 +273,9 @@ export class ChatService {
     // pathological loops. Idempotent precheck (findExistingByName) means a re-run safely resumes.
     const MAX_TOOL_STEPS = 40;
     const result = await runChat(client, { system, model: active.llm.model, apiKey, messages, signal }, tools, {
-      onDelta: emit ? (delta) => emit({ type: 'text', delta }) : undefined,
+      // House style: never surface em dashes. Strip them from the live stream (a "—" is a single code
+      // unit, so it can't span chunks) as a hard guarantee on top of the system-prompt instruction.
+      onDelta: emit ? (delta) => emit({ type: 'text', delta: delta.replace(/—/g, '-') }) : undefined,
       onToolCall: (call) => {
         toolCalls.push({ name: call.name, args: call.args });
         emit?.({ type: 'tool', name: call.name });
@@ -280,6 +283,6 @@ export class ChatService {
       onToolResult: emit ? (r) => emit({ type: 'tool_result', name: r.name, ok: r.ok, error: r.error }) : undefined,
     }, MAX_TOOL_STEPS);
 
-    return { text: result.text, toolCalls };
+    return { text: result.text.replace(/—/g, '-'), toolCalls };
   }
 }

@@ -446,5 +446,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push('');
   L.push('*Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.*');
 
-  return L.join('\n');
+  // House style: no em dashes in the report output. Replace any with a spaced hyphen (em dashes are
+  // written " — " in the source strings, so this yields " - "); en-dash date ranges are left as-is.
+  return L.join('\n').replace(/—/g, '-');
 }

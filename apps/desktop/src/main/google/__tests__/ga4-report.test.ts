@@ -203,7 +203,7 @@ test('exec summary leads with the score + reliability and never claims "Well-con
   assert.ok(!/Well-configured/.test(md));
   assert.ok(/## 1 · Executive summary/.test(md), 'read-first exec summary present');
   assert.ok(/\*\*Reliability score:\*\* \d+\/100 \(Grade [A-F]\)/.test(md), 'composite score + grade');
-  assert.ok(/\*\*Reporting reliability:\*\* \d+% — (High|Medium|Low) confidence/.test(md), 'reliability %');
+  assert.ok(/\*\*Reporting reliability:\*\* \d+% - (High|Medium|Low) confidence/.test(md), 'reliability %');
   assert.ok(/Per-category scorecard/.test(md) && /\| \*\*Composite\*\* \|/.test(md), 'scorecard with composite row');
   assert.ok(/Data trust matrix/.test(md), 'data trust matrix');
   assert.ok(/not verified/.test(md), 'coverage discloses unverified areas');
@@ -234,6 +234,12 @@ test('buildGa4ExecSummary returns the structured exec used by the panel + styled
   // The markdown section 1 and the structured exec agree on the headline number.
   const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b, 'Organic Social') }));
   assert.ok(md.includes(`${exec.composite}/100`), 'markdown + structured exec share the composite');
+});
+
+test('report output uses no em dashes (house style)', () => {
+  assert.ok(!buildGa4AuditReport(input()).includes('—'), 'clean path');
+  const b = baseline({ sessions: 32165, priorSessions: 8819, keyEvents: 210, priorKeyEvents: 200, revenue: 1000, priorRevenue: 950 });
+  assert.ok(!buildGa4AuditReport(input({ baseline: b, growth: growthOf(b, 'Organic Social') })).includes('—'), 'critical-spike path');
 });
 
 test('missing baseline → Not Verified, no crash', () => {

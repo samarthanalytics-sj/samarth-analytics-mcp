@@ -66,6 +66,11 @@ test('all dynamic text is HTML-escaped (no injection)', () => {
   assert.ok(h.includes('A &lt;bad&gt; spike.') && !h.includes('<bad>'), 'trust reason escaped');
 });
 
+test('output uses no em dashes even when the input has them (house style)', () => {
+  const h = execSummaryHtml(view({ verdict: 'Action required — fix it.', biggestRisk: 'A — B problem.' }));
+  assert.ok(!h.includes('—'), 'em dashes stripped from the rendered exec summary');
+});
+
 test('cards use a table layout (not CSS grid) so Word renders the 2×2, not a single column', () => {
   const h = execSummaryHtml(view());
   assert.ok(!/display:\s*grid/.test(h), 'no CSS grid (Word ignores it → cards would stack)');
