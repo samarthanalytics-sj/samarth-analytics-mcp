@@ -1,3 +1,9 @@
+## [1.113.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.112.0...v1.113.0) (2026-06-30)
+
+### Features
+
+* **desktop:** scan a CSV of landing-page URLs for tag suggestions ([80fca29](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/80fca2949c5c3f6c02e01bab24d34d5d532a3527))
+
 ## [1.112.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.111.0...v1.112.0) (2026-06-30)
 
 ### Features
