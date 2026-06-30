@@ -1,3 +1,9 @@
+## [1.105.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.104.0...v1.105.0) (2026-06-30)
+
+### Features
+
+* **desktop:** per-channel multi-line chart in the GA4 report (each platform's daily curve) ([1e97908](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1e979084aeb82e9eaf53b87525b22e560aeb41e0))
+
 ## [1.104.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.103.1...v1.104.0) (2026-06-30)
 
 ### Features
