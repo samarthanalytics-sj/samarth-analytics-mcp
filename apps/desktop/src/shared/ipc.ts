@@ -178,6 +178,15 @@ export interface Ga4ExecSummaryView {
   categories: Ga4ScorecardCategoryView[];
   trust: Ga4TrustRowView[];
 }
+/** Visualisations payload: the daily sessions trend line + colourful device/channel breakdowns. */
+export interface Ga4VisualsView {
+  daily: Array<{ date: string; sessions: number }>;
+  peakIndex: number;
+  trendLabel: string;
+  trendSummary: string;
+  devices: Array<{ name: string; sessions: number }>;
+  channels: Array<{ name: string; sessions: number }>;
+}
 /** Combined GA4 property audit (config + data quality) returned to the GA4 Audit panel. */
 export interface Ga4PropertyAuditResult {
   config: Ga4AuditReportView;
@@ -186,6 +195,8 @@ export interface Ga4PropertyAuditResult {
   markdown: string;
   /** Structured Executive Summary for the designed card panel + styled export. */
   exec: Ga4ExecSummaryView;
+  /** Charts payload (daily trend line + colourful bars) for the panel + PDF. */
+  visuals: Ga4VisualsView;
 }
 /** The data-quality window for a GA4 audit: a count of trailing days (default 28), or an explicit
  *  custom range (YYYY-MM-DD, inclusive, interpreted in the property's timezone). */

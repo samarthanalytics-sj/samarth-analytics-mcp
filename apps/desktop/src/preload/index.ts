@@ -12,6 +12,7 @@ import type {
   Ga4ExecSummaryView,
   Ga4PropertyAuditResult,
   Ga4PropertyListItem,
+  Ga4VisualsView,
   GoogleClientStatus,
   GoogleProduct,
   GtmAccountView,
@@ -229,8 +230,8 @@ const api = {
     // Save the audit report to a user-chosen file as Markdown / PDF / Word (.doc) → saved path, or
     // null if cancelled. `content` is the report Markdown; PDF/DOC lead with the designed Executive
     // Summary rendered from `exec`, then the markdown body.
-    exportReport: (format: 'md' | 'pdf' | 'doc', defaultName: string, content: string, exec: Ga4ExecSummaryView | null): Promise<string | null> =>
-      ipcRenderer.invoke('ga4:exportReport', format, defaultName, content, exec),
+    exportReport: (format: 'md' | 'pdf' | 'doc', defaultName: string, content: string, exec: Ga4ExecSummaryView | null, visuals: Ga4VisualsView | null): Promise<string | null> =>
+      ipcRenderer.invoke('ga4:exportReport', format, defaultName, content, exec, visuals),
   },
 
   // Continuous monitoring: schedule auto re-audits of the active container and
