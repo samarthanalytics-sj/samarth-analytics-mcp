@@ -1,3 +1,9 @@
+## [1.102.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.101.0...v1.102.0) (2026-06-30)
+
+### Features
+
+* **desktop:** rule-based GA4 scoring brain + Executive Summary (reliability %, weighted scorecard, data trust matrix) ([95afcc6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/95afcc6a0ebe5b9ce98db51780c03f0136ee9d85))
+
 ## [1.101.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.100.0...v1.101.0) (2026-06-30)
 
 ### Features
