@@ -7,12 +7,13 @@ import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from './data-service';
 import { auditGa4 } from './ga4-audit';
 import { auditGa4DataQuality } from './ga4-data-quality';
-import { buildGa4AuditReport, buildGa4ExecSummary } from './ga4-report';
+import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Visuals } from './ga4-report';
 import { auditGa4Growth } from './ga4-growth';
 import { reportHtmlDocument } from './ga4-report-export';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
+import { ga4VisualsHtml } from '../../shared/ga4-visuals-html';
 import { withQuotaRetry } from './quota-retry';
-import type { Ga4ExecSummaryView, Ga4PropertyAuditResult, Ga4PropertyListItem } from '../../shared/ipc';
+import type { Ga4ExecSummaryView, Ga4PropertyAuditResult, Ga4PropertyListItem, Ga4VisualsView } from '../../shared/ipc';
 
 export function registerGa4AuditIpc(data: GoogleDataService): void {
   // Flat list of every GA4 property (id + name + parent account) the active user can
@@ -93,7 +94,8 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     };
     const markdown = buildGa4AuditReport(reportInput);
     const exec = buildGa4ExecSummary(reportInput);
-    return { config, dataQuality, markdown, exec };
+    const visuals = buildGa4Visuals(reportInput);
+    return { config, dataQuality, markdown, exec, visuals };
   });
 
   // Save the (renderer-displayed) GA4 audit report to a user-chosen file in the requested format:
@@ -101,7 +103,7 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
   //   doc → a styled HTML document with the MS-Office namespaces (Word / Google Docs open it)
   //   pdf → the same HTML rendered in a hidden, script-free window via Electron printToPDF
   // A save dialog picks the path; returns the path or null if cancelled.
-  ipcMain.handle('ga4:exportReport', async (e, format: unknown, defaultName: unknown, markdown: unknown, exec: unknown): Promise<string | null> => {
+  ipcMain.handle('ga4:exportReport', async (e, format: unknown, defaultName: unknown, markdown: unknown, exec: unknown, visuals: unknown): Promise<string | null> => {
     const fmt = format === 'pdf' ? 'pdf' : format === 'doc' ? 'doc' : 'md';
     const md = String(markdown ?? '');
     const base = String(defaultName ?? 'GA4 audit report')
@@ -109,11 +111,14 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
       .replace(/\.(md|pdf|docx?|txt)$/i, '')
       .trim() || 'GA4 audit report';
     // PDF/Word lead with the DESIGNED Executive Summary (cards + scorecard + trust matrix); the
-    // rest of the report follows as styled HTML from the markdown body (sections 2 onward). The .md
-    // download keeps the full plain-text markdown unchanged.
+    // rest of the report follows as styled HTML from the markdown body (sections 2 onward). The PDF
+    // also embeds the SVG charts (Word can't render SVG, so it's skipped there). The .md download
+    // keeps the full plain-text markdown unchanged.
     const execHtml = exec ? execSummaryHtml(exec as Ga4ExecSummaryView) : '';
+    const visualsHtml = fmt === 'pdf' && visuals ? ga4VisualsHtml(visuals as Ga4VisualsView) : '';
+    const topHtml = execHtml + visualsHtml;
     const bodyIdx = md.indexOf('## 2 ·');
-    const bodyMd = execHtml && bodyIdx >= 0 ? md.slice(bodyIdx) : md;
+    const bodyMd = topHtml && bodyIdx >= 0 ? md.slice(bodyIdx) : md;
     const win = BrowserWindow.fromWebContents(e.sender);
     const filterName = fmt === 'pdf' ? 'PDF' : fmt === 'doc' ? 'Word document' : 'Markdown';
     const opts = { title: 'Save GA4 audit report', defaultPath: `${base}.${fmt}`, filters: [{ name: filterName, extensions: [fmt] }] };
@@ -123,7 +128,7 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     if (fmt === 'md') {
       await writeFile(filePath, md, 'utf8');
     } else if (fmt === 'doc') {
-      await writeFile(filePath, reportHtmlDocument(base, bodyMd, { word: true, execHtml }), 'utf8');
+      await writeFile(filePath, reportHtmlDocument(base, bodyMd, { word: true, execHtml: topHtml }), 'utf8');
     } else {
       // PDF — render the report HTML in a hidden, script-disabled window and print it to PDF.
       const pdfWin = new BrowserWindow({
@@ -131,7 +136,7 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
         webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false },
       });
       try {
-        await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(reportHtmlDocument(base, bodyMd, { execHtml })));
+        await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(reportHtmlDocument(base, bodyMd, { execHtml: topHtml })));
         const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
         await writeFile(filePath, pdf);
       } finally {

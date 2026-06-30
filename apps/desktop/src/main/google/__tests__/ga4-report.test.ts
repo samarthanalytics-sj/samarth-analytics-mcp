@@ -75,6 +75,21 @@ const baseline = (over: Partial<Ga4Baseline> = {}): Ga4Baseline => ({
   priorRevenue: 500000,
   trendPct: 11,
   peakDay: { date: '20260615', sessions: 1800 },
+  dailySessions: [
+    { date: '20260610', sessions: 1200 },
+    { date: '20260611', sessions: 1300 },
+    { date: '20260612', sessions: 1250 },
+    { date: '20260613', sessions: 1400 },
+    { date: '20260614', sessions: 1350 },
+    { date: '20260615', sessions: 1800 },
+    { date: '20260616', sessions: 1300 },
+    { date: '20260617', sessions: 1250 },
+  ],
+  peakDayChannels: [
+    { name: 'Organic Search', sessions: 900 },
+    { name: 'Direct', sessions: 500 },
+    { name: 'Organic Social', sessions: 400 },
+  ],
   devices: [
     { name: 'mobile', sessions: 50000 },
     { name: 'desktop', sessions: 25000 },

@@ -136,6 +136,10 @@ export interface Ga4Baseline {
   trendPct: number | null;
   /** Highest-session day in the window (GA4 "date" = YYYYMMDD); null if no data. */
   peakDay: { date: string; sessions: number } | null;
+  /** Sessions per day across the window, in chronological order — the daily trend line. */
+  dailySessions: Array<{ date: string; sessions: number }>;
+  /** Channel mix ON the peak day, to attribute a spike to a platform (null if no clear peak). */
+  peakDayChannels: Array<{ name: string; sessions: number }> | null;
   devices: Array<{ name: string; sessions: number }>;
   newVsReturning: Array<{ name: string; sessions: number }>;
   topCountries: Array<{ name: string; sessions: number }>;
@@ -1696,16 +1700,18 @@ export class GoogleDataService {
     /** i-th metric of the single row of a no-dimension report (0=sessions, 1=keyEvents, 2=revenue). */
     const oneMetric = (r: Ga4ReportResult, i: number): number => (r.rows[0] ? n(r.rows[0].metrics[i] ?? '0') : 0);
     const byMetricDesc = [{ metric: { metricName: 'sessions' }, desc: true }];
+    const byDateDesc = [{ dimension: { dimensionName: 'date' }, desc: true }];
     // Sessions + the outcomes that should move with real growth, current and prior, in one row each.
     const TREND_METRICS = ['sessions', 'keyEvents', 'totalRevenue'];
 
     // Totals come from NO-dimension reports (one exact row each) — never the per-day report, which a
-    // 100-row cap would truncate for windows > 100 days. Peak day = top day ordered by sessions
-    // (limit 1). Country = top-N ordered (limit 250, like the data-quality source/medium pull).
-    const [curTotal, priorTotal, peak, byDevice, byNvR, byCountry] = await Promise.all([
+    // 100-row cap would truncate for windows > 100 days. The daily series is the per-day report ordered
+    // NEWEST-FIRST at limit 1000, then reversed to chronological — so a custom range longer than the cap
+    // keeps the MOST-RECENT days (what spike/trend cares about), not the oldest. Country = top-N (250).
+    const [curTotal, priorTotal, byDate, byDevice, byNvR, byCountry] = await Promise.all([
       this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: TREND_METRICS }),
-      this.runGa4Report({ property, startDate, endDate, dimensions: ['date'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '1' }),
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['date'], metrics: ['sessions'], orderBys: byDateDesc, limit: '1000' }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['deviceCategory'], metrics: ['sessions'] }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['newVsReturning'], metrics: ['sessions'] }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['country'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '250' }),
@@ -1713,7 +1719,19 @@ export class GoogleDataService {
 
     const sessions = oneMetric(curTotal, 0);
     const priorSessions = oneMetric(priorTotal, 0);
-    const peakDay = peak.rows[0] ? { date: peak.rows[0].dimensions[0] ?? '', sessions: n(peak.rows[0].metrics[0]) } : null;
+    const dailySessions = byDate.rows.map((r) => ({ date: r.dimensions[0] ?? '', sessions: n(r.metrics[0]) })).reverse();
+    let peakDay: { date: string; sessions: number } | null = null;
+    for (const d of dailySessions) if (!peakDay || d.sessions > peakDay.sessions) peakDay = { date: d.date, sessions: d.sessions };
+
+    // Channel mix on the peak day, to attribute a spike to a platform (one extra single-day query).
+    let peakDayChannels: Array<{ name: string; sessions: number }> | null = null;
+    const pd = peakDay ? /^(\d{4})(\d{2})(\d{2})$/.exec(peakDay.date) : null;
+    if (pd) {
+      const dayIso = `${pd[1]}-${pd[2]}-${pd[3]}`;
+      const chanRes = await this.runGa4Report({ property, startDate: dayIso, endDate: dayIso, dimensions: ['sessionDefaultChannelGroup'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '50' }).catch(() => null);
+      if (chanRes) peakDayChannels = merge(pairs(chanRes)).sort((a, b) => b.sessions - a.sessions);
+    }
+
     return {
       startDate,
       endDate,
@@ -1727,6 +1745,8 @@ export class GoogleDataService {
       priorRevenue: oneMetric(priorTotal, 2),
       trendPct: priorSessions > 0 ? Math.round(((sessions - priorSessions) / priorSessions) * 100) : null,
       peakDay,
+      dailySessions,
+      peakDayChannels,
       devices: merge(pairs(byDevice)).sort((a, b) => b.sessions - a.sessions),
       newVsReturning: merge(pairs(byNvR)),
       topCountries: merge(pairs(byCountry)).sort((a, b) => b.sessions - a.sessions).slice(0, 5),

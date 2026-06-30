@@ -11,7 +11,8 @@ import type { Ga4DataQualityResult, DataQualityCounts } from './ga4-data-quality
 import type { Ga4GrowthResult, Ga4GrowthFinding } from './ga4-growth';
 import type { Ga4Baseline } from './data-service';
 import { buildGa4Scorecard } from './ga4-scorecard';
-import type { Ga4ExecSummaryView } from '../../shared/ipc';
+import { analyzeGa4Trend } from './ga4-trend';
+import type { Ga4ExecSummaryView, Ga4VisualsView } from '../../shared/ipc';
 
 export interface Ga4ReportInput {
   property: string; // "properties/123456"
@@ -227,6 +228,22 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
   };
 }
 
+/** Structured visualisations payload (daily trend line + colour-coded device/channel bars) for the
+ *  panel + PDF charts. */
+export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
+  const { baseline, dqCounts } = input;
+  const daily = baseline?.dailySessions ?? [];
+  const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups });
+  return {
+    daily,
+    peakIndex: trend.peakIndex,
+    trendLabel: trend.patternLabel,
+    trendSummary: trend.summary,
+    devices: baseline?.devices ?? [],
+    channels: [...dqCounts.channelGroups].sort((a, b) => b.sessions - a.sessions).slice(0, 8),
+  };
+}
+
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
   const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
   const pid = input.property.replace('properties/', '');
@@ -332,6 +349,12 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     L.push(`**Read:** ${read}`);
   } else {
     L.push('Not enough prior traffic to assess growth for this window.');
+  }
+  // Trend pattern: is the change a one-day spike or a sustained trend, and which platform drove it?
+  if (baseline && baseline.dailySessions.length >= 5) {
+    const trend = analyzeGa4Trend({ dailySessions: baseline.dailySessions, peakDayChannels: baseline.peakDayChannels, windowChannels: dqCounts.channelGroups });
+    L.push('');
+    L.push(`**Trend pattern:** ${trend.patternLabel}. ${trend.summary}`);
   }
   L.push('');
 
