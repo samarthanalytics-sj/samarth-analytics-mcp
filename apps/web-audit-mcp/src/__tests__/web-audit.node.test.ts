@@ -33,6 +33,9 @@ import {
 import { isAuthorized, buildHealthBody } from '../http.js';
 import { loadConfig } from '../utils/config.js';
 import { runConsentRuntimeRules } from '../../../portal/shared/consent-audit.js';
+import { detectEmbeddedForm } from '../agent/tag-suggest/providers.js';
+import { buildSuggestInput } from '../agent/tag-suggest/collect.js';
+import type { PageScan, PageSignals } from '../agent/tag-suggest/collect.js';
 
 let passed = 0;
 let failed = 0;
@@ -482,6 +485,41 @@ const cleanRec = reconcile(
   [capture({ trackerHits: [hit({ url: 'https://r.google-analytics.com/g/collect?tid=G-ABC123', query: { tid: 'G-ABC123' } })] })],
 );
 check('reconcile: matched GA4 yields no reconcile findings', cleanRec.findings.length === 0);
+
+// ── tag-suggest: cross-origin embedded form providers ────────────────────────
+const sig = (over: Partial<PageSignals> = {}): PageSignals => ({ scriptSrcs: [], classNames: [], selectorsPresent: [], iframeSrcs: [], ...over });
+check('embed: Calendly iframe detected', detectEmbeddedForm(sig({ iframeSrcs: ['https://calendly.com/acme/intro'] }))?.vendor === 'calendly');
+check('embed: Jotform iframe detected', detectEmbeddedForm(sig({ iframeSrcs: ['https://form.jotform.com/2412345'] }))?.vendor === 'jotform');
+check('embed: Formstack detected', detectEmbeddedForm(sig({ iframeSrcs: ['https://acme.formstack.com/forms/x'] }))?.vendor === 'formstack');
+check('embed: Tally detected', detectEmbeddedForm(sig({ iframeSrcs: ['https://tally.so/embed/abc'] }))?.vendor === 'tally');
+check('embed: Google Forms detected', detectEmbeddedForm(sig({ iframeSrcs: ['https://docs.google.com/forms/d/e/x/viewform'] }))?.vendor === 'googleforms');
+check('embed: Wufoo detected', detectEmbeddedForm(sig({ iframeSrcs: ['https://acme.wufoo.com/forms/x'] }))?.vendor === 'wufoo');
+check('embed: plain page → no embedded form', detectEmbeddedForm(sig({ iframeSrcs: ['https://www.youtube.com/embed/x'] })) === null);
+// A page with a readable search-y form AND a cross-origin Calendly embed: the embed still surfaces.
+const pgEmbed: PageScan = {
+  page: '/contact',
+  elements: [],
+  forms: [{ purpose: 'search', action: '/search', method: 'get', fields: [{ type: 'search', name: 'q', required: false }] }],
+  signals: sig({ iframeSrcs: ['https://calendly.com/acme/intro'] }),
+};
+const embedInput = buildSuggestInput([pgEmbed], 'example.com');
+check('embed: co-present Calendly embed is not suppressed by another form', embedInput.forms.some((f) => f.provider.vendor === 'calendly'));
+// A readable provider form (its OWN .hs-form class) must NOT be doubled by the synth embed.
+const pgHubReadable: PageScan = {
+  page: '/contact',
+  elements: [],
+  forms: [{ purpose: 'contact', action: '/submit', method: 'post', formClasses: 'hs-form', fields: [{ type: 'email', name: 'email', required: true }] }],
+  signals: sig({ classNames: ['hs-form'], scriptSrcs: ['https://js.hsforms.net/forms/v2.js'] }),
+};
+check('embed: readable HubSpot form is not double-counted by the synth embed', buildSuggestInput([pgHubReadable], 'example.com').forms.length === 1);
+// But an UNRELATED readable form (a search box) must NOT suppress the HubSpot embed on the same page.
+const pgHubBeside: PageScan = {
+  page: '/pricing',
+  elements: [],
+  forms: [{ purpose: 'search', action: '/search', method: 'get', fields: [{ type: 'search', name: 'q', required: false }] }],
+  signals: sig({ classNames: ['hs-form'], scriptSrcs: ['https://js.hsforms.net/forms/v2.js'] }),
+};
+check('embed: HubSpot embed surfaces beside an unrelated search form', buildSuggestInput([pgHubBeside], 'example.com').forms.some((f) => f.provider.vendor === 'hubspot'));
 
 // ── report ──────────────────────────────────────────────────────────────────
 

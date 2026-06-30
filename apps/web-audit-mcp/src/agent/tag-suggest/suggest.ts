@@ -117,13 +117,22 @@ const FORM_EVENT: Record<string, string> = {
 
 // Providers whose form submits inside an iframe / via AJAX — GTM's NATIVE Form
 // Submission trigger won't fire for these; they need a Custom Event listener.
-const EMBED_PROVIDERS = new Set<FormProvider>(['hubspot', 'paperform', 'typeform', 'marketo', 'pardot']);
+const EMBED_PROVIDERS = new Set<FormProvider>([
+  'hubspot', 'paperform', 'typeform', 'marketo', 'pardot',
+  'calendly', 'jotform', 'formstack', 'tally', 'googleforms', 'wufoo',
+]);
 const PROVIDER_EVENT_HINT: Partial<Record<FormProvider, string>> = {
   hubspot: 'HubSpot fires a global submit callback (hsFormCallback / window message)',
   paperform: 'Paperform posts a window message on submit',
   typeform: 'Typeform posts a window message on submit',
   marketo: 'Marketo fires MktoForms2().onSuccess',
   pardot: 'Pardot redirects to a thank-you/completion URL on submit',
+  calendly: 'Calendly posts a window message on booking (event_scheduled)',
+  jotform: 'JotForm posts a window message on submit',
+  formstack: 'Formstack submits inside its embed (window message / redirect)',
+  tally: 'Tally posts a window message on submit',
+  googleforms: 'Google Forms submits inside a cross-origin iframe — track the click into the form, or use server-side',
+  wufoo: 'Wufoo submits inside its embed (confirmation redirect)',
 };
 
 // Framework/wrapper classes shared by EVERY form of a stack — useless (harmful)
