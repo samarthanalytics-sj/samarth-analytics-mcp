@@ -115,7 +115,7 @@ test('report has all 9 verdict-first sections', () => {
   const md = buildGa4AuditReport(input());
   for (const h of [
     '# GA4 Property Audit',
-    '## 1 · Verdict',
+    '## 1 · Executive summary',
     '## 2 · What is wrong',
     '## 3 · Outcomes vs traffic',
     '## 4 · All findings',
@@ -130,7 +130,7 @@ test('report has all 9 verdict-first sections', () => {
   assert.ok(md.includes('353451709'), 'property id (in title + scope)');
   assert.ok(md.includes('14 months'), 'retention label');
   // Verdict is read-first: it precedes the metadata appendix.
-  assert.ok(md.indexOf('## 1 · Verdict') < md.indexOf('## 9 · Scope'), 'verdict before metadata');
+  assert.ok(md.indexOf('## 1 · Executive summary') < md.indexOf('## 9 · Scope'), 'exec summary before metadata');
 });
 
 test('area-status grades on evidence with coloured dots: Data collection + zero-config Custom definitions are Partial', () => {
@@ -178,7 +178,8 @@ test('a doubled-traffic spike conversions did not track → CRITICAL (worst unve
   const b = baseline({ sessions: 32165, priorSessions: 8819, keyEvents: 210, priorKeyEvents: 200, revenue: 1000, priorRevenue: 950 });
   const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b, 'Organic Social') }));
   assert.ok(/\| CRITICAL \| Growth \|/.test(md), 'a >=2x spike not tracked by conversions is CRITICAL, not HIGH');
-  assert.ok(/\*\*Trust:\*\* Do not trust yet/.test(md), 'verdict reflects the critical finding');
+  assert.ok(/\*\*Overall verdict:\*\* Action required/.test(md), 'exec verdict reflects the critical finding');
+  assert.ok(/\*\*Reporting reliability:\*\*/.test(md) && /Do not quote/.test(md), 'reliability + trust matrix flag the risk');
   assert.ok(/revenue\/ROAS may be wrong/.test(md), 'leads with the live-reporting stake');
   assert.ok(!/Well-configured/.test(md), 'never a false all-clear');
   assert.ok(/## 2 · What is wrong/.test(md) && /If unconfirmed:/.test(md), 'top finding is expanded with the worse branch');
@@ -197,10 +198,14 @@ test('healthy growth (sessions, key events and revenue move together) → no act
   assert.ok(!/\| (CRITICAL|HIGH|MEDIUM) \| Growth \|/.test(md), 'no spike/drop finding when outcomes track sessions');
 });
 
-test('verdict never claims "Well-configured" and discloses coverage', () => {
+test('exec summary leads with the score + reliability and never claims "Well-configured"', () => {
   const md = buildGa4AuditReport(input());
   assert.ok(!/Well-configured/.test(md));
-  assert.ok(/## 1 · Verdict/.test(md) && /\*\*Trust:\*\*/.test(md), 'read-first verdict present');
+  assert.ok(/## 1 · Executive summary/.test(md), 'read-first exec summary present');
+  assert.ok(/\*\*Reliability score:\*\* \d+\/100 \(Grade [A-F]\)/.test(md), 'composite score + grade');
+  assert.ok(/\*\*Reporting reliability:\*\* \d+% — (High|Medium|Low) confidence/.test(md), 'reliability %');
+  assert.ok(/Per-category scorecard/.test(md) && /\| \*\*Composite\*\* \|/.test(md), 'scorecard with composite row');
+  assert.ok(/Data trust matrix/.test(md), 'data trust matrix');
   assert.ok(/not verified/.test(md), 'coverage discloses unverified areas');
 });
 
