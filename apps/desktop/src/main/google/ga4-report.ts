@@ -10,6 +10,7 @@ import type { Ga4AuditReport, Ga4PropertySnapshot } from './ga4-audit';
 import type { Ga4DataQualityResult, DataQualityCounts } from './ga4-data-quality';
 import type { Ga4GrowthResult, Ga4GrowthFinding } from './ga4-growth';
 import type { Ga4Baseline } from './data-service';
+import { buildGa4Scorecard } from './ga4-scorecard';
 
 export interface Ga4ReportInput {
   property: string; // "properties/123456"
@@ -140,12 +141,13 @@ const firstSentence = (t: string): string => {
 // Info findings are advisories/all-clears, not problems — never attach a business risk to them.
 const riskFor = (f: FindingRow): string => (f.severity === 'info' ? '—' : f.businessRisk ?? RISK_BY_CATEGORY[f.category] ?? '—');
 
-// Read-first trust verdict. critical/high → "Do not trust yet"; any finding or unverified/partial
-// coverage → "Trust with caveats"; only a fully clean + fully verified property is "Trustworthy".
-function trustVerdict(allFindings: FindingRow[], areaRows: AreaRow[]): string {
-  if (allFindings.some((f) => f.severity === 'critical' || f.severity === 'high')) return 'Do not trust yet';
-  const gaps = allFindings.length > 0 || areaRows.some((a) => a.statusKey !== 'pass');
-  return gaps ? 'Trust with caveats' : 'Trustworthy';
+// One-line overall verdict for the Executive Summary, by rule from the worst finding.
+function overallVerdict(allFindings: FindingRow[], nNotVerified: number): string {
+  const has = (s: string): boolean => allFindings.some((f) => f.severity === s);
+  if (has('critical') || has('high')) return 'Action required — one or more foundational checks need remediation before the data can be fully trusted.';
+  if (has('medium')) return 'Some gaps to address before the data is fully trustworthy.';
+  if (has('low')) return `Largely sound; minor gaps remain and ${nNotVerified} area(s) are unverified.`;
+  return `No blocking issues found; confirm the ${nNotVerified} unverified area(s) before sign-off.`;
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
@@ -200,16 +202,48 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
   const dqAttrib = allFindings.find((f) => f.category === 'data_quality' && f.severity !== 'info' && /source data|Unassigned|\(not set\)/.test(f.message));
 
-  // ── 1 · Verdict (read-first) ──
+  // Rule-based scoring brain: weighted composite + grade and the data-trust reliability %.
+  const score = buildGa4Scorecard({
+    areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
+    findings: allFindings.map((f) => ({ severity: f.severity, category: f.category })),
+    growthAssessed: Boolean(growth?.assessed),
+  });
+  const auditId = `GA4-${pid}-${(dq.endDate ?? '').replace(/-/g, '') || 'na'}`;
+
+  // ── 1 · Executive summary (read-first) ──
   L.push(`# GA4 Property Audit — ${input.displayName} (${pid})`);
   L.push('');
-  L.push('## 1 · Verdict');
+  L.push('## 1 · Executive summary');
   L.push('');
-  L.push(`**Trust:** ${trustVerdict(allFindings, areaRows)}  `);
-  L.push(`**Why:** ${top ? firstSentence(top.whyItMatters ?? top.message) : `No blocking issues found; ${nNotVerified} area(s) remain unverified.`}  `);
-  L.push(`**Do first:** ${top ? firstSentence(top.recommendation ?? 'Confirm the unverified areas.') : 'Confirm the unverified areas (consent, ecommerce parameters) before sign-off.'}  `);
-  L.push(`**At stake:** ${top ? riskFor(top) : 'Sign-off depends on the unverified areas below.'}  `);
+  L.push('A consolidated read of the property’s measurement posture across configuration, event tracking, conversions, data quality, attribution and consent.');
+  L.push('');
+  L.push(`**Reliability score:** ${score.composite ?? '—'}/100 (Grade ${score.grade})  `);
+  L.push(`**Reporting reliability:** ${score.reliabilityPct}% — ${score.reliabilityConfidence} (how much of this property’s data is safe to quote downstream today)  `);
+  L.push(`**Overall verdict:** ${overallVerdict(allFindings, nNotVerified)}  `);
+  L.push(`**Biggest risk:** ${top ? firstSentence(top.whyItMatters ?? top.message) : 'No high-severity risk; the ceiling on trust is coverage.'}  `);
+  L.push(`**Highest-impact fix:** ${top ? firstSentence(top.recommendation ?? 'Confirm the unverified areas.') : 'Confirm the unverified areas (consent, ecommerce parameters) before sign-off.'}  `);
   L.push(`**Coverage:** ${areaRows.length} areas checked · ${nPartial} partial · ${nNotVerified} not verified`);
+  L.push('');
+  L.push('**Per-category scorecard**');
+  L.push('');
+  L.push('| Category | Subscore | Weight | Contribution |');
+  L.push('| --- | --- | --- | --- |');
+  for (const c of score.categories) {
+    const sub = c.subscore === null ? 'Not Verified' : `${c.subscore}/100`;
+    const contrib = c.subscore === null ? '—' : `+${c.contribution.toFixed(1)}`;
+    L.push(`| ${c.name} | ${sub} | ${c.weight}% | ${contrib} |`);
+  }
+  L.push(`| **Composite** | **${score.composite ?? '—'}/100** | **100%** | **${score.composite ?? '—'}** |`);
+  L.push('');
+  L.push('*Contribution = subscore × weight, renormalised over verified categories; Not-Verified categories are excluded and their weight redistributed. The number is computed by rule, never judged.*');
+  L.push('');
+  L.push('**Data trust matrix — what to quote from this audit**');
+  L.push('');
+  L.push('| Metric | Quote? | Why |');
+  L.push('| --- | --- | --- |');
+  for (const t of score.trust) {
+    L.push(`| ${t.metric} | ${t.safe ? '✅ Safe to quote' : '⛔ Do not quote'} | ${cell(t.reason)} |`);
+  }
   L.push('');
 
   // ── 2 · What is wrong (top finding, expanded) ──
@@ -347,6 +381,8 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   // ── 9 · Scope & metadata (appendix) ──
   L.push('## 9 · Scope & metadata');
   L.push('');
+  L.push(`**Audit ID:** ${auditId}  `);
+  L.push(`**Reliability score:** ${score.composite ?? '—'}/100 (Grade ${score.grade}) · **Reporting reliability:** ${score.reliabilityPct}%  `);
   L.push(`**Window:** ${windowLabel}${cmp}  `);
   L.push(`**Retention:** ${retentionLabel(s.dataRetention)}  `);
   L.push(`**Timezone / currency:** ${s.timeZone || '—'} / ${s.currencyCode || '—'}  `);
