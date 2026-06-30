@@ -3288,6 +3288,26 @@ function Ga4AuditPanel({
   const [result, setResult] = useState<Ga4PropertyAuditResult | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [exportNote, setExportNote] = useState('');
+  // Property picker is a dropdown/combobox: closed it shows the selection; open it shows search + list.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  // Close the dropdown on an outside click or Escape (only while it's open).
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onDown = (e: MouseEvent): void => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setPickerOpen(false);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setPickerOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [pickerOpen]);
 
   const signedIn = Boolean(active?.hasGoogleToken);
   // A custom range needs both bounds, start on/before end; a preset window is always valid.
@@ -3385,53 +3405,81 @@ function Ga4AuditPanel({
           <div style={{ color: 'var(--c-amber)', fontSize: 13 }}>Sign this account into Google first (Settings).</div>
         ) : (
           <>
-            {/* Property picker — search + select */}
+            {/* Property picker — a dropdown/combobox: the trigger shows the current selection; opening
+                it reveals the search box + the property list. */}
             <div style={styles.card}>
               <div style={styles.h2}>Property</div>
-              <div style={styles.formRow}>
-                <input
-                  style={styles.input}
-                  type="search"
-                  placeholder="Search GA4 properties by name…"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  aria-label="Search GA4 properties"
-                />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <div ref={pickerRef} style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                  <button
+                    type="button"
+                    style={{ ...styles.ga4Combo, ...(pickerOpen ? styles.ga4ComboOpen : {}) }}
+                    onClick={() => properties !== null && setPickerOpen((o) => !o)}
+                    disabled={properties === null}
+                    aria-haspopup="listbox"
+                    aria-expanded={pickerOpen}
+                  >
+                    {selected ? (
+                      <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                        <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selected.displayName}</span>
+                        <span style={{ color: 'var(--text-faint)', fontSize: 11 }}>{selected.property.replace('properties/', '')}</span>
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)' }}>
+                        {properties === null ? (loadingProps ? 'Loading properties…' : 'No account') : 'Select a GA4 property…'}
+                      </span>
+                    )}
+                    <span style={{ marginLeft: 'auto', color: 'var(--text-faint)', transition: 'transform .15s', transform: pickerOpen ? 'rotate(180deg)' : 'none' }}>▾</span>
+                  </button>
+                  {pickerOpen && properties !== null && (
+                    <div style={styles.ga4ComboPanel}>
+                      <input
+                        style={styles.input}
+                        type="search"
+                        autoFocus
+                        placeholder="Search GA4 properties by name…"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        aria-label="Search GA4 properties"
+                      />
+                      <div style={{ ...styles.ga4PropList, marginTop: 0, border: 'none', maxHeight: 240 }} role="listbox">
+                        {filtered.length === 0 ? (
+                          <div style={{ ...styles.muted, padding: '8px 12px' }}>
+                            {q ? `No properties match “${query.trim()}”.` : 'No GA4 properties found for this account.'}
+                          </div>
+                        ) : (
+                          filtered.map((p) => (
+                            <button
+                              key={p.property}
+                              role="option"
+                              aria-selected={selected?.property === p.property}
+                              style={{ ...styles.ga4PropRow, ...(selected?.property === p.property ? styles.ga4PropRowOn : {}) }}
+                              onClick={() => {
+                                setSelected({ property: p.property, displayName: p.displayName });
+                                setResult(null);
+                                setPickerOpen(false);
+                                setQuery('');
+                              }}
+                              title={p.property}
+                            >
+                              <span style={{ fontWeight: 600 }}>
+                                {p.displayName}
+                                {selected?.property === p.property ? ' ✓' : ''}
+                              </span>
+                              <span style={{ color: 'var(--text-faint)', fontSize: 11 }}>
+                                {p.accountName} · {p.property.replace('properties/', '')}
+                              </span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <button style={styles.ghostBtn} onClick={() => void loadProps()} disabled={loadingProps}>
                   {loadingProps ? 'Loading…' : 'Refresh'}
                 </button>
               </div>
-              {selected && (
-                <div style={{ ...styles.muted, marginTop: 6 }}>
-                  Selected: <b style={{ color: 'var(--text)' }}>{selected.displayName}</b>{' '}
-                  <code style={mdStyles.code}>{selected.property.replace('properties/', '')}</code>
-                </div>
-              )}
-              {properties === null ? (
-                <div style={{ ...styles.muted, marginTop: 8 }}>{loadingProps ? 'Loading properties…' : ''}</div>
-              ) : (
-                <div style={styles.ga4PropList}>
-                  {filtered.length === 0 ? (
-                    <div style={{ ...styles.muted, padding: '8px 12px' }}>
-                      {q ? `No properties match “${query.trim()}”.` : 'No GA4 properties found for this account.'}
-                    </div>
-                  ) : (
-                    filtered.map((p) => (
-                      <button
-                        key={p.property}
-                        style={{ ...styles.ga4PropRow, ...(selected?.property === p.property ? styles.ga4PropRowOn : {}) }}
-                        onClick={() => { setSelected({ property: p.property, displayName: p.displayName }); setResult(null); }}
-                        title={p.property}
-                      >
-                        <span style={{ fontWeight: 600 }}>{p.displayName}</span>
-                        <span style={{ color: 'var(--text-faint)', fontSize: 11 }}>
-                          {p.accountName} · {p.property.replace('properties/', '')}
-                        </span>
-                      </button>
-                    ))
-                  )}
-                </div>
-              )}
             </div>
 
             {/* Data window + run */}
@@ -3973,6 +4021,10 @@ const styles: Record<string, React.CSSProperties> = {
   ga4PropList: { maxHeight: 260, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, marginTop: 8, display: 'flex', flexDirection: 'column' },
   ga4PropRow: { display: 'flex', flexDirection: 'column', gap: 2, textAlign: 'left', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', padding: '8px 12px', cursor: 'pointer', color: 'var(--text)', fontSize: 13 },
   ga4PropRowOn: { background: 'var(--c-blue-bg)' },
+  // Combobox trigger + dropdown panel for the property picker.
+  ga4Combo: { width: '100%', display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', fontSize: 13, textAlign: 'left', fontFamily: 'inherit' },
+  ga4ComboOpen: { borderColor: 'var(--c-blue)', boxShadow: '0 0 0 2px var(--c-blue-bg)' },
+  ga4ComboPanel: { position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 30, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.18)', padding: 6, display: 'flex', flexDirection: 'column', gap: 6 },
   ga4DateInput: { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '7px 9px', fontSize: 13, fontFamily: 'inherit', colorScheme: 'light dark' },
   ga4AreaChip: { fontSize: 11.5, borderRadius: 7, padding: '3px 9px', fontWeight: 600, whiteSpace: 'nowrap' },
 };
