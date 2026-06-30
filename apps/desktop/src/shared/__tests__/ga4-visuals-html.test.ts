@@ -46,6 +46,20 @@ test('renders an SVG line chart with the peak marked', () => {
   assert.ok(h.includes('One-day spike'), 'trend label pill');
 });
 
+test('data-point dots carry a value tooltip (hover shows the value for that date)', () => {
+  const h = ga4VisualsHtml(view());
+  assert.ok(/<circle/.test(h), 'data-point dots rendered');
+  assert.ok(/<title>[^<]*: [\d,]+ sessions<\/title>/.test(h), 'each point has a value tooltip');
+});
+
+test('adaptive grouping: daily → weekly → monthly as the window grows', () => {
+  const mk = (days: number): Ga4VisualsView['daily'] =>
+    Array.from({ length: days }, (_, i) => ({ date: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10).replace(/-/g, ''), sessions: 100 + (i % 7) * 10 }));
+  assert.match(ga4VisualsHtml(view({ daily: mk(20), channelDaily: [] })), /\(daily/);
+  assert.match(ga4VisualsHtml(view({ daily: mk(70), channelDaily: [] })), /\(weekly/);
+  assert.match(ga4VisualsHtml(view({ daily: mk(220), channelDaily: [] })), /\(monthly/);
+});
+
 test('renders a per-channel multi-line chart with a legend', () => {
   const h = ga4VisualsHtml(view());
   assert.ok(h.includes('Sessions by channel'), 'multi-line chart heading');
