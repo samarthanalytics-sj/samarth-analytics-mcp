@@ -1,3 +1,9 @@
+## [1.115.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.115.0...v1.115.1) (2026-06-30)
+
+### Bug Fixes
+
+* **web-audit:** detect single-field / div-onclick signup forms so they get tracked ([fada26a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fada26add475e9cde764d3f00007478b9915f1dd))
+
 ## [1.115.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.114.0...v1.115.0) (2026-06-30)
 
 ### Features
