@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { ga4VisualsHtml } from '../ga4-visuals-html';
+import { ga4VisualsHtml, stripDuplicateCharts } from '../ga4-visuals-html';
 import type { Ga4VisualsView } from '../ipc';
 
 let passed = 0;
@@ -76,6 +76,33 @@ test('no daily data and no bars → empty string (panel renders nothing)', () =>
 
 test('output uses no em dashes (house style)', () => {
   assert.ok(!ga4VisualsHtml(view({ trendSummary: 'A — B spike.' })).includes('—'));
+});
+
+test('stripDuplicateCharts removes the baseline Unicode device + channel blocks, keeps the rest', () => {
+  const md = [
+    '## 6 · Property baseline',
+    '',
+    '- **Sessions:** 32,822',
+    '',
+    '**Device split**',
+    '',
+    '```',
+    'mobile       ████ 98%',
+    'desktop      ░░░░ 2%',
+    '```',
+    '',
+    '**Channel mix (sessions)**',
+    '',
+    '```',
+    'Organic Social  ████ 56%',
+    '```',
+    '',
+    '## 7 · Decision readiness',
+  ].join('\n');
+  const out = stripDuplicateCharts(md);
+  assert.ok(!out.includes('Device split') && !out.includes('Channel mix'), 'unicode chart blocks removed');
+  assert.ok(!out.includes('████') && !out.includes('░░░░'), 'bar glyphs removed');
+  assert.ok(out.includes('**Sessions:** 32,822') && out.includes('## 7 · Decision readiness'), 'surrounding content kept');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

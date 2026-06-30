@@ -11,7 +11,7 @@ import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Visuals } from './ga4
 import { auditGa4Growth } from './ga4-growth';
 import { reportHtmlDocument } from './ga4-report-export';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
-import { ga4VisualsHtml } from '../../shared/ga4-visuals-html';
+import { ga4VisualsHtml, stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4ExecSummaryView, Ga4PropertyAuditResult, Ga4PropertyListItem, Ga4VisualsView } from '../../shared/ipc';
 
@@ -118,7 +118,10 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     const visualsHtml = fmt === 'pdf' && visuals ? ga4VisualsHtml(visuals as Ga4VisualsView) : '';
     const topHtml = execHtml + visualsHtml;
     const bodyIdx = md.indexOf('## 2 ·');
-    const bodyMd = topHtml && bodyIdx >= 0 ? md.slice(bodyIdx) : md;
+    let bodyMd = topHtml && bodyIdx >= 0 ? md.slice(bodyIdx) : md;
+    // PDF renders the colourful visuals panel, so strip the duplicate Unicode device/channel bars
+    // from its body. Word/.md keep them (no panel there).
+    if (visualsHtml) bodyMd = stripDuplicateCharts(bodyMd);
     const win = BrowserWindow.fromWebContents(e.sender);
     const filterName = fmt === 'pdf' ? 'PDF' : fmt === 'doc' ? 'Word document' : 'Markdown';
     const opts = { title: 'Save GA4 audit report', defaultPath: `${base}.${fmt}`, filters: [{ name: filterName, extensions: [fmt] }] };

@@ -23,7 +23,7 @@ import type {
 } from '../../shared/ipc';
 import { suggestionToGroup, suggestionsToTemplateCsv, TEMPLATE_HEADERS } from '../../shared/tag-template';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
-import { ga4VisualsHtml } from '../../shared/ga4-visuals-html';
+import { ga4VisualsHtml, stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: 'claude-opus-4-8',
@@ -3392,6 +3392,10 @@ function Ga4AuditPanel({
   // `areas` is a newer field (PR #185); a stale Electron main can omit it, so default to [] rather
   // than crash on the spread (the ErrorBoundary is a backstop, but the panel should degrade in place).
   const coverage = result ? [...(result.config.areas ?? []), { area: 'Data quality', status: dqStatus }] : [];
+  // The colourful visuals panel + the report body (sections 2+). When the panel renders, the body's
+  // duplicate Unicode Device split / Channel mix bars are stripped so the same data isn't shown twice.
+  const ga4Visuals = result?.visuals ? ga4VisualsHtml(result.visuals) : '';
+  const ga4Body = result ? (result.exec && result.markdown.includes('## 2 ·') ? result.markdown.slice(result.markdown.indexOf('## 2 ·')) : result.markdown) : '';
 
   return (
     <div style={styles.reviewWrap}>
@@ -3597,11 +3601,11 @@ function Ga4AuditPanel({
                     {result.exec && (
                       <div style={{ ...styles.card }} dangerouslySetInnerHTML={{ __html: execSummaryHtml(result.exec) }} />
                     )}
-                    {result.visuals && (
-                      <div style={{ ...styles.card }} dangerouslySetInnerHTML={{ __html: ga4VisualsHtml(result.visuals) }} />
+                    {result.visuals && ga4Visuals && (
+                      <div style={{ ...styles.card }} dangerouslySetInnerHTML={{ __html: ga4Visuals }} />
                     )}
                     <div style={{ ...styles.card, lineHeight: 1.5 }}>
-                      <Markdown text={result.exec && result.markdown.includes('## 2 ·') ? result.markdown.slice(result.markdown.indexOf('## 2 ·')) : result.markdown} />
+                      <Markdown text={ga4Visuals ? stripDuplicateCharts(ga4Body) : ga4Body} />
                     </div>
                   </>
                 ) : (

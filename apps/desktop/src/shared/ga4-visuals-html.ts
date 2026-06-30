@@ -7,6 +7,15 @@ import type { Ga4VisualsView } from './ipc';
 
 const esc = (s: unknown): string => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+/** Remove the Property-baseline Unicode "Device split" / "Channel mix" code blocks from the report
+ *  markdown. Used on the surfaces that ALSO render the colourful visuals panel (on-screen + PDF) so
+ *  the same data isn't shown twice; the .md and Word downloads keep the Unicode bars (no panel). */
+export function stripDuplicateCharts(md: string): string {
+  return md
+    .replace(/\*\*Device split\*\*\s*```[\s\S]*?```\s*/g, '')
+    .replace(/\*\*Channel mix \(sessions\)\*\*\s*```[\s\S]*?```\s*/g, '');
+}
+
 const TEXT = 'var(--text, #1a1a1a)';
 const MUTED = 'var(--text-muted, #5b6472)';
 const FAINT = 'var(--text-faint, #8a93a0)';
