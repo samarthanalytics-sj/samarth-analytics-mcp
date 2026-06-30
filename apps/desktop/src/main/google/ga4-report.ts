@@ -266,6 +266,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
     channelDaily: baseline?.channelDaily ?? [],
     devices: baseline?.devices ?? [],
     channels: [...dqCounts.channelGroups].sort((a, b) => b.sessions - a.sessions).slice(0, 8),
+    drivingChannel: trend.drivingChannel,
     channelTrusted: score.trust.find((t) => t.metric === 'Channel attribution')?.safe ?? true,
   };
 }

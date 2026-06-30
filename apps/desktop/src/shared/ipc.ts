@@ -190,6 +190,9 @@ export interface Ga4VisualsView {
   channelDaily: Array<{ channel: string; series: Array<{ date: string; sessions: number }> }>;
   devices: Array<{ name: string; sessions: number }>;
   channels: Array<{ name: string; sessions: number }>;
+  /** Peak-day driving channel (same source the chart marker + trend summary use) for the insights
+   *  panel, so the three never disagree. dayShare/windowShare are 0-1 fractions. */
+  drivingChannel: { name: string; dayShare: number; windowShare: number } | null;
   /** Whether channel attribution is safe to quote (Data Trust Matrix); false greys the channel charts. */
   channelTrusted: boolean;
 }

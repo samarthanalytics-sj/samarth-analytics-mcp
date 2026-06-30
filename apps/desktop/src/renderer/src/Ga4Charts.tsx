@@ -5,7 +5,7 @@
 
 import { useRef, useState, type CSSProperties } from 'react';
 import type { Ga4VisualsView } from '../../shared/ipc';
-import { granularityFor, granLabel, groupSeries, type GPoint } from '../../shared/ga4-visuals-html';
+import { granularityFor, granLabel, groupSeries, buildTrendInsights, type GPoint, type TrendInsight } from '../../shared/ga4-visuals-html';
 
 const PALETTE = ['#3b82f6', '#06b6d4', '#22c55e', '#f59e0b', '#a855f7', '#ef4444', '#14b8a6', '#ec4899'];
 const LINE = '#3b82f6';
@@ -115,6 +115,31 @@ function InteractiveChart({ series, area, peakLabel }: { series: Series[]; area?
 const eyebrow: CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: '#2563eb' };
 const lbl: CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4 };
 
+const INSIGHT_TONE: Record<TrendInsight['tone'], { bar: string; bg: string }> = {
+  good: { bar: 'var(--c-green, #16a34a)', bg: 'var(--c-green-bg, #f0fdf4)' },
+  watch: { bar: 'var(--c-amber, #d97706)', bg: 'var(--c-amber-bg, #fffbeb)' },
+  info: { bar: 'var(--c-blue, #2563eb)', bg: 'var(--c-blue-bg, #eff6ff)' },
+};
+
+// The deep-insights panel that sits beside the charts: peak, what drove it, concentration, device skew.
+function InsightsPanel({ items }: { items: TrendInsight[] }): JSX.Element | null {
+  if (!items.length) return null;
+  return (
+    <div style={{ border: '1px solid var(--border, #e3e6ea)', borderRadius: 10, padding: '12px 14px', background: 'var(--surface, #fff)', boxSizing: 'border-box' }}>
+      <div style={lbl}>What the data shows</div>
+      {items.map((it, i) => {
+        const tone = INSIGHT_TONE[it.tone];
+        return (
+          <div key={i} style={{ borderLeft: `3px solid ${tone.bar}`, background: tone.bg, borderRadius: '0 6px 6px 0', padding: '7px 10px', margin: '0 0 8px' }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: tone.bar, marginBottom: 2 }}>{it.title}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.45 }}>{it.body}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Bars({ rows }: { rows: Array<{ name: string; sessions: number }> }): JSX.Element {
   const total = rows.reduce((s, x) => s + x.sessions, 0) || 1;
   const top = [...rows].sort((a, b) => b.sessions - a.sessions).slice(0, 8);
@@ -152,39 +177,49 @@ export function Ga4Charts({ visuals: v }: { visuals: Ga4VisualsView }): JSX.Elem
   const untrusted = v.channelTrusted === false;
   const pillColor = /spike|volatile/i.test(v.trendLabel) ? '#f59e0b' : /upward/i.test(v.trendLabel) ? '#22c55e' : /downward/i.test(v.trendLabel) ? '#ef4444' : '#64748b';
   const cardStyle: CSSProperties = { border: '1px solid var(--border, #e3e6ea)', borderRadius: 10, padding: '12px 14px', background: 'var(--surface, #fff)', flex: 1, minWidth: 0 };
+  const insights = buildTrendInsights(v);
 
   return (
     <div style={{ color: 'var(--text)', lineHeight: 1.5 }}>
       <div style={eyebrow}>Traffic trend</div>
       <h2 style={{ fontSize: 18, margin: '2px 0', color: 'var(--text)' }}>Traffic trend &amp; visualisations</h2>
-      {(v.daily?.length ?? 0) >= 5 && (
-        <>
-          <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text)' }}>
-            <span style={{ display: 'inline-block', fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, color: '#fff', background: pillColor, marginRight: 8 }}>{v.trendLabel}</span>
-            {v.trendSummary} <span style={{ color: 'var(--text-faint)' }}>({granLabel(gran)}; hover a point for its value)</span>
-          </div>
-          <InteractiveChart series={[{ name: 'Sessions', color: LINE, points: trendPoints }]} area peakLabel={peakLabel} />
-        </>
-      )}
-      {untrusted && (
-        <div style={{ fontSize: 11.5, color: 'var(--c-amber, #b45309)', background: 'var(--c-amber-bg, #fef3c7)', border: '1px solid var(--c-amber-border, #fde68a)', borderRadius: 6, padding: '6px 10px', margin: '8px 0' }}>
-          ⚠ Channel attribution is not safe to quote yet - a material share of sessions lack source data (see the Data Trust Matrix). The channel charts below are greyed for that reason.
+      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 380px', minWidth: 300 }}>
+          {(v.daily?.length ?? 0) >= 5 && (
+            <>
+              <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text)' }}>
+                <span style={{ display: 'inline-block', fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, color: '#fff', background: pillColor, marginRight: 8 }}>{v.trendLabel}</span>
+                {v.trendSummary} <span style={{ color: 'var(--text-faint)' }}>({granLabel(gran)}; hover a point for its value)</span>
+              </div>
+              <InteractiveChart series={[{ name: 'Sessions', color: LINE, points: trendPoints }]} area peakLabel={peakLabel} />
+            </>
+          )}
+          {untrusted && (
+            <div style={{ fontSize: 11.5, color: 'var(--c-amber, #b45309)', background: 'var(--c-amber-bg, #fef3c7)', border: '1px solid var(--c-amber-border, #fde68a)', borderRadius: 6, padding: '6px 10px', margin: '8px 0' }}>
+              ⚠ Channel attribution is not safe to quote yet - a material share of sessions lack source data (see the Data Trust Matrix). The channel charts below are greyed for that reason.
+            </div>
+          )}
+          {channelSeries.length >= 2 && (
+            <div style={{ opacity: untrusted ? 0.5 : 1 }}>
+              <div style={lbl}>Sessions by channel ({granLabel(gran)})</div>
+              <InteractiveChart series={channelSeries} />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 16px', marginTop: 2 }}>
+                {channelSeries.map((s, i) => (
+                  <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+                    <span style={{ width: 11, height: 3, borderRadius: 2, background: s.color, display: 'inline-block' }} />
+                    {s.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-      )}
-      {channelSeries.length >= 2 && (
-        <div style={{ opacity: untrusted ? 0.5 : 1 }}>
-          <div style={lbl}>Sessions by channel ({granLabel(gran)})</div>
-          <InteractiveChart series={channelSeries} />
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 16px', marginTop: 2 }}>
-            {channelSeries.map((s, i) => (
-              <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)' }}>
-                <span style={{ width: 11, height: 3, borderRadius: 2, background: s.color, display: 'inline-block' }} />
-                {s.name}
-              </span>
-            ))}
+        {insights.length > 0 && (
+          <div style={{ flex: '1 1 280px', minWidth: 260 }}>
+            <InsightsPanel items={insights} />
           </div>
-        </div>
-      )}
+        )}
+      </div>
       <div style={{ display: 'flex', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
         <div style={cardStyle}>
           <div style={lbl}>Device split</div>
