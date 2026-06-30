@@ -238,6 +238,16 @@ test('exec summary leads with the score + reliability and never claims "Well-con
   assert.ok(/not verified/.test(md), 'coverage discloses unverified areas');
 });
 
+test('a fully clean, trustworthy property says "Trustworthy", not "Action required"', () => {
+  const s = snap({
+    customDimensions: [{ parameterName: 'tier', displayName: 'Tier', scope: 'USER' }],
+    customMetrics: [{ parameterName: 'pts', displayName: 'Pts' }],
+  });
+  const md = buildGa4AuditReport(input({ snapshot: s, config: auditGa4(s) }));
+  assert.ok(/\*\*Overall verdict:\*\* Trustworthy - the data is safe to quote/.test(md), 'clean + high reliability → Trustworthy');
+  assert.ok(!/Action required/.test(md));
+});
+
 test('a genuinely clean property (only an info advisory) does not manufacture a risk', () => {
   // Fully instrumented + clean config + clean data quality + healthy growth → no actionable finding.
   const s = snap({

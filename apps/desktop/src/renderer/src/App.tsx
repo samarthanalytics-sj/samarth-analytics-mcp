@@ -23,7 +23,8 @@ import type {
 } from '../../shared/ipc';
 import { suggestionToGroup, suggestionsToTemplateCsv, TEMPLATE_HEADERS } from '../../shared/tag-template';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
-import { ga4VisualsHtml, stripDuplicateCharts } from '../../shared/ga4-visuals-html';
+import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
+import { Ga4Charts } from './Ga4Charts';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: 'claude-opus-4-8',
@@ -3392,9 +3393,9 @@ function Ga4AuditPanel({
   // `areas` is a newer field (PR #185); a stale Electron main can omit it, so default to [] rather
   // than crash on the spread (the ErrorBoundary is a backstop, but the panel should degrade in place).
   const coverage = result ? [...(result.config.areas ?? []), { area: 'Data quality', status: dqStatus }] : [];
-  // The colourful visuals panel + the report body (sections 2+). When the panel renders, the body's
-  // duplicate Unicode Device split / Channel mix bars are stripped so the same data isn't shown twice.
-  const ga4Visuals = result?.visuals ? ga4VisualsHtml(result.visuals) : '';
+  // The interactive visuals panel (React) + the report body (sections 2+). When the panel renders, the
+  // body's duplicate Unicode Device split / Channel mix bars are stripped so the same data isn't shown twice.
+  const hasVisuals = Boolean(result?.visuals && ((result.visuals.daily?.length ?? 0) > 0 || (result.visuals.devices?.length ?? 0) > 0 || (result.visuals.channels?.length ?? 0) > 0));
   const ga4Body = result ? (result.exec && result.markdown.includes('## 2 ·') ? result.markdown.slice(result.markdown.indexOf('## 2 ·')) : result.markdown) : '';
 
   return (
@@ -3599,11 +3600,13 @@ function Ga4AuditPanel({
                     {result.exec && (
                       <div style={{ ...styles.card }} dangerouslySetInnerHTML={{ __html: execSummaryHtml(result.exec) }} />
                     )}
-                    {result.visuals && ga4Visuals && (
-                      <div style={{ ...styles.card }} dangerouslySetInnerHTML={{ __html: ga4Visuals }} />
+                    {result.visuals && hasVisuals && (
+                      <div style={{ ...styles.card }}>
+                        <Ga4Charts visuals={result.visuals} />
+                      </div>
                     )}
                     <div style={{ ...styles.card, lineHeight: 1.5 }}>
-                      <Markdown text={ga4Visuals ? stripDuplicateCharts(ga4Body) : ga4Body} />
+                      <Markdown text={hasVisuals ? stripDuplicateCharts(ga4Body) : ga4Body} />
                     </div>
                   </>
                 ) : (

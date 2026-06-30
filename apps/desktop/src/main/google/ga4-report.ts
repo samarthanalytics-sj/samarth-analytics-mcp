@@ -143,13 +143,17 @@ const firstSentence = (t: string): string => {
 // Info findings are advisories/all-clears, not problems — never attach a business risk to them.
 const riskFor = (f: FindingRow): string => (f.severity === 'info' ? '—' : f.businessRisk ?? RISK_BY_CATEGORY[f.category] ?? '—');
 
-// One-line overall verdict for the Executive Summary, by rule from the worst finding.
-function overallVerdict(allFindings: FindingRow[], nNotVerified: number): string {
+// One-line overall verdict for the Executive Summary, by rule from the worst finding and the data
+// trust. We only call the data "safe to quote" when it was actually verified — i.e. the growth/anomaly
+// comparison ran (growthAssessed) AND trust is high. On a thin/new property where the comparison did
+// not run, the Data Trust Matrix itself says "quote with caution", so we stay conservative here too.
+function overallVerdict(allFindings: FindingRow[], nNotVerified: number, reliabilityPct: number, growthAssessed: boolean): string {
   const has = (s: string): boolean => allFindings.some((f) => f.severity === s);
   if (has('critical') || has('high')) return 'Action required — one or more foundational checks need remediation before the data can be fully trusted.';
   if (has('medium')) return 'Some gaps to address before the data is fully trustworthy.';
   if (has('low')) return `Largely sound; minor gaps remain and ${nNotVerified} area(s) are unverified.`;
-  return `No blocking issues found; confirm the ${nNotVerified} unverified area(s) before sign-off.`;
+  if (growthAssessed && reliabilityPct >= 75) return `Trustworthy — the data is safe to quote for downstream reporting (${reliabilityPct}% reporting reliability)${nNotVerified > 0 ? `; ${nNotVerified} area(s) remain unverified but none are blocking` : ''}.`;
+  return `No blocking issues found; the data is broadly usable, but ${nNotVerified} area(s) are unverified — confirm before full sign-off.`;
 }
 
 // Combined findings (config + data quality + growth) — the single source of truth for the report.
@@ -219,7 +223,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
     grade: scoreModel.grade,
     reliabilityPct: scoreModel.reliabilityPct,
     reliabilityConfidence: scoreModel.reliabilityConfidence,
-    verdict: overallVerdict(allFindings, nNotVerified),
+    verdict: overallVerdict(allFindings, nNotVerified, scoreModel.reliabilityPct, Boolean(growth?.assessed)),
     biggestRisk: top ? firstSentence(top.whyItMatters ?? top.message) : 'No high-severity risk; the ceiling on trust is coverage.',
     highestImpactFix: top ? firstSentence(top.recommendation ?? 'Confirm the unverified areas.') : 'Confirm the unverified areas (consent, ecommerce parameters) before sign-off.',
     coverage: { checked: areaRows.length, partial: nPartial, notVerified: nNotVerified },
@@ -301,7 +305,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push('');
   L.push(`**Reliability score:** ${score.composite ?? '—'}/100 (Grade ${score.grade})  `);
   L.push(`**Reporting reliability:** ${score.reliabilityPct}% — ${score.reliabilityConfidence} (how much of this property’s data is safe to quote downstream today)  `);
-  L.push(`**Overall verdict:** ${overallVerdict(allFindings, nNotVerified)}  `);
+  L.push(`**Overall verdict:** ${overallVerdict(allFindings, nNotVerified, score.reliabilityPct, Boolean(growth?.assessed))}  `);
   L.push(`**Biggest risk:** ${top ? firstSentence(top.whyItMatters ?? top.message) : 'No high-severity risk; the ceiling on trust is coverage.'}  `);
   L.push(`**Highest-impact fix:** ${top ? firstSentence(top.recommendation ?? 'Confirm the unverified areas.') : 'Confirm the unverified areas (consent, ecommerce parameters) before sign-off.'}  `);
   L.push(`**Coverage:** ${areaRows.length} areas checked · ${nPartial} partial · ${nNotVerified} not verified`);
