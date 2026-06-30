@@ -77,7 +77,8 @@ export function execSummaryHtml(x: Ga4ExecSummaryView): string {
     `<section style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${TEXT};line-height:1.5">` +
     `<div style="font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:${BLUE}">Section 1 · Executive Summary</div>` +
     `<h1 style="font-size:26px;margin:4px 0 2px;color:${TEXT}">Executive Summary</h1>` +
-    `<div style="font-size:13px;color:${MUTED};margin-bottom:6px">${esc(x.propertyName)} (${esc(x.propertyId)}) · Audit ${esc(x.auditId)} · Reliability score ${x.composite ?? '—'}/100 (Grade ${esc(x.grade)})</div>` +
+    `<div style="font-size:13px;color:${MUTED};margin-bottom:2px">${esc(x.propertyName)} (${esc(x.propertyId)}) · Audit ${esc(x.auditId)} · Reliability score ${x.composite ?? '—'}/100 (Grade ${esc(x.grade)})</div>` +
+    `<div style="font-size:13px;color:${TEXT};margin:0 0 8px"><b>Audit window:</b> ${esc(x.dateRange)}</div>` +
     // 2×2 cards via a <table> (not CSS grid) so Word's HTML engine — which ignores display:grid —
     // still renders two columns; Chromium (PDF + on-screen) renders it identically.
     `<table role="presentation" style="border-collapse:separate;border-spacing:0;width:100%;margin-top:8px;table-layout:fixed"><tbody>` +

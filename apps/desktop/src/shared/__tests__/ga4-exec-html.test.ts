@@ -19,6 +19,7 @@ const view = (over: Partial<Ga4ExecSummaryView> = {}): Ga4ExecSummaryView => ({
   propertyName: 'Acme <Co>',
   propertyId: '123',
   auditId: 'GA4-123-20260629',
+  dateRange: 'Apr 1 – Jun 29, 2026 (90 days)',
   composite: 65,
   grade: 'D',
   reliabilityPct: 45,
@@ -46,6 +47,12 @@ test('renders the verdict, reliability % and confidence', () => {
   assert.ok(h.includes('45%') && h.includes('Medium confidence'));
   assert.ok(h.includes('Action required'));
   assert.ok(h.includes('Revenue may be wrong.') && h.includes('Check DebugView.'));
+});
+
+test('shows the selected audit window (date range)', () => {
+  const h = execSummaryHtml(view());
+  assert.ok(h.includes('Audit window:'), 'labels the audit window');
+  assert.ok(h.includes('Jun 29, 2026') && h.includes('(90 days)'), 'shows the selected date range + day count');
 });
 
 test('scorecard shows categories, composite, and Not-Verified handling', () => {
