@@ -1,3 +1,9 @@
+## [1.111.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.110.0...v1.111.0) (2026-06-30)
+
+### Features
+
+* **desktop:** colourful card sections for the GA4 report body (sections 2-4) ([6024e48](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6024e4877afb0b0d79e5c12a589f0a052a563413))
+
 ## [1.110.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.109.1...v1.110.0) (2026-06-30)
 
 ### Features
