@@ -127,7 +127,7 @@ async function main(): Promise<void> {
     // separate catch-all — the "PDF Download" tag's {{Click URL}} contains .pdf already fires site-wide.
     check('crawl: full list = 6 scan tags + GA4 Configuration + All-form = 8', res.summary.suggestions === 8, `${res.summary.suggestions}`);
     check('crawl: GA4 Configuration (google_tag) is included', res.suggestions.some((s) => s.platform === 'google_tag' && s.tagName === 'GA4 Configuration'));
-    check('crawl: All Form Submissions catch-all + per-file "PDF Download" tag included; NO All-PDF catch-all', res.suggestions.some((s) => s.tagName === 'GA4 Event - All Form Submissions Tag') && res.suggestions.some((s) => s.tagName === 'GA4 Event - PDF Download Tag') && !res.suggestions.some((s) => s.tagName === 'GA4 Event - All PDF Downloads Tag'));
+    check('crawl: All Form Submissions catch-all + per-file "PDF Download" tag included; NO All-PDF catch-all', res.suggestions.some((s) => s.tagName === 'GA4 – Event – All Form Submissions') && res.suggestions.some((s) => s.tagName === 'GA4 – Event – PDF Download') && !res.suggestions.some((s) => s.tagName === 'GA4 – Event – All PDF Downloads'));
     check('crawl: EM overlap = 2 (PDF download + outbound)', res.summary.enhancedMeasurementOverlap === 2, `${res.summary.enhancedMeasurementOverlap}`);
     check(
       'crawl: byConfidence high=4 medium=4 low=0 (GA4 config high; All-form catch-all medium)',

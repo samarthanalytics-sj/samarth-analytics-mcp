@@ -9,6 +9,7 @@
 import type { SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import type { RawElement } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
+import { tagNameOf, trigNameOf } from '../../../../web-audit-mcp/src/agent/tag-suggest/suggest.js';
 import type { TagScanResult } from '../../shared/ipc';
 import { pageScanFromDriven, assembleResult, emptyResult, type PageDriver, type DrivenPage } from './scan-core';
 
@@ -45,7 +46,7 @@ export function aiTagsToSuggestions(picks: AiTagPick[], page: string, elements: 
     const name = clean(String(p?.name ?? '')).slice(0, 80);
     const event = clean(String(p?.event ?? '')).replace(/[^a-z0-9_]/gi, '_').toLowerCase().slice(0, 40);
     if (!name || !event) continue;
-    const tagName = clean(name.startsWith('GA4') ? name : `GA4 Event - ${name}`);
+    const tagName = name.startsWith('GA4') ? clean(name) : tagNameOf(name);
     const base = {
       id: hashId(`ai|${page}|${p.kind}|${name}|${p.elementIndex ?? p.formIndex ?? ''}`),
       page,
@@ -66,7 +67,7 @@ export function aiTagsToSuggestions(picks: AiTagPick[], page: string, elements: 
         ...base,
         eventParameters: [{ name: 'form_id', value: '{{Form ID}}' }, { name: 'form_url', value: '{{Form URL}}' }, ...PAGE_PARAMS],
         trigger: {
-          name: clean(`${name} Trigger`),
+          name: trigNameOf(name, 'form_submit'),
           kind: 'form_submit',
           ...(f.formId ? { formIdValue: f.formId, formIdOperator: 'equals' as const } : {}),
         },
@@ -79,11 +80,11 @@ export function aiTagsToSuggestions(picks: AiTagPick[], page: string, elements: 
         ...base,
         eventParameters: [{ name: 'cta_text', value: '{{Click Text}}' }, { name: 'click_url', value: '{{Click URL}}' }, ...PAGE_PARAMS],
         trigger: useUrl
-          ? { name: clean(`${name} Trigger`), kind: 'link_click', clickUrlValue: el.href, clickUrlOperator: 'contains' as const }
-          : { name: clean(`${name} Trigger`), kind: 'all_clicks', clickTextValue: el.text.slice(0, 60), clickTextOperator: 'contains' as const },
+          ? { name: trigNameOf(name, 'link_click'), kind: 'link_click', clickUrlValue: el.href, clickUrlOperator: 'contains' as const }
+          : { name: trigNameOf(name, 'all_clicks'), kind: 'all_clicks', clickTextValue: el.text.slice(0, 60), clickTextOperator: 'contains' as const },
       });
     } else if (p.kind === 'pageview') {
-      out.push({ ...base, eventParameters: PAGE_PARAMS, trigger: { name: clean(`${name} Trigger`), kind: 'pageview' } });
+      out.push({ ...base, eventParameters: PAGE_PARAMS, trigger: { name: trigNameOf(name, 'pageview'), kind: 'pageview' } });
     }
   }
   return out;
