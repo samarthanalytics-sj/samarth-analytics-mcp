@@ -167,6 +167,8 @@ export interface Ga4ExecSummaryView {
   propertyName: string;
   propertyId: string;
   auditId: string;
+  /** The selected audit window: human date range + day count, e.g. "Apr 1 – Jun 29, 2026 (90 days)". */
+  dateRange: string;
   composite: number | null;
   grade: string;
   reliabilityPct: number;

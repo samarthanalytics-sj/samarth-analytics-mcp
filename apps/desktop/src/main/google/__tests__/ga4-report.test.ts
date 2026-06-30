@@ -238,6 +238,13 @@ test('exec summary leads with the score + reliability and never claims "Well-con
   assert.ok(/not verified/.test(md), 'coverage discloses unverified areas');
 });
 
+test('executive summary shows the selected audit window (date range + day count)', () => {
+  const md = buildGa4AuditReport(input());
+  assert.ok(/\*\*Audit window:\*\* .*Jun 29, 2026 \(90 days\)/.test(md), 'markdown section 1 names the window');
+  const exec = buildGa4ExecSummary(input());
+  assert.ok(exec.dateRange.includes('Jun 29, 2026') && exec.dateRange.includes('90 days'), 'exec view carries the window');
+});
+
 test('a fully clean, trustworthy property says "Trustworthy", not "Action required"', () => {
   const s = snap({
     customDimensions: [{ parameterName: 'tier', displayName: 'Tier', scope: 'USER' }],

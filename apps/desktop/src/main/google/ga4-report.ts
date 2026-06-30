@@ -156,6 +156,17 @@ function overallVerdict(allFindings: FindingRow[], nNotVerified: number, reliabi
   return `No blocking issues found; the data is broadly usable, but ${nNotVerified} area(s) are unverified — confirm before full sign-off.`;
 }
 
+// The selected audit window for the Executive Summary: the human date range plus the day count when
+// both are known (e.g. "Apr 1 – Jun 29, 2026 (90 days)"). Uses the same dq fields shown in section 9.
+function auditWindowLabel(dq: Ga4DataQualityResult): string {
+  const range = dq.dateRange;
+  const days = dq.windowDays;
+  if (range && days > 0) return `${range} (${days} days)`;
+  if (range) return range;
+  if (days > 0) return `last ${days} days`;
+  return 'window not specified';
+}
+
 // Combined findings (config + data quality + growth) — the single source of truth for the report.
 function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, growth: Ga4GrowthResult | null): FindingRow[] {
   return [
@@ -219,6 +230,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
     propertyName: input.displayName,
     propertyId: pid,
     auditId: `GA4-${pid}-${(dq.endDate ?? '').replace(/-/g, '') || 'na'}`,
+    dateRange: auditWindowLabel(dq),
     composite: scoreModel.composite,
     grade: scoreModel.grade,
     reliabilityPct: scoreModel.reliabilityPct,
@@ -303,6 +315,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push('');
   L.push('A consolidated read of the property’s measurement posture across configuration, event tracking, conversions, data quality, attribution and consent.');
   L.push('');
+  L.push(`**Audit window:** ${auditWindowLabel(dq)}  `);
   L.push(`**Reliability score:** ${score.composite ?? '—'}/100 (Grade ${score.grade})  `);
   L.push(`**Reporting reliability:** ${score.reliabilityPct}% — ${score.reliabilityConfidence} (how much of this property’s data is safe to quote downstream today)  `);
   L.push(`**Overall verdict:** ${overallVerdict(allFindings, nNotVerified, score.reliabilityPct, Boolean(growth?.assessed))}  `);
