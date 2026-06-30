@@ -90,6 +90,10 @@ const baseline = (over: Partial<Ga4Baseline> = {}): Ga4Baseline => ({
     { name: 'Direct', sessions: 500 },
     { name: 'Organic Social', sessions: 400 },
   ],
+  channelDaily: [
+    { channel: 'Organic Search', series: [{ date: '20260610', sessions: 700 }, { date: '20260611', sessions: 750 }] },
+    { channel: 'Direct', series: [{ date: '20260610', sessions: 300 }, { date: '20260611', sessions: 320 }] },
+  ],
   devices: [
     { name: 'mobile', sessions: 50000 },
     { name: 'desktop', sessions: 25000 },

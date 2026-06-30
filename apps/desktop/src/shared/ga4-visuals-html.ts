@@ -71,6 +71,57 @@ function lineChartSvg(daily: Ga4VisualsView['daily'], peakIndex: number): string
   );
 }
 
+// Multi-line chart: one coloured line per channel, sharing the date axis. Returns '' if there isn't
+// enough to plot. A legend is rendered separately by the caller.
+function multiLineChartSvg(channelDaily: Ga4VisualsView['channelDaily']): string {
+  const series = (channelDaily ?? []).filter((c) => c.series && c.series.length >= 2);
+  if (series.length < 2) return '';
+  const n = Math.max(...series.map((c) => c.series.length));
+  const W = 720;
+  const H = 200;
+  const l = 48;
+  const r = 14;
+  const t = 14;
+  const b = 26;
+  const iw = W - l - r;
+  const ih = H - t - b;
+  const maxV = Math.max(1, ...series.flatMap((c) => c.series.map((p) => p.sessions)));
+  const x = (i: number): number => l + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw);
+  const y = (v: number): number => t + ih - (v / maxV) * ih;
+  const lines = series
+    .map((c, ci) => {
+      const color = PALETTE[ci % PALETTE.length];
+      const pts = c.series.map((p, i) => `${x(i).toFixed(1)},${y(p.sessions).toFixed(1)}`).join(' ');
+      return `<polyline points="${pts}" style="fill:none;stroke:${color};stroke-width:1.8;stroke-linejoin:round;stroke-linecap:round;opacity:.95"/>`;
+    })
+    .join('');
+  const first = series[0].series;
+  const xlab = (i: number, anchor: string): string =>
+    first[i] ? `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="${anchor}" style="font-size:10px;fill:${AXIS}">${esc(fmtDay(first[i].date))}</text>` : '';
+  return (
+    `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:720px;display:block;margin:8px 0" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Daily sessions by channel">` +
+    `<line x1="${l}" y1="${(t + ih).toFixed(1)}" x2="${W - r}" y2="${(t + ih).toFixed(1)}" style="stroke:rgba(148,163,184,.35);stroke-width:1"/>` +
+    `<text x="${l - 7}" y="${(t + 4).toFixed(1)}" text-anchor="end" style="font-size:10px;fill:${AXIS}">${maxV.toLocaleString('en-US')}</text>` +
+    lines +
+    xlab(0, 'start') +
+    xlab(n - 1, 'end') +
+    `</svg>`
+  );
+}
+
+function legendHtml(channelDaily: Ga4VisualsView['channelDaily']): string {
+  // Same filter as multiLineChartSvg (>= 2) so legend swatch colours line up with the plotted lines.
+  const series = (channelDaily ?? []).filter((c) => c.series && c.series.length >= 2);
+  if (!series.length) return '';
+  return (
+    `<div style="display:flex;flex-wrap:wrap;gap:10px 16px;margin-top:2px">` +
+    series
+      .map((c, i) => `<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:${MUTED}"><span style="width:11px;height:3px;border-radius:2px;background:${PALETTE[i % PALETTE.length]};display:inline-block"></span>${esc(c.channel || '(not set)')}</span>`)
+      .join('') +
+    `</div>`
+  );
+}
+
 function barList(rows: Ga4VisualsView['devices']): string {
   const total = rows.reduce((s, r) => s + r.sessions, 0) || 1;
   const top = [...rows].sort((a, b) => b.sessions - a.sessions).slice(0, 8);
@@ -106,11 +157,14 @@ export function ga4VisualsHtml(v: Ga4VisualsView): string {
       `${esc(v.trendSummary)}</div>` +
       lineChartSvg(v.daily, v.peakIndex)
     : '';
+  const byChannelChart = multiLineChartSvg(v.channelDaily ?? []);
+  const byChannel = byChannelChart ? label('Sessions by channel') + byChannelChart + legendHtml(v.channelDaily ?? []) : '';
   return (
     `<section style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${TEXT};line-height:1.5">` +
     `<div style="font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#2563eb">Traffic trend</div>` +
     `<h2 style="font-size:18px;margin:2px 0 2px;color:${TEXT}">Traffic trend &amp; visualisations</h2>` +
     trend +
+    byChannel +
     `<table role="presentation" style="border-collapse:separate;border-spacing:0;width:100%;margin-top:8px;table-layout:fixed"><tbody><tr>` +
     cardTd(label('Device split') + barList(v.devices ?? [])) +
     cardTd(label('Channel mix (sessions)') + barList(v.channels ?? [])) +
