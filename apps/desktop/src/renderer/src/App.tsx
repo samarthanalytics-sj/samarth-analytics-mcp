@@ -3593,8 +3593,6 @@ function Ga4AuditPanel({
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ color: 'var(--text-muted)', fontSize: 13, marginRight: 2 }}>Download report:</span>
                       <button style={styles.primaryBtn} onClick={() => void downloadReport('pdf')} disabled={downloading}>⬇ PDF</button>
-                      <button style={styles.ghostBtn} onClick={() => void downloadReport('doc')} disabled={downloading}>⬇ Word (.doc)</button>
-                      <button style={styles.ghostBtn} onClick={() => void downloadReport('md')} disabled={downloading}>⬇ Markdown</button>
                       {downloading && <span style={styles.muted}>Saving…</span>}
                       {exportNote && <span style={styles.muted}>{exportNote}</span>}
                     </div>
