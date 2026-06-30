@@ -1,3 +1,9 @@
+## [1.109.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.108.0...v1.109.0) (2026-06-30)
+
+### Features
+
+* **desktop:** show the selected audit window (date range) in the GA4 Executive Summary ([0e62daf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0e62dafa2b6a424ab229b3fc4758a67a4f09bf8a))
+
 ## [1.108.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.107.1...v1.108.0) (2026-06-30)
 
 ### Features
