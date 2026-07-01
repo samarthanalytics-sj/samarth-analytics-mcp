@@ -1,3 +1,9 @@
+## [1.129.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.128.1...v1.129.0) (2026-07-01)
+
+### Features
+
+* **web-audit:** surface a labeled download CTA as its own suggestion ([8e0c68d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8e0c68d1f5db8214210a5b85224ebab768f8d250))
+
 ## [1.128.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.128.0...v1.128.1) (2026-07-01)
 
 ### Bug Fixes
