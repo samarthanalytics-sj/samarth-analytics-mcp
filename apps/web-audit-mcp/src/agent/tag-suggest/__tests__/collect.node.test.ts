@@ -124,6 +124,15 @@ check('cta intent: plain text "Our team" stays null', classifyCtaIntent('Our tea
 // "View details" is still NOT a tracked CTA (too generic); genuine learn-more stays.
 check('cta intent: "View details" stays null (too generic to track)', classifyCtaIntent('View details') === null);
 check('cta intent: genuine "Learn more"/"Find out more"/"Discover more" still learn_more', ['Learn more', 'Find out more', 'Discover more'].every((t) => classifyCtaIntent(t) === 'learn_more'));
+// contact + download intents (a bare "Contact us" button and a "Download brochure" text link were
+// previously unmatched → the text link got dropped as a plain link).
+check('cta intent: "Contact us"/"Get in touch"/"Contact our experts" → contact', classifyCtaIntent('Contact us') === 'contact' && classifyCtaIntent('Get in touch') === 'contact' && classifyCtaIntent('Contact our experts') === 'contact');
+check('cta intent: "Contact sales" still wins as contact_sales (order preserved)', classifyCtaIntent('Contact sales') === 'contact_sales');
+check('cta intent: page copy "Contact information" stays null (targeted, not bare "contact")', classifyCtaIntent('Contact information') === null);
+check('cta intent: "Download brochure"/"Datasheet"/"Download" → download', classifyCtaIntent('Download brochure') === 'download' && classifyCtaIntent('Datasheet') === 'download' && classifyCtaIntent('Download') === 'download');
+check('CTA: "Contact us" internal link → cta (contact intent), no longer dropped', (() => { const d = classifyElement(a('https://acme.com/contact', { text: 'Contact us' }), 'acme.com'); return d?.kind === 'cta' && d?.intent === 'contact'; })());
+check('CTA: "Download brochure" link to a page (no file ext) → cta (download intent), not dropped', (() => { const d = classifyElement(a('https://acme.com/downloads/vibroflex', { text: 'Download brochure' }), 'acme.com'); return d?.kind === 'cta' && d?.intent === 'download'; })());
+check('a real .pdf "Download brochure" link still classifies as download KIND (file link wins over intent)', classifyElement(a('https://acme.com/brochure.pdf', { text: 'Download brochure' }), 'acme.com')?.kind === 'download');
 // quote/demo recall: an adjective between the verb and the noun still matches.
 check('cta intent: "Get a free quote"/"Request your quote" → request_quote', classifyCtaIntent('Get a free quote') === 'request_quote' && classifyCtaIntent('Request your quote') === 'request_quote');
 check('cta intent: "Get a free demo"/"Book a demo"/"Request a demo" → book_demo', classifyCtaIntent('Get a free demo') === 'book_demo' && classifyCtaIntent('Book a demo') === 'book_demo' && classifyCtaIntent('Request a demo') === 'book_demo');
