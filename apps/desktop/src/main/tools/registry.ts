@@ -1047,6 +1047,8 @@ export function buildToolRegistry(
               formClassesOperator: { type: 'string' },
               pagePathValue: { type: 'string' },
               pagePathOperator: { type: 'string' },
+              pageUrlValue: { type: 'string' },
+              pageUrlOperator: { type: 'string' },
               eventName: { type: 'string' },
             },
             required: ['name', 'kind'],
@@ -1105,6 +1107,8 @@ export function buildToolRegistry(
           formClassesOperator: ts.formClassesOperator != null ? s(ts.formClassesOperator) : undefined,
           pagePathValue: ts.pagePathValue != null ? s(ts.pagePathValue) : undefined,
           pagePathOperator: ts.pagePathOperator != null ? s(ts.pagePathOperator) : undefined,
+          pageUrlValue: ts.pageUrlValue != null ? s(ts.pageUrlValue) : undefined,
+          pageUrlOperator: ts.pageUrlOperator != null ? s(ts.pageUrlOperator) : undefined,
           eventName: ts.eventName != null ? s(ts.eventName) : undefined,
         };
 

@@ -50,7 +50,7 @@ check('form: directly creatable (platform + measurementId)', out1[0].platform ==
 check('naming: tag "GA4 Event - Contact Form Tag", trigger "Contact Form Trigger"', out1[0].tagName === 'GA4 - Event - Contact Form Tag' && out1[0].trigger.name === 'Contact Form Trigger');
 const provLow = { vendor: 'unknown' as const, confidence: 'low' as const, evidence: '' };
 const searchForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'search', action: '', provider: provLow }], elements: [] });
-check('form: search form → ONE view_search_results site-search tag; ships only resolvable params + a note to add search_term', searchForm.length === 1 && searchForm[0].eventName === 'view_search_results' && searchForm[0].tagName === 'GA4 - Event - Site Search Tag' && !(searchForm[0].eventParameters ?? []).some((p) => p.value === '{{Search Term}}') && /search_term/.test(searchForm[0].note ?? ''));
+check('form: GET search bar → ONE view_search_results tag on a Page View where {{Page URL}} contains the query key', searchForm.length === 1 && searchForm[0].eventName === 'view_search_results' && searchForm[0].tagName === 'GA4 - Event - Site Search Tag' && searchForm[0].trigger.kind === 'pageview' && searchForm[0].trigger.pageUrlValue === '?q=' && !(searchForm[0].eventParameters ?? []).some((p) => p.value === '{{Search Term}}') && /search_term/.test(searchForm[0].note ?? ''));
 // A search bar on MANY pages (its action varies per page) is ONE header component → ONE site-wide tag.
 const multiSearch = buildSuggestions({ siteHost: 'a.com', forms: [
   { page: '/a', purpose: 'search', action: '/a/results', provider: provLow, fields: [{ type: 'text', name: 'search', required: false }] },
@@ -58,7 +58,19 @@ const multiSearch = buildSuggestions({ siteHost: 'a.com', forms: [
   { page: '/c', purpose: 'search', action: '/c/results', provider: provLow, fields: [{ type: 'text', name: 'search', required: false }] },
 ], elements: [] });
 const siteSearches = multiSearch.filter((s) => s.eventName === 'view_search_results');
-check('form: a search bar on many pages (varying actions) collapses to ONE site-wide search tag', siteSearches.length === 1 && siteSearches[0].page === 'site-wide' && !siteSearches[0].trigger.pagePathValue);
+check('form: a search bar on many pages (varying actions) collapses to ONE site-wide search tag', siteSearches.length === 1 && siteSearches[0].page === 'site-wide' && siteSearches[0].trigger.kind === 'pageview' && siteSearches[0].trigger.pageUrlValue === '?search=');
+// The trigger is chosen from HOW search runs: GET → Page View (above); AJAX/JS → site_search Custom Event; POST → Form Submission.
+const jsSearch = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'search', action: '', provider: provLow, method: 'js', fields: [{ type: 'text', name: 'q', required: false }] }], elements: [] });
+check('form: AJAX/JS search → view_search_results on a "site_search" Custom Event trigger', jsSearch.length === 1 && jsSearch[0].trigger.kind === 'custom_event' && jsSearch[0].trigger.eventName === 'site_search');
+const postSearch = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'search', action: '/results', provider: provLow, method: 'post', fields: [{ type: 'text', name: 'q', required: false }] }], elements: [] });
+check('form: POST search → view_search_results on a Form Submission trigger', postSearch.length === 1 && postSearch[0].trigger.kind === 'form_submit');
+// Mixed-method search on ONE site → distinct tags with DISTINCT names + ids (no GTM duplicate-name collision).
+const mixedSearch = buildSuggestions({ siteHost: 'a.com', forms: [
+  { page: '/', purpose: 'search', action: '', provider: provLow, method: 'get', fields: [{ type: 'text', name: 'q', required: false }] },
+  { page: '/', purpose: 'search', action: '', provider: provLow, method: 'js', fields: [{ type: 'text', name: 'q', required: false }] },
+  { page: '/', purpose: 'search', action: '/r', provider: provLow, method: 'post', fields: [{ type: 'text', name: 'q', required: false }] },
+], elements: [] }).filter((s) => s.eventName === 'view_search_results');
+check('form: mixed-method search (get/js/post) → distinct tag names + ids, no collision', mixedSearch.length === 3 && new Set(mixedSearch.map((s) => s.tagName)).size === 3 && new Set(mixedSearch.map((s) => s.id)).size === 3 && new Set(mixedSearch.map((s) => s.trigger.name)).size === 3);
 const loginFormS = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'login', action: '', provider: provLow }], elements: [] });
 check('form: login form → login event + "GA4 Event - Login Form Tag"', loginFormS.length === 1 && loginFormS[0].eventName === 'login' && loginFormS[0].tagName === 'GA4 - Event - Login Form Tag');
 check('form: checkout STILL produces no suggestion (ecommerce, deferred)', buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'checkout', action: '', provider: provLow }], elements: [] }).length === 0);

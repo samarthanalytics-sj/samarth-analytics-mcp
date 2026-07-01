@@ -55,6 +55,7 @@ export function triggerWhens(s: SuggestedTagView): TriggerWhen[] {
   if (t.formIdValue) out.push({ variable: '{{Form ID}}', condition: cond(t.formIdOperator, 'equals'), value: t.formIdValue });
   if (t.formClassesValue) out.push({ variable: '{{Form Classes}}', condition: cond(t.formClassesOperator, 'contains'), value: t.formClassesValue });
   if (t.pagePathValue) out.push({ variable: '{{Page Path}}', condition: cond(t.pagePathOperator, 'equals'), value: t.pagePathValue });
+  if (t.pageUrlValue) out.push({ variable: '{{Page URL}}', condition: cond(t.pageUrlOperator, 'contains'), value: t.pageUrlValue });
   return out;
 }
 
