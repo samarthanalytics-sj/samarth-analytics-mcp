@@ -3,7 +3,7 @@
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/suggest.node.test.ts
  */
 import { detectFormProvider, detectEmbeddedForm } from '../providers.js';
-import { buildSuggestions } from '../suggest.js';
+import { buildSuggestions, eventFromLabel } from '../suggest.js';
 import { isYouTubeEmbed } from '../video.js';
 import type { PageSignals, SuggestInput, DetectedForm } from '../types.js';
 
@@ -88,7 +88,7 @@ check('form: scoped to its id → {{Form ID}} equals, no caveat', formWithId[0].
 const titled = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'lead', title: 'Get a Free Consultation', fields: [{ type: 'email', name: 'email', required: true }] }], elements: [] });
 check('form: titled form → tag "GA4 Event - Get a Free Consultation Form Tag" + matching trigger',
   titled[0].tagName === 'GA4 - Event - Get A Free Consultation Form Tag' && titled[0].trigger.name === 'Get A Free Consultation Form Trigger');
-check('form: titled form keeps its purpose event (contact_form)', titled[0].eventName === 'contact_form');
+check('form: titled form → event derived from the title so it matches the tag name', titled[0].eventName === 'get_a_free_consultation_form');
 // A title that already says "Form" isn't doubled up; no title → purpose label.
 const titledForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'newsletter', action: '', provider: prov0, method: 'post', formId: 'n1', title: 'Newsletter Form' }], elements: [] });
 check('form: title already ending "Form" is not doubled ("Newsletter Form", not "Newsletter Form Form")', titledForm[0].tagName === 'GA4 - Event - Newsletter Form Tag');
@@ -245,6 +245,14 @@ check('provider: Pardot via form action (handler endpoint)', detectFormProvider(
 const otherForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/x', purpose: 'other', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
 check('form: "other" uses form_submission (not the reserved EM form_submit)', otherForm[0].eventName === 'form_submission');
 
+// ── eventFromLabel: GA4-valid event derived from a tag label ─────────────────
+check('eventFromLabel: snake_case + click suffix', eventFromLabel('VibroFlex NeoPDF / 1.3 MBDatasheet', 'click') === 'vibroflex_neopdf_1_3_mbdatasheet_click');
+check('eventFromLabel: does not double an already-present suffix', eventFromLabel('Email Click', 'click') === 'email_click');
+check('eventFromLabel: no suffix → plain snake_case', eventFromLabel('Download Form') === 'download_form');
+check('eventFromLabel: must start with a letter (leading digits stripped)', /^[a-z]/.test(eventFromLabel('1.3 Datasheet', 'click')));
+check('eventFromLabel: capped at GA4 40-char limit, trimmed at a word boundary', (() => { const e = eventFromLabel('Thank You For Your Interest In Optical Measurement Solutions Form'); return e.length <= 40 && !e.endsWith('_'); })());
+check('eventFromLabel: strips GA4 reserved prefixes (google_/ga_/firebase_ are silently dropped by GA4)', eventFromLabel('Google Maps', 'click') === 'maps_click' && eventFromLabel('GA Dashboard', 'click') === 'dashboard_click' && !/^(ga|google|firebase)_/.test(eventFromLabel('Firebase Console', 'click')));
+
 // ── CTA INTENT naming + dedup ─────────────────────────────────────────────────
 const ctaInput = buildSuggestions({
   siteHost: 'a.com', forms: [],
@@ -263,23 +271,23 @@ const ctaInput = buildSuggestions({
 // user prefers per-button clarity); the SAME text on multiple pages still collapses site-wide.
 // "contains" (not "equals") so the trigger still fires when GTM's rendered Click Text differs from
 // the scanned textContent (icon / hidden a11y span / scan-time truncation).
-const subs = ctaInput.filter((s) => s.eventName === 'subscribe_click');
-check('cta: each distinct subscribe text → its OWN tag named for that exact text (no regex collapse)',
+const subs = ctaInput.filter((s) => /GA4 - Event - Subscribe/.test(s.tagName));
+check('cta: each distinct subscribe text → its OWN tag + a label-derived event that matches the tag name',
   subs.length === 2 &&
-  subs.some((s) => s.tagName === 'GA4 - Event - Subscribe Now Click Tag' && s.trigger.name === 'Subscribe Now Click Trigger') &&
-  subs.some((s) => s.tagName === 'GA4 - Event - Subscribe Click Tag'));
+  subs.some((s) => s.tagName === 'GA4 - Event - Subscribe Now Click Tag' && s.eventName === 'subscribe_now_click' && s.trigger.name === 'Subscribe Now Click Trigger') &&
+  subs.some((s) => s.tagName === 'GA4 - Event - Subscribe Click Tag' && s.eventName === 'subscribe_click'));
 check('cta: named-intent trigger is a plain {{Click Text}} equals <text> (not matchRegex)',
   subs.every((s) => s.trigger.clickTextOperator === 'equals') &&
   ctaInput.find((s) => s.tagName === 'GA4 - Event - Subscribe Now Click Tag')?.trigger.clickTextValue === 'Subscribe now');
-const demo = ctaInput.find((s) => s.eventName === 'book_demo_click');
-check('cta: tag named for the actual button text "Request a demo", trigger {{Click Text}} equals it',
-  demo?.tagName === 'GA4 - Event - Request A Demo Click Tag' && demo?.trigger.name === 'Request A Demo Click Trigger' &&
+const demo = ctaInput.find((s) => s.tagName === 'GA4 - Event - Request A Demo Click Tag');
+check('cta: tag + event named for the actual button text "Request a demo" (event matches tag)',
+  demo?.eventName === 'request_a_demo_click' && demo?.trigger.name === 'Request A Demo Click Trigger' &&
   demo?.trigger.clickTextValue === 'Request a demo' && demo?.trigger.clickTextOperator === 'equals');
 check('cta: Learn More tag named for the button text + own event', ctaInput.find((s) => s.eventName === 'learn_more_click')?.tagName === 'GA4 - Event - Learn More Click Tag');
 check('cta: Add to Cart uses non-reserved add_to_cart_click event (not the GA4 ecommerce add_to_cart)',
   ctaInput.find((s) => s.eventName === 'add_to_cart_click')?.tagName === 'GA4 - Event - Add To Cart Click Tag' && !ctaInput.some((s) => s.eventName === 'add_to_cart'));
-const genericCtas = ctaInput.filter((s) => s.eventName === 'cta_click');
-check('cta: generic "Buy now" → {{Click Text}} equals "Buy now" + "Buy now Trigger" + same text collapses site-wide', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'equals' && genericCtas[0].trigger.name === 'Buy Now Click Trigger');
+const genericCtas = ctaInput.filter((s) => s.eventName === 'buy_now_click');
+check('cta: generic "Buy now" → label-derived event buy_now_click, {{Click Text}} equals "Buy now", same text collapses site-wide', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'equals' && genericCtas[0].trigger.name === 'Buy Now Click Trigger');
 check('cta: every CTA carries dynamic click_text={{Click Text}}', ctaInput.every((s) => s.eventParameters?.some((p) => p.name === 'click_text' && p.value === '{{Click Text}}')));
 check('cta: ALL CTA triggers use a plain "equals" condition (no regex)', ctaInput.every((s) => s.trigger.clickTextOperator === 'equals'));
 
