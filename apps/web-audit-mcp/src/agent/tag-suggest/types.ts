@@ -155,6 +155,10 @@ export interface SuggestedTag {
     formIdOperator?: FilterOp;
     formClassesValue?: string;
     formClassesOperator?: FilterOp;
+    /** For form_submit with no usable id/class: scope to the one page the form lives on via
+     *  {{Page Path}}, so a per-page form gets its OWN tag instead of folding into the All-Forms catch-all. */
+    pagePathValue?: string;
+    pagePathOperator?: FilterOp;
     eventName?: string;
   };
 }

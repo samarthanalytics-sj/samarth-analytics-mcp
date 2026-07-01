@@ -322,6 +322,8 @@ export interface SuggestedTagView {
     formIdOperator?: string;
     formClassesValue?: string;
     formClassesOperator?: string;
+    pagePathValue?: string;
+    pagePathOperator?: string;
     eventName?: string;
   };
 }

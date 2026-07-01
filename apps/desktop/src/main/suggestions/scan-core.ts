@@ -196,7 +196,7 @@ async function scanTarget(
 
 /** Dedup key for a suggestion — its event + trigger filter (mirrors buildSuggestions). */
 const suggestionKey = (s: SuggestedTag): string =>
-  `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}`;
+  `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}`;
 
 /** Does a CTA trigger fire on the given click text? Mirrors GTM's matchRegex (RE2 (?i)) / contains /
  *  equals, so we can tell whether an engine tag ALREADY covers an AI-suggested button. PURE. */
