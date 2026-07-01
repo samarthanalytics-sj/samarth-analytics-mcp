@@ -16,21 +16,18 @@ const GA4_VAR = '{{GA4 Measurement ID}}';
 const CLICK_URL = '{{Click URL}}';
 const CLICK_TEXT = '{{Click Text}}';
 const FORM_ID = '{{Form ID}}';
-const FORM_URL = '{{Form URL}}';
-const FORM_TEXT = '{{Form Text}}'; // the submit-button text ≈ GA4 form_submit_text
-// Page context on every suggested event. GA4 ALREADY auto-collects the full
-// page_location + page_title on every event, so we add the path and the referrer
-// ("previous page") rather than duplicating those.
+// Page context on every suggested event. GA4 already auto-collects page_location + page_title, so we
+// send the full page URL and the referrer ("previous page") for convenient reporting.
 const PAGE_PARAMS = [
-  { name: 'page_path', value: '{{Page Path}}' },
-  { name: 'page_referrer', value: '{{Referrer}}' },
+  { name: 'page_url', value: '{{Page URL}}' },
+  { name: 'previous_page', value: '{{Referrer}}' },
 ];
 /** Standard GA4 click params — what was clicked, its text, and page context.
  *  (click_url / click_text are the corpus-dominant names — 1090/1117 vs the GA4
  *  defaults link_url/link_text at 796/855.) */
 const CLICK_PARAMS = [
-  { name: 'click_url', value: CLICK_URL },
   { name: 'click_text', value: CLICK_TEXT },
+  { name: 'click_url', value: CLICK_URL },
   ...PAGE_PARAMS,
 ];
 // Standard GA4 video params, valued by GTM's "Video" built-in variables (the
@@ -237,7 +234,10 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     const onePage = ctx.pageBySignature.get(formSignature(f)) ?? null;
     if (onePage) {
       trigger.pagePathValue = onePage;
-      trigger.pagePathOperator = 'equals';
+      // Prefer "contains" so the trigger still matches with a trailing slash / query string / locale
+      // prefix; fall back to "equals" for a root or very short path, where "contains" would match
+      // essentially every page.
+      trigger.pagePathOperator = onePage.replace(/[^a-z0-9]/gi, '').length >= 3 ? 'contains' : 'equals';
       usedPage = onePage;
     }
   }
@@ -288,13 +288,12 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     tagName: tagNameOf(displayLabel, 'form_submit'),
     measurementId: GA4_VAR,
     eventName,
-    // Capture which form + where it submits, via the form built-in variables.
-    // (GTM has no built-in "Form Name" variable — form_text is the submit-button
-    // text; a true form_name would need a Custom JS variable.)
+    // form_id is the runtime {{Form ID}}; form_name is this form's known name baked in as a constant
+    // (GTM has no built-in {{Form Name}} variable, and this tag is scoped to one form). Strip any
+    // "{{ }}" from the scraped label so GTM does not resolve it as a variable reference in the value.
     eventParameters: [
       { name: 'form_id', value: FORM_ID },
-      { name: 'form_destination', value: FORM_URL },
-      { name: 'form_text', value: FORM_TEXT },
+      { name: 'form_name', value: displayLabel.replace(/[{}]/g, '') },
       ...PAGE_PARAMS,
     ],
     trigger,
@@ -402,35 +401,30 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
     case 'cta': {
       const def = CTA_BY_INTENT[el.intent ?? 'generic'];
       const isSpecific = def.intent !== 'generic';
-      // Trigger on the button/link text the user sees with a plain "{{Click Text}} contains <text>"
-      // condition — readable in GTM and the label from the page ("Schedule Strategy Call") — instead
-      // of a big intent regex. "contains" (not "equals") because GTM's {{Click Text}} is the RENDERED
-      // text of the clicked node, while the scan captures the element's full textContent: equals would
-      // miss buttons with an icon / hidden accessibility span, or whose text was truncated at scan
-      // time. The intent still selects the semantic GA4 event (book_demo_click, …) + confidence; a CTA
-      // with different text becomes its OWN tag (per-button clarity over one regex collapsing
-      // variants), and the SAME text on multiple pages still collapses site-wide (dedup key is the
-      // click-text value). cta_text={{Click Text}} carries the exact clicked label for GA4 drill-down.
+      // Fire on the EXACT button/link text the user sees with "{{Click Text}} equals <text>" — a
+      // precise, readable condition (the label from the page, e.g. "Get a Quote") rather than a broad
+      // "contains" (which also fires on "Get a Quote Now") or an intent regex. NOTE: GTM's {{Click
+      // Text}} is the RENDERED text of the clicked node; a button that wraps an icon / hidden a11y span
+      // may have a runtime text that differs from the scraped label, in which case this exact match
+      // needs widening to "contains". The intent still selects the semantic GA4 event (book_demo_click,
+      // …) + confidence; a CTA with different text becomes its OWN tag, and the SAME text on multiple
+      // pages still collapses site-wide (dedup key is the click-text value).
       const ctaText = el.text.replace(/\s+/g, ' ').trim();
       const displayLabel = ctaText.slice(0, 60) || def.label;
       const trigger: SuggestedTag['trigger'] = {
         name: trigNameOf(displayLabel, 'all_clicks'),
         kind: 'all_clicks',
         clickTextValue: ctaText || def.label,
-        clickTextOperator: 'contains',
+        clickTextOperator: 'equals',
       };
       return {
         ...base(def.event, isSpecific ? 'medium' : 'low', false),
         tagName: tagNameOf(displayLabel, 'all_clicks'),
         label: `"${displayLabel}" → GA4 "${def.event}"`,
         evidence: `button/link text "${el.text}"` + (isSpecific ? ` (intent: ${el.intent})` : ''),
-        // cta_text is the DYNAMIC clicked text ({{Click Text}}), not the value
-        // baked in at scan time; link_url captures the href when the CTA is a link.
-        eventParameters: [
-          { name: 'cta_text', value: CLICK_TEXT },
-          { name: 'click_url', value: CLICK_URL },
-          ...PAGE_PARAMS,
-        ],
+        // Standard click params: click_text ({{Click Text}}) is the dynamic clicked label, click_url
+        // the href when the CTA is a link, plus page context.
+        eventParameters: CLICK_PARAMS,
         trigger,
       };
     }
@@ -505,7 +499,7 @@ export function allFormsSuggestion(): SuggestedTag {
     tagName: tagNameOf('All Form Submissions', 'form_submit'),
     measurementId: GA4_VAR,
     eventName: 'form_submission',
-    eventParameters: [{ name: 'form_id', value: FORM_ID }, { name: 'form_url', value: FORM_URL }, ...PAGE_PARAMS],
+    eventParameters: [{ name: 'form_id', value: FORM_ID }, { name: 'form_name', value: FORM_ID }, ...PAGE_PARAMS],
     trigger: { name: trigNameOf('All Form Submissions', 'form_submit'), kind: 'form_submit' },
   };
 }

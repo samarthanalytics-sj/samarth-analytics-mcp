@@ -38,6 +38,8 @@ export const GTM_CREATION_METHODOLOGY =
   'needs; always create a referenced variable BEFORE the trigger/tag that reads it. ' +
   'GA4 EVENT TAG: type gaawe; event parameters go in eventSettingsTable (not eventParameters); measurementId = {{GA4 Measurement ID}}; ' +
   'for ecommerce build the parameters from the GA4 ecommerce reference, each value reading {{Ecommerce <param>}} off the dataLayer. ' +
+  'STANDARD EVENT PARAMETERS: a click/CTA tag sends click_text ({{Click Text}}), click_url ({{Click URL}}), page_url ({{Page URL}}), previous_page ({{Referrer}}); a form tag sends form_id ({{Form ID}}), form_name (the form name), page_url, previous_page. ' +
+  'TRIGGER CONDITIONS must be EXACT — tell GTM precisely WHEN to fire: a click/CTA trigger matches {{Click Text}} EQUALS the exact button label (not contains, which would also fire on a longer label); scope a page-specific trigger (a form that lives on only one page, or a Thank-You / confirmation page) with {{Page Path}} (or {{Page URL}}) CONTAINS the path fragment — e.g. Page Path contains "/request-demo", or a Thank-You page is Page URL contains "/purchase-successful/". That path condition is how you say "fire ONLY on this page" rather than on every page. ' +
   'GOTCHAS: always go through the builders (container exports use UPPER_SNAKE enums, the API takes camelCase); moving to a folder ' +
   'with an empty array 500s; retry on quota errors; folders, environments, and versions ARE API-supported. ' +
   'WORKFLOW per request: (1) restate the intent + the GA4 event it maps to; (2) audit/list for reusable triggers/variables and dup ' +
