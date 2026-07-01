@@ -1,3 +1,9 @@
+## [1.120.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.119.1...v1.120.0) (2026-07-01)
+
+### Features
+
+* **desktop:** add search + type (click/form) filter to the tag suggestion panel ([4c1df0f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4c1df0fee153430898afffb1be5850e809218d9c))
+
 ## [1.119.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.119.0...v1.119.1) (2026-07-01)
 
 ### Bug Fixes
