@@ -1,3 +1,9 @@
+## [1.116.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.115.2...v1.116.0) (2026-07-01)
+
+### Features
+
+* **desktop:** share one GTM creation methodology across chat + AI tag scan ([05ab309](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/05ab3094799f7d409f759117eb4764b2b83fcba7))
+
 ## [1.115.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.115.1...v1.115.2) (2026-07-01)
 
 ### Bug Fixes
