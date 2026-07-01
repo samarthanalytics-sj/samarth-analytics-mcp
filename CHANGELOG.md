@@ -1,3 +1,9 @@
+## [1.119.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.118.0...v1.119.0) (2026-07-01)
+
+### Features
+
+* **desktop:** add a full GTM trigger + variable reference to the chat methodology ([11fe5c6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/11fe5c65daa6993a5b34125800181dded1e8ceac))
+
 ## [1.118.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.117.0...v1.118.0) (2026-07-01)
 
 ### Features
