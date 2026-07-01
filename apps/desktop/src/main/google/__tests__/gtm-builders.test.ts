@@ -42,6 +42,7 @@ import {
   triggerBuiltInVars,
   builtInVarsForTemplates,
   buildVariable,
+  buildUrlQueryVariable,
   auditContainer,
   sanitizeName,
   findGa4BaseTag,
@@ -226,6 +227,15 @@ test('pageview trigger: pageUrlValue → fires on Some pages via {{Page URL}} co
   assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, 'q=');
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'pageview', pageUrlValue: 'q=' }), ['pageUrl']);
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'pageview' }), []); // plain pageview enables nothing
+});
+
+test('buildUrlQueryVariable: URL variable reading ?<key>= (component QUERY + queryKey), name verbatim', () => {
+  const v = buildUrlQueryVariable('URL - search', 'search');
+  assert.equal(v.name, 'URL - search'); // verbatim so a {{URL - search}} reference resolves to it
+  assert.equal(v.type, 'u');
+  const p = v.parameter as Array<{ key: string; value: string }>;
+  assert.equal(p.find((x) => x.key === 'component')?.value, 'QUERY');
+  assert.equal(p.find((x) => x.key === 'queryKey')?.value, 'search');
 });
 
 test('youtube_video trigger: youTubeVideo type, capture params in parameter[], enables Video built-ins', () => {

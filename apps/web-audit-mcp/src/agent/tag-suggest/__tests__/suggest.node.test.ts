@@ -50,7 +50,7 @@ check('form: directly creatable (platform + measurementId)', out1[0].platform ==
 check('naming: tag "GA4 Event - Contact Form Tag", trigger "Contact Form Trigger"', out1[0].tagName === 'GA4 - Event - Contact Form Tag' && out1[0].trigger.name === 'Contact Form Trigger');
 const provLow = { vendor: 'unknown' as const, confidence: 'low' as const, evidence: '' };
 const searchForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'search', action: '', provider: provLow }], elements: [] });
-check('form: GET search bar → ONE view_search_results tag on a Page View where {{Page URL}} contains the query key', searchForm.length === 1 && searchForm[0].eventName === 'view_search_results' && searchForm[0].tagName === 'GA4 - Event - Site Search Tag' && searchForm[0].trigger.kind === 'pageview' && searchForm[0].trigger.pageUrlValue === '?q=' && !(searchForm[0].eventParameters ?? []).some((p) => p.value === '{{Search Term}}') && /search_term/.test(searchForm[0].note ?? ''));
+check('form: GET search bar → view_search_results Page View ({{Page URL}} contains ?q=) + search_term = {{URL - q}}', searchForm.length === 1 && searchForm[0].eventName === 'view_search_results' && searchForm[0].tagName === 'GA4 - Event - Site Search Tag' && searchForm[0].trigger.kind === 'pageview' && searchForm[0].trigger.pageUrlValue === '?q=' && (searchForm[0].eventParameters ?? []).some((p) => p.name === 'search_term' && p.value === '{{URL - q}}'));
 // A search bar on MANY pages (its action varies per page) is ONE header component → ONE site-wide tag.
 const multiSearch = buildSuggestions({ siteHost: 'a.com', forms: [
   { page: '/a', purpose: 'search', action: '/a/results', provider: provLow, fields: [{ type: 'text', name: 'search', required: false }] },
