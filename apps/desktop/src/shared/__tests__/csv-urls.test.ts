@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { parseCsvUrls, CSV_URL_CAP } from '../csv-urls';
+import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../csv-urls';
 
 let passed = 0;
 let failed = 0;
@@ -88,6 +88,20 @@ test('empty / nullish input → empty list (no throw)', () => {
 
 test('CSV cap is a sane positive bound', () => {
   assert.ok(CSV_URL_CAP >= 25 && CSV_URL_CAP <= 1000);
+});
+
+test('parseCsvUrlStats reports unique urls + total + duplicates (exact and near-dupes)', () => {
+  const s = parseCsvUrlStats('https://a.com/x\nhttps://a.com/x\nhttps://a.com/x/\nhttps://a.com/x#top\nhttps://a.com/y');
+  assert.deepEqual(s.urls, ['https://a.com/x', 'https://a.com/y']);
+  assert.equal(s.total, 5); // 5 valid URL rows before de-dup
+  assert.equal(s.duplicates, 3); // exact + trailing-slash + anchor near-dupes of /x
+});
+
+test('parseCsvUrlStats: no duplicates → duplicates 0, and parseCsvUrls === stats.urls', () => {
+  const s = parseCsvUrlStats('https://a.com/x\nhttps://a.com/y');
+  assert.equal(s.total, 2);
+  assert.equal(s.duplicates, 0);
+  assert.deepEqual(parseCsvUrls('https://a.com/x\nhttps://a.com/y'), s.urls);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

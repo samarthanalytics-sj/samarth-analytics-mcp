@@ -22,7 +22,7 @@ import type {
   TagScanResult,
 } from '../../shared/ipc';
 import { suggestionToGroup, suggestionsToTemplateCsv, TEMPLATE_HEADERS } from '../../shared/tag-template';
-import { parseCsvUrls, CSV_URL_CAP } from '../../shared/csv-urls';
+import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
@@ -2025,8 +2025,9 @@ function TagReviewPanel({
   }
 
   const selectedIds = suggestions.filter((s) => selected[s.id]).map((s) => s.id);
-  // Live count of valid URLs in the CSV box (drives the "Scan N pages" button + the detected-count hint).
-  const csvUrlCount = useMemo(() => (discoverMode === 'csv' ? parseCsvUrls(csvText).length : 0), [discoverMode, csvText]);
+  // Live de-dup stats for the CSV box (drives the "Scan N pages" button + the unique/skipped hint).
+  const csvStats = useMemo(() => parseCsvUrlStats(csvText), [csvText]);
+  const csvUrlCount = discoverMode === 'csv' ? csvStats.urls.length : 0;
   // Search + type filter → the VISIBLE subset of suggestions (a view; selection is keyed by id and
   // persists across filter changes). Clicks = link/all clicks; Form = form submit; Other = everything
   // else (Google tag / pageview / video / custom event). (effective is a hoisted fn; safe to use here.)
@@ -2242,7 +2243,9 @@ function TagReviewPanel({
                 </button>
                 {csvText.trim() !== '' && (
                   <span style={styles.muted}>
-                    {csvUrlCount} valid URL{csvUrlCount === 1 ? '' : 's'} detected{csvUrlCount > CSV_URL_CAP ? ` (first ${CSV_URL_CAP} scanned)` : ''}
+                    {csvStats.urls.length} unique page{csvStats.urls.length === 1 ? '' : 's'} detected
+                    {csvStats.duplicates > 0 ? ` (${csvStats.duplicates} duplicate${csvStats.duplicates === 1 ? '' : 's'} skipped)` : ''}
+                    {csvStats.urls.length > CSV_URL_CAP ? ` · first ${CSV_URL_CAP} scanned` : ''}
                   </span>
                 )}
               </div>

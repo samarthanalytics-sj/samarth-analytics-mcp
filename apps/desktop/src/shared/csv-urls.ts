@@ -40,9 +40,18 @@ function dedupeKey(href: string): string {
   }
 }
 
-export function parseCsvUrls(text: string): string[] {
-  const out: string[] = [];
+/** Result of parsing a CSV: the UNIQUE URLs to scan, plus how many valid URLs were found before
+ *  de-dup and how many near-dupes were skipped — so the UI can show "N unique pages (M skipped)". */
+export interface CsvUrlStats {
+  urls: string[]; // unique, in first-seen order (as written)
+  total: number; // valid URLs found before de-dup
+  duplicates: number; // total - urls.length (exact + near-duplicate rows skipped)
+}
+
+export function parseCsvUrlStats(text: string): CsvUrlStats {
+  const urls: string[] = [];
   const seen = new Set<string>();
+  let total = 0;
   for (const line of String(text ?? '').split(/\r?\n/)) {
     const cells = line.split(',');
     for (let i = 0; i < cells.length; i++) {
@@ -60,15 +69,20 @@ export function parseCsvUrls(text: string): string[] {
           href = merged;
         }
       }
+      total += 1; // a valid URL on this row (counted before de-dup)
       const key = dedupeKey(href);
       if (!seen.has(key)) {
         seen.add(key);
-        out.push(href); // keep the URL as written (first occurrence); later near-dupes are skipped
+        urls.push(href); // keep the URL as written (first occurrence); later near-dupes are skipped
       }
       break; // first URL on the row wins; the rest of the row is treated as a label
     }
   }
-  return out;
+  return { urls, total, duplicates: total - urls.length };
+}
+
+export function parseCsvUrls(text: string): string[] {
+  return parseCsvUrlStats(text).urls;
 }
 
 // Cap a CSV import to the scanner's per-run page cap (SCAN_URLS_CAP in main/suggestions/scan-core.ts),
