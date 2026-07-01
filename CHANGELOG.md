@@ -1,3 +1,9 @@
+## [1.125.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.124.0...v1.125.0) (2026-07-01)
+
+### Features
+
+* **web-audit:** derive the GA4 event name from each tag's label so it matches the tag ([b696197](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b6961974c139d09c50c2a15f34748d910f27db61))
+
 ## [1.124.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.123.0...v1.124.0) (2026-07-01)
 
 ### Features
