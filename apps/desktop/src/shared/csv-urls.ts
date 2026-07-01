@@ -1,7 +1,8 @@
 // Extract landing-page URLs from pasted/loaded CSV (or plain) text for the tag-suggestion scanner.
 // One URL per row, taking the first URL-looking cell so "url,label" rows work too; adds https:// to a
-// bare domain, skips a header cell, validates via URL(), and de-duplicates. Pure + framework-free so
-// it's shared by the renderer and unit-testable.
+// bare domain, skips a header cell, validates via URL(), and de-duplicates. De-dup folds near-dupes
+// that point at the SAME page to scan (a trailing slash, or a plain #anchor) so the scanner visits each
+// page once. Pure + framework-free so it's shared by the renderer and unit-testable.
 
 // Don't promote a bare filename (report.csv, index.html, photo.png) to https://report.csv.
 const FILE_EXT = /\.(csv|tsv|txt|json|xml|xlsx?|html?|pdf|png|jpe?g|gif|svg|webp|zip|gz|tgz|tar|docx?|pptx?|md)$/i;
@@ -20,6 +21,22 @@ function normCell(raw: string): string | null {
     return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
   } catch {
     return null;
+  }
+}
+
+// The de-dup KEY for a URL: two URLs sharing this key are the same page to scan, so only the first is
+// kept. We fold a trailing slash (/x/ === /x) and a plain #anchor (/x#form === /x), but KEEP apart
+// anything that can serve different content: protocol, host, and query string, plus a hash-ROUTE
+// fragment (#/… or #!…, where a hash-routing SPA uses the fragment as the actual page).
+function dedupeKey(href: string): string {
+  try {
+    const u = new URL(href);
+    const hashVal = u.hash.replace(/^#/, '');
+    if (!hashVal || !/^[/!]/.test(hashVal)) u.hash = ''; // drop empty + plain-anchor fragments; keep #/… routes
+    if (u.pathname.length > 1 && u.pathname.endsWith('/')) u.pathname = u.pathname.replace(/\/+$/, '');
+    return u.href;
+  } catch {
+    return href;
   }
 }
 
@@ -43,9 +60,10 @@ export function parseCsvUrls(text: string): string[] {
           href = merged;
         }
       }
-      if (!seen.has(href)) {
-        seen.add(href);
-        out.push(href);
+      const key = dedupeKey(href);
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(href); // keep the URL as written (first occurrence); later near-dupes are skipped
       }
       break; // first URL on the row wins; the rest of the row is treated as a label
     }

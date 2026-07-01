@@ -38,6 +38,27 @@ test('de-duplicates identical URLs', () => {
   assert.deepEqual(parseCsvUrls('https://a.com/x\nhttps://a.com/x'), ['https://a.com/x']);
 });
 
+test('folds trailing-slash near-dupes to one page (first written form kept)', () => {
+  assert.deepEqual(parseCsvUrls('https://a.com/x\nhttps://a.com/x/'), ['https://a.com/x']);
+  assert.deepEqual(parseCsvUrls('https://a.com/x/\nhttps://a.com/x'), ['https://a.com/x/']);
+  // root "/" is left alone (already normalized by URL) and still de-dupes
+  assert.deepEqual(parseCsvUrls('https://a.com\nhttps://a.com/'), ['https://a.com/']);
+});
+
+test('folds plain #anchor near-dupes (same page, different in-page anchor)', () => {
+  assert.deepEqual(parseCsvUrls('https://a.com/p\nhttps://a.com/p#contact'), ['https://a.com/p']);
+  assert.deepEqual(parseCsvUrls('https://a.com/p#a\nhttps://a.com/p#b'), ['https://a.com/p#a']);
+  // trailing slash AND anchor together still collapse
+  assert.deepEqual(parseCsvUrls('https://a.com/x/#top\nhttps://a.com/x'), ['https://a.com/x/#top']);
+});
+
+test('keeps genuinely-distinct URLs apart (query string + hash-route SPA pages)', () => {
+  // different query = potentially different content → NOT merged
+  assert.deepEqual(parseCsvUrls('https://a.com/p?id=1\nhttps://a.com/p?id=2'), ['https://a.com/p?id=1', 'https://a.com/p?id=2']);
+  // hash-routing SPA: the #/route IS the page → kept distinct
+  assert.deepEqual(parseCsvUrls('https://a.com/#/products\nhttps://a.com/#/pricing'), ['https://a.com/#/products', 'https://a.com/#/pricing']);
+});
+
 test('ignores blanks, junk cells, and non-http(s) schemes', () => {
   assert.deepEqual(parseCsvUrls('\n  \nnot a url\njavascript:alert(1)\nmailto:a@b.com\nhttps://ok.com/p'), ['https://ok.com/p']);
 });
