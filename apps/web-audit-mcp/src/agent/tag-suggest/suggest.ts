@@ -86,15 +86,18 @@ const titleCase = (s: string): string =>
     })
     .join(' ');
 
-// Naming convention: tags read "GA4 – Event – <Event Name in Title Case>"; triggers read
-// "<Event Name> Click Trigger" (click-based) or "<Event Name> Form Trigger" (form submits).
-export const tagNameOf = (label: string): string => clean(`GA4 – Event – ${titleCase(label)}`);
-export const trigNameOf = (label: string, kind: TriggerKind): string => {
-  const d = titleCase(label);
-  if (kind === 'form_submit') return clean(/\bform(s)?$/i.test(d) || /submission/i.test(d) ? `${d} Trigger` : `${d} Form Trigger`);
-  if (kind === 'link_click' || kind === 'all_clicks') return clean(/\bclick$/i.test(d) ? `${d} Trigger` : `${d} Click Trigger`);
-  return clean(`${d} Trigger`); // youtube_video / pageview / custom_event — neither click nor form
+// Naming convention: tags read "GA4 - Event - <Event Name in Title Case>[ Click| Form] Tag"; triggers
+// read "<Event Name>[ Click| Form] Trigger". The Click/Form word reflects the trigger KIND (a click vs
+// a form submit) and is omitted for other kinds (video/pageview/custom event); it is never doubled up
+// when the label already ends in it (e.g. "Newsletter Form", "Email Click"). tagNameOf + trigNameOf
+// share this so a tag and its trigger always carry the SAME kind word.
+const kindWord = (d: string, kind: TriggerKind): string => {
+  if (kind === 'form_submit') return /\bform(s)?$/i.test(d) || /submission/i.test(d) ? d : `${d} Form`;
+  if (kind === 'link_click' || kind === 'all_clicks') return /\bclick$/i.test(d) ? d : `${d} Click`;
+  return d; // youtube_video / pageview / custom_event — neither click nor form
 };
+export const tagNameOf = (label: string, kind: TriggerKind): string => clean(`GA4 - Event - ${kindWord(titleCase(label), kind)} Tag`);
+export const trigNameOf = (label: string, kind: TriggerKind): string => clean(`${kindWord(titleCase(label), kind)} Trigger`);
 
 // Human-readable label for a GA4 event name, used in tag names (elements only —
 // forms use FORM_LABEL, CTAs use their intent label).
@@ -282,7 +285,7 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     // GA4 EM "form interactions" is limited/generic; a dedicated lead event is valuable.
     enhancedMeasurementOverlap: false,
     platform: 'ga4_event',
-    tagName: tagNameOf(displayLabel),
+    tagName: tagNameOf(displayLabel, 'form_submit'),
     measurementId: GA4_VAR,
     eventName,
     // Capture which form + where it submits, via the form built-in variables.
@@ -335,7 +338,7 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
     confidence: conf,
     enhancedMeasurementOverlap: em,
     platform: 'ga4_event' as const,
-    tagName: tagNameOf(eventLabel(eventName)),
+    tagName: tagNameOf(eventLabel(eventName), 'link_click'),
     measurementId: GA4_VAR,
     eventName,
   });
@@ -368,7 +371,7 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
       const extLabel = ext ? ext.toUpperCase() : 'File';
       return {
         ...base('file_download', 'medium', true), // EM already auto-tracks downloads
-        tagName: tagNameOf(`${extLabel} Download`),
+        tagName: tagNameOf(`${extLabel} Download`, 'link_click'),
         label: `${extLabel} download → GA4 "file_download"  ⚠ Enhanced Measurement already covers this`,
         evidence: `download link ${el.href ?? ''}`.trim(),
         eventParameters: CLICK_PARAMS,
@@ -418,7 +421,7 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
       };
       return {
         ...base(def.event, isSpecific ? 'medium' : 'low', false),
-        tagName: tagNameOf(displayLabel),
+        tagName: tagNameOf(displayLabel, 'all_clicks'),
         label: `"${displayLabel}" → GA4 "${def.event}"`,
         evidence: `button/link text "${el.text}"` + (isSpecific ? ` (intent: ${el.intent})` : ''),
         // cta_text is the DYNAMIC clicked text ({{Click Text}}), not the value
@@ -447,7 +450,7 @@ function videoSuggestion(embeds: VideoEmbed[]): SuggestedTag | null {
     confidence: 'medium',
     enhancedMeasurementOverlap: true,
     platform: 'ga4_event',
-    tagName: tagNameOf('YouTube Video'),
+    tagName: tagNameOf('YouTube Video', 'youtube_video'),
     measurementId: GA4_VAR,
     eventName: YT_VIDEO_EVENT,
     label: 'YouTube video → GA4 "video_start / video_progress / video_complete"  ⚠ Enhanced Measurement may already cover this',
@@ -499,7 +502,7 @@ export function allFormsSuggestion(): SuggestedTag {
     confidence: 'medium',
     enhancedMeasurementOverlap: false,
     platform: 'ga4_event',
-    tagName: tagNameOf('All Form Submissions'),
+    tagName: tagNameOf('All Form Submissions', 'form_submit'),
     measurementId: GA4_VAR,
     eventName: 'form_submission',
     eventParameters: [{ name: 'form_id', value: FORM_ID }, { name: 'form_url', value: FORM_URL }, ...PAGE_PARAMS],

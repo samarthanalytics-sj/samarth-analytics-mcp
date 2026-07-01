@@ -41,11 +41,14 @@ test('GTM_AUDIT_METHODOLOGY carries the Audit-Brain essentials', () => {
   assert.ok(/ad_user_data/.test(m) && /ad_personalization/.test(m), 'names the four Consent Mode v2 signals');
 });
 
-test('GA4_TAG_NAMING defines the "GA4 - Event - <Name> Tag" / "<Name> Trigger" format', () => {
+test('GA4_TAG_NAMING defines the "GA4 - Event - <Name>[ Click|Form] Tag" / "<Name>[ Click|Form] Trigger" format', () => {
   const m = GA4_TAG_NAMING;
-  assert.ok(m.includes('GA4 - Event - <Name> Tag'), 'tag-name format');
-  assert.ok(m.includes('<Name> Trigger'), 'trigger-name format');
-  assert.ok(/Add To Cart Tag/.test(m) && /Add To Cart Trigger/.test(m), 'worked example');
+  assert.ok(m.includes('GA4 - Event - <Name>') && m.includes(' Tag'), 'tag-name format (GA4 - Event - <Name> ... Tag)');
+  assert.ok(/Click Tag/.test(m) && /Form Tag/.test(m), 'has both Click and Form kind words');
+  assert.ok(/Book A Demo Click Tag/.test(m) && /Book A Demo Click Trigger/.test(m), 'click worked example (tag + trigger)');
+  assert.ok(/Newsletter Form Tag/.test(m) && /Newsletter Form Trigger/.test(m), 'form worked example (tag + trigger)');
+  assert.ok(/Add To Cart Tag/.test(m) && /Add To Cart Trigger/.test(m), 'custom-event example omits the kind word');
+  assert.ok(/OMIT the word/i.test(m), 'states the omit-kind-word rule for custom-event/pageview');
 });
 
 test('GA4_ECOMMERCE_REFERENCE maps each ecommerce event to its parameters', () => {
