@@ -1,3 +1,9 @@
+## [1.132.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.131.0...v1.132.0) (2026-07-01)
+
+### Features
+
+* **web-audit:** track an FAQ accordion as ONE tag firing on the whole row ([1f7fd73](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1f7fd734e328b01f621cdaa72e4e77787ff301cc))
+
 ## [1.131.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.130.0...v1.131.0) (2026-07-01)
 
 ### Features
