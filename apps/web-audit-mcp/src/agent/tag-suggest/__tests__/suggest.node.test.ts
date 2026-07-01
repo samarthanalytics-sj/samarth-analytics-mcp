@@ -341,6 +341,17 @@ const docDl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page
 check('download: ".doc" ends-with does NOT over-match ".docx"', docDl?.trigger.clickUrlValue === '.doc' && docDl?.trigger.clickUrlOperator === 'endsWith');
 const noExtDl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Get file', href: 'https://a.com/download' }] }).find((s) => s.eventName === 'file_download');
 check('download: no clear extension → multi-ext regex fallback ("File Download")', noExtDl?.tagName === 'GA4 - Event - File Download Click Tag' && noExtDl?.trigger.clickUrlOperator === 'matchRegex' && /pdf\|zip/.test(noExtDl?.trigger.clickUrlValue ?? ''));
+// A labeled DOWNLOAD-CTA link ("Download brochure") to a file surfaces DISTINCTLY (scoped to its
+// {{Click Text}}), not folded into the generic extension tag — still EM-overlap (de-selected until opt-in).
+const brochureDl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Download brochure', href: 'https://a.com/OM_PB_Vibrometry.pdf' }] });
+const brochure = brochureDl.find((s) => s.trigger.clickTextValue === 'Download brochure');
+check('download: labeled "Download brochure" → own tag on {{Click Text}} equals, file_download + EM overlap',
+  !!brochure && brochure.eventName === 'file_download' && brochure.trigger.kind === 'link_click' && brochure.trigger.clickTextOperator === 'equals' && brochure.enhancedMeasurementOverlap === true && /download brochure/i.test(brochure.tagName));
+check('download: the labeled brochure link does NOT also emit the generic "PDF Download" (folding avoided)', !brochureDl.some((s) => s.tagName === 'GA4 - Event - PDF Download Click Tag'));
+// A generic filename ("Guide") has no download intent → stays the generic extension tag (unchanged).
+const guideDl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Guide', href: 'https://a.com/g.pdf' }] });
+check('download: generic label "Guide" still folds into "PDF Download" (URL-scoped, not click-text)',
+  guideDl.some((s) => s.tagName === 'GA4 - Event - PDF Download Click Tag' && s.trigger.clickUrlOperator === 'endsWith') && !guideDl.some((s) => s.trigger.clickTextValue));
 check('full: SCOPED / purpose form tag is KEPT (contact_form not dropped by the catch-all)', fullForm.some((s) => s.eventName === 'contact_form'));
 // A single-page generic form (no id/class) is now PAGE-SCOPED to its own tag (per-form), instead of
 // being folded into the catch-all. The All-Forms catch-all is still offered alongside it.

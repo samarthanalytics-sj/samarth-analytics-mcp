@@ -6,7 +6,7 @@
 // create_gtm_tracking_tag tool.
 
 import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, FormProvider, VideoEmbed, TriggerKind } from './types.js';
-import { CTA_BY_INTENT } from './cta-intents.js';
+import { CTA_BY_INTENT, classifyCtaIntent } from './cta-intents.js';
 import { buildSocialUrlPattern } from './social.js';
 
 const GA4_VAR = '{{GA4 Measurement ID}}';
@@ -434,6 +434,27 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         trigger: { name: trigNameOf('Phone', 'link_click'), kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
       };
     case 'download': {
+      // A download link with a MEANINGFUL label ("Download brochure", "Datasheet") surfaces as its OWN
+      // selectable suggestion, scoped to its {{Click Text}}, instead of folding into the generic
+      // extension tag — so a named brochure/datasheet download is visible + selectable in the list. It
+      // stays flagged as EM-overlap (GA4 auto-tracks file downloads), so it is de-selected until the
+      // user opts in. A bare/icon-only "Download" (or no descriptive text) falls through to the generic.
+      // Gate on a clear DOWNLOAD-CTA label ("Download brochure", "Datasheet", "Whitepaper") via the
+      // shared download intent — a generic file label ("Guide", "Bundle", a bare filename) has no
+      // download intent and stays in the generic extension tag below.
+      const dlText = el.text.replace(/\s+/g, ' ').trim();
+      const labeled = dlText.length >= 3 && dlText.length <= 48 && classifyCtaIntent(dlText) === 'download';
+      if (labeled) {
+        const dlLabel = dlText.slice(0, 60);
+        return {
+          ...base('file_download', 'medium', true), // EM already auto-tracks downloads → de-selected, but visible
+          tagName: tagNameOf(dlLabel, 'link_click'),
+          label: `"${dlLabel}" download → GA4 "file_download"  ⚠ Enhanced Measurement already covers this`,
+          evidence: `download link "${el.text}" → ${el.href ?? ''}`.trim(),
+          eventParameters: CLICK_PARAMS,
+          trigger: { name: trigNameOf(dlLabel, 'link_click'), kind: 'link_click', clickTextValue: dlText, clickTextOperator: 'equals' },
+        };
+      }
       // Name + scope the tag for the ACTUAL file type ("PDF Download") with a plain
       // "{{Click URL}} ends with .pdf" condition instead of a multi-extension regex. "ends with"
       // anchors at the end of the URL, so it never false-fires on a mid-string match (a /our-services
