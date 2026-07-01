@@ -34,6 +34,14 @@ const form = base({
 });
 check('when: form_submit formId equals → {{Form ID}} / "equals to" / value', triggerWhens(form)[0].condition === 'equals to' && triggerWhens(form)[0].variable === '{{Form ID}}');
 
+// A page-scoped form (no id/class, one page) → {{Page Path}} condition, NOT "fires on every form submit".
+const pageForm = base({
+  id: 'pf', tagName: 'GA4 - Event - Contact Form Tag', eventName: 'contact_form',
+  trigger: { name: 'Contact Form Trigger', kind: 'form_submit', pagePathValue: '/en/request-demo', pagePathOperator: 'contains' },
+});
+const pfw = triggerWhens(pageForm);
+check('when: page-scoped form_submit → {{Page Path}} contains "/en/request-demo" (not "every form submit")', pfw.length === 1 && pfw[0].variable === '{{Page Path}}' && pfw[0].value === '/en/request-demo');
+
 // ── group shape ──────────────────────────────────────────────────────────────
 const gp = suggestionToGroup(phone);
 check('group: tagType + triggerType mapped (Click - Just Links)', gp.tagType === 'GA4 Event Tag' && gp.triggerType === 'Click - Just Links');

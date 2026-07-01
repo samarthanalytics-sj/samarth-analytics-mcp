@@ -1237,6 +1237,7 @@ function triggerCondition(s: SuggestedTagView): string {
   if (t.clickTextValue) parts.push(`{{Click Text}} ${t.clickTextOperator ?? 'contains'} "${t.clickTextValue}"`);
   if (t.formIdValue) parts.push(`{{Form ID}} ${t.formIdOperator ?? 'equals'} "${t.formIdValue}"`);
   if (t.formClassesValue) parts.push(`{{Form Classes}} ${t.formClassesOperator ?? 'contains'} "${t.formClassesValue}"`);
+  if (t.pagePathValue) parts.push(`{{Page Path}} ${t.pagePathOperator ?? 'equals'} "${t.pagePathValue}"`);
   if (t.eventName) parts.push(`event = "${t.eventName}"`);
   if (parts.length === 0)
     return t.kind === 'all_clicks' ? 'fires on every click'
