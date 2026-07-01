@@ -200,6 +200,20 @@ test('form_submit trigger: scoped to one form by {{Form ID}} in filter, needs fo
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'form_submit', formIdValue: 'contact-form' }), ['formId']);
 });
 
+test('form_submit trigger: no id/class → scope to the page via {{Page Path}}, needs pagePath var', () => {
+  const tr = buildTrigger({ name: 'Contact Form Trigger', kind: 'form_submit', pagePathValue: '/contact' });
+  assert.equal(tr.type, 'formSubmission');
+  const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(f.type, 'equals');
+  assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Page Path}}');
+  assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, '/contact');
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'form_submit', pagePathValue: '/contact' }), ['pagePath']);
+  // An id/class scope takes precedence — the page filter is only the no-id/class fallback.
+  const scoped = buildTrigger({ name: 'x', kind: 'form_submit', formIdValue: 'c', pagePathValue: '/contact' });
+  assert.equal((scoped.filter ?? []).length, 1);
+  assert.equal(((scoped.filter ?? [])[0] as { parameter: Array<Record<string, unknown>> }).parameter.find((p) => p.key === 'arg0')?.value, '{{Form ID}}');
+});
+
 test('youtube_video trigger: youTubeVideo type, capture params in parameter[], enables Video built-ins', () => {
   const tr = buildTrigger({ name: 'YouTube Video Trigger', kind: 'youtube_video' });
   assert.equal(tr.type, 'youTubeVideo');

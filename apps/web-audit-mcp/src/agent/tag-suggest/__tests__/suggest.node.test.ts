@@ -80,12 +80,20 @@ check('form: evidence lists the field signature', /fields: email, message/.test(
 const formInstanceClass = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/c', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'row gform_1 gform_wrapper', fields: [{ type: 'email', name: 'email', required: true }] }], elements: [] });
 check('form: instance class gform_1 → {{Form Classes}} contains (skips "row"/"gform_wrapper")', formInstanceClass[0].trigger.formClassesValue === 'gform_1' && formInstanceClass[0].trigger.formClassesOperator === 'contains');
 
-// A SHARED framework wrapper class (wpcf7-form, bare "form") is NOT used to scope.
-const formWrapperClass = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/c', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'wpcf7-form form', fields: [{ type: 'email', name: 'email', required: true }] }], elements: [] });
-check('form: wrapper class (wpcf7-form/"form") is NOT used → unscoped + "every form" note', !formWrapperClass[0].trigger.formClassesValue && /every form submit/i.test(formWrapperClass[0].note ?? ''));
+// A SHARED framework wrapper class (wpcf7-form, bare "form") is NOT used to scope. When the same
+// form (no usable id/class) appears on MULTIPLE pages it is site-wide → stays unscoped, the catch-all
+// covers it. (A single-page no-id form is page-scoped instead — see the "full:" cases below.)
+const formWrapperClass = buildSuggestions({ siteHost: 'a.com', forms: [
+  { page: '/c', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'wpcf7-form form', fields: [{ type: 'email', name: 'email', required: true }] },
+  { page: '/d', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'wpcf7-form form', fields: [{ type: 'email', name: 'email', required: true }] },
+], elements: [] });
+check('form: wrapper class (wpcf7-form/"form") is NOT used; site-wide form stays unscoped + "every form" note', !formWrapperClass[0].trigger.formClassesValue && !formWrapperClass[0].trigger.pagePathValue && /every form submit/i.test(formWrapperClass[0].note ?? ''));
 
-const formNoScope = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/c', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'row container', fields: [] }], elements: [] });
-check('form: no id/class → note that it fires on EVERY form submit', !formNoScope[0].trigger.formIdValue && !formNoScope[0].trigger.formClassesValue && /every form submit/i.test(formNoScope[0].note ?? ''));
+const formNoScope = buildSuggestions({ siteHost: 'a.com', forms: [
+  { page: '/c', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'row container', fields: [] },
+  { page: '/d', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'row container', fields: [] },
+], elements: [] });
+check('form: no id/class on multiple pages → note that it fires on EVERY form submit', !formNoScope[0].trigger.formIdValue && !formNoScope[0].trigger.formClassesValue && !formNoScope[0].trigger.pagePathValue && /every form submit/i.test(formNoScope[0].note ?? ''));
 
 const hubForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: { vendor: 'hubspot', confidence: 'high', evidence: 'js.hsforms.net' }, method: 'js', formId: 'hsForm_123' }], elements: [] });
 check('form: HubSpot (embedded) → note recommends a Custom Event trigger', /custom event/i.test(hubForm[0].note ?? '') && /hubspot/i.test(hubForm[0].note ?? ''));
@@ -104,12 +112,27 @@ const twoForms = buildSuggestions({ siteHost: 'a.com', forms: [
 ], elements: [] });
 check('form: two contact forms with different ids → two scoped tags (not collapsed)', twoForms.filter((s) => s.eventName === 'contact_form').length === 2);
 
-// A NON-UNIQUE id (same id on two DIFFERENT forms) can't scope → dropped + collision note.
+// A NON-UNIQUE id (same id on two DIFFERENT forms) can't scope by id. When the forms are also
+// SITE-WIDE (each signature spans several pages) they can't be page-scoped either → collision note.
 const sharedId = buildSuggestions({ siteHost: 'a.com', forms: [
   { page: '/contact', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'gform_1', fields: [{ type: 'email', name: 'email', required: true }, { type: 'textarea', name: 'message', required: false }] },
+  { page: '/about', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'gform_1', fields: [{ type: 'email', name: 'email', required: true }, { type: 'textarea', name: 'message', required: false }] },
   { page: '/', purpose: 'newsletter', action: '', provider: prov0, method: 'post', formId: 'gform_1', fields: [{ type: 'email', name: 'email', required: true }] },
+  { page: '/blog', purpose: 'newsletter', action: '', provider: prov0, method: 'post', formId: 'gform_1', fields: [{ type: 'email', name: 'email', required: true }] },
 ], elements: [] });
-check('form: shared id across different forms → no {{Form ID}} scope + a collision note', sharedId.every((s) => !s.trigger.formIdValue && /shares this id|unique id/i.test(s.note ?? '')));
+check('form: shared id across different SITE-WIDE forms → no {{Form ID}} scope, no page scope + a collision note', sharedId.every((s) => !s.trigger.formIdValue && !s.trigger.pagePathValue && /shares this id|unique id/i.test(s.note ?? '')));
+
+// REGRESSION (note-branch ordering): a shared/non-unique id on a form that lives on ONE page is
+// correctly PAGE-scoped, so it must get the page-scope note — NOT the "shares this id / double-counting"
+// note (which would contradict the trigger's own {{Page Path}} scope).
+const sharedIdOnePage = buildSuggestions({ siteHost: 'a.com', forms: [
+  { page: '/contact', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'gform_1', fields: [{ type: 'email', name: 'email', required: true }, { type: 'textarea', name: 'message', required: false }] },
+  { page: '/news', purpose: 'newsletter', action: '', provider: prov0, method: 'post', formId: 'gform_1', fields: [{ type: 'email', name: 'email', required: true }] },
+], elements: [] });
+const sharedScoped = sharedIdOnePage.find((s) => s.eventName === 'contact_form');
+check('form: shared id but single-page → page-scoped, note is the page note NOT a false collision note',
+  !!sharedScoped && !sharedScoped.trigger.formIdValue && sharedScoped.trigger.pagePathValue === '/contact' &&
+  /scoped to submits on \/contact/i.test(sharedScoped.note ?? '') && !/shares this id|double-counting/i.test(sharedScoped.note ?? ''));
 
 // ── social media links → a dedicated named tag ───────────────────────────────
 const socialOut = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [{ page: '/', kind: 'social', text: 'Facebook', href: 'https://facebook.com/acme', region: 'footer' }] });
@@ -292,8 +315,15 @@ check('download: ".doc" ends-with does NOT over-match ".docx"', docDl?.trigger.c
 const noExtDl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Get file', href: 'https://a.com/download' }] }).find((s) => s.eventName === 'file_download');
 check('download: no clear extension → multi-ext regex fallback ("File Download")', noExtDl?.tagName === 'GA4 – Event – File Download' && noExtDl?.trigger.clickUrlOperator === 'matchRegex' && /pdf\|zip/.test(noExtDl?.trigger.clickUrlValue ?? ''));
 check('full: SCOPED / purpose form tag is KEPT (contact_form not dropped by the catch-all)', fullForm.some((s) => s.eventName === 'contact_form'));
-const fullOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'other', action: '', provider: prov0 }], elements: [] }, { full: true });
-check('full: an UNSCOPED generic form_submission scan tag is dropped (the All-Form catch-all is the only form_submission)', fullOther.filter((s) => s.eventName === 'form_submission' && s.trigger.kind === 'form_submit').length === 1 && fullOther.some((s) => s.tagName === 'GA4 – Event – All Form Submissions'));
+// A single-page generic form (no id/class) is now PAGE-SCOPED to its own tag (per-form), instead of
+// being folded into the catch-all. The All-Forms catch-all is still offered alongside it.
+const fullOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/contact', purpose: 'other', action: '', provider: prov0 }], elements: [] }, { full: true });
+check('full: a single-page generic form gets its OWN page-scoped tag (not folded)', fullOther.some((s) => s.eventName === 'form_submission' && s.trigger.kind === 'form_submit' && s.trigger.pagePathValue === '/contact'));
+check('full: the All-Forms catch-all is still present alongside the page-scoped form', fullOther.some((s) => s.tagName === 'GA4 – Event – All Form Submissions' && !s.trigger.pagePathValue && !s.trigger.formIdValue));
+// A SITE-WIDE generic form (same form on >1 page) has no single page → stays unscoped → folded into
+// the catch-all (no per-page tag), so generic forms don't double up across pages.
+const siteWideOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/a', purpose: 'other', action: '', provider: prov0 }, { page: '/b', purpose: 'other', action: '', provider: prov0 }], elements: [] }, { full: true });
+check('full: a site-wide generic form folds into the catch-all (one form_submission, no per-page tag)', siteWideOther.filter((s) => s.eventName === 'form_submission' && s.trigger.kind === 'form_submit').length === 1 && siteWideOther.some((s) => s.tagName === 'GA4 – Event – All Form Submissions') && !siteWideOther.some((s) => s.trigger.pagePathValue));
 
 // REGRESSION (image bug): no generated tag/trigger name may contain ":" (GTM rejects it).
 const colonCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Apply Now: Today', intent: 'generic' }] });

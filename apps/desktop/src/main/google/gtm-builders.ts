@@ -421,6 +421,9 @@ export interface TriggerInput {
   formIdOperator?: string;
   formClassesValue?: string;
   formClassesOperator?: string;
+  /** For form_submit with no id/class: scope to the form's page via {{Page Path}}. */
+  pagePathValue?: string;
+  pagePathOperator?: string;
   /** For custom_event: the dataLayer event name. */
   eventName?: string;
   /** For timer: fire every N milliseconds (required). */
@@ -481,6 +484,8 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       const filters: Param[] = [];
       if (o.formIdValue) filters.push(condition('{{Form ID}}', o.formIdOperator ?? 'equals', o.formIdValue));
       if (o.formClassesValue) filters.push(condition('{{Form Classes}}', o.formClassesOperator ?? 'contains', o.formClassesValue));
+      // No id/class scope → scope to the form's page via the built-in {{Page Path}}.
+      if (!filters.length && o.pagePathValue) filters.push(condition('{{Page Path}}', o.pagePathOperator ?? 'equals', o.pagePathValue));
       if (filters.length) t.filter = filters;
       return t;
     }
@@ -673,6 +678,7 @@ export function triggerBuiltInVars(o: TriggerInput): string[] {
   if (o.kind === 'form_submit') {
     if (o.formIdValue) vars.push('formId');
     if (o.formClassesValue) vars.push('formClasses');
+    if (!o.formIdValue && !o.formClassesValue && o.pagePathValue) vars.push('pagePath');
   }
   // The YouTube Video trigger surfaces the "Video" built-in variables — enable them
   // all so the tag's {{Video Title}}/{{Video Percent}}/… and event-name {{Video

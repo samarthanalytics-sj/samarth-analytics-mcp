@@ -188,6 +188,9 @@ function formSignature(f: DetectedForm): string {
 interface FormScopeCtx {
   nonUniqueIds: Set<string>;
   nonUniqueClasses: Set<string>;
+  /** signature → the single page it lives on (for page-scoping a form with no usable id/class), or
+   *  null when the same form appears on >1 page (site-wide → leave unscoped, the catch-all covers it). */
+  pageBySignature: Map<string, string | null>;
 }
 
 function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null {
@@ -216,6 +219,7 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   const idUnique = !!f.formId && !ctx.nonUniqueIds.has(f.formId);
   const classUnique = !!rawClass && !ctx.nonUniqueClasses.has(rawClass);
   let usedClass: string | null = null;
+  let usedPage: string | null = null;
   if (idUnique) {
     trigger.formIdValue = f.formId;
     trigger.formIdOperator = 'equals';
@@ -223,6 +227,16 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     trigger.formClassesValue = rawClass!;
     trigger.formClassesOperator = 'contains';
     usedClass = rawClass;
+  } else {
+    // No usable id/class. If this form lives on ONE page, scope the trigger to that page via
+    // {{Page Path}} so it gets its OWN tag (instead of folding into the All-Forms catch-all). A
+    // site-wide form (same form on many pages) has no single page → stays unscoped.
+    const onePage = ctx.pageBySignature.get(formSignature(f)) ?? null;
+    if (onePage) {
+      trigger.pagePathValue = onePage;
+      trigger.pagePathOperator = 'equals';
+      usedPage = onePage;
+    }
   }
 
   // Flag the cases where the trigger won't fire / won't scope correctly.
@@ -236,11 +250,16 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     note = `${cap(f.provider.vendor)} submits in an iframe / via AJAX — GTM's native Form Submission trigger usually won't fire. Track it with a Custom Event trigger: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the provider submit event'} → push a dataLayer event → fire this tag on it.`;
   } else if (f.method === 'js') {
     note = `JS/div form (no native <form> submit) — GTM's Form Submission trigger may not fire. Use an All-Clicks trigger on the submit button, or a Custom Event from the form's submit handler.`;
+  } else if (trigger.pagePathValue) {
+    // Page-scoped (single page) takes precedence over the shared-id warning below: even when the
+    // form carries a NON-unique id, {{Page Path}} equals <page> scopes it precisely, so there is no
+    // real collision to warn about (warning here would contradict the tag's own page scope).
+    note = `This form has no unique id/class, so it is scoped to submits on ${trigger.pagePathValue} (the only page it was found on). Add an id to the <form> for a more precise, page-independent trigger.`;
   } else if ((f.formId && !idUnique) || (rawClass && !classUnique)) {
     const what = f.formId && !idUnique ? `id "#${f.formId}"` : `class ".${rawClass}"`;
     note = `Another form on the site shares this ${what}, so this trigger will also fire for that form (double-counting). Give each <form> a unique id to scope it.`;
   } else if (!trigger.formIdValue && !trigger.formClassesValue) {
-    note = `This form has no id or unique class, so the trigger fires on EVERY form submit on the page. Add an id to the <form> to scope it.`;
+    note = `This form has no id or unique class and appears on multiple pages, so the trigger fires on EVERY form submit. Add an id to each <form> to scope it.`;
   }
 
   // Field signature (type/name only — never values) for the evidence line.
@@ -256,7 +275,7 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     label: `${cap(f.purpose)} form${prov} → GA4 "${eventName}" on form submit`,
     evidence:
       `form purpose=${f.purpose}; provider=${f.provider.vendor} (${f.provider.evidence})` +
-      (trigger.formIdValue ? `; id=#${f.formId}` : usedClass ? `; class=.${usedClass}` : '') +
+      (trigger.formIdValue ? `; id=#${f.formId}` : usedClass ? `; class=.${usedClass}` : usedPage ? `; page=${usedPage}` : '') +
       (sig.length ? `; fields: ${sig.join(', ')}` : ''),
     ...(note ? { note } : {}),
     confidence: 'high',
@@ -284,8 +303,11 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
 function nonUniqueFormScopes(forms: DetectedForm[]): FormScopeCtx {
   const idSigs = new Map<string, Set<string>>();
   const classSigs = new Map<string, Set<string>>();
+  const sigPages = new Map<string, Set<string>>();
   for (const f of forms) {
     const s = formSignature(f);
+    if (!sigPages.has(s)) sigPages.set(s, new Set());
+    sigPages.get(s)!.add(f.page);
     if (f.formId) {
       if (!idSigs.has(f.formId)) idSigs.set(f.formId, new Set());
       idSigs.get(f.formId)!.add(s);
@@ -296,9 +318,13 @@ function nonUniqueFormScopes(forms: DetectedForm[]): FormScopeCtx {
       classSigs.get(c)!.add(s);
     }
   }
+  // A form unique to ONE page can be page-scoped; one seen on several pages is site-wide (null).
+  const pageBySignature = new Map<string, string | null>();
+  for (const [sig, pages] of sigPages) pageBySignature.set(sig, pages.size === 1 ? [...pages][0] : null);
   return {
     nonUniqueIds: new Set([...idSigs].filter(([, s]) => s.size > 1).map(([k]) => k)),
     nonUniqueClasses: new Set([...classSigs].filter(([, s]) => s.size > 1).map(([k]) => k)),
+    pageBySignature,
   };
 }
 
@@ -511,7 +537,7 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
     // one outbound, etc.). The eventParameters are now all GTM-variable refs
     // (identical across instances), so the trigger filter is the discriminator,
     // not the parameter value.
-    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}`;
+    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}`;
     const seen = byKey.get(key);
     if (!seen) byKey.set(key, { ...s });
     else if (seen.page !== s.page) seen.page = 'site-wide';
@@ -535,7 +561,7 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
     // any scan-derived one that's identical (unscoped + event 'form_submission') to
     // avoid an exact double. SCOPED per-form tags and purpose-specific events
     // (contact_form, signup_form, …) are KEPT — they send a different event.
-    body = body.filter((s) => !(s.trigger.kind === 'form_submit' && s.eventName === 'form_submission' && !s.trigger.formIdValue && !s.trigger.formClassesValue));
+    body = body.filter((s) => !(s.trigger.kind === 'form_submit' && s.eventName === 'form_submission' && !s.trigger.formIdValue && !s.trigger.formClassesValue && !s.trigger.pagePathValue));
   }
   return [...head, ...body];
 }
