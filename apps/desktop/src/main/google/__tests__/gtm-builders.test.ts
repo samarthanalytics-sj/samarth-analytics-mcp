@@ -214,6 +214,20 @@ test('form_submit trigger: no id/class → scope to the page via {{Page Path}}, 
   assert.equal(((scoped.filter ?? [])[0] as { parameter: Array<Record<string, unknown>> }).parameter.find((p) => p.key === 'arg0')?.value, '{{Form ID}}');
 });
 
+test('pageview trigger: pageUrlValue → fires on Some pages via {{Page URL}} contains, enables pageUrl', () => {
+  const plain = buildTrigger({ name: 'All Pages', kind: 'pageview' });
+  assert.equal(plain.type, 'pageview');
+  assert.equal(plain.filter, undefined); // no condition → All Pages
+  const search = buildTrigger({ name: 'Site Search Trigger', kind: 'pageview', pageUrlValue: 'q=', pageUrlOperator: 'contains' });
+  assert.equal(search.type, 'pageview');
+  const f = (search.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(f.type, 'contains');
+  assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Page URL}}');
+  assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, 'q=');
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'pageview', pageUrlValue: 'q=' }), ['pageUrl']);
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'pageview' }), []); // plain pageview enables nothing
+});
+
 test('youtube_video trigger: youTubeVideo type, capture params in parameter[], enables Video built-ins', () => {
   const tr = buildTrigger({ name: 'YouTube Video Trigger', kind: 'youtube_video' });
   assert.equal(tr.type, 'youTubeVideo');

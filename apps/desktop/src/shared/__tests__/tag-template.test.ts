@@ -42,6 +42,14 @@ const pageForm = base({
 const pfw = triggerWhens(pageForm);
 check('when: page-scoped form_submit → {{Page Path}} contains "/en/request-demo" (not "every form submit")', pfw.length === 1 && pfw[0].variable === '{{Page Path}}' && pfw[0].value === '/en/request-demo');
 
+// A GET site-search Page View → {{Page URL}} contains the query key.
+const searchPv = base({
+  id: 'sp', tagName: 'GA4 - Event - Site Search Tag', eventName: 'view_search_results',
+  trigger: { name: 'Site Search Trigger', kind: 'pageview', pageUrlValue: 'q=', pageUrlOperator: 'contains' },
+});
+const spw = triggerWhens(searchPv);
+check('when: site-search pageview → {{Page URL}} contains "q="', spw.length === 1 && spw[0].variable === '{{Page URL}}' && spw[0].value === 'q=');
+
 // ── group shape ──────────────────────────────────────────────────────────────
 const gp = suggestionToGroup(phone);
 check('group: tagType + triggerType mapped (Click - Just Links)', gp.tagType === 'GA4 Event Tag' && gp.triggerType === 'Click - Just Links');

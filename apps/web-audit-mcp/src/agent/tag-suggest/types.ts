@@ -159,6 +159,9 @@ export interface SuggestedTag {
      *  {{Page Path}}, so a per-page form gets its OWN tag instead of folding into the All-Forms catch-all. */
     pagePathValue?: string;
     pagePathOperator?: FilterOp;
+    /** For pageview scoped to a results / specific page (e.g. a GET site-search results URL): filter on {{Page URL}}. */
+    pageUrlValue?: string;
+    pageUrlOperator?: FilterOp;
     eventName?: string;
   };
 }

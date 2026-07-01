@@ -424,6 +424,9 @@ export interface TriggerInput {
   /** For form_submit with no id/class: scope to the form's page via {{Page Path}}. */
   pagePathValue?: string;
   pagePathOperator?: string;
+  /** For pageview scoped to a results / specific page (e.g. a GET site-search results URL): filter on {{Page URL}}. */
+  pageUrlValue?: string;
+  pageUrlOperator?: string;
   /** For custom_event: the dataLayer event name. */
   eventName?: string;
   /** For timer: fire every N milliseconds (required). */
@@ -523,7 +526,12 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       if (o.limit !== undefined && String(o.limit) !== '') t.limit = namedParam(String(o.limit));
       return t;
     }
-    case 'pageview':
+    case 'pageview': {
+      // Fires on All Pages by default; a search-results / page-specific Page View scopes on {{Page URL}}.
+      const t: GtmTriggerResource = { name: sanitizeName(o.name), type: 'pageview' };
+      if (o.pageUrlValue) t.filter = [condition('{{Page URL}}', o.pageUrlOperator ?? 'contains', o.pageUrlValue)];
+      return t;
+    }
     default:
       return { name: sanitizeName(o.name), type: 'pageview' };
   }
@@ -680,6 +688,7 @@ export function triggerBuiltInVars(o: TriggerInput): string[] {
     if (o.formClassesValue) vars.push('formClasses');
     if (!o.formIdValue && !o.formClassesValue && o.pagePathValue) vars.push('pagePath');
   }
+  if (o.kind === 'pageview' && o.pageUrlValue) vars.push('pageUrl');
   // The YouTube Video trigger surfaces the "Video" built-in variables — enable them
   // all so the tag's {{Video Title}}/{{Video Percent}}/… and event-name {{Video
   // Status}} resolve.

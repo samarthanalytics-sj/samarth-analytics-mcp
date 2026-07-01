@@ -207,23 +207,49 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // search instance collapses to this one unscoped, site-wide suggestion via dedup. GA4 Enhanced
   // Measurement already auto-tracks site search, so it is FLAGGED (not auto-selected).
   if (f.purpose === 'search') {
-    const sfields = (f.fields ?? []).map((x) => x.name || x.type).filter(Boolean).slice(0, 8);
+    // The RIGHT trigger depends on HOW search runs (collected during the crawl): a GET form reloads to
+    // a results URL carrying ?<key>=… → a Page View on {{Page URL}}; a JS/AJAX form does NOT reload →
+    // a "site_search" dataLayer Custom Event; a POST form → native Form Submission. Every per-page
+    // instance of the (site-wide) bar collapses to ONE tag via dedup. view_search_results is GA4's
+    // site-search event, which Enhanced Measurement may already track, so it is FLAGGED (not auto-selected).
+    const queryKey = (f.fields ?? []).map((x) => x.name || '').find((n) => /^(q|s|query|search|keyword|term)$/i.test(n)) || 'q';
+    const method = (f.method || 'get').toLowerCase();
+    let trigger: SuggestedTag['trigger'];
+    let note: string;
+    // Name is method-specific so a site with MIXED search mechanisms (e.g. a GET header search AND an
+    // AJAX widget) yields DISTINCT tags/triggers/ids instead of colliding (GTM rejects duplicate names).
+    let searchLabel: string;
+    if (method === 'js') {
+      searchLabel = 'Site Search AJAX';
+      trigger = { name: trigNameOf(searchLabel, 'custom_event'), kind: 'custom_event', eventName: 'site_search' };
+      note = `AJAX/SPA search (no page reload). This fires on a "site_search" Custom Event — have the site push dataLayer.push({event:"site_search", search_term:"<term>"}) on each search, then add a search_term parameter from a Data Layer Variable reading "search_term". GA4 Enhanced Measurement may already track site search.`;
+    } else if (method === 'post') {
+      searchLabel = 'Site Search Form';
+      trigger = { name: trigNameOf(searchLabel, 'custom_event'), kind: 'form_submit' };
+      note = `POST search form. It fires on Form Submission, but that cannot isolate the search box (it fires on any form) and the term is in the POST body, not the URL. Prefer firing view_search_results on the results URL (a Page View where {{Page URL}} contains "?${queryKey}="), or add search_term from a Custom JavaScript / Data Layer Variable reading the "${queryKey}" field. GA4 Enhanced Measurement may already track site search.`;
+    } else {
+      searchLabel = 'Site Search';
+      trigger = { name: trigNameOf(searchLabel, 'pageview'), kind: 'pageview', pageUrlValue: `?${queryKey}=`, pageUrlOperator: 'contains' };
+      note = `GET search bar: submitting reloads to a results URL carrying "?${queryKey}=<term>", so this fires on a Page View where {{Page URL}} contains "?${queryKey}=". Add a search_term parameter from a URL query variable that reads the "${queryKey}" key. GA4 Enhanced Measurement may already track site search.`;
+    }
     return {
-      id: hashId('form|site-search'),
+      // id keyed by trigger kind so mixed-method search variants stay distinct (and same-method
+      // instances across pages still collapse to one via dedup).
+      id: hashId(`form|site-search|${trigger.kind}`),
       page: f.page,
       label: 'Site search → GA4 "view_search_results"',
-      evidence: `search form; provider=${f.provider.vendor}` + (sfields.length ? `; fields: ${sfields.join(', ')}` : ''),
-      note: 'Site-wide search bar. A Form Submission trigger fires on ANY form, so it cannot isolate the search box, and GTM has no built-in search-term variable. For accurate site search, fire view_search_results on the RESULTS URL (a Page View where {{Page URL}} contains the query, e.g. "?q=", "?search=", "?s=") and add a search_term parameter valued by a URL query variable reading that key (or a Data Layer Variable if search is AJAX / pushed to the dataLayer). GA4 Enhanced Measurement may already track site search.',
+      evidence: `search bar; method=${method}; query key="${queryKey}"; provider=${f.provider.vendor}`,
+      note,
       confidence: 'medium',
       enhancedMeasurementOverlap: true,
       platform: 'ga4_event',
-      tagName: tagNameOf('Site Search', 'custom_event'),
+      tagName: tagNameOf(searchLabel, 'custom_event'),
       measurementId: GA4_VAR,
       eventName: 'view_search_results',
       // Ship only resolvable built-ins; search_term needs a URL-query / DLV variable the user creates
       // (no GTM built-in for it), so it is guided in the note rather than shipped as a dangling ref.
       eventParameters: [...PAGE_PARAMS],
-      trigger: { name: trigNameOf('Site Search', 'custom_event'), kind: 'form_submit' },
+      trigger,
     };
   }
   const eventName = FORM_EVENT[f.purpose] ?? 'form_submission';
@@ -559,7 +585,7 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
     // one outbound, etc.). The eventParameters are now all GTM-variable refs
     // (identical across instances), so the trigger filter is the discriminator,
     // not the parameter value.
-    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}`;
+    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}|${s.trigger.pageUrlValue ?? ''}`;
     const seen = byKey.get(key);
     if (!seen) byKey.set(key, { ...s });
     else if (seen.page !== s.page) seen.page = 'site-wide';
