@@ -1,3 +1,9 @@
+## [1.122.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.121.0...v1.122.0) (2026-07-01)
+
+### Features
+
+* **web-audit:** pick the search trigger from how search runs (GET/AJAX/POST) ([42a2ca4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/42a2ca4561b4280c5f4b2dc9e7b0d02e800c00e0))
+
 ## [1.121.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.120.0...v1.121.0) (2026-07-01)
 
 ### Features
