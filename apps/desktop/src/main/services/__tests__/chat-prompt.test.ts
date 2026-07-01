@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY } from '../chat-service';
+import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE } from '../chat-service';
 
 let passed = 0;
 let failed = 0;
@@ -73,6 +73,23 @@ test('GTM_CREATION_METHODOLOGY carries the shared build-methodology (same rules 
   assert.ok(/click_text[\s\S]*click_url[\s\S]*page_url[\s\S]*previous_page/.test(m), 'standard click event params');
   assert.ok(/form_id[\s\S]*form_name[\s\S]*page_url[\s\S]*previous_page/.test(m), 'standard form event params');
   assert.ok(/\{\{Click Text\}\} EQUALS/.test(m) && /CONTAINS the path fragment/i.test(m), 'exact click-text + page-contains trigger conditions');
+});
+
+test('GTM_TRIGGER_VARIABLE_REFERENCE covers trigger/variable types + the Lookup Table grouping pattern, honest about typed vs raw', () => {
+  const m = GTM_TRIGGER_VARIABLE_REFERENCE;
+  // Typed builder scope + the raw fallback.
+  assert.ok(/create_gtm_variable_typed/.test(m) && /create_gtm_variable\b/.test(m) && /create_gtm_trigger\b/.test(m), 'names typed + raw tools');
+  assert.ok(/constant \| data_layer \| javascript/.test(m), 'lists the four typed variable kinds');
+  // Trigger reference incl. raw-only types.
+  assert.ok(/Element Visibility/.test(m) && /elementVisibility/.test(m), 'Element Visibility trigger (raw)');
+  assert.ok(/Scroll Depth/.test(m) && /History Change/.test(m), 'scroll + history triggers');
+  // Variable reference incl. DOM Element.
+  assert.ok(/DOM Element/.test(m) && /type d\b|\[d\]/.test(m) && /attribute/i.test(m), 'DOM Element variable (text or attribute)');
+  // Lookup Table grouping pattern + the smm raw shape.
+  assert.ok(/Lookup Table/.test(m) && /smm/.test(m), 'Lookup Table variable (smm)');
+  assert.ok(/equals true/.test(m) && /GROUPING/.test(m), 'grouping: trigger fires on {{var}} equals true');
+  assert.ok(/enable_gtm_builtin_variables/.test(m), 'enable the input built-in for the lookup table');
+  assert.ok(/EQUALS for an exact/.test(m) && /CONTAINS \/ matchRegex/.test(m), 'equals-vs-contains rule');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
