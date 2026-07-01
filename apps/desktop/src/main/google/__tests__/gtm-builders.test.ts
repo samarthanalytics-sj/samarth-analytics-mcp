@@ -4,6 +4,11 @@ import {
   buildGoogleTag,
   buildGoogleAdsConversionTag,
   buildCustomHtmlTag,
+  buildFloodlightCounterTag,
+  buildGoogleAdsCallConversionTag,
+  buildGoogleAdsRemarketingTag,
+  buildConversionLinkerTag,
+  buildCustomImageTag,
   buildTrigger,
   applyTriggerWaitDefaults,
   normalizeTimerTrigger,
@@ -130,6 +135,69 @@ test('Custom HTML tag: html type + snippet', () => {
   const t = buildCustomHtmlTag({ name: 'FB', html: '<script>fbq()</script>' });
   assert.equal(t.type, 'html');
   assert.equal(findParam(t.parameter, 'html')?.value, '<script>fbq()</script>');
+});
+
+test('Floodlight Counter tag: flc + core params (ordinalType STANDARD default) + conversion linker', () => {
+  const t = buildFloodlightCounterTag({ name: 'FL', advertiserId: '6278210', groupTag: 'confi0', activityTag: 'email0' });
+  assert.equal(t.type, 'flc');
+  assert.equal(findParam(t.parameter, 'advertiserId')?.value, '6278210');
+  assert.equal(findParam(t.parameter, 'groupTag')?.value, 'confi0');
+  assert.equal(findParam(t.parameter, 'activityTag')?.value, 'email0');
+  assert.equal(findParam(t.parameter, 'ordinalType')?.value, 'STANDARD');
+  assert.equal(findParam(t.parameter, 'useImageTag')?.value, 'false');
+  // Conversion Linker pair on by default (matches the 48/62 corpus majority).
+  assert.equal(findParam(t.parameter, 'enableConversionLinker')?.value, 'true');
+  assert.equal(findParam(t.parameter, 'conversionCookiePrefix')?.value, '_gcl');
+  // countingMethod 'unique' -> UNIQUE; opting out of the linker drops both linker params.
+  const u = buildFloodlightCounterTag({ name: 'FL2', advertiserId: '1', groupTag: 'g', activityTag: 'a', countingMethod: 'unique', enableConversionLinker: false });
+  assert.equal(findParam(u.parameter, 'ordinalType')?.value, 'UNIQUE');
+  assert.equal(findParam(u.parameter, 'enableConversionLinker'), undefined);
+});
+
+test('Google Ads Call Conversion tag: awcc + exactly the 3 corpus params, conversionId stripped of AW-', () => {
+  const t = buildGoogleAdsCallConversionTag({ name: 'Call', phoneNumber: '(877) 635-4246', conversionId: 'AW-10966070237', conversionLabel: '8J53CLK87pEBEIqL88YD' });
+  assert.equal(t.type, 'awcc');
+  assert.equal(findParam(t.parameter, 'phoneConversionNumber')?.value, '(877) 635-4246');
+  assert.equal(findParam(t.parameter, 'conversionId')?.value, '10966070237');
+  assert.equal(findParam(t.parameter, 'conversionLabel')?.value, '8J53CLK87pEBEIqL88YD');
+  // The legacy gtag call-conversion extras are NOT part of the native awcc tag.
+  assert.equal(findParam(t.parameter, 'phoneConversionCountryCode'), undefined);
+});
+
+test('Google Ads Remarketing tag: sp + all-pages audience (customParamsFormat NONE), conversionId passes through', () => {
+  const t = buildGoogleAdsRemarketingTag({ name: 'RMKT', conversionId: 'AW-605994778' });
+  assert.equal(t.type, 'sp');
+  // Unlike awct/awcc, sp stores conversionId as-is (the corpus has both AW- and bare forms).
+  assert.equal(findParam(t.parameter, 'conversionId')?.value, 'AW-605994778');
+  assert.equal(findParam(t.parameter, 'customParamsFormat')?.value, 'NONE');
+  assert.equal(findParam(t.parameter, 'enableDynamicRemarketing')?.value, 'false');
+  assert.equal(findParam(t.parameter, 'rdp')?.value, 'false');
+  assert.equal(findParam(t.parameter, 'enableConversionLinker')?.value, 'true');
+});
+
+test('Conversion Linker tag: gclidw + always enableCookieOverrides=false; cross-domain adds the extra params', () => {
+  const base = buildConversionLinkerTag({ name: 'CL' });
+  assert.equal(base.type, 'gclidw');
+  assert.equal(findParam(base.parameter, 'enableCrossDomain')?.value, 'false');
+  assert.equal(findParam(base.parameter, 'enableCookieOverrides')?.value, 'false');
+  assert.equal(findParam(base.parameter, 'linkerDomains'), undefined);
+  // Passing linkerDomains implies cross-domain and emits the extra set (urlPosition is literal "query").
+  const cd = buildConversionLinkerTag({ name: 'CL2', linkerDomains: 'a.com, b.com' });
+  assert.equal(findParam(cd.parameter, 'enableCrossDomain')?.value, 'true');
+  assert.equal(findParam(cd.parameter, 'linkerDomains')?.value, 'a.com, b.com');
+  assert.equal(findParam(cd.parameter, 'urlPosition')?.value, 'query');
+  assert.equal(findParam(cd.parameter, 'formDecoration')?.value, 'false');
+});
+
+test('Custom Image tag: img + url; cache buster on by default (gtmcb), off drops the query-param key', () => {
+  const t = buildCustomImageTag({ name: 'Pixel', url: '//pixel.example.com/p.gif' });
+  assert.equal(t.type, 'img');
+  assert.equal(findParam(t.parameter, 'url')?.value, '//pixel.example.com/p.gif');
+  assert.equal(findParam(t.parameter, 'useCacheBuster')?.value, 'true');
+  assert.equal(findParam(t.parameter, 'cacheBusterQueryParam')?.value, 'gtmcb');
+  const off = buildCustomImageTag({ name: 'Pixel2', url: '//x/y.gif', useCacheBuster: false });
+  assert.equal(findParam(off.parameter, 'useCacheBuster')?.value, 'false');
+  assert.equal(findParam(off.parameter, 'cacheBusterQueryParam'), undefined);
 });
 
 test('link_click trigger: linkClick + {{Click URL}} scope in filter (NOT autoEventFilter), needs clickUrl var', () => {

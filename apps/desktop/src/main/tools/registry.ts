@@ -7,6 +7,11 @@ import {
   buildGoogleTag,
   buildGoogleAdsConversionTag,
   buildCustomHtmlTag,
+  buildFloodlightCounterTag,
+  buildGoogleAdsCallConversionTag,
+  buildGoogleAdsRemarketingTag,
+  buildConversionLinkerTag,
+  buildCustomImageTag,
   buildTrigger,
   triggerBuiltInVars,
   builtInVarsForTemplates,
@@ -88,6 +93,9 @@ const EMPTY_SCHEMA = { type: 'object', properties: {}, additionalProperties: fal
 const s = (v: unknown): string => String(v ?? '');
 const obj = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+/** Read an optional boolean arg (a real boolean, or the strings "true"/"false"); undefined otherwise
+ *  so the builder's own default applies. */
+const bln = (v: unknown): boolean | undefined => (typeof v === 'boolean' ? v : v === 'true' ? true : v === 'false' ? false : undefined);
 
 /** The Meta Pixel tag name: an explicit `name`, else the convention "Meta - Event - <Event> Tag"
  *  (canonical standard event, or the custom event as typed). */
@@ -1008,7 +1016,8 @@ export function buildToolRegistry(
       name: 'create_gtm_tracking_tag',
       description:
         'PREFERRED way to create a tag that fires on an event — builds a CORRECT GTM resource from simple fields (you do not write raw GTM JSON). One confirmed step: enables needed built-in variables, reuses an existing same-named trigger or creates it, and creates the tag linked to it. ' +
-        'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for Facebook/LinkedIn/TikTok/other pixels). ' +
+        'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for Facebook/LinkedIn/TikTok/other pixels); ' +
+        '"conversion_linker" (Google Ads Conversion Linker; no fields required; optional enableCrossDomain plus comma-separated linkerDomains); "google_ads_call_conversion" (needs phoneNumber exactly as shown on the page, conversionId, conversionLabel); "google_ads_remarketing" (needs conversionId; an all-pages audience tag); "floodlight" (Campaign Manager / DV360 Floodlight counter; needs advertiserId, groupTag, activityTag; optional countingMethod standard|unique); "custom_image" (a beacon/pixel; needs url). ' +
         'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event), "pageview", "form_submit" (optional formIdValue and/or formClassesValue, each with a *Operator — scopes the trigger to ONE form via {{Form ID}}/{{Form Classes}}; or pagePathValue/pagePathOperator to scope to a single page via {{Page Path}} when the form has no id/class; omit all and it fires on every form submit). ' +
         'eventParameters values may be GTM built-in variables (e.g. {{Click URL}}, {{Click Text}}, {{Form ID}}, {{Form URL}}) — the needed built-in variables are auto-enabled.',
       inputSchema: {
@@ -1017,7 +1026,7 @@ export function buildToolRegistry(
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          platform: { type: 'string', enum: ['ga4_event', 'google_tag', 'google_ads_conversion', 'custom_html'] },
+          platform: { type: 'string', enum: ['ga4_event', 'google_tag', 'google_ads_conversion', 'custom_html', 'conversion_linker', 'google_ads_call_conversion', 'google_ads_remarketing', 'floodlight', 'custom_image'] },
           tagName: { type: 'string' },
           measurementId: { type: 'string' },
           eventName: { type: 'string' },
@@ -1033,6 +1042,17 @@ export function buildToolRegistry(
           conversionId: { type: 'string' },
           conversionLabel: { type: 'string' },
           html: { type: 'string' },
+          advertiserId: { type: 'string' },
+          groupTag: { type: 'string' },
+          activityTag: { type: 'string' },
+          countingMethod: { type: 'string', enum: ['standard', 'unique'] },
+          phoneNumber: { type: 'string' },
+          enableConversionLinker: { type: 'boolean' },
+          enableCrossDomain: { type: 'boolean' },
+          linkerDomains: { type: 'string' },
+          url: { type: 'string' },
+          useCacheBuster: { type: 'boolean' },
+          cacheBusterQueryParam: { type: 'string' },
           trigger: {
             type: 'object',
             properties: {
@@ -1090,6 +1110,24 @@ export function buildToolRegistry(
           tag = buildGoogleAdsConversionTag({ name: s(a.tagName), conversionId: s(a.conversionId), conversionLabel: s(a.conversionLabel) });
         } else if (platform === 'custom_html') {
           tag = buildCustomHtmlTag({ name: s(a.tagName), html: s(a.html) });
+        } else if (platform === 'conversion_linker') {
+          tag = buildConversionLinkerTag({ name: s(a.tagName), enableCrossDomain: bln(a.enableCrossDomain), linkerDomains: a.linkerDomains != null ? s(a.linkerDomains) : undefined });
+        } else if (platform === 'google_ads_call_conversion') {
+          tag = buildGoogleAdsCallConversionTag({ name: s(a.tagName), phoneNumber: s(a.phoneNumber), conversionId: s(a.conversionId), conversionLabel: s(a.conversionLabel) });
+        } else if (platform === 'google_ads_remarketing') {
+          tag = buildGoogleAdsRemarketingTag({ name: s(a.tagName), conversionId: s(a.conversionId), enableConversionLinker: bln(a.enableConversionLinker) });
+        } else if (platform === 'floodlight') {
+          const cm = s(a.countingMethod);
+          tag = buildFloodlightCounterTag({
+            name: s(a.tagName),
+            advertiserId: s(a.advertiserId),
+            groupTag: s(a.groupTag),
+            activityTag: s(a.activityTag),
+            countingMethod: cm === 'unique' ? 'unique' : cm === 'standard' ? 'standard' : undefined,
+            enableConversionLinker: bln(a.enableConversionLinker),
+          });
+        } else if (platform === 'custom_image') {
+          tag = buildCustomImageTag({ name: s(a.tagName), url: s(a.url), useCacheBuster: bln(a.useCacheBuster), cacheBusterQueryParam: a.cacheBusterQueryParam != null ? s(a.cacheBusterQueryParam) : undefined });
         } else {
           throw new Error(`unknown platform: ${platform}`);
         }

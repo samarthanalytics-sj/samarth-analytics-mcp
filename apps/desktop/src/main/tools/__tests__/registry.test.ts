@@ -254,7 +254,7 @@ function fakeData(
     },
     createGtmTag: async (a: string, c: string, w: string, tag: Record<string, unknown>) => {
       calls.push(`createTag:${a}:${c}:${w}:${JSON.stringify(tag.firingTriggerId ?? [])}`);
-      return { tagId: 'TAG1', name: String(tag.name ?? ''), type: String(tag.type ?? '') };
+      return { tagId: 'TAG1', name: String(tag.name ?? ''), type: String(tag.type ?? ''), parameter: tag.parameter };
     },
     enableGtmBuiltInVariables: async (a: string, c: string, w: string, types: string[]) => {
       calls.push(`enableVars:${a}:${c}:${w}:${types.join(',')}`);
@@ -789,6 +789,88 @@ async function main(): Promise<void> {
     assert.equal(out.tag.type, 'googtag', 'built a Google tag');
     assert.ok(fd.calls.some((c) => c.startsWith('createTag')), 'created the tag');
     assert.ok(fd.calls.some((c) => c.startsWith('createTrigger')), 'created its trigger');
+  });
+
+  // The 5 non-GA4 web platforms: assert the enum → correct-builder dispatch AND that the handler's
+  // arg coercion (bln, countingMethod narrowing, AW- stripping, linkerDomains) flows into the tag.
+  const trkParam = (out: { tag: { parameter?: Array<{ key: string; value: string }> } }, key: string) =>
+    (out.tag.parameter ?? []).find((x) => x.key === key)?.value;
+
+  await test('create_tracking_tag (floodlight) dispatches flc + coerces countingMethod to ordinalType', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'floodlight', tagName: 'FL - Signup', advertiserId: '6278210', groupTag: 'confi0', activityTag: 'email0', countingMethod: 'unique',
+        trigger: { name: 'All Pages', kind: 'pageview' },
+      })
+    );
+    assert.equal(out.tag.type, 'flc');
+    assert.equal(trkParam(out, 'advertiserId'), '6278210');
+    assert.equal(trkParam(out, 'ordinalType'), 'UNIQUE');
+    assert.ok(fd.calls.some((c) => c.startsWith('createTag')), 'created the tag');
+  });
+
+  await test('create_tracking_tag (google_ads_call_conversion) dispatches awcc + strips AW- from conversionId', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'google_ads_call_conversion', tagName: 'Call', phoneNumber: '(877) 635-4246', conversionId: 'AW-10966070237', conversionLabel: 'L1',
+        trigger: { name: 'All Pages', kind: 'pageview' },
+      })
+    );
+    assert.equal(out.tag.type, 'awcc');
+    assert.equal(trkParam(out, 'conversionId'), '10966070237');
+    assert.equal(trkParam(out, 'phoneConversionNumber'), '(877) 635-4246');
+  });
+
+  await test('create_tracking_tag (google_ads_remarketing) dispatches sp with customParamsFormat NONE', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'google_ads_remarketing', tagName: 'RMKT', conversionId: 'AW-605994778',
+        trigger: { name: 'All Pages', kind: 'pageview' },
+      })
+    );
+    assert.equal(out.tag.type, 'sp');
+    assert.equal(trkParam(out, 'customParamsFormat'), 'NONE');
+    assert.equal(trkParam(out, 'conversionId'), 'AW-605994778'); // sp passes conversionId through
+  });
+
+  await test('create_tracking_tag (conversion_linker) dispatches gclidw; linkerDomains implies cross-domain', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'conversion_linker', tagName: 'CL', linkerDomains: 'a.com, b.com',
+        trigger: { name: 'Initialization - All Pages', kind: 'pageview' },
+      })
+    );
+    assert.equal(out.tag.type, 'gclidw');
+    assert.equal(trkParam(out, 'enableCrossDomain'), 'true');
+    assert.equal(trkParam(out, 'linkerDomains'), 'a.com, b.com');
+  });
+
+  await test('create_tracking_tag (custom_image) dispatches img; bln coerces useCacheBuster=false', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'custom_image', tagName: 'Pixel', url: '//pixel.example.com/p.gif', useCacheBuster: false,
+        trigger: { name: 'All Pages', kind: 'pageview' },
+      })
+    );
+    assert.equal(out.tag.type, 'img');
+    assert.equal(trkParam(out, 'url'), '//pixel.example.com/p.gif');
+    assert.equal(trkParam(out, 'useCacheBuster'), 'false');
+    assert.equal(trkParam(out, 'cacheBusterQueryParam'), undefined); // dropped when cache buster is off
   });
 
   await test('create_gtm_variable_typed builds a Custom JS variable', async () => {
