@@ -1,3 +1,9 @@
+## [1.126.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.125.1...v1.126.0) (2026-07-01)
+
+### Features
+
+* **gtm:** add 5 typed non-GA4 web tag builders + consent-gating + gallery repos ([59c83a4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/59c83a4b1e31f11de325823837f4f00bc58d0bea))
+
 ## [1.125.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.125.0...v1.125.1) (2026-07-01)
 
 ### Bug Fixes
