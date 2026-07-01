@@ -47,7 +47,11 @@ export function aiTagsToSuggestions(picks: AiTagPick[], page: string, elements: 
     const name = clean(String(p?.name ?? '')).slice(0, 80);
     const event = clean(String(p?.event ?? '')).replace(/[^a-z0-9_]/gi, '_').toLowerCase().slice(0, 40);
     if (!name || !event) continue;
-    const tagName = name.startsWith('GA4') ? clean(name) : tagNameOf(name);
+    // Kind word (Click/Form) on the tag name must match the trigger it ends up on: form -> form_submit,
+    // link -> link_click, click -> all_clicks, pageview -> pageview (link_click/all_clicks both -> "Click").
+    const trigKind: SuggestedTag['trigger']['kind'] =
+      p.kind === 'form' ? 'form_submit' : p.kind === 'link' ? 'link_click' : p.kind === 'click' ? 'all_clicks' : 'pageview';
+    const tagName = name.startsWith('GA4') ? clean(name) : tagNameOf(name, trigKind);
     const base = {
       id: hashId(`ai|${page}|${p.kind}|${name}|${p.elementIndex ?? p.formIndex ?? ''}`),
       page,
