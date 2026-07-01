@@ -123,15 +123,15 @@ async function main(): Promise<void> {
     check('crawl: mailto → email_click, tel → phone_click', events.has('email_click') && events.has('phone_click'));
     check('crawl: download + outbound + named CTA detected', events.has('file_download') && events.has('outbound_click') && events.has('book_a_demo_click'));
     // full mode (scan path): the 6 scan-derived tags (incl. the per-file "PDF Download" tag) +
-    // GA4 Configuration + the All-form catch-all (the fake site has a form) = 8. PDF needs no
-    // separate catch-all — the "PDF Download" tag's {{Click URL}} contains .pdf already fires site-wide.
-    check('crawl: full list = 6 scan tags + GA4 Configuration + All-form = 8', res.summary.suggestions === 8, `${res.summary.suggestions}`);
+    // GA4 Configuration = 7. There is no form catch-all anymore. PDF needs no separate catch-all —
+    // the "PDF Download" tag's {{Click URL}} contains .pdf already fires site-wide.
+    check('crawl: full list = 6 scan tags + GA4 Configuration = 7', res.summary.suggestions === 7, `${res.summary.suggestions}`);
     check('crawl: GA4 Configuration (google_tag) is included', res.suggestions.some((s) => s.platform === 'google_tag' && s.tagName === 'GA4 Configuration'));
-    check('crawl: All Form Submissions catch-all + per-file "PDF Download" tag included; NO All-PDF catch-all', res.suggestions.some((s) => s.tagName === 'GA4 - Event - All Form Submissions Tag') && res.suggestions.some((s) => s.tagName === 'GA4 - Event - PDF Download Click Tag') && !res.suggestions.some((s) => s.tagName === 'GA4 - Event - All PDF Downloads'));
+    check('crawl: per-file "PDF Download" tag included; NO All-Form and NO All-PDF catch-all', res.suggestions.some((s) => s.tagName === 'GA4 - Event - PDF Download Click Tag') && !res.suggestions.some((s) => s.tagName === 'GA4 - Event - All Form Submissions Tag') && !res.suggestions.some((s) => s.tagName === 'GA4 - Event - All PDF Downloads'));
     check('crawl: EM overlap = 2 (PDF download + outbound)', res.summary.enhancedMeasurementOverlap === 2, `${res.summary.enhancedMeasurementOverlap}`);
     check(
-      'crawl: byConfidence high=4 medium=4 low=0 (GA4 config high; All-form catch-all medium)',
-      res.summary.byConfidence.high === 4 && res.summary.byConfidence.medium === 4 && res.summary.byConfidence.low === 0,
+      'crawl: byConfidence high=4 medium=3 low=0 (form catch-all removed)',
+      res.summary.byConfidence.high === 4 && res.summary.byConfidence.medium === 3 && res.summary.byConfidence.low === 0,
       JSON.stringify(res.summary.byConfidence),
     );
     check('crawl: newTracking = suggestions − EM overlap', res.summary.newTracking === res.summary.suggestions - res.summary.enhancedMeasurementOverlap);

@@ -132,7 +132,6 @@ const FORM_LABEL: Record<string, string> = {
   newsletter: 'Newsletter Form',
   login: 'Login Form',
   search: 'Search Form',
-  other: 'Form Submission',
 };
 
 // djb2 → base36; stable, no crypto dependency.
@@ -149,9 +148,6 @@ const FORM_EVENT: Record<string, string> = {
   newsletter: 'newsletter_form',
   login: 'login', // GA4 recommended event (a login-form submit)
   search: 'search', // GA4 recommended event (a search-form submit)
-  // NOT "form_submit": that's the reserved name GA4 Enhanced Measurement's form
-  // interactions emits, so reusing it would double-count.
-  other: 'form_submission',
 };
 
 // Providers whose form submits inside an iframe / via AJAX — GTM's NATIVE Form
@@ -280,6 +276,10 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // "Get a Free Consultation" → "Get a Free Consultation Form Tag" — falling back
   // to the purpose label. (Don't double up "Form" if the title already says it.)
   const titleText = (f.title ?? '').replace(/\s+/g, ' ').trim();
+  // An unrecognized form with no heading has no meaningful event or scope — do NOT emit a generic
+  // "Form Submission" tag (that catch-all was removed by design). A TITLED "other" form still gets its
+  // title-derived tag.
+  if (f.purpose === 'other' && !titleText) return null;
   const displayLabel = titleText ? (/\bforms?\b/i.test(titleText) ? titleText : `${titleText} Form`) : formLabel;
   // A TITLED form gets a distinct event from its title so the event matches the tag name (e.g.
   // "Download Form" → download_form) instead of a shared purpose event; an untitled form keeps its
@@ -584,31 +584,10 @@ export function ga4ConfigSuggestion(): SuggestedTag {
   };
 }
 
-/** One catch-all tag firing on EVERY form submit (no per-form scope). Offered
- *  alongside the scoped per-form tags so the user can pick either. */
-export function allFormsSuggestion(): SuggestedTag {
-  return {
-    id: 'all-forms',
-    page: 'site-wide',
-    label: 'All form submissions → GA4 "form_submission"',
-    evidence: 'one tag firing on every form submit on the site',
-    confidence: 'medium',
-    enhancedMeasurementOverlap: false,
-    platform: 'ga4_event',
-    tagName: tagNameOf('All Form Submissions', 'form_submit'),
-    measurementId: GA4_VAR,
-    eventName: 'form_submission',
-    eventParameters: [{ name: 'form_id', value: FORM_ID }, { name: 'form_name', value: FORM_ID }, ...PAGE_PARAMS],
-    trigger: { name: trigNameOf('All Form Submissions', 'form_submit'), kind: 'form_submit' },
-  };
-}
-
 const CONF = { high: 0, medium: 1, low: 2 } as const;
 
-/** opts.full prepends the GA4 Configuration tag (always) and the All-form catch-all
- *  (when the site has any form), so the review list is the COMPLETE set of creatable
- *  tags — not only the scan-derived ones. (PDF downloads need no separate catch-all:
- *  the per-file "PDF Download" tag's {{Click URL}} contains .pdf already fires site-wide.) */
+/** opts.full prepends the GA4 Configuration tag (always) so the review list is the COMPLETE set of
+ *  creatable tags — not only the scan-derived ones. */
 export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } = {}): SuggestedTag[] {
   const scopeCtx = nonUniqueFormScopes(input.forms);
   // Social trigger fires on ONLY the exact domains scraped from the site's links.
@@ -647,17 +626,6 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
       a.label.localeCompare(b.label)
   );
   if (!opts.full) return ranked;
-  // COMPLETE list: the GA4 Configuration base tag (always) + the All-form catch-all
-  // (when the site has any form), surfaced ABOVE the scan-derived tags.
-  const head: SuggestedTag[] = [ga4ConfigSuggestion()];
-  let body = ranked;
-  if (input.forms.length > 0) {
-    head.push(allFormsSuggestion());
-    // The All-Form catch-all IS the unscoped generic "form_submission" tag, so drop
-    // any scan-derived one that's identical (unscoped + event 'form_submission') to
-    // avoid an exact double. SCOPED per-form tags and purpose-specific events
-    // (contact_form, signup_form, …) are KEPT — they send a different event.
-    body = body.filter((s) => !(s.trigger.kind === 'form_submit' && s.eventName === 'form_submission' && !s.trigger.formIdValue && !s.trigger.formClassesValue && !s.trigger.pagePathValue));
-  }
-  return [...head, ...body];
+  // COMPLETE list: prepend the GA4 Configuration base tag (always), above the scan-derived tags.
+  return [ga4ConfigSuggestion(), ...ranked];
 }
