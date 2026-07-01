@@ -1,3 +1,9 @@
+## [1.128.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.127.1...v1.128.0) (2026-07-01)
+
+### Features
+
+* **desktop:** show the unique CSV page count (and duplicates skipped) ([f97e658](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f97e6584d2c6af6d86787d4049c20c848455cb06))
+
 ## [1.127.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.127.0...v1.127.1) (2026-07-01)
 
 ### Bug Fixes
