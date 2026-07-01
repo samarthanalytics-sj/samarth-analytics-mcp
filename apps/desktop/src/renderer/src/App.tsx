@@ -159,6 +159,7 @@ function buildEditFields(tool: string, details: Record<string, unknown>): EditFi
     const trig = asObj(details.trigger);
     if (trig.name !== undefined) fields.push({ key: 'trigName', label: 'Trigger name', initial: String(trig.name ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.name = v; d.trigger = t; } });
     if (trig.clickUrlValue !== undefined) fields.push({ key: 'trigCond', label: 'Click URL value', initial: String(trig.clickUrlValue ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.clickUrlValue = v; d.trigger = t; } });
+    if (trig.clickElementValue !== undefined) fields.push({ key: 'trigCond', label: 'Click Element CSS selector', initial: String(trig.clickElementValue ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.clickElementValue = v; d.trigger = t; } });
     if (trig.eventName !== undefined) fields.push({ key: 'trigEvent', label: 'Trigger event name', initial: String(trig.eventName ?? ''), apply: (d, v) => { const t = asObj(d.trigger); t.eventName = v; d.trigger = t; } });
     return fields;
   }
@@ -1235,6 +1236,7 @@ function triggerCondition(s: SuggestedTagView): string {
   const parts: string[] = [];
   if (t.clickUrlValue) parts.push(`{{Click URL}} ${t.clickUrlOperator ?? 'contains'} "${t.clickUrlValue}"`);
   if (t.clickTextValue) parts.push(`{{Click Text}} ${t.clickTextOperator ?? 'contains'} "${t.clickTextValue}"`);
+  if (t.clickElementValue) parts.push(`{{Click Element}} matches CSS "${t.clickElementValue}"`);
   if (t.formIdValue) parts.push(`{{Form ID}} ${t.formIdOperator ?? 'equals'} "${t.formIdValue}"`);
   if (t.formClassesValue) parts.push(`{{Form Classes}} ${t.formClassesOperator ?? 'contains'} "${t.formClassesValue}"`);
   if (t.pagePathValue) parts.push(`{{Page Path}} ${t.pagePathOperator ?? 'equals'} "${t.pagePathValue}"`);
@@ -2092,6 +2094,7 @@ function TagReviewPanel({
       const t = { ...s.trigger };
       if (t.clickUrlValue) t.clickUrlValue = e.triggerValue;
       else if (t.clickTextValue) t.clickTextValue = e.triggerValue;
+      else if (t.clickElementValue) t.clickElementValue = e.triggerValue;
       else if (t.formIdValue) t.formIdValue = e.triggerValue;
       else if (t.formClassesValue) t.formClassesValue = e.triggerValue;
       next.trigger = t;

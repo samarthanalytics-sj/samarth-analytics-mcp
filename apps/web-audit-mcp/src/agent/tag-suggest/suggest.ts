@@ -586,6 +586,75 @@ export function ga4ConfigSuggestion(): SuggestedTag {
 
 const CONF = { high: 0, medium: 1, low: 2 } as const;
 
+// ── FAQ accordion grouping ───────────────────────────────────────────────────
+// Several question rows (CTA text ending in "?") that share a class are ONE accordion. Track them with
+// a SINGLE tag scoped to that class via {{Click Element}} matches CSS "<sel>, <sel> *", so a click on
+// the question text, the row padding, OR the arrow icon all fire (each is inside the header element).
+const FAQ_UTILITY_RE = /^(flex|grid|block|inline|inline-block|hidden|relative|absolute|fixed|sticky|static|container|row|col|w|h|min|max|p[xytblr]?|m[xytblr]?|gap|space|items|justify|content|self|text|font|leading|tracking|bg|border|rounded|shadow|cursor|group|transition|duration|ease|transform|active|open|show|collapsed?)([-:].*)?$/i;
+const FAQ_ACCORDION_RE = /(accordion|faq|question|toggle|collaps|expand|disclos|panel|__item|__header|__trigger|__button|__title|__q)/i;
+// Generic component/wrapper classes that are NOT accordion-specific — a SHARED one of these (btn, card,
+// elementor-widget, …) would scope the trigger to every button/card on the site. So the fallback must
+// reject them; only a clearly accordion-ish token (matched first) or a distinctive class is allowed.
+const FAQ_GENERIC_CLASS_RE = /^(btn|button|card|cta|link|box|tile|wrap|wrapper|widget|module|component|block|content|section|nav|menu|header|footer|elementor|col|row|container|list|item|entry|node|field|group|wpb|vc|e|el|ui)([-_].*)?$/i;
+
+/** A CSS class shared by ALL the FAQ question rows to scope the accordion trigger to. Prefers a clearly
+ *  accordion-ish token; else a DISTINCTIVE shared class (>=4 chars, not a layout utility, not a generic
+ *  component/wrapper). Returns null when nothing usable is shared — so unrelated "?" buttons that merely
+ *  share a generic ".btn"/".card" wrapper are NOT grouped into a bogus, page-wide-firing tag. */
+function faqSharedClass(questions: DetectedElement[]): string | null {
+  const sets = questions.map((q) => new Set((q.className ?? '').split(/\s+/).filter(Boolean)));
+  if (!sets.length || sets.some((s) => s.size === 0)) return null;
+  // Tokens shared by EVERY question row, longest-first then alpha so the pick is deterministic.
+  const shared = [...sets[0]].filter((t) => sets.every((s) => s.has(t))).sort((a, b) => b.length - a.length || a.localeCompare(b));
+  if (!shared.length) return null;
+  return (
+    shared.find((t) => FAQ_ACCORDION_RE.test(t)) ??
+    shared.find((t) => t.length >= 4 && !FAQ_UTILITY_RE.test(t) && !FAQ_GENERIC_CLASS_RE.test(t)) ??
+    null
+  );
+}
+
+function faqTagFor(questions: DetectedElement[], page: string): SuggestedTag | null {
+  const cls = faqSharedClass(questions);
+  if (!cls) return null;
+  return {
+    id: hashId(`cta|faq|${cls}`),
+    page,
+    label: `FAQ accordion (${questions.length} questions) → GA4 "faq_click"`,
+    evidence: `${questions.length} FAQ question rows share class ".${cls}" — ONE tag fires on a click of the question text, the row, or the arrow`,
+    confidence: 'medium',
+    enhancedMeasurementOverlap: false,
+    platform: 'ga4_event',
+    tagName: tagNameOf('FAQ', 'all_clicks'),
+    measurementId: GA4_VAR,
+    eventName: 'faq_click',
+    eventParameters: CLICK_PARAMS,
+    trigger: { name: trigNameOf('FAQ', 'all_clicks'), kind: 'all_clicks', clickElementValue: `.${cls}, .${cls} *`, clickElementOperator: 'cssSelector' },
+  };
+}
+
+/** Group FAQ accordion question rows (>=2 sharing a class on one page) into ONE tag each; returns the
+ *  FAQ tags + the set of question elements consumed (so they aren't ALSO emitted as individual CTAs). */
+function extractFaqGroups(elements: DetectedElement[]): { faqTags: SuggestedTag[]; consumed: Set<DetectedElement> } {
+  const consumed = new Set<DetectedElement>();
+  const faqTags: SuggestedTag[] = [];
+  const byPage = new Map<string, DetectedElement[]>();
+  for (const e of elements) {
+    if (e.kind !== 'cta' || !/\?\s*$/.test(e.text || '') || !(e.className ?? '').trim()) continue;
+    const list = byPage.get(e.page) ?? [];
+    list.push(e);
+    byPage.set(e.page, list);
+  }
+  for (const [page, questions] of byPage) {
+    if (questions.length < 2) continue; // a lone question is not an accordion — keep it as a normal CTA
+    const tag = faqTagFor(questions, page);
+    if (!tag) continue;
+    faqTags.push(tag);
+    for (const q of questions) consumed.add(q);
+  }
+  return { faqTags, consumed };
+}
+
 /** opts.full prepends the GA4 Configuration tag (always) so the review list is the COMPLETE set of
  *  creatable tags — not only the scan-derived ones. */
 export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } = {}): SuggestedTag[] {
@@ -595,9 +664,13 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
     input.elements.filter((e) => e.kind === 'social' && e.socialDomain).map((e) => e.socialDomain as string),
   );
   const socialPattern = buildSocialUrlPattern(presentDomains);
+  // FAQ accordion rows (>=2 question CTAs sharing a class on a page) become ONE tag each; the consumed
+  // question elements are NOT also emitted as individual per-question CTAs.
+  const { faqTags, consumed } = extractFaqGroups(input.elements);
   const raw: SuggestedTag[] = [
     ...input.forms.map((f) => formSuggestion(f, scopeCtx)),
-    ...input.elements.map((e) => elementSuggestion(e, socialPattern)),
+    ...faqTags,
+    ...input.elements.filter((e) => !consumed.has(e)).map((e) => elementSuggestion(e, socialPattern)),
     videoSuggestion(input.videoEmbeds ?? []),
   ].filter((x): x is SuggestedTag => x !== null);
 
@@ -612,7 +685,7 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
     // one outbound, etc.). The eventParameters are now all GTM-variable refs
     // (identical across instances), so the trigger filter is the discriminator,
     // not the parameter value.
-    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}|${s.trigger.pageUrlValue ?? ''}`;
+    const key = `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.clickElementValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}|${s.trigger.pageUrlValue ?? ''}`;
     const seen = byKey.get(key);
     if (!seen) byKey.set(key, { ...s });
     else if (seen.page !== s.page) seen.page = 'site-wide';

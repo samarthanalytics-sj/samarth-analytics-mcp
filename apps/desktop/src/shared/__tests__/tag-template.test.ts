@@ -34,6 +34,11 @@ const form = base({
 });
 check('when: form_submit formId equals → {{Form ID}} / "equals to" / value', triggerWhens(form)[0].condition === 'equals to' && triggerWhens(form)[0].variable === '{{Form ID}}');
 
+// FAQ accordion: {{Click Element}} matches CSS selector → the "matches CSS selector" condition row.
+const faqTag = base({ id: 'faq', tagName: 'GA4 - Event - FAQ Click Tag', eventName: 'faq_click', trigger: { name: 'FAQ Click Trigger', kind: 'all_clicks', clickElementValue: '.faq-q, .faq-q *', clickElementOperator: 'cssSelector' } });
+const fw = triggerWhens(faqTag)[0];
+check('when: all_clicks clickElement cssSelector → {{Click Element}} / "matches CSS selector" / value', fw.variable === '{{Click Element}}' && fw.condition === 'matches CSS selector' && fw.value === '.faq-q, .faq-q *');
+
 // A page-scoped form (no id/class, one page) → {{Page Path}} condition, NOT "fires on every form submit".
 const pageForm = base({
   id: 'pf', tagName: 'GA4 - Event - Contact Form Tag', eventName: 'contact_form',

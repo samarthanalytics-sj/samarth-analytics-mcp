@@ -363,6 +363,36 @@ check('full: an untitled "other" form yields NO form-submit tag (generic tag + c
 const siteWideOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/a', purpose: 'other', action: '', provider: prov0 }, { page: '/b', purpose: 'other', action: '', provider: prov0 }], elements: [] }, { full: true });
 check('full: a site-wide untitled "other" form also yields NO tag (no catch-all fold)', !siteWideOther.some((s) => s.trigger.kind === 'form_submit'));
 
+// ── FAQ accordion grouping ───────────────────────────────────────────────────
+// >=2 question rows (CTA text ending "?") sharing a class collapse into ONE tag scoped to that class
+// via {{Click Element}} matches CSS, so a click on the text, the row, or the arrow icon all fire.
+const faqEls = [
+  { page: '/faq', kind: 'cta' as const, text: 'Does ChowNow charge commissions?', intent: 'generic' as const, className: 'faq-question flex items-center' },
+  { page: '/faq', kind: 'cta' as const, text: 'Does ChowNow integrate with my POS?', intent: 'generic' as const, className: 'faq-question flex items-center' },
+  { page: '/faq', kind: 'cta' as const, text: 'What happens to my customer data?', intent: 'generic' as const, className: 'faq-question flex items-center' },
+];
+const faq = buildSuggestions({ siteHost: 'a.com', forms: [], elements: faqEls });
+const faqTag = faq.find((s) => s.eventName === 'faq_click');
+check('faq: >=2 question rows sharing a class → ONE faq_click tag scoped to the accordion selector (all_clicks + cssSelector)',
+  !!faqTag && faqTag.trigger.kind === 'all_clicks' && faqTag.trigger.clickElementValue === '.faq-question, .faq-question *' && faqTag.trigger.clickElementOperator === 'cssSelector' && /faq/i.test(faqTag.tagName));
+check('faq: the grouped question rows are NOT also emitted as their own per-question CTAs', !faq.some((s) => s.trigger.clickTextValue && /\?$/.test(s.trigger.clickTextValue)));
+// A LONE question (only one) is not an accordion — stays an individual CTA.
+const loneQ = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/x', kind: 'cta', text: 'Need help?', intent: 'generic', className: 'faq-question' }] });
+check('faq: a single question row is NOT grouped (no faq tag; stays an individual CTA)', !loneQ.some((s) => s.eventName === 'faq_click') && loneQ.some((s) => s.trigger.clickTextValue === 'Need help?'));
+// Questions sharing only utility classes (no distinctive shared token) are NOT grouped.
+const noShared = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/x', kind: 'cta', text: 'Q one?', intent: 'generic', className: 'flex items-center' },
+  { page: '/x', kind: 'cta', text: 'Q two?', intent: 'generic', className: 'grid gap-2' },
+] });
+check('faq: questions with no shared distinctive class are NOT grouped (no faq tag)', !noShared.some((s) => s.eventName === 'faq_click'));
+// Two UNRELATED "?" buttons that merely share a generic component class (.btn) must NOT be grouped —
+// otherwise the selector ".btn, .btn *" would fire on every button on the site.
+const btnQ = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/x', kind: 'cta', text: 'Ready to scale?', intent: 'generic', className: 'btn btn-lg btn-primary' },
+  { page: '/x', kind: 'cta', text: 'Have questions?', intent: 'generic', className: 'btn btn-lg btn-primary' },
+] });
+check('faq: unrelated "?" buttons sharing only a generic component class (btn) are NOT grouped', !btnQ.some((s) => s.eventName === 'faq_click'));
+
 // REGRESSION (image bug): no generated tag/trigger name may contain ":" (GTM rejects it).
 const colonCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Apply Now: Today', intent: 'generic' }] });
 check('names: a CTA text with ":" yields a colon-free trigger name ("Apply Now Today Trigger")', colonCta[0].trigger.name === 'Apply Now Today Click Trigger');

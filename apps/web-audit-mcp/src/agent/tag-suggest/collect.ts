@@ -32,6 +32,9 @@ export interface RawElement {
    *  absent in the layout-less cheerio path). Fed to isStyledButton() to tell a real CTA button apart
    *  from a small chip/pill/badge that shares the same fill/border styling. */
   box?: { h: number; padX: number; padY: number; filled: boolean; bordered: boolean };
+  /** The element's own class attribute — used to find a shared accordion/FAQ class so grouped FAQ
+   *  questions can be tracked by ONE tag scoped to that class via {{Click Element}} matches CSS. */
+  className?: string;
 }
 export interface PageScanRaw {
   elements: RawElement[];
@@ -93,7 +96,7 @@ export function collectPageInBrowser(): PageScanRaw {
       seen.add(el);
       const cta = looksCta(el);
       // Only measure the box when the cheap class/role check didn't already flag it (measuring forces layout).
-      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el), cta, box: cta ? undefined : measureBox(el) });
+      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el), cta, box: cta ? undefined : measureBox(el), className: el.getAttribute('class') || undefined });
     }
     // :not(a) — an <a href role="button"> is already captured (with its href) by
     // the anchor query above; without this it would be emitted again as a hrefless
@@ -101,7 +104,7 @@ export function collectPageInBrowser(): PageScanRaw {
     for (const b of Array.from(doc.querySelectorAll('button, [role="button"]:not(a)')).slice(0, MAX)) {
       if (elements.length >= MAX * 2) break;
       seen.add(b);
-      elements.push({ tag: 'button', href: '', text: txt(b), hasDownload: false, region: regionOf(b), cta: true });
+      elements.push({ tag: 'button', href: '', text: txt(b), hasDownload: false, region: regionOf(b), cta: true, className: b.getAttribute('class') || undefined });
     }
     // Non-semantic clickable controls: a bare <a> (no href, JS-routed), an [onclick], or a
     // btn/button/cta-classed div/span — emitted as a hrefless "button" so a styled CTA that isn't a
@@ -112,7 +115,7 @@ export function collectPageInBrowser(): PageScanRaw {
       const label = txt(c);
       if (!label) continue;
       seen.add(c);
-      elements.push({ tag: 'button', href: '', text: label, hasDownload: false, region: regionOf(c), cta: true });
+      elements.push({ tag: 'button', href: '', text: label, hasDownload: false, region: regionOf(c), cta: true, className: c.getAttribute('class') || undefined });
     }
     for (const s of Array.from(doc.querySelectorAll('script[src]')).slice(0, 200)) scriptSrcs.push((s as HTMLScriptElement).src);
     for (const fr of Array.from(doc.querySelectorAll('iframe[src]')).slice(0, 50)) {
@@ -191,7 +194,7 @@ export function isStyledButton(box: NonNullable<RawElement['box']>): boolean {
 export function classifyElement(raw: RawElement, siteHost: string): DetectedElement | null {
   const href = raw.href || '';
   const region = raw.region || undefined;
-  const make = (kind: DetectedElement['kind']): DetectedElement => ({ page: '', kind, text: raw.text, href: href || undefined, region });
+  const make = (kind: DetectedElement['kind']): DetectedElement => ({ page: '', kind, text: raw.text, href: href || undefined, region, className: raw.className });
   if (/^mailto:/i.test(href)) return make('email');
   if (/^tel:/i.test(href)) return make('phone');
   if (raw.tag === 'a' && /^https?:/i.test(href)) {
@@ -240,7 +243,9 @@ const CONSENT_RE = /\b(cookies?|consent|gdpr|ccpa)\b|\b(accept|reject|decline|al
 // or a consent control, and not a whole sentence. Keeps the generic bucket to button-like LABELS.
 function isPromptableCtaText(text: string): boolean {
   const t = (text || '').replace(/\s+/g, ' ').trim();
-  if (t.length < 2 || t.length > 48) return false;
+  // Button-like labels cap at 48 chars, but a QUESTION ("…?" — an FAQ accordion row) may run longer,
+  // so allow those up to 120 chars (the engine groups repeated question rows into one FAQ tag).
+  if (t.length < 2 || (t.length > 48 && !(t.length <= 120 && /\?$/.test(t)))) return false;
   if (CTA_CHROME_RE.test(t) || CONSENT_RE.test(t)) return false;
   return /[a-z0-9]/i.test(t); // has an actual word/character, not just an icon/punctuation
 }

@@ -236,6 +236,16 @@ test('click trigger: clickUrl AND clickText conditions are both emitted (AND-ed)
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'all_clicks', clickUrlValue: '/buy', clickTextValue: 'Buy' }), ['clickUrl', 'clickText']);
 });
 
+test('all_clicks trigger: {{Click Element}} cssSelector filter (FAQ accordion — fires on text/row/arrow) + needs clickElement var', () => {
+  const tr = buildTrigger({ name: 'FAQ Click Trigger', kind: 'all_clicks', clickElementValue: '.faq-q, .faq-q *', clickElementOperator: 'cssSelector' });
+  assert.equal(tr.type, 'click');
+  const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(f.type, 'cssSelector');
+  assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Click Element}}');
+  assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, '.faq-q, .faq-q *');
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'all_clicks', clickElementValue: '.faq-q, .faq-q *' }), ['clickElement']);
+});
+
 test('builtInVarsForTemplates: maps built-in var refs, ignores user variables', () => {
   const keys = builtInVarsForTemplates(['{{Click URL}}', '{{Click Text}}', '{{Form ID}}', '{{Form URL}}', '{{GA4 Measurement ID}}', 'static']);
   assert.deepEqual(new Set(keys), new Set(['clickUrl', 'clickText', 'formId', 'formUrl']));

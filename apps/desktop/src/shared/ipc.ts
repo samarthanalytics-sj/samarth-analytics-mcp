@@ -318,6 +318,8 @@ export interface SuggestedTagView {
     clickUrlOperator?: string;
     clickTextValue?: string;
     clickTextOperator?: string;
+    clickElementValue?: string;
+    clickElementOperator?: string;
     formIdValue?: string;
     formIdOperator?: string;
     formClassesValue?: string;

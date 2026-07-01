@@ -76,6 +76,8 @@ check('short filled chip <a> ("Marketing", 26px box) → null (not a CTA)', clas
 check('bordered locale-switcher pill <a> ("Deutsch", 30px) → null', classifyElement(a('https://acme.com/de', { text: 'Deutsch', box: { h: 30, padX: 24, padY: 12, filled: false, bordered: true }, region: 'header' }), 'acme.com') === null);
 check('styled-button <a> in NAV → null (menu item, not conversion)', classifyElement(a('https://acme.com/products', { text: 'Solutions', box: BTN, region: 'nav' }), 'acme.com') === null);
 check('anchor with neither cta flag nor box (plain link) → null', classifyElement(a('https://acme.com/team', { text: 'Our team' }), 'acme.com') === null);
+// className is threaded through to the DetectedElement (drives FAQ accordion grouping in the engine).
+check('classifyElement carries the element className through', classifyElement({ tag: 'button', href: '', text: 'Does it work?', hasDownload: false, region: '', className: 'faq-question flex' }, 'acme.com')?.className === 'faq-question flex');
 
 // ── classifyPageElements sets the page path ─────────────────────────────────
 const classified = classifyPageElements([a('mailto:hi@acme.com'), a('https://acme.com/x.pdf')], 'acme.com', '/contact');
