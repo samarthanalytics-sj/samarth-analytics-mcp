@@ -1,3 +1,9 @@
+## [1.124.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.123.0...v1.124.0) (2026-07-01)
+
+### Features
+
+* ship GA4 search_term from a URL Query variable, auto-provisioned on create ([5c3f7f4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5c3f7f4b97568b3b082344b5e88e756f6d20e0d9))
+
 ## [1.123.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.122.0...v1.123.0) (2026-07-01)
 
 ### Features
