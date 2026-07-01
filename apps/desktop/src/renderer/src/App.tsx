@@ -1415,6 +1415,18 @@ function pagePathLabel(u: string): string {
   }
 }
 
+// Blog / editorial URL matcher for the optional "skip blog pages" crawl filter. Matches a /blog,
+// /blogs, /news or /article(s) path SEGMENT (incl. under a locale prefix like /en/blog/…), so it also
+// catches individual posts (/blog/my-post). Opt-in only.
+const BLOG_RE = /\/(blogs?|news|articles?)(\/|$)/i;
+function isBlogUrl(u: string): boolean {
+  try {
+    return BLOG_RE.test(new URL(u).pathname);
+  } catch {
+    return BLOG_RE.test(u);
+  }
+}
+
 /** "outbound 40 · cta 30 · download 25 · phone 2 · email 1" for the inventory header. */
 function kindCountsLabel(elements: Array<{ kind: string }>): string {
   const counts: Record<string, number> = {};
@@ -1811,6 +1823,9 @@ function TagReviewPanel({
     window.desktop.providers.status().then((s) => setHasOpenAi(!!s.openai)).catch(() => setHasOpenAi(false));
   }, []);
   const [selectedPages, setSelectedPages] = useState<Record<string, boolean>>({});
+  // Optional crawl filter (opt-in): hide /blog|/news|/article pages from the discovered list and skip
+  // them in the scan. Off by default.
+  const [skipBlog, setSkipBlog] = useState(false);
   // Suggestion display: "cards" (review + create) or "table" (the GTM-structure
   // template layout, also what the CSV download writes).
   const [tagView, setTagView] = useState<'cards' | 'table'>('cards');
@@ -1941,7 +1956,7 @@ function TagReviewPanel({
 
   // Step 2: deep-scan the selected pages with the merged engines.
   async function doScanSelected(): Promise<void> {
-    const urls = (discovered?.urls ?? []).filter((u) => selectedPages[u]);
+    const urls = (discovered?.urls ?? []).filter((u) => selectedPages[u] && !(skipBlog && isBlogUrl(u)));
     if (urls.length === 0 || scanning) return;
     onError('');
     setScanning(true);
@@ -2181,9 +2196,13 @@ function TagReviewPanel({
     }
   }
 
-  const selectedPageCount = (discovered?.urls ?? []).filter((u) => selectedPages[u]).length;
+  // "Skip blog pages" filter → the discovered pages actually shown + scannable (blog pages hidden when
+  // the toggle is on). Select-all / First-N and the selected count operate on the shown set.
+  const shownPages = (discovered?.urls ?? []).filter((u) => !(skipBlog && isBlogUrl(u)));
+  const blogCount = (discovered?.urls ?? []).filter(isBlogUrl).length;
+  const selectedPageCount = shownPages.filter((u) => selectedPages[u]).length;
   const setAllPages = (pred: (u: string, i: number) => boolean): void =>
-    setSelectedPages(Object.fromEntries((discovered?.urls ?? []).map((u, i) => [u, pred(u, i)])));
+    setSelectedPages((prev) => ({ ...prev, ...Object.fromEntries(shownPages.map((u, i) => [u, pred(u, i)])) }));
 
   const newCount = suggestions.filter((s) => !s.enhancedMeasurementOverlap).length;
   const emCount = suggestions.length - newCount;
@@ -2328,8 +2347,15 @@ function TagReviewPanel({
               <div style={styles.muted}>
                 Found <b style={{ color: 'var(--text)' }}>{discovered.total}</b> page(s){' '}
                 {discovered.viaSitemap ? 'via sitemap' : 'via link-crawl'} · {selectedPageCount} selected
+                {skipBlog && blogCount > 0 ? ` · ${blogCount} blog page${blogCount === 1 ? '' : 's'} hidden` : ''}
               </div>
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                {blogCount > 0 && (
+                  <label style={{ ...styles.muted, display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }} title="Hide and skip /blog, /news and /article pages">
+                    <input type="checkbox" checked={skipBlog} disabled={scanning} onChange={(e) => setSkipBlog(e.target.checked)} />
+                    Skip blog pages ({blogCount})
+                  </label>
+                )}
                 <button style={styles.linkBtn} onClick={() => setAllPages(() => true)}>Select all</button>
                 <button style={styles.linkBtn} onClick={() => setAllPages(() => false)}>Select none</button>
                 <button style={styles.linkBtn} onClick={() => setAllPages((_u, i) => i < 25)}>First 25</button>
@@ -2352,9 +2378,9 @@ function TagReviewPanel({
                 <span style={{ color: 'var(--text-muted)' }}>none detected</span>
               )}
             </div>
-            {discovered.urls.length > 0 ? (
+            {shownPages.length > 0 ? (
               <div style={styles.pageListScroll}>
-                {discovered.urls.map((u, i) => (
+                {shownPages.map((u, i) => (
                   <label key={i} style={styles.pageRow} title={u}>
                     <input
                       type="checkbox"
@@ -2367,7 +2393,11 @@ function TagReviewPanel({
                 ))}
               </div>
             ) : (
-              <div style={{ ...styles.muted, marginTop: 6 }}>No pages found — try the quick scan above, or check the URL.</div>
+              <div style={{ ...styles.muted, marginTop: 6 }}>
+                {skipBlog && blogCount > 0
+                  ? `All ${blogCount} discovered page${blogCount === 1 ? ' is a blog page' : 's are blog pages'} — untick "Skip blog pages" to include them.`
+                  : 'No pages found — try the quick scan above, or check the URL.'}
+              </div>
             )}
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
               <button style={styles.primaryBtn} onClick={doScanSelected} disabled={selectedPageCount === 0 || scanning}>
