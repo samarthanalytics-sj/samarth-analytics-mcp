@@ -1,3 +1,9 @@
+## [1.131.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.130.0...v1.131.0) (2026-07-01)
+
+### Features
+
+* **web-audit:** remove the generic form catch-all suggestions ([4625951](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4625951e39755a094e34e4cb229bb036403b93f0))
+
 ## [1.130.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.129.0...v1.130.0) (2026-07-01)
 
 ### Features
