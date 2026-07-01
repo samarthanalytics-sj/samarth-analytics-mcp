@@ -11,6 +11,7 @@ import {
   triggerBuiltInVars,
   builtInVarsForTemplates,
   buildVariable,
+  buildUrlQueryVariable,
   findExistingTrigger,
   customEventNameOf,
   buildGa4ServerTag,
@@ -1137,6 +1138,29 @@ export function buildToolRegistry(
           }
         }
 
+        // Auto-provision USER variables the tag references by the {{URL - <key>}} convention (e.g.
+        // search_term = {{URL - search}} for site search): a URL variable reading ?<key>=. Built-in
+        // enabling does not create these, so a referenced-but-missing one would resolve to nothing.
+        // Create only the missing ones — never overwrite a user's existing variable of the same name.
+        const urlVarNames = new Set<string>();
+        for (const val of templateVals) {
+          for (const m of String(val ?? '').matchAll(/\{\{(URL - [^}]+)\}\}/g)) urlVarNames.add(m[1]);
+        }
+        const createdVariables: string[] = [];
+        if (urlVarNames.size) {
+          const existingVarNames = new Set(
+            (await data.listGtmVariables(accountId, containerId, workspaceId)).map((v) => v.name.toLowerCase())
+          );
+          for (const name of urlVarNames) {
+            if (existingVarNames.has(name.toLowerCase())) continue;
+            const queryKey = name.replace(/^URL - /, '').trim();
+            try {
+              await data.createGtmVariable(accountId, containerId, workspaceId, buildUrlQueryVariable(name, queryKey) as unknown as Record<string, unknown>);
+              createdVariables.push(name);
+            } catch { /* best-effort: the tag still references it; the user can create it in GTM */ }
+          }
+        }
+
         const existing = (await data.listGtmTriggers(accountId, containerId, workspaceId)).find(
           (t) => t.name.toLowerCase() === triggerInput.name.toLowerCase()
         );
@@ -1156,7 +1180,7 @@ export function buildToolRegistry(
           firingTriggerId: [triggerId],
         } as unknown as Record<string, unknown>);
 
-        return { tag: createdTag, trigger: { triggerId, name: triggerInput.name, reused: reusedTrigger }, enabledVariables };
+        return { tag: createdTag, trigger: { triggerId, name: triggerInput.name, reused: reusedTrigger }, enabledVariables, createdVariables };
       },
     },
     {

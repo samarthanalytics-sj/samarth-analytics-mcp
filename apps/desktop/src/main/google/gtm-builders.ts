@@ -738,6 +738,13 @@ export interface VariableInput {
   keyPath?: string; // event_data (server) — the event-data key to read, e.g. "items" or "x-ga-mp1-x"
   defaultValue?: string; // event_data — value when the key is absent (sets setDefaultValue true)
 }
+/** A URL variable that reads ONE query-string key: {{URL - <key>}} resolves to the value of ?<key>=…
+ *  — the standard way to capture a GA4 search_term from a results URL. Corpus-verified shape (type "u",
+ *  component QUERY + queryKey). The name is used verbatim so a {{URL - <key>}} reference resolves to it. */
+export function buildUrlQueryVariable(name: string, queryKey: string): GtmVariableResource {
+  return { name, type: 'u', parameter: [tpl('component', 'QUERY'), tpl('queryKey', queryKey)] };
+}
+
 export function buildVariable(o: VariableInput): GtmVariableResource {
   switch (o.kind) {
     case 'constant':

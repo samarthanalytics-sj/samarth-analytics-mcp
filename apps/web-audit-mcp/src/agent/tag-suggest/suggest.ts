@@ -219,6 +219,9 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     // Name is method-specific so a site with MIXED search mechanisms (e.g. a GET header search AND an
     // AJAX widget) yields DISTINCT tags/triggers/ids instead of colliding (GTM rejects duplicate names).
     let searchLabel: string;
+    // Only the GET case carries a resolvable search_term (a URL Query variable auto-created on create);
+    // js/post keep the note-guided setup (term is in the dataLayer / POST body, no URL to read).
+    let searchParams: Array<{ name: string; value: string }> = [...PAGE_PARAMS];
     if (method === 'js') {
       searchLabel = 'Site Search AJAX';
       trigger = { name: trigNameOf(searchLabel, 'custom_event'), kind: 'custom_event', eventName: 'site_search' };
@@ -230,7 +233,8 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     } else {
       searchLabel = 'Site Search';
       trigger = { name: trigNameOf(searchLabel, 'pageview'), kind: 'pageview', pageUrlValue: `?${queryKey}=`, pageUrlOperator: 'contains' };
-      note = `GET search bar: submitting reloads to a results URL carrying "?${queryKey}=<term>", so this fires on a Page View where {{Page URL}} contains "?${queryKey}=". Add a search_term parameter from a URL query variable that reads the "${queryKey}" key. GA4 Enhanced Measurement may already track site search.`;
+      searchParams = [{ name: 'search_term', value: `{{URL - ${queryKey}}}` }, ...PAGE_PARAMS];
+      note = `GET search bar: submitting reloads to a results URL carrying "?${queryKey}=<term>", so this fires on a Page View where {{Page URL}} contains "?${queryKey}=". search_term is read by {{URL - ${queryKey}}} — a URL Query variable on the "${queryKey}" key that is created automatically when this tag is created. GA4 Enhanced Measurement may already track site search.`;
     }
     return {
       // id keyed by trigger kind so mixed-method search variants stay distinct (and same-method
@@ -246,9 +250,9 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
       tagName: tagNameOf(searchLabel, 'custom_event'),
       measurementId: GA4_VAR,
       eventName: 'view_search_results',
-      // Ship only resolvable built-ins; search_term needs a URL-query / DLV variable the user creates
-      // (no GTM built-in for it), so it is guided in the note rather than shipped as a dangling ref.
-      eventParameters: [...PAGE_PARAMS],
+      // GET ships search_term = {{URL - <key>}} (the create flow auto-provisions that URL Query
+      // variable); js/post keep only resolvable built-ins and guide search_term in the note.
+      eventParameters: searchParams,
       trigger,
     };
   }
