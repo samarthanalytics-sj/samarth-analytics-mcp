@@ -77,7 +77,10 @@ check('form: checkout STILL produces no suggestion (ecommerce, deferred)', build
 const nlForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'newsletter', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
 check('form: newsletter → "GA4 Event - Newsletter Form Tag" + newsletter_form', nlForm[0].tagName === 'GA4 - Event - Newsletter Form Tag' && nlForm[0].eventName === 'newsletter_form' && nlForm[0].trigger.name === 'Newsletter Form Trigger');
 const otherFormName = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/x', purpose: 'other', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
-check('form: "other" → "GA4 Event - Form Submission Tag" + form_submission', otherFormName[0].tagName === 'GA4 - Event - Form Submission Tag' && otherFormName[0].eventName === 'form_submission');
+check('form: an untitled "other" form yields NO generic tag (Form Submission catch-all removed)', otherFormName.length === 0);
+// A TITLED "other" form still gets its own title-derived tag (only the generic catch-all was removed).
+const titledOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/x', purpose: 'other', action: '', title: 'Request a Callback', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
+check('form: a TITLED "other" form still gets its own tag (title-derived, not "Form Submission")', titledOther.length === 1 && titledOther[0].eventName !== 'form_submission' && /request a callback/i.test(titledOther[0].tagName));
 
 // ── field/provider-aware form tracking ───────────────────────────────────────
 const prov0 = { vendor: 'unknown' as const, confidence: 'low' as const, evidence: '' };
@@ -243,7 +246,7 @@ check('rank: high-confidence non-EM first (form/email before download)', ranked[
 check('provider: Pardot via form action (handler endpoint)', detectFormProvider(sig({}), 'https://go.pardot.com/l/1/2/form-handler').vendor === 'pardot');
 
 const otherForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/x', purpose: 'other', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
-check('form: "other" uses form_submission (not the reserved EM form_submit)', otherForm[0].eventName === 'form_submission');
+check('form: an untitled "other" form is not tracked (no generic form_submission tag)', otherForm.length === 0);
 
 // ── eventFromLabel: GA4-valid event derived from a tag label ─────────────────
 check('eventFromLabel: snake_case + click suffix', eventFromLabel('VibroFlex NeoPDF / 1.3 MBDatasheet', 'click') === 'vibroflex_neopdf_1_3_mbdatasheet_click');
@@ -319,10 +322,10 @@ check('video: carries the standard video_* params valued by the Video built-ins'
 check('video: flagged as EM-overlap (GA4 Video engagement) but still suggested', ytTag?.enhancedMeasurementOverlap === true);
 check('video: no embed → no video tag', buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }).length === 0);
 
-// ── full mode: GA4 Configuration + All-form catch-all ────────────────────────
+// ── full mode: GA4 Configuration prepended (no form catch-all) ────────────────
 const fullForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, formId: 'c' }], elements: [] }, { full: true });
 check('full: GA4 Configuration (google_tag) is always FIRST, on All Pages', fullForm[0].platform === 'google_tag' && fullForm[0].tagName === 'GA4 Configuration' && fullForm[0].trigger.kind === 'pageview' && fullForm[0].tagId === '{{GA4 Measurement ID}}');
-check('full: "All Form Submissions" catch-all when a form exists (form_submit, no scope)', fullForm.some((s) => s.tagName === 'GA4 - Event - All Form Submissions Tag' && s.eventName === 'form_submission' && s.trigger.kind === 'form_submit' && !s.trigger.formIdValue));
+check('full: NO "All Form Submissions" catch-all is added even when a form exists', !fullForm.some((s) => s.tagName === 'GA4 - Event - All Form Submissions Tag'));
 const fullPdf = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Guide', href: 'https://a.com/g.pdf' }] }, { full: true });
 check('full: PDF download tag uses a readable {{Click URL}} ends with .pdf — and there is NO separate "All PDF Downloads" catch-all (the per-file tag already fires site-wide)',
   fullPdf.some((s) => s.eventName === 'file_download' && s.tagName === 'GA4 - Event - PDF Download Click Tag' && s.trigger.clickUrlValue === '.pdf' && s.trigger.clickUrlOperator === 'endsWith') &&
@@ -352,16 +355,13 @@ check('download: the labeled brochure link does NOT also emit the generic "PDF D
 const guideDl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Guide', href: 'https://a.com/g.pdf' }] });
 check('download: generic label "Guide" still folds into "PDF Download" (URL-scoped, not click-text)',
   guideDl.some((s) => s.tagName === 'GA4 - Event - PDF Download Click Tag' && s.trigger.clickUrlOperator === 'endsWith') && !guideDl.some((s) => s.trigger.clickTextValue));
-check('full: SCOPED / purpose form tag is KEPT (contact_form not dropped by the catch-all)', fullForm.some((s) => s.eventName === 'contact_form'));
-// A single-page generic form (no id/class) is now PAGE-SCOPED to its own tag (per-form), instead of
-// being folded into the catch-all. The All-Forms catch-all is still offered alongside it.
+check('full: SCOPED / purpose form tag is KEPT (contact_form present)', fullForm.some((s) => s.eventName === 'contact_form'));
+// An unrecognized (other) form with no heading is now DROPPED — the generic "Form Submission" tag AND
+// the site-wide catch-all were removed, so it yields no form-submit tag at all (single- or multi-page).
 const fullOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/contact', purpose: 'other', action: '', provider: prov0 }], elements: [] }, { full: true });
-check('full: a single-page generic form gets its OWN page-scoped tag (not folded)', fullOther.some((s) => s.eventName === 'form_submission' && s.trigger.kind === 'form_submit' && s.trigger.pagePathValue === '/contact'));
-check('full: the All-Forms catch-all is still present alongside the page-scoped form', fullOther.some((s) => s.tagName === 'GA4 - Event - All Form Submissions Tag' && !s.trigger.pagePathValue && !s.trigger.formIdValue));
-// A SITE-WIDE generic form (same form on >1 page) has no single page → stays unscoped → folded into
-// the catch-all (no per-page tag), so generic forms don't double up across pages.
+check('full: an untitled "other" form yields NO form-submit tag (generic tag + catch-all removed)', !fullOther.some((s) => s.trigger.kind === 'form_submit'));
 const siteWideOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/a', purpose: 'other', action: '', provider: prov0 }, { page: '/b', purpose: 'other', action: '', provider: prov0 }], elements: [] }, { full: true });
-check('full: a site-wide generic form folds into the catch-all (one form_submission, no per-page tag)', siteWideOther.filter((s) => s.eventName === 'form_submission' && s.trigger.kind === 'form_submit').length === 1 && siteWideOther.some((s) => s.tagName === 'GA4 - Event - All Form Submissions Tag') && !siteWideOther.some((s) => s.trigger.pagePathValue));
+check('full: a site-wide untitled "other" form also yields NO tag (no catch-all fold)', !siteWideOther.some((s) => s.trigger.kind === 'form_submit'));
 
 // REGRESSION (image bug): no generated tag/trigger name may contain ":" (GTM rejects it).
 const colonCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Apply Now: Today', intent: 'generic' }] });

@@ -28,8 +28,8 @@ export const GTM_CREATION_METHODOLOGY =
   'container to reuse a matching trigger/variable and to avoid duplicate tag names. ' +
   'TRIGGERS by intent: link/CTA click → link_click or all_clicks filtered on {{Click URL}} and/or {{Click Text}} (never an ' +
   'unfiltered all-clicks — it over-fires); form submit → form_submit scoped to ONE form via {{Form ID}} (equals) or a unique ' +
-  '{{Form Classes}} (contains), else {{Page Path}} for the single page it lives on, else unscoped ONLY as a deliberate site-wide ' +
-  'catch-all — leave waitForTags/checkValidation OFF; a native form trigger does NOT fire for iframe/AJAX forms (instead listen ' +
+  '{{Form Classes}} (contains), else {{Page Path}} for the single page it lives on; an unrecognized/unscoped form is NOT tracked ' +
+  '(there is no site-wide form catch-all) — leave waitForTags/checkValidation OFF; a native form trigger does NOT fire for iframe/AJAX forms (instead listen ' +
   'for the provider submit event → push a dataLayer event → fire on a Custom Event trigger); dataLayer event → custom_event whose ' +
   'EVENT NAME is the raw snake_case value the dataLayer pushes (distinct from the trigger display name); pageview; youtube_video; ' +
   'timer (its interval/limit/eventName are TOP-LEVEL trigger fields, not parameter[]). ' +
