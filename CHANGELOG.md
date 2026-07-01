@@ -1,3 +1,9 @@
+## [1.118.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.117.0...v1.118.0) (2026-07-01)
+
+### Features
+
+* standardize GA4 event params + exact trigger conditions ([51d0895](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/51d089588cb54aa83e6157d60c5d115c7fd02931))
+
 ## [1.117.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.116.0...v1.117.0) (2026-07-01)
 
 ### Features
