@@ -11,8 +11,8 @@ import type { LlmTurn } from '../llm/types';
 // Shared GA4/GTM creation methodology — the SAME rules the tag-suggestion engine + AI scan follow,
 // so chat tag creation stays consistent with what the audit/suggestion surfaces propose. Re-exported
 // so the chat-prompt test can assert it is composed into the system prompt.
-import { GTM_CREATION_METHODOLOGY } from '../../shared/gtm-methodology';
-export { GTM_CREATION_METHODOLOGY };
+import { GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE } from '../../shared/gtm-methodology';
+export { GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE };
 
 /**
  * The "GTM Audit Brain" — an evidence-based, deterministic methodology the model must
@@ -195,6 +195,7 @@ export class ChatService {
           GA4_TAG_NAMING +
           GA4_ECOMMERCE_REFERENCE +
           GTM_CREATION_METHODOLOGY +
+          GTM_TRIGGER_VARIABLE_REFERENCE +
           GTM_AUDIT_METHODOLOGY +
           'CLEANUP — UNUSED TRIGGERS: when the user wants to remove unwanted/orphaned triggers (triggers not linked to any tag), FIRST call list_unused_gtm_triggers to show them (it returns each orphan\'s triggerId + name — a trigger referenced by no tag as a firing OR blocking trigger, and not a Trigger Group member). Then, on the user\'s go-ahead, call delete_unused_gtm_triggers: with NO triggerIds it deletes ALL of them; pass triggerIds to delete only the ones the user selected (the filter). It is destructive (double-confirm) and never deletes a referenced trigger even if its id is passed (it is skipped + reported). Do NOT loop delete_gtm_trigger one-by-one for a cleanup — use the bulk tool. ' +
           'CLEANUP — UNUSED VARIABLES: same pattern for orphaned variables (referenced by no tag, trigger, or other variable): list_unused_gtm_variables to show them, then delete_unused_gtm_variables (all, or a selected variableIds subset; destructive double-confirm). IMPORTANT caveat to state to the user: this is a strong HINT not proof, and UNLIKE triggers the GTM API does NOT refuse to delete a referenced variable — a variable used only in a published version or a field the audit cannot read could be wrongly deleted and silently break that {{reference}}. So advise reviewing before deleting. ' +
