@@ -16,8 +16,8 @@ import { pageScanFromDriven, assembleResult, emptyResult, type PageDriver, type 
 
 const GA4_VAR = '{{GA4 Measurement ID}}';
 const PAGE_PARAMS = [
-  { name: 'page_path', value: '{{Page Path}}' },
-  { name: 'page_referrer', value: '{{Referrer}}' },
+  { name: 'page_url', value: '{{Page URL}}' },
+  { name: 'previous_page', value: '{{Referrer}}' },
 ];
 // GTM rejects ":" and a few chars in resource names — strip them (mirrors the engine).
 const clean = (s: string): string => (s || '').replace(/[<>:]/g, ' ').replace(/\s{2,}/g, ' ').trim();
@@ -70,7 +70,7 @@ export function aiTagsToSuggestions(picks: AiTagPick[], page: string, elements: 
       if (!f) continue;
       out.push({
         ...base,
-        eventParameters: [{ name: 'form_id', value: '{{Form ID}}' }, { name: 'form_url', value: '{{Form URL}}' }, ...PAGE_PARAMS],
+        eventParameters: [{ name: 'form_id', value: '{{Form ID}}' }, { name: 'form_name', value: name }, ...PAGE_PARAMS],
         trigger: {
           name: trigNameOf(name, 'form_submit'),
           kind: 'form_submit',
@@ -83,10 +83,12 @@ export function aiTagsToSuggestions(picks: AiTagPick[], page: string, elements: 
       const useUrl = p.kind === 'link' && !!el.href;
       out.push({
         ...base,
-        eventParameters: [{ name: 'cta_text', value: '{{Click Text}}' }, { name: 'click_url', value: '{{Click URL}}' }, ...PAGE_PARAMS],
+        eventParameters: [{ name: 'click_text', value: '{{Click Text}}' }, { name: 'click_url', value: '{{Click URL}}' }, ...PAGE_PARAMS],
         trigger: useUrl
           ? { name: trigNameOf(name, 'link_click'), kind: 'link_click', clickUrlValue: el.href, clickUrlOperator: 'contains' as const }
-          : { name: trigNameOf(name, 'all_clicks'), kind: 'all_clicks', clickTextValue: el.text.slice(0, 60), clickTextOperator: 'contains' as const },
+          // Full (trimmed) text — NOT sliced — because the trigger matches {{Click Text}} EQUALS this
+          // value; a truncated value could never equal the runtime text (the tag NAME uses `name`).
+          : { name: trigNameOf(name, 'all_clicks'), kind: 'all_clicks', clickTextValue: el.text.replace(/\s+/g, ' ').trim(), clickTextOperator: 'equals' as const },
       });
     } else if (p.kind === 'pageview') {
       out.push({ ...base, eventParameters: PAGE_PARAMS, trigger: { name: trigNameOf(name, 'pageview'), kind: 'pageview' } });

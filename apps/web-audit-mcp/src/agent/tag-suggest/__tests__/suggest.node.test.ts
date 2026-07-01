@@ -190,14 +190,13 @@ check('email: carries click_url={{Click URL}} + click_text={{Click Text}} (corpu
 check('download/outbound also carry click_url/click_text params',
   (byEvent('file_download')?.eventParameters?.length ?? 0) >= 2 && (byEvent('outbound_click')?.eventParameters?.length ?? 0) >= 2);
 const leadParams = out1[0].eventParameters ?? [];
-check('form: contact_form carries form_id={{Form ID}} + form_destination={{Form URL}}',
+check('form: contact_form carries form_id={{Form ID}} + form_name (static form label)',
   leadParams.some((p) => p.name === 'form_id' && p.value === '{{Form ID}}') &&
-  leadParams.some((p) => p.name === 'form_destination' && p.value === '{{Form URL}}'));
-check('form: also carries form_text={{Form Text}}', leadParams.some((p) => p.name === 'form_text' && p.value === '{{Form Text}}'));
-check('page context: every event carries page_path={{Page Path}} + page_referrer={{Referrer}}',
+  leadParams.some((p) => p.name === 'form_name' && p.value === 'Contact Form'));
+check('page context: every event carries page_url={{Page URL}} + previous_page={{Referrer}}',
   [byEvent('email_click'), out1[0]].every((s) =>
-    (s?.eventParameters ?? []).some((p) => p.name === 'page_path' && p.value === '{{Page Path}}') &&
-    (s?.eventParameters ?? []).some((p) => p.name === 'page_referrer' && p.value === '{{Referrer}}')));
+    (s?.eventParameters ?? []).some((p) => p.name === 'page_url' && p.value === '{{Page URL}}') &&
+    (s?.eventParameters ?? []).some((p) => p.name === 'previous_page' && p.value === '{{Referrer}}')));
 check('download: flagged as Enhanced-Measurement overlap', byEvent('file_download')?.enhancedMeasurementOverlap === true);
 check('outbound: flagged as Enhanced-Measurement overlap', byEvent('outbound_click')?.enhancedMeasurementOverlap === true);
 check('email/phone are NOT EM overlap (real gaps)', byEvent('email_click')?.enhancedMeasurementOverlap === false && byEvent('phone_click')?.enhancedMeasurementOverlap === false);
@@ -240,7 +239,7 @@ const ctaInput = buildSuggestions({
   ],
 });
 // Each distinct button TEXT becomes its own tag, named for that text, with a plain
-// "{{Click Text}} contains <text>" trigger (no intent regex). Different text → different tag (the
+// "{{Click Text}} equals <text>" trigger (no intent regex). Different text → different tag (the
 // user prefers per-button clarity); the SAME text on multiple pages still collapses site-wide.
 // "contains" (not "equals") so the trigger still fires when GTM's rendered Click Text differs from
 // the scanned textContent (icon / hidden a11y span / scan-time truncation).
@@ -249,20 +248,20 @@ check('cta: each distinct subscribe text → its OWN tag named for that exact te
   subs.length === 2 &&
   subs.some((s) => s.tagName === 'GA4 - Event - Subscribe Now Click Tag' && s.trigger.name === 'Subscribe Now Click Trigger') &&
   subs.some((s) => s.tagName === 'GA4 - Event - Subscribe Click Tag'));
-check('cta: named-intent trigger is a plain {{Click Text}} contains <text> (not matchRegex)',
-  subs.every((s) => s.trigger.clickTextOperator === 'contains') &&
+check('cta: named-intent trigger is a plain {{Click Text}} equals <text> (not matchRegex)',
+  subs.every((s) => s.trigger.clickTextOperator === 'equals') &&
   ctaInput.find((s) => s.tagName === 'GA4 - Event - Subscribe Now Click Tag')?.trigger.clickTextValue === 'Subscribe now');
 const demo = ctaInput.find((s) => s.eventName === 'book_demo_click');
-check('cta: tag named for the actual button text "Request a demo", trigger {{Click Text}} contains it',
+check('cta: tag named for the actual button text "Request a demo", trigger {{Click Text}} equals it',
   demo?.tagName === 'GA4 - Event - Request A Demo Click Tag' && demo?.trigger.name === 'Request A Demo Click Trigger' &&
-  demo?.trigger.clickTextValue === 'Request a demo' && demo?.trigger.clickTextOperator === 'contains');
+  demo?.trigger.clickTextValue === 'Request a demo' && demo?.trigger.clickTextOperator === 'equals');
 check('cta: Learn More tag named for the button text + own event', ctaInput.find((s) => s.eventName === 'learn_more_click')?.tagName === 'GA4 - Event - Learn More Click Tag');
 check('cta: Add to Cart uses non-reserved add_to_cart_click event (not the GA4 ecommerce add_to_cart)',
   ctaInput.find((s) => s.eventName === 'add_to_cart_click')?.tagName === 'GA4 - Event - Add To Cart Click Tag' && !ctaInput.some((s) => s.eventName === 'add_to_cart'));
 const genericCtas = ctaInput.filter((s) => s.eventName === 'cta_click');
-check('cta: generic "Buy now" → {{Click Text}} contains "Buy now" + "Buy now Trigger" + same text collapses site-wide', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'contains' && genericCtas[0].trigger.name === 'Buy Now Click Trigger');
-check('cta: every CTA carries dynamic cta_text={{Click Text}}', ctaInput.every((s) => s.eventParameters?.some((p) => p.name === 'cta_text' && p.value === '{{Click Text}}')));
-check('cta: ALL CTA triggers use a plain "contains" condition (no regex)', ctaInput.every((s) => s.trigger.clickTextOperator === 'contains'));
+check('cta: generic "Buy now" → {{Click Text}} equals "Buy now" + "Buy now Trigger" + same text collapses site-wide', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'equals' && genericCtas[0].trigger.name === 'Buy Now Click Trigger');
+check('cta: every CTA carries dynamic click_text={{Click Text}}', ctaInput.every((s) => s.eventParameters?.some((p) => p.name === 'click_text' && p.value === '{{Click Text}}')));
+check('cta: ALL CTA triggers use a plain "equals" condition (no regex)', ctaInput.every((s) => s.trigger.clickTextOperator === 'equals'));
 
 // Newly tracked CTAs: login + search.
 const moreCtas = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
@@ -270,11 +269,11 @@ const moreCtas = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
   { page: '/', kind: 'cta', text: 'Search', intent: 'search' },
 ] });
 const loginCta = moreCtas.find((s) => s.eventName === 'login_click');
-check('cta: login button → "GA4 Event - Login Tag" (named for the text), {{Click Text}} contains "Login"', loginCta?.tagName === 'GA4 - Event - Login Click Tag' && loginCta?.trigger.clickTextValue === 'Login' && loginCta?.trigger.clickTextOperator === 'contains');
+check('cta: login button → "GA4 Event - Login Tag" (named for the text), {{Click Text}} equals "Login"', loginCta?.tagName === 'GA4 - Event - Login Click Tag' && loginCta?.trigger.clickTextValue === 'Login' && loginCta?.trigger.clickTextOperator === 'equals');
 const searchCta = moreCtas.find((s) => s.eventName === 'search_click');
 // search CTA uses 'search_click' (NOT bare 'search') so a "Search" submit button
 // can't double-count with the search FORM tag (which keeps the GA4 'search' event).
-check('cta: search button → "GA4 Event - Search Tag", event search_click, {{Click Text}} contains "Search"', searchCta?.tagName === 'GA4 - Event - Search Click Tag' && searchCta?.eventName === 'search_click' && searchCta?.trigger.clickTextValue === 'Search' && searchCta?.trigger.clickTextOperator === 'contains');
+check('cta: search button → "GA4 Event - Search Tag", event search_click, {{Click Text}} equals "Search"', searchCta?.tagName === 'GA4 - Event - Search Click Tag' && searchCta?.eventName === 'search_click' && searchCta?.trigger.clickTextValue === 'Search' && searchCta?.trigger.clickTextOperator === 'equals');
 check('cta: search button event (search_click) is DISTINCT from search FORM event (search) — no double-count', searchForm[0].eventName === 'search' && searchCta?.eventName === 'search_click');
 // Title-case preserves intercaps/acronym tokens in the tag name (iOS not "Ios", PDF stays PDF).
 const iosCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Download for iOS', intent: 'generic' }] });

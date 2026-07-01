@@ -70,6 +70,9 @@ test('GTM_CREATION_METHODOLOGY carries the shared build-methodology (same rules 
   assert.ok(/\{\{Form ID\}\}[\s\S]*\{\{Form Classes\}\}[\s\S]*\{\{Page Path\}\}/.test(m), 'form-submit scoping ladder: id → class → page');
   assert.ok(/iframe\/AJAX/i.test(m) && /Custom Event trigger/i.test(m), 'iframe/AJAX forms fall back to a Custom Event trigger');
   assert.ok(/TOP-LEVEL/.test(m), 'keeps the timer top-level-fields gotcha');
+  assert.ok(/click_text[\s\S]*click_url[\s\S]*page_url[\s\S]*previous_page/.test(m), 'standard click event params');
+  assert.ok(/form_id[\s\S]*form_name[\s\S]*page_url[\s\S]*previous_page/.test(m), 'standard form event params');
+  assert.ok(/\{\{Click Text\}\} EQUALS/.test(m) && /CONTAINS the path fragment/i.test(m), 'exact click-text + page-contains trigger conditions');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

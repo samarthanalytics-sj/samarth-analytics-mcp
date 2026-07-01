@@ -34,12 +34,18 @@ const picks: AiTagPick[] = [
 ];
 const sugs = aiTagsToSuggestions(picks, '/', elements, forms);
 check('ai-map: form pick → form_submit scoped by {{Form ID}} equals its real formId', sugs.some((s) => s.eventName === 'contact_form' && s.trigger.kind === 'form_submit' && s.trigger.formIdValue === 'contact' && s.trigger.formIdOperator === 'equals'));
-check('ai-map: click pick → all_clicks on {{Click Text}} contains the element text', sugs.some((s) => s.eventName === 'book_demo_click' && s.trigger.kind === 'all_clicks' && s.trigger.clickTextValue === 'Book a demo'));
+check('ai-map: click pick → all_clicks on {{Click Text}} equals the element text', sugs.some((s) => s.eventName === 'book_demo_click' && s.trigger.kind === 'all_clicks' && s.trigger.clickTextValue === 'Book a demo' && s.trigger.clickTextOperator === 'equals'));
 check('ai-map: link pick → link_click on {{Click URL}} contains the element href', sugs.some((s) => s.eventName === 'file_download' && s.trigger.kind === 'link_click' && /guide\.pdf/.test(s.trigger.clickUrlValue ?? '')));
 check('ai-map: pageview pick → pageview trigger', sugs.some((s) => s.eventName === 'hero_view' && s.trigger.kind === 'pageview'));
 check('ai-map: a pick with a bad reference and an empty-name pick are DROPPED (4 valid)', sugs.length === 4 && !sugs.some((s) => /Bad Form/.test(s.tagName)));
 check('ai-map: every AI suggestion is a creatable ga4_event with the AI note', sugs.every((s) => s.platform === 'ga4_event' && s.measurementId === '{{GA4 Measurement ID}}' && /AI-suggested/.test(s.note ?? '')));
 check('ai-map: tag + trigger names are sanitized (no GTM-invalid ":")', sugs.every((s) => !s.tagName.includes(':') && !s.trigger.name.includes(':')));
+
+// A >60-char button label must NOT be truncated in the EQUALS click-text value (else the runtime
+// {{Click Text}} could never equal it). The tag/trigger NAME may still be shortened separately.
+const longText = 'Schedule your free personalized 45-minute strategy consultation call today';
+const longSugs = aiTagsToSuggestions([{ name: 'Long CTA', event: 'cta_click', kind: 'click', elementIndex: 0 }], '/', [{ tag: 'button', href: '', text: longText, hasDownload: false, region: '' }], []);
+check('ai-map: a long CTA label is NOT truncated in the equals click-text value', longSugs.length === 1 && longSugs[0].trigger.clickTextValue === longText && longSugs[0].trigger.clickTextOperator === 'equals');
 
 // ── dropAiSuggestion: drop AI tags that duplicate the engine scan, or are unsafe ──
 const trig = (over: Partial<SuggestedTag['trigger']>): SuggestedTag['trigger'] => ({ name: 'n', kind: 'all_clicks', ...over });
