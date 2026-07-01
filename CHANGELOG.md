@@ -1,3 +1,9 @@
+## [1.130.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.129.0...v1.130.0) (2026-07-01)
+
+### Features
+
+* **desktop:** optional "skip blog pages" filter on site-crawl discovery ([6ae8199](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6ae8199bda03abe6a2a43d1ec10464a73e825d42))
+
 ## [1.129.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.128.1...v1.129.0) (2026-07-01)
 
 ### Features
