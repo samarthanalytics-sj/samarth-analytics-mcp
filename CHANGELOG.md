@@ -1,3 +1,9 @@
+## [1.125.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.125.0...v1.125.1) (2026-07-01)
+
+### Bug Fixes
+
+* **web-audit:** detect button-styled CTA links like "Get your recording" ([bf77ed8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bf77ed8cc77115f2273599850da7471ecb30f098))
+
 ## [1.125.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.124.0...v1.125.0) (2026-07-01)
 
 ### Features
