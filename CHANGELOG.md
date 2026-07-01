@@ -1,3 +1,9 @@
+## [1.128.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.128.0...v1.128.1) (2026-07-01)
+
+### Bug Fixes
+
+* **web-audit:** detect "Contact us" and "Download brochure" CTAs ([e89504f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e89504f3c58ea9bb4f6f337cf07397483d54213a))
+
 ## [1.128.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.127.1...v1.128.0) (2026-07-01)
 
 ### Features
