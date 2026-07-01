@@ -464,7 +464,7 @@ export function buildAdsRemarketingServerTag(name: string, conversionId: string,
 
 /* ───────────── Triggers ───────────── */
 
-const FILTER_OPS = new Set(['equals', 'contains', 'startsWith', 'endsWith', 'matchRegex', 'greater', 'less']);
+const FILTER_OPS = new Set(['equals', 'contains', 'startsWith', 'endsWith', 'matchRegex', 'cssSelector', 'greater', 'less']);
 function condition(variable: string, op: string, value: string): Param {
   return {
     type: FILTER_OPS.has(op) ? op : 'contains',
@@ -525,6 +525,11 @@ export interface TriggerInput {
   /** For link_click/all_clicks: also filter on {{Click Text}} (e.g. a CTA). */
   clickTextValue?: string;
   clickTextOperator?: string;
+  /** For all_clicks: fire on any click matching a CSS selector via {{Click Element}} (operator
+   *  cssSelector) — e.g. an FAQ accordion header ".faq__q, .faq__q *" so a click on the question text,
+   *  the row padding, OR the arrow icon all fire (they are all inside the matched element). */
+  clickElementValue?: string;
+  clickElementOperator?: string;
   /** For form_submit: scope to one form via {{Form ID}} / {{Form Classes}}. */
   formIdValue?: string;
   formIdOperator?: string;
@@ -570,6 +575,7 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       const filters: Param[] = [];
       if (o.clickUrlValue) filters.push(condition('{{Click URL}}', o.clickUrlOperator ?? 'contains', o.clickUrlValue));
       if (o.clickTextValue) filters.push(condition('{{Click Text}}', o.clickTextOperator ?? 'contains', o.clickTextValue));
+      if (o.clickElementValue) filters.push(condition('{{Click Element}}', o.clickElementOperator ?? 'cssSelector', o.clickElementValue));
       if (filters.length) t.filter = filters;
       return t;
     }
@@ -791,6 +797,7 @@ export function triggerBuiltInVars(o: TriggerInput): string[] {
   if (o.kind === 'link_click' || o.kind === 'all_clicks') {
     if (o.clickUrlValue) vars.push('clickUrl');
     if (o.clickTextValue) vars.push('clickText');
+    if (o.clickElementValue) vars.push('clickElement');
   }
   if (o.kind === 'form_submit') {
     if (o.formIdValue) vars.push('formId');

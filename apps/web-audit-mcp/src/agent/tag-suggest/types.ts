@@ -82,6 +82,9 @@ export interface DetectedElement {
   region?: 'header' | 'footer' | 'nav' | 'main';
   /** A stable CSS/text selector for the GTM trigger (Phase 2 fills this). */
   selector?: string;
+  /** The element's own class attribute (from the collector) — used to find a shared accordion/FAQ
+   *  class so grouped FAQ question rows become ONE tag. */
+  className?: string;
   /** Set when kind==='cta' — drives the tag/trigger name + the trigger filter. */
   intent?: CtaIntent;
   /** Set when kind==='social' — which network (facebook, linkedin, …). */
@@ -109,7 +112,7 @@ export interface SuggestInput {
 }
 
 export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video';
-export type FilterOp = 'equals' | 'contains' | 'startsWith' | 'endsWith' | 'matchRegex';
+export type FilterOp = 'equals' | 'contains' | 'startsWith' | 'endsWith' | 'matchRegex' | 'cssSelector';
 
 /** SAME shape as the desktop create_gtm_tracking_tag input → directly creatable. */
 export interface SuggestedTag {
@@ -149,6 +152,10 @@ export interface SuggestedTag {
     /** For all_clicks/link_click: also filter on {{Click Text}} (e.g. a CTA). */
     clickTextValue?: string;
     clickTextOperator?: FilterOp;
+    /** For all_clicks: fire on any click matching a CSS selector via {{Click Element}} (operator
+     *  cssSelector) — an FAQ accordion header so a click on the text, the row, or the arrow all fire. */
+    clickElementValue?: string;
+    clickElementOperator?: FilterOp;
     /** For form_submit: scope to ONE form via {{Form ID}} / {{Form Classes}}, so
      *  the tag fires for this form only — not every form on the page. */
     formIdValue?: string;
