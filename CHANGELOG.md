@@ -1,3 +1,9 @@
+## [1.119.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.119.0...v1.119.1) (2026-07-01)
+
+### Bug Fixes
+
+* **desktop:** show the {{Page Path}} condition for page-scoped form tags ([5988ede](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5988ede9bdf3ce261aba6da081f96a846aa16eae))
+
 ## [1.119.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.118.0...v1.119.0) (2026-07-01)
 
 ### Features
