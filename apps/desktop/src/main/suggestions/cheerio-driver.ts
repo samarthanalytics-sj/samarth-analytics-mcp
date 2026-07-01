@@ -35,11 +35,18 @@ export function extractWithCheerio(html: string, baseUrl: string): { raw: PageSc
     const t = tagOf(sel.closest('header,footer,nav,main'));
     return t === 'header' || t === 'footer' || t === 'nav' || t === 'main' ? t : '';
   };
+  // A link that reads as a CTA by MARKUP alone: a btn/button/cta class token, role=button, or an
+  // onclick. Cheerio has no layout, so unlike the in-page collector (which also uses getComputedStyle
+  // to catch a class-less styled button) this server-HTML path can only go on the class/role signals.
+  const looksCta = (sel: Cheerio<AnyNode>): boolean => {
+    if (sel.attr('role') === 'button' || sel.attr('onclick') !== undefined) return true;
+    return /(^|[\s_-])(btn|button|cta)([\s_-]|$)/.test((sel.attr('class') || '').toLowerCase());
+  };
 
   const elements: RawElement[] = [];
   $('a[href]').slice(0, 400).each((_i, el) => {
     const $el = $(el);
-    elements.push({ tag: 'a', href: abs($el.attr('href') || ''), text: txt($el), hasDownload: $el.attr('download') !== undefined, region: regionOf($el) });
+    elements.push({ tag: 'a', href: abs($el.attr('href') || ''), text: txt($el), hasDownload: $el.attr('download') !== undefined, region: regionOf($el), cta: looksCta($el) });
   });
   $('button, [role="button"]:not(a)').slice(0, 400).each((_i, el) => {
     const $el = $(el);
