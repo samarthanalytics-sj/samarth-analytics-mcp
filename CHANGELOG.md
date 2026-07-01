@@ -1,3 +1,9 @@
+## [1.127.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.126.0...v1.127.0) (2026-07-01)
+
+### Features
+
+* **desktop:** float selected tag suggestions to the top of the review list ([1dd8cbe](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1dd8cbebcc8f0ecf98dcb6c433c258e1ef384b6f))
+
 ## [1.126.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.125.1...v1.126.0) (2026-07-01)
 
 ### Features
