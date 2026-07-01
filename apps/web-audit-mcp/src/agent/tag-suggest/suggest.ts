@@ -108,6 +108,23 @@ const EVENT_LABEL: Record<string, string> = {
 };
 const eventLabel = (e: string): string => EVENT_LABEL[e] ?? e.split('_').map(cap).join(' ');
 
+/** A GA4-valid event name derived from a tag label so the event MATCHES the tag name (a per-item tag
+ *  gets its own event, not a shared generic one). Lowercased snake_case (letters/digits/underscore),
+ *  MUST start with a letter, capped at GA4's 40-char event-name limit (trimmed at a word boundary).
+ *  An optional kind suffix (e.g. "click") is appended unless the label already ends with it. */
+export function eventFromLabel(label: string, suffix = ''): string {
+  let base = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  if (suffix && !base.endsWith(suffix)) base = base ? `${base}_${suffix}` : suffix;
+  base = base.replace(/^[^a-z]+/, ''); // GA4 event names must start with a letter
+  // GA4 SILENTLY DROPS events whose name starts with a reserved prefix (ga_, google_, firebase_) —
+  // strip the offending leading segment(s), then re-ensure a letter start.
+  while (/^(ga|google|firebase)_/.test(base)) base = base.replace(/^(ga|google|firebase)_/, '');
+  base = base.replace(/^[^a-z]+/, '');
+  if (!base) base = suffix || 'event';
+  if (base.length > 40) base = base.slice(0, 40).replace(/_[^_]*$/, '') || base.slice(0, 40);
+  return base;
+}
+
 // Form purpose → human tag/trigger label ("Contact Form", "Newsletter Form").
 const FORM_LABEL: Record<string, string> = {
   contact: 'Contact Form',
@@ -256,7 +273,6 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
       trigger,
     };
   }
-  const eventName = FORM_EVENT[f.purpose] ?? 'form_submission';
   const formLabel = FORM_LABEL[f.purpose] ?? 'Form Submission';
   const prov = f.provider.vendor !== 'unknown' ? ` (${f.provider.vendor})` : '';
 
@@ -265,6 +281,10 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // to the purpose label. (Don't double up "Form" if the title already says it.)
   const titleText = (f.title ?? '').replace(/\s+/g, ' ').trim();
   const displayLabel = titleText ? (/\bforms?\b/i.test(titleText) ? titleText : `${titleText} Form`) : formLabel;
+  // A TITLED form gets a distinct event from its title so the event matches the tag name (e.g.
+  // "Download Form" → download_form) instead of a shared purpose event; an untitled form keeps its
+  // purpose event (contact_form / login / …, which is already GA4-appropriate and stays recommended).
+  const eventName = titleText ? eventFromLabel(displayLabel) : (FORM_EVENT[f.purpose] ?? 'form_submission');
 
   // Scope the trigger to THIS form via its id (preferred) or an instance-unique
   // class — but ONLY if that id/class isn't shared with another form (else it
@@ -472,10 +492,13 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         clickTextValue: ctaText || def.label,
         clickTextOperator: 'equals',
       };
+      // Event matches the tag name (both derived from the button text), e.g. "Buy Now" → buy_now_click,
+      // instead of a shared generic cta_click. The intent still sets confidence (isSpecific).
+      const ctaEvent = eventFromLabel(displayLabel, 'click');
       return {
-        ...base(def.event, isSpecific ? 'medium' : 'low', false),
+        ...base(ctaEvent, isSpecific ? 'medium' : 'low', false),
         tagName: tagNameOf(displayLabel, 'all_clicks'),
-        label: `"${displayLabel}" → GA4 "${def.event}"`,
+        label: `"${displayLabel}" → GA4 "${ctaEvent}"`,
         evidence: `button/link text "${el.text}"` + (isSpecific ? ` (intent: ${el.intent})` : ''),
         // Standard click params: click_text ({{Click Text}}) is the dynamic clicked label, click_url
         // the href when the CTA is a link, plus page context.

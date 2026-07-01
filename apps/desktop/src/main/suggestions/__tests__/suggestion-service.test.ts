@@ -119,9 +119,9 @@ async function main(): Promise<void> {
 
     const events = new Set(res.suggestions.map((s) => s.eventName));
     check('crawl: visits entry + linked contact page', res.summary.pagesScanned === 2 && fd.opened().length === 2);
-    check('crawl: contact form → contact_form', events.has('contact_form'));
+    check('crawl: titled contact form → event derived from its title (matches the tag name)', events.has('get_a_free_consultation_form'));
     check('crawl: mailto → email_click, tel → phone_click', events.has('email_click') && events.has('phone_click'));
-    check('crawl: download + outbound + named CTA detected', events.has('file_download') && events.has('outbound_click') && events.has('book_demo_click'));
+    check('crawl: download + outbound + named CTA detected', events.has('file_download') && events.has('outbound_click') && events.has('book_a_demo_click'));
     // full mode (scan path): the 6 scan-derived tags (incl. the per-file "PDF Download" tag) +
     // GA4 Configuration + the All-form catch-all (the fake site has a form) = 8. PDF needs no
     // separate catch-all — the "PDF Download" tag's {{Click URL}} contains .pdf already fires site-wide.
@@ -242,7 +242,7 @@ async function main(): Promise<void> {
     const res = await scanUrls(fd.driver, ['https://acme.com/contact', 'https://acme.com/pricing'], 'acme.com');
     const events = new Set(res.suggestions.map((s) => s.eventName));
     check('scanUrls: scans exactly the listed pages (2), no crawl', res.summary.pagesScanned === 2 && fd.opened().length === 2);
-    check('scanUrls: builds suggestions from those pages', events.has('contact_form') && events.has('email_click') && events.has('phone_click'));
+    check('scanUrls: builds suggestions from those pages', events.has('get_a_free_consultation_form') && events.has('email_click') && events.has('phone_click'));
     check('scanUrls: driver closed once', fd.closes() === 1);
   }
 
