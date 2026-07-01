@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE } from '../chat-service';
+import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY } from '../chat-service';
 
 let passed = 0;
 let failed = 0;
@@ -54,6 +54,19 @@ test('GA4_ECOMMERCE_REFERENCE maps each ecommerce event to its parameters', () =
   assert.ok(m.includes('purchase, refund → items, transaction_id, value, tax, shipping, currency, coupon'), 'purchase/refund row');
   assert.ok(m.includes('view_promotion, select_promotion → creative_name, creative_slot, promotion_id, promotion_name, items'), 'promotion row');
   assert.ok(/ecommerce\.items/.test(m) && /Custom Event trigger/i.test(m), 'reads from the ecommerce data layer + Custom Event trigger');
+});
+
+test('GTM_CREATION_METHODOLOGY carries the shared build-methodology (same rules the tag-suggestion engine + AI scan use)', () => {
+  const m = GTM_CREATION_METHODOLOGY;
+  // Shared event-selection prefix (also injected into the AI-scan vision prompt).
+  assert.ok(/GA4 EVENT SELECTION/.test(m) && /snake_case/.test(m), 'includes the event-selection taxonomy in snake_case');
+  assert.ok(/primary navigation/i.test(m) && /cookie-consent \/ CMP/i.test(m), 'names the skip list (nav + consent controls)');
+  // Creation methodology.
+  assert.ok(/create_gtm_tracking_tag/.test(m), 'points at the deterministic builder tool');
+  assert.ok(/variables → triggers → tag/.test(m), 'states the dependency creation order');
+  assert.ok(/\{\{Form ID\}\}[\s\S]*\{\{Form Classes\}\}[\s\S]*\{\{Page Path\}\}/.test(m), 'form-submit scoping ladder: id → class → page');
+  assert.ok(/iframe\/AJAX/i.test(m) && /Custom Event trigger/i.test(m), 'iframe/AJAX forms fall back to a Custom Event trigger');
+  assert.ok(/TOP-LEVEL/.test(m), 'keeps the timer top-level-fields gotcha');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

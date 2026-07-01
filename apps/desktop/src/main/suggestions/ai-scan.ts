@@ -10,6 +10,7 @@ import type { SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-sugge
 import type { RawElement } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import { tagNameOf, trigNameOf } from '../../../../web-audit-mcp/src/agent/tag-suggest/suggest.js';
+import { GA4_EVENT_SELECTION } from '../../shared/gtm-methodology';
 import type { TagScanResult } from '../../shared/ipc';
 import { pageScanFromDriven, assembleResult, emptyResult, type PageDriver, type DrivenPage } from './scan-core';
 
@@ -105,9 +106,10 @@ function buildInventory(elements: RawElement[], forms: RawForm[]): string {
 }
 
 const SYSTEM_PROMPT =
-  'You are a Google Tag Manager / GA4 measurement analyst. Given a screenshot of a web page and a list of the page\'s real clickable ELEMENTS and FORMS (each with an index like [E3] or [F1]), decide which GA4 event tags are worth creating to measure user intent on this page (form submissions, key CTA/button clicks, important outbound/download links, video, etc.). ' +
+  'You are a Google Tag Manager / GA4 measurement analyst. Given a screenshot of a web page and a list of the page\'s real clickable ELEMENTS and FORMS (each with an index like [E3] or [F1]), decide which GA4 event tags are worth creating to measure user intent on this page. ' +
+  GA4_EVENT_SELECTION +
   'Return STRICT JSON: {"tags":[{"name":"<short human tag name>","event":"<snake_case GA4 event name>","kind":"form|click|link|pageview","formIndex":<n for kind form>,"elementIndex":<n for kind click/link>,"why":"<one short reason>"}]}. ' +
-  'Reference a REAL element/form index for every form/click/link tag (so the tag can be wired to it). Prefer 4-12 high-value tags. Do NOT invent indices that are not in the list. Skip generic nav links.';
+  'Reference a REAL element/form index for every form/click/link tag (so the tag can be wired to it). Prefer 4-12 high-value tags. Do NOT invent indices that are not in the list. Skip generic nav links, cookie/consent controls, and UI chrome.';
 
 interface VisionDeps {
   fetchImpl?: typeof fetch;
