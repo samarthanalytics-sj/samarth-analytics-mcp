@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE } from '../chat-service';
+import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE, GTM_DECISION_RULES } from '../chat-service';
 
 let passed = 0;
 let failed = 0;
@@ -90,6 +90,16 @@ test('GTM_TRIGGER_VARIABLE_REFERENCE covers trigger/variable types + the Lookup 
   assert.ok(/equals true/.test(m) && /GROUPING/.test(m), 'grouping: trigger fires on {{var}} equals true');
   assert.ok(/enable_gtm_builtin_variables/.test(m), 'enable the input built-in for the lookup table');
   assert.ok(/EQUALS for an exact/.test(m) && /CONTAINS \/ matchRegex/.test(m), 'equals-vs-contains rule');
+});
+
+test('GTM_DECISION_RULES carries the expert decision rules from the GTM guide (fork, ladder, page path, click/form, mistakes)', () => {
+  const m = GTM_DECISION_RULES;
+  assert.ok(/data layer/i.test(m) && /auto-event/i.test(m) && /PREFER the data layer/i.test(m), 'the data-layer vs auto-event fork');
+  assert.ok(/reliability ladder/i.test(m) && /Data Layer Variable[\s\S]*Cookie[\s\S]*DOM Element/i.test(m), 'the value reliability ladder (DLV > cookie/global > DOM)');
+  assert.ok(/\{\{Page URL\}\} equals "\/contact" NEVER matches/i.test(m) && /IDENTIFY A PAGE by \{\{Page Path\}\}/i.test(m), 'page path vs page URL rule');
+  assert.ok(/\{\{Click ID\}\}[\s\S]*\{\{Click Text\}\} \/ \{\{Click Classes\}\} LAST/i.test(m), 'click-field stability preference');
+  assert.ok(/data-layer success event[\s\S]*Element Visibility[\s\S]*native Form Submission/i.test(m), 'form reliability order');
+  assert.ok(/MISTAKES TO AVOID/i.test(m) && /no firing trigger/i.test(m), 'the common-mistakes guards');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
