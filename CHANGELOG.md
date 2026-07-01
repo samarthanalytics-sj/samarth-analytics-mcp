@@ -1,3 +1,9 @@
+## [1.115.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.115.1...v1.115.2) (2026-07-01)
+
+### Bug Fixes
+
+* **web-audit:** page-scope single-page forms with no usable id/class ([5176386](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5176386a06e07996410edb40d0d59c3f23b66f27))
+
 ## [1.115.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.115.0...v1.115.1) (2026-06-30)
 
 ### Bug Fixes
