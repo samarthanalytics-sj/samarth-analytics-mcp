@@ -66,9 +66,12 @@ export const GTM_TRIGGER_VARIABLE_REFERENCE =
 
 // Expert decision rules distilled from the GTM Understanding Guide (docs/gtm-understanding-guide.md).
 // These are the choices that separate a robust setup from a fragile one; kept concise for the chat prompt.
-// A companion reference library of 100 worked GA4 tag/trigger/variable examples lives at
-// docs/ga4-100-examples.md — a lookup catalog (not inlined here to keep the prompt lean and to avoid
-// clashing with this engine's own event-name conventions, e.g. email_click vs the doc's contact_email).
+// Companion reference libraries (lookup catalogs, not inlined here — kept in docs to keep the prompt
+// lean and avoid clashing with the engine's own conventions): docs/ga4-100-examples.md (100 worked GA4
+// tag/trigger/variable examples) and docs/gtm-other-tag-types.md (non-GA4 tags — Google Ads / Floodlight
+// / Remarketing / Conversion Linker / Google Tag native config, and Meta/TikTok/LinkedIn/Bing/Pinterest/
+// Hotjar/Clarity pixels; note its "prefer the gallery template over Custom HTML + consent-gate every
+// marketing tag" guidance, which the chat prompt already enforces).
 export const GTM_DECISION_RULES =
   'GTM DECISION RULES (how an expert chooses) — ' +
   'THE ONE FORK: GTM learns an event happened either from the DATA LAYER (the site pushes dataLayer.push({event:"…", …})) or from AUTO-EVENT listeners (GTM watches clicks/forms/scroll). PREFER the data layer — match it with a Custom Event trigger + Data Layer Variables; it is structured, intentional, and survives redesigns. Auto-event (Click / Form Submission triggers + Click/Form built-ins or DOM scraping) is a FRAGILE fallback that breaks on AJAX forms, SPAs, framework-churned class names, and markup changes — use it only when there is no data layer and one cannot be added. ' +
