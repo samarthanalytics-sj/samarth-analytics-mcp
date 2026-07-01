@@ -1785,6 +1785,10 @@ function TagReviewPanel({
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [edits, setEdits] = useState<Record<string, TagEdit>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // Suggestion-list filters (search text + type). Display-only: they narrow which rows are SHOWN,
+  // never which ids are selected/created.
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'click' | 'form' | 'other'>('all');
   const [statuses, setStatuses] = useState<Record<string, RowStatus>>({});
   const [confirming, setConfirming] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -2022,9 +2026,32 @@ function TagReviewPanel({
   const selectedIds = suggestions.filter((s) => selected[s.id]).map((s) => s.id);
   // Live count of valid URLs in the CSV box (drives the "Scan N pages" button + the detected-count hint).
   const csvUrlCount = useMemo(() => (discoverMode === 'csv' ? parseCsvUrls(csvText).length : 0), [discoverMode, csvText]);
-  // "Select all / new" never selects a tag that already exists in the container.
+  // Search + type filter → the VISIBLE subset of suggestions (a view; selection is keyed by id and
+  // persists across filter changes). Clicks = link/all clicks; Form = form submit; Other = everything
+  // else (Google tag / pageview / video / custom event). (effective is a hoisted fn; safe to use here.)
+  const kindCategory = (s: SuggestedTagView): 'click' | 'form' | 'other' =>
+    s.trigger.kind === 'form_submit' ? 'form'
+      : s.trigger.kind === 'all_clicks' || s.trigger.kind === 'link_click' ? 'click'
+      : 'other';
+  const filterQuery = search.trim().toLowerCase();
+  const searchMatches = suggestions.filter((s) => {
+    if (!filterQuery) return true;
+    const eff = effective(s);
+    return `${eff.tagName} ${eff.eventName} ${s.page} ${s.label} ${triggerCondition(s)} ${s.note ?? ''}`
+      .toLowerCase()
+      .includes(filterQuery);
+  });
+  const typeCounts = {
+    all: searchMatches.length,
+    click: searchMatches.filter((s) => kindCategory(s) === 'click').length,
+    form: searchMatches.filter((s) => kindCategory(s) === 'form').length,
+    other: searchMatches.filter((s) => kindCategory(s) === 'other').length,
+  };
+  const visible = searchMatches.filter((s) => typeFilter === 'all' || kindCategory(s) === typeFilter);
+  // "Select all / new" never selects a tag that already exists; it operates on the VISIBLE rows (so it
+  // respects the active filter) and merges over prior selections so hidden rows keep their state.
   const setAll = (pred: (s: SuggestedTagView) => boolean): void =>
-    setSelected(Object.fromEntries(suggestions.map((s) => [s.id, pred(s) && !alreadyExists(s)])));
+    setSelected((prev) => ({ ...prev, ...Object.fromEntries(visible.map((s) => [s.id, pred(s) && !alreadyExists(s)])) }));
 
   function effective(s: SuggestedTagView): SuggestedTagView {
     const e = edits[s.id];
@@ -2550,13 +2577,46 @@ function TagReviewPanel({
             </div>
             {exportNote && <div style={{ ...styles.muted, marginTop: -4 }}>{exportNote}</div>}
 
-            {tagView === 'table' ? (
+            {suggestions.length > 0 && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 2 }}>
+                <input
+                  style={{ ...styles.input, flex: 'unset', minWidth: 200, maxWidth: 320 }}
+                  placeholder="Search tags by name, event, page…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                <span style={styles.viewToggle}>
+                  {([['all', 'All'], ['click', 'Click'], ['form', 'Form'], ['other', 'Other']] as const).map(([k, label]) => (
+                    <button
+                      key={k}
+                      style={typeFilter === k ? styles.viewToggleOn : styles.viewToggleOff}
+                      onClick={() => setTypeFilter(k)}
+                    >
+                      {label} ({typeCounts[k]})
+                    </button>
+                  ))}
+                </span>
+                {(search || typeFilter !== 'all') && (
+                  <button style={styles.linkBtn} onClick={() => { setSearch(''); setTypeFilter('all'); }}>
+                    Clear filters
+                  </button>
+                )}
+                {visible.length !== suggestions.length && (
+                  <span style={styles.muted}>Showing {visible.length} of {suggestions.length}</span>
+                )}
+              </div>
+            )}
+            {suggestions.length > 0 && visible.length === 0 && (
+              <div style={styles.muted}>No tags match your search / filter.</div>
+            )}
+
+            {visible.length === 0 ? null : tagView === 'table' ? (
               <>
                 <div style={{ ...styles.muted, marginTop: -4 }}>
                   Tick a row to create it in GTM; edit the Tag name, GA4 event, or trigger value inline.
                 </div>
                 <SuggestionTemplateTable
-                  suggestions={suggestions.map(effective)}
+                  suggestions={visible.map(effective)}
                   selected={selected}
                   statuses={statuses}
                   creating={creating}
@@ -2567,7 +2627,7 @@ function TagReviewPanel({
               </>
             ) : (
             <div style={styles.reviewList}>
-              {suggestions.map((s) => {
+              {visible.map((s) => {
                 const st = statuses[s.id];
                 const isSel = !!selected[s.id];
                 const ed = edits[s.id] ?? {};
