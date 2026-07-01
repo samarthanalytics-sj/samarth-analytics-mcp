@@ -1,3 +1,9 @@
+## [1.127.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.127.0...v1.127.1) (2026-07-01)
+
+### Bug Fixes
+
+* **desktop:** fold near-duplicate CSV URLs so each page is scanned once ([def71d5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/def71d5a53aa1f1fa3e57ed887e398b62d3e4d92)), closes [#anchor](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/anchor) [x#form](https://github.com/samarthanalytics-sj/x/issues/form) [#anchor](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/anchor)
+
 ## [1.127.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.126.0...v1.127.0) (2026-07-01)
 
 ### Features
