@@ -201,6 +201,31 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // deferred to the v3 ecommerce phase rather than a form-submit tag. Search/login
   // forms ARE tracked now (→ GA4 search / login events).
   if (f.purpose === 'checkout') return null;
+  // A SEARCH bar is almost always ONE site-wide component (usually the header). Track it once as GA4
+  // site search (view_search_results + search_term), NOT a per-page form-submit: a Form Submission
+  // trigger with no id/class cannot isolate the search box (it fires on any form). Every per-page
+  // search instance collapses to this one unscoped, site-wide suggestion via dedup. GA4 Enhanced
+  // Measurement already auto-tracks site search, so it is FLAGGED (not auto-selected).
+  if (f.purpose === 'search') {
+    const sfields = (f.fields ?? []).map((x) => x.name || x.type).filter(Boolean).slice(0, 8);
+    return {
+      id: hashId('form|site-search'),
+      page: f.page,
+      label: 'Site search → GA4 "view_search_results"',
+      evidence: `search form; provider=${f.provider.vendor}` + (sfields.length ? `; fields: ${sfields.join(', ')}` : ''),
+      note: 'Site-wide search bar. A Form Submission trigger fires on ANY form, so it cannot isolate the search box, and GTM has no built-in search-term variable. For accurate site search, fire view_search_results on the RESULTS URL (a Page View where {{Page URL}} contains the query, e.g. "?q=", "?search=", "?s=") and add a search_term parameter valued by a URL query variable reading that key (or a Data Layer Variable if search is AJAX / pushed to the dataLayer). GA4 Enhanced Measurement may already track site search.',
+      confidence: 'medium',
+      enhancedMeasurementOverlap: true,
+      platform: 'ga4_event',
+      tagName: tagNameOf('Site Search', 'custom_event'),
+      measurementId: GA4_VAR,
+      eventName: 'view_search_results',
+      // Ship only resolvable built-ins; search_term needs a URL-query / DLV variable the user creates
+      // (no GTM built-in for it), so it is guided in the note rather than shipped as a dangling ref.
+      eventParameters: [...PAGE_PARAMS],
+      trigger: { name: trigNameOf('Site Search', 'custom_event'), kind: 'form_submit' },
+    };
+  }
   const eventName = FORM_EVENT[f.purpose] ?? 'form_submission';
   const formLabel = FORM_LABEL[f.purpose] ?? 'Form Submission';
   const prov = f.provider.vendor !== 'unknown' ? ` (${f.provider.vendor})` : '';

@@ -50,7 +50,15 @@ check('form: directly creatable (platform + measurementId)', out1[0].platform ==
 check('naming: tag "GA4 Event - Contact Form Tag", trigger "Contact Form Trigger"', out1[0].tagName === 'GA4 - Event - Contact Form Tag' && out1[0].trigger.name === 'Contact Form Trigger');
 const provLow = { vendor: 'unknown' as const, confidence: 'low' as const, evidence: '' };
 const searchForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'search', action: '', provider: provLow }], elements: [] });
-check('form: search form → search event + "GA4 Event - Search Form Tag"', searchForm.length === 1 && searchForm[0].eventName === 'search' && searchForm[0].tagName === 'GA4 - Event - Search Form Tag');
+check('form: search form → ONE view_search_results site-search tag; ships only resolvable params + a note to add search_term', searchForm.length === 1 && searchForm[0].eventName === 'view_search_results' && searchForm[0].tagName === 'GA4 - Event - Site Search Tag' && !(searchForm[0].eventParameters ?? []).some((p) => p.value === '{{Search Term}}') && /search_term/.test(searchForm[0].note ?? ''));
+// A search bar on MANY pages (its action varies per page) is ONE header component → ONE site-wide tag.
+const multiSearch = buildSuggestions({ siteHost: 'a.com', forms: [
+  { page: '/a', purpose: 'search', action: '/a/results', provider: provLow, fields: [{ type: 'text', name: 'search', required: false }] },
+  { page: '/b', purpose: 'search', action: '/b/results', provider: provLow, fields: [{ type: 'text', name: 'search', required: false }] },
+  { page: '/c', purpose: 'search', action: '/c/results', provider: provLow, fields: [{ type: 'text', name: 'search', required: false }] },
+], elements: [] });
+const siteSearches = multiSearch.filter((s) => s.eventName === 'view_search_results');
+check('form: a search bar on many pages (varying actions) collapses to ONE site-wide search tag', siteSearches.length === 1 && siteSearches[0].page === 'site-wide' && !siteSearches[0].trigger.pagePathValue);
 const loginFormS = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'login', action: '', provider: provLow }], elements: [] });
 check('form: login form → login event + "GA4 Event - Login Form Tag"', loginFormS.length === 1 && loginFormS[0].eventName === 'login' && loginFormS[0].tagName === 'GA4 - Event - Login Form Tag');
 check('form: checkout STILL produces no suggestion (ecommerce, deferred)', buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'checkout', action: '', provider: provLow }], elements: [] }).length === 0);
@@ -274,7 +282,7 @@ const searchCta = moreCtas.find((s) => s.eventName === 'search_click');
 // search CTA uses 'search_click' (NOT bare 'search') so a "Search" submit button
 // can't double-count with the search FORM tag (which keeps the GA4 'search' event).
 check('cta: search button → "GA4 Event - Search Tag", event search_click, {{Click Text}} equals "Search"', searchCta?.tagName === 'GA4 - Event - Search Click Tag' && searchCta?.eventName === 'search_click' && searchCta?.trigger.clickTextValue === 'Search' && searchCta?.trigger.clickTextOperator === 'equals');
-check('cta: search button event (search_click) is DISTINCT from search FORM event (search) — no double-count', searchForm[0].eventName === 'search' && searchCta?.eventName === 'search_click');
+check('cta: search button event (search_click) is DISTINCT from the site-search event (view_search_results) — no double-count', searchForm[0].eventName === 'view_search_results' && searchCta?.eventName === 'search_click');
 // Title-case preserves intercaps/acronym tokens in the tag name (iOS not "Ios", PDF stays PDF).
 const iosCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Download for iOS', intent: 'generic' }] });
 check('naming: title-case keeps intercaps ("Download For iOS", not "Ios")', iosCta.some((s) => s.tagName === 'GA4 - Event - Download For iOS Click Tag' && s.trigger.name === 'Download For iOS Click Trigger'));
