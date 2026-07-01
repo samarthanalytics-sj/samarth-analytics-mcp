@@ -251,6 +251,115 @@ export function buildCustomHtmlTag(o: CustomHtmlInput): GtmTagResource {
   };
 }
 
+/* ───────────── Other Google web tags (corpus-verified shapes) ─────────────
+ * Parameter shapes below were mined from 562 real container exports; the API v2
+ * create call uses the lowercase param `type` the tpl/boolean helpers emit
+ * (exports serialize them UPPER_SNAKE). Enum VALUES that are literal strings the
+ * tag reads (ordinalType STANDARD/UNIQUE, customParamsFormat NONE, urlPosition
+ * "query") stay in the exact casing the corpus uses. */
+
+export interface FloodlightCounterInput {
+  name: string;
+  advertiserId: string; // numeric CM360/DV360 Floodlight advertiser id (or {{variable}})
+  groupTag: string; // activity group tag string
+  activityTag: string; // activity tag string
+  /** Floodlight counting/ordinal method. Corpus uses only STANDARD (every conversion) and UNIQUE
+   *  (one per user/session); defaults to standard. */
+  countingMethod?: 'standard' | 'unique';
+  /** Read the Conversion Linker cookies for attribution (recommended). Default true. */
+  enableConversionLinker?: boolean;
+  firingTriggerId?: string[];
+}
+// Floodlight Counter (flc) — 62/62 corpus tags carry advertiserId, groupTag, activityTag,
+// ordinalType, useImageTag=false; the Conversion Linker pair (52/62) is added by default.
+export function buildFloodlightCounterTag(o: FloodlightCounterInput): GtmTagResource {
+  const parameter: Param[] = [
+    tpl('advertiserId', o.advertiserId),
+    tpl('groupTag', o.groupTag),
+    tpl('activityTag', o.activityTag),
+    tpl('ordinalType', o.countingMethod === 'unique' ? 'UNIQUE' : 'STANDARD'),
+    boolean('useImageTag', false),
+  ];
+  if (o.enableConversionLinker !== false) parameter.push(boolean('enableConversionLinker', true), tpl('conversionCookiePrefix', '_gcl'));
+  return { name: o.name, type: 'flc', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
+}
+
+export interface GoogleAdsCallConversionInput {
+  name: string;
+  phoneNumber: string; // the on-page phone number, formatted exactly as it appears on the site
+  conversionId: string; // numeric Google Ads id (AW- prefix stripped, or {{variable}})
+  conversionLabel: string;
+  firingTriggerId?: string[];
+}
+// Google Ads Call Conversion (awcc) — 49/49 corpus tags have EXACTLY three template params in this
+// fixed order. conversionId is the bare numeric id (GTM rejects "AW-", same as awct).
+export function buildGoogleAdsCallConversionTag(o: GoogleAdsCallConversionInput): GtmTagResource {
+  return {
+    name: o.name,
+    type: 'awcc',
+    parameter: [tpl('phoneConversionNumber', o.phoneNumber), tpl('conversionId', normalizeAdsConversionId(o.conversionId)), tpl('conversionLabel', o.conversionLabel)],
+    ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}),
+  };
+}
+
+export interface GoogleAdsRemarketingInput {
+  name: string;
+  conversionId: string; // Google Ads conversion id (AW- or bare numeric or {{variable}})
+  /** Read/refresh the linker (gclid) first-party cookies. Default true. */
+  enableConversionLinker?: boolean;
+  firingTriggerId?: string[];
+}
+// Google Ads Remarketing (sp) — the basic all-pages audience shape (customParamsFormat NONE, the
+// 31/43 corpus majority). conversionId passes through unchanged: the corpus stores it both with the
+// AW- prefix and bare, so both validate for this type (unlike awct/awcc which require bare numeric).
+export function buildGoogleAdsRemarketingTag(o: GoogleAdsRemarketingInput): GtmTagResource {
+  const parameter: Param[] = [];
+  if (o.enableConversionLinker !== false) parameter.push(boolean('enableConversionLinker', true), tpl('conversionCookiePrefix', '_gcl'));
+  parameter.push(boolean('enableDynamicRemarketing', false), tpl('conversionId', o.conversionId.trim()), tpl('customParamsFormat', 'NONE'), boolean('rdp', false));
+  return { name: o.name, type: 'sp', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
+}
+
+export interface ConversionLinkerInput {
+  name: string;
+  /** Decorate outbound links/forms for cross-domain measurement. Default false. Passing
+   *  linkerDomains implies cross-domain. */
+  enableCrossDomain?: boolean;
+  /** Comma-separated domains to link (only used when cross-domain). */
+  linkerDomains?: string;
+  firingTriggerId?: string[];
+}
+// Conversion Linker (gclidw) — every corpus tag (253/253) carries enableCookieOverrides=false; the
+// two other booleans default false. Cross-domain adds acceptIncoming/linkerDomains/formDecoration/
+// urlPosition (urlPosition is the literal lowercase "query" — do not upper-case it).
+export function buildConversionLinkerTag(o: ConversionLinkerInput): GtmTagResource {
+  const crossDomain = o.enableCrossDomain === true || !!o.linkerDomains?.trim();
+  const parameter: Param[] = [boolean('enableCrossDomain', crossDomain), boolean('enableUrlPassthrough', false), boolean('enableCookieOverrides', false)];
+  if (crossDomain) {
+    parameter.push(boolean('acceptIncoming', true));
+    if (o.linkerDomains?.trim()) parameter.push(tpl('linkerDomains', o.linkerDomains.trim()));
+    parameter.push(boolean('formDecoration', false), tpl('urlPosition', 'query'));
+  }
+  return { name: o.name, type: 'gclidw', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
+}
+
+export interface CustomImageInput {
+  name: string;
+  url: string; // pixel/beacon URL (protocol-relative //host/path or https, may contain {{variables}})
+  /** Append a random cache-buster query param so the browser refetches. Default true. */
+  useCacheBuster?: boolean;
+  /** Query-key for the cache buster (only emitted when useCacheBuster). Default "gtmcb". */
+  cacheBusterQueryParam?: string;
+  firingTriggerId?: string[];
+}
+// Custom Image (img) — the fallback beacon pixel: a url plus a cache buster. cacheBusterQueryParam is
+// only meaningful (and only emitted) when useCacheBuster is true.
+export function buildCustomImageTag(o: CustomImageInput): GtmTagResource {
+  const useCacheBuster = o.useCacheBuster !== false;
+  const parameter: Param[] = [tpl('url', o.url), boolean('useCacheBuster', useCacheBuster)];
+  if (useCacheBuster) parameter.push(tpl('cacheBusterQueryParam', o.cacheBusterQueryParam?.trim() || 'gtmcb'));
+  return { name: o.name, type: 'img', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
+}
+
 /* ───────────── Server-side GTM (sGTM) ───────────── */
 
 /** A server-container Client resource (claims incoming requests). */
