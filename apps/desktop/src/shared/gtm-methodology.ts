@@ -70,8 +70,11 @@ export const GTM_TRIGGER_VARIABLE_REFERENCE =
 // lean and avoid clashing with the engine's own conventions): docs/ga4-100-examples.md (100 worked GA4
 // tag/trigger/variable examples) and docs/gtm-other-tag-types.md (non-GA4 tags — Google Ads / Floodlight
 // / Remarketing / Conversion Linker / Google Tag native config, and Meta/TikTok/LinkedIn/Bing/Pinterest/
-// Hotjar/Clarity pixels; note its "prefer the gallery template over Custom HTML + consent-gate every
-// marketing tag" guidance, which the chat prompt already enforces).
+// Hotjar/Clarity pixels). Its "prefer a gallery template over Custom HTML" guidance matches the chat
+// prompt (create_meta_pixel_tag / import_gallery_template + GTM_DECISION_RULES); its "consent-gate every
+// marketing tag" principle is enforced on the AUDIT path (GTM_AUDIT_METHODOLOGY), NOT yet on the tag-
+// create path — a known gap. Web tag types with no typed builder (Conversion Linker, Ads Call Conversion,
+// Ads Remarketing, Floodlight, Custom Image) fall to the raw create_gtm_tag tool.
 export const GTM_DECISION_RULES =
   'GTM DECISION RULES (how an expert chooses) — ' +
   'THE ONE FORK: GTM learns an event happened either from the DATA LAYER (the site pushes dataLayer.push({event:"…", …})) or from AUTO-EVENT listeners (GTM watches clicks/forms/scroll). PREFER the data layer — match it with a Custom Event trigger + Data Layer Variables; it is structured, intentional, and survives redesigns. Auto-event (Click / Form Submission triggers + Click/Form built-ins or DOM scraping) is a FRAGILE fallback that breaks on AJAX forms, SPAs, framework-churned class names, and markup changes — use it only when there is no data layer and one cannot be added. ' +
