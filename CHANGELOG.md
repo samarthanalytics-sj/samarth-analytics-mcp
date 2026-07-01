@@ -1,3 +1,9 @@
+## [1.121.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.120.0...v1.121.0) (2026-07-01)
+
+### Features
+
+* **web-audit:** track a site-wide search bar once as GA4 view_search_results ([4590dde](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4590ddec41a9327ae498bb7ca4c8a4c9b422e173))
+
 ## [1.120.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.119.1...v1.120.0) (2026-07-01)
 
 ### Features
