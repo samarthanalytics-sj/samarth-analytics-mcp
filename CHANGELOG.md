@@ -1,3 +1,9 @@
+## [1.117.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.116.0...v1.117.0) (2026-07-01)
+
+### Features
+
+* unify GA4 tag/trigger naming to "GA4 - Event - <Name> Click/Form Tag" ([4eec37d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4eec37dc3eacd943d449c02867036f8e70475270))
+
 ## [1.116.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.115.2...v1.116.0) (2026-07-01)
 
 ### Features
