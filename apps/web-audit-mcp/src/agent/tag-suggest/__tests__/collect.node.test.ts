@@ -2,7 +2,7 @@
  * Element collector — pure classifier + assembler tests (no browser).
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/collect.node.test.ts
  */
-import { classifyElement, classifyPageElements, classifyCtaIntent, buildSuggestInput, type RawElement, type PageScan } from '../collect.js';
+import { classifyElement, classifyPageElements, classifyCtaIntent, isStyledButton, buildSuggestInput, type RawElement, type PageScan } from '../collect.js';
 import { buildSuggestions } from '../suggest.js';
 import type { PageSignals } from '../types.js';
 
@@ -55,6 +55,27 @@ check('button-styled NAV link → null (not a conversion)', classifyElement(a('h
 check('button-styled MAIN cta → generic', (() => { const d = classifyElement(a('https://acme.com/contact', { text: 'Talk to our experts', cta: true, region: 'main' }), 'acme.com'); return d?.kind === 'cta' && d?.intent === 'generic'; })());
 check('email beats outbound (mailto not treated as link)', kindOf('mailto:x@partner.com') === 'email');
 check('region carried through', classifyElement(a('mailto:hi@acme.com', { region: 'footer' }), 'acme.com')?.region === 'footer');
+
+// ── isStyledButton: a class-less styled <a> is a CTA only if it is BUTTON-sized ──────────────────
+// (the height floor is what keeps the filled/bordered PILLS — chips, locale switchers, pagination,
+//  breadcrumbs, badges — from flooding the review list; those are short, real CTA buttons are tall).
+const BTN = { h: 44, padX: 48, padY: 14, filled: true, bordered: false };
+check('isStyledButton: filled chunky button (44px) → true', isStyledButton(BTN));
+check('isStyledButton: outlined button, no fill (40px) → true', isStyledButton({ h: 40, padX: 32, padY: 10, filled: false, bordered: true }));
+check('isStyledButton: line-height button (padY 0, horizontal pad) → true', isStyledButton({ h: 48, padX: 40, padY: 0, filled: true, bordered: false }));
+check('isStyledButton: short filled tag/chip (26px) → false', !isStyledButton({ h: 26, padX: 20, padY: 8, filled: true, bordered: false }));
+check('isStyledButton: bordered locale pill (30px) → false', !isStyledButton({ h: 30, padX: 24, padY: 12, filled: false, bordered: true }));
+check('isStyledButton: 32px chip is below the 36px floor → false', !isStyledButton({ h: 32, padX: 20, padY: 8, filled: true, bordered: false }));
+check('isStyledButton: plain text link (no fill/border) → false', !isStyledButton({ h: 40, padX: 0, padY: 0, filled: false, bordered: false }));
+check('isStyledButton: filled but unpadded block → false', !isStyledButton({ h: 40, padX: 0, padY: 0, filled: true, bordered: false }));
+check('isStyledButton: NaN box (unparsed style) → false, no throw', !isStyledButton({ h: NaN, padX: NaN, padY: NaN, filled: true, bordered: false }));
+
+// classifyElement honours the measured box for a class-less styled <a> (no cta flag, no known intent).
+check('styled-button <a> (button box + action text) → generic cta', (() => { const d = classifyElement(a('https://acme.com/webinar', { text: 'Get your recording', box: BTN, region: 'main' }), 'acme.com'); return d?.kind === 'cta' && d?.intent === 'generic'; })());
+check('short filled chip <a> ("Marketing", 26px box) → null (not a CTA)', classifyElement(a('https://acme.com/blog/marketing', { text: 'Marketing', box: { h: 26, padX: 20, padY: 8, filled: true, bordered: false }, region: 'main' }), 'acme.com') === null);
+check('bordered locale-switcher pill <a> ("Deutsch", 30px) → null', classifyElement(a('https://acme.com/de', { text: 'Deutsch', box: { h: 30, padX: 24, padY: 12, filled: false, bordered: true }, region: 'header' }), 'acme.com') === null);
+check('styled-button <a> in NAV → null (menu item, not conversion)', classifyElement(a('https://acme.com/products', { text: 'Solutions', box: BTN, region: 'nav' }), 'acme.com') === null);
+check('anchor with neither cta flag nor box (plain link) → null', classifyElement(a('https://acme.com/team', { text: 'Our team' }), 'acme.com') === null);
 
 // ── classifyPageElements sets the page path ─────────────────────────────────
 const classified = classifyPageElements([a('mailto:hi@acme.com'), a('https://acme.com/x.pdf')], 'acme.com', '/contact');

@@ -28,6 +28,10 @@ export interface RawElement {
    *  btn/button/cta-classed element. Lets a prominent button surface as a (low-confidence)
    *  CTA even when its label isn't a known intent; a plain nav <a> stays unflagged. */
   cta?: boolean;
+  /** An anchor's rendered box (getComputedStyle + getBoundingClientRect, browser collector only —
+   *  absent in the layout-less cheerio path). Fed to isStyledButton() to tell a real CTA button apart
+   *  from a small chip/pill/badge that shares the same fill/border styling. */
+  box?: { h: number; padX: number; padY: number; filled: boolean; bordered: boolean };
 }
 export interface PageScanRaw {
   elements: RawElement[];
@@ -58,6 +62,28 @@ export function collectPageInBrowser(): PageScanRaw {
     const cls = (el.getAttribute('class') || '').toLowerCase();
     return /(^|[\s_-])(btn|button|cta)([\s_-]|$)/.test(cls);
   };
+  // Measure an anchor's rendered box so the pure isStyledButton() can tell a real CTA button (a
+  // filled/bordered, padded, chunky box like a yellow "Get your recording" link) from a small
+  // chip/pill/badge/switcher that merely shares that styling. getComputedStyle/getBoundingClientRect
+  // exist only in a real browser (Electron/Playwright); the cheerio path has no layout, so box is absent.
+  const measureBox = (el: Element): RawElement['box'] => {
+    try {
+      const view = el.ownerDocument && el.ownerDocument.defaultView;
+      if (!view) return undefined;
+      const s = view.getComputedStyle(el);
+      const bg = s.backgroundColor;
+      const r = el.getBoundingClientRect();
+      return {
+        h: r.height,
+        padX: parseFloat(s.paddingLeft) + parseFloat(s.paddingRight),
+        padY: parseFloat(s.paddingTop) + parseFloat(s.paddingBottom),
+        filled: !!bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)',
+        bordered: parseFloat(s.borderTopWidth) > 0 && s.borderTopStyle !== 'none',
+      };
+    } catch {
+      return undefined;
+    }
+  };
 
   const scanDoc = (doc: Document): void => {
     const seen = new Set<Element>();
@@ -65,7 +91,9 @@ export function collectPageInBrowser(): PageScanRaw {
       if (elements.length >= MAX * 2) break;
       const el = a as HTMLAnchorElement;
       seen.add(el);
-      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el), cta: looksCta(el) });
+      const cta = looksCta(el);
+      // Only measure the box when the cheap class/role check didn't already flag it (measuring forces layout).
+      elements.push({ tag: 'a', href: el.href || '', text: txt(el), hasDownload: el.hasAttribute('download'), region: regionOf(el), cta, box: cta ? undefined : measureBox(el) });
     }
     // :not(a) — an <a href role="button"> is already captured (with its href) by
     // the anchor query above; without this it would be emitted again as a hrefless
@@ -150,6 +178,15 @@ function normSiteHost(s: string): string {
   }
 }
 
+/** True when an anchor's measured box reads as a real BUTTON: a fill or a visible border, genuine
+ *  padding, and a chunky height (>= 36px). The height floor is the key filter — conversion buttons are
+ *  tall, while the filled/bordered PILLS that flood a page (category/tag chips, locale switchers,
+ *  pagination, breadcrumb and social-share pills, badges) are short (typically < 32px). NaN box values
+ *  (unparsed styles) fail every comparison, so a bad measurement degrades to false, not a throw. */
+export function isStyledButton(box: NonNullable<RawElement['box']>): boolean {
+  return (box.filled || box.bordered) && (box.padX >= 12 || box.padY >= 6) && box.h >= 36;
+}
+
 /** Classify one raw element → a DetectedElement, or null if not trackable. */
 export function classifyElement(raw: RawElement, siteHost: string): DetectedElement | null {
   const href = raw.href || '';
@@ -183,9 +220,11 @@ export function classifyElement(raw: RawElement, siteHost: string): DetectedElem
   if (raw.tag === 'button' || raw.tag === 'a') {
     const intent = raw.text ? classifyCtaIntent(raw.text) : null;
     if (intent) return { ...make('cta'), intent };
-    // A button-styled link inside the NAV is almost always a menu item, not a conversion — so the
-    // generic fallback skips region 'nav' (a real <button> or a header/main CTA still surfaces).
-    if ((raw.tag === 'button' || raw.cta) && raw.region !== 'nav' && isPromptableCtaText(raw.text)) return { ...make('cta'), intent: 'generic' };
+    // Generic (low-confidence) CTA: a real <button>, a class/role/onclick-flagged control, or an <a>
+    // whose measured box is button-sized (a filled/bordered, chunky box — NOT a small chip/pill). A
+    // button-styled link inside the NAV is almost always a menu item, so the fallback skips region 'nav'.
+    const styled = raw.tag === 'a' && raw.box ? isStyledButton(raw.box) : false;
+    if ((raw.tag === 'button' || raw.cta || styled) && raw.region !== 'nav' && isPromptableCtaText(raw.text)) return { ...make('cta'), intent: 'generic' };
   }
   return null;
 }
