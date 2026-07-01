@@ -2048,7 +2048,11 @@ function TagReviewPanel({
     form: searchMatches.filter((s) => kindCategory(s) === 'form').length,
     other: searchMatches.filter((s) => kindCategory(s) === 'other').length,
   };
-  const visible = searchMatches.filter((s) => typeFilter === 'all' || kindCategory(s) === typeFilter);
+  const filtered = searchMatches.filter((s) => typeFilter === 'all' || kindCategory(s) === typeFilter);
+  // Selected tags float to the TOP (stable within each group, so relative order is otherwise preserved)
+  // — the user's picks stay grouped and visible instead of scattered down a long list. Array.sort is
+  // stable in the Electron/V8 runtime, so equal-rank rows keep their original order.
+  const visible = [...filtered].sort((a, b) => (selected[b.id] ? 1 : 0) - (selected[a.id] ? 1 : 0));
   // "Select all / new" never selects a tag that already exists; it operates on the VISIBLE rows (so it
   // respects the active filter) and merges over prior selections so hidden rows keep their state.
   const setAll = (pred: (s: SuggestedTagView) => boolean): void =>
