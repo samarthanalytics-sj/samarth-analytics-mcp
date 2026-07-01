@@ -43,6 +43,9 @@ export const CTA_INTENTS: CtaIntentDef[] = [
   { intent: 'book_demo', pattern: '\\b(book|request|schedule|get)\\s+(?:(?:a|an|your|the|free|quick|live|personalized|product)\\s+){0,2}demo\\b|\\b(book|schedule|request)\\s+(?:(?:a|an|your|the|free|quick|live|intro|strategy|discovery|sales|brief)\\s+){0,2}(call|meeting|consultation|consult|appointment|callback)\\b', event: 'book_demo_click', label: 'Book Demo Click' },
   { intent: 'request_quote', pattern: '\\b(request|get)\\s+(?:(?:a|an|your|my|the|free|instant|fast|quick|custom|online)\\s+){0,2}quote\\b', event: 'request_quote_click', label: 'Request Quote Click' },
   { intent: 'contact_sales', pattern: '\\b(contact|talk\\s+to)\\s+sales\\b', event: 'contact_sales_click', label: 'Contact Sales Click' },
+  // Plain contact CTA (kept AFTER contact_sales so "Contact sales" wins). Targeted phrases, not bare
+  // "contact", so page copy like "contact information" doesn't classify as a CTA.
+  { intent: 'contact', pattern: '\\bcontact\\s+us\\b|\\bget\\s+in\\s+touch\\b|\\bcontact\\s+(?:our\\s+)?(?:team|experts?)\\b', event: 'contact_click', label: 'Contact Click' },
   { intent: 'subscribe', pattern: '\\bsubscribe\\b|\\bsign\\s*me\\s*up\\b', event: 'subscribe_click', label: 'Subscribe Click' },
   // "Get started"/free-trial AND the "free audit" family — "Get Free Audit", "Start a free audit",
   // "Run a free audit", "Free audit" (the audit is the conversion CTA on tag-audit / consulting sites).
@@ -57,6 +60,10 @@ export const CTA_INTENTS: CtaIntentDef[] = [
   // "See more", "Read more") stays out — only the specific results/work proof CTA is tracked.
   { intent: 'learn_more', pattern: '\\b(learn\\s+more|find\\s+out\\s+more|discover\\s+more|view\\s+(?:client|customer|our)\\s+(?:results|work|stories)|(?:client|customer)\\s+results)\\b', event: 'learn_more_click', label: 'Learn More Click' },
   { intent: 'faq', pattern: '\\b(faqs?|frequently\\s+asked\\s+questions?)\\b', event: 'faq_click', label: 'FAQ Click' },
+  // Download CTA (brochure / datasheet / whitepaper / catalog). A direct file-extension link is already
+  // caught as a 'download' KIND before this; this covers a "Download brochure" link/button to a gated
+  // or JS-triggered download (no file extension), which would otherwise be dropped as a plain link.
+  { intent: 'download', pattern: '\\bdownload\\b|\\b(?:brochure|datasheet|data\\s+sheet|spec\\s+sheet|white\\s*paper|catalog(?:ue)?|e-?book)\\b', event: 'download_click', label: 'Download Click' },
   { intent: 'generic', pattern: '\\b(buy\\s+now|create\\s+(an\\s+)?account|sign\\s*up|join\\s+(now|today)|order\\s+now|shop\\s+now|donate|apply\\s+now|register\\s+(now|today))\\b', event: 'cta_click', label: 'CTA Click' },
 ];
 
