@@ -1,3 +1,9 @@
+## [1.123.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.122.0...v1.123.0) (2026-07-01)
+
+### Features
+
+* **desktop:** fold the GTM Understanding Guide decision rules into the chat methodology ([d8d04c4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d8d04c4eeb2d7bf17ef5444e8073737a63c3d500))
+
 ## [1.122.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.121.0...v1.122.0) (2026-07-01)
 
 ### Features
