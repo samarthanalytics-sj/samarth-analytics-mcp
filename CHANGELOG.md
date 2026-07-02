@@ -1,3 +1,9 @@
+## [1.135.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.134.0...v1.135.0) (2026-07-02)
+
+### Features
+
+* **web-audit:** corpus-aligned form-submission triggers (Custom Event route) ([e7cd65a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e7cd65af9fb3a1d113cd4638e8810ad52a624f67))
+
 ## [1.134.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.133.1...v1.134.0) (2026-07-02)
 
 ### Features
