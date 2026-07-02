@@ -1,3 +1,9 @@
+## [1.137.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.136.1...v1.137.0) (2026-07-02)
+
+### Features
+
+* **desktop:** per-page form_name Lookup Table for a multi-page form (one tag) ([38cf3eb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/38cf3eb4d975d3061475a8b2a86dab18cb368673))
+
 ## [1.136.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.136.0...v1.136.1) (2026-07-02)
 
 ### Bug Fixes
