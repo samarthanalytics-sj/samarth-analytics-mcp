@@ -599,12 +599,23 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       if (filters.length) t.filter = filters;
       return t;
     }
-    case 'custom_event':
-      return {
+    case 'custom_event': {
+      const t: GtmTriggerResource = {
         name: sanitizeName(o.name),
         type: 'customEvent',
         customEventFilter: [condition('{{_event}}', 'equals', normalizeCustomEventName(o.eventName ?? ''))],
       };
+      // Real containers routinely scope a data-layer form trigger further — "event EQUALS form_submit
+      // AND {{Form ID}} EQUALS x" / "AND {{Page Path}} CONTAINS /contact" (the corpus' dominant,
+      // "Best"-rated form-tracking route). Those secondary ANDed conditions live in `filter`,
+      // alongside customEventFilter.
+      const filters: Param[] = [];
+      if (o.formIdValue) filters.push(condition('{{Form ID}}', o.formIdOperator ?? 'equals', o.formIdValue));
+      if (o.pagePathValue) filters.push(condition('{{Page Path}}', o.pagePathOperator ?? 'contains', o.pagePathValue));
+      if (o.pageUrlValue) filters.push(condition('{{Page URL}}', o.pageUrlOperator ?? 'contains', o.pageUrlValue));
+      if (filters.length) t.filter = filters;
+      return t;
+    }
     case 'form_submit': {
       // A formSubmission trigger with no `filter` fires on ALL forms; the
       // {{Form ID}}/{{Form Classes}} "Some Forms" scope goes in `filter` (same as
@@ -825,6 +836,11 @@ export function triggerBuiltInVars(o: TriggerInput): string[] {
     if (o.formIdValue) vars.push('formId');
     if (o.formClassesValue) vars.push('formClasses');
     if (!o.formIdValue && !o.formClassesValue && o.pagePathValue) vars.push('pagePath');
+  }
+  if (o.kind === 'custom_event') {
+    if (o.formIdValue) vars.push('formId');
+    if (o.pagePathValue) vars.push('pagePath');
+    if (o.pageUrlValue) vars.push('pageUrl');
   }
   if (o.kind === 'pageview' && o.pageUrlValue) vars.push('pageUrl');
   // The YouTube Video trigger surfaces the "Video" built-in variables — enable them

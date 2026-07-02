@@ -322,6 +322,23 @@ test('custom_event trigger: customEvent + {{_event}} filter', () => {
   const f = (tr.customEventFilter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
   assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{_event}}');
   assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, 'purchase');
+  assert.equal(tr.filter, undefined, 'no secondary conditions unless asked');
+});
+
+test('custom_event trigger: secondary ANDed scope conditions in filter (event AND Form ID AND Page Path) + built-ins', () => {
+  // The corpus-standard data-layer form pattern: "event EQUALS form_submit AND {{Form ID}} EQUALS x
+  // AND {{Page Path}} CONTAINS /contact" — secondary conditions live in filter, beside customEventFilter.
+  const tr = buildTrigger({ name: 'Contact Form Trigger', kind: 'custom_event', eventName: 'form_submit', formIdValue: 'gform_2', pagePathValue: '/contact', pagePathOperator: 'contains' });
+  assert.equal(tr.type, 'customEvent');
+  const ce = (tr.customEventFilter ?? [])[0] as { parameter: Array<Record<string, unknown>> };
+  assert.equal(ce.parameter.find((p) => p.key === 'arg1')?.value, 'form_submit');
+  const filters = (tr.filter ?? []) as Array<{ type: string; parameter: Array<Record<string, unknown>> }>;
+  assert.equal(filters.length, 2);
+  assert.equal(filters[0].parameter.find((p) => p.key === 'arg0')?.value, '{{Form ID}}');
+  assert.equal(filters[0].type, 'equals');
+  assert.equal(filters[1].parameter.find((p) => p.key === 'arg0')?.value, '{{Page Path}}');
+  assert.equal(filters[1].type, 'contains');
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'custom_event', eventName: 'form_submit', formIdValue: 'gform_2', pagePathValue: '/contact' }), ['formId', 'pagePath']);
 });
 
 test('form_submit trigger: scoped to one form by {{Form ID}} in filter, needs formId var', () => {

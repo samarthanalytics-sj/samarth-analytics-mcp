@@ -169,6 +169,12 @@ const PROVIDER_EVENT_HINT: Partial<Record<FormProvider, string>> = {
   googleforms: 'Google Forms submits inside a cross-origin iframe — track the click into the form, or use server-side',
   wufoo: 'Wufoo submits inside its embed (confirmation redirect)',
 };
+// The dataLayer EVENT the suggested Custom Event trigger fires on, per provider — from the corpus of
+// real form triggers ("hubspot-form-success" 15×; the generic "form_submit" 213× is the default). The
+// push itself comes from the provider listener described in PROVIDER_EVENT_HINT.
+const PROVIDER_DL_EVENT: Partial<Record<FormProvider, string>> = {
+  hubspot: 'hubspot-form-success',
+};
 
 // Framework/wrapper classes shared by EVERY form of a stack — useless (harmful)
 // for scoping a trigger to ONE form. Never used as a {{Form Classes}} filter.
@@ -323,11 +329,25 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   const isEmbed =
     EMBED_PROVIDERS.has(f.provider.vendor) &&
     !(f.provider.vendor === 'pardot' && (f.method === 'post' || f.method === 'get'));
+  // AJAX/embed + JS/div forms: the native Form Submission trigger usually never fires there, and the
+  // corpus' dominant ("Best"-rated) route is a CUSTOM EVENT trigger — so suggest THAT trigger, fired
+  // by the provider listener / submit-handler push described in the note. The {{Form ID}}/{{Form
+  // Classes}} built-ins don't resolve on a pushed event, so only the page scope carries over (the
+  // builder supports ANDed {{Page Path}} conditions on custom_event, as real containers do).
+  const dlEvent = isEmbed || f.method === 'js' ? (PROVIDER_DL_EVENT[f.provider.vendor] ?? 'form_submit') : null;
+  if (dlEvent) {
+    trigger.kind = 'custom_event';
+    trigger.eventName = dlEvent;
+    delete trigger.formIdValue;
+    delete trigger.formIdOperator;
+    delete trigger.formClassesValue;
+    delete trigger.formClassesOperator;
+  }
   let note: string | undefined;
   if (isEmbed) {
-    note = `${cap(f.provider.vendor)} submits in an iframe / via AJAX — GTM's native Form Submission trigger usually won't fire. Track it with a Custom Event trigger: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the provider submit event'} → push a dataLayer event → fire this tag on it.`;
+    note = `${cap(f.provider.vendor)} submits in an iframe / via AJAX — GTM's native Form Submission trigger usually won't fire, so this tag fires on a "${dlEvent}" Custom Event. Add the push: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the provider submit event'} → dataLayer.push({event: "${dlEvent}"}). Fallback: an Element Visibility trigger on the thank-you message.`;
   } else if (f.method === 'js') {
-    note = `JS/div form (no native <form> submit) — GTM's Form Submission trigger may not fire. Use an All-Clicks trigger on the submit button, or a Custom Event from the form's submit handler.`;
+    note = `JS/div form (no native <form> submit) — GTM's Form Submission trigger may not fire, so this tag fires on a "${dlEvent}" Custom Event; push dataLayer.push({event: "${dlEvent}"}) from the form's submit handler. Fallbacks: an All-Clicks trigger on the submit button, or an Element Visibility trigger on the thank-you message.`;
   } else if (trigger.pagePathValue) {
     // Page-scoped (single page) takes precedence over the shared-id warning below: even when the
     // form carries a NON-unique id, {{Page Path}} equals <page> scopes it precisely, so there is no
