@@ -51,6 +51,7 @@ import {
   triggerBuiltInVars,
   builtInVarsForTemplates,
   buildVariable,
+  buildFormNameVariable,
   buildUrlQueryVariable,
   auditContainer,
   sanitizeName,
@@ -1231,6 +1232,17 @@ test('Ads server tag builders emit the corpus-validated sgtm types + key fields'
   assert.equal(rp.find((x) => x.key === 'conversionId')?.value, 'AW-123');
   assert.equal(rp.find((x) => x.key === 'enableDynamicRemarketing')?.value, 'true');
   assert.equal(rp.find((x) => x.key === 'remarketingEventDataSource')?.value, 'EVENT_DATA');
+});
+
+test('buildFormNameVariable → reusable "Form Name" Custom JS variable reading {{Form Element}}', () => {
+  const v = buildFormNameVariable();
+  assert.equal(v.name, 'Form Name');
+  assert.equal(v.type, 'jsm'); // Custom JavaScript
+  const js = ((v.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'javascript')?.value ?? '';
+  assert.match(js, /\{\{Form Element\}\}/, 'reads the submitted form element');
+  assert.match(js, /getAttribute\('name'\)/);
+  assert.match(js, /aria-label/);
+  assert.match(js, /h1,h2,h3/, 'falls back to the nearest heading');
 });
 
 test('buildVariable event_data → server Event Data variable (ed) reading keyPath', () => {

@@ -133,9 +133,8 @@ const sameForm = buildSuggestions({ siteHost: 'a.com', forms: auditPages.map((p)
 const audit = sameForm.filter((s) => /Get A Free Audit/i.test(s.tagName));
 check('form: same titled form on N pages → exactly ONE tag (not N duplicates)', audit.length === 1);
 check('form: that tag fires on all its pages via a {{Page Path}} matchRegex', audit[0]?.trigger.pagePathOperator === 'matchRegex' && auditPages.every((p) => (audit[0]!.trigger.pagePathValue ?? '').includes(p)));
-check('form: its form_name is a {{Page Path}} Lookup Table variable + eventParamLookups carries the per-page rows',
-  !!audit[0]?.eventParameters?.some((pm) => pm.name === 'form_name' && /^\{\{Lookup - Form Name/.test(pm.value)) &&
-  audit[0]?.eventParamLookups?.[0]?.input === '{{Page Path}}' && (audit[0]?.eventParamLookups?.[0]?.rows.length ?? 0) === 3);
+check('form: its form_name is the shared {{Form Name}} variable (no per-form lookup)',
+  audit[0]?.eventParameters?.find((pm) => pm.name === 'form_name')?.value === '{{Form Name}}' && !audit[0]?.eventParamLookups);
 
 // REGRESSION (adversarial review, HIGH): a MIXED group — the same titled form with a unique Form ID on
 // ONE page but not the others — must NOT split into an id-scoped tag + a page-regex tag that share the
@@ -265,29 +264,20 @@ check('email: carries click_url={{Click URL}} + click_text={{Click Text}} (corpu
 check('download/outbound also carry click_url/click_text params',
   (byEvent('file_download')?.eventParameters?.length ?? 0) >= 2 && (byEvent('outbound_click')?.eventParameters?.length ?? 0) >= 2);
 const leadParams = out1[0].eventParameters ?? [];
-check('form: contact_form carries form_id={{Form ID}} + form_name (static form label)',
+check('form: contact_form carries form_id={{Form ID}} + form_name={{Form Name}} (the shared variable)',
   leadParams.some((p) => p.name === 'form_id' && p.value === '{{Form ID}}') &&
-  leadParams.some((p) => p.name === 'form_name' && p.value === 'Contact Form'));
-check('form: a SINGLE-page form keeps a static form_name (no lookup)', !out1[0].eventParamLookups);
+  leadParams.some((p) => p.name === 'form_name' && p.value === '{{Form Name}}'));
+check('form: NO per-form lookup variable is emitted (form_name is the shared {{Form Name}})', !out1[0].eventParamLookups);
 
-// The SAME form (same Form ID) on MULTIPLE pages → ONE tag scoped by {{Form ID}}, whose form_name is
-// read from a {{Page Path}} Lookup Table variable (one row per page) — the classic GTM pattern.
+// The SAME form (same Form ID) on MULTIPLE pages → ONE tag scoped by {{Form ID}}; form_name is still
+// the shared {{Form Name}} variable (the page-scoping lives in the trigger, not in form_name).
 const consultForm = (page: string): DetectedForm => ({ page, purpose: 'contact', action: '', method: 'post', formId: 'consult-form', provider: prov0, fields: [{ type: 'email', name: 'email', required: true }] });
 const mp = buildSuggestions({ siteHost: 'a.com', forms: [consultForm('/'), consultForm('/services/ga4-consulting'), consultForm('/services/conversion-tracking')], elements: [] });
 const mpForm = mp.filter((s) => s.trigger.kind === 'form_submit');
 check('form: same-Form-ID form on 3 pages → ONE tag scoped by {{Form ID}} equals, page site-wide',
   mpForm.length === 1 && mpForm[0].trigger.formIdValue === 'consult-form' && mpForm[0].trigger.formIdOperator === 'equals' && mpForm[0].page === 'site-wide');
-const mpName = (mpForm[0]?.eventParameters ?? []).find((p) => p.name === 'form_name');
-const mpLk = mpForm[0]?.eventParamLookups?.[0];
-check('form: multi-page form_name reads a {{Page Path}} Lookup Table variable (not a static string)',
-  mpName?.value === '{{Lookup - Form Name - Contact Form}}' && !!mpLk && mpLk.variableName === 'Lookup - Form Name - Contact Form' && mpLk.input === '{{Page Path}}' && mpLk.defaultValue === 'Contact Form');
-check('form: the lookup has one row per page with a per-page name (Home / humanised segment)',
-  !!mpLk &&
-  mpLk.rows.length === 3 &&
-  mpLk.rows.some((r) => r.key === '/' && r.value === 'Contact Form - Home') &&
-  mpLk.rows.some((r) => r.key === '/services/ga4-consulting' && r.value === 'Contact Form - Ga4 Consulting') &&
-  mpLk.rows.some((r) => r.key === '/services/conversion-tracking' && r.value === 'Contact Form - Conversion Tracking'));
-check('form: the multi-page tag note explains the auto-created lookup variable', /Lookup Table variable/i.test(mpForm[0]?.note ?? '') && /auto-created/i.test(mpForm[0]?.note ?? ''));
+check('form: multi-page form_name is the shared {{Form Name}} variable, no lookup emitted',
+  (mpForm[0]?.eventParameters ?? []).find((p) => p.name === 'form_name')?.value === '{{Form Name}}' && !mpForm[0]?.eventParamLookups);
 check('page context: every event carries page_url={{Page URL}} + previous_page={{Referrer}}',
   [byEvent('email_click'), out1[0]].every((s) =>
     (s?.eventParameters ?? []).some((p) => p.name === 'page_url' && p.value === '{{Page URL}}') &&

@@ -19,6 +19,7 @@ import {
   buildUrlQueryVariable,
   buildClickTextLookupVariable,
   buildLookupTableVariable,
+  buildFormNameVariable,
   findExistingTrigger,
   customEventNameOf,
   buildGa4ServerTag,
@@ -1212,10 +1213,14 @@ export function buildToolRegistry(
           ...(Array.isArray(a.configSettings) ? a.configSettings.map((p) => s(obj(p).value)) : []),
           ...paramLookups.map((l) => l.input), // {{Page Path}} on the lookup's input → enable that built-in
         ];
+        // A param that references the shared {{Form Name}} Custom JS variable (e.g. form tags' form_name)
+        // needs the Form Element built-in — the variable's code reads {{Form Element}}.
+        const needsFormName = templateVals.some((v) => String(v ?? '').includes('{{Form Name}}'));
         const vars = Array.from(
           new Set([
             ...triggerBuiltInVars(triggerInput),
             ...builtInVarsForTemplates(templateVals),
+            ...(needsFormName ? ['formElement'] : []),
             ...(Array.isArray(a.builtInVariables) ? a.builtInVariables.map(String) : []),
           ])
         );
@@ -1237,10 +1242,20 @@ export function buildToolRegistry(
           for (const m of String(val ?? '').matchAll(/\{\{(URL - [^}]+)\}\}/g)) urlVarNames.add(m[1]);
         }
         const createdVariables: string[] = [];
-        if (urlVarNames.size || triggerInput.lookupTable || paramLookups.length) {
+        if (urlVarNames.size || triggerInput.lookupTable || paramLookups.length || needsFormName) {
           const existingVarNames = new Set(
             (await data.listGtmVariables(accountId, containerId, workspaceId)).map((v) => v.name.toLowerCase())
           );
+          // The shared "Form Name" Custom JS variable (GTM has no built-in {{Form Name}}) — derives the
+          // form name from the submitted {{Form Element}} at fire time. Created once, referenced by every
+          // form tag; never overwrites an existing same-named variable.
+          if (needsFormName && !existingVarNames.has('form name')) {
+            try {
+              await data.createGtmVariable(accountId, containerId, workspaceId, buildFormNameVariable() as unknown as Record<string, unknown>);
+              createdVariables.push('Form Name');
+              existingVarNames.add('form name');
+            } catch { /* best-effort: the tag still references it; the user can create it in GTM */ }
+          }
           for (const name of urlVarNames) {
             if (existingVarNames.has(name.toLowerCase())) continue;
             const queryKey = name.replace(/^URL - /, '').trim();
