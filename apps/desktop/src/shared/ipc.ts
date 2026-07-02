@@ -152,12 +152,19 @@ export interface Ga4ScorecardCategoryView {
   name: string;
   subscore: number | null;
   weight: number;
+  /** Renormalised weight over the VERIFIED categories (0..1; 0 when Not Verified) — the
+   *  redistribution the scorecard footnote honours; scored categories sum to 1. */
+  effectiveWeight: number;
   contribution: number;
   status: string;
 }
 /** One row of the Data Trust Matrix — what a client can safely quote from this audit. */
 export interface Ga4TrustRowView {
   metric: string;
+  /** PASS-GATED verdict: safe only when every gating check passed; a missing/unverified gate is
+   *  'unverified' (never safe); a failed gate is 'do_not_quote'; a partial gate is 'caution'. */
+  verdict: 'safe' | 'caution' | 'unverified' | 'do_not_quote';
+  /** verdict === 'safe'. */
   safe: boolean;
   reason: string;
 }
@@ -195,6 +202,10 @@ export interface Ga4VisualsView {
   drivingChannel: { name: string; dayShare: number; windowShare: number } | null;
   /** Whether channel attribution is safe to quote (Data Trust Matrix); false greys the channel charts. */
   channelTrusted: boolean;
+  /** Verdict-aware caveat shown when channelTrusted is false — a FAILED channel gate reads
+   *  "material share of sessions lack source data"; an UNVERIFIED one must NOT assert measured
+   *  loss and says the split is unverified instead. Null when trusted. */
+  channelCaveat: string | null;
 }
 /** One finding as a colour-coded card (section 4). */
 export interface Ga4FindingCardView {
@@ -229,6 +240,9 @@ export interface Ga4SectionsView {
     keSafe: boolean;
     revSafe: boolean;
     sesSafe: boolean;
+    /** Verdict-aware caveat line (null when key events + revenue are quotable): distinguishes a
+     *  FAILED gate ("not safe to quote") from an UNVERIFIED one ("confirm before quoting"). */
+    quoteNote: string | null;
     read: string;
     trendPattern: string | null;
   } | null;

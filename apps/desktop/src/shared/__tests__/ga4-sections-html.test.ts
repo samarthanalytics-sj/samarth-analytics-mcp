@@ -35,6 +35,7 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     keSafe: false,
     revSafe: false,
     sesSafe: true,
+    quoteNote: '* Not safe to quote until conversion tracking is confirmed; sessions are safe to quote.',
     read: 'Outcomes did NOT keep pace with traffic.',
     trendPattern: 'Upward trend. A sustained upward trend.',
   },
@@ -109,11 +110,11 @@ test('section 5 renders area coverage with status chips + confidence + evidence'
   assert.ok(h.includes('Not Verified') && h.includes('1 data stream(s)'), 'status label + evidence');
 });
 
-test('section 6 baseline shows sessions, growth (with unsafe tag), peak day, markets', () => {
+test('section 6 baseline shows sessions, growth (with trust-matrix flag), peak day, markets', () => {
   const h = ga4SectionsHtml(view());
   assert.ok(h.includes('Property baseline'));
   assert.ok(h.includes('33,453') && h.includes('India 96%'));
-  assert.ok(/not safe to quote/.test(h), 'growth unsafe note shown when key events/revenue unsafe');
+  assert.ok(/flagged in the data trust matrix/.test(h), 'flagged growth figures point at the trust matrix (verdict-aware, not a blanket "not safe")');
 });
 
 test('section 7 decision readiness pills answerable vs not answerable', () => {

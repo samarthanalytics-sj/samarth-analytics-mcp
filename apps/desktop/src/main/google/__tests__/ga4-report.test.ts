@@ -230,8 +230,11 @@ test('a diluted-but-growing spike is graded LOW, not "Action required", and reve
   assert.ok(/\| LOW \| Growth \|/.test(md), 'growth graded LOW (channel-mix dilution)');
   assert.ok(!/\| (CRITICAL|HIGH) \| Growth \|/.test(md), 'not escalated to critical/high');
   assert.ok(!/revenue\/ROAS may be wrong/.test(md), 'drops the "revenue may be wrong" alarm');
-  // growth no longer "serious" → revenue + conversions flip back to safe to quote
-  assert.ok(/Revenue \/ AOV \/ ROAS \| ✅ Safe to quote/.test(md), 'revenue safe to quote again');
+  // Growth no longer "serious" → the traffic-vs-conversion gate is not FAILED, so revenue is not
+  // do-not-quote. It stays UNVERIFIED (pass-gated: the ecommerce setup gate cannot be verified via
+  // the Admin API in this fixture) — never silently promoted to "safe".
+  assert.ok(!/Revenue \/ AOV \/ ROAS \| ⛔ Do not quote/.test(md), 'diluted growth is not a failed gate');
+  assert.ok(/Revenue \/ AOV \/ ROAS \| ⚪ Unverified/.test(md), 'revenue reads UNVERIFIED (ecommerce gate unverified), not do-not-quote');
 });
 
 test('healthy growth (sessions, key events and revenue move together) → no actionable growth finding', () => {
@@ -257,14 +260,17 @@ test('executive summary shows the selected audit window (date range + day count)
   assert.ok(exec.dateRange.includes('Jun 29, 2026') && exec.dateRange.includes('90 days'), 'exec view carries the window');
 });
 
-test('a fully clean, trustworthy property says "Trustworthy", not "Action required"', () => {
+test('a clean property with unverifiable consent/ecommerce reads honest — usable, never blanket-"safe to quote"', () => {
   const s = snap({
     customDimensions: [{ parameterName: 'tier', displayName: 'Tier', scope: 'USER' }],
     customMetrics: [{ parameterName: 'pts', displayName: 'Pts' }],
   });
   const md = buildGa4AuditReport(input({ snapshot: s, config: auditGa4(s) }));
-  assert.ok(/\*\*Overall verdict:\*\* Trustworthy - the data is safe to quote/.test(md), 'clean + high reliability → Trustworthy');
-  assert.ok(!/Action required/.test(md));
+  // PASS-GATED trust: with consent + ecommerce unverified, the report must NOT claim the data is
+  // blanket-safe to quote (an unrun check cannot make a metric safe) — but it also must not alarm.
+  assert.ok(!/Action required/.test(md), 'clean property → no false alarm');
+  assert.ok(!/Trustworthy - the data is safe to quote/.test(md), 'must not claim safe-to-quote while revenue/consent gates are unverified');
+  assert.ok(/unverified/i.test(md), 'the verdict acknowledges the unverified areas');
 });
 
 test('a genuinely clean property (only an info advisory) does not manufacture a risk', () => {

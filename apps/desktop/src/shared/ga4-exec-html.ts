@@ -2,7 +2,7 @@
 // dangerouslySetInnerHTML so it picks up the app theme) and the PDF/Word export (the same markup,
 // where the CSS-var fallbacks supply print-friendly colours). All dynamic text is HTML-escaped.
 
-import type { Ga4ExecSummaryView } from './ipc';
+import type { Ga4ExecSummaryView, Ga4TrustRowView } from './ipc';
 
 const esc = (s: unknown): string => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -28,7 +28,9 @@ const card = (inner: string): string =>
 const cardTd = (c: string): string => `<td style="width:50%;vertical-align:top;padding:6px">${c}</td>`;
 
 export function execSummaryHtml(x: Ga4ExecSummaryView): string {
-  const relColor = x.reliabilityPct >= 75 ? GREEN : x.reliabilityPct >= 45 ? AMBER : RED;
+  // Bands match the pass-gated scale's reachable range (a clean production property tops out near
+  // ~45 — collection is at most Partial via the Admin API and consent is never readable).
+  const relColor = x.reliabilityPct >= 45 ? GREEN : x.reliabilityPct >= 20 ? AMBER : RED;
 
   const verdictCard = card(label('Overall verdict') + `<div style="font-size:16px;font-weight:600;line-height:1.4;color:${TEXT}">${esc(x.verdict)}</div>`);
   const reliabilityCard = card(
@@ -42,27 +44,42 @@ export function execSummaryHtml(x: Ga4ExecSummaryView): string {
   const th = `style="text-align:left;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:${FAINT};padding:6px 10px;border-bottom:2px solid ${BORDER}"`;
   const td = `style="padding:7px 10px;border-bottom:1px solid ${BORDER};font-size:13px;color:${TEXT};vertical-align:top"`;
 
+  const anyNotVerified = x.categories.some((c) => c.subscore === null);
   const scoreRows = x.categories
     .map((c) => {
       const sub = c.subscore === null ? 'Not Verified' : `${c.subscore}/100`;
       const contrib = c.subscore === null ? '—' : `+${c.contribution.toFixed(1)}`;
-      return `<tr><td ${td}>${esc(c.name)}</td><td ${td}><b>${esc(sub)}</b></td><td ${td}>${c.weight}%</td><td ${td}>${esc(contrib)}</td></tr>`;
+      // Effective weight = the renormalised share this category actually carries in the composite
+      // (a Not-Verified category carries none — its weight is redistributed, never scored 50 or 100).
+      const effW = c.subscore === null ? 'excluded' : `${(c.effectiveWeight * 100).toFixed(0)}%`;
+      return `<tr><td ${td}>${esc(c.name)}</td><td ${td}><b>${esc(sub)}</b></td><td ${td}>${c.weight}%</td><td ${td}>${esc(effW)}</td><td ${td}>${esc(contrib)}</td></tr>`;
     })
     .join('');
-  const compositeRow = `<tr><td ${td}><b>COMPOSITE</b></td><td ${td}><b>${x.composite ?? '—'}/100</b></td><td ${td}><b>100%</b></td><td ${td}><b>${x.composite ?? '—'}</b></td></tr>`;
+  const compositeRow = `<tr><td ${td}><b>COMPOSITE</b></td><td ${td}><b>${x.composite ?? '—'}/100</b></td><td ${td}><b>100%</b></td><td ${td}><b>100%</b></td><td ${td}><b>${x.composite ?? '—'}</b></td></tr>`;
   const scorecard =
     `<table style="border-collapse:collapse;width:100%;margin-top:8px">` +
-    `<thead><tr><th ${th}>Category</th><th ${th}>Subscore</th><th ${th}>Weight</th><th ${th}>Contribution</th></tr></thead>` +
-    `<tbody>${scoreRows}${compositeRow}</tbody></table>`;
+    `<thead><tr><th ${th}>Category</th><th ${th}>Subscore</th><th ${th}>Weight</th><th ${th}>Eff. weight</th><th ${th}>Contribution</th></tr></thead>` +
+    `<tbody>${scoreRows}${compositeRow}</tbody></table>` +
+    (anyNotVerified
+      ? `<div style="font-size:11.5px;color:${MUTED};margin-top:6px">Not Verified categories are excluded from the composite — never scored 50 or 100 — and their weight is redistributed over the verified categories (the “Eff. weight” column).</div>`
+      : '');
 
-  const badge = (safe: boolean): string => {
-    const [bg, fg, txt] = safe ? [GREEN_BG, GREEN, 'SAFE TO QUOTE'] : [RED_BG, RED, 'DO NOT QUOTE'];
+  // PASS-GATED verdicts: SAFE only when every gating check passed; an unverified gate is grey (never
+  // green — not-failed is not the same as passed); a partial gate is amber; a failed gate is red.
+  const AMBER_BG = v('--c-amber-bg', '#fef3c7');
+  const GREY_BG = v('--surface-2', '#eef1f4');
+  const badge = (verdict: Ga4TrustRowView['verdict']): string => {
+    const [bg, fg, txt] =
+      verdict === 'safe' ? [GREEN_BG, GREEN, 'SAFE TO QUOTE']
+      : verdict === 'caution' ? [AMBER_BG, AMBER, 'QUOTE WITH CAUTION']
+      : verdict === 'unverified' ? [GREY_BG, MUTED, 'UNVERIFIED']
+      : [RED_BG, RED, 'DO NOT QUOTE'];
     return `<span style="display:inline-block;white-space:nowrap;font-size:10.5px;font-weight:700;letter-spacing:.4px;padding:3px 9px;border-radius:999px;background:${bg};color:${fg}">${txt}</span>`;
   };
   const trustRows = x.trust
     .map(
       (t) =>
-        `<tr><td ${td}><b>${esc(t.metric)}</b></td><td ${td}>${badge(t.safe)}</td><td ${td}>${esc(t.reason)}</td></tr>`,
+        `<tr><td ${td}><b>${esc(t.metric)}</b></td><td ${td}>${badge(t.verdict)}</td><td ${td}>${esc(t.reason)}</td></tr>`,
     )
     .join('');
   const trustMatrix =

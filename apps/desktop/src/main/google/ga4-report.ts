@@ -152,7 +152,10 @@ function overallVerdict(allFindings: FindingRow[], nNotVerified: number, reliabi
   if (has('critical') || has('high')) return 'Action required — one or more foundational checks need remediation before the data can be fully trusted.';
   if (has('medium')) return 'Some gaps to address before the data is fully trustworthy.';
   if (has('low')) return `Largely sound; minor gaps remain and ${nNotVerified} area(s) are unverified.`;
-  if (growthAssessed && reliabilityPct >= 75) return `Trustworthy — the data is safe to quote for downstream reporting (${reliabilityPct}% reporting reliability)${nNotVerified > 0 ? `; ${nNotVerified} area(s) remain unverified but none are blocking` : ''}.`;
+  // Threshold calibrated to the pass-gated scale's reachable range (the Admin API caps Data
+  // collection at Partial and cannot read consent mode, so a clean property tops out near ~45).
+  // The wording never claims blanket "safe to quote" — quotability is per-metric in the trust matrix.
+  if (growthAssessed && reliabilityPct >= 45) return `Trustworthy within the verified scope — the figures the data trust matrix marks safe or caution are quotable (${reliabilityPct}% reporting reliability)${nNotVerified > 0 ? `; ${nNotVerified} area(s) remain unverified — confirm those before quoting them` : ''}.`;
   return `No blocking issues found; the data is broadly usable, but ${nNotVerified} area(s) are unverified — confirm before full sign-off.`;
 }
 
@@ -252,8 +255,8 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
     biggestRisk: top ? firstSentence(top.whyItMatters ?? top.message) : 'No high-severity risk; the ceiling on trust is coverage.',
     highestImpactFix: top ? firstSentence(top.recommendation ?? 'Confirm the unverified areas.') : 'Confirm the unverified areas (consent, ecommerce parameters) before sign-off.',
     coverage: { checked: areaRows.length, partial: nPartial, notVerified: nNotVerified },
-    categories: scoreModel.categories.map((c) => ({ name: c.name, subscore: c.subscore, weight: c.weight, contribution: c.contribution, status: c.status })),
-    trust: scoreModel.trust.map((t) => ({ metric: t.metric, safe: t.safe, reason: t.reason })),
+    categories: scoreModel.categories.map((c) => ({ name: c.name, subscore: c.subscore, weight: c.weight, effectiveWeight: c.effectiveWeight, contribution: c.contribution, status: c.status })),
+    trust: scoreModel.trust.map((t) => ({ metric: t.metric, verdict: t.verdict, safe: t.safe, reason: t.reason })),
   };
 }
 
@@ -280,7 +283,18 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
     devices: baseline?.devices ?? [],
     channels: [...dqCounts.channelGroups].sort((a, b) => b.sessions - a.sessions).slice(0, 8),
     drivingChannel: trend.drivingChannel,
-    channelTrusted: score.trust.find((t) => t.metric === 'Channel attribution')?.safe ?? true,
+    ...(() => {
+      const v = score.trust.find((t) => t.metric === 'Channel attribution')?.verdict ?? 'safe';
+      // A FAILED gate asserts measured source-data loss; an UNVERIFIED one must NOT — the split is
+      // simply unverified (e.g. attribution settings unreadable), and the wording says exactly that.
+      const channelCaveat =
+        v === 'do_not_quote'
+          ? 'A material share of sessions lack source data, so the channel split is not safe to quote (see the Data Trust Matrix).'
+          : v === 'unverified'
+            ? 'Channel attribution could not be verified this run, so the channel split is unverified — confirm before quoting (see the Data Trust Matrix).'
+            : null;
+      return { channelTrusted: v === 'safe' || v === 'caution', channelCaveat };
+    })(),
   };
 }
 
@@ -300,10 +314,21 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     findings: allFindings.map((f) => ({ severity: f.severity, category: f.category })),
     growthAssessed: Boolean(growth?.assessed),
   });
-  const safeOf = (metric: string): boolean => score.trust.find((t) => t.metric === metric)?.safe ?? true;
-  const keSafe = safeOf('Conversion counts');
-  const revSafe = safeOf('Revenue / AOV / ROAS');
-  const sesSafe = safeOf('Sessions, users, engagement rate');
+  const verdictOfM = (metric: string): 'safe' | 'caution' | 'unverified' | 'do_not_quote' =>
+    score.trust.find((t) => t.metric === metric)?.verdict ?? 'safe';
+  const keV = verdictOfM('Conversion counts');
+  const revV = verdictOfM('Revenue / AOV / ROAS');
+  const keSafe = keV === 'safe' || keV === 'caution';
+  const revSafe = revV === 'safe' || revV === 'caution';
+  const sesSafe = verdictOfM('Sessions, users, engagement rate') !== 'do_not_quote' && verdictOfM('Sessions, users, engagement rate') !== 'unverified';
+  // Verdict-aware caveat: a FAILED gate reads "not safe to quote"; an UNVERIFIED one must say
+  // "confirm before quoting" instead of asserting untrustworthiness (matches the trust matrix).
+  const quoteNote =
+    keV === 'do_not_quote' || revV === 'do_not_quote'
+      ? `* Not safe to quote until conversion tracking is confirmed${sesSafe ? '; sessions are safe to quote' : ''}.`
+      : keV === 'unverified' || revV === 'unverified'
+        ? '* Could not be fully verified — confirm before quoting (see the data trust matrix).'
+        : null;
 
   const topFinding = top
     ? {
@@ -326,8 +351,8 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
   }
   const outcomes =
     growth && growth.assessed
-      ? { assessed: true, sessionsPct: growth.sessionsTrendPct, keyEventsPct: growth.keyEventsTrendPct, revenuePct: growth.revenueTrendPct, keSafe, revSafe, sesSafe, read: growthReadLine(growth.findings[0]), trendPattern }
-      : { assessed: false, sessionsPct: null, keyEventsPct: null, revenuePct: null, keSafe, revSafe, sesSafe, read: 'Not enough prior traffic to assess growth for this window.', trendPattern };
+      ? { assessed: true, sessionsPct: growth.sessionsTrendPct, keyEventsPct: growth.keyEventsTrendPct, revenuePct: growth.revenueTrendPct, keSafe, revSafe, sesSafe, quoteNote, read: growthReadLine(growth.findings[0]), trendPattern }
+      : { assessed: false, sessionsPct: null, keyEventsPct: null, revenuePct: null, keSafe, revSafe, sesSafe, quoteNote, read: 'Not enough prior traffic to assess growth for this window.', trendPattern };
 
   const findings = allFindings.map((f) => ({ severity: f.severity, area: f.area, message: f.message, businessRisk: riskFor(f), recommendation: f.recommendation ?? '—' }));
 
@@ -420,13 +445,23 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     growthAssessed: Boolean(growth?.assessed),
   });
   const auditId = `GA4-${pid}-${(dq.endDate ?? '').replace(/-/g, '') || 'na'}`;
-  // Foreground only fully-trusted figures: flag the outcome metrics the Data Trust Matrix marks
-  // "do not quote" (the numbers stay, but are clearly tagged so they aren't read as fact).
-  const safeOf = (metric: string): boolean => score.trust.find((t) => t.metric === metric)?.safe ?? true;
-  const keSafe = safeOf('Conversion counts');
-  const revSafe = safeOf('Revenue / AOV / ROAS');
+  // Foreground only trusted figures: tag the outcome metrics whose PASS-GATED verdict is
+  // do-not-quote or unverified (the numbers stay, but are clearly tagged so they aren't read as
+  // fact). A caution verdict keeps the figure untagged here — the trust matrix carries the caveat.
+  const safeOf = (metric: string): boolean => {
+    const v = score.trust.find((t) => t.metric === metric)?.verdict ?? 'safe';
+    return v === 'safe' || v === 'caution';
+  };
+  const verdictOf = (metric: string): 'safe' | 'caution' | 'unverified' | 'do_not_quote' =>
+    score.trust.find((t) => t.metric === metric)?.verdict ?? 'safe';
+  const keV = verdictOf('Conversion counts');
+  const revV = verdictOf('Revenue / AOV / ROAS');
   const sesSafe = safeOf('Sessions, users, engagement rate');
-  const quoteTag = (safe: boolean): string => (safe ? '' : ' (not safe to quote)');
+  // Verdict-aware figure tag: a failed gate reads "not safe to quote"; an unverified gate is tagged
+  // as unverified (never silently treated as fine); caution figures stay untagged here — the trust
+  // matrix carries the caveat.
+  const quoteTag = (v: 'safe' | 'caution' | 'unverified' | 'do_not_quote'): string =>
+    v === 'do_not_quote' ? ' (not safe to quote)' : v === 'unverified' ? ' (unverified — confirm before quoting)' : '';
 
   // ── 1 · Executive summary (read-first) ──
   L.push(`# GA4 Property Audit — ${input.displayName} (${pid})`);
@@ -445,14 +480,15 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push('');
   L.push('**Per-category scorecard**');
   L.push('');
-  L.push('| Category | Subscore | Weight | Contribution |');
-  L.push('| --- | --- | --- | --- |');
+  L.push('| Category | Subscore | Weight | Eff. weight | Contribution |');
+  L.push('| --- | --- | --- | --- | --- |');
   for (const c of score.categories) {
     const sub = c.subscore === null ? 'Not Verified' : `${c.subscore}/100`;
     const contrib = c.subscore === null ? '—' : `+${c.contribution.toFixed(1)}`;
-    L.push(`| ${c.name} | ${sub} | ${c.weight}% | ${contrib} |`);
+    const effW = c.subscore === null ? 'excluded' : `${(c.effectiveWeight * 100).toFixed(0)}%`;
+    L.push(`| ${c.name} | ${sub} | ${c.weight}% | ${effW} | ${contrib} |`);
   }
-  L.push(`| **Composite** | **${score.composite ?? '—'}/100** | **100%** | **${score.composite ?? '—'}** |`);
+  L.push(`| **Composite** | **${score.composite ?? '—'}/100** | **100%** | **100%** | **${score.composite ?? '—'}** |`);
   L.push('');
   L.push('*Contribution = subscore × weight, renormalised over verified categories; Not-Verified categories are excluded and their weight redistributed. The number is computed by rule, never judged.*');
   L.push('');
@@ -461,7 +497,12 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push('| Metric | Quote? | Why |');
   L.push('| --- | --- | --- |');
   for (const t of score.trust) {
-    L.push(`| ${t.metric} | ${t.safe ? '✅ Safe to quote' : '⛔ Do not quote'} | ${cell(t.reason)} |`);
+    const label =
+      t.verdict === 'safe' ? '✅ Safe to quote'
+      : t.verdict === 'caution' ? '🟡 Quote with caution'
+      : t.verdict === 'unverified' ? '⚪ Unverified — do not assume safe'
+      : '⛔ Do not quote';
+    L.push(`| ${t.metric} | ${label} | ${cell(t.reason)} |`);
   }
   L.push('');
 
@@ -492,9 +533,14 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     L.push(`Revenue     ${trendPctText(growth.revenueTrendPct)}`);
     L.push('```');
     L.push(`**Read:** ${growthReadLine(growth.findings[0])}`);
-    if (!keSafe || !revSafe) {
+    // Verdict-aware caveat: a FAILED gate says "not safe to quote"; an UNVERIFIED one says
+    // "confirm before quoting" — never asserting untrustworthiness the matrix doesn't claim.
+    if (keV === 'do_not_quote' || revV === 'do_not_quote') {
       L.push('');
       L.push(`*Per the data trust matrix, the key-event and revenue figures above are NOT safe to quote until conversion tracking is confirmed${sesSafe ? '; sessions are safe to quote' : ''}.*`);
+    } else if (keV === 'unverified' || revV === 'unverified') {
+      L.push('');
+      L.push('*The key-event/revenue figures above could not be fully verified (see the data trust matrix) — confirm before quoting.*');
     }
   } else {
     L.push('Not enough prior traffic to assess growth for this window.');
@@ -538,7 +584,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   if (baseline) {
     L.push(`- **Sessions:** ${num(baseline.sessions)} (prior period ${num(baseline.priorSessions)}${trendLabel(baseline)})`);
     if (growth && growth.assessed) {
-      L.push(`- **Growth signals (vs prior):** sessions ${trendPctText(growth.sessionsTrendPct)} · key events ${trendPctText(growth.keyEventsTrendPct)}${quoteTag(keSafe)} · revenue ${trendPctText(growth.revenueTrendPct)}${quoteTag(revSafe)}`);
+      L.push(`- **Growth signals (vs prior):** sessions ${trendPctText(growth.sessionsTrendPct)} · key events ${trendPctText(growth.keyEventsTrendPct)}${quoteTag(keV)} · revenue ${trendPctText(growth.revenueTrendPct)}${quoteTag(revV)}`);
     }
     L.push(`- **Peak day:** ${baseline.peakDay ? `${fmtDay(baseline.peakDay.date)} — ${num(baseline.peakDay.sessions)} sessions` : 'Not Verified'}`);
     L.push(`- **New vs returning:** ${shareLabel(baseline.newVsReturning)}`);

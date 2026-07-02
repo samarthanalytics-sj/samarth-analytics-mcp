@@ -34,6 +34,7 @@ const view = (over: Partial<Ga4VisualsView> = {}): Ga4VisualsView => ({
   channels: [{ name: 'Organic Social', sessions: 700 }, { name: 'Direct', sessions: 300 }],
   drivingChannel: { name: 'Organic Social', dayShare: 0.75, windowShare: 0.7 },
   channelTrusted: true,
+  channelCaveat: null,
   ...over,
 });
 
