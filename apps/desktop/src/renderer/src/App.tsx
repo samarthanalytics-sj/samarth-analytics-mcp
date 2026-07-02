@@ -18,6 +18,7 @@ import type {
   LlmProvider,
   ScanProgressView,
   SecretSelfTest,
+  ServerContainerResultView,
   SuggestedTagView,
   TagScanResult,
 } from '../../shared/ipc';
@@ -36,7 +37,7 @@ const DEFAULT_MODEL: Record<LlmProvider, string> = {
 };
 
 type View = 'chat' | 'gtm' | 'ga4audit' | 'prompts' | 'settings';
-type GtmTab = 'suggestions' | 'audit';
+type GtmTab = 'suggestions' | 'audit' | 'server';
 
 /* Friendly labels for GTM type codes, so approvals read in plain English. */
 const GTM_TYPE_LABELS: Record<string, string> = {
@@ -1129,7 +1130,7 @@ function GtmContextBar({
 
   async function pickContainer(containerId: string): Promise<void> {
     const c = containers.find((x) => x.containerId === containerId);
-    setSel((s) => ({ ...s, containerId, containerName: c?.name, workspaceId: undefined, workspaceName: undefined }));
+    setSel((s) => ({ ...s, containerId, containerName: c?.name, containerPublicId: c?.publicId, workspaceId: undefined, workspaceName: undefined }));
     setWorkspaces([]);
     if (!containerId || !sel.accountId) return;
     setLoading('workspaces');
@@ -1162,7 +1163,8 @@ function GtmContextBar({
       <div style={styles.ctxBar}>
         <span>
           <span style={{ color: 'var(--text-muted)' }}>Working in: </span>
-          📁 {ctx.accountName} › <b style={{ color: 'var(--text)' }}>{ctx.containerName}</b> ›{' '}
+          📁 {ctx.accountName} › <b style={{ color: 'var(--text)' }}>{ctx.containerName}</b>
+          {ctx.containerPublicId ? <span style={{ color: 'var(--text-faint)' }}> ({ctx.containerPublicId})</span> : null} ›{' '}
           <b style={{ color: 'var(--c-blue)' }}>{ctx.workspaceName ?? 'workspace?'}</b>
         </span>
         <button style={styles.linkBtn} onClick={() => { setSel(ctx); setEditing(true); }}>
@@ -1184,7 +1186,7 @@ function GtmContextBar({
       <select style={styles.ctxSelect} value={sel.containerId ?? ''} disabled={!sel.accountId || loading === 'containers'} onChange={(e) => void pickContainer(e.target.value)}>
         <option value="">{loading === 'containers' ? 'Loading…' : 'Container…'}</option>
         {containers.map((c) => (
-          <option key={c.containerId} value={c.containerId}>{c.name}</option>
+          <option key={c.containerId} value={c.containerId}>{c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
         ))}
       </select>
       <select style={styles.ctxSelect} value={sel.workspaceId ?? ''} disabled={!sel.containerId || loading === 'workspaces'} onChange={(e) => pickWorkspace(e.target.value)}>
@@ -1453,11 +1455,17 @@ function GtmToolsView({
         <button style={tab === 'audit' ? styles.subTabOn : styles.subTabOff} onClick={() => setTab('audit')} role="tab" aria-selected={tab === 'audit'}>
           🔍 Container audit
         </button>
+        <button style={tab === 'server' ? styles.subTabOn : styles.subTabOff} onClick={() => setTab('server')} role="tab" aria-selected={tab === 'server'}>
+          🖥 Server container
+          <span style={styles.betaBadge}>Beta</span>
+        </button>
       </div>
       {tab === 'suggestions' ? (
         <TagReviewPanel key={(active?.id ?? 'none') + ':sug'} active={active} onError={onError} />
-      ) : (
+      ) : tab === 'audit' ? (
         <ContainerAuditPanel key={(active?.id ?? 'none') + ':aud'} active={active} onError={onError} />
+      ) : (
+        <ServerContainerPanel key={(active?.id ?? 'none') + ':srv'} active={active} onError={onError} />
       )}
     </div>
   );
@@ -3370,6 +3378,133 @@ const GA4_AREA_STATUS: Record<string, { label: string; style: React.CSSPropertie
   fail: { label: 'Fail', style: { background: 'var(--c-red-bg)', color: 'var(--c-red)', border: '1px solid var(--c-red-border)' } },
   not_verified: { label: 'Not Verified', style: { background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border-2)' } },
 };
+
+// Create a complete SERVER-side (sGTM) container FROM the selected web container: the container +
+// GA4 client + trigger + GA4 relay tag (relaying the web container's GA4 Measurement ID), and — when
+// a tagging-server URL is given — records it on the server container and points the web Google tag at
+// it. Draft-only, confirmation-gated; the host (Cloud Run / Stape) is deployed by the user separately.
+function ServerContainerPanel({
+  active,
+  onError,
+}: {
+  active: AccountView | undefined;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const ctx = active?.gtmContext;
+  const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId);
+  const [name, setName] = useState('');
+  const [serverUrl, setServerUrl] = useState('');
+  const [running, setRunning] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<ServerContainerResultView | null>(null);
+
+  // Default the new container's name from the web container ("<web> - Server"), once, when it loads.
+  useEffect(() => {
+    if (ctx?.containerName) setName((n) => n || `${ctx.containerName} - Server`);
+  }, [ctx?.containerName]);
+
+  async function create(): Promise<void> {
+    if (!ready || !ctx || running || !name.trim()) return;
+    onError('');
+    setRunning(true);
+    setConfirming(false);
+    setResult(null);
+    try {
+      const r = await window.desktop.gtm.createServerContainer({
+        accountId: ctx.accountId!,
+        webContainerId: ctx.containerId!,
+        name: name.trim(),
+        serverUrl: serverUrl.trim() || undefined,
+      });
+      setResult(r);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 };
+  const row: React.CSSProperties = { border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13 };
+
+  return (
+    <div style={{ padding: '12px 20px', display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
+      <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        Create a NEW server-side (sGTM) container from the web container above. It builds the container + GA4 client + firing trigger + GA4 relay tag (relaying this web container&apos;s GA4 Measurement ID). Paste your tagging-server URL (from Cloud Run, Stape, or your own host) to also record it on the server container and point this web container&apos;s Google tag at it. Draft-only &mdash; nothing is published, and GTM does not deploy the host.
+      </div>
+      {!ready && (
+        <div style={{ color: 'var(--c-amber)', fontSize: 13 }}>
+          {!active?.hasGoogleToken ? 'Sign this account into Google first.' : 'Pick a GTM account and the web container in the GTM bar above, then return here.'}
+        </div>
+      )}
+      {ready && (
+        <>
+          <div style={{ fontSize: 13 }}>
+            Base web container: <b style={{ color: 'var(--text)' }}>{ctx!.containerName}</b>
+            {ctx!.containerPublicId ? <span style={{ color: 'var(--text-faint)' }}> ({ctx!.containerPublicId})</span> : null}
+          </div>
+          <label>
+            <span style={lbl}>New server container name</span>
+            <input style={styles.input} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. example.com - Server" />
+          </label>
+          <label>
+            <span style={lbl}>Tagging server URL — optional (from Cloud Run / Stape / your host)</span>
+            <input style={styles.input} value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} placeholder="https://sgtm.example.com" />
+          </label>
+          <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+            Leave the URL blank to create the container now and wire it later (after you deploy the host). You can set it any time from the chat with set_server_container_tagging_url.
+          </div>
+          {!confirming ? (
+            <button style={styles.primaryBtn} disabled={running || !name.trim()} onClick={() => setConfirming(true)}>
+              {running ? 'Creating…' : result ? 'Create another' : 'Create server container'}
+            </button>
+          ) : (
+            <div style={{ ...styles.confirm }}>
+              <div style={{ ...styles.muted, marginBottom: 8, color: 'var(--c-amber)' }}>
+                Create a NEW server container “{name.trim()}” in this account
+                {serverUrl.trim() ? ` and point ${ctx!.containerName} at ${serverUrl.trim()}` : ''}? Draft-only — not published.
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={styles.primaryBtn} disabled={running} onClick={create}>{running ? 'Creating…' : 'Confirm & create'}</button>
+                <button style={styles.ghostBtn} disabled={running} onClick={() => setConfirming(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+          {result && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+              <div style={{ ...row, borderColor: 'var(--c-green-border)', background: 'var(--c-green-bg)' }}>
+                ✓ Created server container <b>{result.serverContainer.name}</b>{' '}
+                <b style={{ color: 'var(--c-green)' }}>{result.serverContainer.publicId}</b>
+              </div>
+              <div style={row}>
+                Built: GA4 client <b>{result.created.client}</b>, trigger <b>{result.created.trigger}</b>, GA4 relay tag <b>{result.created.serverTag}</b> → relaying <code style={mdStyles.code}>{result.measurementId}</code>.
+              </div>
+              <div style={row}>
+                {result.serverUrlSet
+                  ? <>Tagging server URL recorded on the server container{result.webWired ? <> and the web Google tag <b>{result.webWired.name}</b> now points at it.</> : <> (no Google tag found in the web container to point at it — set server_container_url on your web GA4 tag manually).</>}</>
+                  : <>No server URL set yet — deploy your tagging-server host, then set its URL on the container (and point the web Google tag at it) to start sending.</>}
+              </div>
+              {result.webNonGa4.length > 0 && (
+                <div style={{ ...row, borderColor: 'var(--c-amber-border)', background: 'var(--c-amber-bg)' }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--c-amber)' }}>Needs a server-side tag built by hand ({result.webNonGa4.length}):</div>
+                  {result.webNonGa4.slice(0, 20).map((t, i) => (
+                    <div key={i} style={{ fontSize: 12 }}>• {t.kind}: <b>{t.name}</b> <span style={{ color: 'var(--text-faint)' }}>({t.detail})</span></div>
+                  ))}
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                    Ask the chat to add these server-side (Google Ads → create_server_tag; Meta/TikTok → import the CAPI template + create_meta_emq_variables).
+                  </div>
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                Open GTM to review &amp; publish the new server container. Deploy the tagging-server host (Cloud Run / Stape) if you haven&apos;t, then verify it answers before relying on it.
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 // Pick a GA4 property (search across all accessible accounts), choose a data window,
 // and run the read-only config + data-quality audit (the same ga4-audit / data-quality

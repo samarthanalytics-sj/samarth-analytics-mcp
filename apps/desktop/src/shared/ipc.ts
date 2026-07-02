@@ -100,8 +100,22 @@ export interface GtmContext {
   accountName?: string;
   containerId?: string;
   containerName?: string;
+  /** The container's public id "GTM-XXXXXXX" — how users identify a container (vs the numeric id). */
+  containerPublicId?: string;
   workspaceId?: string;
   workspaceName?: string;
+}
+
+/** Result of creating a SERVER container from a web container (gtm:createServerContainer). */
+export interface ServerContainerResultView {
+  serverContainer: { containerId: string; publicId: string; name: string; taggingServerUrls: string[] };
+  workspaceId: string;
+  measurementId: string;
+  created: { client: string; trigger: string; serverTag: string };
+  serverUrlSet: boolean;
+  webWired: { tagId: string; name: string } | null;
+  /** Non-GA4 conversion tags found in the web container that still need a server-side tag by hand. */
+  webNonGa4: Array<{ kind: string; name: string; detail: string }>;
 }
 
 export interface Ga4AccountView {

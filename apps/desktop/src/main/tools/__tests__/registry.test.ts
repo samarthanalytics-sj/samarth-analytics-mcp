@@ -111,6 +111,18 @@ function fakeData(
         serverTag: { tagId: 'T1', name: 'GA4 - Server' },
       };
     },
+    createServerContainerFromWeb: async (a: string, webId: string, name: string, url?: string) => {
+      calls.push(`createServerFromWeb:${a}:${webId}:${name}:${url ?? ''}`);
+      return {
+        serverContainer: { containerId: 'SC1', publicId: 'GTM-SERVER', name, taggingServerUrls: url ? [url] : [] },
+        workspaceId: 'w1',
+        measurementId: 'G-DERIVED',
+        created: { client: 'GA4', trigger: 'All Events', serverTag: 'GA4 - Server' },
+        serverUrlSet: !!url,
+        webWired: url ? { tagId: 'WT1', name: 'Google Tag' } : null,
+        webNonGa4: [{ kind: 'Google Ads conversion', name: 'Ads - Purchase', detail: 'conversionId AW-1' }],
+      };
+    },
     setWebServerContainerUrl: async (_a: string, _c: string, _w: string, tagId: string, url: string) => {
       calls.push(`setWebServerUrl:${tagId}:${url}`);
       return { tagId, name: 'Google Tag', serverContainerUrl: url };
@@ -407,7 +419,7 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 87, 'read + write registry has 87 tools');
+    assert.equal(withWrites.list().length, 88, 'read + write registry has 88 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1319,6 +1331,17 @@ async function main(): Promise<void> {
     assert.equal(boot.serverTag.name, 'GA4 - Server');
     assert.equal(boot.client.name, 'GA4');
     assert.ok(fd.calls.includes('bootstrapServer:1:Server:G-1'));
+
+    // create_server_container_from_web: one-step orchestrator (derive id + bootstrap + wire URL).
+    const srv = JSON.parse(await reg.execute('create_server_container_from_web', { accountId: '1', webContainerId: '2', name: 'ex.com - Server', serverUrl: 'https://sgtm.ex.com' }));
+    assert.equal(srv.serverContainer.publicId, 'GTM-SERVER', 'returns the new server container GTM-XXX id');
+    assert.equal(srv.serverUrlSet, true);
+    assert.equal(srv.webWired?.name, 'Google Tag', 'points the web Google tag at the server');
+    assert.ok(Array.isArray(srv.webNonGa4) && srv.webNonGa4[0].kind === 'Google Ads conversion', 'reports non-GA4 web tags for manual server setup');
+    assert.ok(fd.calls.includes('createServerFromWeb:1:2:ex.com - Server:https://sgtm.ex.com'));
+    // name defaults + serverUrl optional.
+    await reg.execute('create_server_container_from_web', { accountId: '1', webContainerId: '2' });
+    assert.ok(fd.calls.includes('createServerFromWeb:1:2:Server:'), 'name defaults, serverUrl optional');
 
     const client = JSON.parse(await reg.execute('create_gtm_client', { accountId: '1', containerId: '2', workspaceId: '3', client: { name: 'GA4', type: 'gaaw_client' } }));
     assert.equal(client.type, 'gaaw_client');
