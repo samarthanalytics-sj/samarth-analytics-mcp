@@ -1,3 +1,9 @@
+## [1.138.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.138.0...v1.138.1) (2026-07-02)
+
+### Bug Fixes
+
+* **desktop:** accurate created count + live X/Y create progress ([4449fd7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4449fd71b3451716736da486f1fd599d89f54de1))
+
 ## [1.138.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.137.1...v1.138.0) (2026-07-02)
 
 ### Features
