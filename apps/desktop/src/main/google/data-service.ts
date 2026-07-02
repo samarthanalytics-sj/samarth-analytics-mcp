@@ -1448,8 +1448,17 @@ export class GoogleDataService {
     webWired: { tagId: string; name: string } | null;
     webNonGa4: Array<{ kind: string; name: string; detail: string }>;
   }> {
+    // No name given → derive it from the WEB container's own name ("<web name> - Server"), so the
+    // created container is identifiable (never a bare literal like "Server").
+    let containerName = name.trim();
+    if (!containerName) {
+      const auth0 = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+      const gtm0 = tagmanager({ version: 'v2', auth: auth0 });
+      const web = await gtm0.accounts.containers.get({ path: `accounts/${accountId}/containers/${webContainerId}` });
+      containerName = `${web.data.name ?? 'Web'} - Server`;
+    }
     const measurementId = await this.deriveWebContainerMeasurementId(accountId, webContainerId);
-    const boot = await this.bootstrapServerSideTagging(accountId, name, measurementId);
+    const boot = await this.bootstrapServerSideTagging(accountId, containerName, measurementId);
 
     let serverUrlSet = false;
     let webWired: { tagId: string; name: string } | null = null;

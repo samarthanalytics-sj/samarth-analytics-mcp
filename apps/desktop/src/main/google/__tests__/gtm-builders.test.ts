@@ -1328,6 +1328,44 @@ test('buildMetaEmqVariables → ed variables with keyPath === key (corpus shape)
   }
 });
 
+test('buildMetaEmqVariables: email/phone get a NESTED user_data.* fallback (GA4 nested shape never blanks)', () => {
+  const vars = buildMetaEmqVariables();
+  const byName = new Map(vars.map((v) => [v.name, v]));
+  for (const key of ['email_address', 'phone_number']) {
+    const companion = byName.get(`ed - user_data.${key}`);
+    assert.ok(companion, `companion ed - user_data.${key} exists`);
+    const ckp = (companion!.parameter ?? []).find((p) => (p as { key?: string }).key === 'keyPath') as { value?: string };
+    assert.equal(ckp?.value, `user_data.${key}`);
+    const primary = byName.get(`ed - ${key}`)!;
+    const dv = (primary.parameter ?? []).find((p) => (p as { key?: string }).key === 'defaultValue') as { value?: string };
+    assert.equal(dv?.value, `{{ed - user_data.${key}}}`, `ed - ${key} falls back to the nested companion`);
+  }
+});
+
+test('buildMetaCapiServerTag maps EMQ user_data (em/ph ONLY) + ecommerce custom_data + event_id (Stape list shapes)', () => {
+  const t = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - AddToCart Tag', 'P', 'T', 'AddToCart');
+  const listOf = (key: string): Array<{ map: Array<{ key?: string; value?: string }> }> =>
+    ((t.parameter ?? []).find((p) => (p as { key?: string }).key === key) as { list?: Array<{ map: Array<{ key?: string; value?: string }> }> })?.list ?? [];
+  const rows = (key: string): Array<[string, string]> =>
+    listOf(key).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
+  // user_data: em/ph ONLY — the template extracts fn/ln/ct/zp/country itself; explicit rows for those
+  // would ERASE template-extracted values when the ed variable resolves undefined (lower EMQ).
+  assert.deepEqual(rows('userDataList'), [['em', '{{ed - email_address}}'], ['ph', '{{ed - phone_number}}']]);
+  assert.deepEqual(rows('customDataList'), [['content_ids', '{{ed - content_ids}}'], ['value', '{{ed - value}}'], ['currency', '{{ed - currency}}'], ['order_id', '{{ed - transaction_id}}']]);
+  assert.deepEqual(rows('serverEventDataList'), [['event_id', '{{ed - event_id}}']]);
+  // Every referenced ed key is provided by buildMetaEmqVariables (the auto-provision covers them all).
+  const provided = new Set(buildMetaEmqVariables().map((v) => v.name));
+  const referenced = [...rows('userDataList'), ...rows('customDataList'), ...rows('serverEventDataList')].map(([, v]) => v.replace(/[{}]/g, ''));
+  for (const ref of referenced) assert.ok(provided.has(ref), `${ref} is created by buildMetaEmqVariables`);
+  // Opt-out: mapEmqVariables false → no lists at all.
+  const off = buildMetaCapiServerTag('cvt_5TP8W', 'x', 'P', 'T', 'AddToCart', { mapEmqVariables: false });
+  assert.ok(!(off.parameter ?? []).some((p) => ['userDataList', 'customDataList', 'serverEventDataList'].includes(String((p as { key?: string }).key))));
+});
+
+test('buildVariable throws on an unknown kind (no silent empty Custom JS variable)', () => {
+  assert.throws(() => buildVariable({ name: 'x', kind: 'cookie' as never }), /Unknown variable kind "cookie"/);
+});
+
 test('detectMetaTags flags an fbq Purchase tag, ignores GA4', () => {
   const snapshot = {
     tags: [
