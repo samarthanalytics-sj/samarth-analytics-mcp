@@ -1,3 +1,9 @@
+## [1.139.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.138.2...v1.139.0) (2026-07-02)
+
+### Features
+
+* **mcp:** expose a one-shot "set up a server-side container" MCP prompt ([27de9ff](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/27de9ff66355f6ba11cb6ac25170bfb16ea78370)), closes [#246](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/246)
+
 ## [1.138.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.138.1...v1.138.2) (2026-07-02)
 
 ### Bug Fixes
