@@ -380,10 +380,10 @@ const siteWideOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/a'
 check('full: a site-wide untitled "other" form also yields NO tag (no catch-all fold)', !siteWideOther.some((s) => s.trigger.kind === 'form_submit'));
 
 // ── FAQ accordion grouping ───────────────────────────────────────────────────
-// >=2 question rows (CTA text ending "?") collapse into ONE tag — class route when a stable shared
-// class exists ({{Click Element}} matches CSS: fires on the text, the row, or the arrow), else the
-// corpus-dominant text route ({{Click Text}} ends with "?"). Single-page FAQs ALSO get an ANDed
-// {{Page Path}} condition; per-question tags are never emitted alongside.
+// >=2 question rows (CTA text ending "?") collapse into ONE tag. {{Click Text}} ends with "?" is the
+// PRIMARY condition (always present, corpus-dominant); a stable shared class ANDs the {{Click
+// Element}} CSS selector on top (corpus: "Click Text ENDS_WITH ? AND Click Classes CONTAINS <cls>");
+// single-page FAQs ALSO get an ANDed {{Page Path}} condition. Per-question tags never emitted alongside.
 const faqEls = [
   { page: '/faq', kind: 'cta' as const, text: 'Does ChowNow charge commissions?', intent: 'generic' as const, className: 'faq-question flex items-center' },
   { page: '/faq', kind: 'cta' as const, text: 'Does ChowNow integrate with my POS?', intent: 'generic' as const, className: 'faq-question flex items-center' },
@@ -391,9 +391,9 @@ const faqEls = [
 ];
 const faq = buildSuggestions({ siteHost: 'a.com', forms: [], elements: faqEls });
 const faqTag = faq.find((s) => s.eventName === 'faq_click');
-check('faq: shared accordion class → ONE faq_click tag on the class selector + ANDed {{Page Path}} (multiple conditions in one trigger)',
-  !!faqTag && faqTag.trigger.kind === 'all_clicks' && faqTag.trigger.clickElementValue === '.faq-question, .faq-question *' && faqTag.trigger.clickElementOperator === 'cssSelector' && faqTag.trigger.pagePathValue === '/faq' && faqTag.trigger.pagePathOperator === 'contains' && /faq/i.test(faqTag.tagName));
-check('faq: the grouped question rows are NOT also emitted as their own per-question CTAs', !faq.some((s) => s.trigger.clickTextValue && /\?$/.test(s.trigger.clickTextValue)));
+check('faq: class route = THREE ANDed conditions — {{Click Text}} ends with "?" AND the class selector AND {{Page Path}}',
+  !!faqTag && faqTag.trigger.kind === 'all_clicks' && faqTag.trigger.clickTextValue === '?' && faqTag.trigger.clickTextOperator === 'endsWith' && faqTag.trigger.clickElementValue === '.faq-question, .faq-question *' && faqTag.trigger.clickElementOperator === 'cssSelector' && faqTag.trigger.pagePathValue === '/faq' && faqTag.trigger.pagePathOperator === 'contains' && /faq/i.test(faqTag.tagName));
+check('faq: the grouped question rows are NOT also emitted as their own per-question CTAs', !faq.some((s) => s.trigger.clickTextOperator === 'equals' && /\?$/.test(s.trigger.clickTextValue ?? '')));
 // A LONE question (only one on the whole site) is not an accordion — stays an individual CTA.
 const loneQ = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/x', kind: 'cta', text: 'Need help?', intent: 'generic', className: 'faq-question' }] });
 check('faq: a single question row is NOT grouped (no faq tag; stays an individual CTA)', !loneQ.some((s) => s.eventName === 'faq_click') && loneQ.some((s) => s.trigger.clickTextValue === 'Need help?'));
