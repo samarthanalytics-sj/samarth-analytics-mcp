@@ -213,6 +213,17 @@ interface FormScopeCtx {
   /** signature → EVERY page the form was seen on (drives the per-page form_name Lookup Table for a
    *  multi-page form: ONE tag whose form_name reflects which page it fired on). */
   pagesBySignature: Map<string, Set<string>>;
+  /** lowercased display label → EVERY page the SAME-named form was seen on. Groups multi-page
+   *  instances of one form into ONE tag (a {{Page Path}} form_name lookup + an all-pages trigger)
+   *  even when their signatures differ (e.g. a per-page form action). Case-insensitive. */
+  pagesByLabel: Map<string, Set<string>>;
+  /** lowercased label → the canonical (first-seen) display label, so case variants share one tag. */
+  canonicalLabel: Map<string, string>;
+  /** lowercased label → the DISTINCT unique {{Form ID}}s to scope by (one tag firing on ^(id1|id2)$),
+   *  but ONLY when EVERY instance of the group has a unique id (else null → scope by the page RegEx). */
+  formIdsByLabel: Map<string, string[] | null>;
+  /** lowercased label → the {{Form Classes}} value, same group-uniform rule as formIdByLabel. */
+  formClassByLabel: Map<string, string | null>;
 }
 
 /** A readable label for a page path: "Home" for the root, else the last path segment humanised
@@ -222,6 +233,18 @@ function pagePathLabel(page: string): string {
   if (!seg) return 'Home';
   return seg.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+/** The tag-identifying display label for a form — drives its tagName + event, and is the SAME across
+ *  every page the same form appears on (so it groups multi-page instances into one tag). Returns '' for
+ *  an untitled "other" form, which yields no tag. Mirrors the inline logic in formSuggestion. */
+function formDisplayLabel(f: DetectedForm): string {
+  if (f.purpose === 'search' || f.purpose === 'checkout') return '';
+  const titleText = (f.title ?? '').replace(/\s+/g, ' ').trim();
+  if (f.purpose === 'other' && !titleText) return '';
+  return titleText ? (/\bforms?\b/i.test(titleText) ? titleText : `${titleText} Form`) : (FORM_LABEL[f.purpose] ?? 'Form Submission');
+}
+
+const escRe = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null {
   // Skip: search/login submits aren't conversions; checkout is ECOMMERCE — it
@@ -297,42 +320,66 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // "Form Submission" tag (that catch-all was removed by design). A TITLED "other" form still gets its
   // title-derived tag.
   if (f.purpose === 'other' && !titleText) return null;
-  const displayLabel = titleText ? (/\bforms?\b/i.test(titleText) ? titleText : `${titleText} Form`) : formLabel;
+  const rawLabel = titleText ? (/\bforms?\b/i.test(titleText) ? titleText : `${titleText} Form`) : formLabel;
+  // Use the GROUP's canonical (first-seen) casing so case variants of the same form share ONE tag.
+  const labelKey = rawLabel.toLowerCase();
+  const displayLabel = ctx.canonicalLabel.get(labelKey) ?? rawLabel;
   // A TITLED form gets a distinct event from its title so the event matches the tag name (e.g.
   // "Download Form" → download_form) instead of a shared purpose event; an untitled form keeps its
   // purpose event (contact_form / login / …, which is already GA4-appropriate and stays recommended).
   const eventName = titleText ? eventFromLabel(displayLabel) : (FORM_EVENT[f.purpose] ?? 'form_submission');
 
-  // Scope the trigger to THIS form via its id (preferred) or an instance-unique
-  // class — but ONLY if that id/class isn't shared with another form (else it
-  // would fire for both). Otherwise it stays unscoped (fires on every form).
+  // EVERY page this same-named form was found on (its tag-identity group). >=2 means the SAME form
+  // spans multiple pages, so it becomes ONE tag firing on all of them (not N page-scoped duplicates).
+  const labelPages = [...(ctx.pagesByLabel.get(labelKey) ?? new Set([f.page]))].filter(Boolean).sort();
+  const multiPage = labelPages.length >= 2 && labelPages.length <= 50;
+
+  // Scope the trigger to THIS form. GROUP-LEVEL id/class (every instance of the same-named form shares
+  // the SAME unique one) is preferred; a MIXED group (id on some pages, not others) must NOT scope by
+  // that id — it would split the group into an id-tag + a page-regex tag with the SAME name (a
+  // duplicate-name collision at create) — so it falls through to the page RegEx (one tag for the group).
   const trigger: SuggestedTag['trigger'] = { name: trigNameOf(displayLabel, 'form_submit'), kind: 'form_submit' };
   const rawClass = pickFormClass(f.formClasses);
+  const groupIds = ctx.formIdsByLabel.get(labelKey) ?? null;
+  const groupClass = ctx.formClassByLabel.get(labelKey) ?? null;
   const idUnique = !!f.formId && !ctx.nonUniqueIds.has(f.formId);
   const classUnique = !!rawClass && !ctx.nonUniqueClasses.has(rawClass);
   let usedClass: string | null = null;
   let usedPage: string | null = null;
-  if (idUnique) {
-    trigger.formIdValue = f.formId;
-    trigger.formIdOperator = 'equals';
-  } else if (classUnique) {
-    trigger.formClassesValue = rawClass!;
-    trigger.formClassesOperator = 'contains';
-    usedClass = rawClass;
-  } else {
-    // No usable id/class. If this form lives on ONE page, scope the trigger to that page via
-    // {{Page Path}} so it gets its OWN tag (instead of folding into the All-Forms catch-all). A
-    // site-wide form (same form on many pages) has no single page → stays unscoped.
-    const onePage = ctx.pageBySignature.get(formSignature(f)) ?? null;
-    if (onePage) {
-      trigger.pagePathValue = onePage;
-      // Prefer "contains" so the trigger still matches with a trailing slash / query string / locale
-      // prefix; fall back to "equals" for a root or very short path, where "contains" would match
-      // essentially every page.
-      trigger.pagePathOperator = onePage.replace(/[^a-z0-9]/gi, '').length >= 3 ? 'contains' : 'equals';
-      usedPage = onePage;
+  if (groupIds && groupIds.length) {
+    // Scope by {{Form ID}} — one id → equals; several distinct ids in the group → ^(id1|id2)$ matchRegex
+    // (fires on exactly those forms, wherever they appear, with no page over-fire).
+    if (groupIds.length === 1) {
+      trigger.formIdValue = groupIds[0];
+      trigger.formIdOperator = 'equals';
+    } else {
+      trigger.formIdValue = `^(${groupIds.map(escRe).join('|')})$`;
+      trigger.formIdOperator = 'matchRegex';
     }
+  } else if (groupClass) {
+    trigger.formClassesValue = groupClass;
+    trigger.formClassesOperator = 'contains';
+    usedClass = groupClass;
+  } else if (multiPage) {
+    // Same form, no id/class, on a HANDFUL of pages → ONE tag firing on a submit on ANY of those pages
+    // via a {{Page Path}} RegEx (^(/a|/b|…)/?$). This scopes it to exactly its pages (not the site-wide
+    // "every form submit" catch-all), and every per-page instance dedups to this one tag.
+    trigger.pagePathValue = `^(${labelPages.map(escRe).join('|')})/?$`;
+    trigger.pagePathOperator = 'matchRegex';
+    usedPage = `${labelPages.length} pages`;
+  } else if (labelPages.length === 1) {
+    // No usable id/class, ONE page → scope the trigger to that page via {{Page Path}} so it gets its
+    // OWN tag (instead of folding into the All-Forms catch-all).
+    const onePage = labelPages[0];
+    trigger.pagePathValue = onePage;
+    // Prefer "contains" so the trigger still matches with a trailing slash / query string / locale
+    // prefix; fall back to "equals" for a root or very short path, where "contains" would match
+    // essentially every page.
+    trigger.pagePathOperator = onePage.replace(/[^a-z0-9]/gi, '').length >= 3 ? 'contains' : 'equals';
+    usedPage = onePage;
   }
+  // else: the form is on MORE than 50 pages (effectively site-wide) → a page RegEx would be unwieldy,
+  // so leave the trigger unscoped (fires on every form submit); the note below warns about that.
 
   // Flag the cases where the trigger won't fire / won't scope correctly.
   // Pardot's form-HANDLER mode is a native <form> POST the native trigger handles
@@ -359,11 +406,16 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     note = `${cap(f.provider.vendor)} submits in an iframe / via AJAX — GTM's native Form Submission trigger usually won't fire, so this tag fires on a "${dlEvent}" Custom Event. Add the push: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the provider submit event'} → dataLayer.push({event: "${dlEvent}"}). Fallback: an Element Visibility trigger on the thank-you message.`;
   } else if (f.method === 'js') {
     note = `JS/div form (no native <form> submit) — GTM's Form Submission trigger may not fire, so this tag fires on a "${dlEvent}" Custom Event; push dataLayer.push({event: "${dlEvent}"}) from the form's submit handler. Fallbacks: an All-Clicks trigger on the submit button, or an Element Visibility trigger on the thank-you message.`;
+  } else if (trigger.pagePathOperator === 'matchRegex') {
+    // The multi-page consolidated case: ONE tag scoped by a {{Page Path}} RegEx over the group's pages.
+    // A Page-Path-only Form Submission trigger fires on EVERY form submit on those pages, so warn that
+    // a DIFFERENT form co-located on any of them would also fire this tag (and be double-counted).
+    note = `Forms sharing this name/heading appear on ${labelPages.length} pages, so they are ONE tag firing when a form is submitted on any of them ({{Page Path}} matches the ${labelPages.length}-page RegEx). Because it is scoped by page (not by the form), ANOTHER form on one of those pages would also fire this tag — give the <form> a shared unique id and switch to a {{Form ID}} trigger to fire on this form only.`;
   } else if (trigger.pagePathValue) {
     // Page-scoped (single page) takes precedence over the shared-id warning below: even when the
     // form carries a NON-unique id, {{Page Path}} equals <page> scopes it precisely, so there is no
     // real collision to warn about (warning here would contradict the tag's own page scope).
-    note = `This form has no unique id/class, so it is scoped to submits on ${trigger.pagePathValue} (the only page it was found on). Add an id to the <form> for a more precise, page-independent trigger.`;
+    note = `This form has no unique id/class, so it is scoped to submits on ${trigger.pagePathValue} (the only page it was found on). A Page-Path-only trigger fires on any form submit on that page — add a unique id to the <form> for a form-specific {{Form ID}} trigger.`;
   } else if ((f.formId && !idUnique) || (rawClass && !classUnique)) {
     const what = f.formId && !idUnique ? `id "#${f.formId}"` : `class ".${rawClass}"`;
     note = `Another form on the site shares this ${what}, so this trigger will also fire for that form (double-counting). Give each <form> a unique id to scope it.`;
@@ -379,16 +431,20 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   const baseName = displayLabel.replace(/[{}]/g, '').replace(/\s{2,}/g, ' ').trim();
   let formNameValue = baseName;
   let eventParamLookups: SuggestedTag['eventParamLookups'];
-  const allPages = [...(ctx.pagesBySignature.get(formSignature(f)) ?? new Set([f.page]))].filter(Boolean).sort();
-  if (allPages.length >= 2 && allPages.length <= 50) {
-    const rows = allPages.map((p) => ({ key: p, value: `${baseName} - ${pagePathLabel(p)}` }));
-    // Only worth a lookup if the per-page names actually differ (they do once labels differ).
+  if (multiPage) {
+    // Per-page name from the last path segment ("Home"/"Ga4 Consulting"), BUT if two pages share the
+    // same last segment (/uk/contact, /us/contact → both "Contact") fall back to the full path so each
+    // page keeps a DISTINCT form_name (otherwise two rows collapse to one value in GA4 reporting).
+    const segLabels = labelPages.map(pagePathLabel);
+    const segCollides = new Set(segLabels).size < labelPages.length;
+    const rows = labelPages.map((p, i) => ({ key: p, value: `${baseName} - ${segCollides ? p : segLabels[i]}` }));
+    // Only worth a lookup if the per-page names actually differ (they do once page labels differ).
     if (new Set(rows.map((r) => r.value)).size >= 2) {
       const variableName = `Lookup - Form Name - ${baseName}`;
       formNameValue = `{{${variableName}}}`;
       eventParamLookups = [{ variableName, input: '{{Page Path}}', rows, defaultValue: baseName }];
-      const pagesList = allPages.slice(0, 6).join(', ') + (allPages.length > 6 ? ', …' : '');
-      const lookupNote = `This form is on ${allPages.length} pages, so it is ONE tag whose form_name is read from a "${variableName}" Lookup Table variable ({{Page Path}} → a per-page name: ${pagesList}) — auto-created with the tag. Edit the rows in GTM to rename any page; for many URLs under one section, a RegEx Table variable is cleaner.`;
+      const pagesList = labelPages.slice(0, 6).join(', ') + (labelPages.length > 6 ? ', …' : '');
+      const lookupNote = `form_name is read from a "${variableName}" Lookup Table variable ({{Page Path}} → a per-page name: ${pagesList}) — auto-created with the tag. Edit the rows in GTM to rename any page; for many URLs under one section, a RegEx Table variable is cleaner.`;
       note = note ? `${note} ${lookupNote}` : lookupNote;
     }
   }
@@ -435,7 +491,21 @@ function nonUniqueFormScopes(forms: DetectedForm[]): FormScopeCtx {
   const idSigs = new Map<string, Set<string>>();
   const classSigs = new Map<string, Set<string>>();
   const sigPages = new Map<string, Set<string>>();
+  // Grouping is CASE-INSENSITIVE on the display label ("Get a Free Audit" and "GET A FREE AUDIT" are
+  // the same form) — key on the lowercased label, keep the first-seen casing as canonical.
+  const labelPages = new Map<string, Set<string>>();
+  const canonicalLabel = new Map<string, string>();
+  const labelForms = new Map<string, DetectedForm[]>();
   for (const f of forms) {
+    const label = formDisplayLabel(f);
+    if (label) {
+      const key = label.toLowerCase();
+      if (!canonicalLabel.has(key)) canonicalLabel.set(key, label);
+      if (!labelPages.has(key)) labelPages.set(key, new Set());
+      labelPages.get(key)!.add(f.page);
+      if (!labelForms.has(key)) labelForms.set(key, []);
+      labelForms.get(key)!.push(f);
+    }
     const s = formSignature(f);
     if (!sigPages.has(s)) sigPages.set(s, new Set());
     sigPages.get(s)!.add(f.page);
@@ -449,14 +519,34 @@ function nonUniqueFormScopes(forms: DetectedForm[]): FormScopeCtx {
       classSigs.get(c)!.add(s);
     }
   }
+  const nonUniqueIds = new Set([...idSigs].filter(([, s]) => s.size > 1).map(([k]) => k));
+  const nonUniqueClasses = new Set([...classSigs].filter(([, s]) => s.size > 1).map(([k]) => k));
   // A form unique to ONE page can be page-scoped; one seen on several pages is site-wide (null).
   const pageBySignature = new Map<string, string | null>();
   for (const [sig, pages] of sigPages) pageBySignature.set(sig, pages.size === 1 ? [...pages][0] : null);
+  // Per-label GROUP-LEVEL id/class scope, computed so the WHOLE same-named group becomes ONE tag with
+  // ONE trigger (never split into an id-tag + a page-regex tag with the same name → a duplicate-name
+  // collision at create). {{Form ID}} scope is usable ONLY if EVERY instance carries a UNIQUE id — then
+  // scope by the distinct ids ({{Form ID}} matches ^(id1|id2)$), firing on exactly those forms. A MIXED
+  // group (id on some pages, not others) falls through to the page RegEx.
+  const formIdsByLabel = new Map<string, string[] | null>();
+  const formClassByLabel = new Map<string, string | null>();
+  for (const [key, group] of labelForms) {
+    const allUniqueId = group.every((f) => !!f.formId && !nonUniqueIds.has(f.formId));
+    formIdsByLabel.set(key, allUniqueId ? [...new Set(group.map((f) => f.formId!))].sort() : null);
+    const classes = new Set(group.map((f) => pickFormClass(f.formClasses) ?? ''));
+    const uniformClass = !allUniqueId && classes.size === 1 && !classes.has('') && !nonUniqueClasses.has([...classes][0]) ? [...classes][0] : null;
+    formClassByLabel.set(key, uniformClass);
+  }
   return {
-    nonUniqueIds: new Set([...idSigs].filter(([, s]) => s.size > 1).map(([k]) => k)),
-    nonUniqueClasses: new Set([...classSigs].filter(([, s]) => s.size > 1).map(([k]) => k)),
+    nonUniqueIds,
+    nonUniqueClasses,
     pageBySignature,
     pagesBySignature: sigPages,
+    pagesByLabel: labelPages,
+    canonicalLabel,
+    formIdsByLabel,
+    formClassByLabel,
   };
 }
 
