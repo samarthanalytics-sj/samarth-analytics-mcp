@@ -526,12 +526,20 @@ export interface TriggerInput {
   /** For link_click/all_clicks: filter on {{Click URL}}. */
   clickUrlValue?: string;
   clickUrlOperator?: string;
+  /** For a matchRegex click-URL condition: GTM's "matches RegEx (ignore case)" — emitted as the
+   *  condition-level ignore_case parameter (a web container cannot parse an inline (?i) flag). */
+  clickUrlIgnoreCase?: boolean;
   /** For link_click/all_clicks: also filter on {{Click Text}} (e.g. a CTA). */
   clickTextValue?: string;
   clickTextOperator?: string;
   /** For a matchRegex click-text condition: GTM's "matches RegEx (ignore case)" — emitted as the
    *  condition-level ignore_case parameter (a web container cannot parse an inline (?i) flag). */
   clickTextIgnoreCase?: boolean;
+  /** For all_clicks: fire when a companion Lookup Table variable returns "true" — the classic GTM
+   *  grouping pattern (ONE tag for several click texts). The trigger condition is {{<name>}} equals
+   *  "true"; the variable itself (type smm, input {{Click Text}}, each text → "true", exact-match)
+   *  is auto-provisioned by create_gtm_tracking_tag when missing. */
+  lookupTable?: { name: string; texts: string[] };
   /** For all_clicks: fire on any click matching a CSS selector via {{Click Element}} (operator
    *  cssSelector) — e.g. an FAQ accordion header ".faq__q, .faq__q *" so a click on the question text,
    *  the row padding, OR the arrow icon all fire (they are all inside the matched element). */
@@ -580,9 +588,11 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       // wrong array GTM ignores them and the trigger fires on EVERY click.
       const t: GtmTriggerResource = { name: sanitizeName(o.name), type: o.kind === 'link_click' ? 'linkClick' : 'click' };
       const filters: Param[] = [];
-      if (o.clickUrlValue) filters.push(condition('{{Click URL}}', o.clickUrlOperator ?? 'contains', o.clickUrlValue));
+      if (o.clickUrlValue) filters.push(condition('{{Click URL}}', o.clickUrlOperator ?? 'contains', o.clickUrlValue, o.clickUrlIgnoreCase === true));
       if (o.clickTextValue) filters.push(condition('{{Click Text}}', o.clickTextOperator ?? 'contains', o.clickTextValue, o.clickTextIgnoreCase === true));
       if (o.clickElementValue) filters.push(condition('{{Click Element}}', o.clickElementOperator ?? 'cssSelector', o.clickElementValue));
+      // Lookup-table grouping: the condition reads the companion smm variable, not {{Click Text}}.
+      if (o.lookupTable?.name) filters.push(condition(`{{${o.lookupTable.name}}}`, 'equals', 'true'));
       // Page-scoped click trigger (e.g. an FAQ accordion tracked only on its page): a second ANDed
       // {{Page Path}} condition, as real containers do ("Click Text ends with ? AND Page Path contains /faq/").
       if (o.pagePathValue) filters.push(condition('{{Page Path}}', o.pagePathOperator ?? 'contains', o.pagePathValue));
@@ -806,7 +816,8 @@ export function triggerBuiltInVars(o: TriggerInput): string[] {
   const vars: string[] = [];
   if (o.kind === 'link_click' || o.kind === 'all_clicks') {
     if (o.clickUrlValue) vars.push('clickUrl');
-    if (o.clickTextValue) vars.push('clickText');
+    // A lookup-table trigger reads {{Click Text}} through its companion smm variable.
+    if (o.clickTextValue || o.lookupTable?.name) vars.push('clickText');
     if (o.clickElementValue) vars.push('clickElement');
     if (o.pagePathValue) vars.push('pagePath');
   }
@@ -870,6 +881,27 @@ export interface VariableInput {
  *  component QUERY + queryKey). The name is used verbatim so a {{URL - <key>}} reference resolves to it. */
 export function buildUrlQueryVariable(name: string, queryKey: string): GtmVariableResource {
   return { name, type: 'u', parameter: [tpl('component', 'QUERY'), tpl('queryKey', queryKey)] };
+}
+
+/** A Lookup Table variable mapping several exact {{Click Text}} values to "true" — the classic GTM
+ *  grouping pattern (ONE tag/trigger for many related click texts; the trigger fires on
+ *  {{<name>}} equals "true"). Corpus-verified shape (type "smm": setDefaultValue false, input
+ *  {{Click Text}}, map = list of {key,value} rows). Lookup matching is EXACT (case-sensitive), so
+ *  each text variant ("Learn More", "LEARN MORE") is its own row, editable later in GTM. */
+export function buildClickTextLookupVariable(name: string, texts: string[]): GtmVariableResource {
+  return {
+    name,
+    type: 'smm',
+    parameter: [
+      boolean('setDefaultValue', false),
+      tpl('input', '{{Click Text}}'),
+      {
+        type: 'list',
+        key: 'map',
+        list: texts.map((t) => ({ type: 'map', map: [tpl('key', t), tpl('value', 'true')] })),
+      },
+    ],
+  };
 }
 
 export function buildVariable(o: VariableInput): GtmVariableResource {

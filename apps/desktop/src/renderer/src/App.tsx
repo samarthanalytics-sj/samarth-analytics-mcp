@@ -1215,29 +1215,14 @@ interface TagEdit {
   triggerValue?: string;
 }
 
-const CONF_BADGE: Record<'high' | 'medium' | 'low', React.CSSProperties> = {
-  high: { background: 'var(--c-green-bg)', color: 'var(--c-green)', border: '1px solid var(--c-green-border)' },
-  medium: { background: 'var(--c-amber-bg)', color: 'var(--c-amber)', border: '1px solid var(--c-amber-border)' },
-  low: { background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border-2)' },
-};
-
-const TRIGGER_TYPE_LABEL: Record<string, string> = {
-  link_click: 'Link Click (linkClick)',
-  all_clicks: 'All Elements Click (click)',
-  form_submit: 'Form Submission (formSubmission)',
-  custom_event: 'Custom Event (customEvent)',
-  pageview: 'Page View (pageview)',
-  youtube_video: 'YouTube Video (youTubeVideo)',
-};
-const triggerTypeLabel = (kind: string): string => TRIGGER_TYPE_LABEL[kind] ?? kind;
-
 /** Human-readable trigger condition (the filter GTM will apply). */
 function triggerCondition(s: SuggestedTagView): string {
   const t = s.trigger;
   const parts: string[] = [];
-  if (t.clickUrlValue) parts.push(`{{Click URL}} ${t.clickUrlOperator ?? 'contains'} "${t.clickUrlValue}"`);
+  if (t.clickUrlValue) parts.push(`{{Click URL}} ${t.clickUrlOperator ?? 'contains'}${t.clickUrlIgnoreCase ? ' (ignore case)' : ''} "${t.clickUrlValue}"`);
   if (t.clickTextValue) parts.push(`{{Click Text}} ${t.clickTextOperator ?? 'contains'}${t.clickTextIgnoreCase ? ' (ignore case)' : ''} "${t.clickTextValue}"`);
   if (t.clickElementValue) parts.push(`{{Click Element}} matches CSS "${t.clickElementValue}"`);
+  if (t.lookupTable?.name) parts.push(`{{${t.lookupTable.name}}} equals "true" (${t.lookupTable.texts.map((x) => `"${x}"`).join(', ')} → true)`);
   if (t.formIdValue) parts.push(`{{Form ID}} ${t.formIdOperator ?? 'equals'} "${t.formIdValue}"`);
   if (t.formClassesValue) parts.push(`{{Form Classes}} ${t.formClassesOperator ?? 'contains'} "${t.formClassesValue}"`);
   if (t.pagePathValue) parts.push(`{{Page Path}} ${t.pagePathOperator ?? 'equals'} "${t.pagePathValue}"`);
@@ -1438,23 +1423,6 @@ function kindCountsLabel(elements: Array<{ kind: string }>): string {
     .sort((a, b) => b[1] - a[1])
     .map(([k, n]) => `${k} ${n}`)
     .join(' · ');
-}
-
-function EditLine({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-}): JSX.Element {
-  return (
-    <label style={styles.editRow}>
-      <span style={styles.proposalLabel}>{label}</span>
-      <input style={styles.editInput} value={value} onChange={(e) => onChange(e.target.value)} />
-    </label>
-  );
 }
 
 // The grouped "GTM" workspace: one shared account/container/workspace picker
@@ -1800,7 +1768,6 @@ function TagReviewPanel({
   const [warnings, setWarnings] = useState<string[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [edits, setEdits] = useState<Record<string, TagEdit>>({});
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // Suggestion-list filters (search text + type). Display-only: they narrow which rows are SHOWN,
   // never which ids are selected/created.
   const [search, setSearch] = useState('');
@@ -1829,9 +1796,6 @@ function TagReviewPanel({
   // Optional crawl filter (opt-in): hide /blog|/news|/article pages from the discovered list and skip
   // them in the scan. Off by default.
   const [skipBlog, setSkipBlog] = useState(false);
-  // Suggestion display: "cards" (review + create) or "table" (the GTM-structure
-  // template layout, also what the CSV download writes).
-  const [tagView, setTagView] = useState<'cards' | 'table'>('cards');
   const [exportNote, setExportNote] = useState('');
   // The container's existing tags — so suggestions already present are marked
   // "already exists" and skipped (no duplicate-name failure, no wasted API quota).
@@ -1871,7 +1835,6 @@ function TagReviewPanel({
     // and isn't nudged into creating dozens of speculative tags.
     setSelected(Object.fromEntries(list.map((s) => [s.id, !s.enhancedMeasurementOverlap && s.confidence !== 'low'])));
     setEdits({});
-    setExpanded({});
     setStatuses({});
     setConfirming(false);
     setDone(null);
@@ -2646,21 +2609,6 @@ function TagReviewPanel({
                 <button style={styles.linkBtn} onClick={() => setAll((s) => !s.enhancedMeasurementOverlap)}>
                   Select new only
                 </button>
-                {/* Cards = review & create; Table = the GTM-structure template layout. */}
-                <span style={styles.viewToggle}>
-                  <button
-                    style={tagView === 'cards' ? styles.viewToggleOn : styles.viewToggleOff}
-                    onClick={() => setTagView('cards')}
-                  >
-                    Cards
-                  </button>
-                  <button
-                    style={tagView === 'table' ? styles.viewToggleOn : styles.viewToggleOff}
-                    onClick={() => setTagView('table')}
-                  >
-                    Table
-                  </button>
-                </span>
                 <button style={styles.linkBtn} onClick={() => void downloadStructureCsv()}>
                   ⬇ Download CSV
                 </button>
@@ -2719,7 +2667,7 @@ function TagReviewPanel({
                 </div>
               ))}
 
-            {visible.length === 0 ? null : tagView === 'table' ? (
+            {visible.length === 0 ? null : (
               <>
                 <div style={{ ...styles.muted, marginTop: -4 }}>
                   Tick a row to create it in GTM; edit the Tag name, GA4 event, or trigger value inline.
@@ -2734,116 +2682,6 @@ function TagReviewPanel({
                   onEdit={(id, patch) => setEdits((m) => ({ ...m, [id]: { ...m[id], ...patch } }))}
                 />
               </>
-            ) : (
-            <div style={styles.reviewList}>
-              {visible.map((s) => {
-                const st = statuses[s.id];
-                const isSel = !!selected[s.id];
-                const ed = edits[s.id] ?? {};
-                const eff = effective(s);
-                const okRow = st?.state === 'ok';
-                const existsRow = st?.state === 'exists' || alreadyExists(s);
-                const doneRow = okRow || existsRow;
-                return (
-                  <div
-                    key={s.id}
-                    style={{
-                      ...styles.reviewRow,
-                      ...(okRow ? styles.reviewRowOk : {}),
-                      opacity: existsRow || (s.enhancedMeasurementOverlap && !isSel && !okRow) ? 0.6 : 1,
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isSel && !existsRow}
-                      disabled={doneRow || creating}
-                      onChange={(e) => setSelected((sel) => ({ ...sel, [s.id]: e.target.checked }))}
-                      style={{ marginTop: 4 }}
-                    />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={styles.reviewRowHead}>
-                        <span style={{ fontWeight: 600 }}>{eff.tagName}</span>
-                        <span style={{ ...styles.badge, ...CONF_BADGE[s.confidence] }}>{s.confidence}</span>
-                        <span style={styles.typeChip}>{s.platform === 'google_tag' ? 'Google tag' : 'GA4 event'}</span>
-                        {existsRow && <span style={styles.existsChip}>✓ already exists</span>}
-                        {s.enhancedMeasurementOverlap && !existsRow && (
-                          <span style={styles.emChip}>⚠ Enhanced Measurement already tracks this</span>
-                        )}
-                      </div>
-                      <div style={styles.detailGrid}>
-                        <span style={styles.detailKey}>{s.platform === 'google_tag' ? 'Tag ID' : 'Event'}</span>
-                        <span><code style={mdStyles.code}>{s.platform === 'google_tag' ? (s.tagId ?? eff.measurementId) : eff.eventName}</code></span>
-                        <span style={styles.detailKey}>Page</span>
-                        <span>{s.page}</span>
-                        <span style={styles.detailKey}>Tag type</span>
-                        <span>{s.platform === 'google_tag' ? 'Google tag (googtag)' : 'GA4 Event (gaawe)'}</span>
-                        <span style={styles.detailKey}>Trigger</span>
-                        <span>
-                          <b style={{ color: 'var(--text)' }}>{s.trigger.name}</b> · {triggerTypeLabel(s.trigger.kind)}
-                        </span>
-                        <span style={styles.detailKey}>Condition</span>
-                        <span>{triggerCondition(s)}</span>
-                        <span style={styles.detailKey}>Parameters</span>
-                        <span>
-                          {(eff.eventParameters ?? []).length > 0
-                            ? (eff.eventParameters ?? []).map((p, i) => (
-                                <span key={i}>
-                                  {i > 0 ? '  ·  ' : ''}
-                                  <code style={mdStyles.code}>{p.name}</code>={p.value}
-                                </span>
-                              ))
-                            : '—'}
-                        </span>
-                      </div>
-                      <div style={styles.reviewEvidence}>{s.evidence}</div>
-                      {s.note && (
-                        <div style={{ fontSize: 12, marginTop: 4, color: 'var(--c-amber)', display: 'flex', gap: 6 }}>
-                          <span>⚠</span>
-                          <span>{s.note}</span>
-                        </div>
-                      )}
-                      {st && st.state !== 'idle' && (
-                        <div
-                          style={{
-                            fontSize: 12,
-                            marginTop: 4,
-                            color: st.state === 'ok' ? 'var(--c-green)' : st.state === 'err' ? 'var(--c-red)' : st.state === 'exists' ? 'var(--c-cyan)' : 'var(--text-muted)',
-                          }}
-                        >
-                          {st.state === 'creating' ? 'Creating…' : st.state === 'ok' ? `✓ ${st.msg}` : `✗ ${st.msg}`}
-                        </div>
-                      )}
-                      {expanded[s.id] && (
-                        <div style={styles.editGrid}>
-                          <EditLine
-                            label="Tag name"
-                            value={ed.tagName ?? s.tagName}
-                            onChange={(v) => setEdits((m) => ({ ...m, [s.id]: { ...m[s.id], tagName: v } }))}
-                          />
-                          {s.platform !== 'google_tag' && (
-                            <EditLine
-                              label="Event name"
-                              value={ed.eventName ?? s.eventName}
-                              onChange={(v) => setEdits((m) => ({ ...m, [s.id]: { ...m[s.id], eventName: v } }))}
-                            />
-                          )}
-                          <EditLine
-                            label="Measurement ID"
-                            value={ed.measurementId ?? s.measurementId}
-                            onChange={(v) => setEdits((m) => ({ ...m, [s.id]: { ...m[s.id], measurementId: v } }))}
-                          />
-                        </div>
-                      )}
-                    </div>
-                    {!okRow && (
-                      <button style={styles.linkBtn} onClick={() => setExpanded((x) => ({ ...x, [s.id]: !x[s.id] }))}>
-                        {expanded[s.id] ? 'done' : '✎ edit'}
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
             )}
 
             {confirming ? (

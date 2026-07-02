@@ -873,6 +873,24 @@ async function main(): Promise<void> {
     assert.equal(trkParam(out, 'cacheBusterQueryParam'), undefined); // dropped when cache buster is off
   });
 
+  await test('create_tracking_tag (merged variants) auto-provisions the Lookup Table variable + fires on it', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'ga4_event', tagName: 'GA4 - Event - Learn More Click Tag', measurementId: 'G-XYZ', eventName: 'learn_more_click',
+        trigger: { name: 'Learn More Variants Click Trigger', kind: 'all_clicks', lookupTable: { name: 'Lookup - Learn More Variants', texts: ['Learn More', 'LEARN MORE'] } },
+      })
+    );
+    // The companion smm variable is created (missing in the fake container) and reported back.
+    assert.ok(fd.calls.some((c) => c.startsWith('createVar:1:2:3:smm:Lookup - Learn More Variants')), 'created the smm lookup variable');
+    assert.deepEqual(out.createdVariables, ['Lookup - Learn More Variants']);
+    assert.ok(fd.calls.some((c) => c.startsWith('createTrigger')), 'created the variants trigger');
+    // The lookup reads {{Click Text}} — its built-in must be auto-enabled.
+    assert.ok(fd.calls.includes('enableVars:1:2:3:clickText'), 'auto-enabled clickText for the lookup');
+  });
+
   await test('create_gtm_variable_typed builds a Custom JS variable', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, approveAsIs);

@@ -316,10 +316,15 @@ export interface SuggestedTagView {
     kind: string;
     clickUrlValue?: string;
     clickUrlOperator?: string;
+    /** For matchRegex click-URL: GTM's "matches RegEx (ignore case)" condition parameter. */
+    clickUrlIgnoreCase?: boolean;
     clickTextValue?: string;
     clickTextOperator?: string;
     /** For matchRegex click-text: GTM's "matches RegEx (ignore case)" condition parameter. */
     clickTextIgnoreCase?: boolean;
+    /** Companion Lookup Table (type smm, input {{Click Text}}, each text → "true") the trigger fires
+     *  on ({{<name>}} equals "true") — auto-created with the tag when missing. */
+    lookupTable?: { name: string; texts: string[] };
     clickElementValue?: string;
     clickElementOperator?: string;
     formIdValue?: string;

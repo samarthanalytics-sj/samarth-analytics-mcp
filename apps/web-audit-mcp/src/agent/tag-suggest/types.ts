@@ -153,9 +153,16 @@ export interface SuggestedTag {
     kind: TriggerKind;
     clickUrlValue?: string;
     clickUrlOperator?: FilterOp;
+    /** For matchRegex click-URL: GTM's "matches RegEx (ignore case)" condition parameter (a web
+     *  container cannot parse an inline (?i) flag). */
+    clickUrlIgnoreCase?: boolean;
     /** For all_clicks/link_click: also filter on {{Click Text}} (e.g. a CTA). */
     clickTextValue?: string;
     clickTextOperator?: FilterOp;
+    /** For all_clicks: fire when a companion Lookup Table variable returns "true" (the classic GTM
+     *  grouping pattern — ONE tag for several exact click texts). The variable (type smm, input
+     *  {{Click Text}}, each text → "true") is auto-created with the tag when missing. */
+    lookupTable?: { name: string; texts: string[] };
     /** For all_clicks: fire on any click matching a CSS selector via {{Click Element}} (operator
      *  cssSelector) — an FAQ accordion header so a click on the text, the row, or the arrow all fire. */
     clickElementValue?: string;

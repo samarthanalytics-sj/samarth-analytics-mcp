@@ -50,21 +50,25 @@ const merged = mergeGroup(groups[0]);
 // pre-existing one-variant equals trigger.
 check('merged: common tag name from the shared event; trigger gets the distinct "Variants" name',
   merged.tagName === 'GA4 - Event - Learn More Click Tag' && merged.trigger.name === 'Learn More Variants Click Trigger' && mergeLabel('learn_more_click') === 'Learn More');
-// NO inline (?i): gtm.js evaluates web matchRegex with JS RegExp (a bare (?i) is a SyntaxError →
-// silent no-match). Case-insensitivity rides on GTM's condition-level ignore_case instead.
-check('merged: pure case variants FOLD — plain single alternative + ignore_case ON (no inline (?i))',
-  merged.trigger.clickTextValue === '^Learn More$' && merged.trigger.clickTextOperator === 'matchRegex' && merged.trigger.clickTextIgnoreCase === true);
+// The trigger is the classic GTM LOOKUP TABLE grouping pattern (corpus: "CTA Lookup Variable"): each
+// exact variant is its own explicit row (lookup matching is case-sensitive), the condition reads the
+// companion variable — no click-text regex at all.
+check('merged: trigger fires on the companion Lookup Table ({{Lookup - <Label> Variants}} equals true) with each variant an exact row',
+  merged.trigger.lookupTable?.name === 'Lookup - Learn More Variants' &&
+  JSON.stringify(merged.trigger.lookupTable?.texts) === JSON.stringify(['Learn More', 'LEARN MORE']) &&
+  !merged.trigger.clickTextValue && !merged.trigger.clickTextOperator);
 check('merged: keeps the event + kind + a fresh stable id', merged.eventName === 'learn_more_click' && merged.trigger.kind === 'all_clicks' && merged.id === 'merged:learn_more_click:all_clicks');
-check('merged: evidence lists the variants', /"Learn More", "LEARN MORE"/.test(merged.evidence));
+check('merged: evidence lists the variants; note explains the auto-created lookup variable',
+  /"Learn More", "LEARN MORE"/.test(merged.evidence) && /Lookup - Learn More Variants/.test(merged.note ?? ''));
 
-// Genuinely different texts stay as alternatives, regex-escaped.
+// Genuinely different texts each become their own lookup row, verbatim (no escaping needed).
 const diff = findMergeGroups([
   cta('a', 'Learn more'),
   cta('b', 'Find out more? (now)', { trigger: { name: 'T', kind: 'all_clicks', clickTextValue: 'Find out more? (now)', clickTextOperator: 'equals' } }),
 ]);
 const mergedDiff = mergeGroup(diff[0]);
-check('merged: different texts → ^(A|B)$ with regex special chars escaped (ignore_case carries the casing)',
-  mergedDiff.trigger.clickTextValue === '^(Learn more|Find out more\\? \\(now\\))$' && mergedDiff.trigger.clickTextIgnoreCase === true);
+check('merged: different texts → one lookup row per text, verbatim (regex specials stay literal)',
+  JSON.stringify(mergedDiff.trigger.lookupTable?.texts) === JSON.stringify(['Learn more', 'Find out more? (now)']));
 
 // Page + confidence + EM semantics.
 const cross = mergeGroup(findMergeGroups([cta('a', 'Learn More', { page: '/x' }), cta('b', 'LEARN MORE', { page: '/y', confidence: 'high' })])[0]);
