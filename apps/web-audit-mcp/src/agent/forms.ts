@@ -39,6 +39,9 @@ export interface RawForm {
   hasPrivacyLink: boolean;
   /** Lower-cased visible text of the form, capped — for keyword scans. */
   text: string;
+  /** True when the form is not rendered at scan time (display:none / visibility:hidden — typically a
+   *  modal/popup form that opens on a button click, e.g. a "Book a demo" Marketo modal). */
+  hidden?: boolean;
 }
 
 /** Serialized by Playwright/Electron and executed in the page. Self-contained.
@@ -92,6 +95,34 @@ export function extractFormsInPage(): RawForm[] {
       if (f) fields.push(f);
     }
     return fields;
+  };
+  // Like fieldsIn, but EXCLUDING fields that belong to a real <form> descendant — those are already
+  // captured as native forms in step 1. Without this, a modal wrapper that CONTAINS a <form> plus an
+  // outside "Book a demo" button would be re-detected as a second, phantom div-form of the same fields.
+  const fieldsOutsideForm = (root: Element): RawFormField[] => {
+    const fields: RawFormField[] = [];
+    // Cap on COLLECTED fields (not on the raw query) — a 50+-field <form> earlier in document order
+    // must not blind the detector to a genuinely separate div-form after it.
+    for (const el of Array.from(root.querySelectorAll('input, select, textarea'))) {
+      if (fields.length >= MAX_FIELDS) break;
+      if (el.closest('form')) continue;
+      const f = fieldOf(el);
+      if (f) fields.push(f);
+    }
+    return fields;
+  };
+  // Not rendered at scan time: display:none (self or ancestor) collapses the box; visibility:hidden is
+  // inherited into the computed style. Typically a modal/popup form that opens on a button click.
+  const hiddenOf = (el: Element): boolean => {
+    try {
+      const view = el.ownerDocument && el.ownerDocument.defaultView;
+      const r = el.getBoundingClientRect();
+      // A display:contents box is 0x0 while its children render normally — not hidden.
+      if (r.width === 0 && r.height === 0) return view ? view.getComputedStyle(el).display !== 'contents' : true;
+      return view ? view.getComputedStyle(el).visibility === 'hidden' : false;
+    } catch {
+      return false;
+    }
   };
   const privacyIn = (root: Element): boolean =>
     Boolean(root.querySelector('a[href*="privacy"], a[href*="datenschutz"], a[href*="confidentialite"], a[href*="privacidad"], a[href*="cookie-policy"]'));
@@ -150,6 +181,7 @@ export function extractFormsInPage(): RawForm[] {
         fields,
         hasPrivacyLink: privacyIn(form),
         text: (form.textContent || '').toLowerCase().replace(/\s+/g, ' ').slice(0, 1500),
+        ...(hiddenOf(form) ? { hidden: true } : {}),
       });
     }
     // 2. div/JS "forms": a non-<form> container with input field(s) + a submit-
@@ -170,7 +202,7 @@ export function extractFormsInPage(): RawForm[] {
       let node: Element | null = btn.parentElement;
       for (let i = 0; node && i < 10; i++, node = node.parentElement) {
         if (node.tagName === 'FORM') break;
-        if (fieldsIn(node).length >= 1) {
+        if (fieldsOutsideForm(node).length >= 1) {
           host = node;
           break;
         }
@@ -178,7 +210,7 @@ export function extractFormsInPage(): RawForm[] {
       if (!host || host.closest('form')) continue;
       // Skip overlapping hosts (nested clusters resolving to the same widget).
       if (seen.some((h) => h.contains(host!) || host!.contains(h))) continue;
-      const fields = fieldsIn(host);
+      const fields = fieldsOutsideForm(host);
       if (!fields.some((f) => TEXTISH.has(f.type))) continue;
       seen.push(host);
       out.push({
@@ -193,6 +225,7 @@ export function extractFormsInPage(): RawForm[] {
         fields,
         hasPrivacyLink: privacyIn(host),
         text: ((host.textContent || '') + ' ' + label).toLowerCase().replace(/\s+/g, ' ').slice(0, 1500),
+        ...(hiddenOf(host) ? { hidden: true } : {}),
       });
     }
     // 3. Field-CLUSTER "forms": catch a form whose submit control is a plain <div onClick> (no
@@ -210,14 +243,14 @@ export function extractFormsInPage(): RawForm[] {
       let node: Element | null = fld.parentElement;
       for (let i = 0; node && i < 10; i++, node = node.parentElement) {
         if (node.tagName === 'FORM') break;
-        if (fieldsIn(node).filter((f) => TEXTISH.has(f.type)).length >= 2) {
+        if (fieldsOutsideForm(node).filter((f) => TEXTISH.has(f.type)).length >= 2) {
           host = node;
           break;
         }
       }
       if (!host || host.closest('form')) continue;
       if (seen.some((h) => h.contains(host!) || host!.contains(h))) continue;
-      const fields = fieldsIn(host);
+      const fields = fieldsOutsideForm(host);
       const textish = fields.filter((f) => TEXTISH.has(f.type));
       if (!(textish.some((f) => f.type === 'email' || f.type === 'textarea') || textish.length >= 3)) continue;
       seen.push(host);
@@ -233,6 +266,7 @@ export function extractFormsInPage(): RawForm[] {
         fields,
         hasPrivacyLink: privacyIn(host),
         text: (host.textContent || '').toLowerCase().replace(/\s+/g, ' ').slice(0, 1500),
+        ...(hiddenOf(host) ? { hidden: true } : {}),
       });
     }
   };
@@ -310,6 +344,8 @@ export interface FormAnalysis {
   hasConsentCheckbox: boolean;
   hasPrivacyLink: boolean;
   issues: FormIssue[];
+  /** Not rendered at scan time (a modal/popup form that opens on a click). */
+  hidden?: boolean;
 }
 
 export function classifyFieldPii(field: RawFormField): PiiCategory | null {
@@ -441,6 +477,7 @@ export function analyzeForms(rawForms: RawForm[], pageUrl: string): FormAnalysis
       hasConsentCheckbox,
       hasPrivacyLink: form.hasPrivacyLink,
       issues,
+      ...(form.hidden ? { hidden: true } : {}),
     };
   });
 }

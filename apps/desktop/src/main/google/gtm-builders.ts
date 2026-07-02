@@ -583,6 +583,9 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       if (o.clickUrlValue) filters.push(condition('{{Click URL}}', o.clickUrlOperator ?? 'contains', o.clickUrlValue));
       if (o.clickTextValue) filters.push(condition('{{Click Text}}', o.clickTextOperator ?? 'contains', o.clickTextValue, o.clickTextIgnoreCase === true));
       if (o.clickElementValue) filters.push(condition('{{Click Element}}', o.clickElementOperator ?? 'cssSelector', o.clickElementValue));
+      // Page-scoped click trigger (e.g. an FAQ accordion tracked only on its page): a second ANDed
+      // {{Page Path}} condition, as real containers do ("Click Text ends with ? AND Page Path contains /faq/").
+      if (o.pagePathValue) filters.push(condition('{{Page Path}}', o.pagePathOperator ?? 'contains', o.pagePathValue));
       if (filters.length) t.filter = filters;
       return t;
     }
@@ -805,6 +808,7 @@ export function triggerBuiltInVars(o: TriggerInput): string[] {
     if (o.clickUrlValue) vars.push('clickUrl');
     if (o.clickTextValue) vars.push('clickText');
     if (o.clickElementValue) vars.push('clickElement');
+    if (o.pagePathValue) vars.push('pagePath');
   }
   if (o.kind === 'form_submit') {
     if (o.formIdValue) vars.push('formId');

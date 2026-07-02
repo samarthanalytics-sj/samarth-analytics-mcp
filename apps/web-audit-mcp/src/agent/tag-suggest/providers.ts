@@ -45,7 +45,17 @@ const SIGNATURES: Signature[] = [
   { vendor: 'gravityforms', test: (s) => (hasClass(s, 'gform_wrapper') ? 'class .gform_wrapper' : null) },
   { vendor: 'contactform7', test: (s) => (hasClass(s, 'wpcf7') || hasClass(s, 'wpcf7-form') ? 'class .wpcf7' : null) },
   { vendor: 'wpforms', test: (s) => (hasClass(s, 'wpforms-form') || hasClass(s, 'wpforms-container') ? 'class .wpforms-form' : null) },
-  { vendor: 'marketo', test: (s) => (s.selectorsPresent.some((x) => /^#mktoForm_\d/.test(x)) ? 'id #mktoForm_*' : null) },
+  {
+    vendor: 'marketo',
+    // A Marketo form rendered without the #mktoForm_<n> id still carries class .mktoForm; the forms2
+    // loader script (app-*.marketo.com/js/forms2/…) is a further page-level marker.
+    test: (s) =>
+      (s.selectorsPresent.some((x) => /^#mktoForm_\d/.test(x)) ? 'id #mktoForm_*' : null) ??
+      (hasClass(s, 'mktoForm') ? 'class .mktoForm' : null) ??
+      // The forms2 LOADER only — munchkin.js is the analytics tracker, loaded site-wide without any
+      // form, and must not flip unrelated forms to provider=marketo.
+      some(s.scriptSrcs, /\.marketo\.(com|net)\/js\/forms2\//i),
+  },
   {
     vendor: 'pardot',
     test: (s, action) =>
@@ -89,7 +99,9 @@ const FORM_EMBED: Signature[] = [
       (hasClass(s, 'paperform') || hasSel(s, '[data-paperform-id]') ? 'paperform embed' : null) ??
       some(s.iframeSrcs ?? [], /paperform\.co/i),
   },
-  { vendor: 'marketo', test: (s) => (s.selectorsPresent.some((x) => /^#mktoForm_\d/.test(x)) ? 'id #mktoForm_*' : null) },
+  // class .mktoForm means a rendered Marketo form ELEMENT exists (not just the tracking script), so it
+  // is a safe embed marker; a bare marketo script src is NOT (munchkin.js loads without a form).
+  { vendor: 'marketo', test: (s) => (s.selectorsPresent.some((x) => /^#mktoForm_\d/.test(x)) ? 'id #mktoForm_*' : null) ?? (hasClass(s, 'mktoForm') ? 'class .mktoForm' : null) },
   { vendor: 'mailchimp', test: (s, a) => (/list-manage\.com/i.test(a) ? 'action list-manage.com' : null) ?? (hasSel(s, '#mce-EMAIL') || hasSel(s, '#mc-embedded-subscribe') ? 'mailchimp id' : null) },
   { vendor: 'gravityforms', test: (s) => (hasClass(s, 'gform_wrapper') ? 'class .gform_wrapper' : null) },
   { vendor: 'contactform7', test: (s) => (hasClass(s, 'wpcf7') || hasClass(s, 'wpcf7-form') ? 'class .wpcf7' : null) },

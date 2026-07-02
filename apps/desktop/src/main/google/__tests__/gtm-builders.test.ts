@@ -252,6 +252,18 @@ test('all_clicks trigger: matchRegex + clickTextIgnoreCase emits the condition-l
   assert.equal(pf.parameter.find((p) => p.key === 'ignore_case'), undefined);
 });
 
+test('all_clicks trigger: {{Page Path}} is a second ANDed condition on a page-scoped click (FAQ pattern) + needs pagePath var', () => {
+  const tr = buildTrigger({ name: 'FAQ Click Trigger', kind: 'all_clicks', clickTextValue: '?', clickTextOperator: 'endsWith', pagePathValue: '/faq', pagePathOperator: 'contains' });
+  const filters = (tr.filter ?? []) as Array<{ type: string; parameter: Array<Record<string, unknown>> }>;
+  assert.equal(filters.length, 2); // Click Text ends with "?" AND Page Path contains /faq — one trigger
+  assert.equal(filters[0].type, 'endsWith');
+  assert.equal(filters[0].parameter.find((p) => p.key === 'arg0')?.value, '{{Click Text}}');
+  assert.equal(filters[1].type, 'contains');
+  assert.equal(filters[1].parameter.find((p) => p.key === 'arg0')?.value, '{{Page Path}}');
+  assert.equal(filters[1].parameter.find((p) => p.key === 'arg1')?.value, '/faq');
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'all_clicks', clickTextValue: '?', pagePathValue: '/faq' }), ['clickText', 'pagePath']);
+});
+
 test('all_clicks trigger: {{Click Element}} cssSelector filter (FAQ accordion — fires on text/row/arrow) + needs clickElement var', () => {
   const tr = buildTrigger({ name: 'FAQ Click Trigger', kind: 'all_clicks', clickElementValue: '.faq-q, .faq-q *', clickElementOperator: 'cssSelector' });
   assert.equal(tr.type, 'click');

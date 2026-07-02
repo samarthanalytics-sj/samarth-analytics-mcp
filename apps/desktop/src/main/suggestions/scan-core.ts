@@ -184,6 +184,7 @@ async function scanTarget(
     formClasses: f.formClasses,
     title: f.title,
     fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })),
+    hidden: f.hidden,
   }));
   const links: string[] = [];
   for (const el of driven.raw.elements) {
@@ -214,6 +215,7 @@ function ctaTriggerFiresOn(trigger: SuggestedTag['trigger'], text: string): bool
   }
   if (trigger.clickTextOperator === 'contains') return text.toLowerCase().includes(v.toLowerCase());
   if (trigger.clickTextOperator === 'equals') return text.trim().toLowerCase() === v.trim().toLowerCase();
+  if (trigger.clickTextOperator === 'endsWith') return text.trim().toLowerCase().endsWith(v.trim().toLowerCase());
   return false;
 }
 
@@ -238,6 +240,10 @@ export function dropAiSuggestion(a: SuggestedTag, engine: SuggestedTag[]): boole
   if (COOKIE_BANNER_RE.test(`${a.tagName} ${a.eventName} ${a.trigger.clickTextValue ?? ''}`.replace(/_/g, ' '))) return true;
   if (a.trigger.kind === 'all_clicks' && !a.trigger.clickTextValue && !a.trigger.clickUrlValue) return true;
   if (AI_GLOBAL_EVENTS.has(a.eventName) && engine.some((e) => e.eventName === a.eventName)) return true;
+  // The engine's single FAQ tag (one trigger covering the question text/row/arrow) already covers any
+  // per-question AI tag — its class-route trigger has no click-text condition, so ctaTriggerFiresOn
+  // can't see the coverage; match on the question shape instead.
+  if (/\?\s*$/.test(a.trigger.clickTextValue ?? '') && engine.some((e) => e.eventName === 'faq_click')) return true;
   if (a.trigger.kind === 'all_clicks' && a.trigger.clickTextOperator !== 'matchRegex' && a.trigger.clickTextValue) {
     return engine.some((e) => e.trigger.kind === 'all_clicks' && ctaTriggerFiresOn(e.trigger, a.trigger.clickTextValue ?? ''));
   }
@@ -258,6 +264,7 @@ export function pageScanFromDriven(driven: DrivenPage, url: string, siteHost: st
     formClasses: f.formClasses,
     title: f.title,
     fields: f.fields.map((x) => ({ type: x.type, name: x.name, required: x.required })),
+    hidden: f.hidden,
   }));
   return { page: path, elements, forms, signals: driven.raw.signals };
 }

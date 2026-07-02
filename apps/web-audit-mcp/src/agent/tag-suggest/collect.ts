@@ -274,6 +274,7 @@ export interface PageScan {
     formClasses?: string;
     title?: string;
     fields?: FormFieldSummary[];
+    hidden?: boolean;
   }>;
   signals: PageSignals;
 }
@@ -300,6 +301,7 @@ export function buildSuggestInput(pages: PageScan[], siteHost: string): SuggestI
         formClasses: f.formClasses,
         title: f.title,
         fields: f.fields,
+        hidden: f.hidden,
       });
     }
     // A provider form is EMBEDDED (often a cross-origin iframe whose fields we can't
