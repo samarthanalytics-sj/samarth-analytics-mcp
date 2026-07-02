@@ -27,6 +27,7 @@ import {
   buildAdsRemarketingServerTag,
   buildAllowParamsTransformation,
   buildServerAllEventsTrigger,
+  buildServerEventTrigger,
   buildMetaPixelTag,
   buildMetaCapiServerTag,
   metaStandardEvent,
@@ -1294,20 +1295,21 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_variable_typed',
       description:
-        'Create a GTM variable with the correct structure (you do not write raw JSON). kind: "constant" (value), "data_layer" (dataLayerName), "javascript" (javascript — a Custom JavaScript variable, e.g. "function(){return document.title;}" for page title), or "event_data" (SERVER container only — reads keyPath from the incoming event, e.g. keyPath "items" or "x-ga-mp1-tt"; optional defaultValue). Requires accountId, containerId, workspaceId, kind, name.',
+        'Create a GTM variable with the correct structure (you do not write raw JSON). kind: "constant" (value), "data_layer" (dataLayerName), "javascript" (javascript — a Custom JavaScript variable, e.g. "function(){return document.title;}" for page title), "event_data" (SERVER container only — reads keyPath from the incoming event, e.g. keyPath "items" or "x-ga-mp1-tt"; optional defaultValue), or "request_header" (SERVER container only — reads one HTTP header off the request via headerName, e.g. "X-Geo-Country" / "X-Device-Os" that the tagging host injects). Requires accountId, containerId, workspaceId, kind, name.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          kind: { type: 'string', enum: ['constant', 'data_layer', 'javascript', 'event_data'] },
+          kind: { type: 'string', enum: ['constant', 'data_layer', 'javascript', 'event_data', 'request_header'] },
           name: { type: 'string' },
           value: { type: 'string' },
           dataLayerName: { type: 'string' },
           javascript: { type: 'string' },
           keyPath: { type: 'string' },
           defaultValue: { type: 'string' },
+          headerName: { type: 'string', description: 'request_header only — the HTTP header to read, e.g. "X-Geo-Country".' },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'kind', 'name'],
         additionalProperties: false,
@@ -1328,6 +1330,7 @@ export function buildToolRegistry(
             javascript: a.javascript != null ? s(a.javascript) : undefined,
             keyPath: a.keyPath != null ? s(a.keyPath) : undefined,
             defaultValue: a.defaultValue != null ? s(a.defaultValue) : undefined,
+            headerName: a.headerName != null ? s(a.headerName) : undefined,
           }) as unknown as Record<string, unknown>
         ),
     },
@@ -1591,7 +1594,7 @@ export function buildToolRegistry(
     {
       name: 'create_server_trigger',
       description:
-        'Create the firing trigger for a SERVER container — a Custom Event trigger that fires on ALL events, optionally SCOPED to a client via "Client Name equals <clientName>". Use THIS (not create_gtm_trigger) for server triggers — it builds the exact customEvent shape GTM requires (a {{_event}} match-all custom-event filter plus the optional Client Name filter), which is easy to get wrong by hand. When clientName is given it also enables the Client Name built-in so the filter resolves. Requires accountId, containerId, workspaceId, name; optional clientName (e.g. "GA4").',
+        'Create the firing trigger for a SERVER container — a Custom Event trigger, optionally SCOPED to a client via "Client Name equals <clientName>". Pass `eventName` to fire on ONE specific event ("{{_event}} equals purchase" — the dominant server pattern, e.g. to fire a GA4 Purchase or Ads Purchase conversion tag only on the purchase event); OMIT eventName to fire on ALL events (a base/relay trigger). Use THIS (not create_gtm_trigger) for server triggers — it builds the exact customEvent shape GTM requires ({{_event}} filter + the optional Client Name filter), which is easy to get wrong by hand. When clientName is given it also enables the Client Name built-in so the filter resolves. Requires accountId, containerId, workspaceId, name; optional eventName, clientName (e.g. "GA4").',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1599,17 +1602,19 @@ export function buildToolRegistry(
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
           name: { type: 'string' },
-          clientName: { type: 'string', description: 'Scope the trigger to this client (Client Name equals …). Omit to fire on all events.' },
+          eventName: { type: 'string', description: 'Fire only on this event ({{_event}} equals <eventName>, e.g. "purchase"). Omit to fire on all events.' },
+          clientName: { type: 'string', description: 'Scope the trigger to this client (Client Name equals …). Omit to fire on all events regardless of client.' },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'name'],
         additionalProperties: false,
       },
       write: true,
       summarize: (a) =>
-        `Create server trigger "${s(a.name)}"${s(a.clientName) ? ` scoped to Client Name = ${s(a.clientName)}` : ' (all events)'} in workspace ${s(a.workspaceId)}`,
+        `Create server trigger "${s(a.name)}"${s(a.eventName) ? ` on event "${s(a.eventName)}"` : ' (all events)'}${s(a.clientName) ? ` scoped to Client Name = ${s(a.clientName)}` : ''} in workspace ${s(a.workspaceId)}`,
       precheck: (a) => findExistingByName(data, a, s(a.name), 'trigger'),
       handler: async (a) => {
         const clientName = a.clientName != null ? s(a.clientName) : '';
+        const eventName = a.eventName != null ? s(a.eventName).trim() : '';
         if (clientName) {
           // Enable the Client Name built-in so {{Client Name}} resolves (best-effort).
           try {
@@ -1618,7 +1623,9 @@ export function buildToolRegistry(
             /* non-fatal */
           }
         }
-        const trigger = buildServerAllEventsTrigger(s(a.name), clientName || undefined);
+        const trigger = eventName
+          ? buildServerEventTrigger(s(a.name), eventName, clientName || undefined)
+          : buildServerAllEventsTrigger(s(a.name), clientName || undefined);
         return data.createGtmTrigger(s(a.accountId), s(a.containerId), s(a.workspaceId), trigger as unknown as Record<string, unknown>);
       },
     },

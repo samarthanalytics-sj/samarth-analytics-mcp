@@ -21,6 +21,7 @@ import {
   buildGa4Client,
   buildGa4ServerTag,
   buildServerAllEventsTrigger,
+  buildServerEventTrigger,
   buildMetaEmqVariables,
   buildMetaPixelTag,
   buildMetaCapiServerTag,
@@ -1163,6 +1164,28 @@ test('buildServerAllEventsTrigger scoped to a client → {{Client Name}} equals 
   assert.equal(f[0].type, 'equals');
   assert.equal(f[0].parameter.find((x) => x.key === 'arg0')?.value, '{{Client Name}}');
   assert.equal(f[0].parameter.find((x) => x.key === 'arg1')?.value, 'GA4');
+});
+
+test('buildServerEventTrigger → CUSTOM_EVENT on ONE event ({{_event}} equals purchase) + client scope', () => {
+  const tr = buildServerEventTrigger('ga4 - purchase', 'purchase', 'GA4');
+  assert.equal(tr.type, 'customEvent');
+  const cef = (tr.customEventFilter ?? []) as Array<{ type: string; parameter: Array<{ key: string; value: string }> }>;
+  assert.equal(cef.length, 1);
+  assert.equal(cef[0].type, 'equals'); // the corpus-dominant per-event pattern (not matchRegex .*)
+  assert.equal(cef[0].parameter.find((x) => x.key === 'arg0')?.value, '{{_event}}');
+  assert.equal(cef[0].parameter.find((x) => x.key === 'arg1')?.value, 'purchase');
+  const f = (tr.filter ?? []) as Array<{ type: string; parameter: Array<{ key: string; value: string }> }>;
+  assert.equal(f[0].parameter.find((x) => x.key === 'arg0')?.value, '{{Client Name}}');
+  assert.equal(f[0].parameter.find((x) => x.key === 'arg1')?.value, 'GA4');
+  // No client → no filter.
+  assert.equal(buildServerEventTrigger('t', 'purchase').filter, undefined);
+});
+
+test('buildVariable request_header → server rh variable reading one HTTP header', () => {
+  const v = buildVariable({ name: 'X-Geo-Country', kind: 'request_header', headerName: 'X-Geo-Country' });
+  assert.equal(v.type, 'rh');
+  assert.equal((v.parameter ?? []).length, 1);
+  assert.equal(findParam(v.parameter ?? [], 'headerName')?.value, 'X-Geo-Country');
 });
 
 test('upsertGoogleTagConfig adds server_container_url, preserves other settings, updates in place', () => {
