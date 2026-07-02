@@ -1,3 +1,9 @@
+## [1.136.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.135.0...v1.136.0) (2026-07-02)
+
+### Features
+
+* **desktop:** GA4 audit brain conforms to the pass-gated reference spec ([9826c1a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9826c1a95876d4cb62706efe94a61acf80787a93))
+
 ## [1.135.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.134.0...v1.135.0) (2026-07-02)
 
 ### Features
