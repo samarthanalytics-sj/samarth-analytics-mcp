@@ -18,6 +18,7 @@ import {
   buildVariable,
   buildUrlQueryVariable,
   buildClickTextLookupVariable,
+  buildLookupTableVariable,
   findExistingTrigger,
   customEventNameOf,
   buildGa4ServerTag,
@@ -1035,6 +1036,20 @@ export function buildToolRegistry(
             type: 'array',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } } },
           },
+          eventParamLookups: {
+            type: 'array',
+            description: 'Companion Lookup Table variables an event parameter value references by {{variableName}} (e.g. form_name = {{Lookup - X Form Name}} keyed on {{Page Path}}). Each is auto-created (type smm) when missing; the input built-in is auto-enabled.',
+            items: {
+              type: 'object',
+              properties: {
+                variableName: { type: 'string' },
+                input: { type: 'string' },
+                rows: { type: 'array', items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'string' } }, required: ['key', 'value'] } },
+                defaultValue: { type: 'string' },
+              },
+              required: ['variableName', 'input', 'rows'],
+            },
+          },
           tagId: { type: 'string' },
           configSettings: {
             type: 'array',
@@ -1171,6 +1186,21 @@ export function buildToolRegistry(
           eventName: ts.eventName != null ? s(ts.eventName) : undefined,
         };
 
+        // Companion Lookup Table variables an event parameter references (e.g. a per-page form_name):
+        // normalize now so their INPUT built-in ({{Page Path}}) is enabled and the smm var provisioned.
+        const paramLookups = (Array.isArray(a.eventParamLookups) ? a.eventParamLookups : [])
+          .map((l) => {
+            const o = obj(l);
+            const variableName = s(o.variableName).trim();
+            const input = s(o.input).trim();
+            const rows = Array.isArray(o.rows)
+              ? o.rows.map((r) => ({ key: s(obj(r).key), value: s(obj(r).value) })).filter((r) => r.key !== '' && r.value !== '')
+              : [];
+            const defaultValue = o.defaultValue != null ? s(o.defaultValue) : undefined;
+            return { variableName, input, rows, defaultValue };
+          })
+          .filter((l) => l.variableName && l.input && l.rows.length);
+
         // Enable EXACTLY the built-in variables this tag needs: the trigger's,
         // plus any referenced by the event/config parameter VALUES (e.g. an
         // eventSettingsTable value of "{{Click Text}}" needs the Click Text
@@ -1179,6 +1209,7 @@ export function buildToolRegistry(
           a.eventName != null ? s(a.eventName) : undefined, // e.g. "video_{{Video Status}}" → enable Video Status
           ...(Array.isArray(a.eventParameters) ? a.eventParameters.map((p) => s(obj(p).value)) : []),
           ...(Array.isArray(a.configSettings) ? a.configSettings.map((p) => s(obj(p).value)) : []),
+          ...paramLookups.map((l) => l.input), // {{Page Path}} on the lookup's input → enable that built-in
         ];
         const vars = Array.from(
           new Set([
@@ -1205,7 +1236,7 @@ export function buildToolRegistry(
           for (const m of String(val ?? '').matchAll(/\{\{(URL - [^}]+)\}\}/g)) urlVarNames.add(m[1]);
         }
         const createdVariables: string[] = [];
-        if (urlVarNames.size || triggerInput.lookupTable) {
+        if (urlVarNames.size || triggerInput.lookupTable || paramLookups.length) {
           const existingVarNames = new Set(
             (await data.listGtmVariables(accountId, containerId, workspaceId)).map((v) => v.name.toLowerCase())
           );
@@ -1225,6 +1256,16 @@ export function buildToolRegistry(
               await data.createGtmVariable(accountId, containerId, workspaceId, buildClickTextLookupVariable(lt.name, lt.texts) as unknown as Record<string, unknown>);
               createdVariables.push(lt.name);
             } catch { /* best-effort: the trigger still references it; the user can create it in GTM */ }
+          }
+          // Companion Lookup Table variables an event parameter references (e.g. a per-page form_name:
+          // {{Page Path}} → name). Created only when missing; never overwrites an existing variable.
+          for (const l of paramLookups) {
+            if (existingVarNames.has(l.variableName.toLowerCase())) continue;
+            try {
+              await data.createGtmVariable(accountId, containerId, workspaceId, buildLookupTableVariable(l.variableName, l.input, l.rows, l.defaultValue) as unknown as Record<string, unknown>);
+              createdVariables.push(l.variableName);
+              existingVarNames.add(l.variableName.toLowerCase()); // de-dupe if two params share one lookup
+            } catch { /* best-effort: the tag still references it; the user can create it in GTM */ }
           }
         }
 

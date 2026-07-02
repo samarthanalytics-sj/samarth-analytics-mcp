@@ -148,6 +148,15 @@ export interface SuggestedTag {
   configSettings?: Array<{ name: string; value: string }>;
   eventName: string;
   eventParameters?: Array<{ name: string; value: string }>;
+  /** Companion Lookup Table variable(s) an event parameter VALUE references by {{name}} (e.g.
+   *  form_name = {{Lookup - X Form Name}} keyed on {{Page Path}}, so ONE multi-page form tag records a
+   *  per-page form name). Each is auto-created (type smm) with the tag when missing. */
+  eventParamLookups?: Array<{
+    variableName: string;
+    input: string; // e.g. '{{Page Path}}'
+    rows: Array<{ key: string; value: string }>;
+    defaultValue?: string;
+  }>;
   trigger: {
     name: string;
     kind: TriggerKind;
