@@ -465,10 +465,14 @@ export function buildAdsRemarketingServerTag(name: string, conversionId: string,
 /* ───────────── Triggers ───────────── */
 
 const FILTER_OPS = new Set(['equals', 'contains', 'startsWith', 'endsWith', 'matchRegex', 'cssSelector', 'greater', 'less']);
-function condition(variable: string, op: string, value: string): Param {
+// ignoreCase emits GTM's condition-level ignore_case parameter ("matches RegEx (ignore case)") — the
+// mechanism real containers use (corpus: 812 conditions across 168/562 files). gtm.js evaluates web
+// matchRegex with the browser's JS RegExp, which CANNOT parse an inline (?i) flag (SyntaxError →
+// silent no-match), so an inline flag must never be baked into arg1.
+function condition(variable: string, op: string, value: string, ignoreCase?: boolean): Param {
   return {
     type: FILTER_OPS.has(op) ? op : 'contains',
-    parameter: [tpl('arg0', variable), tpl('arg1', value)],
+    parameter: [tpl('arg0', variable), tpl('arg1', value), ...(ignoreCase ? [boolean('ignore_case', true)] : [])],
   };
 }
 
@@ -525,6 +529,9 @@ export interface TriggerInput {
   /** For link_click/all_clicks: also filter on {{Click Text}} (e.g. a CTA). */
   clickTextValue?: string;
   clickTextOperator?: string;
+  /** For a matchRegex click-text condition: GTM's "matches RegEx (ignore case)" — emitted as the
+   *  condition-level ignore_case parameter (a web container cannot parse an inline (?i) flag). */
+  clickTextIgnoreCase?: boolean;
   /** For all_clicks: fire on any click matching a CSS selector via {{Click Element}} (operator
    *  cssSelector) — e.g. an FAQ accordion header ".faq__q, .faq__q *" so a click on the question text,
    *  the row padding, OR the arrow icon all fire (they are all inside the matched element). */
@@ -574,7 +581,7 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       const t: GtmTriggerResource = { name: sanitizeName(o.name), type: o.kind === 'link_click' ? 'linkClick' : 'click' };
       const filters: Param[] = [];
       if (o.clickUrlValue) filters.push(condition('{{Click URL}}', o.clickUrlOperator ?? 'contains', o.clickUrlValue));
-      if (o.clickTextValue) filters.push(condition('{{Click Text}}', o.clickTextOperator ?? 'contains', o.clickTextValue));
+      if (o.clickTextValue) filters.push(condition('{{Click Text}}', o.clickTextOperator ?? 'contains', o.clickTextValue, o.clickTextIgnoreCase === true));
       if (o.clickElementValue) filters.push(condition('{{Click Element}}', o.clickElementOperator ?? 'cssSelector', o.clickElementValue));
       if (filters.length) t.filter = filters;
       return t;
