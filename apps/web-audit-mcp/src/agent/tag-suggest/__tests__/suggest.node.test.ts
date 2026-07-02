@@ -104,20 +104,58 @@ check('form: evidence lists the field signature', /fields: email, message/.test(
 const formInstanceClass = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/c', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'row gform_1 gform_wrapper', fields: [{ type: 'email', name: 'email', required: true }] }], elements: [] });
 check('form: instance class gform_1 → {{Form Classes}} contains (skips "row"/"gform_wrapper")', formInstanceClass[0].trigger.formClassesValue === 'gform_1' && formInstanceClass[0].trigger.formClassesOperator === 'contains');
 
-// A SHARED framework wrapper class (wpcf7-form, bare "form") is NOT used to scope. When the same
-// form (no usable id/class) appears on MULTIPLE pages it is site-wide → stays unscoped, the catch-all
-// covers it. (A single-page no-id form is page-scoped instead — see the "full:" cases below.)
+// A SHARED framework wrapper class (wpcf7-form, bare "form") is NOT used to scope. The SAME form (no
+// usable id/class) on MULTIPLE pages becomes ONE tag scoped by a {{Page Path}} RegEx over exactly its
+// pages (not the site-wide every-form catch-all), and every per-page instance dedups into it.
 const formWrapperClass = buildSuggestions({ siteHost: 'a.com', forms: [
   { page: '/c', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'wpcf7-form form', fields: [{ type: 'email', name: 'email', required: true }] },
   { page: '/d', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'wpcf7-form form', fields: [{ type: 'email', name: 'email', required: true }] },
 ], elements: [] });
-check('form: wrapper class (wpcf7-form/"form") is NOT used; site-wide form stays unscoped + "every form" note', !formWrapperClass[0].trigger.formClassesValue && !formWrapperClass[0].trigger.pagePathValue && /every form submit/i.test(formWrapperClass[0].note ?? ''));
+const fwc = formWrapperClass.find((s) => s.eventName === 'contact_form')!;
+check('form: wrapper class NOT used; same form on 2 pages → ONE tag scoped by {{Page Path}} matchRegex over its pages',
+  formWrapperClass.filter((s) => s.eventName === 'contact_form').length === 1 && !fwc.trigger.formClassesValue && fwc.trigger.pagePathOperator === 'matchRegex' && /\/c/.test(fwc.trigger.pagePathValue ?? '') && /\/d/.test(fwc.trigger.pagePathValue ?? ''));
 
 const formNoScope = buildSuggestions({ siteHost: 'a.com', forms: [
   { page: '/c', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'row container', fields: [] },
   { page: '/d', purpose: 'contact', action: '', provider: prov0, method: 'post', formClasses: 'row container', fields: [] },
 ], elements: [] });
-check('form: no id/class on multiple pages → note that it fires on EVERY form submit', !formNoScope[0].trigger.formIdValue && !formNoScope[0].trigger.formClassesValue && !formNoScope[0].trigger.pagePathValue && /every form submit/i.test(formNoScope[0].note ?? ''));
+const fns = formNoScope.find((s) => s.eventName === 'contact_form')!;
+check('form: no id/class on multiple pages → ONE tag on a {{Page Path}} RegEx over those pages (not the every-form catch-all)',
+  formNoScope.filter((s) => s.eventName === 'contact_form').length === 1 && !fns.trigger.formIdValue && !fns.trigger.formClassesValue && fns.trigger.pagePathOperator === 'matchRegex');
+
+// THE reported case: the SAME titled form ("Get a Free Audit") on MANY pages → ONE tag whose form_name
+// is a {{Page Path}} Lookup Table variable (per-page name), firing on all its pages via the Page-Path
+// RegEx — NOT N page-scoped duplicates that skip on create.
+const auditPages = ['/guides/a', '/guides/b', '/guides/c'];
+const sameForm = buildSuggestions({ siteHost: 'a.com', forms: auditPages.map((p) => (
+  { page: p, purpose: 'other' as const, action: `${p}/submit`, provider: prov0, method: 'post', title: 'Get a Free Audit', fields: [{ type: 'email', name: 'email', required: true }] }
+)), elements: [] });
+const audit = sameForm.filter((s) => /Get A Free Audit/i.test(s.tagName));
+check('form: same titled form on N pages → exactly ONE tag (not N duplicates)', audit.length === 1);
+check('form: that tag fires on all its pages via a {{Page Path}} matchRegex', audit[0]?.trigger.pagePathOperator === 'matchRegex' && auditPages.every((p) => (audit[0]!.trigger.pagePathValue ?? '').includes(p)));
+check('form: its form_name is a {{Page Path}} Lookup Table variable + eventParamLookups carries the per-page rows',
+  !!audit[0]?.eventParameters?.some((pm) => pm.name === 'form_name' && /^\{\{Lookup - Form Name/.test(pm.value)) &&
+  audit[0]?.eventParamLookups?.[0]?.input === '{{Page Path}}' && (audit[0]?.eventParamLookups?.[0]?.rows.length ?? 0) === 3);
+
+// REGRESSION (adversarial review, HIGH): a MIXED group — the same titled form with a unique Form ID on
+// ONE page but not the others — must NOT split into an id-scoped tag + a page-regex tag that share the
+// SAME name (which would skip-on-create). The whole group falls through to ONE {{Page Path}}-regex tag.
+const mixedId = buildSuggestions({ siteHost: 'a.com', forms: [
+  { page: '/g/a', purpose: 'other', action: '', provider: prov0, method: 'post', title: 'Get a Free Audit', formId: 'audit-1', fields: [{ type: 'email', name: 'email', required: true }] },
+  { page: '/g/b', purpose: 'other', action: '', provider: prov0, method: 'post', title: 'Get a Free Audit', fields: [{ type: 'email', name: 'email', required: true }] },
+  { page: '/g/c', purpose: 'other', action: '', provider: prov0, method: 'post', title: 'Get a Free Audit', fields: [{ type: 'email', name: 'email', required: true }] },
+], elements: [] });
+const mixed = mixedId.filter((s) => /Get A Free Audit/i.test(s.tagName));
+check('form: mixed id-uniqueness (id on only some pages) → exactly ONE tag (no duplicate-name split), page-regex scoped',
+  mixed.length === 1 && mixed[0].trigger.pagePathOperator === 'matchRegex' && !mixed[0].trigger.formIdValue);
+
+// A case variant of the SAME title ("GET A FREE AUDIT" vs "Get a Free Audit") groups case-insensitively
+// into the same ONE tag (not two).
+const caseVar = buildSuggestions({ siteHost: 'a.com', forms: [
+  { page: '/p1', purpose: 'other', action: '', provider: prov0, method: 'post', title: 'Get a Free Audit', fields: [{ type: 'email', name: 'email', required: true }] },
+  { page: '/p2', purpose: 'other', action: '', provider: prov0, method: 'post', title: 'GET A FREE AUDIT', fields: [{ type: 'email', name: 'email', required: true }] },
+], elements: [] });
+check('form: title case variants group case-insensitively → ONE tag', caseVar.filter((s) => /free audit/i.test(s.tagName)).length === 1);
 
 // Embed/AJAX + JS forms get the corpus' "Best"-rated route: the SUGGESTED TRIGGER *is* a Custom Event
 // (not a native Form Submission that would never fire, with only a note about the workaround).
@@ -135,12 +173,16 @@ check('form: JS/div form → the trigger IS a Custom Event on "form_submit", pag
 const pardotHandler = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: 'https://go.pardot.com/l/1/2/form-handler', provider: { vendor: 'pardot', confidence: 'high', evidence: 'action pardot.com' }, method: 'post', formId: 'pardot-form' }], elements: [] });
 check('form: Pardot form-handler (native POST) → scoped by id, NO iframe/Custom-Event note', pardotHandler[0].trigger.formIdValue === 'pardot-form' && !/iframe|custom event/i.test(pardotHandler[0].note ?? ''));
 
-// Two DIFFERENT contact forms (different ids) stay as TWO scoped tags, not merged.
+// Two untitled contact forms share the "Contact Form" name (they'd collide as two same-named tags at
+// create). Each has a UNIQUE id → they consolidate into ONE tag scoped by a {{Form ID}} RegEx over
+// both ids (fires on exactly those two forms, no page over-fire), form_name distinguished per page.
 const twoForms = buildSuggestions({ siteHost: 'a.com', forms: [
   { page: '/contact', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'contact-main' },
   { page: '/', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'footer-contact' },
 ], elements: [] });
-check('form: two contact forms with different ids → two scoped tags (not collapsed)', twoForms.filter((s) => s.eventName === 'contact_form').length === 2);
+const tf = twoForms.filter((s) => s.eventName === 'contact_form');
+check('form: two same-name contact forms with distinct unique ids → ONE tag scoped by {{Form ID}} matchRegex over both ids',
+  tf.length === 1 && tf[0].trigger.formIdOperator === 'matchRegex' && /contact-main/.test(tf[0].trigger.formIdValue ?? '') && /footer-contact/.test(tf[0].trigger.formIdValue ?? ''));
 
 // A NON-UNIQUE id (same id on two DIFFERENT forms) can't scope by id. When the forms are also
 // SITE-WIDE (each signature spans several pages) they can't be page-scoped either → collision note.
@@ -150,7 +192,10 @@ const sharedId = buildSuggestions({ siteHost: 'a.com', forms: [
   { page: '/', purpose: 'newsletter', action: '', provider: prov0, method: 'post', formId: 'gform_1', fields: [{ type: 'email', name: 'email', required: true }] },
   { page: '/blog', purpose: 'newsletter', action: '', provider: prov0, method: 'post', formId: 'gform_1', fields: [{ type: 'email', name: 'email', required: true }] },
 ], elements: [] });
-check('form: shared id across different SITE-WIDE forms → no {{Form ID}} scope, no page scope + a collision note', sharedId.every((s) => !s.trigger.formIdValue && !s.trigger.pagePathValue && /shares this id|unique id/i.test(s.note ?? '')));
+check('form: shared non-unique id across DIFFERENT same-name groups → each group is ONE {{Page Path}}-RegEx tag, NOT id-scoped',
+  sharedId.every((s) => !s.trigger.formIdValue) &&
+  sharedId.filter((s) => s.eventName === 'contact_form').length === 1 &&
+  sharedId.find((s) => s.eventName === 'contact_form')?.trigger.pagePathOperator === 'matchRegex');
 
 // REGRESSION (note-branch ordering): a shared/non-unique id on a form that lives on ONE page is
 // correctly PAGE-scoped, so it must get the page-scope note — NOT the "shares this id / double-counting"
