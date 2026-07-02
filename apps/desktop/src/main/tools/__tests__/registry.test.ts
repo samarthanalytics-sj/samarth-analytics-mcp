@@ -927,6 +927,24 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.includes('enableVars:1:2:3:pagePath') || fd.calls.some((c) => c.startsWith('enableVars:1:2:3:') && c.includes('pagePath')), 'auto-enabled pagePath for the lookup input');
   });
 
+  await test('create_tracking_tag (form_name = {{Form Name}}) auto-provisions the shared "Form Name" Custom JS variable + enables Form Element', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'ga4_event', tagName: 'GA4 - Event - Contact Form Tag', measurementId: 'G-XYZ', eventName: 'contact_form',
+        eventParameters: [{ name: 'form_id', value: '{{Form ID}}' }, { name: 'form_name', value: '{{Form Name}}' }],
+        trigger: { name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'contact-1' },
+      })
+    );
+    // The shared Custom JS (jsm) "Form Name" variable is created once and reported back.
+    assert.ok(fd.calls.some((c) => c.startsWith('createVar:1:2:3:jsm:Form Name')), 'created the Form Name Custom JS variable');
+    assert.deepEqual(out.createdVariables, ['Form Name']);
+    // The variable reads {{Form Element}} — that built-in must be auto-enabled.
+    assert.ok(fd.calls.some((c) => c.startsWith('enableVars:1:2:3:') && c.includes('formElement')), 'auto-enabled the Form Element built-in');
+  });
+
   await test('create_gtm_variable_typed builds a Custom JS variable', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, approveAsIs);

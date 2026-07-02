@@ -226,14 +226,6 @@ interface FormScopeCtx {
   formClassByLabel: Map<string, string | null>;
 }
 
-/** A readable label for a page path: "Home" for the root, else the last path segment humanised
- *  ("/services/ga4-consulting" → "Ga4 Consulting"). Used to build distinct per-page form names. */
-function pagePathLabel(page: string): string {
-  const seg = page.replace(/\/+$/, '').split('/').filter(Boolean).pop();
-  if (!seg) return 'Home';
-  return seg.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
 /** The tag-identifying display label for a form — drives its tagName + event, and is the SAME across
  *  every page the same form appears on (so it groups multi-page instances into one tag). Returns '' for
  *  an untitled "other" form, which yields no tag. Mirrors the inline logic in formSuggestion. */
@@ -423,31 +415,12 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     note = `This form has no id or unique class and appears on multiple pages, so the trigger fires on EVERY form submit. Add an id to each <form> to scope it.`;
   }
 
-  // form_name: normally this form's known name baked in as a constant (braces stripped so GTM does
-  // not resolve it as a variable ref). BUT when the SAME form spans multiple pages this is ONE tag
-  // (scoped by {{Form ID}} or unscoped), and a single constant can't say WHICH page it fired on — so
-  // drive form_name from a {{Page Path}} Lookup Table variable instead, one row per page, mirroring
-  // the classic GTM pattern. Auto-created (type smm) with the tag.
-  const baseName = displayLabel.replace(/[{}]/g, '').replace(/\s{2,}/g, ' ').trim();
-  let formNameValue = baseName;
-  let eventParamLookups: SuggestedTag['eventParamLookups'];
-  if (multiPage) {
-    // Per-page name from the last path segment ("Home"/"Ga4 Consulting"), BUT if two pages share the
-    // same last segment (/uk/contact, /us/contact → both "Contact") fall back to the full path so each
-    // page keeps a DISTINCT form_name (otherwise two rows collapse to one value in GA4 reporting).
-    const segLabels = labelPages.map(pagePathLabel);
-    const segCollides = new Set(segLabels).size < labelPages.length;
-    const rows = labelPages.map((p, i) => ({ key: p, value: `${baseName} - ${segCollides ? p : segLabels[i]}` }));
-    // Only worth a lookup if the per-page names actually differ (they do once page labels differ).
-    if (new Set(rows.map((r) => r.value)).size >= 2) {
-      const variableName = `Lookup - Form Name - ${baseName}`;
-      formNameValue = `{{${variableName}}}`;
-      eventParamLookups = [{ variableName, input: '{{Page Path}}', rows, defaultValue: baseName }];
-      const pagesList = labelPages.slice(0, 6).join(', ') + (labelPages.length > 6 ? ', …' : '');
-      const lookupNote = `form_name is read from a "${variableName}" Lookup Table variable ({{Page Path}} → a per-page name: ${pagesList}) — auto-created with the tag. Edit the rows in GTM to rename any page; for many URLs under one section, a RegEx Table variable is cleaner.`;
-      note = note ? `${note} ${lookupNote}` : lookupNote;
-    }
-  }
+  // form_name is a SINGLE reusable {{Form Name}} Custom JavaScript variable (GTM has no built-in
+  // {{Form Name}}) — every form tag references the same one, resolved at submit time from the form
+  // element (name → id → aria-label → nearest heading). Auto-created with the tag (see FORM_NAME_JS in
+  // the desktop builder). NOTE: for embed/AJAX forms that fire on a dataLayer Custom Event (not a
+  // native form submit), {{Form Element}} isn't set, so it falls back to "form".
+  const formNameValue = '{{Form Name}}';
 
   // Field signature (type/name only — never values) for the evidence line.
   const sig = (f.fields ?? [])
@@ -473,14 +446,13 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     tagName: tagNameOf(displayLabel, 'form_submit'),
     measurementId: GA4_VAR,
     eventName,
-    // form_id is the runtime {{Form ID}}; form_name is either the form's constant name or, for a
-    // multi-page form, a {{Page Path}} Lookup Table ref (see above) so one tag records the page.
+    // form_id is the runtime {{Form ID}}; form_name is the shared {{Form Name}} Custom JS variable
+    // (auto-created on tag create), so every form tag reports a name consistently from ONE variable.
     eventParameters: [
       { name: 'form_id', value: FORM_ID },
       { name: 'form_name', value: formNameValue },
       ...PAGE_PARAMS,
     ],
-    ...(eventParamLookups ? { eventParamLookups } : {}),
     trigger,
   };
 }

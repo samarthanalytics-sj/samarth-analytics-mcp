@@ -962,6 +962,16 @@ export function buildClickTextLookupVariable(name: string, texts: string[]): Gtm
   return buildLookupTableVariable(name, '{{Click Text}}', texts.map((t) => ({ key: t, value: 'true' })));
 }
 
+/** The reusable "Form Name" Custom JavaScript variable — GTM has no built-in {{Form Name}}, so this
+ *  derives it from the submitted form element at fire time (name → id → aria-label → nearest heading →
+ *  "form"). Every GA4 form tag references {{Form Name}} instead of a hardcoded string, so form_name is
+ *  reported consistently from ONE variable. References the {{Form Element}} built-in (auto-enabled). */
+export const FORM_NAME_JS =
+  "function(){\n  var f = {{Form Element}};\n  if(!f || !f.getAttribute) return 'form';\n  return f.getAttribute('name') || f.getAttribute('id') || f.getAttribute('aria-label') || ((f.querySelector('h1,h2,h3')||{}).innerText||'').trim() || 'form';\n}";
+export function buildFormNameVariable(): GtmVariableResource {
+  return buildVariable({ kind: 'javascript', name: 'Form Name', javascript: FORM_NAME_JS });
+}
+
 export function buildVariable(o: VariableInput): GtmVariableResource {
   switch (o.kind) {
     case 'constant':
@@ -2031,13 +2041,37 @@ export function buildMetaPixelTag(
  *  eventNameStandard with Override (inheritEventName=false); a non-standard event inherits the
  *  incoming event_name. pixelId/accessToken are typically {{variables}}. Field keys
  *  corpus-validated (cvt_5TP8W). The EMQ user-data params come from create_meta_emq_variables. PURE. */
+/** The Meta user_data (advanced-matching / EMQ) rows the CAPI tag sends, as [Facebook key → the
+ *  `ed - <emq key>` variable that feeds it]. Corpus-verified against the live stape-io/facebook-tag
+ *  `userDataList`. fbp/fbc are OMITTED — the template generates _fbp (generateFbp) and reads _fbc from
+ *  the cookie itself, so they are not explicit rows. Every ed key here is in META_EMQ_EVENT_DATA_KEYS,
+ *  so `create_meta_emq_variables` provides them. */
+const META_USER_DATA_MAP: Array<[fbKey: string, emqKey: string]> = [
+  ['em', 'email_address'],
+  ['ph', 'phone_number'],
+  ['fn', 'first_name'],
+  ['ln', 'last_name'],
+  ['ct', 'city'],
+  ['zp', 'postal_code'],
+  ['country', 'country'],
+];
+/** The Meta custom_data (event/object) rows — the ecommerce fields. Corpus `customDataList` maps
+ *  content_ids/contents/value/currency; order_id comes from the GA4 transaction_id. */
+const META_CUSTOM_DATA_MAP: Array<[fbKey: string, emqKey: string]> = [
+  ['content_ids', 'content_ids'],
+  ['value', 'value'],
+  ['currency', 'currency'],
+  ['order_id', 'transaction_id'],
+];
+const edRefRow = ([fbKey, emqKey]: [string, string]): Param => ({ type: 'map', map: [tpl('name', fbKey), tpl('value', `{{ed - ${emqKey}}}`)] });
+
 export function buildMetaCapiServerTag(
   type: string,
   name: string,
   pixelId: string,
   accessToken: string,
   event: string,
-  opts?: { actionSource?: string; eventEnhancement?: boolean; generateFbp?: boolean; firingTriggerId?: string[] }
+  opts?: { actionSource?: string; eventEnhancement?: boolean; generateFbp?: boolean; firingTriggerId?: string[]; mapEmqVariables?: boolean }
 ): GtmTagResource {
   const std = metaStandardEvent(event);
   // Event-name fields verified against the live stape-io/facebook-tag template: inheritEventName
@@ -2054,6 +2088,17 @@ export function buildMetaCapiServerTag(
   ];
   if (std) parameter.push(tpl('eventNameStandard', std));
   else parameter.push(tpl('eventNameCustom', event));
+  // Map the EMQ Event-Data variables into the tag's user_data (Event Match Quality), custom_data
+  // (ecommerce), and event_id — so the created tag actually SENDS the fields instead of leaving the
+  // "Add property" lists empty. Pair with create_meta_emq_variables (which creates the `ed - <key>`
+  // variables these reference). Corpus-verified list shapes.
+  if (opts?.mapEmqVariables !== false) {
+    parameter.push(
+      { type: 'list', key: 'userDataList', list: META_USER_DATA_MAP.map(edRefRow) },
+      { type: 'list', key: 'customDataList', list: META_CUSTOM_DATA_MAP.map(edRefRow) },
+      { type: 'list', key: 'serverEventDataList', list: [edRefRow(['event_id', 'event_id'])] },
+    );
+  }
   return {
     name: sanitizeName(name),
     type,
