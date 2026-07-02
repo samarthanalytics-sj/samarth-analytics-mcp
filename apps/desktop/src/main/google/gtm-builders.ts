@@ -93,6 +93,10 @@ export interface Ga4EventInput {
   eventName: string;
   eventParameters?: Array<{ name: string; value: string }>;
   firingTriggerId?: string[];
+  /** GA4 "Send Ecommerce data" from the dataLayer — forwards the WHOLE ecommerce object (items,
+   *  value, currency, transaction_id, …) with no per-param variables. Corpus shape:
+   *  sendEcommerceData=true + getEcommerceDataFrom='dataLayer'. Use for funnel event tags. */
+  sendEcommerceData?: boolean;
 }
 export function buildGa4EventTag(o: Ga4EventInput): GtmTagResource {
   // GTM requires an (empty) measurementId tagReference plus measurementIdOverride
@@ -103,8 +107,9 @@ export function buildGa4EventTag(o: Ga4EventInput): GtmTagResource {
     tpl('measurementIdOverride', o.measurementId),
     tpl('eventName', o.eventName),
     // Off by default — present on 99% of real GA4 event tags (corpus of 562).
-    boolean('sendEcommerceData', false),
+    boolean('sendEcommerceData', o.sendEcommerceData === true),
   ];
+  if (o.sendEcommerceData === true) parameter.push(tpl('getEcommerceDataFrom', 'dataLayer'));
   if (o.eventParameters?.length) {
     // Event parameters live in `eventSettingsTable` as a list of maps keyed
     // `parameter`/`parameterValue` — NOT an `eventParameters` list of name/value
@@ -1003,6 +1008,218 @@ export function buildVariable(o: VariableInput): GtmVariableResource {
       // variable (a resolves-to-nothing landmine the user only finds later in GTM).
       throw new Error(`Unknown variable kind "${String(o.kind)}" — use constant / data_layer / javascript / event_data / request_header (or create_gtm_variable for raw types).`);
   }
+}
+
+/** The GA4 ecommerce FUNNEL events a one-shot setup installs (order = the funnel). */
+export const GA4_ECOMMERCE_FUNNEL_EVENTS = [
+  'view_item',
+  'add_to_cart',
+  'view_cart',
+  'begin_checkout',
+  'add_shipping_info',
+  'add_payment_info',
+  'purchase',
+] as const;
+
+/** The ecommerce dataLayer variables downstream tags (Ads value/currency, Meta contents) read —
+ *  corpus keys: ecommerce.currency 52×, .items 48×, .value 44×, .transaction_id 42×, .coupon 45×. */
+export const ECOMMERCE_DLV_KEYS = ['ecommerce.value', 'ecommerce.currency', 'ecommerce.items', 'ecommerce.transaction_id', 'ecommerce.coupon'] as const;
+export function buildEcommerceDlvVariables(): GtmVariableResource[] {
+  return ECOMMERCE_DLV_KEYS.map((k) => buildVariable({ name: `dlv - ${k}`, kind: 'data_layer', dataLayerName: k }));
+}
+
+/** GTM's built-in "Consent Initialization - All Pages" trigger id — the earliest firing point,
+ *  BEFORE every other trigger; the consent-default tag must fire on it. Corpus: the consent-default
+ *  tags reference this id directly (2/2). */
+export const CONSENT_INIT_TRIGGER_ID = '2147479572';
+
+export interface ConsentDefaults {
+  ad_storage?: 'granted' | 'denied';
+  analytics_storage?: 'granted' | 'denied';
+  ad_user_data?: 'granted' | 'denied';
+  ad_personalization?: 'granted' | 'denied';
+  functionality_storage?: 'granted' | 'denied';
+  security_storage?: 'granted' | 'denied';
+  /** ms to wait for the CMP's consent update before tags fire (default 500). */
+  waitForUpdate?: number;
+}
+/** The Consent Mode v2 DEFAULT-consent tag: a Custom HTML gtag('consent','default', …) firing on the
+ *  built-in Consent Initialization trigger (before everything else). Denied-by-default unless
+ *  overridden — the CMP then upgrades via gtag('consent','update', …). Includes BOTH v2 signals
+ *  (ad_user_data + ad_personalization); the portal's consent audit requires them present in the
+ *  default call and firing before any GA/Ads tag — which the consent-init trigger guarantees. */
+export function buildConsentModeDefaultTag(name: string, defaults?: ConsentDefaults): GtmTagResource {
+  const d = defaults ?? {};
+  const val = (v: 'granted' | 'denied' | undefined): string => (v === 'granted' ? 'granted' : 'denied');
+  const wait = d.waitForUpdate && d.waitForUpdate > 0 ? d.waitForUpdate : 500;
+  const html =
+    '<script>\n' +
+    'window.dataLayer = window.dataLayer || [];\n' +
+    'function gtag(){dataLayer.push(arguments);}\n' +
+    "gtag('consent', 'default', {\n" +
+    `  ad_storage: '${val(d.ad_storage)}',\n` +
+    `  analytics_storage: '${val(d.analytics_storage)}',\n` +
+    `  ad_user_data: '${val(d.ad_user_data)}',\n` +
+    `  ad_personalization: '${val(d.ad_personalization)}',\n` +
+    `  functionality_storage: '${d.functionality_storage === 'denied' ? 'denied' : 'granted'}',\n` +
+    `  security_storage: '${d.security_storage === 'denied' ? 'denied' : 'granted'}',\n` +
+    `  wait_for_update: ${wait}\n` +
+    '});\n' +
+    '</script>';
+  return {
+    name: sanitizeName(name),
+    type: 'html',
+    firingTriggerId: [CONSENT_INIT_TRIGGER_ID],
+    parameter: [tpl('html', html), boolean('supportDocumentWrite', false)],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// verify_tracking_setup — the post-install QA checklist. PURE (the live endpoint
+// health check is appended by the data-service, which owns network access).
+// ---------------------------------------------------------------------------
+
+export interface TrackingSetupCheck {
+  id: string;
+  label: string;
+  status: 'pass' | 'warn' | 'fail' | 'skip';
+  detail: string;
+}
+export interface TrackingSetupReport {
+  ok: boolean;
+  passed: number;
+  warnings: number;
+  failures: number;
+  checks: TrackingSetupCheck[];
+}
+
+/** Read a top-level string parameter off a raw Tag resource. */
+function tagParam(tag: Record<string, unknown>, key: string): string {
+  const params = Array.isArray(tag.parameter) ? (tag.parameter as Array<Record<string, unknown>>) : [];
+  const hit = params.find((p) => p.key === key);
+  return hit && hit.value != null ? String(hit.value) : '';
+}
+
+/** Read one setting (e.g. server_container_url) out of a Google tag's configSettingsTable —
+ *  the list-of-maps shape upsertGoogleTagConfig writes. */
+function googleTagConfigValue(tag: Record<string, unknown>, configKey: string): string {
+  const params = Array.isArray(tag.parameter) ? (tag.parameter as Array<Record<string, unknown>>) : [];
+  const table = params.find((p) => p.key === 'configSettingsTable');
+  const rows = table && Array.isArray(table.list) ? (table.list as Array<Record<string, unknown>>) : [];
+  for (const row of rows) {
+    const cells = Array.isArray(row.map) ? (row.map as Array<Record<string, unknown>>) : [];
+    const k = cells.find((c) => c.key === 'parameter');
+    if (k && String(k.value ?? '') === configKey) {
+      const v = cells.find((c) => c.key === 'parameterValue');
+      return v && v.value != null ? String(v.value) : '';
+    }
+  }
+  return '';
+}
+
+const eventTitle = (ev: string): string => ev.split('_').map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(' ');
+
+/** Evaluate a full web(+server) tracking install against the funnel checklist:
+ *  web Google tag, per-event GA4 tags (present / not paused / has trigger / forwards ecommerce),
+ *  consent defaults on Consent Initialization, and — when the server side is passed — the GA4
+ *  client, tagging server URL, and per-event server relay coverage (a base all-events relay
+ *  counts as coverage for every event). PURE — takes RAW resources. */
+export function evaluateTrackingSetup(
+  webTags: Array<Record<string, unknown>>,
+  events: string[],
+  server?: {
+    tags: Array<Record<string, unknown>>;
+    clients: Array<{ name?: string; type?: string }>;
+    taggingServerUrls: string[];
+  } | null
+): TrackingSetupReport {
+  const checks: TrackingSetupCheck[] = [];
+  const ecommerceEvents = new Set<string>(GA4_ECOMMERCE_FUNNEL_EVENTS);
+
+  // 1. The web Google tag (GA4 loader).
+  const googleTag = webTags.find((t) => t.type === 'googtag');
+  checks.push(
+    googleTag
+      ? { id: 'web_google_tag', label: 'Web: Google tag', status: 'pass', detail: `"${String(googleTag.name ?? '')}" (GA4 loads on the site).` }
+      : { id: 'web_google_tag', label: 'Web: Google tag', status: 'fail', detail: 'No Google tag (googtag) found — GA4 does not load. Create it first (create_googtag_tag).' }
+  );
+
+  // 2. Web → server link (only meaningful when a server container is being verified).
+  const serverUrlOnWeb = googleTag ? googleTagConfigValue(googleTag, 'server_container_url') : '';
+  if (serverUrlOnWeb) {
+    checks.push({ id: 'web_server_url', label: 'Web: server_container_url', status: 'pass', detail: `Google tag sends to ${serverUrlOnWeb}.` });
+  } else if (server) {
+    checks.push({ id: 'web_server_url', label: 'Web: server_container_url', status: 'fail', detail: 'The web Google tag is NOT pointed at the server container — hits go straight to Google. Fix with set_web_server_container_url.' });
+  } else {
+    checks.push({ id: 'web_server_url', label: 'Web: server_container_url', status: 'skip', detail: 'No server container in this check (client-side only setup).' });
+  }
+
+  // 3. Consent defaults must fire on the built-in Consent Initialization trigger.
+  const consentTag = webTags.find((t) => Array.isArray(t.firingTriggerId) && (t.firingTriggerId as unknown[]).map(String).includes(CONSENT_INIT_TRIGGER_ID));
+  checks.push(
+    consentTag
+      ? { id: 'web_consent_defaults', label: 'Web: consent defaults', status: 'pass', detail: `"${String(consentTag.name ?? '')}" fires on Consent Initialization (defaults set before any tag).` }
+      : { id: 'web_consent_defaults', label: 'Web: consent defaults', status: 'warn', detail: 'No tag fires on Consent Initialization — Consent Mode v2 defaults are never set. Add one with setup_consent_mode_defaults.' }
+  );
+
+  // 4. Per-event web coverage.
+  for (const ev of events) {
+    const id = `web_event_${ev}`;
+    const label = `Web: ${ev}`;
+    const tag = webTags.find((t) => t.type === 'gaawe' && tagParam(t, 'eventName') === ev);
+    if (!tag) {
+      checks.push({ id, label, status: 'fail', detail: `No GA4 event tag sends "${ev}". Create it with setup_ecommerce_funnel or create_ga4_event_tag.` });
+      continue;
+    }
+    const name = String(tag.name ?? '');
+    if (tag.paused === true) checks.push({ id, label, status: 'warn', detail: `"${name}" exists but is PAUSED — it never fires.` });
+    else if (!Array.isArray(tag.firingTriggerId) || (tag.firingTriggerId as unknown[]).length === 0) checks.push({ id, label, status: 'warn', detail: `"${name}" has NO firing trigger — it never fires.` });
+    else if (ecommerceEvents.has(ev) && tagParam(tag, 'sendEcommerceData') !== 'true') checks.push({ id, label, status: 'warn', detail: `"${name}" fires but does not forward the dataLayer ecommerce object (Send Ecommerce data is off) — items/value/currency will be missing.` });
+    else checks.push({ id, label, status: 'pass', detail: `"${name}" fires${ecommerceEvents.has(ev) ? ' and forwards ecommerce data' : ''}.` });
+  }
+
+  if (server) {
+    // 5. A client must claim incoming GA4 requests.
+    const ga4Client = server.clients.find((c) => c.type === 'gaaw_client');
+    checks.push(
+      ga4Client
+        ? { id: 'server_client', label: 'Server: GA4 client', status: 'pass', detail: `"${ga4Client.name ?? 'GA4'}" claims incoming GA4 requests.` }
+        : { id: 'server_client', label: 'Server: GA4 client', status: 'fail', detail: 'No GA4 client (gaaw_client) — the server container cannot claim incoming requests, so NOTHING is processed.' }
+    );
+
+    // 6. The container must know its tagging server URL (liveness is checked separately).
+    const urls = server.taggingServerUrls.filter((u) => u && u.trim());
+    checks.push(
+      urls.length > 0
+        ? { id: 'server_tagging_url', label: 'Server: tagging server URL', status: 'pass', detail: urls.join(', ') }
+        : { id: 'server_tagging_url', label: 'Server: tagging server URL', status: 'fail', detail: 'No tagging server URL on the container — deploy the host, then record it with set_server_container_tagging_url.' }
+    );
+
+    // 7. Per-event relay coverage: a per-event sgtmgaaw tag, else the base relay (no eventName)
+    //    which forwards every incoming event.
+    const relays = server.tags.filter((t) => t.type === 'sgtmgaaw');
+    const baseRelay = relays.find((t) => !tagParam(t, 'eventName') && t.paused !== true && Array.isArray(t.firingTriggerId) && (t.firingTriggerId as unknown[]).length > 0);
+    for (const ev of events) {
+      const id = `server_event_${ev}`;
+      const label = `Server: ${ev}`;
+      const tag = relays.find((t) => tagParam(t, 'eventName') === ev);
+      if (tag) {
+        const name = String(tag.name ?? '');
+        if (tag.paused === true) checks.push({ id, label, status: 'warn', detail: `"${name}" exists but is PAUSED.` });
+        else if (!Array.isArray(tag.firingTriggerId) || (tag.firingTriggerId as unknown[]).length === 0) checks.push({ id, label, status: 'warn', detail: `"${name}" has NO firing trigger.` });
+        else checks.push({ id, label, status: 'pass', detail: `"${name}" relays ${eventTitle(ev)} to GA4.` });
+      } else if (baseRelay) {
+        checks.push({ id, label, status: 'pass', detail: `Relayed by the base GA4 server tag "${String(baseRelay.name ?? '')}" (forwards all events).` });
+      } else {
+        checks.push({ id, label, status: 'fail', detail: `No server tag relays "${ev}" — add it with setup_server_ecommerce_funnel or create_server_tag.` });
+      }
+    }
+  }
+
+  const passed = checks.filter((c) => c.status === 'pass').length;
+  const warnings = checks.filter((c) => c.status === 'warn').length;
+  const failures = checks.filter((c) => c.status === 'fail').length;
+  return { ok: failures === 0, passed, warnings, failures, checks };
 }
 
 /** Server "Allow parameters" transformation (`tf_allow_params`) — keeps ONLY the listed

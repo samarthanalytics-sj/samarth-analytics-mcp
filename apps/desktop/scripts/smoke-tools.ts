@@ -47,6 +47,7 @@ const MUTATIONS = new Set([
   'createGtmEnvironment',
   'createServerContainer', 'createGtmClient', 'deleteGtmClient', 'createGtmTransformation', 'bootstrapServerSideTagging',
   'setWebServerContainerUrl', 'setServerContainerTaggingUrl', 'createMetaEmqVariables', 'copyWorkspaceResources', 'importGalleryTemplate',
+  'setupEcommerceFunnel', 'setupServerEcommerceFunnel', 'createServerContainerFromWeb',
 ]);
 
 // A snapshot crafted so the audit produces every kind of finding: a paused GA4
@@ -95,9 +96,15 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     createGtmTransformation: () => r('createGtmTransformation', { transformationId: 'X1', name: 'X', type: 'sgtm_transformation' }),
     bootstrapServerSideTagging: () =>
       r('bootstrapServerSideTagging', { container: { containerId: 'SC1', publicId: 'GTM-SERVER', name: 'Server', taggingServerUrls: [] }, workspaceId: 'w1', client: { clientId: 'CL1', name: 'GA4' }, trigger: { triggerId: 'TR1', name: 'All Events' }, serverTag: { tagId: 'T1', name: 'GA4 - Server' } }),
+    createServerContainerFromWeb: () =>
+      r('createServerContainerFromWeb', { serverContainer: { containerId: 'SC1', publicId: 'GTM-SERVER', name: 'Web - Server', taggingServerUrls: [] }, workspaceId: 'w1', measurementId: 'G-1', created: { client: 'GA4', trigger: 'All Events', serverTag: 'GA4 - Server' }, serverUrlSet: false, webWired: null, webNonGa4: [] }),
+    deriveWebContainerMeasurementId: () => r('deriveWebContainerMeasurementId', 'G-1'),
     setWebServerContainerUrl: () => r('setWebServerContainerUrl', { tagId: '1', name: 'Google Tag', serverContainerUrl: 'https://sgtm.example.com' }),
     setServerContainerTaggingUrl: () => r('setServerContainerTaggingUrl', { containerId: 'SC1', name: 'Server', taggingServerUrls: ['https://sgtm.example.com'] }),
     createMetaEmqVariables: () => r('createMetaEmqVariables', { created: ['ed - fbp', 'ed - fbc'], skipped: [] }),
+    setupEcommerceFunnel: () => r('setupEcommerceFunnel', { created: { variables: [], triggers: ['CE - purchase'], tags: ['GA4 - Event - Purchase Tag'] }, skipped: [] }),
+    setupServerEcommerceFunnel: () => r('setupServerEcommerceFunnel', { created: { triggers: ['ga4 - purchase'], tags: ['GA4 - Purchase Tag (Server)'] }, skipped: [] }),
+    verifyTrackingSetup: () => r('verifyTrackingSetup', { ok: true, passed: 1, warnings: 0, failures: 0, checks: [{ id: 'web_google_tag', label: 'Web: Google tag', status: 'pass', detail: 'ok' }] }),
     copyWorkspaceResources: () => r('copyWorkspaceResources', { variables: { created: [], skipped: [] }, triggers: { created: [], skipped: [] }, tags: { created: [], skipped: [] } }),
     listGtmTemplates: () => r('listGtmTemplates', [{ templateId: '261', name: 'Meta Pixel', type: 'cvt_5RM3Q', galleryOwner: 'facebook', galleryRepository: 'GoogleTagManager-WebTemplate-For-FacebookPixel' }]),
     importGalleryTemplate: () => r('importGalleryTemplate', { templateId: '261', name: 'Meta Pixel', type: 'cvt_5RM3Q', imported: true }),
@@ -220,7 +227,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 46 read tools', readOnlyNames.size === 46, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 47 read tools', readOnlyNames.size === 47, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────

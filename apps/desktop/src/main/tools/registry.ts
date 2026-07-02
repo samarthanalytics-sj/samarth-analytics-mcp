@@ -30,6 +30,8 @@ import {
   buildAllowParamsTransformation,
   buildServerAllEventsTrigger,
   buildServerEventTrigger,
+  buildConsentModeDefaultTag,
+  GA4_ECOMMERCE_FUNNEL_EVENTS,
   buildMetaPixelTag,
   buildMetaCapiServerTag,
   metaStandardEvent,
@@ -402,6 +404,33 @@ export function buildToolRegistry(
         additionalProperties: false,
       },
       handler: (a) => data.verifyServerEndpoint(s(a.serverUrl)),
+    },
+    {
+      name: 'verify_tracking_setup',
+      description:
+        'READ-ONLY post-install QA: verify a full tracking setup against the funnel checklist and return pass/warn/fail per check. Web checks: Google tag present, per-event GA4 tag coverage (exists / not paused / has a trigger / forwards the ecommerce object), consent defaults firing on Consent Initialization, web→server link (server_container_url). When the server container ids are also given: GA4 client present, tagging server URL recorded, per-event server relay coverage (a base all-events relay counts), and a LIVE /healthy check on the tagging server. Run this after setup_ecommerce_funnel / setup_server_ecommerce_funnel / setup_consent_mode_defaults to prove the install works — and before telling the user their tracking is complete. Requires accountId, containerId, workspaceId (the WEB container). Optional events (default: the 7-event ecommerce funnel; pass the events you installed if different) and serverAccountId/serverContainerId/serverWorkspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string', description: 'The WEB container id.' },
+          workspaceId: { type: 'string' },
+          events: { type: 'array', items: { type: 'string' }, description: 'Events to verify coverage for. Omit for the standard ecommerce funnel.' },
+          serverAccountId: { type: 'string', description: 'Set all three server ids to also verify the SERVER container + live endpoint.' },
+          serverContainerId: { type: 'string' },
+          serverWorkspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: (a) => {
+        const events = Array.isArray(a.events) && a.events.length > 0 ? a.events.map(String) : undefined;
+        const server =
+          s(a.serverAccountId).trim() && s(a.serverContainerId).trim() && s(a.serverWorkspaceId).trim()
+            ? { accountId: s(a.serverAccountId).trim(), containerId: s(a.serverContainerId).trim(), workspaceId: s(a.serverWorkspaceId).trim() }
+            : undefined;
+        return data.verifyTrackingSetup(s(a.accountId), s(a.containerId), s(a.workspaceId), { events, server });
+      },
     },
     {
       name: 'audit_gtm_container',
@@ -1605,6 +1634,120 @@ export function buildToolRegistry(
       handler: (a) => data.setServerContainerTaggingUrl(s(a.accountId), s(a.containerId), [s(a.serverUrl)]),
     },
     {
+      name: 'setup_ecommerce_funnel',
+      description:
+        "ONE STEP: install the FULL GA4 ecommerce funnel in a WEB container. For each funnel event (default: view_item, add_to_cart, view_cart, begin_checkout, add_shipping_info, add_payment_info, purchase) it creates a Custom Event trigger + a GA4 event tag with 'Send Ecommerce data' ON — the tag forwards the WHOLE dataLayer ecommerce object (items, value, currency, transaction_id), so NO per-parameter variable mapping is needed. Also creates the dlv - ecommerce.* variables that downstream Ads/Meta tags read. Idempotent: same-named tags/triggers/variables are skipped, so re-running completes a partial install instead of erroring. Requires accountId, containerId, workspaceId (a WEB container), measurementId (G-XXXXXXX — derive it from the existing Google tag or ask). Optional events to override the funnel list (e.g. add generate_lead).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          measurementId: { type: 'string', description: 'GA4 Measurement ID (G-XXXXXXX) the event tags send to.' },
+          events: { type: 'array', items: { type: 'string' }, description: 'Funnel events to install. Omit for the standard 7-event ecommerce funnel.' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'measurementId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => {
+        const evs = Array.isArray(a.events) && a.events.length > 0 ? a.events.map(String) : [...GA4_ECOMMERCE_FUNNEL_EVENTS];
+        return `Install the GA4 ecommerce funnel (${evs.length} events: ${evs.join(', ')} → ${s(a.measurementId)}) with triggers + ecommerce variables in workspace ${s(a.workspaceId)}`;
+      },
+      handler: (a) => {
+        const measurementId = s(a.measurementId).trim();
+        if (!measurementId) throw new Error('measurementId (G-XXXXXXX) is required — derive it from the web Google tag or ask the user.');
+        const events = Array.isArray(a.events) && a.events.length > 0 ? a.events.map(String) : [...GA4_ECOMMERCE_FUNNEL_EVENTS];
+        return data.setupEcommerceFunnel(s(a.accountId), s(a.containerId), s(a.workspaceId), measurementId, events);
+      },
+    },
+    {
+      name: 'setup_server_ecommerce_funnel',
+      description:
+        'ONE STEP: install the server-side ecommerce funnel in a SERVER container. For each funnel event (default: the standard 7-event ecommerce funnel) it creates a per-event trigger ({{_event}} equals the event, scoped to the GA4 client) + a GA4 server tag relaying it, and — when adsConversionId plus a per-event conversionLabel are given — a Google Ads conversion server tag for that event (typically purchase). Enables the Client Name built-in. Idempotent by name; re-running completes a partial install. Run AFTER create_server_container_from_web. Requires accountId, containerId (the SERVER container), workspaceId, measurementId. Optional events, adsConversionId (AW-XXXXXXXX) + adsConversionLabels [{event, conversionLabel}].',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string', description: 'The SERVER container id.' },
+          workspaceId: { type: 'string' },
+          measurementId: { type: 'string', description: 'GA4 Measurement ID (G-XXXXXXX) the server relays to.' },
+          events: { type: 'array', items: { type: 'string' }, description: 'Funnel events. Omit for the standard 7-event ecommerce funnel.' },
+          adsConversionId: { type: 'string', description: 'Google Ads conversion ID (AW-XXXXXXXX) — needed only for server Ads conversion tags.' },
+          adsConversionLabels: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { event: { type: 'string' }, conversionLabel: { type: 'string' } },
+              required: ['event', 'conversionLabel'],
+              additionalProperties: false,
+            },
+            description: 'Per-event Ads conversion labels, e.g. [{"event":"purchase","conversionLabel":"AbCdEf..."}]. Only listed events get an Ads tag.',
+          },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'measurementId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => {
+        const evs = Array.isArray(a.events) && a.events.length > 0 ? a.events.map(String) : [...GA4_ECOMMERCE_FUNNEL_EVENTS];
+        return `Install the SERVER ecommerce funnel (${evs.length} events → ${s(a.measurementId)}${s(a.adsConversionId).trim() ? ` + Ads conversions for ${s(a.adsConversionId).trim()}` : ''}) in server workspace ${s(a.workspaceId)}`;
+      },
+      handler: (a) => {
+        const measurementId = s(a.measurementId).trim();
+        if (!measurementId) throw new Error('measurementId (G-XXXXXXX) is required.');
+        const events = Array.isArray(a.events) && a.events.length > 0 ? a.events.map(String) : [...GA4_ECOMMERCE_FUNNEL_EVENTS];
+        const conversionId = s(a.adsConversionId).trim();
+        const labels = Array.isArray(a.adsConversionLabels)
+          ? a.adsConversionLabels
+              .map((l) => ({ event: s(obj(l).event).trim(), conversionLabel: s(obj(l).conversionLabel).trim() }))
+              .filter((l) => l.event && l.conversionLabel)
+          : [];
+        const ads = conversionId && labels.length > 0 ? { conversionId, labels } : undefined;
+        return data.setupServerEcommerceFunnel(s(a.accountId), s(a.containerId), s(a.workspaceId), measurementId, events, ads);
+      },
+    },
+    {
+      name: 'setup_consent_mode_defaults',
+      description:
+        "Install the Consent Mode v2 DEFAULT-consent tag in a WEB container: a Custom HTML gtag('consent','default',…) covering ALL v2 signals (ad_storage, analytics_storage, ad_user_data, ad_personalization, functionality_storage, security_storage) with wait_for_update, firing on the built-in 'Consent Initialization - All Pages' trigger — BEFORE any other tag. Ad/analytics signals default to DENIED (GDPR-safe); the CMP then upgrades via gtag('consent','update'). This sets DEFAULTS only — the user still needs a CMP/consent banner for the update call. Skipped if a tag with the same name already exists. Requires accountId, containerId, workspaceId. Optional per-signal overrides ('granted'/'denied'), waitForUpdate ms (default 500), name (default 'Consent Mode - Defaults').",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: "Tag name (default 'Consent Mode - Defaults')." },
+          adStorage: { type: 'string', enum: ['granted', 'denied'] },
+          analyticsStorage: { type: 'string', enum: ['granted', 'denied'] },
+          adUserData: { type: 'string', enum: ['granted', 'denied'] },
+          adPersonalization: { type: 'string', enum: ['granted', 'denied'] },
+          functionalityStorage: { type: 'string', enum: ['granted', 'denied'] },
+          securityStorage: { type: 'string', enum: ['granted', 'denied'] },
+          waitForUpdate: { type: 'number', description: 'ms to wait for the CMP consent update before tags fire (default 500).' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) =>
+        `Create consent-default tag "${s(a.name).trim() || 'Consent Mode - Defaults'}" (ads/analytics ${s(a.adStorage) === 'granted' ? 'granted' : 'denied'} by default, fires on Consent Initialization) in workspace ${s(a.workspaceId)}`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'Consent Mode - Defaults', 'tag'),
+      handler: (a) => {
+        const grantedOrDenied = (v: unknown): 'granted' | 'denied' | undefined => (v === 'granted' ? 'granted' : v === 'denied' ? 'denied' : undefined);
+        const tag = buildConsentModeDefaultTag(s(a.name).trim() || 'Consent Mode - Defaults', {
+          ad_storage: grantedOrDenied(a.adStorage),
+          analytics_storage: grantedOrDenied(a.analyticsStorage),
+          ad_user_data: grantedOrDenied(a.adUserData),
+          ad_personalization: grantedOrDenied(a.adPersonalization),
+          functionality_storage: grantedOrDenied(a.functionalityStorage),
+          security_storage: grantedOrDenied(a.securityStorage),
+          waitForUpdate: typeof a.waitForUpdate === 'number' ? a.waitForUpdate : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
       name: 'create_server_tag',
       description:
         'Create a tag in a SERVER container workspace (reads event data from the GA4 client). platform: "ga4" (forward events to GA4 — needs measurementId, optional eventName, defaults to forwarding the incoming event), "ads_conversion" (Google Ads conversion — needs conversionId + conversionLabel), "ads_conversion_linker" (Google Ads conversion linker), or "ads_remarketing" (Google Ads dynamic remarketing — needs conversionId). Optional firingTriggerId. Requires accountId, containerId, workspaceId, platform, name.',
@@ -2717,6 +2860,9 @@ export function buildToolRegistry(
       if (missing.length) {
         const better = tools
           .filter((t) => t.name !== name && t.write === tool.write && requiredOf(t).length > 0 && requiredOf(t).every((r) => provided.includes(r)))
+          // Most SPECIFIC match first (uses the most of the supplied args) — otherwise any
+          // tool requiring just the workspace triple crowds out the tool the args really fit.
+          .sort((a, b) => requiredOf(b).length - requiredOf(a).length)
           .map((t) => t.name)
           .slice(0, 3);
         const msg =

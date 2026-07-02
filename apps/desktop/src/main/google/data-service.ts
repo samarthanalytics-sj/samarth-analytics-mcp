@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
@@ -1515,6 +1515,167 @@ export class GoogleDataService {
       webWired,
       webNonGa4,
     };
+  }
+
+  /** ONE-SHOT web GA4 ecommerce funnel: for each funnel event, a Custom Event trigger
+   *  ("CE - <event>", reused by name) + a GA4 event tag with the native "Send Ecommerce data" flag
+   *  (forwards the WHOLE dataLayer ecommerce object — items/value/currency/transaction_id — no
+   *  per-param variables needed). Also creates the ecommerce dataLayer variables (dlv - ecommerce.*)
+   *  downstream Ads/Meta tags read. Idempotent: existing same-named tags/triggers/variables are
+   *  skipped, so re-running completes a partial setup instead of erroring. */
+  async setupEcommerceFunnel(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    measurementId: string,
+    events: string[]
+  ): Promise<{ created: { variables: string[]; triggers: string[]; tags: string[] }; skipped: string[] }> {
+    const [tags, triggers, variables] = await Promise.all([
+      this.listGtmTags(accountId, containerId, workspaceId),
+      this.listGtmTriggers(accountId, containerId, workspaceId),
+      this.listGtmVariables(accountId, containerId, workspaceId),
+    ]);
+    const tagNames = new Set(tags.map((t) => t.name.trim().toLowerCase()));
+    const trigByName = new Map(triggers.map((t) => [t.name.trim().toLowerCase(), t.triggerId]));
+    const varNames = new Set(variables.map((v) => v.name.trim().toLowerCase()));
+    const created = { variables: [] as string[], triggers: [] as string[], tags: [] as string[] };
+    const skipped: string[] = [];
+    for (const v of buildEcommerceDlvVariables()) {
+      if (varNames.has(v.name.trim().toLowerCase())) { skipped.push(v.name); continue; }
+      await this.createGtmVariable(accountId, containerId, workspaceId, v as unknown as Record<string, unknown>);
+      created.variables.push(v.name);
+    }
+    const title = (ev: string): string => ev.split('_').map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(' ');
+    for (const ev of events) {
+      const trigName = `CE - ${ev}`;
+      let triggerId = trigByName.get(trigName.toLowerCase());
+      if (!triggerId) {
+        const tr = await this.createGtmTrigger(accountId, containerId, workspaceId, buildTrigger({ name: trigName, kind: 'custom_event', eventName: ev }) as unknown as Record<string, unknown>);
+        triggerId = String((tr as { triggerId?: string }).triggerId ?? '');
+        created.triggers.push(trigName);
+        trigByName.set(trigName.toLowerCase(), triggerId);
+      }
+      const tagName = `GA4 - Event - ${title(ev)} Tag`;
+      if (tagNames.has(tagName.toLowerCase())) { skipped.push(tagName); continue; }
+      await this.createGtmTag(accountId, containerId, workspaceId, buildGa4EventTag({
+        name: tagName, measurementId, eventName: ev, sendEcommerceData: true,
+        firingTriggerId: triggerId ? [triggerId] : undefined,
+      }) as unknown as Record<string, unknown>);
+      created.tags.push(tagName);
+    }
+    return { created, skipped };
+  }
+
+  /** ONE-SHOT server-side ecommerce funnel (on a SERVER container): per event, a per-event server
+   *  trigger ("ga4 - <event>", {{_event}} equals + {{Client Name}} = GA4, reused by name) + a GA4
+   *  server tag relaying that event; optionally a Google Ads conversion server tag per event that has
+   *  a conversion label. Enables the Client Name built-in. Idempotent by name. */
+  async setupServerEcommerceFunnel(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    measurementId: string,
+    events: string[],
+    ads?: { conversionId: string; labels: Array<{ event: string; conversionLabel: string }> }
+  ): Promise<{ created: { triggers: string[]; tags: string[] }; skipped: string[] }> {
+    try {
+      await this.enableGtmBuiltInVariables(accountId, containerId, workspaceId, ['clientName']);
+    } catch { /* non-fatal — the trigger still matches without the scope resolving */ }
+    const [tags, triggers] = await Promise.all([
+      this.listGtmTags(accountId, containerId, workspaceId),
+      this.listGtmTriggers(accountId, containerId, workspaceId),
+    ]);
+    const tagNames = new Set(tags.map((t) => t.name.trim().toLowerCase()));
+    const trigByName = new Map(triggers.map((t) => [t.name.trim().toLowerCase(), t.triggerId]));
+    const created = { triggers: [] as string[], tags: [] as string[] };
+    const skipped: string[] = [];
+    const title = (ev: string): string => ev.split('_').map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(' ');
+    const labelFor = new Map((ads?.labels ?? []).map((l) => [l.event, l.conversionLabel]));
+    for (const ev of events) {
+      const trigName = `ga4 - ${ev}`;
+      let triggerId = trigByName.get(trigName.toLowerCase());
+      if (!triggerId) {
+        const tr = await this.createGtmTrigger(accountId, containerId, workspaceId, buildServerEventTrigger(trigName, ev, 'GA4') as unknown as Record<string, unknown>);
+        triggerId = String((tr as { triggerId?: string }).triggerId ?? '');
+        created.triggers.push(trigName);
+        trigByName.set(trigName.toLowerCase(), triggerId);
+      }
+      const ftid = triggerId ? [triggerId] : undefined;
+      const ga4Name = `GA4 - ${title(ev)} Tag (Server)`;
+      if (tagNames.has(ga4Name.toLowerCase())) skipped.push(ga4Name);
+      else {
+        await this.createGtmTag(accountId, containerId, workspaceId, buildGa4ServerTag(ga4Name, measurementId, ev, ftid) as unknown as Record<string, unknown>);
+        created.tags.push(ga4Name);
+      }
+      const label = labelFor.get(ev);
+      if (ads?.conversionId && label) {
+        const adsName = `Ads - Conversion - ${title(ev)} (Server)`;
+        if (tagNames.has(adsName.toLowerCase())) skipped.push(adsName);
+        else {
+          await this.createGtmTag(accountId, containerId, workspaceId, buildAdsConversionServerTag(adsName, ads.conversionId, label, ftid) as unknown as Record<string, unknown>);
+          created.tags.push(adsName);
+        }
+      }
+    }
+    return { created, skipped };
+  }
+
+  /** Post-install QA (READ-ONLY): run the tracking-setup checklist on a web container —
+   *  and, when server coords are given, on its server container too — then live-check the
+   *  tagging server endpoint (/healthy). The pure checklist logic lives in
+   *  evaluateTrackingSetup (gtm-builders); this gathers RAW resources and adds the one
+   *  check that needs the network. */
+  async verifyTrackingSetup(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    opts?: {
+      events?: string[];
+      server?: { accountId: string; containerId: string; workspaceId: string };
+    }
+  ): Promise<TrackingSetupReport> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const rawTags = async (acct: string, cont: string, ws: string): Promise<Array<Record<string, unknown>>> => {
+      const parent = `accounts/${acct}/containers/${cont}/workspaces/${ws}`;
+      const tags = await collectPages(
+        (pageToken) => gtm.accounts.containers.workspaces.tags.list({ parent, pageToken }),
+        (r) => r.data.tag,
+        (r) => r.data.nextPageToken
+      );
+      return tags as unknown as Array<Record<string, unknown>>;
+    };
+    const events = opts?.events && opts.events.length > 0 ? opts.events : [...GA4_ECOMMERCE_FUNNEL_EVENTS];
+
+    const webTags = await rawTags(accountId, containerId, workspaceId);
+    let server: { tags: Array<Record<string, unknown>>; clients: Array<{ name?: string; type?: string }>; taggingServerUrls: string[] } | null = null;
+    if (opts?.server) {
+      const sv = opts.server;
+      const [tags, clients, container] = await Promise.all([
+        rawTags(sv.accountId, sv.containerId, sv.workspaceId),
+        this.listGtmClients(sv.accountId, sv.containerId, sv.workspaceId),
+        gtm.accounts.containers.get({ path: `accounts/${sv.accountId}/containers/${sv.containerId}` }),
+      ]);
+      server = { tags, clients, taggingServerUrls: (container.data.taggingServerUrls ?? []).map(String) };
+    }
+
+    const report = evaluateTrackingSetup(webTags, events, server);
+
+    // The one live check: is the tagging server actually answering?
+    const firstUrl = server?.taggingServerUrls.find((u) => u && u.trim());
+    if (firstUrl) {
+      const health = await this.verifyServerEndpoint(firstUrl);
+      const check: TrackingSetupCheck = health.ok
+        ? { id: 'server_endpoint', label: 'Server: endpoint health', status: 'pass', detail: `${firstUrl} answered /healthy (HTTP ${health.status}).` }
+        : { id: 'server_endpoint', label: 'Server: endpoint health', status: 'fail', detail: `${firstUrl} did not answer /healthy${health.status ? ` (HTTP ${health.status})` : ''}${health.error ? ` — ${health.error}` : ''}. The host may not be deployed.` };
+      report.checks.push(check);
+      if (check.status === 'pass') report.passed += 1;
+      else {
+        report.failures += 1;
+        report.ok = false;
+      }
+    }
+    return report;
   }
 
   /** Point a WEB Google tag at a server container (the web→server link): upsert

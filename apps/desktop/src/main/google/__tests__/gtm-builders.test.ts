@@ -53,6 +53,12 @@ import {
   buildVariable,
   buildFormNameVariable,
   buildUrlQueryVariable,
+  buildEcommerceDlvVariables,
+  ECOMMERCE_DLV_KEYS,
+  GA4_ECOMMERCE_FUNNEL_EVENTS,
+  buildConsentModeDefaultTag,
+  CONSENT_INIT_TRIGGER_ID,
+  evaluateTrackingSetup,
   auditContainer,
   sanitizeName,
   findGa4BaseTag,
@@ -1676,6 +1682,145 @@ test('setCustomEventName updates the {{_event}} value in place, preserving struc
   // adds the {{_event}} condition if missing
   const t2 = setCustomEventName({ name: 'x', type: 'customEvent' }, 'add to cart') as { customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }> };
   assert.equal(t2.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'add_to_cart');
+});
+
+console.log('\nOne-shot funnel + consent + verify:');
+
+test('buildGa4EventTag sendEcommerceData: emits the flag + getEcommerceDataFrom dataLayer; absent otherwise', () => {
+  const on = buildGa4EventTag({ name: 'GA4 - Event - Purchase Tag', measurementId: 'G-1', eventName: 'purchase', sendEcommerceData: true });
+  const params = on.parameter as Array<Record<string, unknown>>;
+  assert.equal(findParam(params, 'sendEcommerceData')?.value, 'true');
+  assert.equal(findParam(params, 'sendEcommerceData')?.type, 'boolean');
+  assert.equal(findParam(params, 'getEcommerceDataFrom')?.value, 'dataLayer');
+  const off = buildGa4EventTag({ name: 'GA4 - Event - Login Tag', measurementId: 'G-1', eventName: 'login' });
+  const offParams = off.parameter as Array<Record<string, unknown>>;
+  // corpus-faithful: real GA4 event tags carry an explicit false (99% of 562)
+  assert.equal(findParam(offParams, 'sendEcommerceData')?.value, 'false', 'explicit false unless requested');
+  assert.equal(findParam(offParams, 'getEcommerceDataFrom'), undefined, 'source only present when forwarding');
+});
+
+test('buildEcommerceDlvVariables: one dlv per corpus ecommerce key', () => {
+  const vars = buildEcommerceDlvVariables();
+  assert.equal(vars.length, ECOMMERCE_DLV_KEYS.length);
+  for (const [i, key] of ECOMMERCE_DLV_KEYS.entries()) {
+    assert.equal(vars[i].name, `dlv - ${key}`);
+    assert.equal(vars[i].type, 'v');
+    const p = vars[i].parameter as Array<Record<string, unknown>>;
+    assert.equal(findParam(p, 'name')?.value, key);
+  }
+});
+
+test('buildConsentModeDefaultTag: denied-by-default Custom HTML on the Consent Initialization trigger', () => {
+  const t = buildConsentModeDefaultTag('Consent Mode - Defaults');
+  assert.equal(t.type, 'html');
+  assert.deepEqual(t.firingTriggerId, [CONSENT_INIT_TRIGGER_ID]);
+  const html = String(findParam(t.parameter as Array<Record<string, unknown>>, 'html')?.value ?? '');
+  assert.ok(html.includes("gtag('consent', 'default'"), 'is a consent default call');
+  for (const signal of ['ad_storage', 'analytics_storage', 'ad_user_data', 'ad_personalization']) {
+    assert.ok(html.includes(`${signal}: 'denied'`), `${signal} denied by default`);
+  }
+  assert.ok(html.includes("functionality_storage: 'granted'"), 'functionality granted by default');
+  assert.ok(html.includes("security_storage: 'granted'"), 'security granted by default');
+  assert.ok(html.includes('wait_for_update: 500'), 'waits for the CMP update');
+  assert.equal(findParam(t.parameter as Array<Record<string, unknown>>, 'supportDocumentWrite')?.value, 'false');
+});
+
+test('buildConsentModeDefaultTag: per-signal overrides + waitForUpdate', () => {
+  const t = buildConsentModeDefaultTag('Consent', { analytics_storage: 'granted', functionality_storage: 'denied', waitForUpdate: 2000 });
+  const html = String(findParam(t.parameter as Array<Record<string, unknown>>, 'html')?.value ?? '');
+  assert.ok(html.includes("analytics_storage: 'granted'"));
+  assert.ok(html.includes("ad_storage: 'denied'"), 'unspecified ad signal stays denied');
+  assert.ok(html.includes("functionality_storage: 'denied'"));
+  assert.ok(html.includes('wait_for_update: 2000'));
+});
+
+// --- evaluateTrackingSetup ---------------------------------------------------
+
+const fullWebTags = (): Array<Record<string, unknown>> => [
+  { name: 'Google Tag', type: 'googtag', firingTriggerId: ['2147479553'], parameter: [
+    { type: 'template', key: 'tagId', value: 'G-1' },
+    { type: 'list', key: 'configSettingsTable', list: [{ type: 'map', map: [
+      { type: 'template', key: 'parameter', value: 'server_container_url' },
+      { type: 'template', key: 'parameterValue', value: 'https://sgtm.example.com' },
+    ] }] },
+  ] },
+  { name: 'Consent Mode - Defaults', type: 'html', firingTriggerId: [CONSENT_INIT_TRIGGER_ID], parameter: [] },
+  ...GA4_ECOMMERCE_FUNNEL_EVENTS.map((ev) => ({
+    name: `GA4 - Event - ${ev} Tag`, type: 'gaawe', firingTriggerId: ['10'],
+    parameter: [
+      { type: 'template', key: 'eventName', value: ev },
+      { type: 'boolean', key: 'sendEcommerceData', value: 'true' },
+    ],
+  })),
+];
+const fullServer = () => ({
+  tags: [{ name: 'GA4 - Server', type: 'sgtmgaaw', firingTriggerId: ['5'], parameter: [{ type: 'template', key: 'measurementId', value: 'G-1' }] }],
+  clients: [{ name: 'GA4', type: 'gaaw_client' }],
+  taggingServerUrls: ['https://sgtm.example.com'],
+});
+
+test('evaluateTrackingSetup: a complete web+server install passes every check', () => {
+  const r = evaluateTrackingSetup(fullWebTags(), [...GA4_ECOMMERCE_FUNNEL_EVENTS], fullServer());
+  assert.equal(r.failures, 0, JSON.stringify(r.checks.filter((c) => c.status === 'fail')));
+  assert.equal(r.warnings, 0, JSON.stringify(r.checks.filter((c) => c.status === 'warn')));
+  assert.equal(r.ok, true);
+  // 3 web-level + 7 web events + client + url + 7 server events
+  assert.equal(r.checks.length, 3 + 7 + 2 + 7);
+  const serverEvents = r.checks.filter((c) => c.id.startsWith('server_event_'));
+  assert.ok(serverEvents.every((c) => c.status === 'pass' && c.detail.includes('base GA4 server tag')), 'base relay covers every event');
+});
+
+test('evaluateTrackingSetup: missing Google tag + missing event tags fail; consent missing warns', () => {
+  const r = evaluateTrackingSetup([], ['purchase']);
+  assert.equal(r.ok, false);
+  assert.equal(r.checks.find((c) => c.id === 'web_google_tag')?.status, 'fail');
+  assert.equal(r.checks.find((c) => c.id === 'web_event_purchase')?.status, 'fail');
+  assert.equal(r.checks.find((c) => c.id === 'web_consent_defaults')?.status, 'warn');
+  assert.equal(r.checks.find((c) => c.id === 'web_server_url')?.status, 'skip', 'no server side in this check → skip, not fail');
+});
+
+test('evaluateTrackingSetup: paused / trigger-less / ecommerce-off tags warn, not pass', () => {
+  const tags: Array<Record<string, unknown>> = [
+    { name: 'P', type: 'gaawe', paused: true, firingTriggerId: ['1'], parameter: [{ key: 'eventName', value: 'purchase' }, { key: 'sendEcommerceData', value: 'true' }] },
+    { name: 'NT', type: 'gaawe', firingTriggerId: [], parameter: [{ key: 'eventName', value: 'add_to_cart' }, { key: 'sendEcommerceData', value: 'true' }] },
+    { name: 'NE', type: 'gaawe', firingTriggerId: ['1'], parameter: [{ key: 'eventName', value: 'view_item' }] },
+    { name: 'Lead', type: 'gaawe', firingTriggerId: ['1'], parameter: [{ key: 'eventName', value: 'generate_lead' }] },
+  ];
+  const r = evaluateTrackingSetup(tags, ['purchase', 'add_to_cart', 'view_item', 'generate_lead']);
+  assert.equal(r.checks.find((c) => c.id === 'web_event_purchase')?.status, 'warn');
+  assert.ok(r.checks.find((c) => c.id === 'web_event_purchase')?.detail.includes('PAUSED'));
+  assert.equal(r.checks.find((c) => c.id === 'web_event_add_to_cart')?.status, 'warn');
+  assert.ok(r.checks.find((c) => c.id === 'web_event_add_to_cart')?.detail.includes('NO firing trigger'));
+  assert.equal(r.checks.find((c) => c.id === 'web_event_view_item')?.status, 'warn', 'funnel event without Send Ecommerce data warns');
+  assert.equal(r.checks.find((c) => c.id === 'web_event_generate_lead')?.status, 'pass', 'non-ecommerce event needs no ecommerce flag');
+});
+
+test('evaluateTrackingSetup: server side — missing client/url/relay fail; web not pointed at server fails', () => {
+  const web = fullWebTags();
+  // strip the server_container_url row off the Google tag
+  (web[0].parameter as Array<Record<string, unknown>>).splice(1, 1);
+  const r = evaluateTrackingSetup(web, ['purchase'], { tags: [], clients: [], taggingServerUrls: [] });
+  assert.equal(r.checks.find((c) => c.id === 'web_server_url')?.status, 'fail', 'server given but web not linked → fail');
+  assert.equal(r.checks.find((c) => c.id === 'server_client')?.status, 'fail');
+  assert.equal(r.checks.find((c) => c.id === 'server_tagging_url')?.status, 'fail');
+  assert.equal(r.checks.find((c) => c.id === 'server_event_purchase')?.status, 'fail');
+  assert.equal(r.ok, false);
+});
+
+test('evaluateTrackingSetup: per-event server relay beats the base relay in the detail; paused base relay does not count', () => {
+  const server = {
+    tags: [
+      { name: 'GA4 - Purchase Tag (Server)', type: 'sgtmgaaw', firingTriggerId: ['7'], parameter: [{ key: 'measurementId', value: 'G-1' }, { key: 'eventName', value: 'purchase' }] },
+      { name: 'GA4 - Server', type: 'sgtmgaaw', paused: true, firingTriggerId: ['5'], parameter: [{ key: 'measurementId', value: 'G-1' }] },
+    ],
+    clients: [{ name: 'GA4', type: 'gaaw_client' }],
+    taggingServerUrls: ['https://sgtm.example.com'],
+  };
+  const r = evaluateTrackingSetup(fullWebTags(), ['purchase', 'view_item'], server);
+  const purchase = r.checks.find((c) => c.id === 'server_event_purchase');
+  assert.equal(purchase?.status, 'pass');
+  assert.ok(purchase?.detail.includes('GA4 - Purchase Tag (Server)'));
+  assert.equal(r.checks.find((c) => c.id === 'server_event_view_item')?.status, 'fail', 'paused base relay is NOT coverage');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
