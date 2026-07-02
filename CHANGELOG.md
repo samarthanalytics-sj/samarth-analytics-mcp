@@ -1,3 +1,9 @@
+## [1.134.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.133.1...v1.134.0) (2026-07-02)
+
+### Features
+
+* **desktop:** lookup-table merge trigger, fix the (?i) download regex, table-only review ([29a5b36](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/29a5b36a8b92c0f94b98991e0e3fd8e76b21e5e2))
+
 ## [1.133.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.133.0...v1.133.1) (2026-07-02)
 
 ### Bug Fixes
