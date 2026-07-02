@@ -1,3 +1,9 @@
+## [1.140.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.139.0...v1.140.0) (2026-07-02)
+
+### Features
+
+* **desktop:** "Server container" tab — create a server container from a web container ([c63fd44](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c63fd446f033dbfa57eba8495156d9af2b42b414))
+
 ## [1.139.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.138.2...v1.139.0) (2026-07-02)
 
 ### Features
