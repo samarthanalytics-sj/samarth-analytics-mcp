@@ -1,3 +1,9 @@
+## [1.138.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.137.1...v1.138.0) (2026-07-02)
+
+### Features
+
+* **desktop:** server-side per-event triggers + request-header variables ([fbeef43](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fbeef43a166783fe63ab399885e8a7d13ac8b3c1))
+
 ## [1.137.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.137.0...v1.137.1) (2026-07-02)
 
 ### Bug Fixes
