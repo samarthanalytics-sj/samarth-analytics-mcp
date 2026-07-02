@@ -318,6 +318,8 @@ export interface SuggestedTagView {
     clickUrlOperator?: string;
     clickTextValue?: string;
     clickTextOperator?: string;
+    /** For matchRegex click-text: GTM's "matches RegEx (ignore case)" condition parameter. */
+    clickTextIgnoreCase?: boolean;
     clickElementValue?: string;
     clickElementOperator?: string;
     formIdValue?: string;

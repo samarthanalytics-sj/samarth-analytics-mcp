@@ -236,6 +236,22 @@ test('click trigger: clickUrl AND clickText conditions are both emitted (AND-ed)
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'all_clicks', clickUrlValue: '/buy', clickTextValue: 'Buy' }), ['clickUrl', 'clickText']);
 });
 
+test('all_clicks trigger: matchRegex + clickTextIgnoreCase emits the condition-level ignore_case parameter (no inline (?i))', () => {
+  const tr = buildTrigger({ name: 'Learn More Variants Click Trigger', kind: 'all_clicks', clickTextValue: '^Learn More$', clickTextOperator: 'matchRegex', clickTextIgnoreCase: true });
+  const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(f.type, 'matchRegex');
+  assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, '^Learn More$');
+  // GTM's "matches RegEx (ignore case)" — gtm.js cannot parse an inline (?i), so the flag must ride
+  // on the condition's ignore_case boolean parameter.
+  const ic = f.parameter.find((p) => p.key === 'ignore_case');
+  assert.equal(ic?.type, 'boolean');
+  assert.equal(ic?.value, 'true');
+  // Without the flag, no ignore_case parameter is emitted (existing conditions unchanged).
+  const plain = buildTrigger({ name: 'x', kind: 'all_clicks', clickTextValue: 'Buy', clickTextOperator: 'equals' });
+  const pf = (plain.filter ?? [])[0] as { parameter: Array<Record<string, unknown>> };
+  assert.equal(pf.parameter.find((p) => p.key === 'ignore_case'), undefined);
+});
+
 test('all_clicks trigger: {{Click Element}} cssSelector filter (FAQ accordion — fires on text/row/arrow) + needs clickElement var', () => {
   const tr = buildTrigger({ name: 'FAQ Click Trigger', kind: 'all_clicks', clickElementValue: '.faq-q, .faq-q *', clickElementOperator: 'cssSelector' });
   assert.equal(tr.type, 'click');

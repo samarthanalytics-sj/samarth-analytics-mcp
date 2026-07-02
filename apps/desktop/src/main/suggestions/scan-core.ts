@@ -198,8 +198,10 @@ async function scanTarget(
 const suggestionKey = (s: SuggestedTag): string =>
   `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.clickElementValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}|${s.trigger.pageUrlValue ?? ''}`;
 
-/** Does a CTA trigger fire on the given click text? Mirrors GTM's matchRegex (RE2 (?i)) / contains /
- *  equals, so we can tell whether an engine tag ALREADY covers an AI-suggested button. PURE. */
+/** Does a CTA trigger fire on the given click text? Mirrors GTM's matchRegex (compiled with the JS
+ *  'i' flag — gtm.js evaluates web matchRegex via JS RegExp, with case-insensitivity carried by the
+ *  condition-level ignore_case parameter, not an inline (?i) flag) / contains / equals, so we can
+ *  tell whether an engine tag ALREADY covers an AI-suggested button. PURE. */
 function ctaTriggerFiresOn(trigger: SuggestedTag['trigger'], text: string): boolean {
   const v = trigger.clickTextValue ?? '';
   if (!v || !text) return false;

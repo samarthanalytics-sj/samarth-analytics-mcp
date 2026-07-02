@@ -22,6 +22,7 @@ import type {
   TagScanResult,
 } from '../../shared/ipc';
 import { suggestionToGroup, suggestionsToTemplateCsv, TEMPLATE_HEADERS } from '../../shared/tag-template';
+import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
@@ -1235,7 +1236,7 @@ function triggerCondition(s: SuggestedTagView): string {
   const t = s.trigger;
   const parts: string[] = [];
   if (t.clickUrlValue) parts.push(`{{Click URL}} ${t.clickUrlOperator ?? 'contains'} "${t.clickUrlValue}"`);
-  if (t.clickTextValue) parts.push(`{{Click Text}} ${t.clickTextOperator ?? 'contains'} "${t.clickTextValue}"`);
+  if (t.clickTextValue) parts.push(`{{Click Text}} ${t.clickTextOperator ?? 'contains'}${t.clickTextIgnoreCase ? ' (ignore case)' : ''} "${t.clickTextValue}"`);
   if (t.clickElementValue) parts.push(`{{Click Element}} matches CSS "${t.clickElementValue}"`);
   if (t.formIdValue) parts.push(`{{Form ID}} ${t.formIdOperator ?? 'equals'} "${t.formIdValue}"`);
   if (t.formClassesValue) parts.push(`{{Form Classes}} ${t.formClassesOperator ?? 'contains'} "${t.formClassesValue}"`);
@@ -2107,6 +2108,46 @@ function TagReviewPanel({
   const alreadyExists = (s: SuggestedTagView): boolean =>
     existing.names.has(effective(s).tagName.trim().toLowerCase()) || (s.platform === 'google_tag' && existing.hasGa4Base);
 
+  // Mergeable groups: >=2 click tags sending the SAME event from different {{Click Text}} equals
+  // triggers (e.g. "Learn More" vs "LEARN MORE"). Offered as an opt-in merge — rows already in the
+  // container (or already created this session) are excluded, since their tags can't be rewritten.
+  // Grouping runs on the EFFECTIVE view (inline edits applied), so an edited event/trigger text moves
+  // a row between groups instead of being silently reverted by the merge.
+  const mergeGroups = findMergeGroups(
+    suggestions
+      .filter((s) => !alreadyExists(s) && statuses[s.id]?.state !== 'ok' && statuses[s.id]?.state !== 'exists' && statuses[s.id]?.state !== 'creating')
+      .map(effective)
+  );
+  function doMergeGroup(g: MergeGroup): void {
+    const merged = mergeGroup(g);
+    // If a DIFFERENT suggestion (outside the group) already carries the derived common name, pick the
+    // distinct "Variants" name — the create flow matches existing tags/triggers by name, so a collision
+    // would dead-end at "already exists" or cross-wire.
+    const memberIds = new Set(g.tags.map((t) => t.id));
+    if (suggestions.some((s) => !memberIds.has(s.id) && effective(s).tagName.trim().toLowerCase() === merged.tagName.trim().toLowerCase())) {
+      merged.tagName = `GA4 - Event - ${mergeLabel(g.eventName)} Variants Click Tag`;
+    }
+    const ids = new Set(g.tags.map((t) => t.id));
+    const wasSelected = g.tags.some((t) => selected[t.id]);
+    // The merged tag takes the FIRST member's slot so the list doesn't jump.
+    setSuggestions((list) => {
+      const at = Math.max(0, list.findIndex((s) => ids.has(s.id)));
+      const rest = list.filter((s) => !ids.has(s.id));
+      return [...rest.slice(0, Math.min(at, rest.length)), merged, ...rest.slice(Math.min(at, rest.length))];
+    });
+    setSelected((sel) => {
+      const n = { ...sel };
+      for (const id of ids) delete n[id];
+      n[merged.id] = wasSelected;
+      return n;
+    });
+    setEdits((e) => {
+      const n = { ...e };
+      for (const id of ids) delete n[id];
+      return n;
+    });
+  }
+
   // Load the container's existing tags whenever the target is ready, then deselect
   // any suggestion that already exists (so a "create" never re-creates a duplicate).
   useEffect(() => {
@@ -2186,6 +2227,15 @@ function TagReviewPanel({
         for (const o of outcomes) if (o.ok || o.existing) n[o.id] = false;
         return n;
       });
+      // Fold the just-created tag names into the container inventory, so alreadyExists() stays
+      // accurate for rows produced later in the session (e.g. a merged tag reusing a created name).
+      const okNames = chosen.filter((s) => byId.get(s.id)?.ok).map((s) => s.tagName.trim().toLowerCase());
+      if (okNames.length) {
+        setExisting((ex) => ({
+          names: new Set([...ex.names, ...okNames]),
+          hasGa4Base: ex.hasGa4Base || chosen.some((s) => byId.get(s.id)?.ok && s.platform === 'google_tag'),
+        }));
+      }
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
       setStatuses((st) => {
@@ -2650,6 +2700,24 @@ function TagReviewPanel({
             {suggestions.length > 0 && visible.length === 0 && (
               <div style={styles.muted}>No tags match your search / filter.</div>
             )}
+
+            {/* Same-event tags (e.g. "Learn More" vs "LEARN MORE") → offer an opt-in merge into ONE
+                tag whose single trigger RegEx (ignore case) matches every variant. Hidden while a scan
+                streams (each progress tick replaces the list, which would silently undo a merge), and
+                a group is only offered while at least one member row is visible under the filters. */}
+            {!scanning && mergeGroups
+              .filter((g) => g.tags.some((t) => visible.some((v) => v.id === t.id)))
+              .map((g) => (
+                <div key={`${g.eventName}|${g.kind}`} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8 }}>
+                  <span style={styles.muted}>
+                    {g.texts.length} tags fire the same event <b style={{ color: 'var(--text)' }}>{g.eventName}</b>:{' '}
+                    {g.texts.map((t) => `"${t}"`).join(' · ')}
+                  </span>
+                  <button style={styles.ghostBtn} onClick={() => doMergeGroup(g)} disabled={creating}>
+                    Merge into one tag
+                  </button>
+                </div>
+              ))}
 
             {visible.length === 0 ? null : tagView === 'table' ? (
               <>
