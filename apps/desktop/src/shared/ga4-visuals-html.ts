@@ -306,9 +306,10 @@ export function buildTrendInsights(v: Ga4VisualsView): TrendInsight[] {
     });
   }
 
-  // 5) Trust caveat.
+  // 5) Trust caveat — verdict-aware wording from the builder (a FAILED gate asserts measured
+  // source-data loss; an UNVERIFIED one only says the split is unverified, never a false fact).
   if (v.channelTrusted === false) {
-    out.push({ tone: 'watch', title: 'Caveat', body: 'A material share of sessions lack source data, so the channel split is not safe to quote yet (see the Data Trust Matrix).' });
+    out.push({ tone: 'watch', title: 'Caveat', body: v.channelCaveat ?? 'The channel split is not safe to quote yet (see the Data Trust Matrix).' });
   }
   // House style: no em dashes, even via interpolated channel/device names (normalised at the source so
   // the React panel and the PDF agree without each re-stripping).
@@ -363,7 +364,7 @@ export function ga4VisualsHtml(v: Ga4VisualsView): string {
   const greyOpen = untrusted ? '<div style="opacity:.5">' : '';
   const greyClose = untrusted ? '</div>' : '';
   const caveat = untrusted
-    ? `<div style="font-size:11.5px;color:var(--c-amber,#b45309);background:var(--c-amber-bg,#fef3c7);border:1px solid var(--c-amber-border,#fde68a);border-radius:6px;padding:6px 10px;margin:8px 0">⚠ Channel attribution is not safe to quote yet - a material share of sessions lack source data (see the Data Trust Matrix). The channel charts below are greyed for that reason.</div>`
+    ? `<div style="font-size:11.5px;color:var(--c-amber,#b45309);background:var(--c-amber-bg,#fef3c7);border:1px solid var(--c-amber-border,#fde68a);border-radius:6px;padding:6px 10px;margin:8px 0">⚠ ${esc((v.channelCaveat ?? 'The channel split is not safe to quote yet (see the Data Trust Matrix).').replace(/—/g, '-'))} The channel charts below are greyed for that reason.</div>`
     : '';
   const channelGrouped: ChannelPoints[] = (v.channelDaily ?? []).map((c) => ({ channel: c.channel, points: groupSeries(c.series, gran, anchor) }));
   const byChannelChart = multiLineChartSvg(channelGrouped);

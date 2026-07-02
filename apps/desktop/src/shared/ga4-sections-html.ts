@@ -97,7 +97,9 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
     const o = x.outcomes;
     if (o.assessed) {
       const maxAbs = Math.max(1, Math.abs(o.sessionsPct ?? 0), Math.abs(o.keyEventsPct ?? 0), Math.abs(o.revenuePct ?? 0));
-      const caveat = !o.keSafe || !o.revSafe ? `<div style="font-size:11.5px;color:${AMBER};margin-top:6px">* Not safe to quote until conversion tracking is confirmed${o.sesSafe ? '; sessions are safe to quote' : ''}.</div>` : '';
+      // Verdict-aware caveat from the builder: a FAILED gate reads "not safe to quote"; an
+      // UNVERIFIED one reads "confirm before quoting" — never claiming more than the trust matrix.
+      const caveat = o.quoteNote ? `<div style="font-size:11.5px;color:${AMBER};margin-top:6px">${esc(o.quoteNote.replace(/—/g, '-'))}</div>` : '';
       s3 += card(
         growthBar('Sessions', o.sessionsPct, maxAbs, BLUE, false) +
           growthBar('Key events', o.keyEventsPct, maxAbs, o.keSafe ? GREEN : AMBER, !o.keSafe) +
@@ -151,7 +153,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
     const b = x.baseline;
     const g = b.growth;
     const growthLine = g
-      ? `<div style="font-size:12.5px;color:${TEXT};margin:3px 0"><span style="font-weight:700;color:${MUTED}">Growth signals (vs prior):</span> sessions ${esc(signed(g.sessionsPct))} &middot; key events ${esc(signed(g.keyEventsPct))}${g.keSafe ? '' : ' *'} &middot; revenue ${esc(signed(g.revenuePct))}${g.revSafe ? '' : ' *'}${g.keSafe && g.revSafe ? '' : `<span style="color:${AMBER}"> (* not safe to quote)</span>`}</div>`
+      ? `<div style="font-size:12.5px;color:${TEXT};margin:3px 0"><span style="font-weight:700;color:${MUTED}">Growth signals (vs prior):</span> sessions ${esc(signed(g.sessionsPct))} &middot; key events ${esc(signed(g.keyEventsPct))}${g.keSafe ? '' : ' *'} &middot; revenue ${esc(signed(g.revenuePct))}${g.revSafe ? '' : ' *'}${g.keSafe && g.revSafe ? '' : `<span style="color:${AMBER}"> (* flagged in the data trust matrix)</span>`}</div>`
       : '';
     s6 += card(
       metaRow('Sessions', `${b.sessions} (prior period ${b.priorSessions}${b.trend})`) +

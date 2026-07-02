@@ -29,12 +29,14 @@ const view = (over: Partial<Ga4ExecSummaryView> = {}): Ga4ExecSummaryView => ({
   highestImpactFix: 'Check DebugView.',
   coverage: { checked: 11, partial: 3, notVerified: 1 },
   categories: [
-    { name: 'Configuration', subscore: 83, weight: 18, contribution: 14.9, status: 'pass' },
-    { name: 'Consent & Compliance', subscore: null, weight: 10, contribution: 0, status: 'not_verified' },
+    { name: 'Configuration', subscore: 83, weight: 18, effectiveWeight: 0.2, contribution: 14.9, status: 'pass' },
+    { name: 'Consent & Compliance', subscore: null, weight: 10, effectiveWeight: 0, contribution: 0, status: 'not_verified' },
   ],
   trust: [
-    { metric: 'Sessions, users, engagement rate', safe: true, reason: 'Fine.' },
-    { metric: 'Revenue / AOV / ROAS', safe: false, reason: 'A <bad> spike.' },
+    { metric: 'Sessions, users, engagement rate', verdict: 'safe', safe: true, reason: 'Fine.' },
+    { metric: 'Revenue / AOV / ROAS', verdict: 'do_not_quote', safe: false, reason: 'A <bad> spike.' },
+    { metric: 'Conversion counts', verdict: 'unverified', safe: false, reason: 'Comparison did not run.' },
+    { metric: 'Channel attribution', verdict: 'caution', safe: false, reason: 'Some loss.' },
   ],
   ...over,
 });
