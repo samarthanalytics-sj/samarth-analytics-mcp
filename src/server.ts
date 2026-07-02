@@ -12,6 +12,7 @@ import {
   getGa4DataClient,
 } from './utils/ga4Client.js';
 import { registerAllTools } from './tools/index.js';
+import { registerServerSidePrompts } from './prompts/serverSide.js';
 import { getGuardrailConfig } from './utils/guardrails.js';
 import { resolveAuth } from './auth/identityContext.js';
 
@@ -24,7 +25,7 @@ export function createGtmMcpServer(auth: OAuth2Client): McpServer {
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
-      capabilities: { tools: {} },
+      capabilities: { tools: {}, prompts: {} },
       instructions: buildInstructions(config),
     }
   );
@@ -45,6 +46,9 @@ export function createGtmMcpServer(auth: OAuth2Client): McpServer {
     getGa4AlphaClient,
     getGa4DataClientFn
   );
+
+  // MCP prompts (prompts/list) — user-selectable templates shown in the client's "prompts" tab.
+  registerServerSidePrompts(server);
 
   return server;
 }
