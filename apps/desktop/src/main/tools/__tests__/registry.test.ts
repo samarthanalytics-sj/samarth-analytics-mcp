@@ -280,6 +280,18 @@ function fakeData(
       calls.push(`metaEmq:${a}:${c}:${w}`);
       return { created: ['ed - fbp', 'ed - fbc', 'ed - event_id'], skipped: ['ed - value'] };
     },
+    setupEcommerceFunnel: async (a: string, c: string, w: string, mid: string, events: string[]) => {
+      calls.push(`setupFunnel:${a}:${c}:${w}:${mid}:${events.join(',')}`);
+      return { created: { variables: [], triggers: events.map((e) => `CE - ${e}`), tags: [] }, skipped: [] };
+    },
+    setupServerEcommerceFunnel: async (a: string, c: string, w: string, mid: string, events: string[], ads?: { conversionId: string; labels: Array<{ event: string; conversionLabel: string }> }) => {
+      calls.push(`setupServerFunnel:${a}:${c}:${w}:${mid}:${events.join(',')}:${ads ? `${ads.conversionId}=${ads.labels.map((l) => `${l.event}/${l.conversionLabel}`).join('+')}` : 'noAds'}`);
+      return { created: { triggers: [], tags: [] }, skipped: [] };
+    },
+    verifyTrackingSetup: async (a: string, c: string, w: string, o?: { events?: string[]; server?: { accountId: string; containerId: string; workspaceId: string } }) => {
+      calls.push(`verifySetup:${a}:${c}:${w}:${o?.events ? o.events.join(',') : 'default'}:${o?.server ? `${o.server.accountId}/${o.server.containerId}/${o.server.workspaceId}` : 'noServer'}`);
+      return { ok: true, passed: 1, warnings: 0, failures: 0, checks: [] };
+    },
     listGtmTemplates: async (a: string, c: string, w: string) => {
       calls.push(`listTemplates:${a}:${c}:${w}`);
       return [];
@@ -395,6 +407,7 @@ async function main(): Promise<void> {
       'run_ga4_report',
       'score_ga4_property',
       'verify_server_endpoint',
+      'verify_tracking_setup',
     ]);
   });
 
@@ -415,11 +428,11 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 46, 'read-only registry has 46 tools');
+    assert.equal(readOnly.list().length, 47, 'read-only registry has 47 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 88, 'read + write registry has 88 tools');
+    assert.equal(withWrites.list().length, 92, 'read + write registry has 92 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
@@ -1366,6 +1379,51 @@ async function main(): Promise<void> {
       trigger: { name: 'CE - Add To Cart', type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'add_to_cart' }] }] },
     });
     assert.ok(fd.calls.some((x) => x.startsWith('createTrigger:')), 'a genuinely new trigger is created');
+  });
+
+  await test('one-shot funnel: setup_ecommerce_funnel / setup_server_ecommerce_funnel / setup_consent_mode_defaults / verify_tracking_setup', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs, 'gtm');
+
+    // Web funnel: defaults to the standard 7-event ecommerce funnel.
+    await reg.execute('setup_ecommerce_funnel', { accountId: '1', containerId: '2', workspaceId: '3', measurementId: 'G-1' });
+    assert.ok(
+      fd.calls.includes('setupFunnel:1:2:3:G-1:view_item,add_to_cart,view_cart,begin_checkout,add_shipping_info,add_payment_info,purchase'),
+      'default = the 7-event ecommerce funnel',
+    );
+    // Custom event list overrides the default; blank measurementId fails loudly.
+    await reg.execute('setup_ecommerce_funnel', { accountId: '1', containerId: '2', workspaceId: '3', measurementId: 'G-1', events: ['purchase', 'generate_lead'] });
+    assert.ok(fd.calls.includes('setupFunnel:1:2:3:G-1:purchase,generate_lead'));
+    await assert.rejects(() => reg.execute('setup_ecommerce_funnel', { accountId: '1', containerId: '2', workspaceId: '3', measurementId: '  ' }), /measurementId/);
+
+    // Server funnel: ads object built only when conversionId + at least one valid label are given.
+    await reg.execute('setup_server_ecommerce_funnel', { accountId: '1', containerId: 'SC1', workspaceId: 'w1', measurementId: 'G-1', events: ['purchase'], adsConversionId: 'AW-9', adsConversionLabels: [{ event: 'purchase', conversionLabel: 'LBL' }] });
+    assert.ok(fd.calls.includes('setupServerFunnel:1:SC1:w1:G-1:purchase:AW-9=purchase/LBL'));
+    await reg.execute('setup_server_ecommerce_funnel', { accountId: '1', containerId: 'SC1', workspaceId: 'w1', measurementId: 'G-1', events: ['purchase'], adsConversionId: 'AW-9' });
+    assert.ok(fd.calls.includes('setupServerFunnel:1:SC1:w1:G-1:purchase:noAds'), 'conversionId without labels → no ads tags');
+
+    // Consent defaults: precheck-guarded create of the Custom HTML consent-default tag.
+    const consent = JSON.parse(await reg.execute('setup_consent_mode_defaults', { accountId: '1', containerId: '2', workspaceId: '3', analyticsStorage: 'granted' }));
+    assert.equal(consent.name, 'Consent Mode - Defaults', 'default tag name');
+    assert.equal(consent.type, 'html');
+    const html = String((consent.parameter as Array<{ key: string; value?: string }>).find((p) => p.key === 'html')?.value ?? '');
+    assert.ok(html.includes("analytics_storage: 'granted'") && html.includes("ad_storage: 'denied'"), 'override + denied default in the emitted gtag call');
+    // Already present → reused, no duplicate create.
+    const fd2 = fakeData({ snapshot: { tags: [], triggers: [], variables: [] } });
+    (fd2.data as unknown as { listGtmTags: unknown }).listGtmTags = async () => [{ tagId: '77', name: 'Consent Mode - Defaults', type: 'html' }];
+    const dup = JSON.parse(await buildToolRegistry(fd2.data, approveAsIs, 'gtm').execute('setup_consent_mode_defaults', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(dup.alreadyExists, true, 'existing consent tag is reused, not duplicated');
+
+    // verify_tracking_setup is READ-ONLY (present without confirm) and routes the server ids.
+    const ro = buildToolRegistry(fd.data);
+    assert.ok(ro.list().some((t) => t.name === 'verify_tracking_setup'), 'verify tool available read-only');
+    await ro.execute('verify_tracking_setup', { accountId: '1', containerId: '2', workspaceId: '3' });
+    assert.ok(fd.calls.includes('verifySetup:1:2:3:default:noServer'));
+    await ro.execute('verify_tracking_setup', { accountId: '1', containerId: '2', workspaceId: '3', events: ['purchase'], serverAccountId: '1', serverContainerId: 'SC1', serverWorkspaceId: 'w1' });
+    assert.ok(fd.calls.includes('verifySetup:1:2:3:purchase:1/SC1/w1'));
+    // Partial server ids (one missing) → treated as web-only, not a broken server check.
+    await ro.execute('verify_tracking_setup', { accountId: '1', containerId: '2', workspaceId: '3', serverAccountId: '1' });
+    assert.equal(fd.calls.filter((c) => c === 'verifySetup:1:2:3:default:noServer').length, 2, 'incomplete server ids fall back to web-only');
   });
 
   await test('server-side GTM: list tools are read-only; create + bootstrap are confirm-gated writes', async () => {

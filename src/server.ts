@@ -13,6 +13,7 @@ import {
 } from './utils/ga4Client.js';
 import { registerAllTools } from './tools/index.js';
 import { registerServerSidePrompts } from './prompts/serverSide.js';
+import { registerEcommerceFunnelPrompts } from './prompts/ecommerceFunnel.js';
 import { getGuardrailConfig } from './utils/guardrails.js';
 import { resolveAuth } from './auth/identityContext.js';
 
@@ -49,6 +50,7 @@ export function createGtmMcpServer(auth: OAuth2Client): McpServer {
 
   // MCP prompts (prompts/list) — user-selectable templates shown in the client's "prompts" tab.
   registerServerSidePrompts(server);
+  registerEcommerceFunnelPrompts(server);
 
   return server;
 }
