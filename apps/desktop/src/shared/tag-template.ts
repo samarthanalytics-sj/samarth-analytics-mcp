@@ -51,9 +51,11 @@ export function triggerWhens(s: SuggestedTagView): TriggerWhen[] {
   const t = s.trigger;
   const cond = (op: string | undefined, fallback: string): string => CONDITION[op ?? fallback] ?? op ?? fallback;
   const out: TriggerWhen[] = [];
-  if (t.clickUrlValue) out.push({ variable: '{{Click URL}}', condition: cond(t.clickUrlOperator, 'contains'), value: t.clickUrlValue });
+  if (t.clickUrlValue) out.push({ variable: '{{Click URL}}', condition: cond(t.clickUrlOperator, 'contains') + (t.clickUrlIgnoreCase ? ' (ignore case)' : ''), value: t.clickUrlValue });
   if (t.clickTextValue) out.push({ variable: '{{Click Text}}', condition: cond(t.clickTextOperator, 'contains') + (t.clickTextIgnoreCase ? ' (ignore case)' : ''), value: t.clickTextValue });
   if (t.clickElementValue) out.push({ variable: '{{Click Element}}', condition: cond(t.clickElementOperator, 'cssSelector'), value: t.clickElementValue });
+  // Lookup-table grouping: the trigger reads the companion smm variable ({{Click Text}} → true rows).
+  if (t.lookupTable?.name) out.push({ variable: `{{${t.lookupTable.name}}}`, condition: 'equals to', value: 'true' });
   if (t.formIdValue) out.push({ variable: '{{Form ID}}', condition: cond(t.formIdOperator, 'equals'), value: t.formIdValue });
   if (t.formClassesValue) out.push({ variable: '{{Form Classes}}', condition: cond(t.formClassesOperator, 'contains'), value: t.formClassesValue });
   if (t.pagePathValue) out.push({ variable: '{{Page Path}}', condition: cond(t.pagePathOperator, 'equals'), value: t.pagePathValue });

@@ -4,6 +4,7 @@ import {
   buildGoogleTag,
   buildGoogleAdsConversionTag,
   buildCustomHtmlTag,
+  buildClickTextLookupVariable,
   buildFloodlightCounterTag,
   buildGoogleAdsCallConversionTag,
   buildGoogleAdsRemarketingTag,
@@ -250,6 +251,39 @@ test('all_clicks trigger: matchRegex + clickTextIgnoreCase emits the condition-l
   const plain = buildTrigger({ name: 'x', kind: 'all_clicks', clickTextValue: 'Buy', clickTextOperator: 'equals' });
   const pf = (plain.filter ?? [])[0] as { parameter: Array<Record<string, unknown>> };
   assert.equal(pf.parameter.find((p) => p.key === 'ignore_case'), undefined);
+});
+
+test('Lookup Table variable: corpus smm shape (setDefaultValue false, input {{Click Text}}, one row per exact text)', () => {
+  const v = buildClickTextLookupVariable('Lookup - Learn More Variants', ['Learn More', 'LEARN MORE']);
+  assert.equal(v.type, 'smm');
+  assert.equal(findParam(v.parameter ?? [], 'setDefaultValue')?.value, 'false');
+  assert.equal(findParam(v.parameter ?? [], 'input')?.value, '{{Click Text}}');
+  const map = findParam(v.parameter ?? [], 'map') as { type: string; list: Array<{ map: Array<Record<string, unknown>> }> };
+  assert.equal(map?.type, 'list');
+  assert.equal(map.list.length, 2);
+  assert.equal(map.list[0].map.find((m) => m.key === 'key')?.value, 'Learn More');
+  assert.equal(map.list[0].map.find((m) => m.key === 'value')?.value, 'true');
+  assert.equal(map.list[1].map.find((m) => m.key === 'key')?.value, 'LEARN MORE');
+});
+
+test('all_clicks trigger: lookupTable → single {{<Lookup>}} equals "true" condition + enables clickText var', () => {
+  const tr = buildTrigger({ name: 'Learn More Variants Click Trigger', kind: 'all_clicks', lookupTable: { name: 'Lookup - Learn More Variants', texts: ['Learn More', 'LEARN MORE'] } });
+  assert.equal(tr.type, 'click');
+  const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(f.type, 'equals');
+  assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Lookup - Learn More Variants}}');
+  assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, 'true');
+  // The lookup reads {{Click Text}}, so the Click Text built-in must be enabled.
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'all_clicks', lookupTable: { name: 'L', texts: ['A'] } }), ['clickText']);
+});
+
+test('link_click trigger: matchRegex + clickUrlIgnoreCase emits ignore_case on the {{Click URL}} condition (download fallback)', () => {
+  const tr = buildTrigger({ name: 'File Download Click Trigger', kind: 'link_click', clickUrlValue: '\\.(pdf|zip)(\\?|#|$)', clickUrlOperator: 'matchRegex', clickUrlIgnoreCase: true });
+  const f = (tr.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(f.type, 'matchRegex');
+  assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Click URL}}');
+  const ic = f.parameter.find((p) => p.key === 'ignore_case');
+  assert.equal(ic?.value, 'true');
 });
 
 test('all_clicks trigger: {{Page Path}} is a second ANDed condition on a page-scoped click (FAQ pattern) + needs pagePath var', () => {

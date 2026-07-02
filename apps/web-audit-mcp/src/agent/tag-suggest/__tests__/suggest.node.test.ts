@@ -350,6 +350,9 @@ const docDl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page
 check('download: ".doc" ends-with does NOT over-match ".docx"', docDl?.trigger.clickUrlValue === '.doc' && docDl?.trigger.clickUrlOperator === 'endsWith');
 const noExtDl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Get file', href: 'https://a.com/download' }] }).find((s) => s.eventName === 'file_download');
 check('download: no clear extension → multi-ext regex fallback ("File Download")', noExtDl?.tagName === 'GA4 - Event - File Download Click Tag' && noExtDl?.trigger.clickUrlOperator === 'matchRegex' && /pdf\|zip/.test(noExtDl?.trigger.clickUrlValue ?? ''));
+// The fallback regex must NEVER carry an inline (?i) — gtm.js (browser JS RegExp) cannot parse it and
+// the condition would silently never match. Case-insensitivity rides on the ignore-case flag instead.
+check('download: fallback regex is plain (no inline (?i)) + clickUrlIgnoreCase ON', !(noExtDl?.trigger.clickUrlValue ?? '').includes('(?i)') && noExtDl?.trigger.clickUrlIgnoreCase === true);
 // A labeled DOWNLOAD-CTA link ("Download brochure") to a file surfaces DISTINCTLY (scoped to its
 // {{Click Text}}), not folded into the generic extension tag — still EM-overlap (de-selected until opt-in).
 const brochureDl = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'download', text: 'Download brochure', href: 'https://a.com/OM_PB_Vibrometry.pdf' }] });

@@ -17,6 +17,7 @@ import {
   builtInVarsForTemplates,
   buildVariable,
   buildUrlQueryVariable,
+  buildClickTextLookupVariable,
   findExistingTrigger,
   customEventNameOf,
   buildGa4ServerTag,
@@ -1060,11 +1061,17 @@ export function buildToolRegistry(
               kind: { type: 'string', enum: ['link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit', 'youtube_video'] },
               clickUrlValue: { type: 'string' },
               clickUrlOperator: { type: 'string' },
+              clickUrlIgnoreCase: { type: 'boolean' },
               clickTextValue: { type: 'string' },
               clickTextOperator: { type: 'string' },
               clickTextIgnoreCase: { type: 'boolean' },
               clickElementValue: { type: 'string' },
               clickElementOperator: { type: 'string' },
+              lookupTable: {
+                type: 'object',
+                properties: { name: { type: 'string' }, texts: { type: 'array', items: { type: 'string' } } },
+                required: ['name', 'texts'],
+              },
               formIdValue: { type: 'string' },
               formIdOperator: { type: 'string' },
               formClassesValue: { type: 'string' },
@@ -1141,9 +1148,16 @@ export function buildToolRegistry(
           kind: (s(ts.kind) || 'pageview') as TriggerInput['kind'],
           clickUrlValue: ts.clickUrlValue != null ? s(ts.clickUrlValue) : undefined,
           clickUrlOperator: ts.clickUrlOperator != null ? s(ts.clickUrlOperator) : undefined,
+          clickUrlIgnoreCase: bln(ts.clickUrlIgnoreCase),
           clickTextValue: ts.clickTextValue != null ? s(ts.clickTextValue) : undefined,
           clickTextOperator: ts.clickTextOperator != null ? s(ts.clickTextOperator) : undefined,
           clickTextIgnoreCase: bln(ts.clickTextIgnoreCase),
+          lookupTable: (() => {
+            const lt = obj(ts.lookupTable);
+            const name = s(lt.name).trim();
+            const texts = Array.isArray(lt.texts) ? lt.texts.map((t) => s(t)).filter(Boolean) : [];
+            return name && texts.length ? { name, texts } : undefined;
+          })(),
           clickElementValue: ts.clickElementValue != null ? s(ts.clickElementValue) : undefined,
           clickElementOperator: ts.clickElementOperator != null ? s(ts.clickElementOperator) : undefined,
           formIdValue: ts.formIdValue != null ? s(ts.formIdValue) : undefined,
@@ -1191,7 +1205,7 @@ export function buildToolRegistry(
           for (const m of String(val ?? '').matchAll(/\{\{(URL - [^}]+)\}\}/g)) urlVarNames.add(m[1]);
         }
         const createdVariables: string[] = [];
-        if (urlVarNames.size) {
+        if (urlVarNames.size || triggerInput.lookupTable) {
           const existingVarNames = new Set(
             (await data.listGtmVariables(accountId, containerId, workspaceId)).map((v) => v.name.toLowerCase())
           );
@@ -1202,6 +1216,15 @@ export function buildToolRegistry(
               await data.createGtmVariable(accountId, containerId, workspaceId, buildUrlQueryVariable(name, queryKey) as unknown as Record<string, unknown>);
               createdVariables.push(name);
             } catch { /* best-effort: the tag still references it; the user can create it in GTM */ }
+          }
+          // The lookup-table trigger's companion smm variable ({{Click Text}} → "true" per text).
+          // Created only when missing — an existing same-named variable is never overwritten.
+          const lt = triggerInput.lookupTable;
+          if (lt && !existingVarNames.has(lt.name.toLowerCase())) {
+            try {
+              await data.createGtmVariable(accountId, containerId, workspaceId, buildClickTextLookupVariable(lt.name, lt.texts) as unknown as Record<string, unknown>);
+              createdVariables.push(lt.name);
+            } catch { /* best-effort: the trigger still references it; the user can create it in GTM */ }
           }
         }
 

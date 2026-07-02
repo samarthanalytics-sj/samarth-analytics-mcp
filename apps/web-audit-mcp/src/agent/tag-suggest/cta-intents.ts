@@ -5,8 +5,10 @@
 //
 // The pattern is a regex SOURCE string (no flags). It is matched
 // case-INSENSITIVELY and is word-bounded, so:
-//   - the GTM trigger uses it as `(?i)<pattern>` via matchRegex (RE2 honours the
-//     inline (?i) flag), firing regardless of the button's casing; and
+//   - a GTM trigger built from it must pair matchRegex with the condition-level
+//     ignore_case parameter ("matches RegEx (ignore case)") — NEVER an inline
+//     (?i) flag, which gtm.js (browser JS RegExp) cannot parse and silently
+//     treats as no-match; and
 //   - it never fires on a substring of a larger word ("demo" inside
 //     "demonstration") because every alternative is \b-anchored.
 

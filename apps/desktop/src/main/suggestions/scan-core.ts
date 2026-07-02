@@ -204,6 +204,11 @@ const suggestionKey = (s: SuggestedTag): string =>
  *  condition-level ignore_case parameter, not an inline (?i) flag) / contains / equals, so we can
  *  tell whether an engine tag ALREADY covers an AI-suggested button. PURE. */
 function ctaTriggerFiresOn(trigger: SuggestedTag['trigger'], text: string): boolean {
+  // A lookup-table trigger fires on its exact text rows (compared case-insensitively here, since the
+  // AI's scraped casing may differ from the engine's).
+  if (trigger.lookupTable?.texts?.length) {
+    return trigger.lookupTable.texts.some((t) => t.trim().toLowerCase() === text.trim().toLowerCase());
+  }
   const v = trigger.clickTextValue ?? '';
   if (!v || !text) return false;
   if (trigger.clickTextOperator === 'matchRegex') {

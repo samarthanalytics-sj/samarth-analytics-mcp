@@ -473,7 +473,9 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         eventParameters: CLICK_PARAMS,
         trigger: ext
           ? { name: trigNameOf(`${extLabel} Download`, 'link_click'), kind: 'link_click', clickUrlValue: `.${ext}`, clickUrlOperator: 'endsWith' }
-          : { name: trigNameOf('File Download', 'link_click'), kind: 'link_click', clickUrlValue: `(?i)\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex' },
+          // Plain regex + the condition-level ignore-case flag — gtm.js evaluates web matchRegex with
+          // the browser's JS RegExp, which cannot parse an inline (?i) (SyntaxError → never fires).
+          : { name: trigNameOf('File Download', 'link_click'), kind: 'link_click', clickUrlValue: `\\.(${DOWNLOAD_EXT})(\\?|#|$)`, clickUrlOperator: 'matchRegex', clickUrlIgnoreCase: true },
       };
     }
     case 'outbound':
