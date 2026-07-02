@@ -144,7 +144,7 @@ export function buildGoogleTag(o: GoogleTagInput): GtmTagResource {
       })),
     });
   }
-  return { name: o.name, type: 'googtag', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
+  return { name: sanitizeName(o.name), type: 'googtag', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
 }
 
 /** Upsert a Google-tag config setting (e.g. server_container_url for server-side tagging)
@@ -230,7 +230,7 @@ export function normalizeAdsConversionId(id: string): string {
 }
 export function buildGoogleAdsConversionTag(o: GoogleAdsConversionInput): GtmTagResource {
   return {
-    name: o.name,
+    name: sanitizeName(o.name),
     type: 'awct',
     parameter: [tpl('conversionId', normalizeAdsConversionId(o.conversionId)), tpl('conversionLabel', o.conversionLabel)],
     ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}),
@@ -244,7 +244,7 @@ export interface CustomHtmlInput {
 }
 export function buildCustomHtmlTag(o: CustomHtmlInput): GtmTagResource {
   return {
-    name: o.name,
+    name: sanitizeName(o.name),
     type: 'html',
     parameter: [tpl('html', o.html), boolean('supportDocumentWrite', false)],
     ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}),
@@ -281,7 +281,7 @@ export function buildFloodlightCounterTag(o: FloodlightCounterInput): GtmTagReso
     boolean('useImageTag', false),
   ];
   if (o.enableConversionLinker !== false) parameter.push(boolean('enableConversionLinker', true), tpl('conversionCookiePrefix', '_gcl'));
-  return { name: o.name, type: 'flc', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
+  return { name: sanitizeName(o.name), type: 'flc', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
 }
 
 export interface GoogleAdsCallConversionInput {
@@ -295,7 +295,7 @@ export interface GoogleAdsCallConversionInput {
 // fixed order. conversionId is the bare numeric id (GTM rejects "AW-", same as awct).
 export function buildGoogleAdsCallConversionTag(o: GoogleAdsCallConversionInput): GtmTagResource {
   return {
-    name: o.name,
+    name: sanitizeName(o.name),
     type: 'awcc',
     parameter: [tpl('phoneConversionNumber', o.phoneNumber), tpl('conversionId', normalizeAdsConversionId(o.conversionId)), tpl('conversionLabel', o.conversionLabel)],
     ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}),
@@ -316,7 +316,7 @@ export function buildGoogleAdsRemarketingTag(o: GoogleAdsRemarketingInput): GtmT
   const parameter: Param[] = [];
   if (o.enableConversionLinker !== false) parameter.push(boolean('enableConversionLinker', true), tpl('conversionCookiePrefix', '_gcl'));
   parameter.push(boolean('enableDynamicRemarketing', false), tpl('conversionId', o.conversionId.trim()), tpl('customParamsFormat', 'NONE'), boolean('rdp', false));
-  return { name: o.name, type: 'sp', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
+  return { name: sanitizeName(o.name), type: 'sp', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
 }
 
 export interface ConversionLinkerInput {
@@ -339,7 +339,7 @@ export function buildConversionLinkerTag(o: ConversionLinkerInput): GtmTagResour
     if (o.linkerDomains?.trim()) parameter.push(tpl('linkerDomains', o.linkerDomains.trim()));
     parameter.push(boolean('formDecoration', false), tpl('urlPosition', 'query'));
   }
-  return { name: o.name, type: 'gclidw', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
+  return { name: sanitizeName(o.name), type: 'gclidw', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
 }
 
 export interface CustomImageInput {
@@ -357,7 +357,7 @@ export function buildCustomImageTag(o: CustomImageInput): GtmTagResource {
   const useCacheBuster = o.useCacheBuster !== false;
   const parameter: Param[] = [tpl('url', o.url), boolean('useCacheBuster', useCacheBuster)];
   if (useCacheBuster) parameter.push(tpl('cacheBusterQueryParam', o.cacheBusterQueryParam?.trim() || 'gtmcb'));
-  return { name: o.name, type: 'img', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
+  return { name: sanitizeName(o.name), type: 'img', parameter, ...(o.firingTriggerId ? { firingTriggerId: o.firingTriggerId } : {}) };
 }
 
 /* ───────────── Server-side GTM (sGTM) ───────────── */
@@ -997,8 +997,11 @@ export function buildVariable(o: VariableInput): GtmVariableResource {
       return { name: o.name, type: 'rh', parameter: [tpl('headerName', o.headerName ?? '')] };
     }
     case 'javascript':
-    default:
       return { name: o.name, type: 'jsm', parameter: [tpl('javascript', o.javascript ?? '')] };
+    default:
+      // An off-enum kind must FAIL loudly — the old fallthrough silently created an EMPTY Custom JS
+      // variable (a resolves-to-nothing landmine the user only finds later in GTM).
+      throw new Error(`Unknown variable kind "${String(o.kind)}" — use constant / data_layer / javascript / event_data / request_header (or create_gtm_variable for raw types).`);
   }
 }
 
@@ -2042,18 +2045,16 @@ export function buildMetaPixelTag(
  *  incoming event_name. pixelId/accessToken are typically {{variables}}. Field keys
  *  corpus-validated (cvt_5TP8W). The EMQ user-data params come from create_meta_emq_variables. PURE. */
 /** The Meta user_data (advanced-matching / EMQ) rows the CAPI tag sends, as [Facebook key → the
- *  `ed - <emq key>` variable that feeds it]. Corpus-verified against the live stape-io/facebook-tag
- *  `userDataList`. fbp/fbc are OMITTED — the template generates _fbp (generateFbp) and reads _fbc from
- *  the cookie itself, so they are not explicit rows. Every ed key here is in META_EMQ_EVENT_DATA_KEYS,
- *  so `create_meta_emq_variables` provides them. */
+ *  `ed - <emq key>` variable that feeds it]. ONLY em/ph: the Stape template's own addUserData already
+ *  extracts fn/ln/ct/zp/country (and the nested GA4 user_data.* shapes) from the incoming event, and
+ *  its overrideDataIfNeeded applies explicit rows UNCONDITIONALLY — so an explicit row whose variable
+ *  resolves undefined would ERASE what the template extracted (lower EMQ). em/ph rows carry the
+ *  top-level email_address/phone_number keys the template misses, and their ed variables fall back to
+ *  the nested user_data.* path (see buildMetaEmqVariables), so they never blank a found value. fbp/fbc
+ *  are omitted — the template generates _fbp and reads _fbc from the cookie itself. */
 const META_USER_DATA_MAP: Array<[fbKey: string, emqKey: string]> = [
   ['em', 'email_address'],
   ['ph', 'phone_number'],
-  ['fn', 'first_name'],
-  ['ln', 'last_name'],
-  ['ct', 'city'],
-  ['zp', 'postal_code'],
-  ['country', 'country'],
 ];
 /** The Meta custom_data (event/object) rows — the ecommerce fields. Corpus `customDataList` maps
  *  content_ids/contents/value/currency; order_id comes from the GA4 transaction_id. */
@@ -2107,9 +2108,24 @@ export function buildMetaCapiServerTag(
   };
 }
 
-/** Build the Meta EMQ Event Data variables (`ed - <key>`, type `ed`, keyPath `<key>`). PURE. */
+/** Build the Meta EMQ Event Data variables (`ed - <key>`, type `ed`, keyPath `<key>`). email/phone
+ *  get a NESTED fallback: GA4 enhanced user data usually arrives nested (user_data.email_address),
+ *  where a flat keyPath resolves undefined — so `ed - email_address` reads the flat key with
+ *  defaultValue {{ed - user_data.email_address}} (a companion variable reading the nested path).
+ *  Either shape then resolves, and the CAPI tag's explicit em/ph rows never blank a value the
+ *  template would have found. PURE. */
 export function buildMetaEmqVariables(): GtmVariableResource[] {
-  return META_EMQ_EVENT_DATA_KEYS.map((k) => buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
+  const NESTED_FALLBACK = new Set(['email_address', 'phone_number']);
+  const out: GtmVariableResource[] = [];
+  for (const k of META_EMQ_EVENT_DATA_KEYS) {
+    if (NESTED_FALLBACK.has(k)) {
+      out.push(buildVariable({ name: `ed - user_data.${k}`, kind: 'event_data', keyPath: `user_data.${k}` }));
+      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }));
+    } else {
+      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
+    }
+  }
+  return out;
 }
 
 /** TikTok Events API STANDARD events — the Stape stape-io/tiktok-tag `eventName` SELECT, verified

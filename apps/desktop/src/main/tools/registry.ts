@@ -19,6 +19,7 @@ import {
   buildUrlQueryVariable,
   buildClickTextLookupVariable,
   buildLookupTableVariable,
+  buildRegexTableVariable,
   buildFormNameVariable,
   findExistingTrigger,
   customEventNameOf,
@@ -1022,7 +1023,7 @@ export function buildToolRegistry(
         'PREFERRED way to create a tag that fires on an event — builds a CORRECT GTM resource from simple fields (you do not write raw GTM JSON). One confirmed step: enables needed built-in variables, reuses an existing same-named trigger or creates it, and creates the tag linked to it. ' +
         'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for Facebook/LinkedIn/TikTok/other pixels); ' +
         '"conversion_linker" (Google Ads Conversion Linker; no fields required; optional enableCrossDomain plus comma-separated linkerDomains); "google_ads_call_conversion" (needs phoneNumber exactly as shown on the page, conversionId, conversionLabel); "google_ads_remarketing" (needs conversionId; an all-pages audience tag); "floodlight" (Campaign Manager / DV360 Floodlight counter; needs advertiserId, groupTag, activityTag; optional countingMethod standard|unique); "custom_image" (a beacon/pixel; needs url). ' +
-        'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event; optional ANDed scope conditions — formIdValue, pagePathValue/pagePathOperator, pageUrlValue — e.g. event form_submit AND {{Page Path}} contains /contact, the corpus-standard data-layer form pattern), "pageview", "form_submit" (optional formIdValue and/or formClassesValue, each with a *Operator — scopes the trigger to ONE form via {{Form ID}}/{{Form Classes}}; or pagePathValue/pagePathOperator to scope to a single page via {{Page Path}} when the form has no id/class; omit all and it fires on every form submit). ' +
+        'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event; optional ANDed scope conditions — formIdValue, pagePathValue/pagePathOperator, pageUrlValue — e.g. event form_submit AND {{Page Path}} contains /contact, the corpus-standard data-layer form pattern), "pageview", "timer" (REQUIRES trigger.intervalMs in ms, optional trigger.limit), "form_submit" (optional formIdValue and/or formClassesValue, each with a *Operator — scopes the trigger to ONE form via {{Form ID}}/{{Form Classes}}; or pagePathValue/pagePathOperator to scope to a single page via {{Page Path}} when the form has no id/class; omit all and it fires on every form submit). ' +
         'eventParameters values may be GTM built-in variables (e.g. {{Click URL}}, {{Click Text}}, {{Form ID}}, {{Form URL}}) — the needed built-in variables are auto-enabled.',
       inputSchema: {
         type: 'object',
@@ -1075,7 +1076,7 @@ export function buildToolRegistry(
             type: 'object',
             properties: {
               name: { type: 'string' },
-              kind: { type: 'string', enum: ['link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit', 'youtube_video'] },
+              kind: { type: 'string', enum: ['link_click', 'all_clicks', 'custom_event', 'pageview', 'form_submit', 'youtube_video', 'timer'] },
               clickUrlValue: { type: 'string' },
               clickUrlOperator: { type: 'string' },
               clickUrlIgnoreCase: { type: 'boolean' },
@@ -1098,6 +1099,8 @@ export function buildToolRegistry(
               pageUrlValue: { type: 'string' },
               pageUrlOperator: { type: 'string' },
               eventName: { type: 'string' },
+              intervalMs: { type: 'string', description: 'timer only — REQUIRED: the firing interval in milliseconds (e.g. "30000").' },
+              limit: { type: 'string', description: 'timer only — max number of fires (omit = unlimited).' },
             },
             required: ['name', 'kind'],
           },
@@ -1186,7 +1189,14 @@ export function buildToolRegistry(
           pageUrlValue: ts.pageUrlValue != null ? s(ts.pageUrlValue) : undefined,
           pageUrlOperator: ts.pageUrlOperator != null ? s(ts.pageUrlOperator) : undefined,
           eventName: ts.eventName != null ? s(ts.eventName) : undefined,
+          intervalMs: ts.intervalMs != null ? s(ts.intervalMs) : undefined,
+          limit: ts.limit != null ? s(ts.limit) : undefined,
         };
+        // A Timer with no interval NEVER fires (blank Interval in the GTM UI) — fail loudly instead of
+        // silently creating a broken trigger (enums are advisory; the model can pass any kind string).
+        if (triggerInput.kind === 'timer' && !s(triggerInput.intervalMs ?? '').trim()) {
+          throw new Error('trigger.kind "timer" requires trigger.intervalMs (the firing interval in milliseconds, e.g. "30000").');
+        }
 
         // Companion Lookup Table variables an event parameter references (e.g. a per-page form_name):
         // normalize now so their INPUT built-in ({{Page Path}}) is enabled and the smm var provisioned.
@@ -1310,14 +1320,14 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_variable_typed',
       description:
-        'Create a GTM variable with the correct structure (you do not write raw JSON). kind: "constant" (value), "data_layer" (dataLayerName), "javascript" (javascript — a Custom JavaScript variable, e.g. "function(){return document.title;}" for page title), "event_data" (SERVER container only — reads keyPath from the incoming event, e.g. keyPath "items" or "x-ga-mp1-tt"; optional defaultValue), or "request_header" (SERVER container only — reads one HTTP header off the request via headerName, e.g. "X-Geo-Country" / "X-Device-Os" that the tagging host injects). Requires accountId, containerId, workspaceId, kind, name.',
+        'Create a GTM variable with the correct structure (you do not write raw JSON). kind: "constant" (value), "data_layer" (dataLayerName), "javascript" (javascript — a Custom JavaScript variable, e.g. "function(){return document.title;}" for page title), "event_data" (SERVER container only — reads keyPath from the incoming event, e.g. keyPath "items" or "x-ga-mp1-tt"; optional defaultValue), "request_header" (SERVER container only — reads one HTTP header off the request via headerName, e.g. "X-Geo-Country" / "X-Device-Os" that the tagging host injects), "lookup_table" (input = the {{variable}} to match EXACTLY, rows = [{key,value}], optional defaultValue), or "regex_table" (same fields; each row key is a REGEX matched against input — use when many inputs map to one value, e.g. {{Page Path}} "^/services/" → a section name). Requires accountId, containerId, workspaceId, kind, name.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          kind: { type: 'string', enum: ['constant', 'data_layer', 'javascript', 'event_data', 'request_header'] },
+          kind: { type: 'string', enum: ['constant', 'data_layer', 'javascript', 'event_data', 'request_header', 'lookup_table', 'regex_table'] },
           name: { type: 'string' },
           value: { type: 'string' },
           dataLayerName: { type: 'string' },
@@ -1325,6 +1335,12 @@ export function buildToolRegistry(
           keyPath: { type: 'string' },
           defaultValue: { type: 'string' },
           headerName: { type: 'string', description: 'request_header only — the HTTP header to read, e.g. "X-Geo-Country".' },
+          input: { type: 'string', description: 'lookup_table / regex_table only — the input {{variable}}, e.g. "{{Page Path}}" or "{{Click Text}}".' },
+          rows: {
+            type: 'array',
+            description: 'lookup_table / regex_table only — the mapping rows (key → value; regex_table keys are regexes).',
+            items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'string' } }, required: ['key', 'value'] },
+          },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'kind', 'name'],
         additionalProperties: false,
@@ -1332,22 +1348,31 @@ export function buildToolRegistry(
       write: true,
       summarize: (a) => `Create ${s(a.kind)} variable "${s(a.name)}"`,
       precheck: (a) => findExistingByName(data, a, s(a.name), 'variable'),
-      handler: (a) =>
-        data.createGtmVariable(
-          s(a.accountId),
-          s(a.containerId),
-          s(a.workspaceId),
-          buildVariable({
+      handler: (a) => {
+        const kind = s(a.kind);
+        let resource: Record<string, unknown>;
+        if (kind === 'lookup_table' || kind === 'regex_table') {
+          const input = s(a.input).trim();
+          const rows = Array.isArray(a.rows) ? a.rows.map((r) => ({ key: s(obj(r).key), value: s(obj(r).value) })).filter((r) => r.key) : [];
+          if (!input || !rows.length) throw new Error(`kind "${kind}" requires input (the {{variable}} to match) and rows ([{key,value}, …]).`);
+          const dv = a.defaultValue != null ? s(a.defaultValue) : undefined;
+          resource = (kind === 'lookup_table'
+            ? buildLookupTableVariable(s(a.name), input, rows, dv)
+            : buildRegexTableVariable(s(a.name), input, rows, dv)) as unknown as Record<string, unknown>;
+        } else {
+          resource = buildVariable({
             name: s(a.name),
-            kind: s(a.kind) as VariableKind,
+            kind: kind as VariableKind,
             value: a.value != null ? s(a.value) : undefined,
             dataLayerName: a.dataLayerName != null ? s(a.dataLayerName) : undefined,
             javascript: a.javascript != null ? s(a.javascript) : undefined,
             keyPath: a.keyPath != null ? s(a.keyPath) : undefined,
             defaultValue: a.defaultValue != null ? s(a.defaultValue) : undefined,
             headerName: a.headerName != null ? s(a.headerName) : undefined,
-          }) as unknown as Record<string, unknown>
-        ),
+          }) as unknown as Record<string, unknown>;
+        }
+        return data.createGtmVariable(s(a.accountId), s(a.containerId), s(a.workspaceId), resource);
+      },
     },
     {
       name: 'create_gtm_workspace',
@@ -1535,10 +1560,10 @@ export function buildToolRegistry(
       },
       write: true,
       summarize: (a) =>
-        `Create a SERVER container from web container ${s(a.webContainerId)}${s(a.serverUrl) ? ` and point it at ${s(a.serverUrl)}` : ''}`,
+        `Create SERVER container "${s(a.name).trim() || '<web container name> - Server'}" from web container ${s(a.webContainerId)}${s(a.serverUrl) ? ` and point it at ${s(a.serverUrl)}` : ''}`,
       handler: async (a) => {
-        const name = s(a.name).trim() || 'Server';
-        return data.createServerContainerFromWeb(s(a.accountId), s(a.webContainerId), name, s(a.serverUrl).trim() || undefined);
+        // Empty name passes through — the data-service derives "<web container name> - Server".
+        return data.createServerContainerFromWeb(s(a.accountId), s(a.webContainerId), s(a.name).trim(), s(a.serverUrl).trim() || undefined);
       },
     },
     {
@@ -1670,7 +1695,7 @@ export function buildToolRegistry(
     {
       name: 'create_meta_emq_variables',
       description:
-        'Create the standard Meta CAPI "Event Match Quality" Event Data variables (ed - fbp, fbc, event_id, value, currency, transaction_id, content_ids, email_address, phone_number, first_name, last_name, country, city, postal_code) in a SERVER container, so you can map them into the Meta Conversions API tag\'s Event Parameters / user_data. Idempotent — skips variables that already exist. NOTE: the Meta Conversions API TAG itself is a gallery template (cvt_…) you import + configure (Pixel ID + Access Token) in the GTM UI — the API cannot build it; this just creates the variables it reads. The CAPI tag hashes user_data itself, so these source the RAW values. Requires accountId, containerId (the SERVER container), workspaceId.',
+        'Create the standard Meta CAPI "Event Match Quality" Event Data variables (ed - fbp, fbc, event_id, value, currency, transaction_id, content_ids, email_address, phone_number, first_name, last_name, country, city, postal_code; email/phone get a nested user_data.* fallback) in a SERVER container. Idempotent — skips variables that already exist. NOTE: the CAPI tag itself is built by create_meta_capi_server_tag (it imports + configures the Stape template via the API AND auto-runs this tool), so you rarely need to call this directly — only to pre-provision the variables. The CAPI tag hashes user_data itself, so these source the RAW values. Requires accountId, containerId (the SERVER container), workspaceId.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1734,7 +1759,7 @@ export function buildToolRegistry(
     {
       name: 'create_meta_capi_server_tag',
       description:
-        'Create a Meta/Facebook Conversions API (CAPI) SERVER tag from the Stape "Facebook Conversion API" community template (stape-io / facebook-tag), tuned for high Event Match Quality: action source = website, Event Enhancement (gtmeec cookie) ON, generate _fbp ON. Pass pixelId + accessToken (typically {{Facebook Pixel ID}} / {{Facebook Api Token}} variables) and the Meta `event` — a STANDARD event (ViewContent, AddToCart, Purchase, Lead, …) sets eventNameStandard with Override; anything else inherits the incoming event_name. For EMQ, FIRST run create_meta_emq_variables (email/phone/fbp/fbc/etc.) and map them in the CAPI tag\'s user-data; the more PII you send (email + click-ID = high priority), the higher the score. Imports the Stape template if needed (you do NOT pass the cvt_ type). Optional firingTriggerId, eventEnhancement, generateFbp, actionSource, name (defaults to "Meta CAPI - <Event> Tag"). Requires accountId, containerId (SERVER), workspaceId, pixelId, accessToken, event.',
+        'Create a Meta/Facebook Conversions API (CAPI) SERVER tag from the Stape "Facebook Conversion API" community template (stape-io / facebook-tag), tuned for high Event Match Quality: action source = website, Event Enhancement (gtmeec cookie) ON, generate _fbp ON, and the EMQ user-data (em/ph from {{ed - email_address}}/{{ed - phone_number}} with nested user_data.* fallbacks), ecommerce custom_data (content_ids/value/currency/order_id) and event_id AUTO-MAPPED into the tag — it also auto-creates those `ed - …` Event Data variables when missing (idempotent), so ONE call yields a complete, working tag. Pass mapEmqVariables=false to skip the mapping (the template still auto-extracts user data from the incoming event). Pass pixelId + accessToken (typically {{Facebook Pixel ID}} / {{Facebook Api Token}} variables) and the Meta `event` — a STANDARD event (ViewContent, AddToCart, Purchase, Lead, …) sets eventNameStandard with Override; anything else inherits the incoming event_name. Imports the Stape template if needed (you do NOT pass the cvt_ type). Optional firingTriggerId, eventEnhancement, generateFbp, actionSource, mapEmqVariables, name (defaults to "Meta CAPI - <Event> Tag"). Requires accountId, containerId (SERVER), workspaceId, pixelId, accessToken, event.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1748,6 +1773,7 @@ export function buildToolRegistry(
           actionSource: { type: 'string', description: 'Default "website".' },
           eventEnhancement: { type: 'boolean', description: 'Event Enhancement (gtmeec) — default true.' },
           generateFbp: { type: 'boolean', description: 'Generate _fbp cookie — default true.' },
+          mapEmqVariables: { type: 'boolean', description: 'Map the ed-variable EMQ/ecommerce rows into the tag (default true). false = leave the lists empty; the template still auto-extracts from the event.' },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'accessToken', 'event'],
@@ -1764,14 +1790,25 @@ export function buildToolRegistry(
         if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
           throw new Error(`Could not resolve the Stape Facebook CAPI template's tag type (got "${tmpl.type}"). Import stape-io/facebook-tag and check list_gtm_templates.`);
         }
+        const mapEmq = bln(a.mapEmqVariables) !== false; // default true; only an explicit false skips
+        // The mapped rows reference {{ed - …}} variables — ensure they EXIST first (idempotent; skips
+        // ones already present) or the tag create hard-fails on the dangling references.
+        let createdVariables: string[] = [];
+        if (mapEmq) {
+          try {
+            createdVariables = (await data.createMetaEmqVariables(s(a.accountId), s(a.containerId), s(a.workspaceId))).created;
+          } catch { /* best-effort: existing containers may already have them */ }
+        }
         const name = s(a.name).trim() || `Meta CAPI - ${metaStandardEvent(event) ?? event} Tag`;
         const tag = buildMetaCapiServerTag(tmpl.type, name, s(a.pixelId), s(a.accessToken), event, {
           actionSource: a.actionSource != null ? s(a.actionSource) : undefined,
-          eventEnhancement: a.eventEnhancement != null ? Boolean(a.eventEnhancement) : undefined,
-          generateFbp: a.generateFbp != null ? Boolean(a.generateFbp) : undefined,
+          eventEnhancement: bln(a.eventEnhancement),
+          generateFbp: bln(a.generateFbp),
+          mapEmqVariables: mapEmq,
           firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
         });
-        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+        const created = await data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+        return { ...created, createdVariables };
       },
     },
     {
@@ -1829,9 +1866,9 @@ export function buildToolRegistry(
           userData: mapRows(a.userData),
           eventProperties: mapRows(a.eventProperties),
           testEventCode: a.testEventCode != null ? s(a.testEventCode) : undefined,
-          generateTtp: a.generateTtp != null ? Boolean(a.generateTtp) : undefined,
-          eventEnhancement: a.eventEnhancement != null ? Boolean(a.eventEnhancement) : undefined,
-          requireConsent: a.requireConsent != null ? Boolean(a.requireConsent) : undefined,
+          generateTtp: bln(a.generateTtp),
+          eventEnhancement: bln(a.eventEnhancement),
+          requireConsent: bln(a.requireConsent),
           firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
         });
         return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);

@@ -94,6 +94,49 @@ export function registerContainerTools(server: McpServer, getClient: () => GtmCl
     }
   );
 
+  // ── containers/set tagging server urls (SERVER containers) ─────────────────
+  server.registerTool(
+    'containers_set_tagging_server_urls',
+    {
+      description:
+        "[WRITE] Set a SERVER container's taggingServerUrls (the deployed tagging-server URL, e.g. from Cloud Run/Stape). " +
+        'Read-modify-write via containers.update so the other container fields are preserved; rejects a non-server container. ' +
+        'Records the URL in config only — it does NOT deploy the host. Requires GTM_MCP_ENABLE_WRITES=true and confirm=true.',
+      inputSchema: z.object({
+        accountId: z.string().describe('The GTM account ID.'),
+        containerId: z.string().describe('The SERVER container ID.'),
+        serverUrls: z.array(z.string()).describe('The https tagging-server URL(s) to record on the container.'),
+        confirm: z.boolean().describe('Must be true to confirm this write operation.'),
+      }),
+    },
+    async ({ accountId, containerId, serverUrls, confirm }) => {
+      try {
+        const config = getGuardrailConfig();
+        const { dryRun } = checkGuardrails('write', confirm, config);
+        if (dryRun) {
+          return textResult(`[DRY RUN] Would set taggingServerUrls on container ${containerId} to: ${serverUrls.join(', ')}`);
+        }
+        const client = getClient();
+        const path = `accounts/${accountId}/containers/${containerId}`;
+        const current = (await client.accounts.containers.get({ path })).data;
+        const ctx = Array.isArray(current.usageContext) ? current.usageContext : [];
+        if (!ctx.some((u) => String(u).toLowerCase() === 'server')) {
+          throw new Error(
+            `Container ${containerId} is not a SERVER container (usageContext ${JSON.stringify(ctx)}) — taggingServerUrls only applies to server containers.`
+          );
+        }
+        const res = await client.accounts.containers.update({
+          path,
+          fingerprint: current.fingerprint ?? undefined,
+          requestBody: { ...current, taggingServerUrls: serverUrls },
+        });
+        return jsonResult({ containerId: res.data.containerId, name: res.data.name, taggingServerUrls: res.data.taggingServerUrls ?? [] });
+      } catch (err) {
+        return errorResult('containers_set_tagging_server_urls', err);
+      }
+    }
+  );
+
   // ── containers/snippet ─────────────────────────────────────────────────────
   server.registerTool(
     'containers_snippet',

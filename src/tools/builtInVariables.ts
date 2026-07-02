@@ -106,8 +106,10 @@ export function registerBuiltInVariableTools(server: McpServer, getClient: () =>
           return textResult(`[DRY RUN] Would disable built-in variables: ${types.join(', ')}`);
         }
         const client = getClient();
+        // The DELETE endpoint is the /built_in_variables collection under the workspace — without the
+        // suffix the request hits the workspace itself and fails (or worse).
         await client.accounts.containers.workspaces.built_in_variables.delete({
-          path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+          path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/built_in_variables`,
           type: types,
         });
         return textResult(`Built-in variables disabled: ${types.join(', ')}`);
@@ -136,8 +138,9 @@ export function registerBuiltInVariableTools(server: McpServer, getClient: () =>
           return textResult(`[DRY RUN] Would revert built-in variable: ${type}`);
         }
         const client = getClient();
+        // Same collection path as delete: .../workspaces/{id}/built_in_variables (per the API docs).
         const res = await client.accounts.containers.workspaces.built_in_variables.revert({
-          path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
+          path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/built_in_variables`,
           type,
         });
         return jsonResult(res.data);

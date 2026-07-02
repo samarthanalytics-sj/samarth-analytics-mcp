@@ -3491,7 +3491,7 @@ function ServerContainerPanel({
                     <div key={i} style={{ fontSize: 12 }}>• {t.kind}: <b>{t.name}</b> <span style={{ color: 'var(--text-faint)' }}>({t.detail})</span></div>
                   ))}
                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-                    Ask the chat to add these server-side (Google Ads → create_server_tag; Meta/TikTok → import the CAPI template + create_meta_emq_variables).
+                    Ask the chat to add these server-side (Google Ads → create_server_tag; Meta → create_meta_capi_server_tag; TikTok → create_tiktok_capi_server_tag).
                   </div>
                 </div>
               )}

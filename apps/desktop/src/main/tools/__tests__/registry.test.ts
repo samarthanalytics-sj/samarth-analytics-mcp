@@ -945,6 +945,41 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.some((c) => c.startsWith('enableVars:1:2:3:') && c.includes('formElement')), 'auto-enabled the Form Element built-in');
   });
 
+  await test('create_tracking_tag (timer) maps intervalMs/limit to top-level Trigger fields; missing interval fails loudly', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    await reg.execute('create_gtm_tracking_tag', {
+      accountId: '1', containerId: '2', workspaceId: '3',
+      platform: 'ga4_event', tagName: 'GA4 - Event - Heartbeat Tag', measurementId: 'G-XYZ', eventName: 'heartbeat',
+      trigger: { name: 'Heartbeat Timer', kind: 'timer', intervalMs: '30000', limit: '10' },
+    });
+    assert.ok(fd.calls.some((c) => c.startsWith('createTrigger:1:2:3:Heartbeat Timer')), 'created the timer trigger');
+    // No interval → a Timer that NEVER fires; must throw instead of silently creating it.
+    await assert.rejects(
+      () => reg.execute('create_gtm_tracking_tag', { accountId: '1', containerId: '2', workspaceId: '3', platform: 'ga4_event', tagName: 'X', measurementId: 'G-1', eventName: 'e', trigger: { name: 'Broken Timer', kind: 'timer' } }),
+      /requires trigger\.intervalMs/,
+    );
+  });
+
+  await test('create_gtm_variable_typed: lookup_table + regex_table kinds build smm/remm from input+rows', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const lt = JSON.parse(await reg.execute('create_gtm_variable_typed', {
+      accountId: '1', containerId: '2', workspaceId: '3', kind: 'lookup_table', name: 'Page Type',
+      input: '{{Page Path}}', rows: [{ key: '/', value: 'Homepage' }, { key: '/services/ga4-consulting', value: 'GA4 Service' }], defaultValue: 'Other',
+    }));
+    assert.equal(lt.type, 'smm');
+    assert.ok(fd.calls.some((c) => c.startsWith('createVar:1:2:3:smm:Page Type')), 'created the smm lookup');
+    const rt = JSON.parse(await reg.execute('create_gtm_variable_typed', {
+      accountId: '1', containerId: '2', workspaceId: '3', kind: 'regex_table', name: 'Section',
+      input: '{{Page Path}}', rows: [{ key: '^/services/', value: 'Services' }],
+    }));
+    assert.equal(rt.type, 'remm');
+    assert.ok(fd.calls.some((c) => c.startsWith('createVar:1:2:3:remm:Section')), 'created the remm regex table');
+    // Missing input/rows must fail with a clear message.
+    await assert.rejects(() => reg.execute('create_gtm_variable_typed', { accountId: '1', containerId: '2', workspaceId: '3', kind: 'lookup_table', name: 'X' }), /requires input/);
+  });
+
   await test('create_gtm_variable_typed builds a Custom JS variable', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, approveAsIs);
@@ -1357,9 +1392,10 @@ async function main(): Promise<void> {
     assert.equal(srv.webWired?.name, 'Google Tag', 'points the web Google tag at the server');
     assert.ok(Array.isArray(srv.webNonGa4) && srv.webNonGa4[0].kind === 'Google Ads conversion', 'reports non-GA4 web tags for manual server setup');
     assert.ok(fd.calls.includes('createServerFromWeb:1:2:ex.com - Server:https://sgtm.ex.com'));
-    // name defaults + serverUrl optional.
+    // Omitted name passes through EMPTY — the data-service derives "<web container name> - Server"
+    // (the description-promised default; never the bare literal "Server").
     await reg.execute('create_server_container_from_web', { accountId: '1', webContainerId: '2' });
-    assert.ok(fd.calls.includes('createServerFromWeb:1:2:Server:'), 'name defaults, serverUrl optional');
+    assert.ok(fd.calls.includes('createServerFromWeb:1:2::'), 'empty name passes through for web-name derivation; serverUrl optional');
 
     const client = JSON.parse(await reg.execute('create_gtm_client', { accountId: '1', containerId: '2', workspaceId: '3', client: { name: 'GA4', type: 'gaaw_client' } }));
     assert.equal(client.type, 'gaaw_client');
@@ -1441,6 +1477,14 @@ async function main(): Promise<void> {
     assert.equal(capi.type, 'cvt_5RM3Q', 'built on the imported Stape CAPI template type');
     assert.equal(capi.name, 'Meta CAPI - Purchase Tag', 'default CAPI name');
     assert.ok(fd.calls.includes('importTemplate:stape-io/facebook-tag'));
+    // The tag's EMQ rows reference {{ed - *}} — the handler auto-ensures those variables exist
+    // (idempotent) so the tag create never fails on dangling references, and reports what it made.
+    assert.ok(fd.calls.includes('metaEmq:1:2:3'), 'auto-ran create_meta_emq_variables before the tag create');
+    assert.deepEqual(capi.createdVariables, ['ed - fbp', 'ed - fbc', 'ed - event_id'], 'reports the EMQ variables it created');
+    // mapEmqVariables=false skips both the variable ensure and the mapped lists.
+    const before = fd.calls.filter((c) => c.startsWith('metaEmq:')).length;
+    await reg.execute('create_meta_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', name: 'Meta CAPI - Bare Tag', pixelId: '1', accessToken: 'T', event: 'Purchase', mapEmqVariables: false });
+    assert.equal(fd.calls.filter((c) => c.startsWith('metaEmq:')).length, before, 'mapEmqVariables=false → no EMQ variable ensure');
     await assert.rejects(() => reg.execute('create_meta_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '1', accessToken: '', event: 'Purchase' }), /accessToken is required/);
 
     // create_tiktok_capi_server_tag imports the Stape TikTok template + creates the Events API server tag.
