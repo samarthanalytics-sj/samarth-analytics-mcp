@@ -61,6 +61,10 @@ export interface DetectedForm {
   /** The form's input fields (type/name/required only) — drives the field-based
    *  signature shown to the user. */
   fields?: FormFieldSummary[];
+  /** Not rendered at scan time — a modal/popup form that opens on a click (e.g. a
+   *  "Book a demo" Marketo modal). Surfaced in the evidence so the user knows why
+   *  no form is visible on the page. */
+  hidden?: boolean;
 }
 
 export type ElementKind = 'email' | 'phone' | 'download' | 'outbound' | 'social' | 'cta';

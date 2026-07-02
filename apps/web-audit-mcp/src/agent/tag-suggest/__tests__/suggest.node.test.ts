@@ -244,6 +244,12 @@ check('rank: high-confidence non-EM first (form/email before download)', ranked[
 
 // ── review-fix regressions ───────────────────────────────────────────────────
 check('provider: Pardot via form action (handler endpoint)', detectFormProvider(sig({}), 'https://go.pardot.com/l/1/2/form-handler').vendor === 'pardot');
+// Marketo without the #mktoForm_<n> id (the get.chownow.com shape): class .mktoForm or the forms2 script.
+check('provider: Marketo via class .mktoForm (no #mktoForm_<n> id)', detectFormProvider(sig({ classNames: ['mktoForm', 'tal'] })).vendor === 'marketo');
+check('provider: Marketo via the forms2 loader script', detectFormProvider(sig({ scriptSrcs: ['https://app-ab12.marketo.com/js/forms2/js/forms2.min.js'] })).vendor === 'marketo');
+check('provider: munchkin.js (tracking-only, loads site-wide without a form) does NOT flip forms to marketo', detectFormProvider(sig({ scriptSrcs: ['https://munchkin.marketo.net/munchkin.js'] })).vendor !== 'marketo');
+check('embed: class .mktoForm marks an embedded Marketo form; a bare marketo script does NOT synthesize one',
+  detectEmbeddedForm(sig({ classNames: ['mktoForm'] }))?.vendor === 'marketo' && detectEmbeddedForm(sig({ scriptSrcs: ['https://app-ab12.marketo.com/js/forms2/js/forms2.min.js'] })) === null);
 
 const otherForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/x', purpose: 'other', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
 check('form: an untitled "other" form is not tracked (no generic form_submission tag)', otherForm.length === 0);
@@ -364,8 +370,10 @@ const siteWideOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/a'
 check('full: a site-wide untitled "other" form also yields NO tag (no catch-all fold)', !siteWideOther.some((s) => s.trigger.kind === 'form_submit'));
 
 // ── FAQ accordion grouping ───────────────────────────────────────────────────
-// >=2 question rows (CTA text ending "?") sharing a class collapse into ONE tag scoped to that class
-// via {{Click Element}} matches CSS, so a click on the text, the row, or the arrow icon all fire.
+// >=2 question rows (CTA text ending "?") collapse into ONE tag — class route when a stable shared
+// class exists ({{Click Element}} matches CSS: fires on the text, the row, or the arrow), else the
+// corpus-dominant text route ({{Click Text}} ends with "?"). Single-page FAQs ALSO get an ANDed
+// {{Page Path}} condition; per-question tags are never emitted alongside.
 const faqEls = [
   { page: '/faq', kind: 'cta' as const, text: 'Does ChowNow charge commissions?', intent: 'generic' as const, className: 'faq-question flex items-center' },
   { page: '/faq', kind: 'cta' as const, text: 'Does ChowNow integrate with my POS?', intent: 'generic' as const, className: 'faq-question flex items-center' },
@@ -373,25 +381,77 @@ const faqEls = [
 ];
 const faq = buildSuggestions({ siteHost: 'a.com', forms: [], elements: faqEls });
 const faqTag = faq.find((s) => s.eventName === 'faq_click');
-check('faq: >=2 question rows sharing a class → ONE faq_click tag scoped to the accordion selector (all_clicks + cssSelector)',
-  !!faqTag && faqTag.trigger.kind === 'all_clicks' && faqTag.trigger.clickElementValue === '.faq-question, .faq-question *' && faqTag.trigger.clickElementOperator === 'cssSelector' && /faq/i.test(faqTag.tagName));
+check('faq: shared accordion class → ONE faq_click tag on the class selector + ANDed {{Page Path}} (multiple conditions in one trigger)',
+  !!faqTag && faqTag.trigger.kind === 'all_clicks' && faqTag.trigger.clickElementValue === '.faq-question, .faq-question *' && faqTag.trigger.clickElementOperator === 'cssSelector' && faqTag.trigger.pagePathValue === '/faq' && faqTag.trigger.pagePathOperator === 'contains' && /faq/i.test(faqTag.tagName));
 check('faq: the grouped question rows are NOT also emitted as their own per-question CTAs', !faq.some((s) => s.trigger.clickTextValue && /\?$/.test(s.trigger.clickTextValue)));
-// A LONE question (only one) is not an accordion — stays an individual CTA.
+// A LONE question (only one on the whole site) is not an accordion — stays an individual CTA.
 const loneQ = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/x', kind: 'cta', text: 'Need help?', intent: 'generic', className: 'faq-question' }] });
 check('faq: a single question row is NOT grouped (no faq tag; stays an individual CTA)', !loneQ.some((s) => s.eventName === 'faq_click') && loneQ.some((s) => s.trigger.clickTextValue === 'Need help?'));
-// Questions sharing only utility classes (no distinctive shared token) are NOT grouped.
+// A STATE class (Bootstrap-style "collapsed", toggled as the accordion opens) must never scope the
+// trigger — the stable structural class ("acc-tog", the ChowNow shape) is picked instead.
+const stateCls = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/', kind: 'cta', text: 'Does ChowNow charge commissions?', intent: 'generic', className: 'collapsed acc-tog' },
+  { page: '/', kind: 'cta', text: 'What happens to my customer data?', intent: 'generic', className: 'collapsed acc-tog' },
+] }).find((s) => s.eventName === 'faq_click');
+check('faq: a toggling state class (.collapsed) is rejected — the stable class (.acc-tog) scopes the selector; root page uses equals',
+  stateCls?.trigger.clickElementValue === '.acc-tog, .acc-tog *' && stateCls?.trigger.pagePathValue === '/' && stateCls?.trigger.pagePathOperator === 'equals');
+// No usable shared class → the corpus-dominant TEXT route: ONE tag on {{Click Text}} ends with "?",
+// still ANDed with the page condition — never per-question tags.
 const noShared = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
-  { page: '/x', kind: 'cta', text: 'Q one?', intent: 'generic', className: 'flex items-center' },
-  { page: '/x', kind: 'cta', text: 'Q two?', intent: 'generic', className: 'grid gap-2' },
+  { page: '/x', kind: 'cta', text: 'Q one is long enough?', intent: 'generic', className: 'flex items-center' },
+  { page: '/x', kind: 'cta', text: 'Q two is long enough?', intent: 'generic', className: 'grid gap-2' },
 ] });
-check('faq: questions with no shared distinctive class are NOT grouped (no faq tag)', !noShared.some((s) => s.eventName === 'faq_click'));
-// Two UNRELATED "?" buttons that merely share a generic component class (.btn) must NOT be grouped —
-// otherwise the selector ".btn, .btn *" would fire on every button on the site.
+const noSharedFaq = noShared.find((s) => s.eventName === 'faq_click');
+check('faq: no shared class → ONE text-route tag ({{Click Text}} ends with "?" + {{Page Path}}), no per-question tags',
+  !!noSharedFaq && noSharedFaq.trigger.clickTextValue === '?' && noSharedFaq.trigger.clickTextOperator === 'endsWith' && noSharedFaq.trigger.pagePathValue === '/x' && !noShared.some((s) => s.trigger.clickTextOperator === 'equals' && /\?$/.test(s.trigger.clickTextValue ?? '')));
+// A generic component class (.btn) never scopes the selector — these group via the TEXT route instead
+// (no ".btn, .btn *" page-wide selector).
 const btnQ = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
   { page: '/x', kind: 'cta', text: 'Ready to scale?', intent: 'generic', className: 'btn btn-lg btn-primary' },
   { page: '/x', kind: 'cta', text: 'Have questions?', intent: 'generic', className: 'btn btn-lg btn-primary' },
 ] });
-check('faq: unrelated "?" buttons sharing only a generic component class (btn) are NOT grouped', !btnQ.some((s) => s.eventName === 'faq_click'));
+const btnFaq = btnQ.find((s) => s.eventName === 'faq_click');
+check('faq: "?" buttons sharing only .btn → TEXT route (no .btn selector)', !!btnFaq && !btnFaq.trigger.clickElementValue && btnFaq.trigger.clickTextOperator === 'endsWith');
+// ACCORDIONS on MULTIPLE pages (each page has >=2 distinct questions) → ONE site-wide tag, no page cond.
+const multiPage = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/a', kind: 'cta', text: 'How does shipping work?', intent: 'generic', className: 'faq-q' },
+  { page: '/a', kind: 'cta', text: 'What countries do you ship to?', intent: 'generic', className: 'faq-q' },
+  { page: '/b', kind: 'cta', text: 'How do returns work?', intent: 'generic', className: 'faq-q' },
+  { page: '/b', kind: 'cta', text: 'How long do refunds take?', intent: 'generic', className: 'faq-q' },
+] });
+const multiFaq = multiPage.find((s) => s.eventName === 'faq_click');
+check('faq: accordions on multiple pages → ONE site-wide tag, no {{Page Path}} condition', !!multiFaq && multiFaq.page === 'site-wide' && !multiFaq.trigger.pagePathValue && multiPage.filter((s) => s.eventName === 'faq_click').length === 1);
+// GUARDS against over-folding (adversarial-review catches):
+// An INTENT CTA ending in "?" is never swallowed into the FAQ group — it keeps its intent tag.
+const intentQ = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/faq', kind: 'cta', text: 'Q one is long enough?', intent: 'generic', className: 'faq-q' },
+  { page: '/faq', kind: 'cta', text: 'Q two is long enough?', intent: 'generic', className: 'faq-q' },
+  { page: '/faq', kind: 'cta', text: 'Want to book a demo?', intent: 'book_demo', className: 'faq-q' },
+] });
+check('faq: an intent CTA ending in "?" keeps its own tag (not swallowed into faq_click)',
+  intentQ.some((s) => s.eventName === 'faq_click') && intentQ.some((s) => s.eventName !== 'faq_click' && s.trigger.clickTextValue === 'Want to book a demo?' && s.trigger.clickTextOperator === 'equals'));
+// A repeated identical "?" button across pages (footer chat launcher) is NOT an accordion.
+const repeated = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/a', kind: 'cta', text: 'Questions or thoughts?', intent: 'generic', className: 'chat-launcher' },
+  { page: '/b', kind: 'cta', text: 'Questions or thoughts?', intent: 'generic', className: 'chat-launcher' },
+] });
+check('faq: a repeated identical "?" button across pages does NOT fabricate an FAQ group (stays a CTA)',
+  !repeated.some((s) => s.eventName === 'faq_click') && repeated.some((s) => s.trigger.clickTextValue === 'Questions or thoughts?'));
+// A stray "?" CTA on another page does NOT degrade a real accordion's class route + page scoping.
+const strayMix = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/faq', kind: 'cta', text: 'Does it work offline?', intent: 'generic', className: 'accordion-button' },
+  { page: '/faq', kind: 'cta', text: 'Is there a free trial?', intent: 'generic', className: 'accordion-button' },
+  { page: '/home', kind: 'cta', text: 'Ready to grow your restaurant?', intent: 'generic', className: 'btn btn-primary' },
+] });
+const strayFaq = strayMix.find((s) => s.eventName === 'faq_click');
+check('faq: a stray "?" CTA elsewhere stays OUT of the group — accordion keeps class route + page scope, stray keeps its tag',
+  strayFaq?.trigger.clickElementValue === '.accordion-button, .accordion-button *' && strayFaq?.trigger.pagePathValue === '/faq' && strayMix.some((s) => s.trigger.clickTextValue === 'Ready to grow your restaurant?'));
+// A PREFIXED state class (is-collapsed) is rejected like the bare one — the stable class wins.
+const prefixedState = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/', kind: 'cta', text: 'Does it sync with my POS?', intent: 'generic', className: 'is-collapsed acc-tog' },
+  { page: '/', kind: 'cta', text: 'Can I export my data?', intent: 'generic', className: 'is-collapsed acc-tog' },
+] }).find((s) => s.eventName === 'faq_click');
+check('faq: a prefixed state class (.is-collapsed) never scopes the selector', prefixedState?.trigger.clickElementValue === '.acc-tog, .acc-tog *');
 
 // REGRESSION (image bug): no generated tag/trigger name may contain ":" (GTM rejects it).
 const colonCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Apply Now: Today', intent: 'generic' }] });

@@ -134,6 +134,20 @@ function fieldsIn($: CheerioAPI, root: Cheerio<AnyNode>): RawFormField[] {
   return fields;
 }
 
+// Like fieldsIn, but EXCLUDING fields inside a real <form> descendant — those are already captured as
+// native forms in step 1. Mirrors the in-page extractor's fieldsOutsideForm, so a wrapper containing a
+// <form> plus an outside "Book a demo" button isn't re-detected as a second, phantom div-form.
+function fieldsOutsideForm($: CheerioAPI, root: Cheerio<AnyNode>): RawFormField[] {
+  const fields: RawFormField[] = [];
+  root.find('input, select, textarea').each((_i, el) => {
+    if (fields.length >= 50) return false;
+    if ($(el).closest('form').length) return;
+    const f = fieldOf($, el);
+    if (f) fields.push(f);
+  });
+  return fields;
+}
+
 function privacyIn(root: Cheerio<AnyNode>): boolean {
   return root.find('a[href*="privacy"], a[href*="datenschutz"], a[href*="confidentialite"], a[href*="privacidad"], a[href*="cookie-policy"]').length > 0;
 }
@@ -195,7 +209,7 @@ function extractFormsCheerio($: CheerioAPI, abs: (href: string) => string): RawF
     let node = btn.parent();
     for (let i = 0; node.length && i < 6; i++, node = node.parent()) {
       if (String(node.prop('tagName') || '').toLowerCase() === 'form') break;
-      if (fieldsIn($, node).length >= 1) {
+      if (fieldsOutsideForm($, node).length >= 1) {
         host = node;
         break;
       }
@@ -203,7 +217,7 @@ function extractFormsCheerio($: CheerioAPI, abs: (href: string) => string): RawF
     if (!host || host.closest('form').length) return;
     const hostEl = host.get(0);
     if (!hostEl || seen.has(hostEl)) return; // same container reached via two buttons
-    const fields = fieldsIn($, host);
+    const fields = fieldsOutsideForm($, host);
     if (!fields.some((f) => TEXTISH.has(f.type))) return;
     seen.add(hostEl);
     out.push({

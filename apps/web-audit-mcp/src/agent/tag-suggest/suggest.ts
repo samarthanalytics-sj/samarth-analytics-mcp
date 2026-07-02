@@ -354,7 +354,8 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     evidence:
       `form purpose=${f.purpose}; provider=${f.provider.vendor} (${f.provider.evidence})` +
       (trigger.formIdValue ? `; id=#${f.formId}` : usedClass ? `; class=.${usedClass}` : usedPage ? `; page=${usedPage}` : '') +
-      (sig.length ? `; fields: ${sig.join(', ')}` : ''),
+      (sig.length ? `; fields: ${sig.join(', ')}` : '') +
+      (f.hidden ? '; hidden at page load — typically opens in a modal/popup or tab (e.g. a "Book a demo" overlay)' : ''),
     ...(note ? { note } : {}),
     confidence: 'high',
     // GA4 EM "form interactions" is limited/generic; a dedicated lead event is valuable.
@@ -587,11 +588,17 @@ export function ga4ConfigSuggestion(): SuggestedTag {
 const CONF = { high: 0, medium: 1, low: 2 } as const;
 
 // ── FAQ accordion grouping ───────────────────────────────────────────────────
-// Several question rows (CTA text ending in "?") that share a class are ONE accordion. Track them with
-// a SINGLE tag scoped to that class via {{Click Element}} matches CSS "<sel>, <sel> *", so a click on
-// the question text, the row padding, OR the arrow icon all fire (each is inside the header element).
+// Question rows (CTA text ending in "?") are ONE FAQ, tracked by a SINGLE tag — never per-question
+// tags. The trigger follows the corpus of real FAQ triggers: PREFER a distinctive shared accordion
+// class → {{Click Element}} matches CSS "<sel>, <sel> *" (fires on the question text, the row padding,
+// OR the arrow icon); else the corpus-dominant {{Click Text}} ends with "?". Either way, when every
+// question lives on ONE page the trigger ALSO carries a {{Page Path}} condition (multiple ANDed
+// conditions in one trigger, as real containers do); a multi-page FAQ stays site-wide.
 const FAQ_UTILITY_RE = /^(flex|grid|block|inline|inline-block|hidden|relative|absolute|fixed|sticky|static|container|row|col|w|h|min|max|p[xytblr]?|m[xytblr]?|gap|space|items|justify|content|self|text|font|leading|tracking|bg|border|rounded|shadow|cursor|group|transition|duration|ease|transform|active|open|show|collapsed?)([-:].*)?$/i;
 const FAQ_ACCORDION_RE = /(accordion|faq|question|toggle|collaps|expand|disclos|panel|__item|__header|__trigger|__button|__title|__q)/i;
+// Runtime STATE tokens (Bootstrap "collapsed", SMACSS "is-open") — toggled as the accordion opens, so
+// they must never scope the trigger. Matches the trailing token so prefixed forms are caught too.
+const FAQ_STATE_RE = /(^|[-_])(collapsed?|collapsing|open(ed)?|closed?|active|expanded|show(n)?)$/i;
 // Generic component/wrapper classes that are NOT accordion-specific — a SHARED one of these (btn, card,
 // elementor-widget, …) would scope the trigger to every button/card on the site. So the fallback must
 // reject them; only a clearly accordion-ish token (matched first) or a distinctive class is allowed.
@@ -607,21 +614,41 @@ function faqSharedClass(questions: DetectedElement[]): string | null {
   // Tokens shared by EVERY question row, longest-first then alpha so the pick is deterministic.
   const shared = [...sets[0]].filter((t) => sets.every((s) => s.has(t))).sort((a, b) => b.length - a.length || a.localeCompare(b));
   if (!shared.length) return null;
+  // A STATE class (Bootstrap-style "collapsed"/"is-open" — toggled as the accordion opens) must never
+  // scope the trigger: it disappears from the open row, so half the clicks wouldn't fire. It can look
+  // accordion-ish ("collapsed"/"is-collapsed" match "collaps"), so BOTH picks reject utility/state
+  // tokens — leaving a stable structural class (e.g. "acc-tog") for the distinctive fallback.
   return (
-    shared.find((t) => FAQ_ACCORDION_RE.test(t)) ??
-    shared.find((t) => t.length >= 4 && !FAQ_UTILITY_RE.test(t) && !FAQ_GENERIC_CLASS_RE.test(t)) ??
+    shared.find((t) => FAQ_ACCORDION_RE.test(t) && !FAQ_UTILITY_RE.test(t) && !FAQ_STATE_RE.test(t)) ??
+    shared.find((t) => t.length >= 4 && !FAQ_UTILITY_RE.test(t) && !FAQ_GENERIC_CLASS_RE.test(t) && !FAQ_STATE_RE.test(t)) ??
     null
   );
 }
 
-function faqTagFor(questions: DetectedElement[], page: string): SuggestedTag | null {
+function faqTagFor(questions: DetectedElement[]): SuggestedTag {
+  const pages = [...new Set(questions.map((q) => q.page))];
+  const onePage = pages.length === 1 ? pages[0] : null;
+  const distinct = new Set(questions.map((q) => q.text.replace(/\s+/g, ' ').trim().toLowerCase())).size;
   const cls = faqSharedClass(questions);
-  if (!cls) return null;
+  // Class route (arrow-safe) when a stable shared class exists; else the corpus-dominant text route.
+  const trigger: SuggestedTag['trigger'] = cls
+    ? { name: trigNameOf('FAQ', 'all_clicks'), kind: 'all_clicks', clickElementValue: `.${cls}, .${cls} *`, clickElementOperator: 'cssSelector' }
+    : { name: trigNameOf('FAQ', 'all_clicks'), kind: 'all_clicks', clickTextValue: '?', clickTextOperator: 'endsWith' };
+  if (onePage) {
+    // Second ANDed condition scoping the trigger to the FAQ's page. Same operator guard as the
+    // form path: "contains" survives trailing slash/locale prefixes; a root/short path uses equals.
+    trigger.pagePathValue = onePage;
+    trigger.pagePathOperator = onePage.replace(/[^a-z0-9]/gi, '').length >= 3 ? 'contains' : 'equals';
+  }
+  const how = cls
+    ? `share class ".${cls}" — ONE tag fires on a click of the question text, the row, or the arrow`
+    : `are tracked by ONE tag firing when the clicked text ends with "?"`;
   return {
-    id: hashId(`cta|faq|${cls}`),
-    page,
-    label: `FAQ accordion (${questions.length} questions) → GA4 "faq_click"`,
-    evidence: `${questions.length} FAQ question rows share class ".${cls}" — ONE tag fires on a click of the question text, the row, or the arrow`,
+    id: hashId(`cta|faq|${cls ?? 'text'}|${onePage ?? 'site-wide'}`),
+    page: onePage ?? 'site-wide',
+    label: `FAQ accordion (${distinct} questions) → GA4 "faq_click"`,
+    evidence: `${distinct} FAQ question rows ${how}${onePage ? `; scoped to ${onePage} via {{Page Path}}` : ''}`,
+    ...(cls ? {} : { note: 'The {{Click Text}} ends-with-"?" condition fires on a click of the question text or the row; a bare arrow icon (no text of its own) is not counted.' }),
     confidence: 'medium',
     enhancedMeasurementOverlap: false,
     platform: 'ga4_event',
@@ -629,30 +656,32 @@ function faqTagFor(questions: DetectedElement[], page: string): SuggestedTag | n
     measurementId: GA4_VAR,
     eventName: 'faq_click',
     eventParameters: CLICK_PARAMS,
-    trigger: { name: trigNameOf('FAQ', 'all_clicks'), kind: 'all_clicks', clickElementValue: `.${cls}, .${cls} *`, clickElementOperator: 'cssSelector' },
+    trigger,
   };
 }
 
-/** Group FAQ accordion question rows (>=2 sharing a class on one page) into ONE tag each; returns the
- *  FAQ tags + the set of question elements consumed (so they aren't ALSO emitted as individual CTAs). */
+/** Group FAQ question rows into ONE tag, consuming them — grouped questions are never ALSO emitted as
+ *  individual per-question CTAs. Guarded against over-folding: only GENERIC-intent "?" CTAs qualify
+ *  (an intent CTA like "Want to book a demo?" keeps its intent tag), and grouping needs ACCORDION
+ *  EVIDENCE — a page with >=2 DISTINCT question texts (accordion rows co-locate). A stray "?" CTA on
+ *  another page stays an individual CTA (so it cannot strip the class route / page scoping off a real
+ *  accordion), and a repeated identical "Questions?" button across pages never fabricates a group. */
 function extractFaqGroups(elements: DetectedElement[]): { faqTags: SuggestedTag[]; consumed: Set<DetectedElement> } {
   const consumed = new Set<DetectedElement>();
-  const faqTags: SuggestedTag[] = [];
+  const candidates = elements.filter((e) => e.kind === 'cta' && (e.intent ?? 'generic') === 'generic' && /\?\s*$/.test(e.text || ''));
   const byPage = new Map<string, DetectedElement[]>();
-  for (const e of elements) {
-    if (e.kind !== 'cta' || !/\?\s*$/.test(e.text || '') || !(e.className ?? '').trim()) continue;
+  for (const e of candidates) {
     const list = byPage.get(e.page) ?? [];
     list.push(e);
     byPage.set(e.page, list);
   }
-  for (const [page, questions] of byPage) {
-    if (questions.length < 2) continue; // a lone question is not an accordion — keep it as a normal CTA
-    const tag = faqTagFor(questions, page);
-    if (!tag) continue;
-    faqTags.push(tag);
-    for (const q of questions) consumed.add(q);
-  }
-  return { faqTags, consumed };
+  const anchorPages = new Set(
+    [...byPage.entries()].filter(([, list]) => new Set(list.map((e) => e.text.replace(/\s+/g, ' ').trim().toLowerCase())).size >= 2).map(([p]) => p),
+  );
+  if (!anchorPages.size) return { faqTags: [], consumed };
+  const grouped = candidates.filter((e) => anchorPages.has(e.page));
+  for (const q of grouped) consumed.add(q);
+  return { faqTags: [faqTagFor(grouped)], consumed };
 }
 
 /** opts.full prepends the GA4 Configuration tag (always) so the review list is the COMPLETE set of
