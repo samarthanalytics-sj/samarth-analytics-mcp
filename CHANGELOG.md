@@ -1,3 +1,9 @@
+## [1.142.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.141.1...v1.142.0) (2026-07-02)
+
+### Features
+
+* **desktop:** one-shot ecommerce funnel + consent defaults + tracking verifier ([bfcc6c8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bfcc6c817ff26b0d65e56163506833dce8eaae87))
+
 ## [1.141.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.141.0...v1.141.1) (2026-07-02)
 
 ### Bug Fixes
