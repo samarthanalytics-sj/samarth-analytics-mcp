@@ -31,7 +31,9 @@ export const GTM_CREATION_METHODOLOGY =
   '{{Form Classes}} (contains), else {{Page Path}} for the single page it lives on; an unrecognized/unscoped form is NOT tracked ' +
   '(there is no site-wide form catch-all) — leave waitForTags/checkValidation OFF; a native form trigger does NOT fire for iframe/AJAX forms (instead listen ' +
   'for the provider submit event → push a dataLayer event → fire on a Custom Event trigger); dataLayer event → custom_event whose ' +
-  'EVENT NAME is the raw snake_case value the dataLayer pushes (distinct from the trigger display name); pageview; youtube_video; ' +
+  'EVENT NAME is the raw snake_case value the dataLayer pushes (distinct from the trigger display name) — a Custom Event trigger can ' +
+  'ALSO carry ANDed filter conditions ({{Page Path}} contains /contact, {{Form ID}} equals X) to scope a data-layer form trigger to ' +
+  'ONE form/page, the pattern real containers use; pageview; youtube_video; ' +
   'timer (its interval/limit/eventName are TOP-LEVEL trigger fields, not parameter[]). ' +
   'VARIABLES: Data Layer Variable (kind data_layer, dataLayerName = the exact key, e.g. ecommerce.value); constant; built-ins ' +
   '({{Click URL}}, {{Form ID}}, {{Page Path}}, …) are ENABLED, not created — create_gtm_tracking_tag enables the ones its trigger ' +

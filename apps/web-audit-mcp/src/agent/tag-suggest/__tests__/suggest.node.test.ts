@@ -44,7 +44,8 @@ check('embed: Paperform via iframe src', detectEmbeddedForm(sig({ iframeSrcs: ['
 // ── form → suggestion ───────────────────────────────────────────────────────
 const contactForm: DetectedForm = { page: '/contact', purpose: 'contact', action: 'https://js.hsforms.net/x', provider: { vendor: 'hubspot', confidence: 'high', evidence: 'script js.hsforms.net' } };
 const out1 = buildSuggestions({ siteHost: 'acme.com', forms: [contactForm], elements: [] });
-check('form: contact → contact_form on form_submit', out1.length === 1 && out1[0].eventName === 'contact_form' && out1[0].trigger.kind === 'form_submit');
+check('form: contact (HubSpot embed) → contact_form on a Custom Event trigger (native form_submit would never fire)',
+  out1.length === 1 && out1[0].eventName === 'contact_form' && out1[0].trigger.kind === 'custom_event' && out1[0].trigger.eventName === 'hubspot-form-success');
 check('form: label names the provider', out1[0].label.includes('hubspot'));
 check('form: directly creatable (platform + measurementId)', out1[0].platform === 'ga4_event' && out1[0].measurementId === '{{GA4 Measurement ID}}');
 check('naming: tag "GA4 Event - Contact Form Tag", trigger "Contact Form Trigger"', out1[0].tagName === 'GA4 - Event - Contact Form Tag' && out1[0].trigger.name === 'Contact Form Trigger');
@@ -118,11 +119,17 @@ const formNoScope = buildSuggestions({ siteHost: 'a.com', forms: [
 ], elements: [] });
 check('form: no id/class on multiple pages → note that it fires on EVERY form submit', !formNoScope[0].trigger.formIdValue && !formNoScope[0].trigger.formClassesValue && !formNoScope[0].trigger.pagePathValue && /every form submit/i.test(formNoScope[0].note ?? ''));
 
+// Embed/AJAX + JS forms get the corpus' "Best"-rated route: the SUGGESTED TRIGGER *is* a Custom Event
+// (not a native Form Submission that would never fire, with only a note about the workaround).
 const hubForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: { vendor: 'hubspot', confidence: 'high', evidence: 'js.hsforms.net' }, method: 'js', formId: 'hsForm_123' }], elements: [] });
-check('form: HubSpot (embedded) → note recommends a Custom Event trigger', /custom event/i.test(hubForm[0].note ?? '') && /hubspot/i.test(hubForm[0].note ?? ''));
+check('form: HubSpot (embedded) → the trigger IS a Custom Event on the corpus event "hubspot-form-success"',
+  hubForm[0].trigger.kind === 'custom_event' && hubForm[0].trigger.eventName === 'hubspot-form-success' && !hubForm[0].trigger.formIdValue);
+check('form: HubSpot note explains the dataLayer push + the Element Visibility fallback', /custom event/i.test(hubForm[0].note ?? '') && /hubspot/i.test(hubForm[0].note ?? '') && /dataLayer\.push/.test(hubForm[0].note ?? '') && /element visibility/i.test(hubForm[0].note ?? ''));
 
 const jsForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, method: 'js', fields: [{ type: 'email', name: 'email', required: true }] }], elements: [] });
 check('form: JS/div form → note the native Form Submission trigger may not fire', /native <form> submit|may not fire/i.test(jsForm[0].note ?? ''));
+check('form: JS/div form → the trigger IS a Custom Event on "form_submit", page-scoped via {{Page Path}} (ANDed condition)',
+  jsForm[0].trigger.kind === 'custom_event' && jsForm[0].trigger.eventName === 'form_submit' && jsForm[0].trigger.pagePathValue === '/' && /All-Clicks|element visibility/i.test(jsForm[0].note ?? ''));
 
 // Pardot FORM HANDLER (native <form> POST) → native trigger DOES fire: scoped by id, no "won't fire" note.
 const pardotHandler = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: 'https://go.pardot.com/l/1/2/form-handler', provider: { vendor: 'pardot', confidence: 'high', evidence: 'action pardot.com' }, method: 'post', formId: 'pardot-form' }], elements: [] });
