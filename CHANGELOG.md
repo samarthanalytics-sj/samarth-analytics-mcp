@@ -1,3 +1,9 @@
+## [1.138.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.138.1...v1.138.2) (2026-07-02)
+
+### Bug Fixes
+
+* **web-audit:** consolidate a same-named form across pages into ONE tag + Page-Path form_name lookup ([5936eb2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5936eb286365285e46b1a0c8bccf82cd4fe3992e))
+
 ## [1.138.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.138.0...v1.138.1) (2026-07-02)
 
 ### Bug Fixes
