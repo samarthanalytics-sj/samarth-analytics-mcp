@@ -1,3 +1,9 @@
+## [1.133.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.132.0...v1.133.0) (2026-07-02)
+
+### Features
+
+* **desktop:** offer merging same-event click tags into one tag ([d75f503](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d75f503f68d77105a386c6c34063f1b3d7236147))
+
 ## [1.132.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.131.0...v1.132.0) (2026-07-01)
 
 ### Features
