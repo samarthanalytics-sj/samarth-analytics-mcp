@@ -652,25 +652,33 @@ function faqTagFor(questions: DetectedElement[]): SuggestedTag {
   const onePage = pages.length === 1 ? pages[0] : null;
   const distinct = new Set(questions.map((q) => q.text.replace(/\s+/g, ' ').trim().toLowerCase())).size;
   const cls = faqSharedClass(questions);
-  // Class route (arrow-safe) when a stable shared class exists; else the corpus-dominant text route.
-  const trigger: SuggestedTag['trigger'] = cls
-    ? { name: trigNameOf('FAQ', 'all_clicks'), kind: 'all_clicks', clickElementValue: `.${cls}, .${cls} *`, clickElementOperator: 'cssSelector' }
-    : { name: trigNameOf('FAQ', 'all_clicks'), kind: 'all_clicks', clickTextValue: '?', clickTextOperator: 'endsWith' };
+  // {{Click Text}} ends with "?" is the PRIMARY FAQ condition (the corpus-dominant signal) and is
+  // ALWAYS present. When a stable shared class exists it is ANDed with the {{Click Element}} CSS
+  // selector — the corpus combines them the same way ("Click Text ENDS_WITH ? AND Click Classes
+  // CONTAINS <accordion class>"), so the tag never fires on a non-question element that merely sits
+  // inside the accordion, and never on a "?" text outside it.
+  const trigger: SuggestedTag['trigger'] = {
+    name: trigNameOf('FAQ', 'all_clicks'),
+    kind: 'all_clicks',
+    clickTextValue: '?',
+    clickTextOperator: 'endsWith',
+    ...(cls ? { clickElementValue: `.${cls}, .${cls} *`, clickElementOperator: 'cssSelector' as const } : {}),
+  };
   if (onePage) {
-    // Second ANDed condition scoping the trigger to the FAQ's page. Same operator guard as the
+    // ANDed condition scoping the trigger to the FAQ's page. Same operator guard as the
     // form path: "contains" survives trailing slash/locale prefixes; a root/short path uses equals.
     trigger.pagePathValue = onePage;
     trigger.pagePathOperator = onePage.replace(/[^a-z0-9]/gi, '').length >= 3 ? 'contains' : 'equals';
   }
   const how = cls
-    ? `share class ".${cls}" — ONE tag fires on a click of the question text, the row, or the arrow`
+    ? `share class ".${cls}" — ONE tag fires when the clicked text ends with "?" inside the accordion (.${cls})`
     : `are tracked by ONE tag firing when the clicked text ends with "?"`;
   return {
     id: hashId(`cta|faq|${cls ?? 'text'}|${onePage ?? 'site-wide'}`),
     page: onePage ?? 'site-wide',
     label: `FAQ accordion (${distinct} questions) → GA4 "faq_click"`,
     evidence: `${distinct} FAQ question rows ${how}${onePage ? `; scoped to ${onePage} via {{Page Path}}` : ''}`,
-    ...(cls ? {} : { note: 'The {{Click Text}} ends-with-"?" condition fires on a click of the question text or the row; a bare arrow icon (no text of its own) is not counted.' }),
+    note: 'The {{Click Text}} ends-with-"?" condition fires on a click of the question text or the row; a click landing exactly on a bare arrow icon (no text of its own) is not counted.',
     confidence: 'medium',
     enhancedMeasurementOverlap: false,
     platform: 'ga4_event',
