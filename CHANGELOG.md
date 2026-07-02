@@ -1,3 +1,9 @@
+## [1.141.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.141.0...v1.141.1) (2026-07-02)
+
+### Bug Fixes
+
+* capability audit — 17 latent tool defects fixed before users hit them ([b198600](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b1986001cf978835e584b09222e8e024cf83e735)), closes [#251](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/251)
+
 ## [1.141.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.140.0...v1.141.0) (2026-07-02)
 
 ### Features
