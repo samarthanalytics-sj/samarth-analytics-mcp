@@ -1,3 +1,9 @@
+## [1.141.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.140.0...v1.141.0) (2026-07-02)
+
+### Features
+
+* form tags use one reusable {{Form Name}} Custom JS variable ([bbded4a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bbded4a96f08c2721ab4664bba0a3b63d8d3e964))
+
 ## [1.140.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.139.0...v1.140.0) (2026-07-02)
 
 ### Features
