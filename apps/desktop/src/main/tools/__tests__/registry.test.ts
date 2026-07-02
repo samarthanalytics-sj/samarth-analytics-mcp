@@ -1362,6 +1362,21 @@ async function main(): Promise<void> {
     assert.equal(srvTrig.type, 'customEvent', 'server trigger is a customEvent (built by the tool, not hand-rolled)');
     assert.ok(fd.calls.includes('enableVars:1:2:3:clientName'), 'enabled the Client Name built-in for the scoped filter');
 
+    // create_server_trigger with eventName → PER-EVENT customEvent (the dominant server pattern);
+    // the deep {{_event}} equals shape is asserted in gtm-builders.test.ts (buildServerEventTrigger).
+    const evTrig = JSON.parse(
+      await reg.execute('create_server_trigger', { accountId: '1', containerId: '2', workspaceId: '3', name: 'ga4 - purchase', eventName: 'purchase', clientName: 'GA4' }),
+    );
+    assert.equal(evTrig.type, 'customEvent');
+    assert.ok(fd.calls.includes('createTrigger:1:2:3:ga4 - purchase'), 'created the per-event server trigger');
+
+    // create_gtm_variable_typed request_header → a server rh variable (logged as createVar:…:rh:…).
+    const rhVar = JSON.parse(
+      await reg.execute('create_gtm_variable_typed', { accountId: '1', containerId: '2', workspaceId: '3', kind: 'request_header', name: 'X-Geo-Country', headerName: 'X-Geo-Country' }),
+    );
+    assert.equal(rhVar.type, 'rh', 'request_header → rh variable');
+    assert.ok(fd.calls.includes('createVar:1:2:3:rh:X-Geo-Country'), 'created the rh variable');
+
     // import_gallery_template: bring in the Meta Pixel community template (write) → returns its cvt_ type.
     const imp = JSON.parse(
       await reg.execute('import_gallery_template', { accountId: '1', containerId: '2', workspaceId: '3', owner: 'facebook', repository: 'GoogleTagManager-WebTemplate-For-FacebookPixel' }),

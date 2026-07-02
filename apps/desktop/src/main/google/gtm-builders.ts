@@ -415,6 +415,21 @@ export function buildServerAllEventsTrigger(name: string, clientName?: string): 
   return t;
 }
 
+/** A server Custom Event trigger that fires on ONE specific event: `{{_event}} equals <eventName>`
+ *  (e.g. purchase), optionally scoped to a client via `{{Client Name}} equals <clientName>`. This is
+ *  the DOMINANT server trigger pattern in real containers ("event = purchase AND Client Name = GA4"),
+ *  used to fire a per-event tag (GA4 Purchase, Ads Purchase conversion) only on that event. The
+ *  {{Client Name}} filter needs the CLIENT_NAME built-in enabled. Shape corpus-validated. PURE. */
+export function buildServerEventTrigger(name: string, eventName: string, clientName?: string): GtmTriggerResource {
+  const t: GtmTriggerResource = {
+    name: sanitizeName(name),
+    type: 'customEvent',
+    customEventFilter: [condition('{{_event}}', 'equals', eventName)],
+  };
+  if (clientName && clientName.trim() !== '') t.filter = [condition('{{Client Name}}', 'equals', clientName)];
+  return t;
+}
+
 /** Server-side Google Ads CONVERSION tag (`sgtmadsct`). Shape corpus-validated. Reads the
  *  conversion value/currency from the event the client received; conversionId is the AW-
  *  account id, conversionLabel the per-conversion label (both may be {{variables}}). */
@@ -882,7 +897,7 @@ export function builtInVarsForTemplates(values: Array<string | undefined>): stri
 
 /* ───────────── Variables ───────────── */
 
-export type VariableKind = 'constant' | 'data_layer' | 'javascript' | 'event_data';
+export type VariableKind = 'constant' | 'data_layer' | 'javascript' | 'event_data' | 'request_header';
 export interface VariableInput {
   name: string;
   kind: VariableKind;
@@ -891,6 +906,7 @@ export interface VariableInput {
   javascript?: string; // javascript (custom JS)
   keyPath?: string; // event_data (server) — the event-data key to read, e.g. "items" or "x-ga-mp1-x"
   defaultValue?: string; // event_data — value when the key is absent (sets setDefaultValue true)
+  headerName?: string; // request_header (server) — the HTTP header to read, e.g. "X-Geo-Country"
 }
 /** A URL variable that reads ONE query-string key: {{URL - <key>}} resolves to the value of ?<key>=…
  *  — the standard way to capture a GA4 search_term from a results URL. Corpus-verified shape (type "u",
@@ -963,6 +979,12 @@ export function buildVariable(o: VariableInput): GtmVariableResource {
       const parameter: Param[] = [boolean('setDefaultValue', hasDefault), tpl('keyPath', o.keyPath ?? '')];
       if (hasDefault) parameter.push(tpl('defaultValue', o.defaultValue as string));
       return { name: o.name, type: 'ed', parameter };
+    }
+    case 'request_header': {
+      // Server-container Request Header variable (`rh`) — reads one HTTP header off the incoming
+      // request (geo/device the tagging host injects, e.g. X-Geo-Country, X-Device-Os). Shape
+      // corpus-validated (a single headerName parameter).
+      return { name: o.name, type: 'rh', parameter: [tpl('headerName', o.headerName ?? '')] };
     }
     case 'javascript':
     default:
