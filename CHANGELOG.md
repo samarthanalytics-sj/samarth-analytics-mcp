@@ -1,3 +1,9 @@
+## [1.137.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.137.0...v1.137.1) (2026-07-02)
+
+### Bug Fixes
+
+* **desktop:** never emit two suggestions that create the same GTM tag ([8c88040](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8c8804064ff868f9a4e905d5febd9a494e6cfc50))
+
 ## [1.137.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.136.1...v1.137.0) (2026-07-02)
 
 ### Features
