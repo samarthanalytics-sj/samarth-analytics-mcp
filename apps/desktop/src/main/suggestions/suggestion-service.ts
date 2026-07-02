@@ -136,6 +136,8 @@ export interface CreateTagsOptions {
   throttleMs?: number;
   /** Retries on a quota/rate-limit error, with exponential backoff (default 6). */
   maxRetries?: number;
+  /** Called after each tag is attempted (done, total) — drives the live "7/40" progress in the UI. */
+  onProgress?: (done: number, total: number) => void;
 }
 
 /**
@@ -188,9 +190,14 @@ export async function createSuggestedTags(
                 }),
             trigger: t.trigger,
           }),
-        ) as { declined?: boolean; tag?: { name?: string }; trigger?: { reused?: boolean } };
+        ) as { declined?: boolean; alreadyExists?: boolean; tag?: { name?: string }; trigger?: { reused?: boolean } };
         if (out?.declined) {
           outcomes.push({ id: t.id, ok: false, error: 'declined' });
+        } else if (out?.alreadyExists) {
+          // The tool's precheck short-circuited: a tag with this name is ALREADY in the container, so
+          // nothing was created. This must NOT count as "created" (it inflated the created total — the
+          // reported count read higher than GTM actually had).
+          outcomes.push({ id: t.id, ok: false, existing: true, error: 'already exists' });
         } else {
           outcomes.push({
             id: t.id,
@@ -221,6 +228,7 @@ export async function createSuggestedTags(
         break;
       }
     }
+    opts.onProgress?.(i + 1, tags.length);
   }
   return outcomes;
 }

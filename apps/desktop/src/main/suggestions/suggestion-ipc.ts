@@ -157,7 +157,8 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
   ipcMain.handle(
     'suggestions:createTags',
     async (
-      _e,
+      event,
+      requestId: unknown,
       accountId: unknown,
       containerId: unknown,
       workspaceId: unknown,
@@ -166,6 +167,7 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
       const acct = String(accountId ?? '');
       const cont = String(containerId ?? '');
       const ws = String(workspaceId ?? '');
+      const reqId = String(requestId ?? '');
       if (!acct || !cont || !ws) throw new Error('Pick a GTM account, container and draft workspace first.');
       const list = Array.isArray(tags) ? (tags as SuggestedTagView[]) : [];
 
@@ -197,7 +199,11 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
         }
       }
       const creatable = list.filter((t) => !errors.has(t.id));
-      const outcomes = await createSuggestedTags((name, args) => reg.execute(name, args), ids, creatable);
+      const outcomes = await createSuggestedTags((name, args) => reg.execute(name, args), ids, creatable, {
+        onProgress: (doneCount, total) => {
+          if (reqId && !event.sender.isDestroyed()) event.sender.send('suggestions:createTags:event', { requestId: reqId, done: doneCount, total });
+        },
+      });
       for (const [id, error] of errors) outcomes.push({ id, ok: false, error });
       return outcomes;
     },
