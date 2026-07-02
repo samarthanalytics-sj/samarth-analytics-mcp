@@ -891,6 +891,30 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.includes('enableVars:1:2:3:clickText'), 'auto-enabled clickText for the lookup');
   });
 
+  await test('create_tracking_tag (eventParamLookups) auto-provisions a Page-Path form_name Lookup Table + enables pagePath', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'ga4_event', tagName: 'GA4 - Event - Contact Form Tag', measurementId: 'G-XYZ', eventName: 'contact_form',
+        eventParameters: [{ name: 'form_id', value: '{{Form ID}}' }, { name: 'form_name', value: '{{Lookup - Form Name - Contact Form}}' }],
+        eventParamLookups: [{
+          variableName: 'Lookup - Form Name - Contact Form',
+          input: '{{Page Path}}',
+          rows: [{ key: '/', value: 'Contact Form - Home' }, { key: '/services/x', value: 'Contact Form - X' }],
+          defaultValue: 'Contact Form',
+        }],
+        trigger: { name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'consult-form' },
+      })
+    );
+    // The companion smm variable is created (missing in the fake container) and reported back.
+    assert.ok(fd.calls.some((c) => c.startsWith('createVar:1:2:3:smm:Lookup - Form Name - Contact Form')), 'created the smm form-name lookup');
+    assert.deepEqual(out.createdVariables, ['Lookup - Form Name - Contact Form']);
+    // The lookup's input reads {{Page Path}} — that built-in must be auto-enabled.
+    assert.ok(fd.calls.includes('enableVars:1:2:3:pagePath') || fd.calls.some((c) => c.startsWith('enableVars:1:2:3:') && c.includes('pagePath')), 'auto-enabled pagePath for the lookup input');
+  });
+
   await test('create_gtm_variable_typed builds a Custom JS variable', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, approveAsIs);

@@ -325,6 +325,15 @@ export interface SuggestedTagView {
   configSettings?: Array<{ name: string; value: string }>;
   eventName: string;
   eventParameters?: Array<{ name: string; value: string }>;
+  /** Companion Lookup Table variable(s) an event parameter VALUE references by {{name}} (e.g.
+   *  form_name = {{Lookup - X Form Name}} keyed on {{Page Path}}) — auto-created (type smm) with the
+   *  tag when missing. */
+  eventParamLookups?: Array<{
+    variableName: string;
+    input: string;
+    rows: Array<{ key: string; value: string }>;
+    defaultValue?: string;
+  }>;
   trigger: {
     name: string;
     kind: string;

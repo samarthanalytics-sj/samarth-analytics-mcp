@@ -899,25 +899,51 @@ export function buildUrlQueryVariable(name: string, queryKey: string): GtmVariab
   return { name, type: 'u', parameter: [tpl('component', 'QUERY'), tpl('queryKey', queryKey)] };
 }
 
+/** A Lookup Table variable (type "smm") mapping an INPUT to a per-row OUTPUT, with an optional
+ *  default. Corpus-verified shape (setDefaultValue [+ defaultValue], input, map = list of {key,value}
+ *  rows). Matching is EXACT (case-sensitive). Use for {{Page Path}} → a per-page form_name, or any
+ *  input → value table. */
+export function buildLookupTableVariable(
+  name: string,
+  input: string,
+  rows: Array<{ key: string; value: string }>,
+  defaultValue?: string,
+): GtmVariableResource {
+  const hasDefault = defaultValue !== undefined && defaultValue !== '';
+  const parameter: Param[] = [boolean('setDefaultValue', hasDefault), tpl('input', input)];
+  if (hasDefault) parameter.push(tpl('defaultValue', defaultValue as string));
+  parameter.push({ type: 'list', key: 'map', list: rows.map((r) => ({ type: 'map', map: [tpl('key', r.key), tpl('value', r.value)] })) });
+  return { name, type: 'smm', parameter };
+}
+
+/** A RegEx Table variable (type "remm") mapping a regex-matched input to output values. Corpus shape:
+ *  setDefaultValue, input, fullMatch, replaceAfterMatch, ignoreCase [+ defaultValue], map. Defaults to
+ *  partial match + ignoreCase (the corpus norm, 72/97 and 89/97) — use when many URLs under one
+ *  section should map to one value (e.g. {{Page Path}} matching "^/services/" → a section name). */
+export function buildRegexTableVariable(
+  name: string,
+  input: string,
+  rows: Array<{ key: string; value: string }>,
+  defaultValue?: string,
+): GtmVariableResource {
+  const hasDefault = defaultValue !== undefined && defaultValue !== '';
+  const parameter: Param[] = [
+    boolean('setDefaultValue', hasDefault),
+    tpl('input', input),
+    boolean('fullMatch', false),
+    boolean('replaceAfterMatch', false),
+    boolean('ignoreCase', true),
+  ];
+  if (hasDefault) parameter.push(tpl('defaultValue', defaultValue as string));
+  parameter.push({ type: 'list', key: 'map', list: rows.map((r) => ({ type: 'map', map: [tpl('key', r.key), tpl('value', r.value)] })) });
+  return { name, type: 'remm', parameter };
+}
+
 /** A Lookup Table variable mapping several exact {{Click Text}} values to "true" — the classic GTM
  *  grouping pattern (ONE tag/trigger for many related click texts; the trigger fires on
- *  {{<name>}} equals "true"). Corpus-verified shape (type "smm": setDefaultValue false, input
- *  {{Click Text}}, map = list of {key,value} rows). Lookup matching is EXACT (case-sensitive), so
- *  each text variant ("Learn More", "LEARN MORE") is its own row, editable later in GTM. */
+ *  {{<name>}} equals "true"). Each text variant ("Learn More", "LEARN MORE") is its own row. */
 export function buildClickTextLookupVariable(name: string, texts: string[]): GtmVariableResource {
-  return {
-    name,
-    type: 'smm',
-    parameter: [
-      boolean('setDefaultValue', false),
-      tpl('input', '{{Click Text}}'),
-      {
-        type: 'list',
-        key: 'map',
-        list: texts.map((t) => ({ type: 'map', map: [tpl('key', t), tpl('value', 'true')] })),
-      },
-    ],
-  };
+  return buildLookupTableVariable(name, '{{Click Text}}', texts.map((t) => ({ key: t, value: 'true' })));
 }
 
 export function buildVariable(o: VariableInput): GtmVariableResource {

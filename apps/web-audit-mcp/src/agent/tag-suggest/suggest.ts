@@ -210,6 +210,17 @@ interface FormScopeCtx {
   /** signature → the single page it lives on (for page-scoping a form with no usable id/class), or
    *  null when the same form appears on >1 page (site-wide → leave unscoped, the catch-all covers it). */
   pageBySignature: Map<string, string | null>;
+  /** signature → EVERY page the form was seen on (drives the per-page form_name Lookup Table for a
+   *  multi-page form: ONE tag whose form_name reflects which page it fired on). */
+  pagesBySignature: Map<string, Set<string>>;
+}
+
+/** A readable label for a page path: "Home" for the root, else the last path segment humanised
+ *  ("/services/ga4-consulting" → "Ga4 Consulting"). Used to build distinct per-page form names. */
+function pagePathLabel(page: string): string {
+  const seg = page.replace(/\/+$/, '').split('/').filter(Boolean).pop();
+  if (!seg) return 'Home';
+  return seg.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null {
@@ -360,6 +371,28 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     note = `This form has no id or unique class and appears on multiple pages, so the trigger fires on EVERY form submit. Add an id to each <form> to scope it.`;
   }
 
+  // form_name: normally this form's known name baked in as a constant (braces stripped so GTM does
+  // not resolve it as a variable ref). BUT when the SAME form spans multiple pages this is ONE tag
+  // (scoped by {{Form ID}} or unscoped), and a single constant can't say WHICH page it fired on — so
+  // drive form_name from a {{Page Path}} Lookup Table variable instead, one row per page, mirroring
+  // the classic GTM pattern. Auto-created (type smm) with the tag.
+  const baseName = displayLabel.replace(/[{}]/g, '').replace(/\s{2,}/g, ' ').trim();
+  let formNameValue = baseName;
+  let eventParamLookups: SuggestedTag['eventParamLookups'];
+  const allPages = [...(ctx.pagesBySignature.get(formSignature(f)) ?? new Set([f.page]))].filter(Boolean).sort();
+  if (allPages.length >= 2 && allPages.length <= 50) {
+    const rows = allPages.map((p) => ({ key: p, value: `${baseName} - ${pagePathLabel(p)}` }));
+    // Only worth a lookup if the per-page names actually differ (they do once labels differ).
+    if (new Set(rows.map((r) => r.value)).size >= 2) {
+      const variableName = `Lookup - Form Name - ${baseName}`;
+      formNameValue = `{{${variableName}}}`;
+      eventParamLookups = [{ variableName, input: '{{Page Path}}', rows, defaultValue: baseName }];
+      const pagesList = allPages.slice(0, 6).join(', ') + (allPages.length > 6 ? ', …' : '');
+      const lookupNote = `This form is on ${allPages.length} pages, so it is ONE tag whose form_name is read from a "${variableName}" Lookup Table variable ({{Page Path}} → a per-page name: ${pagesList}) — auto-created with the tag. Edit the rows in GTM to rename any page; for many URLs under one section, a RegEx Table variable is cleaner.`;
+      note = note ? `${note} ${lookupNote}` : lookupNote;
+    }
+  }
+
   // Field signature (type/name only — never values) for the evidence line.
   const sig = (f.fields ?? [])
     .filter((x) => !['checkbox', 'radio', 'select', 'hidden'].includes(x.type))
@@ -384,14 +417,14 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     tagName: tagNameOf(displayLabel, 'form_submit'),
     measurementId: GA4_VAR,
     eventName,
-    // form_id is the runtime {{Form ID}}; form_name is this form's known name baked in as a constant
-    // (GTM has no built-in {{Form Name}} variable, and this tag is scoped to one form). Strip any
-    // "{{ }}" from the scraped label so GTM does not resolve it as a variable reference in the value.
+    // form_id is the runtime {{Form ID}}; form_name is either the form's constant name or, for a
+    // multi-page form, a {{Page Path}} Lookup Table ref (see above) so one tag records the page.
     eventParameters: [
       { name: 'form_id', value: FORM_ID },
-      { name: 'form_name', value: displayLabel.replace(/[{}]/g, '') },
+      { name: 'form_name', value: formNameValue },
       ...PAGE_PARAMS,
     ],
+    ...(eventParamLookups ? { eventParamLookups } : {}),
     trigger,
   };
 }
@@ -423,6 +456,7 @@ function nonUniqueFormScopes(forms: DetectedForm[]): FormScopeCtx {
     nonUniqueIds: new Set([...idSigs].filter(([, s]) => s.size > 1).map(([k]) => k)),
     nonUniqueClasses: new Set([...classSigs].filter(([, s]) => s.size > 1).map(([k]) => k)),
     pageBySignature,
+    pagesBySignature: sigPages,
   };
 }
 

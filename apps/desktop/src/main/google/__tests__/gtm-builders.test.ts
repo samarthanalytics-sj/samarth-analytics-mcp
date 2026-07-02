@@ -5,6 +5,8 @@ import {
   buildGoogleAdsConversionTag,
   buildCustomHtmlTag,
   buildClickTextLookupVariable,
+  buildLookupTableVariable,
+  buildRegexTableVariable,
   buildFloodlightCounterTag,
   buildGoogleAdsCallConversionTag,
   buildGoogleAdsRemarketingTag,
@@ -264,6 +266,41 @@ test('Lookup Table variable: corpus smm shape (setDefaultValue false, input {{Cl
   assert.equal(map.list[0].map.find((m) => m.key === 'key')?.value, 'Learn More');
   assert.equal(map.list[0].map.find((m) => m.key === 'value')?.value, 'true');
   assert.equal(map.list[1].map.find((m) => m.key === 'key')?.value, 'LEARN MORE');
+});
+
+test('Lookup Table variable (generalized): arbitrary input + per-row values + optional default (Page Path → form_name)', () => {
+  const v = buildLookupTableVariable(
+    'Lookup - Form Name - Contact Form',
+    '{{Page Path}}',
+    [{ key: '/', value: 'Contact Form - Home' }, { key: '/services/ga4-consulting', value: 'Contact Form - Ga4 Consulting' }],
+    'Contact Form',
+  );
+  assert.equal(v.type, 'smm');
+  assert.equal(findParam(v.parameter ?? [], 'setDefaultValue')?.value, 'true'); // a default → setDefaultValue true
+  assert.equal(findParam(v.parameter ?? [], 'defaultValue')?.value, 'Contact Form');
+  assert.equal(findParam(v.parameter ?? [], 'input')?.value, '{{Page Path}}');
+  const map = findParam(v.parameter ?? [], 'map') as { list: Array<{ map: Array<Record<string, unknown>> }> };
+  assert.equal(map.list.length, 2);
+  assert.equal(map.list[0].map.find((m) => m.key === 'key')?.value, '/');
+  assert.equal(map.list[0].map.find((m) => m.key === 'value')?.value, 'Contact Form - Home');
+  // No default → setDefaultValue false, no defaultValue param.
+  const noDef = buildLookupTableVariable('L', '{{Page Path}}', [{ key: '/', value: 'x' }]);
+  assert.equal(findParam(noDef.parameter ?? [], 'setDefaultValue')?.value, 'false');
+  assert.equal(findParam(noDef.parameter ?? [], 'defaultValue'), undefined);
+});
+
+test('RegEx Table variable: corpus remm shape (setDefaultValue, input, fullMatch, replaceAfterMatch, ignoreCase, map)', () => {
+  const v = buildRegexTableVariable('RegEx - Section', '{{Page Path}}', [{ key: '^/services/', value: 'Services' }], 'Other');
+  assert.equal(v.type, 'remm');
+  assert.equal(findParam(v.parameter ?? [], 'setDefaultValue')?.value, 'true');
+  assert.equal(findParam(v.parameter ?? [], 'defaultValue')?.value, 'Other');
+  assert.equal(findParam(v.parameter ?? [], 'input')?.value, '{{Page Path}}');
+  assert.equal(findParam(v.parameter ?? [], 'fullMatch')?.value, 'false');
+  assert.equal(findParam(v.parameter ?? [], 'replaceAfterMatch')?.value, 'false');
+  assert.equal(findParam(v.parameter ?? [], 'ignoreCase')?.value, 'true'); // corpus norm
+  const map = findParam(v.parameter ?? [], 'map') as { list: Array<{ map: Array<Record<string, unknown>> }> };
+  assert.equal(map.list[0].map.find((m) => m.key === 'key')?.value, '^/services/');
+  assert.equal(map.list[0].map.find((m) => m.key === 'value')?.value, 'Services');
 });
 
 test('all_clicks trigger: lookupTable → single {{<Lookup>}} equals "true" condition + enables clickText var', () => {

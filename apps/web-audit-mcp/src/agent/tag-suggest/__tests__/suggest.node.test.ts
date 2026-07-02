@@ -223,6 +223,26 @@ const leadParams = out1[0].eventParameters ?? [];
 check('form: contact_form carries form_id={{Form ID}} + form_name (static form label)',
   leadParams.some((p) => p.name === 'form_id' && p.value === '{{Form ID}}') &&
   leadParams.some((p) => p.name === 'form_name' && p.value === 'Contact Form'));
+check('form: a SINGLE-page form keeps a static form_name (no lookup)', !out1[0].eventParamLookups);
+
+// The SAME form (same Form ID) on MULTIPLE pages → ONE tag scoped by {{Form ID}}, whose form_name is
+// read from a {{Page Path}} Lookup Table variable (one row per page) — the classic GTM pattern.
+const consultForm = (page: string): DetectedForm => ({ page, purpose: 'contact', action: '', method: 'post', formId: 'consult-form', provider: prov0, fields: [{ type: 'email', name: 'email', required: true }] });
+const mp = buildSuggestions({ siteHost: 'a.com', forms: [consultForm('/'), consultForm('/services/ga4-consulting'), consultForm('/services/conversion-tracking')], elements: [] });
+const mpForm = mp.filter((s) => s.trigger.kind === 'form_submit');
+check('form: same-Form-ID form on 3 pages → ONE tag scoped by {{Form ID}} equals, page site-wide',
+  mpForm.length === 1 && mpForm[0].trigger.formIdValue === 'consult-form' && mpForm[0].trigger.formIdOperator === 'equals' && mpForm[0].page === 'site-wide');
+const mpName = (mpForm[0]?.eventParameters ?? []).find((p) => p.name === 'form_name');
+const mpLk = mpForm[0]?.eventParamLookups?.[0];
+check('form: multi-page form_name reads a {{Page Path}} Lookup Table variable (not a static string)',
+  mpName?.value === '{{Lookup - Form Name - Contact Form}}' && !!mpLk && mpLk.variableName === 'Lookup - Form Name - Contact Form' && mpLk.input === '{{Page Path}}' && mpLk.defaultValue === 'Contact Form');
+check('form: the lookup has one row per page with a per-page name (Home / humanised segment)',
+  !!mpLk &&
+  mpLk.rows.length === 3 &&
+  mpLk.rows.some((r) => r.key === '/' && r.value === 'Contact Form - Home') &&
+  mpLk.rows.some((r) => r.key === '/services/ga4-consulting' && r.value === 'Contact Form - Ga4 Consulting') &&
+  mpLk.rows.some((r) => r.key === '/services/conversion-tracking' && r.value === 'Contact Form - Conversion Tracking'));
+check('form: the multi-page tag note explains the auto-created lookup variable', /Lookup Table variable/i.test(mpForm[0]?.note ?? '') && /auto-created/i.test(mpForm[0]?.note ?? ''));
 check('page context: every event carries page_url={{Page URL}} + previous_page={{Referrer}}',
   [byEvent('email_click'), out1[0]].every((s) =>
     (s?.eventParameters ?? []).some((p) => p.name === 'page_url' && p.value === '{{Page URL}}') &&

@@ -180,7 +180,12 @@ export async function createSuggestedTags(
             // ga4_event uses eventName + eventParameters. Send the right set per platform.
             ...(t.platform === 'google_tag'
               ? { tagId: t.tagId ?? t.measurementId, configSettings: Array.isArray(t.configSettings) ? t.configSettings : [] }
-              : { eventName: t.eventName, eventParameters: Array.isArray(t.eventParameters) ? t.eventParameters : [] }),
+              : {
+                  eventName: t.eventName,
+                  eventParameters: Array.isArray(t.eventParameters) ? t.eventParameters : [],
+                  // Companion Lookup Table variables an event param references (e.g. a per-page form_name).
+                  ...(Array.isArray(t.eventParamLookups) && t.eventParamLookups.length ? { eventParamLookups: t.eventParamLookups } : {}),
+                }),
             trigger: t.trigger,
           }),
         ) as { declined?: boolean; tag?: { name?: string }; trigger?: { reused?: boolean } };
