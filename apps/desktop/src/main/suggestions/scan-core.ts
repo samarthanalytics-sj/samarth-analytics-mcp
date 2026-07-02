@@ -199,6 +199,19 @@ async function scanTarget(
 const suggestionKey = (s: SuggestedTag): string =>
   `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.clickElementValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}|${s.trigger.pageUrlValue ?? ''}`;
 
+/** Remove suggestions that would create the SAME GTM tag — identity = platform + tag name + event +
+ *  trigger filter — keeping the FIRST occurrence. Exact dupes slip in when the vision pass proposes
+ *  one button twice, or a cross-source pair the trigger-key filter didn't catch; GTM tag names must be
+ *  unique anyway, so a second copy is always noise. PURE. */
+export function dedupSuggestions(list: SuggestedTag[]): SuggestedTag[] {
+  const byIdentity = new Map<string, SuggestedTag>();
+  for (const s of list) {
+    const k = `${s.platform}|${s.tagName.trim().toLowerCase()}|${suggestionKey(s)}`;
+    if (!byIdentity.has(k)) byIdentity.set(k, s);
+  }
+  return [...byIdentity.values()];
+}
+
 /** Does a CTA trigger fire on the given click text? Mirrors GTM's matchRegex (compiled with the JS
  *  'i' flag — gtm.js evaluates web matchRegex via JS RegExp, with case-insensitivity carried by the
  *  condition-level ignore_case parameter, not an inline (?i) flag) / contains / equals, so we can
@@ -293,7 +306,9 @@ export function assembleResult(
   const seen = new Set(scanned.map(suggestionKey));
   // Merge AI-derived `extra`: drop exact-key dupes, semantic dupes of an engine tag (same global
   // event, or a CTA the engine already fires on), and unsafe unscoped all-clicks suggestions.
-  const suggestions = [...scanned, ...extra.filter((s) => !seen.has(suggestionKey(s)) && !dropAiSuggestion(s, scanned))];
+  const merged = [...scanned, ...extra.filter((s) => !seen.has(suggestionKey(s)) && !dropAiSuggestion(s, scanned))];
+  // Final safety net: NEVER emit two suggestions that would create the SAME GTM tag. Keep the first.
+  const suggestions = dedupSuggestions(merged);
   const byConfidence = { high: 0, medium: 0, low: 0 };
   let em = 0;
   for (const sug of suggestions) {

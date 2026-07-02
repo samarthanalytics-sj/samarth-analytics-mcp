@@ -2,7 +2,7 @@
 // network, no browser). Run: tsx src/main/suggestions/__tests__/ai-scan.test.ts
 
 import { aiTagsToSuggestions, openaiVisionSuggest, type AiTagPick } from '../ai-scan';
-import { dropAiSuggestion } from '../scan-core';
+import { dropAiSuggestion, dedupSuggestions } from '../scan-core';
 import type { RawElement } from '../../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm } from '../../../../../web-audit-mcp/src/agent/forms.js';
 import type { SuggestedTag } from '../../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
@@ -74,6 +74,20 @@ check('cookie: banner CTAs dropped by snake_case event name',
 check('cookie: a normal CTA is NOT mistaken for a cookie banner',
   dropAiSuggestion(sug('book_demo_click', trig({ clickTextValue: 'Manage subscription', clickTextOperator: 'contains' })), []) === false &&
     dropAiSuggestion(sug('signup_click', trig({ clickTextValue: 'Accept terms and continue', clickTextOperator: 'contains' })), []) === false);
+
+// ── dedupSuggestions: never emit two suggestions that create the SAME GTM tag ──
+const gs = (over: Partial<SuggestedTag> = {}): SuggestedTag => ({
+  id: Math.random().toString(36), page: '/', label: '', evidence: '', confidence: 'medium', enhancedMeasurementOverlap: false,
+  platform: 'ga4_event', tagName: 'GA4 - Event - Get Started Click Tag', measurementId: '{{m}}', eventName: 'get_started_click',
+  trigger: { name: 'Get Started Click Trigger', kind: 'all_clicks', clickTextValue: 'Get Started', clickTextOperator: 'equals' }, ...over,
+} as SuggestedTag);
+// The reported bug: the vision pass proposes the same button twice → two identical tags (different id).
+const dupd = dedupSuggestions([gs(), gs({ id: 'other' }), gs({ id: 'third' })]);
+check('dedup: three identical "Get Started" suggestions collapse to ONE', dupd.length === 1 && dupd[0].eventName === 'get_started_click');
+// A genuinely different CTA (different text/trigger) is KEPT alongside.
+const mixed = dedupSuggestions([gs(), gs({ id: 'b' }), gs({ id: 'c', tagName: 'GA4 - Event - Contact Us Click Tag', eventName: 'contact_us_click', trigger: { name: 'Contact Us Click Trigger', kind: 'all_clicks', clickTextValue: 'Contact Us', clickTextOperator: 'equals' } })]);
+check('dedup: distinct CTAs are preserved (only exact dupes drop)', mixed.length === 2 && mixed.some((s) => s.eventName === 'contact_us_click'));
+check('dedup: the FIRST occurrence is the one kept', dedupSuggestions([gs({ id: 'first' }), gs({ id: 'second' })])[0].id === 'first');
 
 // ── openaiVisionSuggest: response parsing with an injected fetch ──────────────
 const asResp = (o: Partial<Response> & { json: () => Promise<unknown> }): Response => o as unknown as Response;
