@@ -3,6 +3,7 @@ import type {
   AccountView,
   AddAccountInput,
   AuditReportView,
+  ServerContainerResultView,
   ChatReply,
   ChatStreamEvent,
   ChatTurn,
@@ -229,6 +230,13 @@ const api = {
       tagName?: string;
     }): Promise<{ created: boolean; present: boolean; existingTag?: string; variableCreated?: boolean; variableName: string; measurementId: string; tagName: string }> =>
       ipcRenderer.invoke('gtm:ensureGa4Config', ctx),
+    // Create a complete SERVER container FROM a web container (+ optionally wire a server URL).
+    createServerContainer: (ctx: {
+      accountId: string;
+      webContainerId: string;
+      name: string;
+      serverUrl?: string;
+    }): Promise<ServerContainerResultView> => ipcRenderer.invoke('gtm:createServerContainer', ctx),
   },
 
   // GA4 Audit panel: list GA4 properties (picker) + run a read-only config +

@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildMetaEmqVariables, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
@@ -1424,6 +1424,87 @@ export class GoogleDataService {
       client: { clientId: clientRes.data.clientId ?? '', name: clientRes.data.name ?? 'GA4' },
       trigger: { triggerId, name: triggerRes.data.name ?? 'All Events' },
       serverTag: { tagId: tagRes.data.tagId ?? '', name: tagRes.data.name ?? 'GA4 - Server' },
+    };
+  }
+
+  /** ONE-STEP "server container from THIS web container": derive the web container's GA4 Measurement
+   *  ID, bootstrap a SERVER container (container + GA4 client + firing trigger + GA4 relay tag), and —
+   *  when a server URL is given (from the user's Cloud Run / tagging-server host) — record it on the
+   *  server container AND point the web container's Google tag at it (the web→server link). Also
+   *  scans the web container for the NON-GA4 conversion tags (Google Ads, Meta) that still need a
+   *  server-side tag built by hand, and returns them as follow-ups. Best-effort on the scan/wire so a
+   *  failure there never loses the created server container. Read-only until the user confirms. */
+  async createServerContainerFromWeb(
+    accountId: string,
+    webContainerId: string,
+    name: string,
+    serverUrl?: string
+  ): Promise<{
+    serverContainer: { containerId: string; publicId: string; name: string; taggingServerUrls: string[] };
+    workspaceId: string;
+    measurementId: string;
+    created: { client: string; trigger: string; serverTag: string };
+    serverUrlSet: boolean;
+    webWired: { tagId: string; name: string } | null;
+    webNonGa4: Array<{ kind: string; name: string; detail: string }>;
+  }> {
+    const measurementId = await this.deriveWebContainerMeasurementId(accountId, webContainerId);
+    const boot = await this.bootstrapServerSideTagging(accountId, name, measurementId);
+
+    let serverUrlSet = false;
+    let webWired: { tagId: string; name: string } | null = null;
+    const webNonGa4: Array<{ kind: string; name: string; detail: string }> = [];
+    const url = serverUrl?.trim();
+
+    // Record the server URL on the NEW server container — independent of the web-container scan below,
+    // so a snapshot failure never drops a URL the user provided. Best-effort (the container is already
+    // created; this only records config).
+    if (url) {
+      try {
+        await this.setServerContainerTaggingUrl(accountId, boot.container.containerId, [url]);
+        serverUrlSet = true;
+      } catch {
+        /* non-fatal — the user can set it later with set_server_container_tagging_url */
+      }
+    }
+
+    // Enumerate the web container to (a) list the non-GA4 conversion tags needing a server-side tag by
+    // hand, and (b) find its Google tag to point at the server. Best-effort and separate from the
+    // URL-record above.
+    try {
+      const webWs = await this.defaultWorkspaceId(accountId, webContainerId);
+      const snap = await this.getGtmContainerSnapshot(accountId, webContainerId, webWs);
+      for (const t of snap.tags) {
+        if (t.type === 'awct') {
+          const convId = String((t.parameter.find((p) => (p as { key?: string }).key === 'conversionId') as { value?: unknown })?.value ?? '');
+          webNonGa4.push({ kind: 'Google Ads conversion', name: t.name, detail: convId ? `conversionId ${convId}` : 'conversion tag' });
+        } else if (t.type === 'sp') {
+          webNonGa4.push({ kind: 'Floodlight sales', name: t.name, detail: 'Floodlight tag' });
+        }
+      }
+      const meta = detectMetaTags(snap);
+      for (const m of meta.metaTags) {
+        webNonGa4.push({ kind: 'Meta pixel', name: m.name, detail: m.ecommerceEvents.length ? `events: ${m.ecommerceEvents.join(', ')}` : 'pixel' });
+      }
+      if (url) {
+        const googtag = snap.tags.find((t) => t.type === 'googtag');
+        if (googtag) {
+          const res = await this.setWebServerContainerUrl(accountId, webContainerId, webWs, googtag.tagId, url);
+          webWired = { tagId: res.tagId, name: res.name };
+        }
+      }
+    } catch {
+      /* non-fatal: the server container (and its URL) are done; the scan/web-wire is a convenience */
+    }
+
+    return {
+      serverContainer: boot.container,
+      workspaceId: boot.workspaceId,
+      measurementId,
+      created: { client: boot.client.name, trigger: boot.trigger.name, serverTag: boot.serverTag.name },
+      serverUrlSet,
+      webWired,
+      webNonGa4,
     };
   }
 

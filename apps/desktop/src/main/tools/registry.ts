@@ -1504,6 +1504,29 @@ export function buildToolRegistry(
       },
     },
     {
+      name: 'create_server_container_from_web',
+      description:
+        "ONE STEP: create a complete server-side container FROM a web container. Derives the web container's GA4 Measurement ID, bootstraps a SERVER container (container + GA4 client + firing trigger + GA4 relay tag), and — when `serverUrl` is given (the user's deployed Cloud Run / Stape / tagging-server URL) — records it on the server container AND points the web container's Google tag at it (web→server link). Also returns the NON-GA4 conversion tags (Google Ads, Meta) still in the web container that need a server-side tag built by hand. Does NOT deploy the host and does NOT publish. Requires accountId + webContainerId (the ACTIVE web container's id); optional name (defaults from the web container) and serverUrl.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          webContainerId: { type: 'string', description: "The WEB container to base the server container on (its GA4 id is derived automatically)." },
+          name: { type: 'string', description: 'Name for the new server container (e.g. "example.com - Server").' },
+          serverUrl: { type: 'string', description: 'Optional tagging-server URL (https://…) — records it on the server container + points the web Google tag at it. Omit to wire later.' },
+        },
+        required: ['accountId', 'webContainerId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) =>
+        `Create a SERVER container from web container ${s(a.webContainerId)}${s(a.serverUrl) ? ` and point it at ${s(a.serverUrl)}` : ''}`,
+      handler: async (a) => {
+        const name = s(a.name).trim() || 'Server';
+        return data.createServerContainerFromWeb(s(a.accountId), s(a.webContainerId), name, s(a.serverUrl).trim() || undefined);
+      },
+    },
+    {
       name: 'set_web_server_container_url',
       description:
         "Wire a WEB container to a server container: set the web Google tag's server_container_url (the data then flows web→server). Requires accountId, containerId, workspaceId, tagId (the web Google tag — type googtag; find it with list_gtm_tags), and serverUrl (the https://… tagging-server URL, available only AFTER you provision the server host). Upserts the config setting, preserving the tag's other settings. After this, QA in GTM Preview.",

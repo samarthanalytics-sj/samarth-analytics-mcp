@@ -44,6 +44,23 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     return JSON.parse(await withQuotaRetry(() => reg.execute(tool, args), { maxRetries: 5 })) as unknown;
   });
 
+  // Create a complete SERVER container FROM a web container in one step: derive the web container's
+  // GA4 Measurement ID, bootstrap the server container (container + GA4 client + trigger + GA4 relay
+  // tag), and — when a server URL is supplied — record it on the server container and point the web
+  // Google tag at it. The renderer confirms first (this is a write); nothing is published.
+  ipcMain.handle('gtm:createServerContainer', async (_e, ctx: unknown) => {
+    const o = (ctx && typeof ctx === 'object' ? ctx : {}) as Record<string, unknown>;
+    const accountId = String(o.accountId ?? '');
+    const webContainerId = String(o.webContainerId ?? '');
+    const name = String(o.name ?? '').trim();
+    const serverUrl = o.serverUrl != null ? String(o.serverUrl).trim() : '';
+    if (!accountId || !webContainerId) throw new Error('Pick a GTM account and the web container to base the server container on.');
+    if (!name) throw new Error('Give the new server container a name.');
+    // The bootstrap fires several writes (container + client + trigger + tag + URL wiring) and can
+    // trip the per-minute quota; retry the whole flow with backoff (it is name-idempotent).
+    return withQuotaRetry(() => data.createServerContainerFromWeb(accountId, webContainerId, name, serverUrl || undefined), { maxRetries: 3 });
+  });
+
   // Ensure a GA4 base/config tag exists. If none is present, store the Measurement
   // ID in a Constant variable and create a Google Tag that references {{<var>}},
   // firing on the built-in All Pages trigger. Draft-only; the renderer confirms
