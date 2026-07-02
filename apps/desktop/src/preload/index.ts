@@ -199,9 +199,19 @@ const api = {
       accountId: string,
       containerId: string,
       workspaceId: string,
-      suggestions: SuggestedTagView[]
-    ): Promise<CreateTagOutcome[]> =>
-      ipcRenderer.invoke('suggestions:createTags', accountId, containerId, workspaceId, suggestions),
+      suggestions: SuggestedTagView[],
+      onProgress?: (p: { done: number; total: number }) => void,
+    ): Promise<CreateTagOutcome[]> => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const listener = (_e: unknown, payload: { requestId: string; done: number; total: number }): void => {
+        if (payload?.requestId !== requestId) return;
+        onProgress?.({ done: payload.done, total: payload.total });
+      };
+      if (onProgress) ipcRenderer.on('suggestions:createTags:event', listener);
+      return ipcRenderer
+        .invoke('suggestions:createTags', requestId, accountId, containerId, workspaceId, suggestions)
+        .finally(() => ipcRenderer.removeListener('suggestions:createTags:event', listener));
+    },
   },
 
   // Container audit: surface the existing audit engine + its fixes as a panel.

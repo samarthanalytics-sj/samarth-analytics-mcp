@@ -299,22 +299,30 @@ async function main(): Promise<void> {
       const tn = String(args.tagName);
       if (tn === 'BOOM') throw new Error('api 400');
       if (tn === 'NOPE') return JSON.stringify({ declined: true });
+      // The tool's precheck short-circuit for a name already in the container (no create).
+      if (tn === 'DUPE') return JSON.stringify({ alreadyExists: true, tag: { name: tn }, message: 'already exists' });
       return JSON.stringify({ tag: { name: tn }, trigger: { reused: tn === 'REUSE' } });
     };
     const tag = (id: string, tagName: string): SuggestedTagView => ({
       id, page: '/', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
       platform: 'ga4_event', tagName, measurementId: '{{GA4 Measurement ID}}', eventName: 'e', trigger: { name: 't', kind: 'all_clicks' },
     });
-    const fast = { sleep: async (): Promise<void> => {}, throttleMs: 0 };
+    const progress: Array<[number, number]> = [];
+    const fast = { sleep: async (): Promise<void> => {}, throttleMs: 0, onProgress: (d: number, t: number): void => { progress.push([d, t]); } };
     const outcomes = await createSuggestedTags(execute, { accountId: '1', containerId: '2', workspaceId: '3' }, [
-      tag('a', 'OK'), tag('b', 'BOOM'), tag('c', 'REUSE'), tag('d', 'NOPE'),
+      tag('a', 'OK'), tag('b', 'BOOM'), tag('c', 'REUSE'), tag('d', 'NOPE'), tag('e', 'DUPE'),
     ], fast);
-    check('create: one outcome per tag, in order', outcomes.length === 4 && outcomes.map((o) => o.id).join('') === 'abcd');
+    check('create: one outcome per tag, in order', outcomes.length === 5 && outcomes.map((o) => o.id).join('') === 'abcde');
     check('create: ok tag → ok:true with name', outcomes[0].ok && outcomes[0].tagName === 'OK');
     check('create: a thrown (non-quota) error is isolated, later tags still run', !outcomes[1].ok && (outcomes[1].error ?? '').includes('api 400') && outcomes[2].ok === true);
     check('create: reused trigger surfaced', outcomes[2].triggerReused === true);
+    // The precheck-skip (already present) must count as EXISTING, not created — the reported total was
+    // inflated because a skip was mapped to ok:true.
+    check('create: precheck-skip (alreadyExists) → existing:true, NOT ok:true (count not inflated)',
+      outcomes[4].existing === true && outcomes[4].ok === false && outcomes.filter((o) => o.ok).length === 2);
+    check('create: onProgress fires once per tag with (done, total)', progress.length === 5 && progress[4][0] === 5 && progress[4][1] === 5);
     check('create: declined → ok:false error "declined"', !outcomes[3].ok && outcomes[3].error === 'declined');
-    check('create: workspace ids passed to every call', calls.every((c) => c.accountId === '1' && c.containerId === '2' && c.workspaceId === '3') && calls.length === 4);
+    check('create: workspace ids passed to every call', calls.every((c) => c.accountId === '1' && c.containerId === '2' && c.workspaceId === '3') && calls.length === 5);
 
     // The GA4 Configuration base tag (google_tag) must send tagId + configSettings,
     // NOT eventName/eventParameters (the registry's google_tag branch reads tagId).

@@ -1775,7 +1775,9 @@ function TagReviewPanel({
   const [statuses, setStatuses] = useState<Record<string, RowStatus>>({});
   const [confirming, setConfirming] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [done, setDone] = useState<{ created: number; failed: number } | null>(null);
+  const [done, setDone] = useState<{ created: number; existing: number; failed: number; total: number } | null>(null);
+  // Live create progress (attempted / total) so a big batch shows "7/40" while it runs.
+  const [createProgress, setCreateProgress] = useState<{ done: number; total: number } | null>(null);
   const [settleMs, setSettleMs] = useState('2500');
   const [settleAuto, setSettleAuto] = useState(true);
   const effSettleMs = (): number | undefined => (settleAuto ? undefined : Number(settleMs) || undefined);
@@ -2162,12 +2164,15 @@ function TagReviewPanel({
       for (const s of chosen) n[s.id] = { state: 'creating' };
       return n;
     });
+    setDone(null);
+    setCreateProgress({ done: 0, total: chosen.length });
     try {
       const outcomes: CreateTagOutcome[] = await window.desktop.tags.createTags(
         ctx.accountId!,
         ctx.containerId!,
         ctx.workspaceId!,
-        chosen
+        chosen,
+        (p) => setCreateProgress(p),
       );
       const byId = new Map(outcomes.map((o) => [o.id, o]));
       setStatuses((st) => {
@@ -2183,7 +2188,7 @@ function TagReviewPanel({
       });
       const created = outcomes.filter((o) => o.ok).length;
       const existing = outcomes.filter((o) => o.existing).length;
-      setDone({ created, failed: outcomes.length - created - existing });
+      setDone({ created, existing, failed: outcomes.length - created - existing, total: chosen.length });
       // Succeeded + already-existing rows: deselect (read-only). Failures stay selected to retry.
       setSelected((sel) => {
         const n = { ...sel };
@@ -2209,6 +2214,7 @@ function TagReviewPanel({
     } finally {
       setCreating(false);
       setConfirming(false);
+      setCreateProgress(null);
     }
   }
 
@@ -2712,10 +2718,16 @@ function TagReviewPanel({
                   Approve &amp; create selected ({selectedIds.length})
                 </button>
                 {!targetReady && <span style={{ color: 'var(--c-amber)', fontSize: 13 }}>Pick a draft workspace first.</span>}
-                {done && (
+                {creating && createProgress && (
+                  <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+                    Creating… {createProgress.done}/{createProgress.total}
+                  </span>
+                )}
+                {!creating && done && (
                   <span style={{ color: done.failed ? 'var(--c-amber)' : 'var(--c-green)', fontSize: 13 }}>
-                    {done.created} created{done.failed ? `, ${done.failed} failed` : ''} — open GTM to review &amp;
-                    publish.
+                    {done.created} of {done.total} created
+                    {done.existing ? ` · ${done.existing} already existed` : ''}
+                    {done.failed ? ` · ${done.failed} failed` : ''} — open GTM to review &amp; publish.
                   </span>
                 )}
               </div>
