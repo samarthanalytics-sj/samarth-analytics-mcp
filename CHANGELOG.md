@@ -1,3 +1,9 @@
+## [1.136.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.136.0...v1.136.1) (2026-07-02)
+
+### Bug Fixes
+
+* **web-audit:** FAQ trigger always carries {{Click Text}} ends with "?" as the primary condition ([2b09b19](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2b09b190111719289c481b4e692279682644af0c))
+
 ## [1.136.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.135.0...v1.136.0) (2026-07-02)
 
 ### Features
