@@ -1759,6 +1759,26 @@ test('buildGa4EventTag: defaults Send-Ecommerce ON for an ecommerce event with n
   assert.ok(isGa4EcommerceEvent('add_to_cart') && !isGa4EcommerceEvent('login'));
 });
 
+test('buildGa4EventTag: auto-fills default event parameters (page_url/previous_page) when none passed; opt-out + explicit override', () => {
+  const est = (t: { parameter?: unknown }): Array<[string, string]> => {
+    const p = ((t.parameter as Array<{ key?: string; list?: Array<{ map: Array<{ key?: string; value?: string }> }> }>) ?? []).find((x) => x.key === 'eventSettingsTable');
+    return (p?.list ?? []).map((r) => [r.map.find((m) => m.key === 'parameter')?.value ?? '', r.map.find((m) => m.key === 'parameterValue')?.value ?? '']);
+  };
+  // no params passed → default page params filled (bound to default-enabled built-ins)
+  const auto = buildGa4EventTag({ name: 'GA4 - Login', measurementId: 'G-1', eventName: 'login' });
+  assert.deepEqual(est(auto), [['page_url', '{{Page URL}}'], ['previous_page', '{{Referrer}}']]);
+  // ecommerce event with no params → default params AND the ecommerce object coexist
+  const purch = buildGa4EventTag({ name: 'GA4 - Purchase', measurementId: 'G-1', eventName: 'purchase' });
+  assert.equal(paramVal(purch, 'sendEcommerceData'), 'true');
+  assert.deepEqual(est(purch), [['page_url', '{{Page URL}}'], ['previous_page', '{{Referrer}}']]);
+  // explicit params win (no auto-fill)
+  const explicit = buildGa4EventTag({ name: 'x', measurementId: 'G-1', eventName: 'sign_up', eventParameters: [{ name: 'method', value: '{{Method}}' }] });
+  assert.deepEqual(est(explicit), [['method', '{{Method}}']]);
+  // opt-out → bare tag, no event parameters
+  const bare = buildGa4EventTag({ name: 'x', measurementId: 'G-1', eventName: 'login', autoEventParameters: false });
+  assert.equal(((bare.parameter as Array<{ key?: string }>) ?? []).some((p) => p.key === 'eventSettingsTable'), false);
+});
+
 test('buildLinkedInCapiServerTag: conversion tag (token + rule + automap on); eventId → eventData row; explicit rows + opt-outs', () => {
   const t = buildLinkedInCapiServerTag('cvt_LI01', 'LinkedIn CAPI', '{{LI Token}}', '{{LI Rule}}', { eventId: '{{Event ID}}', firingTriggerId: ['9'] });
   assert.equal(t.type, 'cvt_LI01');
