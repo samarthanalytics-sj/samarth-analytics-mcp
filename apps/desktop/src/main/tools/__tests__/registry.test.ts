@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildToolRegistry, type GtmContextControl } from '../registry';
+import { buildGa4WriteTools } from '../ga4-write-tools';
 import { AuditHistoryStore } from '../../storage/audit-history';
 import type { GoogleDataService } from '../../google/data-service';
 import type { GtmContext } from '../../../shared/ipc';
@@ -300,6 +301,47 @@ function fakeData(
       calls.push(`verifySetup:${a}:${c}:${w}:${o?.events ? o.events.join(',') : 'default'}:${o?.server ? `${o.server.accountId}/${o.server.containerId}/${o.server.workspaceId}` : 'noServer'}`);
       return { ok: true, passed: 1, warnings: 0, failures: 0, checks: [] };
     },
+    // GA4 Admin write plumbing (generic + specials).
+    ga4AdminCreate: async (ver: string, accessor: string, parent: string, body: Record<string, unknown>, query?: Record<string, string>) => {
+      calls.push(`ga4Create:${ver}:${accessor}:${parent}:${JSON.stringify(body)}:${query ? JSON.stringify(query) : ''}`);
+      return { name: `${parent}/created/1`, ...body };
+    },
+    ga4AdminPatch: async (ver: string, accessor: string, name: string, mask: string, body: Record<string, unknown>) => {
+      calls.push(`ga4Patch:${ver}:${accessor}:${name}:${mask}:${JSON.stringify(body)}`);
+      return { name, ...body };
+    },
+    ga4AdminDelete: async (ver: string, accessor: string, name: string) => {
+      calls.push(`ga4Delete:${ver}:${accessor}:${name}`);
+      return { deleted: true, name };
+    },
+    ga4AdminArchive: async (ver: string, accessor: string, name: string) => {
+      calls.push(`ga4Archive:${ver}:${accessor}:${name}`);
+      return { archived: true, name };
+    },
+    ga4CreateProperty: async (accountName: string, body: Record<string, unknown>) => {
+      calls.push(`ga4CreateProperty:${accountName}:${JSON.stringify(body)}`);
+      return { name: 'properties/999', ...body };
+    },
+    ga4UpdateProperty: async (name: string, mask: string, body: Record<string, unknown>) => {
+      calls.push(`ga4UpdateProperty:${name}:${mask}:${JSON.stringify(body)}`);
+      return { name, ...body };
+    },
+    ga4DeleteProperty: async (name: string) => {
+      calls.push(`ga4DeleteProperty:${name}`);
+      return { name };
+    },
+    ga4UpdateDataRetention: async (name: string, mask: string, body: Record<string, unknown>) => {
+      calls.push(`ga4DataRetention:${name}:${mask}:${JSON.stringify(body)}`);
+      return { name, ...body };
+    },
+    ga4UpdateAccount: async (name: string, displayName: string) => {
+      calls.push(`ga4UpdateAccount:${name}:${displayName}`);
+      return { name, displayName };
+    },
+    ga4DeleteAccount: async (name: string) => {
+      calls.push(`ga4DeleteAccount:${name}`);
+      return { deleted: true, name };
+    },
     listGtmTemplates: async (a: string, c: string, w: string) => {
       calls.push(`listTemplates:${a}:${c}:${w}`);
       return [];
@@ -440,7 +482,25 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 94, 'read + write registry has 94 tools');
+    // Pin the GA4 write count to a LITERAL (not derived from the fn under test), so a
+    // dropped catalog entry or verb fails here instead of moving both sides together.
+    const ga4Writes = buildGa4WriteTools(fakeData().data);
+    assert.equal(ga4Writes.length, 60, 'GA4 write catalog produces 60 tools (19 resources + 6 lifecycle specials)');
+    // 92 base + add_ga4_server_parameters + create_linkedin_capi_server_tag = 94 GTM/GA4-read/context.
+    assert.equal(withWrites.list().length, 94 + 60, 'read + write registry has 94 GTM/GA4-read/context + 60 GA4-write tools');
+    // Every catalog resource + special contributes at least one tool (catches a fully-dropped entry
+    // for a resource no other assertion names — google_ads_link, firebase_link, expanded_data_set,
+    // dv360, sa360, adsense, subproperty, rollup, etc.).
+    const ga4Names = new Set(ga4Writes.map((t) => t.name));
+    for (const n of [
+      'create_ga4_key_event', 'create_ga4_custom_dimension', 'create_ga4_custom_metric', 'create_ga4_data_stream',
+      'create_ga4_google_ads_link', 'create_ga4_firebase_link', 'create_ga4_measurement_protocol_secret',
+      'create_ga4_audience', 'create_ga4_channel_group', 'create_ga4_calculated_metric', 'create_ga4_expanded_data_set',
+      'create_ga4_event_create_rule', 'create_ga4_display_video_360_advertiser_link', 'create_ga4_search_ads_360_link',
+      'create_ga4_adsense_link', 'create_ga4_subproperty_event_filter', 'create_ga4_rollup_property_source_link',
+      'create_ga4_property_access_binding', 'create_ga4_account_access_binding',
+      'create_ga4_property', 'update_ga4_property', 'delete_ga4_property', 'update_ga4_data_retention', 'update_ga4_account', 'delete_ga4_account',
+    ]) assert.ok(ga4Names.has(n), `GA4 write catalog missing ${n}`);
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'add_ga4_server_parameters'), true, 'add_ga4_server_parameters present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_linkedin_capi_server_tag'), true, 'create_linkedin_capi_server_tag present');
@@ -456,6 +516,67 @@ async function main(): Promise<void> {
     for (const fixTool of ['set_gtm_tag_paused', 'delete_gtm_trigger', 'delete_gtm_variable']) {
       assert.equal(withWrites.list().some((t) => t.name === fixTool), true, `${fixTool} is registered`);
     }
+  });
+
+  await test('GA4 write tools: scoped to the ga4 product, gated by confirm, routed correctly', async () => {
+    // Read-only GA4 chat: NO write tools.
+    const ro = buildToolRegistry(fakeData().data, undefined, 'ga4');
+    assert.equal(ro.list().some((t) => t.name.startsWith('create_ga4_')), false, 'no GA4 writes without a confirm fn');
+
+    // GA4 chat WITH confirm: write tools present; GTM write tools filtered out.
+    const ga4 = buildToolRegistry(fakeData().data, approveAsIs, 'ga4');
+    const names = ga4.list().map((t) => t.name);
+    for (const n of ['create_ga4_key_event', 'archive_ga4_custom_dimension', 'create_ga4_property_access_binding', 'create_ga4_property', 'delete_ga4_account']) {
+      assert.ok(names.includes(n), `${n} available in the GA4 chat`);
+    }
+    assert.ok(!names.some((n) => n === 'create_gtm_tracking_tag'), 'GTM write tools do NOT leak into the GA4 product');
+
+    // create key event → generic ga4AdminCreate with the right version/accessor/parent/body.
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs, 'ga4');
+    await reg.execute('create_ga4_key_event', { property: '123', eventName: 'purchase', countingMethod: 'ONCE_PER_SESSION' });
+    assert.ok(fd.calls.includes('ga4Create:v1beta:properties.keyEvents:properties/123:{"eventName":"purchase","countingMethod":"ONCE_PER_SESSION"}:'), `create routed wrong: ${fd.calls.filter((c) => c.startsWith('ga4Create')).join(' | ')}`);
+
+    // update derives the mask from supplied fields + targets the full name.
+    await reg.execute('update_ga4_custom_dimension', { name: 'properties/123/customDimensions/9', displayName: 'New' });
+    assert.ok(fd.calls.includes('ga4Patch:v1beta:properties.customDimensions:properties/123/customDimensions/9:displayName:{"displayName":"New"}'));
+
+    // dataStream-parented create builds the nested parent.
+    await reg.execute('create_ga4_measurement_protocol_secret', { property: '123', dataStreamId: '9', displayName: 'Server' });
+    assert.ok(fd.calls.some((c) => c.startsWith('ga4Create:v1beta:properties.dataStreams.measurementProtocolSecrets:properties/123/dataStreams/9:')));
+
+    // WEB data stream: defaultUri must NEST under webStreamData (not a dropped/flat field).
+    await reg.execute('create_ga4_data_stream', { property: '5', type: 'WEB_DATA_STREAM', displayName: 'Web', defaultUri: 'https://example.com' });
+    const dsCall = fd.calls.find((c) => c.startsWith('ga4Create:v1beta:properties.dataStreams:'));
+    assert.ok(dsCall && dsCall.includes('"webStreamData":{"defaultUri":"https://example.com"}'), `defaultUri not nested: ${dsCall}`);
+
+    // calculated metric routes calculatedMetricId to the query, not the body.
+    await reg.execute('create_ga4_calculated_metric', { property: '7', calculatedMetricId: 'roas', formula: '{{r}}/{{c}}' });
+    assert.ok(fd.calls.some((c) => c.startsWith('ga4Create:v1alpha:properties.calculatedMetrics:properties/7:') && c.endsWith(':{"calculatedMetricId":"roas"}')));
+
+    // property create puts the account parent in the body via the bespoke method.
+    await reg.execute('create_ga4_property', { accountId: '456', displayName: 'New', timeZone: 'America/New_York', currencyCode: 'USD' });
+    assert.ok(fd.calls.some((c) => c.startsWith('ga4CreateProperty:accounts/456:')));
+  });
+
+  await test('GA4 delete/archive tools are destructive (two-step approval), creates are not', async () => {
+    const fd = fakeData();
+    // Approve-once fn: destructive tools ask twice, so a single-yes declines the 2nd.
+    const once = seqConfirm(true, false);
+    const reg = buildToolRegistry(fd.data, once.fn, 'ga4');
+    // A create is non-destructive → applies with NO card (delete-only approvals).
+    await reg.execute('create_ga4_key_event', { property: '1', eventName: 'x' });
+    assert.equal(once.calls.length, 0, 'create shows no approval card');
+    // An archive is destructive → two prompts; declining the 2nd cancels it.
+    const out = await reg.execute('archive_ga4_custom_metric', { name: 'properties/1/customMetrics/2' });
+    assert.equal(JSON.parse(out).declined, true, 'archive cancelled when 2nd confirm declined');
+    assert.ok(!fd.calls.some((c) => c.startsWith('ga4Archive:')), 'no archive API call when declined');
+    // Delete is destructive too.
+    const del = seqConfirm(true, true);
+    const fd2 = fakeData();
+    await buildToolRegistry(fd2.data, del.fn, 'ga4').execute('delete_ga4_key_event', { name: 'properties/1/keyEvents/2' });
+    assert.equal(del.calls.length, 2, 'delete asked twice');
+    assert.ok(fd2.calls.includes('ga4Delete:v1beta:properties.keyEvents:properties/1/keyEvents/2'), 'delete applied after both confirms');
   });
 
   await test('unknown tool name suggests the closest real tool (did you mean)', async () => {
@@ -1528,6 +1649,16 @@ async function main(): Promise<void> {
     );
     assert.equal(evTrig.type, 'customEvent');
     assert.ok(fd.calls.includes('createTrigger:1:2:3:ga4 - purchase'), 'created the per-event server trigger');
+
+    // pageUrlContains (campaign scoping) → auto-creates the {{ed - page_location}} variable it reads.
+    await reg.execute('create_server_trigger', { accountId: '1', containerId: '2', workspaceId: '3', name: 'ACF - Sign Petition Click', eventName: 'Sign Petition Click', clientName: 'GA4', pageUrlContains: '/petition/minister-for-children/' });
+    assert.ok(fd.calls.includes('createVar:1:2:3:ed:ed - page_location'), 'auto-created ed - page_location for the page filter');
+    assert.ok(fd.calls.includes('createTrigger:1:2:3:ACF - Sign Petition Click'), 'created the page-scoped trigger');
+    // Variable already present → reused, no duplicate create.
+    const fdHasVar = fakeData({ existingVariables: [{ variableId: 'V7', name: 'ed - page_location', type: 'ed' }] });
+    await buildToolRegistry(fdHasVar.data, approveAsIs, 'gtm').execute('create_server_trigger', { accountId: '1', containerId: '2', workspaceId: '3', name: 'X - Scoped', eventName: 'e', pageUrlContains: '/x/' });
+    assert.ok(!fdHasVar.calls.some((c) => c.startsWith('createVar:')), 'existing ed - page_location NOT re-created');
+    assert.ok(fdHasVar.calls.includes('createTrigger:1:2:3:X - Scoped'));
 
     // create_gtm_variable_typed request_header → a server rh variable (logged as createVar:…:rh:…).
     const rhVar = JSON.parse(

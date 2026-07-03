@@ -89,7 +89,9 @@ Google classifies OAuth scopes into three tiers. What you must do depends on the
 | `openid`, `email`, `profile` | Non-sensitive | Identify the signed-in account |
 | `https://www.googleapis.com/auth/tagmanager.readonly` | **Sensitive** | Read GTM accounts/containers/workspaces/tags to audit them |
 | `https://www.googleapis.com/auth/tagmanager.edit.containers` | **Sensitive** | Create/edit tags, triggers, variables **in a draft workspace** (never publishes) |
-| `https://www.googleapis.com/auth/analytics.readonly` | **Sensitive** | Read GA4 config & run reports (read-only) |
+| `https://www.googleapis.com/auth/analytics.readonly` | **Sensitive** | Read GA4 config & run reports |
+| `https://www.googleapis.com/auth/analytics.edit` | **Sensitive** | Create/edit/delete/archive GA4 Admin config (key events, dimensions, metrics, streams, links, audiences, properties, …) at the user's request |
+| `https://www.googleapis.com/auth/analytics.manage.users` | **Sensitive** | Manage GA4 access bindings (grant/change/revoke a user's account/property roles) at the user's request |
 
 **Conclusion: you need sensitive-scope verification — and *not* a security
 assessment.** None of these scopes are restricted, so the costly annual CASA
@@ -124,9 +126,12 @@ block the submission.
 ### 3. Privacy policy — what it must say
 For each scope, state what data is accessed and why, that data is used only to
 provide the app's features, that it isn't sold, and how it's stored. Be explicit
-that **GTM/GA4 data is read on the user's machine** and that edits are limited to
-**draft workspaces** (never published automatically). If you don't transmit
-Google user data off-device, say so — it strengthens the review.
+that **GTM/GA4 data is read on the user's machine**, that GTM edits are limited to
+**draft workspaces** (never published automatically), and that **GA4 Admin edits
+(create/update/delete/archive config and access bindings) are applied to the live
+property only at the user's explicit in-app request** (deletes and archives
+require a two-step in-app confirmation). If you don't transmit Google user data
+off-device, say so — it strengthens the review.
 
 ### 4. Scope justifications (copy/adapt per scope)
 - **tagmanager.readonly** — "Read the user's GTM accounts, containers,
@@ -138,7 +143,15 @@ Google user data off-device, say so — it strengthens the review.
   draft workspace the user reviews and publishes in GTM; deletions additionally
   require explicit two-step in-app confirmation."
 - **analytics.readonly** — "Read GA4 property configuration and run reports
-  (read-only) to audit setup and data quality. No write scope is requested."
+  to audit setup and data quality."
+- **analytics.edit** — "Create and edit GA4 Admin configuration at the user's
+  request — key events, custom dimensions/metrics, data streams, links,
+  audiences, channel groups, properties and data-retention settings. Every
+  change is initiated by the user in-app; deletes and archives require explicit
+  two-step in-app confirmation."
+- **analytics.manage.users** — "Manage GA4 access bindings (grant/change/revoke
+  a user's roles on an account or property) at the user's explicit request, so
+  administrators can manage team access from the app."
 
 ### 5. Demo video
 A public/unlisted **YouTube** video that shows:

@@ -233,4 +233,10 @@ export interface GuardrailConfig {
   publishEnabled: boolean;
   deletesEnabled: boolean;
   dryRun: boolean;
+  /** GA4 Admin config writes (create/update). Gated separately from GTM so the
+   *  two products can be enabled independently. Default false. */
+  ga4WritesEnabled: boolean;
+  /** GA4 Admin destructive ops (delete AND archive — archive is effectively
+   *  irreversible for dimensions/metrics/audiences). Default false. */
+  ga4DeletesEnabled: boolean;
 }

@@ -1,3 +1,27 @@
+## [1.145.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.145.0...v1.145.1) (2026-07-03)
+
+### Bug Fixes
+
+* **desktop:** make the one-shot tracking flow quota-safe and idempotent ([08e4a96](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/08e4a9685c15461e6943598f92925ea0ed340a85))
+
+## [1.145.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.144.0...v1.145.0) (2026-07-03)
+
+### Features
+
+* GA4 Admin write tools (create/update/delete/archive) on both surfaces ([686d844](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/686d844402d63c91aa14b19158fdd4a5b7910a27))
+
+## [1.144.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.143.0...v1.144.0) (2026-07-03)
+
+### Features
+
+* **desktop:** production-shaped server containers from the web container ([265b726](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/265b726a2c25352718b6490d8e75b1df7dffe03f))
+
+## [1.143.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.142.0...v1.143.0) (2026-07-03)
+
+### Features
+
+* **desktop:** delete-only write approvals in chat ([c867510](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c867510e47315dd17e03f1d05c3422495d42b7ee))
+
 ## [1.142.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.141.1...v1.142.0) (2026-07-02)
 
 ### Features
