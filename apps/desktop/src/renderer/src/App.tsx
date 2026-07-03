@@ -2753,11 +2753,11 @@ function TagReviewPanel({
 // Audit findings-filter values. Tag types use the bare GTM type string; everything else uses a
 // sentinel/prefix so the dropdown can span severity, issue type, auto-fixability, and the
 // trigger/variable cross-cuts without colliding with any GTM type.
-const ORPHAN_TRIGGER_FILTER = '__orphaned_triggers__';
+const UNUSED_TRIGGER_FILTER = '__unused_triggers__';
 const UNUSED_VAR_FILTER = '__unused_variables__';
 const FIXABLE_FILTER = '__fixable__';
 // Issue-type (finding.category) → friendly label, in display order. The "unused" category is split
-// into the granular Orphaned-triggers / Unused-variables quick filters instead of a generic entry.
+// into the granular Unused-triggers / Unused-variables quick filters instead of a generic entry.
 const AUDIT_CATEGORY_LABELS: Array<[string, string]> = [
   ['consent', 'Consent Mode'],
   ['security', 'Security'],
@@ -2778,7 +2778,7 @@ const AUDIT_SEVERITIES: Array<[string, string]> = [
 
 /** Human label for the active audit filter value — used in the "nothing matches" empty state. */
 function auditFilterLabel(v: string): string {
-  if (v === ORPHAN_TRIGGER_FILTER) return 'orphaned trigger';
+  if (v === UNUSED_TRIGGER_FILTER) return 'unused trigger';
   if (v === UNUSED_VAR_FILTER) return 'unused variable';
   if (v === FIXABLE_FILTER) return 'auto-fixable';
   if (v.startsWith('sev:')) return v.slice(4);
@@ -2813,7 +2813,7 @@ function ContainerAuditPanel({
   const [search, setSearch] = useState('');
   const [exporting, setExporting] = useState(false);
   const [exportNote, setExportNote] = useState('');
-  // Bulk-delete selection (orphaned triggers + unused variables), keyed by finding index, plus the
+  // Bulk-delete selection (unused triggers + unused variables), keyed by finding index, plus the
   // one-shot confirmation that gates a bulk delete (the captured index list to remove).
   const [selectedDel, setSelectedDel] = useState<Record<number, boolean>>({});
   const [delConfirm, setDelConfirm] = useState<{ indices: number[] } | null>(null);
@@ -2897,16 +2897,16 @@ function ContainerAuditPanel({
   const fixable = (report?.findings ?? []).filter((f) => f.autoFixable).length;
 
   // Findings filter. The dropdown lists every tag type present in the findings (with counts), plus an
-  // "Orphaned triggers" entry for the unused-trigger findings (which are about triggers, not a tag
+  // "Unused triggers" entry for the unused-trigger findings (which are about triggers, not a tag
   // type). When one is picked, both the list and the batch buttons scope to it.
   const typeCounts = new Map<string, number>();
   for (const f of findings) {
     if (f.resource?.kind === 'tag' && f.resource.type) typeCounts.set(f.resource.type, (typeCounts.get(f.resource.type) ?? 0) + 1);
   }
   const tagTypes = [...typeCounts.keys()].sort((a, b) => gtmTypeLabel(a).localeCompare(gtmTypeLabel(b)));
-  const isOrphanTrigger = (f: AuditFindingView): boolean => f.category === 'unused' && f.resource?.kind === 'trigger';
+  const isUnusedTrigger = (f: AuditFindingView): boolean => f.category === 'unused' && f.resource?.kind === 'trigger';
   const isUnusedVariable = (f: AuditFindingView): boolean => f.category === 'unused' && f.resource?.kind === 'variable';
-  const orphanCount = findings.filter(isOrphanTrigger).length;
+  const unusedTriggerCount = findings.filter(isUnusedTrigger).length;
   const unusedVarCount = findings.filter(isUnusedVariable).length;
   // Counts per severity + per issue-type (category) so each dropdown option shows how many it covers.
   const sevCounts = new Map<string, number>();
@@ -2932,7 +2932,7 @@ function ContainerAuditPanel({
       return false;
     }
     if (typeFilter === 'all') return true;
-    if (typeFilter === ORPHAN_TRIGGER_FILTER) return isOrphanTrigger(f);
+    if (typeFilter === UNUSED_TRIGGER_FILTER) return isUnusedTrigger(f);
     if (typeFilter === UNUSED_VAR_FILTER) return isUnusedVariable(f);
     if (typeFilter === FIXABLE_FILTER) return f.autoFixable;
     if (typeFilter.startsWith('sev:')) return f.severity === typeFilter.slice(4);
@@ -2963,8 +2963,8 @@ function ContainerAuditPanel({
   // Rows to render — keep each finding's ORIGINAL index so the per-row fix state still aligns.
   const visible = findings.map((f, i) => ({ f, i })).filter(({ f }) => typeMatches(f));
 
-  // ── Bulk delete (orphaned triggers + unused variables) ──────────────────────
-  // The audit's two destructive fixes — delete_gtm_trigger (orphaned triggers) and
+  // ── Bulk delete (unused triggers + unused variables) ──────────────────────
+  // The audit's two destructive fixes — delete_gtm_trigger (unused triggers) and
   // delete_gtm_variable (unused variables) — get selection checkboxes plus "Delete selected" /
   // "Delete all" buttons. Both scope to the current filter + search via `visible`, exactly like the
   // non-destructive batches. Single deletes keep their per-row two-click confirm; a bulk delete
@@ -2980,10 +2980,10 @@ function ContainerAuditPanel({
   const anyFixing = Object.values(fix).some((s) => s?.state === 'fixing');
   const delTriggerCount = (idxs: number[]): number => idxs.filter((i) => findings[i].fix?.tool === 'delete_gtm_trigger').length;
   const delVariableCount = (idxs: number[]): number => idxs.filter((i) => findings[i].fix?.tool === 'delete_gtm_variable').length;
-  // "X orphaned trigger(s) · Y unused variable(s)" — the kind breakdown for a set of delete targets.
+  // "X unused trigger(s) · Y unused variable(s)" — the kind breakdown for a set of delete targets.
   const delBreakdown = (idxs: number[]): string =>
     [
-      delTriggerCount(idxs) > 0 ? `${delTriggerCount(idxs)} orphaned trigger(s)` : '',
+      delTriggerCount(idxs) > 0 ? `${delTriggerCount(idxs)} unused trigger(s)` : '',
       delVariableCount(idxs) > 0 ? `${delVariableCount(idxs)} unused variable(s)` : '',
     ]
       .filter(Boolean)
@@ -3151,7 +3151,7 @@ function ContainerAuditPanel({
                     </option>
                   ))}
                   {fixable > 0 && <option value={FIXABLE_FILTER}>Auto-fixable ({fixable})</option>}
-                  {orphanCount > 0 && <option value={ORPHAN_TRIGGER_FILTER}>Orphaned triggers ({orphanCount})</option>}
+                  {unusedTriggerCount > 0 && <option value={UNUSED_TRIGGER_FILTER}>Unused triggers ({unusedTriggerCount})</option>}
                   {unusedVarCount > 0 && <option value={UNUSED_VAR_FILTER}>Unused variables ({unusedVarCount})</option>}
                   {tagTypes.map((t) => (
                     <option key={t} value={t}>
@@ -3236,7 +3236,7 @@ function ContainerAuditPanel({
                     ? canceling
                       ? `Stopping after the current fix… (${batchProgress?.done ?? 0}/${batchProgress?.total ?? 0})`
                       : `Applying ${batchProgress?.done ?? 0}/${batchProgress?.total ?? 0}… click Cancel to stop after the current fix.`
-                    : 'Non-destructive fixes only — bulk delete for orphaned triggers / unused variables is below; “No extra consent” skips ad pixels.'}
+                    : 'Non-destructive fixes only — bulk delete for unused triggers / variables is below; “No extra consent” skips ad pixels.'}
                 </span>
               </div>
             )}
@@ -3247,7 +3247,7 @@ function ContainerAuditPanel({
                   style={{ ...styles.dangerSolid, ...disabledStyle(applyingAll || anyFixing || selectedDelTargets.length === 0) }}
                   disabled={applyingAll || anyFixing || selectedDelTargets.length === 0}
                   onClick={() => setDelConfirm({ indices: selectedDelTargets })}
-                  title="Delete the checked orphaned triggers / unused variables — one confirmation, then each is removed from the draft workspace."
+                  title="Delete the checked unused triggers / variables — one confirmation, then each is removed from the draft workspace."
                 >
                   Delete selected ({selectedDelTargets.length})
                 </button>
@@ -3255,7 +3255,7 @@ function ContainerAuditPanel({
                   style={{ ...styles.dangerGhost, ...disabledStyle(applyingAll || anyFixing) }}
                   disabled={applyingAll || anyFixing}
                   onClick={() => setDelConfirm({ indices: deletableTargets })}
-                  title="Delete every orphaned trigger / unused variable matching the current filter + search (the rows shown below)."
+                  title="Delete every unused trigger / variable matching the current filter + search (the rows shown below)."
                 >
                   Delete all in view ({deletableTargets.length})
                 </button>
@@ -3315,7 +3315,7 @@ function ContainerAuditPanel({
         {report && findings.length === 0 && (
           <div style={styles.empty}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
-            No issues found — every tag has a trigger, nothing's mis-paused, no orphans. Looks clean.
+            No issues found — every tag has a trigger, nothing's mis-paused, nothing unused. Looks clean.
           </div>
         )}
 

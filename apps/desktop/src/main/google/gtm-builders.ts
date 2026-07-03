@@ -2027,7 +2027,7 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
       category: 'unused',
       resource: { kind: 'trigger', id: tr.triggerId, name: tr.name },
       message: `Trigger "${tr.name}" isn't used by any tag.`,
-      recommendation: 'Delete it if it is not needed — unused triggers add clutter and unnecessary listeners. Use delete_unused_gtm_triggers to remove all orphans at once (or a selected subset).',
+      recommendation: 'Delete it if it is not needed — unused triggers add clutter and unnecessary listeners. Use delete_unused_gtm_triggers to remove all unused triggers at once (or a selected subset).',
       autoFixable: true,
       fix: { tool: 'delete_gtm_trigger', args: { triggerId: tr.triggerId, name: tr.name } },
     });
