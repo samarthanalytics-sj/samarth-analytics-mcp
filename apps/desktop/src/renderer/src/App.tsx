@@ -793,6 +793,19 @@ interface ChatMessage {
   tools?: string[];
   /** Tool failures surfaced in the UI even if the model doesn't mention them. */
   toolErrors?: Array<{ name: string; error: string }>;
+  /** Epoch ms when the message was created (a query's send time / a reply's start time).
+   *  Optional — messages stored before this field existed simply render without a timestamp. */
+  ts?: number;
+}
+
+/** Short timestamp shown under a chat bubble: just the time for today's messages, date + time
+ *  for older ones (the full date/time is on the element's hover title). */
+function formatMsgTime(ts: number): string {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString()
+    ? time
+    : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
 }
 
 // Per-account + per-container chat persistence (survives tab switches AND app restarts).
@@ -899,7 +912,8 @@ function ChatView({
     if (!text || busy) return;
     onError('');
     const history: ChatTurn[] = messages.map((m) => ({ role: m.role, text: m.text }));
-    setMessages((m) => [...m, { role: 'user', text }, { role: 'assistant', text: '', tools: [] }]);
+    const now = Date.now();
+    setMessages((m) => [...m, { role: 'user', text, ts: now }, { role: 'assistant', text: '', tools: [], ts: now }]);
     setInput('');
     setBusy(true);
     setRevertable(null);
@@ -952,7 +966,7 @@ function ChatView({
       const res = await window.desktop.data.revertLastChange();
       const parts = [`Reverted ${res.reverted.length} item(s)`];
       if (res.failed.length) parts.push(`${res.failed.length} failed: ${res.failed.map((f) => f.label).join(', ')}`);
-      setMessages((m) => [...m, { role: 'assistant', text: `↩︎ ${parts.join(' · ')}.`, tools: [] }]);
+      setMessages((m) => [...m, { role: 'assistant', text: `↩︎ ${parts.join(' · ')}.`, tools: [], ts: Date.now() }]);
       setRevertable(null);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -1005,22 +1019,38 @@ function ChatView({
           </div>
         )}
         {messages.map((m, i) => (
-          <div key={i} style={m.role === 'user' ? styles.userMsg : styles.asstMsg}>
-            {m.role === 'assistant' ? (
-              <>
-                {m.text ? <Markdown text={m.text} /> : m.toolErrors?.length ? null : <span style={{ opacity: 0.6 }}>…</span>}
-                {m.toolErrors?.length ? (
-                  <div style={styles.toolErrors}>
-                    {m.toolErrors.map((te, j) => (
-                      <div key={j} style={styles.toolErrorLine}>
-                        ⚠️ <strong>{te.name}</strong> failed — {te.error}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </>
-            ) : (
-              <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              maxWidth: '75%',
+              alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+              alignItems: m.role === 'user' ? 'flex-end' : 'flex-start',
+            }}
+          >
+            <div style={{ ...(m.role === 'user' ? styles.userMsg : styles.asstMsg), maxWidth: '100%' }}>
+              {m.role === 'assistant' ? (
+                <>
+                  {m.text ? <Markdown text={m.text} /> : m.toolErrors?.length ? null : <span style={{ opacity: 0.6 }}>…</span>}
+                  {m.toolErrors?.length ? (
+                    <div style={styles.toolErrors}>
+                      {m.toolErrors.map((te, j) => (
+                        <div key={j} style={styles.toolErrorLine}>
+                          ⚠️ <strong>{te.name}</strong> failed — {te.error}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
+              )}
+            </div>
+            {m.ts != null && (
+              <div style={styles.msgTime} title={new Date(m.ts).toLocaleString()}>
+                {formatMsgTime(m.ts)}
+              </div>
             )}
           </div>
         ))}
@@ -4215,6 +4245,7 @@ const styles: Record<string, React.CSSProperties> = {
   empty: { color: 'var(--text-faint)', textAlign: 'center', maxWidth: 420, margin: '60px auto', lineHeight: 1.6, flexShrink: 0 },
   userMsg: { alignSelf: 'flex-end', background: '#2563eb', color: '#fff', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14 },
   asstMsg: { alignSelf: 'flex-start', background: 'var(--surface-2)', color: 'var(--text)', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14, border: '1px solid var(--border)' },
+  msgTime: { fontSize: 11, color: 'var(--text-faint)', margin: '3px 4px 0', userSelect: 'none' },
   toolTrace: { color: 'var(--c-blue)', fontSize: 11, marginBottom: 4 },
   toolErrors: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 },
   toolErrorLine: { background: 'var(--c-red-bg)', border: '1px solid var(--c-red-border)', color: 'var(--c-red)', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
