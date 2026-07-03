@@ -81,8 +81,11 @@ const fmtDay = (ymd: string): string => {
   const m = /^(\d{4})(\d{2})(\d{2})$/.exec(ymd);
   return m ? `${MONTHS[Number(m[2]) - 1] ?? '?'} ${Number(m[3])}, ${m[1]}` : ymd || '—';
 };
+const RETENTION_LABELS: Record<string, string> = {
+  TWO_MONTHS: '2 months', FOURTEEN_MONTHS: '14 months', TWENTY_FIVE_MONTHS: '25 months', THIRTY_EIGHT_MONTHS: '38 months', FIFTY_MONTHS: '50 months',
+};
 const retentionLabel = (dr: Ga4PropertySnapshot['dataRetention']): string =>
-  dr === null ? 'Not Verified' : dr.eventDataRetention === 'FOURTEEN_MONTHS' ? '14 months' : dr.eventDataRetention === 'TWO_MONTHS' ? '2 months' : dr.eventDataRetention;
+  dr === null ? 'Not Verified' : RETENTION_LABELS[dr.eventDataRetention] ?? dr.eventDataRetention;
 const hasEcommerce = (s: Ga4PropertySnapshot): boolean =>
   (s.keyEvents ?? []).some((k) => /purchase|add_to_cart|begin_checkout|view_item|add_payment_info|add_shipping_info/i.test(k.eventName));
 const hasKeyEvent = (s: Ga4PropertySnapshot, re: RegExp): boolean => (s.keyEvents ?? []).some((k) => re.test(k.eventName));
@@ -103,12 +106,24 @@ function areaEvidence(area: string, s: Ga4PropertySnapshot, config: Ga4AuditRepo
       return retentionLabel(s.dataRetention);
     case 'Key events':
       return s.keyEvents === null ? 'could not read' : `${s.keyEvents.length} key event(s)`;
+    case 'Enhanced measurement': {
+      const web = s.dataStreams.filter((d) => d.type === 'WEB_DATA_STREAM');
+      if (web.length === 0) return 'no web stream';
+      if (web.some((d) => d.enhancedMeasurementEnabled === false)) return 'off on a web stream';
+      const em = web.find((d) => d.enhancedMeasurement)?.enhancedMeasurement;
+      const off = em ? [em.siteSearchEnabled ? '' : 'site search', em.pageChangesEnabled ? '' : 'SPA page changes', em.formInteractionsEnabled ? '' : 'form interactions'].filter(Boolean) : [];
+      return off.length ? `on; off: ${off.join(', ')}` : 'on';
+    }
     case 'Custom definitions':
       return `${config.counts.customDimensions} dimension(s), ${config.counts.customMetrics} metric(s)`;
+    case 'Attribution':
+      return s.attribution
+        ? `${s.attribution.reportingAttributionModel}; lookback ${s.attribution.acquisitionLookback || '—'}/${s.attribution.otherLookback || '—'}`
+        : 'attribution settings unread';
     case 'Privacy (PII)':
       return s.customDimensions === null ? 'dimensions unread' : 'no PII patterns in dimension names';
     case 'Integrations':
-      return `${s.googleAdsLinks ?? '—'} Google Ads link(s); Signals ${s.googleSignals === 'GOOGLE_SIGNALS_ENABLED' ? 'on' : s.googleSignals === 'GOOGLE_SIGNALS_DISABLED' ? 'off' : '—'}`;
+      return `${s.googleAdsLinks ?? '—'} Google Ads link(s); Signals ${s.googleSignals === 'GOOGLE_SIGNALS_ENABLED' ? 'on' : s.googleSignals === 'GOOGLE_SIGNALS_DISABLED' ? 'off' : '—'}; BigQuery ${Array.isArray(s.bigQueryLinks) ? (s.bigQueryLinks.length ? 'linked' : 'none') : '—'}; ${typeof s.audiences === 'number' ? `${s.audiences} audience(s)` : '— audiences'}`;
     case 'Benchmarking':
       return s.industryCategory && s.industryCategory !== 'INDUSTRY_CATEGORY_UNSPECIFIED' ? s.industryCategory : 'industry not set';
     default:
@@ -206,14 +221,12 @@ function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, grow
 function buildAreaRows(
   s: Ga4PropertySnapshot,
   config: Ga4AuditReport,
-  attribution: Ga4ReportInput['attribution'],
   audienceCount: number | null,
   ecom: boolean,
 ): AreaRow[] {
+  // Attribution is now a GRADED config area (auditGa4) with its own evidence, so it is not re-added
+  // here as a passive "pass" row.
   const rows: AreaRow[] = config.areas.map((a) => ({ area: a.area, statusKey: a.status, evidence: areaEvidence(a.area, s, config) }));
-  if (attribution) {
-    rows.push({ area: 'Attribution', statusKey: 'pass', evidence: `${attribution.reportingAttributionModel}; lookback ${attribution.acquisitionConversionEventLookbackWindow}/${attribution.otherConversionEventLookbackWindow}` });
-  }
   if (audienceCount !== null) {
     rows.push({ area: 'Audiences', statusKey: audienceCount > 0 ? 'pass' : 'partial', evidence: `${audienceCount} audience(s)` });
   }
@@ -234,7 +247,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
   const ecom = hasEcommerce(s);
   const allFindings = buildAllFindings(config, dq, growth);
   const top = allFindings.filter((f) => f.severity !== 'info')[0];
-  const areaRows = buildAreaRows(s, config, attribution, audienceCount, ecom);
+  const areaRows = buildAreaRows(s, config, audienceCount, ecom);
   const nPartial = areaRows.filter((a) => a.statusKey === 'partial').length;
   const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
   const scoreModel = buildGa4Scorecard({
@@ -268,7 +281,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
   const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
   // Channel-attribution trust comes from the same Data Trust Matrix the Executive Summary uses.
   const allFindings = buildAllFindings(config, dq, growth);
-  const areaRows = buildAreaRows(s, config, attribution, audienceCount, hasEcommerce(s));
+  const areaRows = buildAreaRows(s, config, audienceCount, hasEcommerce(s));
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
     findings: allFindings.map((f) => ({ severity: f.severity, category: f.category })),
@@ -307,7 +320,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
   const dqAttrib = allFindings.find((f) => f.category === 'data_quality' && f.severity !== 'info' && /source data|Unassigned|\(not set\)/.test(f.message));
-  const areaRows = buildAreaRows(s, config, attribution, audienceCount, ecom);
+  const areaRows = buildAreaRows(s, config, audienceCount, ecom);
   const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
@@ -430,7 +443,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   // all-clear as a problem.
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
-  const areaRows = buildAreaRows(s, config, attribution, audienceCount, ecom);
+  const areaRows = buildAreaRows(s, config, audienceCount, ecom);
 
   const windowLabel = auditWindowLabel(dq); // same label as section 1 + the styled section 9 card
   const cmp = baseline ? ` vs prior ${baseline.priorStartDate} – ${baseline.priorEndDate}` : '';
