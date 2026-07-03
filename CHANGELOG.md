@@ -1,3 +1,9 @@
+## [1.151.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.150.0...v1.151.0) (2026-07-03)
+
+### Features
+
+* **desktop:** Pinterest Conversions API server tag ([0a66fc1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0a66fc1c0aa7678dbf2447d5d6a916964b34e5e9))
+
 ## [1.150.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.149.0...v1.150.0) (2026-07-03)
 
 ### Features
