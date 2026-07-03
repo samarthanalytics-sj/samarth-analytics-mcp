@@ -3118,10 +3118,14 @@ function ContainerAuditPanel({
               {report.summary.info} info){fixable > 0 ? ` · ${fixable} auto-fixable` : ''}
             </div>
             {report.counts.findings > 0 && (
-              <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Download the full audit:</span>
-                <button style={styles.linkBtn} onClick={() => void downloadAudit('csv')} disabled={exporting}>⬇ CSV</button>
-                <button style={styles.linkBtn} onClick={() => void downloadAudit('md')} disabled={exporting}>⬇ Markdown</button>
+              <div style={styles.downloadBar}>
+                <span style={{ color: 'var(--text)', fontSize: 13.5, fontWeight: 600 }}>Download the full audit</span>
+                <button style={{ ...styles.downloadBtn, ...disabledStyle(exporting) }} onClick={() => void downloadAudit('csv')} disabled={exporting} title="Download every finding as a CSV spreadsheet">
+                  ⬇ CSV
+                </button>
+                <button style={{ ...styles.downloadBtn, ...disabledStyle(exporting) }} onClick={() => void downloadAudit('md')} disabled={exporting} title="Download the audit as a shareable Markdown report">
+                  ⬇ Markdown
+                </button>
                 {exporting && <span style={styles.muted}>Saving…</span>}
                 {exportNote && <span style={styles.muted}>{exportNote}</span>}
               </div>
@@ -4272,6 +4276,11 @@ const styles: Record<string, React.CSSProperties> = {
   muted: { color: 'var(--text-faint)', fontSize: 13 },
   dot: { width: 9, height: 9, borderRadius: 999, display: 'inline-block', flexShrink: 0 },
   linkBtn: { background: 'transparent', border: 'none', color: 'var(--c-blue)', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' },
+  // "Download the full audit" bar — a tinted, bordered strip so the export is an obvious call to
+  // action rather than a faint text link. Its buttons are solid but a touch smaller than primaryBtn
+  // so the "Apply all fixes" CTA still reads as the primary action.
+  downloadBar: { marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '11px 14px', background: 'rgba(37,99,235,0.1)', border: '1px solid rgba(37,99,235,0.55)', borderRadius: 10 },
+  downloadBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 15px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 },
 
   // Tag-suggestion review panel.
   reviewWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
