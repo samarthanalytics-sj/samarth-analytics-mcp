@@ -1,3 +1,9 @@
+## [1.156.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.156.0...v1.156.1) (2026-07-03)
+
+### Bug Fixes
+
+* **desktop:** map CTA tag suggestions to marketing platforms by classified intent ([f7aeed8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f7aeed818b6b8fa7dd1cfa81c280ab3f3abbb3c7))
+
 ## [1.156.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.155.0...v1.156.0) (2026-07-03)
 
 ### Features

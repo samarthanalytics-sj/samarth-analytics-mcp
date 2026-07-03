@@ -179,6 +179,9 @@ export interface SuggestedTag {
   tagId?: string;
   /** For platform 'google_tag': optional gtag config settings (name/value). */
   configSettings?: Array<{ name: string; value: string }>;
+  /** For a CTA-derived tag: the classified CTA intent, so platform derivations map by intent
+   *  (authoritative) rather than the event-name text. */
+  ctaIntent?: CtaIntent;
   eventName: string;
   eventParameters?: Array<{ name: string; value: string }>;
   /** Companion Lookup Table variable(s) an event parameter VALUE references by {{name}} (e.g.

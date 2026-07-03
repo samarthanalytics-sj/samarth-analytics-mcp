@@ -5,7 +5,7 @@
 // we don't suggest redundant tags. Output is directly creatable via the existing
 // create_gtm_tracking_tag tool.
 
-import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, SuggestPlatform, FormProvider, VideoEmbed, TriggerKind } from './types.js';
+import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, SuggestPlatform, FormProvider, VideoEmbed, TriggerKind, CtaIntent } from './types.js';
 import { CTA_BY_INTENT, classifyCtaIntent } from './cta-intents.js';
 import { buildSocialUrlPattern } from './social.js';
 
@@ -640,6 +640,10 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         tagName: tagNameOf(displayLabel, 'all_clicks'),
         label: `"${displayLabel}" → GA4 "${ctaEvent}"`,
         evidence: `button/link text "${el.text}"` + (isSpecific ? ` (intent: ${el.intent})` : ''),
+        // Carry the classified intent so the platform derivations map by intent (authoritative for
+        // CTAs) instead of the event-name text — a CTA whose event name lacks a keyword still gets its
+        // correct Meta/Ads/etc. counterpart.
+        ctaIntent: el.intent ?? 'generic',
         // Standard click params: click_text ({{Click Text}}) is the dynamic clicked label, click_url
         // the href when the CTA is a link, plus page context.
         eventParameters: CLICK_PARAMS,
@@ -891,6 +895,32 @@ function extractFaqGroups(elements: DetectedElement[]): { faqTags: SuggestedTag[
   return { faqTags: [faqTagFor(grouped)], consumed };
 }
 
+// ── CTA intent → conversion meaning → per-platform event ─────────────────────
+// For a CTA-derived tag the classified intent is AUTHORITATIVE (the scan already knows what the button
+// does), so each platform deriver maps by intent rather than by the coincidental keywords in the event
+// NAME (e.g. "Schedule Strategy Call" → Lead via book_demo, not Contact via the substring 'call'). The
+// intent resolves to a conversion MEANING, then each platform maps that meaning to its own event.
+type ConvMeaning = 'lead' | 'contact' | 'subscribe' | 'search' | 'add_to_cart' | 'download';
+// A CTA intent → the conversion MEANING worth a marketing-platform tag. Intents NOT here (login,
+// learn_more, faq) are NOT conversions → no platform counterpart.
+const CTA_INTENT_MEANING: Partial<Record<CtaIntent, ConvMeaning>> = {
+  book_demo: 'lead', request_quote: 'lead', get_started: 'lead', generic: 'lead',
+  contact: 'contact', contact_sales: 'contact',
+  subscribe: 'subscribe', add_to_cart: 'add_to_cart', download: 'download', search: 'search',
+};
+// Per-platform: a conversion meaning → that platform's event (undefined = skip that meaning for that
+// platform). Google Ads is handled inline in toGoogleAdsSuggestion (meaning → conversion or skip).
+const META_MEANING: Partial<Record<ConvMeaning, string>> = { lead: 'Lead', contact: 'Contact', subscribe: 'Subscribe', search: 'Search', add_to_cart: 'AddToCart', download: 'Download' };
+const PINTEREST_MEANING: Partial<Record<ConvMeaning, string>> = { lead: 'lead', contact: 'lead', subscribe: 'signup', search: 'search', add_to_cart: 'addtocart' };
+const TIKTOK_MEANING: Partial<Record<ConvMeaning, string>> = { lead: 'SubmitForm', contact: 'Contact', subscribe: 'Subscribe', search: 'Search', add_to_cart: 'AddToCart', download: 'Download' };
+const REDDIT_MEANING: Partial<Record<ConvMeaning, string>> = { lead: 'Lead', contact: 'Lead', subscribe: 'SignUp', search: 'Search', add_to_cart: 'AddToCart' };
+// Google Ads treats these meanings as conversions; search/download are NOT (→ null).
+const GOOGLE_ADS_CONVERSION_MEANINGS = new Set<ConvMeaning>(['lead', 'contact', 'subscribe', 'add_to_cart']);
+/** The conversion MEANING for a CTA-derived tag, or null when the CTA carries no ctaIntent (non-CTA
+ *  tags) or its intent is not a conversion (login/learn_more/faq → no platform counterpart). */
+const ctaMeaning = (ga4: SuggestedTag): ConvMeaning | null =>
+  ga4.ctaIntent ? (CTA_INTENT_MEANING[ga4.ctaIntent] ?? null) : null;
+
 // ── Meta (Facebook) Pixel suggestions ────────────────────────────────────────
 // Meta suggestions are DERIVED from the GA4 ones so a Meta tag REUSES its GA4 source's trigger name —
 // on create, the shared trigger create/reuse-by-name path attaches one trigger to both (GA4 + Meta).
@@ -938,26 +968,35 @@ export function toMetaSuggestion(ga4: SuggestedTag): SuggestedTag | null {
       trigger: ga4.trigger,
     };
   }
-  // ga4_event → pick the Meta event from the GA4 event name by normalized keyword.
-  const key = ga4.eventName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  // ga4_event → pick the Meta event. For a CTA the classified INTENT is authoritative (map by meaning,
+  // NOT the event-name keywords — so "Schedule Strategy Call" → Lead via book_demo, not Contact via the
+  // coincidental 'call' substring); a non-conversion intent (learn_more/login/faq) → null. Every non-CTA
+  // tag (email/phone/ecommerce/form) keeps the existing event-name keyword chain unchanged.
   let metaEvent: string | null = null;
-  if (key.includes('purchase')) metaEvent = 'Purchase';
-  // add_payment_info → AddPaymentInfo — MUST be checked before the generic add/cart branch so it
-  // doesn't accidentally fall through (it has no 'cart' token, but keep it explicit and first).
-  else if (key.includes('paymentinfo') || key.includes('addpaymentinfo')) metaEvent = 'AddPaymentInfo';
-  else if (key.includes('wishlist')) metaEvent = 'AddToWishlist';
-  else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) metaEvent = 'AddToCart';
-  else if (key.includes('checkout') || key.includes('initiatecheckout')) metaEvent = 'InitiateCheckout';
-  else if (key.includes('viewitem') || key.includes('viewcontent')) metaEvent = 'ViewContent';
-  else if (key.includes('search')) metaEvent = 'Search';
-  else if (key.includes('subscribe') || key.includes('newsletter')) metaEvent = 'Subscribe';
-  else if (key.includes('signup') || key.includes('register')) metaEvent = 'CompleteRegistration';
-  else if (key.includes('lead') || key.includes('contact') || key.includes('quote') || key.includes('demo') || key.includes('getstarted')) metaEvent = 'Lead';
-  else if (key.includes('email')) metaEvent = 'Contact';
-  else if (key.includes('phone') || key.includes('call')) metaEvent = 'Contact';
-  else if (key.includes('download')) metaEvent = 'Download';
-  else if (ga4.trigger.kind === 'form_submit') metaEvent = 'Lead'; // forms default to Lead
-  else return null; // no Meta counterpart — skip generic clicks (outbound/social/video/faq/learn_more)
+  const meaning = ctaMeaning(ga4);
+  if (ga4.ctaIntent) {
+    metaEvent = meaning ? (META_MEANING[meaning] ?? null) : null;
+    if (!metaEvent) return null;
+  } else {
+    const key = ga4.eventName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (key.includes('purchase')) metaEvent = 'Purchase';
+    // add_payment_info → AddPaymentInfo — MUST be checked before the generic add/cart branch so it
+    // doesn't accidentally fall through (it has no 'cart' token, but keep it explicit and first).
+    else if (key.includes('paymentinfo') || key.includes('addpaymentinfo')) metaEvent = 'AddPaymentInfo';
+    else if (key.includes('wishlist')) metaEvent = 'AddToWishlist';
+    else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) metaEvent = 'AddToCart';
+    else if (key.includes('checkout') || key.includes('initiatecheckout')) metaEvent = 'InitiateCheckout';
+    else if (key.includes('viewitem') || key.includes('viewcontent')) metaEvent = 'ViewContent';
+    else if (key.includes('search')) metaEvent = 'Search';
+    else if (key.includes('subscribe') || key.includes('newsletter')) metaEvent = 'Subscribe';
+    else if (key.includes('signup') || key.includes('register')) metaEvent = 'CompleteRegistration';
+    else if (key.includes('lead') || key.includes('contact') || key.includes('quote') || key.includes('demo') || key.includes('getstarted')) metaEvent = 'Lead';
+    else if (key.includes('email')) metaEvent = 'Contact';
+    else if (key.includes('phone') || key.includes('call')) metaEvent = 'Contact';
+    else if (key.includes('download')) metaEvent = 'Download';
+    else if (ga4.trigger.kind === 'form_submit') metaEvent = 'Lead'; // forms default to Lead
+    else return null; // no Meta counterpart — skip generic clicks (outbound/social/video/faq/learn_more)
+  }
   // ECOMMERCE Meta events carry Object Properties sourced from the ecommerce dlv variables (value/
   // currency/contents); every other Meta event keeps eventParameters undefined (a form Lead must NOT
   // gain a value/currency it doesn't have).
@@ -1023,15 +1062,23 @@ export function toPinterestSuggestion(ga4: SuggestedTag): SuggestedTag | null {
       trigger: ga4.trigger,
     };
   }
-  const key = ga4Key(ga4);
+  // A CTA maps by its classified INTENT (authoritative); every non-CTA tag keeps the event-name keyword
+  // chain. A non-conversion CTA intent (or a meaning Pinterest doesn't support) → null.
   let event: string | null = null;
-  if (key.includes('viewitem') || key.includes('viewcontent')) event = 'viewcontent';
-  else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) event = 'addtocart';
-  else if (key.includes('purchase') || key.includes('checkout')) event = 'checkout';
-  else if (key.includes('signup') || key.includes('register')) event = 'signup';
-  else if (key.includes('generatelead') || key.includes('lead') || key.includes('contact')) event = 'lead';
-  else if (key.includes('search')) event = 'search';
-  else return null;
+  if (ga4.ctaIntent) {
+    const meaning = ctaMeaning(ga4);
+    event = meaning ? (PINTEREST_MEANING[meaning] ?? null) : null;
+    if (!event) return null;
+  } else {
+    const key = ga4Key(ga4);
+    if (key.includes('viewitem') || key.includes('viewcontent')) event = 'viewcontent';
+    else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) event = 'addtocart';
+    else if (key.includes('purchase') || key.includes('checkout')) event = 'checkout';
+    else if (key.includes('signup') || key.includes('register')) event = 'signup';
+    else if (key.includes('generatelead') || key.includes('lead') || key.includes('contact')) event = 'lead';
+    else if (key.includes('search')) event = 'search';
+    else return null;
+  }
   return {
     ...clone,
     platform: 'pinterest_tag',
@@ -1074,18 +1121,26 @@ export function toTikTokSuggestion(ga4: SuggestedTag): SuggestedTag | null {
       trigger: ga4.trigger,
     };
   }
-  const key = ga4Key(ga4);
+  // A CTA maps by its classified INTENT (authoritative); every non-CTA tag keeps the event-name keyword
+  // chain. A non-conversion CTA intent → null.
   let event: string | null = null;
-  if (key.includes('viewitem') || key.includes('viewcontent')) event = 'ViewContent';
-  else if (key.includes('addtowishlist') || key.includes('wishlist')) event = 'AddToWishlist';
-  else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) event = 'AddToCart';
-  else if (key.includes('begincheckout') || key.includes('initiatecheckout') || key.includes('checkout')) event = 'InitiateCheckout';
-  else if (key.includes('purchase')) event = 'CompletePayment';
-  else if (key.includes('generatelead') || key.includes('lead')) event = 'SubmitForm';
-  else if (key.includes('signup') || key.includes('register')) event = 'CompleteRegistration';
-  else if (key.includes('search')) event = 'Search';
-  else if (key.includes('contact')) event = 'Contact';
-  else return null;
+  if (ga4.ctaIntent) {
+    const meaning = ctaMeaning(ga4);
+    event = meaning ? (TIKTOK_MEANING[meaning] ?? null) : null;
+    if (!event) return null;
+  } else {
+    const key = ga4Key(ga4);
+    if (key.includes('viewitem') || key.includes('viewcontent')) event = 'ViewContent';
+    else if (key.includes('addtowishlist') || key.includes('wishlist')) event = 'AddToWishlist';
+    else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) event = 'AddToCart';
+    else if (key.includes('begincheckout') || key.includes('initiatecheckout') || key.includes('checkout')) event = 'InitiateCheckout';
+    else if (key.includes('purchase')) event = 'CompletePayment';
+    else if (key.includes('generatelead') || key.includes('lead')) event = 'SubmitForm';
+    else if (key.includes('signup') || key.includes('register')) event = 'CompleteRegistration';
+    else if (key.includes('search')) event = 'Search';
+    else if (key.includes('contact')) event = 'Contact';
+    else return null;
+  }
   return {
     ...clone,
     platform: 'tiktok_pixel',
@@ -1151,16 +1206,24 @@ export function toRedditSuggestion(ga4: SuggestedTag): SuggestedTag | null {
       trigger: ga4.trigger,
     };
   }
-  const key = ga4Key(ga4);
+  // A CTA maps by its classified INTENT (authoritative); every non-CTA tag keeps the event-name keyword
+  // chain. A non-conversion CTA intent (or a meaning Reddit doesn't support, e.g. download) → null.
   let event: string | null = null;
-  if (key.includes('viewitem') || key.includes('viewcontent')) event = 'ViewContent';
-  else if (key.includes('addtowishlist') || key.includes('wishlist')) event = 'AddToWishlist';
-  else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) event = 'AddToCart';
-  else if (key.includes('purchase')) event = 'Purchase';
-  else if (key.includes('generatelead') || key.includes('lead') || key.includes('contact')) event = 'Lead';
-  else if (key.includes('signup') || key.includes('register')) event = 'SignUp';
-  else if (key.includes('search')) event = 'Search';
-  else return null;
+  if (ga4.ctaIntent) {
+    const meaning = ctaMeaning(ga4);
+    event = meaning ? (REDDIT_MEANING[meaning] ?? null) : null;
+    if (!event) return null;
+  } else {
+    const key = ga4Key(ga4);
+    if (key.includes('viewitem') || key.includes('viewcontent')) event = 'ViewContent';
+    else if (key.includes('addtowishlist') || key.includes('wishlist')) event = 'AddToWishlist';
+    else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) event = 'AddToCart';
+    else if (key.includes('purchase')) event = 'Purchase';
+    else if (key.includes('generatelead') || key.includes('lead') || key.includes('contact')) event = 'Lead';
+    else if (key.includes('signup') || key.includes('register')) event = 'SignUp';
+    else if (key.includes('search')) event = 'Search';
+    else return null;
+  }
   return {
     ...clone,
     platform: 'reddit_pixel',
@@ -1204,11 +1267,20 @@ export function toGoogleAdsSuggestion(ga4: SuggestedTag): SuggestedTag | null {
       trigger: ga4.trigger,
     };
   }
-  const key = ga4Key(ga4);
-  const isConversion =
-    ga4.trigger.kind === 'form_submit' ||
-    key.includes('generatelead') || key.includes('lead') || key.includes('contact') ||
-    key.includes('purchase') || key.includes('signup');
+  // A CTA maps by its classified INTENT (authoritative): it is a conversion only when the intent's
+  // meaning is a lead/contact/subscribe/add_to_cart (search/download/non-conversion → null). Every
+  // non-CTA tag keeps the existing keyword rule (form submit, or a lead/contact/purchase/sign-up event).
+  let isConversion: boolean;
+  if (ga4.ctaIntent) {
+    const meaning = ctaMeaning(ga4);
+    isConversion = !!meaning && GOOGLE_ADS_CONVERSION_MEANINGS.has(meaning);
+  } else {
+    const key = ga4Key(ga4);
+    isConversion =
+      ga4.trigger.kind === 'form_submit' ||
+      key.includes('generatelead') || key.includes('lead') || key.includes('contact') ||
+      key.includes('purchase') || key.includes('signup');
+  }
   if (!isConversion) return null;
   return {
     ...ga4,

@@ -630,6 +630,54 @@ check('meta: an "Add to Cart" CTA → Meta "AddToCart"; a generic outbound click
     buildSuggestions(formInput, { full: true, platforms: ['ga4'] }).every((s) => s.platform === 'ga4_event' || s.platform === 'google_tag'));
 }
 
+// ── CTA intent → platform mapping (intent-first, NOT event-name text) ─────────
+// A GA4 CTA whose EVENT NAME lacks a recognized keyword (free_audit_click, schedule_strategy_call_click)
+// still gets its correct Meta/Google-Ads counterpart, because the derivers map by the classified CTA
+// INTENT — not the coincidental substrings in the event name. This is the reported CSV bug.
+{
+  const gaCta = (text: string, intent: import('../types.js').CtaIntent): import('../types.js').DetectedElement =>
+    ({ page: '/', kind: 'cta', text, intent });
+  // get_started ("Free Audit") → a conversion (Meta Lead + Google Ads Conversion). Its event name is
+  // free_audit_click / get_started_click — no 'lead'/'contact'/'form' keyword, so the OLD keyword path
+  // gave it NO counterpart. The intent-first path now maps it via get_started → lead.
+  const freeAudit = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [gaCta('Free Audit', 'get_started')] }, { full: true, platforms: ['ga4', 'meta', 'google_ads'] });
+  const faMeta = freeAudit.find((s) => s.platform === 'meta_pixel' && s.eventName === 'Lead');
+  const faAds = freeAudit.find((s) => s.platform === 'google_ads_conversion');
+  const faGa4 = freeAudit.find((s) => s.platform === 'ga4_event' && /free audit/i.test(s.label));
+  check('cta-intent: get_started CTA "Free Audit" → Meta "Lead" (via intent, not the event-name text)', !!faMeta);
+  check('cta-intent: get_started CTA "Free Audit" → a Google Ads Conversion (ID + Label vars)',
+    !!faAds && faAds.measurementId === '{{Google Ads Conversion ID}}' && faAds.conversionLabel === '{{Google Ads Conversion Label}}');
+  check('cta-intent: the Meta counterpart reuses the GA4 CTA trigger name (shared trigger on create)',
+    !!faGa4 && !!faMeta && faMeta.trigger.name === faGa4.trigger.name);
+
+  // book_demo ("Schedule Strategy Call") → Meta Lead — NOT Contact. The event name is
+  // schedule_strategy_call_click; the OLD keyword path would have matched the 'call' substring → Contact.
+  // Intent-first maps book_demo → lead → Meta Lead.
+  const strategyCall = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [gaCta('Schedule Strategy Call', 'book_demo')] }, { platforms: ['meta'] });
+  check('cta-intent: book_demo CTA "Schedule Strategy Call" → Meta "Lead" (NOT "Contact" via the "call" substring)',
+    strategyCall.some((s) => s.eventName === 'Lead') && !strategyCall.some((s) => s.eventName === 'Contact'));
+  const strategyAds = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [gaCta('Schedule Strategy Call', 'book_demo')] }, { platforms: ['google_ads'] });
+  check('cta-intent: book_demo CTA → a Google Ads Conversion (lead meaning)', strategyAds.some((s) => s.platform === 'google_ads_conversion'));
+
+  // learn_more ("View Client Results") is NOT a conversion → NO meta_pixel, NO google_ads_conversion.
+  const learnMore = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [gaCta('View Client Results', 'learn_more')] }, { platforms: ['ga4', 'meta', 'google_ads'] });
+  check('cta-intent: learn_more CTA "View Client Results" → NO meta_pixel and NO google_ads_conversion (GA4 only)',
+    learnMore.some((s) => s.platform === 'ga4_event') && !learnMore.some((s) => s.platform === 'meta_pixel') && !learnMore.some((s) => s.platform === 'google_ads_conversion'));
+
+  // The NON-CTA keyword path is unchanged: an email_click still → Meta Contact (no ctaIntent → keyword).
+  const emailMeta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'email', text: 'hi', href: 'mailto:hi@a.com' }] }, { platforms: ['meta'] });
+  check('cta-intent: a NON-CTA email_click still → Meta "Contact" (keyword path unchanged)', emailMeta.some((s) => s.eventName === 'Contact'));
+
+  // The ecommerce dataLayer add_to_cart tag (NO ctaIntent) still maps via keyword → Meta AddToCart.
+  const ecomAtc = buildSuggestions({ siteHost: 'shop.com', forms: [], elements: [], websiteType: 'ecommerce' }, { platforms: ['meta'] });
+  check('cta-intent: the ecommerce dataLayer add_to_cart tag (no ctaIntent) still → Meta "AddToCart" via keyword', ecomAtc.some((s) => s.eventName === 'AddToCart'));
+
+  // Google Ads: a search-intent CTA is NOT a conversion → no google_ads_conversion; but it IS a Meta Search.
+  const searchCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [gaCta('Search', 'search')] }, { platforms: ['meta', 'google_ads'] });
+  check('cta-intent: search CTA → Meta "Search" but NO Google Ads Conversion (search is not an Ads conversion)',
+    searchCta.some((s) => s.eventName === 'Search' && s.platform === 'meta_pixel') && !searchCta.some((s) => s.platform === 'google_ads_conversion'));
+}
+
 // ── eCommerce funnel suggestions (websiteType-gated) ─────────────────────────
 {
   const ECOM_EVENTS = ['view_item_list', 'select_item', 'view_item', 'add_to_cart', 'remove_from_cart', 'view_cart', 'begin_checkout', 'add_shipping_info', 'add_payment_info', 'purchase'];
