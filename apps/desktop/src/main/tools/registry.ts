@@ -458,7 +458,7 @@ export function buildToolRegistry(
     {
       name: 'audit_gtm_container_changes',
       description:
-        'Re-audit the workspace AND report what CHANGED since the last audit of it: NEW issues (regressions) and RESOLVED issues, plus the full current report. Records this run so the next call can diff against it — the basis for continuous monitoring. New findings carry the same ready-to-run fixes (apply on approval). Use when the user asks "what changed", "any regressions", or to monitor over time. Requires accountId, containerId, workspaceId.',
+        'Re-audit the workspace AND report what CHANGED since the last audit of it: NEW issues (regressions) and RESOLVED issues, plus the full current report. Records this run so the next call can diff against it — the basis for continuous monitoring. New findings carry the same ready-to-run fixes (non-delete fixes apply directly; deletes are approval-gated). Use when the user asks "what changed", "any regressions", or to monitor over time. Requires accountId, containerId, workspaceId.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1049,7 +1049,7 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_tracking_tag',
       description:
-        'PREFERRED way to create a tag that fires on an event — builds a CORRECT GTM resource from simple fields (you do not write raw GTM JSON). One confirmed step: enables needed built-in variables, reuses an existing same-named trigger or creates it, and creates the tag linked to it. ' +
+        'PREFERRED way to create a tag that fires on an event — builds a CORRECT GTM resource from simple fields (you do not write raw GTM JSON). One call (applies directly to the draft workspace): enables needed built-in variables, reuses an existing same-named trigger or creates it, and creates the tag linked to it. ' +
         'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for Facebook/LinkedIn/TikTok/other pixels); ' +
         '"conversion_linker" (Google Ads Conversion Linker; no fields required; optional enableCrossDomain plus comma-separated linkerDomains); "google_ads_call_conversion" (needs phoneNumber exactly as shown on the page, conversionId, conversionLabel); "google_ads_remarketing" (needs conversionId; an all-pages audience tag); "floodlight" (Campaign Manager / DV360 Floodlight counter; needs advertiserId, groupTag, activityTag; optional countingMethod standard|unique); "custom_image" (a beacon/pixel; needs url). ' +
         'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event; optional ANDed scope conditions — formIdValue, pagePathValue/pagePathOperator, pageUrlValue — e.g. event form_submit AND {{Page Path}} contains /contact, the corpus-standard data-layer form pattern), "pageview", "timer" (REQUIRES trigger.intervalMs in ms, optional trigger.limit), "form_submit" (optional formIdValue and/or formClassesValue, each with a *Operator — scopes the trigger to ONE form via {{Form ID}}/{{Form Classes}}; or pagePathValue/pagePathOperator to scope to a single page via {{Page Path}} when the form has no id/class; omit all and it fires on every form submit). ' +
@@ -2292,7 +2292,7 @@ export function buildToolRegistry(
     {
       name: 'set_ga4_measurement_id_on_all_tags',
       description:
-        'Set/replace the Measurement ID on ALL GA4 tags in the workspace in ONE approval (GA4 event tags + the Google tag). The value may be a literal id (G-/AW-/GT-XXXX) or a GTM variable like {{GA4 Variable}}. PREFER this whenever the user says "all GA4 tags" / "every GA4 tag" (e.g. "replace {{GA4 Measurement ID}} with {{GA4 Variable}} on all GA4 tags") — do NOT loop set_ga4_measurement_id tag-by-tag. It builds each parameter correctly, preserves the rest of every tag, continues past any single failure, and returns a summary of updated/failed tags.',
+        'Set/replace the Measurement ID on ALL GA4 tags in the workspace in ONE call (GA4 event tags + the Google tag). The value may be a literal id (G-/AW-/GT-XXXX) or a GTM variable like {{GA4 Variable}}. PREFER this whenever the user says "all GA4 tags" / "every GA4 tag" (e.g. "replace {{GA4 Measurement ID}} with {{GA4 Variable}} on all GA4 tags") — do NOT loop set_ga4_measurement_id tag-by-tag. It builds each parameter correctly, preserves the rest of every tag, continues past any single failure, and returns a summary of updated/failed tags.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2315,7 +2315,7 @@ export function buildToolRegistry(
     {
       name: 'add_ga4_event_parameters_to_all_tags',
       description:
-        'Add GA4 event parameters to ALL GA4 Event tags (gaawe) in the workspace in ONE approval. PREFER this whenever the user says "all GA4 tags" / "every GA4 event tag" (e.g. "add user_id and session_id to all GA4 event tags") — do NOT loop add_ga4_event_parameters tag-by-tag. It appends to each tag\'s eventSettingsTable, updates a value in place if the name already exists, preserves each tag, continues past any single failure, and returns a summary. Values may be GTM variables like {{User ID}}.',
+        'Add GA4 event parameters to ALL GA4 Event tags (gaawe) in the workspace in ONE call. PREFER this whenever the user says "all GA4 tags" / "every GA4 event tag" (e.g. "add user_id and session_id to all GA4 event tags") — do NOT loop add_ga4_event_parameters tag-by-tag. It appends to each tag\'s eventSettingsTable, updates a value in place if the name already exists, preserves each tag, continues past any single failure, and returns a summary. Values may be GTM variables like {{User ID}}.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2350,7 +2350,7 @@ export function buildToolRegistry(
     {
       name: 'set_gtm_tag_paused',
       description:
-        'Pause or unpause a tag in a GTM workspace, preserving all its other settings. Use this to apply the audit fix for a paused tag. Requires accountId, containerId, workspaceId, tagId, and paused (boolean — false to unpause/enable, true to pause). Optional name is shown in the approval prompt.',
+        'Pause or unpause a tag in a GTM workspace, preserving all its other settings. Use this to apply the audit fix for a paused tag. Requires accountId, containerId, workspaceId, tagId, and paused (boolean — false to unpause/enable, true to pause). Optional name is used in logs.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2588,14 +2588,14 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_tag_with_trigger',
       description:
-        'PREFERRED one-shot tool: create a tag that fires on a trigger, in a single confirmed step. ' +
+        'PREFERRED one-shot tool: create a tag that fires on a trigger, in a single call. ' +
         'Enables any needed built-in variables, REUSES an existing trigger with the same name (no ' +
         'duplicates) or creates it, then creates the tag linked to that trigger. Requires accountId, ' +
         'containerId, workspaceId, `tag` (GTM Tag resource {name,type,parameter?}), `trigger` (GTM ' +
         'Trigger resource {name,type,filter?}), and optional `builtInVariables` (TYPE KEYS, e.g. ' +
         '["clickUrl","clickText","pageUrl"] — there is NO built-in for Page Title). For a GA4 event ' +
         '`tag`, use type "gaawe" with the eventSettingsTable (parameter/parameterValue) shape described in create_gtm_tag. ' +
-        'Use this instead of separate create_gtm_trigger + create_gtm_tag calls so the user approves once.',
+        'Use this instead of separate create_gtm_trigger + create_gtm_tag calls so the pieces land consistently in one step.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2887,28 +2887,32 @@ export function buildToolRegistry(
           console.error(`[tool] ${name}: writes disabled (no confirm fn)`);
           return JSON.stringify({ declined: true, message: 'Write tools are disabled.' });
         }
-        const summary = tool.summarize ? tool.summarize(effectiveArgs) : tool.name;
-        const declined = JSON.stringify({ declined: true, message: 'The user declined this change.' });
-
-        // The user may edit names/types/config in the approval card; the returned
-        // args replace the model's proposal.
-        const edited = await confirm({
-          tool: tool.name,
-          summary,
-          details: effectiveArgs,
-          destructive: tool.destructive,
-        });
-        if (!edited) {
-          console.error(`[tool] ${name}: user DECLINED in approval card`);
-          return declined;
-        }
-        if (JSON.stringify(edited) !== JSON.stringify(effectiveArgs)) {
-          console.error(`[tool] ${name}: args EDITED in approval card → ${truncForLog(JSON.stringify(edited))}`);
-        }
-        effectiveArgs = edited;
-
-        // Destructive tools (delete) require a SECOND, final confirmation.
+        // Approval is DELETE-ONLY (user decision 2026-07-03): non-destructive writes (create/edit
+        // tags, triggers, variables, folders, …) apply directly — they land in a DRAFT workspace,
+        // are never published by us, and are reversible there. Destructive tools keep the full
+        // two-step approval below. The confirm fn still gates write-tool AVAILABILITY above.
         if (tool.destructive) {
+          const summary = tool.summarize ? tool.summarize(effectiveArgs) : tool.name;
+          const declined = JSON.stringify({ declined: true, message: 'The user declined this change.' });
+
+          // The user may edit names/types/config in the approval card; the returned
+          // args replace the model's proposal.
+          const edited = await confirm({
+            tool: tool.name,
+            summary,
+            details: effectiveArgs,
+            destructive: true,
+          });
+          if (!edited) {
+            console.error(`[tool] ${name}: user DECLINED in approval card`);
+            return declined;
+          }
+          if (JSON.stringify(edited) !== JSON.stringify(effectiveArgs)) {
+            console.error(`[tool] ${name}: args EDITED in approval card → ${truncForLog(JSON.stringify(edited))}`);
+          }
+          effectiveArgs = edited;
+
+          // Deletes require a SECOND, final confirmation.
           const again = await confirm({
             tool: tool.name,
             summary: `FINAL CONFIRMATION — permanently ${tool.summarize ? tool.summarize(effectiveArgs) : summary}. This cannot be undone.`,
@@ -2920,6 +2924,8 @@ export function buildToolRegistry(
             console.error(`[tool] ${name}: user DECLINED final confirmation`);
             return declined;
           }
+        } else {
+          console.error(`[tool] ${name}: write auto-applied (approval is delete-only)`);
         }
       }
       try {

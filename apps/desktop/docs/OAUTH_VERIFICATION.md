@@ -133,9 +133,10 @@ Google user data off-device, say so — it strengthens the review.
   workspaces, tags, triggers and variables to run configuration audits and
   produce health reports. Read-only."
 - **tagmanager.edit.containers** — "Create and edit tags, triggers and variables
-  **in a draft workspace** to apply user-approved fixes. The app never requests
-  publish/version scopes, so it cannot publish changes; every write requires
-  explicit per-change user approval."
+  **in a draft workspace** at the user's request. The app never requests
+  publish/version scopes, so it cannot publish changes — every change stays in a
+  draft workspace the user reviews and publishes in GTM; deletions additionally
+  require explicit two-step in-app confirmation."
 - **analytics.readonly** — "Read GA4 property configuration and run reports
   (read-only) to audit setup and data quality. No write scope is requested."
 
@@ -145,7 +146,7 @@ A public/unlisted **YouTube** video that shows:
    `client_id`), with the requested scopes visible.
 2. Granting consent and returning to the app.
 3. The app **using each sensitive scope** — e.g. listing GTM tags (readonly),
-   creating a draft tag with the approval prompt (edit.containers), and a GA4
+   creating a draft tag from chat (edit.containers), and a GA4
    audit/report (analytics.readonly).
 
 > **Desktop/installed-app note:** Samarth Desktop is an *installed app* using the

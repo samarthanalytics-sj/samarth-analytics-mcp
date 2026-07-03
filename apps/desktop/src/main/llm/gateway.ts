@@ -98,6 +98,18 @@ export async function runChat(
       // tool_use/tool_result pairing stays valid; the skipped ones report why.
       let batchFailed = false;
       for (const call of reply.toolCalls) {
+        // Stop must halt the batch BETWEEN tool calls. With delete-only approvals,
+        // creates/edits no longer pause at a confirm card, so this check is the only
+        // brake left on queued writes after the user presses Stop.
+        if (input.signal?.aborted) {
+          results.push({
+            id: call.id,
+            name: call.name,
+            content: 'Skipped: the user pressed Stop before this call ran.',
+            isError: true,
+          });
+          continue;
+        }
         if (batchFailed) {
           results.push({
             id: call.id,

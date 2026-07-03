@@ -185,6 +185,33 @@ await test('stop: an already-aborted signal returns "Stopped." and never calls t
   assert.equal(client.inputs.length, 0, 'model not called once stopped');
 });
 
+await test('stop: aborting MID-BATCH halts the remaining tool calls (the only brake now that creates have no approval card)', async () => {
+  const executed: unknown[] = [];
+  const ac = new AbortController();
+  const client = new ScriptedClient([
+    { toolCalls: [
+      { id: '1', name: 't', args: { tag: 1 } },
+      { id: '2', name: 't', args: { tag: 2 } },
+      { id: '3', name: 't', args: { tag: 3 } },
+    ] },
+    { text: 'should not matter' },
+  ]);
+  // The user presses Stop while the first write is in flight; 2 & 3 must never run.
+  const exec = executor(async (_n, a) => {
+    executed.push(a);
+    ac.abort();
+    return 'created';
+  });
+  const res = await runChat(
+    client,
+    { system: 's', model: 'm', apiKey: 'k', messages: [{ role: 'user', text: 'hi' }], signal: ac.signal },
+    exec
+  );
+  assert.equal(executed.length, 1, 'only the in-flight write ran; queued writes died at the abort check');
+  assert.equal(res.text, 'Stopped.', 'the loop exits as Stopped at the next step');
+  assert.equal(client.inputs.length, 1, 'the model is never re-invoked after Stop');
+});
+
 await test('stop: a provider AbortError is returned as "Stopped." (not thrown)', async () => {
   const client: LlmClient = {
     async chatStream() {
