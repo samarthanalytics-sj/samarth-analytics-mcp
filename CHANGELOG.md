@@ -1,3 +1,9 @@
+## [1.157.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.156.1...v1.157.0) (2026-07-03)
+
+### Features
+
+* **desktop:** filter Tag Suggestions by ad platform (GA4 / Meta / Google Ads / …) ([55132e6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/55132e676b716a9d27c314e3f4fbdab62873262a))
+
 ## [1.156.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.156.0...v1.156.1) (2026-07-03)
 
 ### Bug Fixes
