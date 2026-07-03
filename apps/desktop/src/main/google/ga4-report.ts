@@ -243,7 +243,7 @@ function buildAreaRows(
 /** Structured Executive Summary (section 1) — drives the markdown report, the on-screen card panel
  *  and the styled PDF/Word export from one rule-based computation. */
 export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
-  const { snapshot: s, config, dataQuality: dq, growth, attribution, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, growth, audienceCount } = input;
   const pid = input.property.replace('properties/', '');
   const ecom = hasEcommerce(s);
   const allFindings = buildAllFindings(config, dq, growth);
@@ -277,7 +277,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
 /** Structured visualisations payload (daily trend line + colour-coded device/channel bars) for the
  *  panel + PDF charts. */
 export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
-  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount } = input;
   const daily = baseline?.dailySessions ?? [];
   const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
   // Channel-attribution trust comes from the same Data Trust Matrix the Executive Summary uses.
@@ -315,7 +315,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
 /** Structured body sections (2-4) for the designed card panel + styled export. Computed from the same
  *  pure builders the markdown report uses, so the two surfaces can't drift. */
 export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
-  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount } = input;
   const ecom = hasEcommerce(s);
   const allFindings = buildAllFindings(config, dq, growth);
   const actionable = allFindings.filter((f) => f.severity !== 'info');
@@ -430,7 +430,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
-  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount } = input;
   const pid = input.property.replace('properties/', '');
   const ecom = hasEcommerce(s);
   const L: string[] = [];
