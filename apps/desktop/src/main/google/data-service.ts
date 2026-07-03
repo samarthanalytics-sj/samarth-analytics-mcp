@@ -2553,4 +2553,82 @@ export class GoogleDataService {
       })),
     };
   }
+
+  // ── GA4 Admin WRITES ───────────────────────────────────────────────────────
+  // GA4 config CRUD. GA4 collections are uniform (create/patch/delete/archive),
+  // so a generic resolver walks the dotted accessor path (e.g. "properties.keyEvents"
+  // or "properties.dataStreams.measurementProtocolSecrets") on the versioned client.
+  // Needs the analytics.edit scope (and analytics.manage.users for access bindings) —
+  // the desktop grants both; each write is still human-approved (deletes/archives
+  // via the two-step card).
+  private ga4WriteSub(version: 'v1beta' | 'v1alpha', accessorPath: string): Ga4AdminSubResource {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    // The factory overloads on a LITERAL version, so branch rather than pass a union.
+    let node: unknown = version === 'v1alpha' ? analyticsadmin({ version: 'v1alpha', auth }) : analyticsadmin({ version: 'v1beta', auth });
+    for (const seg of accessorPath.split('.')) node = (node as Record<string, unknown>)[seg];
+    return node as Ga4AdminSubResource;
+  }
+
+  async ga4AdminCreate(version: 'v1beta' | 'v1alpha', accessorPath: string, parent: string, requestBody: Record<string, unknown>, query?: Record<string, string>): Promise<unknown> {
+    const res = await this.ga4WriteSub(version, accessorPath).create({ parent, requestBody, ...(query ?? {}) });
+    return res.data;
+  }
+  async ga4AdminPatch(version: 'v1beta' | 'v1alpha', accessorPath: string, name: string, updateMask: string, requestBody: Record<string, unknown>): Promise<unknown> {
+    const res = await this.ga4WriteSub(version, accessorPath).patch({ name, updateMask, requestBody });
+    return res.data;
+  }
+  async ga4AdminDelete(version: 'v1beta' | 'v1alpha', accessorPath: string, name: string): Promise<{ deleted: boolean; name: string }> {
+    await this.ga4WriteSub(version, accessorPath).delete({ name });
+    return { deleted: true, name };
+  }
+  async ga4AdminArchive(version: 'v1beta' | 'v1alpha', accessorPath: string, name: string): Promise<{ archived: boolean; name: string }> {
+    await this.ga4WriteSub(version, accessorPath).archive({ name, requestBody: {} });
+    return { archived: true, name };
+  }
+
+  /** Create a property — parent (account) goes INSIDE the body, not the URL. */
+  async ga4CreateProperty(accountName: string, body: Record<string, unknown>): Promise<unknown> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const res = await admin.properties.create({ requestBody: { parent: accountName, propertyType: 'PROPERTY_TYPE_ORDINARY', ...body } });
+    return res.data;
+  }
+  async ga4UpdateProperty(name: string, updateMask: string, body: Record<string, unknown>): Promise<unknown> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const res = await admin.properties.patch({ name, updateMask, requestBody: body });
+    return res.data;
+  }
+  async ga4DeleteProperty(name: string): Promise<unknown> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const res = await admin.properties.delete({ name });
+    return res.data;
+  }
+  async ga4UpdateDataRetention(name: string, updateMask: string, body: Record<string, unknown>): Promise<unknown> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const res = await admin.properties.updateDataRetentionSettings({ name, updateMask, requestBody: body });
+    return res.data;
+  }
+  async ga4UpdateAccount(name: string, displayName: string): Promise<unknown> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    const res = await admin.accounts.patch({ name, updateMask: 'displayName', requestBody: { displayName } });
+    return res.data;
+  }
+  async ga4DeleteAccount(name: string): Promise<{ deleted: boolean; name: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    await admin.accounts.delete({ name });
+    return { deleted: true, name };
+  }
+}
+
+/** The four uniform mutating methods on a GA4 Admin collection (loose boundary type). */
+interface Ga4AdminSubResource {
+  create: (p: { parent: string; requestBody: object } & Record<string, unknown>) => Promise<{ data: unknown }>;
+  patch: (p: { name: string; updateMask?: string; requestBody: object }) => Promise<{ data: unknown }>;
+  delete: (p: { name: string }) => Promise<{ data: unknown }>;
+  archive: (p: { name: string; requestBody: object }) => Promise<{ data: unknown }>;
 }

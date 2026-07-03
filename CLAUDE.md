@@ -30,11 +30,19 @@ Layout:
 ## Guardrails — do not violate
 
 ### Read-only by default
-The MCP server ships read-only. Writes/publishes/deletes are gated behind
+The MCP server ships read-only. GTM writes/publishes/deletes are gated behind
 `GTM_MCP_ENABLE_WRITES`, `GTM_MCP_ENABLE_PUBLISH`, `GTM_MCP_ENABLE_DELETES`
-(all default `false`). Never relax these defaults or weaken a guardrail check
-to make something work. GA4 access is read-only by design — do not add GA4
-write scopes or calls.
+and GA4 Admin writes behind `GA4_MCP_ENABLE_WRITES` / `GA4_MCP_ENABLE_DELETES`
+(all default `false`, plus `confirm=true` on every write). Never relax these
+defaults or weaken a guardrail check to make something work.
+
+GA4 Admin CRUD was added deliberately (user-authorized 2026-07-03) behind those
+flags and the `analytics.edit` + `analytics.manage.users` scopes; it is OFF by
+default. Do NOT re-expand the GA4 write surface, add scopes, or flip a default
+without an explicit user request. The GA4 **Data API** (reporting) stays
+read-only — never add write calls there. Deletes and archives (archive is
+irreversible for custom dimensions/metrics and audiences) require the deletes
+flag; in the desktop chat they show the two-step approval card.
 
 ### Never commit secrets
 Never commit `.env`, any `*.gtm-mcp-tokens.json`, service-account keys, or

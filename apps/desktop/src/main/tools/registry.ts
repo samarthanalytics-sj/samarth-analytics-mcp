@@ -45,6 +45,7 @@ import {
   type VariableKind,
   type GtmTagResource,
 } from '../google/gtm-builders';
+import { buildGa4WriteTools } from './ga4-write-tools';
 import { withQuotaRetry } from '../google/quota-retry';
 import { auditWorkspace, auditChanges } from '../google/audit-runner';
 import { diffSnapshots } from '../google/gtm-monitor';
@@ -82,7 +83,7 @@ export interface GtmContextControl {
   set: (ctx: GtmContext) => Promise<void> | void;
 }
 
-interface Tool extends LlmToolDef {
+export interface Tool extends LlmToolDef {
   /** Mutates GTM — only listed/executed when a confirm function is provided. */
   write?: boolean;
   /** Deletes data — requires a SECOND confirmation before applying. */
@@ -2849,7 +2850,9 @@ export function buildToolRegistry(
       ]
     : [];
 
-  const all = [...readTools, ...(confirm ? writeTools : []), ...contextTools];
+  // GA4 Admin write tools (product 'ga4') live in a separate catalog; included
+  // only when a confirm function is provided, exactly like the GTM write tools.
+  const all = [...readTools, ...(confirm ? [...writeTools, ...buildGa4WriteTools(data)] : []), ...contextTools];
   const tools = product ? all.filter((t) => productOf(t.name) === product) : all;
 
   return {

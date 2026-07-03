@@ -49,6 +49,8 @@ const MUTATIONS = new Set([
   'createServerContainer', 'createGtmClient', 'deleteGtmClient', 'createGtmTransformation', 'bootstrapServerSideTagging',
   'setWebServerContainerUrl', 'setServerContainerTaggingUrl', 'createMetaEmqVariables', 'copyWorkspaceResources', 'importGalleryTemplate',
   'setupEcommerceFunnel', 'setupServerEcommerceFunnel', 'createServerContainerFromWeb',
+  'ga4AdminCreate', 'ga4AdminPatch', 'ga4AdminDelete', 'ga4AdminArchive',
+  'ga4CreateProperty', 'ga4UpdateProperty', 'ga4DeleteProperty', 'ga4UpdateDataRetention', 'ga4UpdateAccount', 'ga4DeleteAccount',
 ]);
 
 // A snapshot crafted so the audit produces every kind of finding: a paused GA4
@@ -107,6 +109,17 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     setupServerEcommerceFunnel: () => r('setupServerEcommerceFunnel', { created: { triggers: ['ga4 - purchase'], tags: ['GA4 - Purchase Tag (Server)'] }, skipped: [] }),
     verifyTrackingSetup: () => r('verifyTrackingSetup', { ok: true, passed: 1, warnings: 0, failures: 0, checks: [{ id: 'web_google_tag', label: 'Web: Google tag', status: 'pass', detail: 'ok' }] }),
     copyWorkspaceResources: () => r('copyWorkspaceResources', { variables: { created: [], skipped: [] }, triggers: { created: [], skipped: [] }, tags: { created: [], skipped: [] } }),
+    // GA4 Admin write plumbing (generic + specials).
+    ga4AdminCreate: () => r('ga4AdminCreate', { name: 'properties/1/x/1' }),
+    ga4AdminPatch: () => r('ga4AdminPatch', { name: 'properties/1/x/1' }),
+    ga4AdminDelete: (_v: string, _a: string, name: string) => r('ga4AdminDelete', { deleted: true, name }),
+    ga4AdminArchive: (_v: string, _a: string, name: string) => r('ga4AdminArchive', { archived: true, name }),
+    ga4CreateProperty: () => r('ga4CreateProperty', { name: 'properties/999' }),
+    ga4UpdateProperty: () => r('ga4UpdateProperty', { name: 'properties/1' }),
+    ga4DeleteProperty: () => r('ga4DeleteProperty', { name: 'properties/1' }),
+    ga4UpdateDataRetention: () => r('ga4UpdateDataRetention', { name: 'properties/1/dataRetentionSettings' }),
+    ga4UpdateAccount: () => r('ga4UpdateAccount', { name: 'accounts/1' }),
+    ga4DeleteAccount: (name: string) => r('ga4DeleteAccount', { deleted: true, name }),
     listGtmTemplates: () => r('listGtmTemplates', [{ templateId: '261', name: 'Meta Pixel', type: 'cvt_5RM3Q', galleryOwner: 'facebook', galleryRepository: 'GoogleTagManager-WebTemplate-For-FacebookPixel' }]),
     importGalleryTemplate: () => r('importGalleryTemplate', { templateId: '261', name: 'Meta Pixel', type: 'cvt_5RM3Q', imported: true }),
     getServerContainerSnapshot: () =>
@@ -231,28 +244,31 @@ async function main(): Promise<void> {
     record('read-only registry exposes the 47 read tools', readOnlyNames.size === 47, `${readOnlyNames.size} tools`);
   }
 
-  // ── B. Approval is DELETE-ONLY: a declining confirm blocks every delete_* tool
-  //       (no delete API call), while non-destructive writes apply directly. ────
+  // ── B. Approval is DELETE-ONLY: a declining confirm blocks every destructive
+  //       tool (delete_* and GA4 archive_*), while non-destructive writes apply
+  //       directly. Destructive is identified from the registry flag, not names. ──
   {
     const fd = makeFakeData();
     const reg = buildToolRegistry(fd.data, decline);
-    const deleteNames = writeNames.filter((n) => n.startsWith('delete_')); // all destructive tools are delete_*
-    let deletesDeclined = 0;
+    const isDestructive = (n: string) => n.startsWith('delete_') || n.startsWith('archive_');
+    const destructiveNames = writeNames.filter(isDestructive);
+    let destructiveDeclined = 0;
     let othersApplied = 0;
     for (const name of writeNames) {
       const schema = fullList.find((t) => t.name === name)!.inputSchema;
       const out = JSON.parse(await reg.execute(name, synthesize(schema) as Record<string, unknown>));
-      if (name.startsWith('delete_')) {
-        if (out?.declined === true) deletesDeclined++;
+      if (isDestructive(name)) {
+        if (out?.declined === true) destructiveDeclined++;
       } else if (out?.declined !== true) {
         othersApplied++;
       }
     }
-    const deleteCalls = fd.calls.filter((c) => c.startsWith('delete')).length;
+    // No delete/archive should have reached the data layer (GTM deletes + GA4 delete/archive).
+    const destructiveCalls = fd.calls.filter((c) => /^delete|^ga4AdminDelete|^ga4AdminArchive|^ga4DeleteProperty|^ga4DeleteAccount/.test(c)).length;
     record(
-      'declined confirm → every delete declines (no delete API call); creates/edits apply without approval',
-      deletesDeclined === deleteNames.length && othersApplied === writeNames.length - deleteNames.length && deleteCalls === 0,
-      `${deletesDeclined}/${deleteNames.length} deletes declined, ${othersApplied}/${writeNames.length - deleteNames.length} non-deletes applied, ${deleteCalls} delete API calls`
+      'declined confirm → every delete/archive declines (no destructive API call); creates/edits apply without approval',
+      destructiveDeclined === destructiveNames.length && othersApplied === writeNames.length - destructiveNames.length && destructiveCalls === 0,
+      `${destructiveDeclined}/${destructiveNames.length} destructive declined, ${othersApplied}/${writeNames.length - destructiveNames.length} non-destructive applied, ${destructiveCalls} destructive API calls`
     );
   }
 
