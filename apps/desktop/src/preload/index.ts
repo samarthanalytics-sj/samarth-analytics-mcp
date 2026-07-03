@@ -221,6 +221,8 @@ const api = {
       ipcRenderer.invoke('gtm:audit', accountId, containerId, workspaceId),
     applyFix: (fix: { tool: string; args: Record<string, unknown> }): Promise<unknown> =>
       ipcRenderer.invoke('gtm:applyFix', fix),
+    exportAudit: (defaultName: string, content: string): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportAudit', defaultName, content),
     ensureGa4Config: (ctx: {
       accountId: string;
       containerId: string;
