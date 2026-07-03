@@ -106,6 +106,11 @@ export interface VideoEmbed {
   provider: 'youtube';
 }
 
+/** Which ad platforms a scan generates tags for. Each maps the SAME detected elements to its own
+ *  tags, sharing one trigger per detection. 'ga4' is the always-available default; the rest derive
+ *  from the GA4 suggestions (so the trigger name is shared on create). */
+export type SuggestPlatform = 'ga4' | 'meta' | 'google_ads' | 'tiktok' | 'linkedin' | 'reddit' | 'pinterest';
+
 export interface SuggestInput {
   /** The audited site's host, used to classify outbound links. */
   siteHost: string;
@@ -144,12 +149,31 @@ export interface SuggestedTag {
    *  eventName/eventParameters. 'meta_pixel' = a Meta (Facebook) Pixel tag built via
    *  the official gallery template — here `measurementId` holds the Meta Pixel ID
    *  (default {{Meta Pixel ID}}), `eventName` is the Meta standard/custom event
-   *  (PageView/Lead/Purchase/…), and `eventParameters` are optional Object Properties. */
-  platform: 'ga4_event' | 'google_tag' | 'meta_pixel';
+   *  (PageView/Lead/Purchase/…), and `eventParameters` are optional Object Properties.
+   *  The other pixel platforms mirror meta_pixel (measurementId = that platform's ID
+   *  variable, eventName = its event): 'tiktok_pixel' / 'linkedin_insight' / 'reddit_pixel'
+   *  / 'pinterest_tag'. Google Ads uses 'google_ads_conversion' (measurementId = the
+   *  Conversion ID, conversionLabel = the Conversion Label), 'google_ads_remarketing'
+   *  (measurementId = the Conversion ID), and 'conversion_linker' (no id fields). */
+  platform:
+    | 'ga4_event'
+    | 'google_tag'
+    | 'meta_pixel'
+    | 'tiktok_pixel'
+    | 'linkedin_insight'
+    | 'reddit_pixel'
+    | 'pinterest_tag'
+    | 'google_ads_conversion'
+    | 'google_ads_remarketing'
+    | 'conversion_linker';
   tagName: string;
   /** Defaults to the {{GA4 Measurement ID}} variable; user can override at create.
-   *  For platform 'meta_pixel' this is the Meta Pixel ID (default {{Meta Pixel ID}}). */
+   *  For a pixel platform this is that platform's ID (e.g. {{Meta Pixel ID}}); for
+   *  google_ads_conversion/remarketing it is the Google Ads Conversion ID. */
   measurementId: string;
+  /** For platform 'google_ads_conversion': the Ads Conversion Label (default
+   *  {{Google Ads Conversion Label}}). Ignored for other platforms. */
+  conversionLabel?: string;
   /** For platform 'google_tag': the Measurement ID (or its {{variable}}) the base
    *  tag loads. Ignored for 'ga4_event'. */
   tagId?: string;

@@ -3181,6 +3181,75 @@ export function buildPinterestTag(
   };
 }
 
+/* ───────────── TikTok Pixel (web) ───────────── */
+
+/** Build a TikTok WEB Pixel tag (gallery template tiktok/gtm-template-pixel; `type` = its cvt_ code).
+ *  Fields: pixel_code (the TikTok Pixel ID, usually a {{variable}}) + event (the SELECT value —
+ *  ViewContent/AddToCart/CompletePayment/Pageview/…). The mapped event is passed straight through (do
+ *  NOT custom-encode). firingTriggerId is only attached when the caller passes it; the create flow
+ *  attaches via the shared trigger path, so leave it undefined there. PURE. */
+export function buildTikTokPixelTag(
+  type: string,
+  name: string,
+  pixelCode: string,
+  event: string,
+  firingTriggerId?: string[]
+): GtmTagResource {
+  const parameter: Param[] = [tpl('pixel_code', pixelCode), tpl('event', (event ?? '').trim() || 'Pageview')];
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(firingTriggerId && firingTriggerId.length ? { firingTriggerId } : {}),
+    parameter,
+  };
+}
+
+/* ───────────── LinkedIn Insight Tag (web) ───────────── */
+
+/** Build a LinkedIn Insight Tag (gallery template linkedin/linkedin-gtm-community-template; `type` =
+ *  its cvt_ code). The single field is partnerId (the LinkedIn Partner ID, usually a {{variable}}) —
+ *  LinkedIn's per-event conversions are defined Campaign-Manager-side, so this is the base tag only.
+ *  firingTriggerId is only attached when the caller passes it. PURE. */
+export function buildLinkedInInsightTag(
+  type: string,
+  name: string,
+  partnerId: string,
+  firingTriggerId?: string[]
+): GtmTagResource {
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(firingTriggerId && firingTriggerId.length ? { firingTriggerId } : {}),
+    parameter: [tpl('partnerId', partnerId)],
+  };
+}
+
+/* ───────────── Reddit Pixel (web, Custom HTML) ───────────── */
+
+/** Build a Reddit Pixel tag as a Custom HTML tag (there is NO gallery template). EVERY Reddit tag is
+ *  SELF-CONTAINED: it emits the rdt() bootstrap (guarded by `if(!w.rdt)`, so loading it on more than
+ *  one tag is safe) + rdt('init','<pixelId>') (idempotent) + rdt('track','<event>'). The base tag
+ *  (base=true) tracks 'PageVisit'; an event tag tracks its own event. This deliberately does NOT rely
+ *  on a separate base tag having fired first — an event tag created on its own still initializes rdt,
+ *  so a deselected/failed base tag can't turn its events into a silent `rdt is not defined`. The
+ *  pixelId is usually a {{variable}} emitted literally into the JS (GTM substitutes at fire time).
+ *  Delegates to buildCustomHtmlTag so the parameter shape matches every other Custom HTML tag. PURE. */
+export function buildRedditPixelTag(
+  name: string,
+  pixelId: string,
+  event: string,
+  opts?: { base?: boolean; firingTriggerId?: string[] }
+): GtmTagResource {
+  const pid = (pixelId ?? '').trim();
+  const ev = opts?.base ? 'PageVisit' : ((event ?? '').trim() || 'PageVisit');
+  const bootstrap =
+    `!function(w,d){if(!w.rdt){var p=w.rdt=function(){p.sendEvent?p.sendEvent.apply(p,arguments):p.callQueue.push(arguments)};` +
+    `p.callQueue=[];var t=d.createElement("script");t.src="https://www.redditstatic.com/ads/pixel.js";t.async=!0;` +
+    `var s=d.getElementsByTagName("script")[0];s.parentNode.insertBefore(t,s)}}(window,document);`;
+  const html = `<script>\n${bootstrap}\nrdt('init','${pid}');\nrdt('track','${ev}');\n</script>`;
+  return buildCustomHtmlTag({ name, html, firingTriggerId: opts?.firingTriggerId });
+}
+
 /* ───────────── Pinterest Conversions API (server) ───────────── */
 
 /** The Pinterest SERVER template's `eventNameStandard` SELECT values (snake_case — DIFFERENT from the

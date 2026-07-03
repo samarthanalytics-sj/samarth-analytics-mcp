@@ -6,7 +6,7 @@
 // Split so the pure part (aiTagsToSuggestions: AI picks + scraped inventory →
 // SuggestedTag[]) is unit-tested without any network or browser.
 
-import type { SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
+import type { SuggestedTag, SuggestPlatform } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import type { RawElement } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import { tagNameOf, trigNameOf } from '../../../../web-audit-mcp/src/agent/tag-suggest/suggest.js';
@@ -177,9 +177,9 @@ export interface AiScanInput {
   model: string;
   driver: PageDriver;
   siteHostHint?: string;
-  /** Which ad platforms to generate tags for (default ['ga4']). 'meta' adds Meta
-   *  (Facebook) Pixel counterparts derived from the GA4 ones (sharing each trigger). */
-  platforms?: Array<'ga4' | 'meta'>;
+  /** Which ad platforms to generate tags for (default ['ga4']). Each non-'ga4' platform adds its
+   *  counterparts derived from the GA4 ones (sharing each trigger). */
+  platforms?: SuggestPlatform[];
 }
 
 /** Open ONE page, screenshot it, run the vision model, and merge its picks (wired to

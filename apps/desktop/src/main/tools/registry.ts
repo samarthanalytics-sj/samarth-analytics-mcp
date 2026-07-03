@@ -42,6 +42,9 @@ import {
   buildHotjarTag,
   buildPinterestTag,
   buildPinterestCapiServerTag,
+  buildTikTokPixelTag,
+  buildLinkedInInsightTag,
+  buildRedditPixelTag,
   buildSnapPixelTag,
   detectMetaTags,
   findUnusedTriggers,
@@ -1060,7 +1063,7 @@ export function buildToolRegistry(
       name: 'create_gtm_tracking_tag',
       description:
         'PREFERRED way to create a tag that fires on an event — builds a CORRECT GTM resource from simple fields (you do not write raw GTM JSON). One call (applies directly to the draft workspace): enables needed built-in variables, reuses an existing same-named trigger or creates it, and creates the tag linked to it. ' +
-        'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "meta_pixel" (a Meta/Facebook Pixel via the OFFICIAL gallery template — needs pixelId (or measurementId as the pixel id, e.g. a {{Meta Pixel ID}} variable) + eventName = the Meta event (PageView/Lead/AddToCart/Purchase/ViewContent/InitiateCheckout/Search/Subscribe/CompleteRegistration/Contact/…), optional eventParameters → Meta Object Properties); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for LinkedIn/TikTok/other pixels); ' +
+        'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "meta_pixel" (a Meta/Facebook Pixel via the OFFICIAL gallery template — needs pixelId (or measurementId as the pixel id, e.g. a {{Meta Pixel ID}} variable) + eventName = the Meta event (PageView/Lead/AddToCart/Purchase/ViewContent/InitiateCheckout/Search/Subscribe/CompleteRegistration/Contact/…), optional eventParameters → Meta Object Properties); "tiktok_pixel" (a TikTok web Pixel via its gallery template - needs pixelId + eventName = the TikTok event Pageview/ViewContent/AddToCart/CompletePayment); "linkedin_insight" (the LinkedIn Insight base tag via its gallery template - needs pixelId = the LinkedIn Partner ID); "reddit_pixel" (a Reddit Pixel as Custom HTML - needs pixelId + eventName = the Reddit event PageVisit/ViewContent/AddToCart/Purchase/Lead/SignUp/Search; empty or PageVisit emits the full init snippet); "pinterest_tag" (a Pinterest web tag via its gallery template - needs pixelId + eventName = the Pinterest event pagevisit/viewcontent/addtocart/checkout/lead); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for other pixels); ' +
         '"conversion_linker" (Google Ads Conversion Linker; no fields required; optional enableCrossDomain plus comma-separated linkerDomains); "google_ads_call_conversion" (needs phoneNumber exactly as shown on the page, conversionId, conversionLabel); "google_ads_remarketing" (needs conversionId; an all-pages audience tag); "floodlight" (Campaign Manager / DV360 Floodlight counter; needs advertiserId, groupTag, activityTag; optional countingMethod standard|unique); "custom_image" (a beacon/pixel; needs url). ' +
         'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event; optional ANDed scope conditions — formIdValue, pagePathValue/pagePathOperator, pageUrlValue — e.g. event form_submit AND {{Page Path}} contains /contact, the corpus-standard data-layer form pattern), "pageview", "timer" (REQUIRES trigger.intervalMs in ms, optional trigger.limit), "form_submit" (optional formIdValue and/or formClassesValue, each with a *Operator — scopes the trigger to ONE form via {{Form ID}}/{{Form Classes}}; or pagePathValue/pagePathOperator to scope to a single page via {{Page Path}} when the form has no id/class; omit all and it fires on every form submit). ' +
         'eventParameters values may be GTM built-in variables (e.g. {{Click URL}}, {{Click Text}}, {{Form ID}}, {{Form URL}}) — the needed built-in variables are auto-enabled.',
@@ -1070,7 +1073,7 @@ export function buildToolRegistry(
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          platform: { type: 'string', enum: ['ga4_event', 'google_tag', 'meta_pixel', 'google_ads_conversion', 'custom_html', 'conversion_linker', 'google_ads_call_conversion', 'google_ads_remarketing', 'floodlight', 'custom_image'] },
+          platform: { type: 'string', enum: ['ga4_event', 'google_tag', 'meta_pixel', 'tiktok_pixel', 'linkedin_insight', 'reddit_pixel', 'pinterest_tag', 'google_ads_conversion', 'custom_html', 'conversion_linker', 'google_ads_call_conversion', 'google_ads_remarketing', 'floodlight', 'custom_image'] },
           tagName: { type: 'string' },
           measurementId: { type: 'string' },
           pixelId: { type: 'string' },
@@ -1219,6 +1222,44 @@ export function buildToolRegistry(
           needsEcommerceDlv = objProps.some((p) => p.value.includes('{{dlv - ecommerce.'));
           // The shared trigger logic below attaches firingTriggerId — do NOT pass it here.
           tag = buildMetaPixelTag(tmpl.type, s(a.tagName), pixelId, event, undefined, objProps);
+        } else if (platform === 'pinterest_tag') {
+          // Pinterest web tag via the OFFICIAL gallery template. The tag id is pixelId (or
+          // measurementId, e.g. a {{Pinterest Tag ID}} variable); eventName is the Pinterest event.
+          const tmpl = await data.importGalleryTemplate(accountId, containerId, workspaceId, 'pinterest', 'ws-gtm-template');
+          if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+            throw new Error(`Could not resolve the Pinterest template's tag type (got "${tmpl.type}").`);
+          }
+          const tagId = s(a.pixelId).trim() || s(a.measurementId).trim();
+          const event = s(a.eventName).trim() || 'pagevisit';
+          // The shared trigger logic below attaches firingTriggerId — do NOT pass it here.
+          tag = buildPinterestTag(tmpl.type, s(a.tagName), tagId, event);
+        } else if (platform === 'tiktok_pixel') {
+          // TikTok web Pixel via the OFFICIAL gallery template. The pixel code is pixelId (or
+          // measurementId, e.g. a {{TikTok Pixel ID}} variable); eventName is the TikTok event.
+          const tmpl = await data.importGalleryTemplate(accountId, containerId, workspaceId, 'tiktok', 'gtm-template-pixel');
+          if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+            throw new Error(`Could not resolve the TikTok Pixel template's tag type (got "${tmpl.type}").`);
+          }
+          const pixelCode = s(a.pixelId).trim() || s(a.measurementId).trim();
+          const event = s(a.eventName).trim() || 'Pageview';
+          tag = buildTikTokPixelTag(tmpl.type, s(a.tagName), pixelCode, event);
+        } else if (platform === 'linkedin_insight') {
+          // LinkedIn Insight (base) tag via the OFFICIAL community gallery template. The partner id is
+          // pixelId (or measurementId, e.g. a {{LinkedIn Partner ID}} variable).
+          const tmpl = await data.importGalleryTemplate(accountId, containerId, workspaceId, 'linkedin', 'linkedin-gtm-community-template');
+          if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+            throw new Error(`Could not resolve the LinkedIn Insight template's tag type (got "${tmpl.type}").`);
+          }
+          const partnerId = s(a.pixelId).trim() || s(a.measurementId).trim();
+          tag = buildLinkedInInsightTag(tmpl.type, s(a.tagName), partnerId);
+        } else if (platform === 'reddit_pixel') {
+          // Reddit Pixel as a Custom HTML tag (there is NO gallery template). The pixel id is pixelId
+          // (or measurementId, e.g. a {{Reddit Pixel ID}} variable). An empty or "PageVisit" event
+          // emits the full rdt() init snippet (the base tag); any other event emits a track-only call.
+          const pixelId = s(a.pixelId).trim() || s(a.measurementId).trim();
+          const event = s(a.eventName).trim();
+          const isBase = event === '' || event.toLowerCase() === 'pagevisit';
+          tag = buildRedditPixelTag(s(a.tagName), pixelId, event, { base: isBase });
         } else {
           throw new Error(`unknown platform: ${platform}`);
         }
@@ -1312,6 +1353,13 @@ export function buildToolRegistry(
         for (const val of templateVals) {
           for (const m of String(val ?? '').matchAll(/\{\{(URL - [^}]+)\}\}/g)) urlVarNames.add(m[1]);
         }
+        // GA4 ecommerce event tags reference {{Ecommerce X}} Data Layer variables (items/value/currency/
+        // item_list_id/…) — collect the referenced ones so the block below best-effort creates each as a
+        // Data Layer variable reading ecommerce.<param> (the reverse of the engine's ecommerceParamVar).
+        const ecommerceVarNames = new Set<string>();
+        for (const val of templateVals) {
+          for (const m of String(val ?? '').matchAll(/\{\{(Ecommerce [^}]+)\}\}/g)) ecommerceVarNames.add(m[1]);
+        }
         const createdVariables: string[] = [];
         // An ecommerce Meta tag references {{dlv - ecommerce.*}} in its Object Properties — best-effort
         // create those dataLayer variables so they resolve (idempotent; never fails the tag create).
@@ -1322,10 +1370,22 @@ export function buildToolRegistry(
             createdVariables.push(...(await data.createEcommerceDlvVariables(accountId, containerId, workspaceId)).created);
           } catch { /* best-effort: existing containers may already have them; the user can create them in GTM */ }
         }
-        if (urlVarNames.size || triggerInput.lookupTable || paramLookups.length || needsFormName) {
+        if (urlVarNames.size || ecommerceVarNames.size || triggerInput.lookupTable || paramLookups.length || needsFormName) {
           const existingVarNames = new Set(
             (await data.listGtmVariables(accountId, containerId, workspaceId)).map((v) => v.name.toLowerCase())
           );
+          // GA4 ecommerce parameter variables: {{Ecommerce Item List ID}} → a Data Layer variable reading
+          // ecommerce.item_list_id (drop "Ecommerce ", lowercase each word, join with "_"). Created only
+          // when missing — never overwrites an existing same-named variable.
+          for (const name of ecommerceVarNames) {
+            if (existingVarNames.has(name.toLowerCase())) continue;
+            const key = name.replace(/^Ecommerce /, '').trim().split(/\s+/).map((w) => w.toLowerCase()).join('_');
+            try {
+              await data.createGtmVariable(accountId, containerId, workspaceId, buildVariable({ name, kind: 'data_layer', dataLayerName: `ecommerce.${key}` }) as unknown as Record<string, unknown>);
+              createdVariables.push(name);
+              existingVarNames.add(name.toLowerCase());
+            } catch { /* best-effort: the tag still references it; the user can create it in GTM */ }
+          }
           // The shared "Form Name" Custom JS variable (GTM has no built-in {{Form Name}}) — derives the
           // form name from the submitted {{Form Element}} at fire time. Created once, referenced by every
           // form tag; never overwrites an existing same-named variable.

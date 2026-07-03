@@ -5,7 +5,7 @@
 // we don't suggest redundant tags. Output is directly creatable via the existing
 // create_gtm_tracking_tag tool.
 
-import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, FormProvider, VideoEmbed, TriggerKind } from './types.js';
+import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, SuggestPlatform, FormProvider, VideoEmbed, TriggerKind } from './types.js';
 import { CTA_BY_INTENT, classifyCtaIntent } from './cta-intents.js';
 import { buildSocialUrlPattern } from './social.js';
 
@@ -673,18 +673,20 @@ function videoSuggestion(embeds: VideoEmbed[]): SuggestedTag | null {
 }
 
 // ── eCommerce funnel suggestions (only when the site is detected as a store) ──
-// The GA4 recommended ecommerce funnel, in funnel order. Each becomes a GA4 event tag with NO event
-// parameters, so buildGa4EventTag auto-enables "Send Ecommerce data" (getEcommerceDataFrom=dataLayer)
-// — GA4 reads value/currency/items from the dataLayer ecommerce object the site pushes. They fire on a
-// Custom Event trigger matching the same dataLayer event name (view_item / add_to_cart / purchase / …).
+// The GA4 recommended ecommerce funnel, in funnel order. Each becomes a GA4 event tag with the EXPLICIT
+// event parameters GA4 recommends for that event (items/value/currency/…), each valued from an
+// {{Ecommerce X}} Data Layer variable the create flow auto-provisions (reading ecommerce.<param>). This
+// is the explicit-config alternative to the "Send Ecommerce data" toggle, so the Parameters column is
+// populated. They fire on a Custom Event trigger matching the same dataLayer event name.
 const ECOMMERCE_EVENTS = [
-  'view_item', 'view_item_list', 'add_to_cart', 'remove_from_cart', 'view_cart',
+  'view_item_list', 'select_item', 'view_item', 'add_to_cart', 'remove_from_cart', 'view_cart',
   'begin_checkout', 'add_shipping_info', 'add_payment_info', 'purchase',
 ] as const;
 // A human label per ecommerce event, for the tag/trigger name ("GA4 - Event - Add To Cart (Ecommerce) …").
 const ECOMMERCE_EVENT_LABEL: Record<string, string> = {
-  view_item: 'View Item',
   view_item_list: 'View Item List',
+  select_item: 'Select Item',
+  view_item: 'View Item',
   add_to_cart: 'Add To Cart',
   remove_from_cart: 'Remove From Cart',
   view_cart: 'View Cart',
@@ -693,30 +695,58 @@ const ECOMMERCE_EVENT_LABEL: Record<string, string> = {
   add_payment_info: 'Add Payment Info',
   purchase: 'Purchase',
 };
+// GA4 ecommerce event → its recommended event parameters (the GA4 ecommerce reference), in order. Each
+// param's value is the matching {{Ecommerce X}} Data Layer variable (see ecommerceParamVar).
+const GA4_ECOMMERCE_PARAMS: Record<string, readonly string[]> = {
+  view_item_list: ['items', 'item_list_id', 'item_list_name'],
+  select_item: ['items', 'item_list_id', 'item_list_name'],
+  view_item: ['items', 'value', 'currency'],
+  add_to_cart: ['items', 'value', 'currency'],
+  remove_from_cart: ['items', 'value', 'currency'],
+  view_cart: ['items', 'value', 'currency'],
+  begin_checkout: ['items', 'value', 'currency', 'coupon'],
+  add_shipping_info: ['items', 'value', 'currency', 'coupon', 'shipping_tier'],
+  add_payment_info: ['items', 'value', 'currency', 'coupon', 'payment_type'],
+  purchase: ['items', 'value', 'currency', 'transaction_id', 'coupon', 'shipping', 'tax'],
+};
+
+/** A GA4 ecommerce param (snake_case, e.g. item_list_id) → its Data Layer variable NAME
+ *  ("Ecommerce Item List ID"). The create flow provisions a matching Data Layer variable that reads
+ *  ecommerce.<param>. Kept in lockstep with the desktop provisioner's reverse derivation
+ *  ("Ecommerce Item List ID" → ecommerce.item_list_id). PURE. */
+export function ecommerceParamVar(param: string): string {
+  const words = param
+    .split('_')
+    .map((w) => (w === 'id' ? 'ID' : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+  return `Ecommerce ${words}`;
+}
 
 /** The GA4 ecommerce funnel event tags — emitted only for a detected ecommerce site (else []). Each
- *  tag has NO eventParameters so the create flow turns on "Send Ecommerce data" (the whole dataLayer
- *  ecommerce object → items/value/currency), and fires on a Custom Event trigger matching its dataLayer
- *  event name. These flow through the SAME dedup/rank AND the SAME Meta derivation as every other
- *  suggestion, so their Meta counterparts come for free. PURE. */
+ *  tag carries the EXPLICIT GA4 event parameters for its event (items/value/currency/…), valued from
+ *  {{Ecommerce X}} Data Layer variables the create flow auto-provisions, and fires on a Custom Event
+ *  trigger matching its dataLayer event name. These flow through the SAME dedup/rank AND the SAME
+ *  per-platform derivation as every other suggestion (Meta/etc. counterparts come for free). PURE. */
 export function ecommerceSuggestions(isEcommerce: boolean): SuggestedTag[] {
   if (!isEcommerce) return [];
   return ECOMMERCE_EVENTS.map((event) => {
     const human = ECOMMERCE_EVENT_LABEL[event];
+    const params = GA4_ECOMMERCE_PARAMS[event] ?? [];
     return {
       id: hashId(`ecommerce|${event}`),
       // These fire on the dataLayer event regardless of page, so they are site-wide.
       page: 'site-wide',
       label: `Ecommerce ${human} → GA4 "${event}"`,
       evidence: `detected ecommerce site — GA4 ${event} funnel event`,
-      note: `Fires on a "${event}" Custom Event. Have the store push dataLayer.push({event:"${event}", ecommerce:{items:[…], value:…, currency:"…"${event === 'purchase' ? ', transaction_id:"…"' : ''}}}) — this tag has "Send Ecommerce data" ON, so GA4 reads items/value/currency straight from that ecommerce object.`,
+      note: `Fires on a "${event}" Custom Event. Have the store push dataLayer.push({event:"${event}", ecommerce:{${params.filter((p) => p !== 'items').map((p) => `${p}:…`).join(', ')}${params.length > 1 ? ', ' : ''}items:[…]}}). Its ${params.length} event parameter(s) read the {{Ecommerce …}} Data Layer variables (auto-created on create).`,
       confidence: 'high',
       enhancedMeasurementOverlap: false,
       platform: 'ga4_event',
-      // NO eventParameters → buildGa4EventTag auto-enables Send Ecommerce data (dataLayer object).
       tagName: `GA4 - Event - ${human} (Ecommerce) Tag`,
       measurementId: GA4_VAR,
       eventName: event,
+      // Explicit GA4 ecommerce parameters (items/value/currency/…), each from an {{Ecommerce X}} DLV.
+      eventParameters: params.map((p) => ({ name: p, value: `{{${ecommerceParamVar(p)}}}` })),
       // Custom Event trigger matching the dataLayer event name (name uses a stable "(dataLayer)" suffix).
       trigger: { name: `${human} (dataLayer) Trigger`, kind: 'custom_event', eventName: event },
     };
@@ -951,14 +981,274 @@ export function toMetaSuggestion(ga4: SuggestedTag): SuggestedTag | null {
   };
 }
 
+// ── Additional ad-platform suggestions (Pinterest / TikTok / LinkedIn / Reddit / Google Ads) ──
+// Each mirrors toMetaSuggestion: DERIVE from a GA4 SuggestedTag and REUSE its trigger (ga4.trigger),
+// so on create the shared trigger create/reuse-by-name path attaches ONE trigger to both. Each returns
+// SuggestedTag | null (null = no sensible mapping for that GA4 event). measurementId holds the
+// platform's ID variable, eventName the platform's event, eventParameters undefined (event-only — no
+// object properties yet, matching non-ecommerce Meta). These new pixels have no built-in consent, like
+// meta_pixel; the container audit already flags ungated ones, so we do NOT auto-gate here.
+
+const PINTEREST_TAG_VAR = '{{Pinterest Tag ID}}';
+const TIKTOK_PIXEL_VAR = '{{TikTok Pixel ID}}';
+const LINKEDIN_PARTNER_VAR = '{{LinkedIn Partner ID}}';
+const REDDIT_PIXEL_VAR = '{{Reddit Pixel ID}}';
+const GOOGLE_ADS_CONVERSION_ID_VAR = '{{Google Ads Conversion ID}}';
+const GOOGLE_ADS_CONVERSION_LABEL_VAR = '{{Google Ads Conversion Label}}';
+
+/** The GA4-event-name keyword (lowercased, non-alphanumerics stripped) used to pick a platform event. */
+const ga4Key = (ga4: SuggestedTag): string => ga4.eventName.toLowerCase().replace(/[^a-z0-9]/g, '');
+/** Tag-name suffix shared across platforms: the GA4 tag name minus the "GA4 - [Event - ]" prefix. */
+const ga4Suffix = (ga4: SuggestedTag): string => ga4.tagName.replace(/^GA4 - (Event - )?/, '');
+
+/** Map a GA4 SuggestedTag → its Pinterest tag counterpart, or null. The base google_tag → the Pinterest
+ *  base tag (eventName 'pagevisit', All Pages); a ga4_event → the Pinterest event for its keyword. PURE. */
+export function toPinterestSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  const clone = { ...ga4 };
+  if (ga4.platform === 'google_tag') {
+    return {
+      ...clone,
+      platform: 'pinterest_tag',
+      eventName: 'pagevisit',
+      measurementId: PINTEREST_TAG_VAR,
+      tagName: 'Pinterest - Base Tag',
+      tagId: undefined,
+      configSettings: undefined,
+      eventParameters: undefined,
+      eventParamLookups: undefined,
+      conversionLabel: undefined,
+      enhancedMeasurementOverlap: false,
+      id: 'pinterest-' + ga4.id,
+      label: 'Pinterest base tag (PageVisit on all pages)',
+      trigger: ga4.trigger,
+    };
+  }
+  const key = ga4Key(ga4);
+  let event: string | null = null;
+  if (key.includes('viewitem') || key.includes('viewcontent')) event = 'viewcontent';
+  else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) event = 'addtocart';
+  else if (key.includes('purchase') || key.includes('checkout')) event = 'checkout';
+  else if (key.includes('signup') || key.includes('register')) event = 'signup';
+  else if (key.includes('generatelead') || key.includes('lead') || key.includes('contact')) event = 'lead';
+  else if (key.includes('search')) event = 'search';
+  else return null;
+  return {
+    ...clone,
+    platform: 'pinterest_tag',
+    eventName: event,
+    measurementId: PINTEREST_TAG_VAR,
+    tagName: 'Pinterest - ' + event + ' - ' + ga4Suffix(ga4),
+    id: 'pinterest-' + ga4.id,
+    label: 'Pinterest ' + event + ': ' + ga4.label,
+    evidence: ga4.evidence,
+    note: ga4.note,
+    enhancedMeasurementOverlap: false,
+    eventParameters: undefined,
+    eventParamLookups: undefined,
+    tagId: undefined,
+    configSettings: undefined,
+    conversionLabel: undefined,
+    trigger: ga4.trigger,
+  };
+}
+
+/** Map a GA4 SuggestedTag → its TikTok Pixel counterpart, or null. Base google_tag → TikTok base tag
+ *  (eventName 'Pageview', All Pages); a ga4_event → the TikTok standard event for its keyword. PURE. */
+export function toTikTokSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  const clone = { ...ga4 };
+  if (ga4.platform === 'google_tag') {
+    return {
+      ...clone,
+      platform: 'tiktok_pixel',
+      eventName: 'Pageview',
+      measurementId: TIKTOK_PIXEL_VAR,
+      tagName: 'TikTok - Base Pixel',
+      tagId: undefined,
+      configSettings: undefined,
+      eventParameters: undefined,
+      eventParamLookups: undefined,
+      conversionLabel: undefined,
+      enhancedMeasurementOverlap: false,
+      id: 'tiktok-' + ga4.id,
+      label: 'TikTok base pixel (Pageview on all pages)',
+      trigger: ga4.trigger,
+    };
+  }
+  const key = ga4Key(ga4);
+  let event: string | null = null;
+  if (key.includes('viewitem') || key.includes('viewcontent')) event = 'ViewContent';
+  else if (key.includes('addtowishlist') || key.includes('wishlist')) event = 'AddToWishlist';
+  else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) event = 'AddToCart';
+  else if (key.includes('begincheckout') || key.includes('initiatecheckout') || key.includes('checkout')) event = 'InitiateCheckout';
+  else if (key.includes('purchase')) event = 'CompletePayment';
+  else if (key.includes('generatelead') || key.includes('lead')) event = 'SubmitForm';
+  else if (key.includes('signup') || key.includes('register')) event = 'CompleteRegistration';
+  else if (key.includes('search')) event = 'Search';
+  else if (key.includes('contact')) event = 'Contact';
+  else return null;
+  return {
+    ...clone,
+    platform: 'tiktok_pixel',
+    eventName: event,
+    measurementId: TIKTOK_PIXEL_VAR,
+    tagName: 'TikTok - ' + event + ' - ' + ga4Suffix(ga4),
+    id: 'tiktok-' + ga4.id,
+    label: 'TikTok ' + event + ': ' + ga4.label,
+    evidence: ga4.evidence,
+    note: ga4.note,
+    enhancedMeasurementOverlap: false,
+    eventParameters: undefined,
+    eventParamLookups: undefined,
+    tagId: undefined,
+    configSettings: undefined,
+    conversionLabel: undefined,
+    trigger: ga4.trigger,
+  };
+}
+
+/** Map a GA4 SuggestedTag → its LinkedIn Insight counterpart. LinkedIn per-event conversions are
+ *  defined Campaign-Manager-side, so we ONLY derive the BASE Insight Tag (from the base google_tag);
+ *  every ga4_event returns null. So LinkedIn contributes exactly ONE base tag. PURE. */
+export function toLinkedInSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  if (ga4.platform !== 'google_tag') return null;
+  return {
+    ...ga4,
+    platform: 'linkedin_insight',
+    eventName: '',
+    measurementId: LINKEDIN_PARTNER_VAR,
+    tagName: 'LinkedIn - Insight Tag',
+    tagId: undefined,
+    configSettings: undefined,
+    eventParameters: undefined,
+    eventParamLookups: undefined,
+    conversionLabel: undefined,
+    enhancedMeasurementOverlap: false,
+    id: 'linkedin-' + ga4.id,
+    label: 'LinkedIn Insight Tag (base, all pages)',
+    trigger: ga4.trigger,
+  };
+}
+
+/** Map a GA4 SuggestedTag → its Reddit Pixel counterpart, or null. Base google_tag → Reddit base tag
+ *  (eventName 'PageVisit', All Pages); a ga4_event → the Reddit event for its keyword. PURE. */
+export function toRedditSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  const clone = { ...ga4 };
+  if (ga4.platform === 'google_tag') {
+    return {
+      ...clone,
+      platform: 'reddit_pixel',
+      eventName: 'PageVisit',
+      measurementId: REDDIT_PIXEL_VAR,
+      tagName: 'Reddit - Base Pixel',
+      tagId: undefined,
+      configSettings: undefined,
+      eventParameters: undefined,
+      eventParamLookups: undefined,
+      conversionLabel: undefined,
+      enhancedMeasurementOverlap: false,
+      id: 'reddit-' + ga4.id,
+      label: 'Reddit base pixel (PageVisit on all pages)',
+      trigger: ga4.trigger,
+    };
+  }
+  const key = ga4Key(ga4);
+  let event: string | null = null;
+  if (key.includes('viewitem') || key.includes('viewcontent')) event = 'ViewContent';
+  else if (key.includes('addtowishlist') || key.includes('wishlist')) event = 'AddToWishlist';
+  else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) event = 'AddToCart';
+  else if (key.includes('purchase')) event = 'Purchase';
+  else if (key.includes('generatelead') || key.includes('lead') || key.includes('contact')) event = 'Lead';
+  else if (key.includes('signup') || key.includes('register')) event = 'SignUp';
+  else if (key.includes('search')) event = 'Search';
+  else return null;
+  return {
+    ...clone,
+    platform: 'reddit_pixel',
+    eventName: event,
+    measurementId: REDDIT_PIXEL_VAR,
+    tagName: 'Reddit - ' + event + ' - ' + ga4Suffix(ga4),
+    id: 'reddit-' + ga4.id,
+    label: 'Reddit ' + event + ': ' + ga4.label,
+    evidence: ga4.evidence,
+    note: ga4.note,
+    enhancedMeasurementOverlap: false,
+    eventParameters: undefined,
+    eventParamLookups: undefined,
+    tagId: undefined,
+    configSettings: undefined,
+    conversionLabel: undefined,
+    trigger: ga4.trigger,
+  };
+}
+
+/** Map a GA4 SuggestedTag → its Google Ads counterpart, or null. The base google_tag → a Conversion
+ *  Linker (All Pages). A CONVERSION-worthy GA4 event (a form submit, or an event about lead/contact/
+ *  purchase/sign-up) → a Google Ads Conversion tag (measurementId = the Conversion ID, conversionLabel
+ *  = the Conversion Label). All other ga4_events return null (Ads is conversion-focused). PURE. */
+export function toGoogleAdsSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  if (ga4.platform === 'google_tag') {
+    return {
+      ...ga4,
+      platform: 'conversion_linker',
+      eventName: '',
+      measurementId: '',
+      tagName: 'Google Ads - Conversion Linker',
+      tagId: undefined,
+      configSettings: undefined,
+      eventParameters: undefined,
+      eventParamLookups: undefined,
+      conversionLabel: undefined,
+      enhancedMeasurementOverlap: false,
+      id: 'gads-' + ga4.id,
+      label: 'Google Ads Conversion Linker (all pages)',
+      trigger: ga4.trigger,
+    };
+  }
+  const key = ga4Key(ga4);
+  const isConversion =
+    ga4.trigger.kind === 'form_submit' ||
+    key.includes('generatelead') || key.includes('lead') || key.includes('contact') ||
+    key.includes('purchase') || key.includes('signup');
+  if (!isConversion) return null;
+  return {
+    ...ga4,
+    platform: 'google_ads_conversion',
+    eventName: ga4.eventName,
+    measurementId: GOOGLE_ADS_CONVERSION_ID_VAR,
+    conversionLabel: GOOGLE_ADS_CONVERSION_LABEL_VAR,
+    tagName: 'Google Ads - Conversion - ' + ga4Suffix(ga4),
+    id: 'gads-' + ga4.id,
+    label: 'Google Ads Conversion: ' + ga4.label,
+    evidence: ga4.evidence,
+    note: ga4.note,
+    enhancedMeasurementOverlap: false,
+    eventParameters: undefined,
+    eventParamLookups: undefined,
+    tagId: undefined,
+    configSettings: undefined,
+    trigger: ga4.trigger,
+  };
+}
+
+/** The non-GA4 platform → its derivation function. buildSuggestions loops this so every platform is
+ *  handled uniformly (Meta was the original special-case). */
+const PLATFORM_DERIVERS: Record<Exclude<SuggestPlatform, 'ga4'>, (ga4: SuggestedTag) => SuggestedTag | null> = {
+  meta: toMetaSuggestion,
+  pinterest: toPinterestSuggestion,
+  tiktok: toTikTokSuggestion,
+  linkedin: toLinkedInSuggestion,
+  reddit: toRedditSuggestion,
+  google_ads: toGoogleAdsSuggestion,
+};
+
 /** opts.full prepends the GA4 Configuration tag (always) so the review list is the COMPLETE set of
  *  creatable tags — not only the scan-derived ones. opts.platforms (default ['ga4']) selects which
- *  platforms to emit: 'ga4' returns the GA4 tags; 'meta' returns their Meta Pixel counterparts (derived
- *  from the GA4 tags so the trigger name is SHARED). 'meta' only computes GA4 internally but does not
- *  return them. */
+ *  platforms to emit: 'ga4' returns the GA4 tags; every other selected platform returns its derived
+ *  counterparts (each reusing its GA4 source's trigger name, so the trigger is SHARED on create). A
+ *  non-'ga4' selection computes GA4 internally but does not return it. */
 export function buildSuggestions(
   input: SuggestInput,
-  opts: { full?: boolean; platforms?: Array<'ga4' | 'meta'> } = {},
+  opts: { full?: boolean; platforms?: SuggestPlatform[] } = {},
 ): SuggestedTag[] {
   const scopeCtx = nonUniqueFormScopes(input.forms);
   // Social trigger fires on ONLY the exact domains scraped from the site's links.
@@ -1006,14 +1296,16 @@ export function buildSuggestions(
   // The GA4 list (the base Google tag is prepended only in full mode).
   const ga4Suggestions = opts.full ? [ga4ConfigSuggestion(), ...ranked] : ranked;
 
-  // Which platforms to emit (default GA4 only, so existing callers are unchanged). Meta counterparts
-  // are DERIVED from the GA4 list so each Meta tag reuses its GA4 source's trigger name (one shared
-  // trigger on create). 'meta' alone computes GA4 internally but returns only the Meta tags.
+  // Which platforms to emit (default GA4 only, so existing callers are unchanged). Every non-GA4
+  // platform's tags are DERIVED from the GA4 list so each reuses its GA4 source's trigger name (one
+  // shared trigger on create). A non-'ga4' selection computes GA4 internally but returns only its own.
   const platforms = opts.platforms ?? ['ga4'];
   const out: SuggestedTag[] = [];
   if (platforms.includes('ga4')) out.push(...ga4Suggestions);
-  if (platforms.includes('meta')) {
-    out.push(...ga4Suggestions.map(toMetaSuggestion).filter((x): x is SuggestedTag => x !== null));
+  for (const platform of platforms) {
+    if (platform === 'ga4') continue;
+    const derive = PLATFORM_DERIVERS[platform];
+    out.push(...ga4Suggestions.map(derive).filter((x): x is SuggestedTag => x !== null));
   }
   return out;
 }

@@ -1,3 +1,25 @@
+## [1.156.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.155.0...v1.156.0) (2026-07-03)
+
+### Features
+
+* **desktop:** explicit GA4 ecommerce event parameters + {{Ecommerce X}} variables ([36253a4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/36253a4442af6508adb944a00cd50de08ee687c7))
+
+### Bug Fixes
+
+* **desktop:** drop unused attribution locals in ga4-report (unblock node typecheck) ([db07caa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/db07caaf18861038a286df63069a4eef36522fb6))
+
+## [1.155.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.154.0...v1.155.0) (2026-07-03)
+
+### Features
+
+* **desktop:** GA4 audit per-event + transaction integrity checks ([03505b4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/03505b4b47a5123ad1abfb73369dd57632d1f91b))
+* **desktop:** GA4 audit phase-1 config + trend upgrades ([5cbded4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5cbded48c19f33aea03873dd14ca3da311b992d9))
+* **desktop:** multi-select platform picker (Google Ads, TikTok, LinkedIn, Reddit, Pinterest) ([d18677f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d18677f6af2674dc5b7ee79f5351a7295a54bb6c))
+
+### Bug Fixes
+
+* **desktop:** GA4 audit phase-1 review fixes ([7bcf8e1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7bcf8e10b6c83e3f2460a7a8e55afa72c45d3cc9))
+
 ## [1.154.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.153.0...v1.154.0) (2026-07-03)
 
 ### Features

@@ -363,6 +363,44 @@ async function main(): Promise<void> {
     const mout = await createSuggestedTags(mexec, { accountId: '1', containerId: '2', workspaceId: '3' }, [metaTag], fast);
     check('create: meta_pixel drives a create call with platform meta_pixel + pixel id (measurementId) + Meta eventName',
       mcalls[0].platform === 'meta_pixel' && mcalls[0].measurementId === '{{Meta Pixel ID}}' && mcalls[0].eventName === 'Lead' && mout[0].ok === true);
+
+    // A google_ads_conversion suggestion drives a create call with conversionId + conversionLabel
+    // (NOT measurementId/eventName) — the registry's awct branch reads those. measurementId holds the
+    // Conversion ID; conversionLabel holds the Conversion Label.
+    const adsConvTag: SuggestedTagView = {
+      id: 'gc', page: '/contact', label: 'Google Ads Conversion', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
+      platform: 'google_ads_conversion', tagName: 'Google Ads - Conversion - Contact Form Tag',
+      measurementId: '{{Google Ads Conversion ID}}', conversionLabel: '{{Google Ads Conversion Label}}',
+      eventName: 'contact_form', trigger: { name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'lead-form', formIdOperator: 'equals' },
+    };
+    const gccalls: Array<Record<string, unknown>> = [];
+    const gcexec = async (_n: string, args: Record<string, unknown>): Promise<string> => { gccalls.push(args); return JSON.stringify({ tag: { name: 'Google Ads - Conversion - Contact Form Tag' }, trigger: { reused: false } }); };
+    const gcout = await createSuggestedTags(gcexec, { accountId: '1', containerId: '2', workspaceId: '3' }, [adsConvTag], fast);
+    check('create: google_ads_conversion drives a create call with conversionId + conversionLabel (no measurementId/eventName leak)',
+      gccalls[0].platform === 'google_ads_conversion' && gccalls[0].conversionId === '{{Google Ads Conversion ID}}' && gccalls[0].conversionLabel === '{{Google Ads Conversion Label}}' &&
+      gccalls[0].measurementId === undefined && gccalls[0].eventName === undefined && gcout[0].ok === true);
+
+    // conversion_linker sends NO id fields; google_ads_remarketing sends only conversionId.
+    const linkerTag: SuggestedTagView = {
+      id: 'cl', page: 'site-wide', label: 'Conversion Linker', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
+      platform: 'conversion_linker', tagName: 'Google Ads - Conversion Linker', measurementId: '', eventName: '', trigger: { name: 'All Pages', kind: 'pageview' },
+    };
+    const clcalls: Array<Record<string, unknown>> = [];
+    const clexec = async (_n: string, args: Record<string, unknown>): Promise<string> => { clcalls.push(args); return JSON.stringify({ tag: { name: 'Google Ads - Conversion Linker' } }); };
+    await createSuggestedTags(clexec, { accountId: '1', containerId: '2', workspaceId: '3' }, [linkerTag], fast);
+    check('create: conversion_linker sends no id fields', clcalls[0].platform === 'conversion_linker' && clcalls[0].conversionId === undefined && clcalls[0].measurementId === undefined && clcalls[0].eventName === undefined);
+
+    // A pixel platform (pinterest) still flows the eventName/measurementId path unchanged.
+    const pinTag: SuggestedTagView = {
+      id: 'pt', page: '/p', label: 'Pinterest', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
+      platform: 'pinterest_tag', tagName: 'Pinterest - addtocart - Add To Cart Tag', measurementId: '{{Pinterest Tag ID}}', eventName: 'addtocart',
+      trigger: { name: 'Add To Cart Trigger', kind: 'all_clicks', clickTextValue: 'Add to Cart', clickTextOperator: 'equals' },
+    };
+    const ptcalls: Array<Record<string, unknown>> = [];
+    const ptexec = async (_n: string, args: Record<string, unknown>): Promise<string> => { ptcalls.push(args); return JSON.stringify({ tag: { name: 'Pinterest - addtocart - Add To Cart Tag' } }); };
+    await createSuggestedTags(ptexec, { accountId: '1', containerId: '2', workspaceId: '3' }, [pinTag], fast);
+    check('create: pinterest_tag sends measurementId (Tag ID) + eventName like the other pixels',
+      ptcalls[0].platform === 'pinterest_tag' && ptcalls[0].measurementId === '{{Pinterest Tag ID}}' && ptcalls[0].eventName === 'addtocart');
   }
 
   // ── assembleResult: the AI-derived `extra` respects the platform selection too ──

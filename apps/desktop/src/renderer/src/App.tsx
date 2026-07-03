@@ -19,6 +19,7 @@ import type {
   ScanProgressView,
   SecretSelfTest,
   ServerContainerResultView,
+  SuggestPlatform,
   SuggestedTagView,
   TagScanResult,
 } from '../../shared/ipc';
@@ -1826,10 +1827,16 @@ function TagReviewPanel({
   const [settleMs, setSettleMs] = useState('2500');
   const [settleAuto, setSettleAuto] = useState(true);
   const effSettleMs = (): number | undefined => (settleAuto ? undefined : Number(settleMs) || undefined);
-  // Pre-scan platform choice: which ad platforms to generate tags for. GA4 only (default), Meta
-  // (Facebook) Pixel only, or both. Meta tags are derived from the GA4 ones so each shares one trigger.
-  const [platformChoice, setPlatformChoice] = useState<'ga4' | 'meta' | 'both'>('ga4');
-  const platforms: Array<'ga4' | 'meta'> = platformChoice === 'both' ? ['ga4', 'meta'] : [platformChoice];
+  // Pre-scan platform choice: a MULTI-SELECT of ad platforms to generate tags for. GA4 is the default;
+  // any subset of the others may be toggled. Each non-GA4 platform's tags are derived from the GA4 ones
+  // so every platform's tag shares one trigger per detection. Never send an empty array — a scan with
+  // no platform makes no sense — so deselecting the last one falls back to ['ga4'] (see togglePlatform).
+  const [platforms, setPlatforms] = useState<SuggestPlatform[]>(['ga4']);
+  const togglePlatform = (p: SuggestPlatform): void =>
+    setPlatforms((prev) => {
+      const next = prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p];
+      return next.length ? next : ['ga4'];
+    });
   const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned']; inventory: TagScanResult['inventory']; installed: TagScanResult['installed'] } | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [discovering, setDiscovering] = useState(false);
@@ -2307,19 +2314,25 @@ function TagReviewPanel({
             {discoverMode === 'ai' && <span style={styles.muted}>experimental · screenshots the page + reads it with OpenAI vision</span>}
             {discoverMode === 'csv' && <span style={styles.muted}>scan a list of landing-page URLs directly (no crawl)</span>}
           </div>
-          {/* Pre-scan platform choice: which ad platforms to generate tags for. */}
+          {/* Pre-scan platform choice: a MULTI-SELECT — toggle any subset of ad platforms. Each selected
+              platform generates its own tags from the same detected elements, sharing one trigger. */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={styles.muted}>Create tags for:</span>
             {([
               ['ga4', 'GA4'],
               ['meta', 'Meta (Facebook)'],
-              ['both', 'Both GA4 & Meta'],
-            ] as const).map(([c, label]) => (
+              ['google_ads', 'Google Ads'],
+              ['tiktok', 'TikTok'],
+              ['linkedin', 'LinkedIn'],
+              ['reddit', 'Reddit'],
+              ['pinterest', 'Pinterest'],
+            ] as const).map(([p, label]) => (
               <button
-                key={c}
-                style={platformChoice === c ? styles.toggleOn : styles.toggleOff}
-                onClick={() => setPlatformChoice(c)}
+                key={p}
+                style={platforms.includes(p) ? styles.toggleOn : styles.toggleOff}
+                onClick={() => togglePlatform(p)}
                 disabled={scanning || discovering}
+                aria-pressed={platforms.includes(p)}
               >
                 {label}
               </button>
@@ -2519,6 +2532,37 @@ function TagReviewPanel({
             <div style={{ ...styles.muted, marginTop: 6 }}>
               Meta tags use the <code style={mdStyles.code}>{'{{Meta Pixel ID}}'}</code> variable — set it in the
               container (or edit the Pixel ID per row).
+            </div>
+          )}
+          {platforms.includes('pinterest') && (
+            <div style={{ ...styles.muted, marginTop: 6 }}>
+              Pinterest tags use the <code style={mdStyles.code}>{'{{Pinterest Tag ID}}'}</code> variable — set it in
+              the container (or edit the Tag ID per row).
+            </div>
+          )}
+          {platforms.includes('tiktok') && (
+            <div style={{ ...styles.muted, marginTop: 6 }}>
+              TikTok tags use the <code style={mdStyles.code}>{'{{TikTok Pixel ID}}'}</code> variable — set it in the
+              container (or edit the Pixel ID per row).
+            </div>
+          )}
+          {platforms.includes('linkedin') && (
+            <div style={{ ...styles.muted, marginTop: 6 }}>
+              LinkedIn tags use the <code style={mdStyles.code}>{'{{LinkedIn Partner ID}}'}</code> variable — set it in
+              the container (or edit the Partner ID per row).
+            </div>
+          )}
+          {platforms.includes('reddit') && (
+            <div style={{ ...styles.muted, marginTop: 6 }}>
+              Reddit tags use the <code style={mdStyles.code}>{'{{Reddit Pixel ID}}'}</code> variable — set it in the
+              container (or edit the Pixel ID per row).
+            </div>
+          )}
+          {platforms.includes('google_ads') && (
+            <div style={{ ...styles.muted, marginTop: 6 }}>
+              Google Ads conversions use the <code style={mdStyles.code}>{'{{Google Ads Conversion ID}}'}</code> and{' '}
+              <code style={mdStyles.code}>{'{{Google Ads Conversion Label}}'}</code> variables — set them in the
+              container (or edit each row).
             </div>
           )}
         </div>

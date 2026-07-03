@@ -20,11 +20,30 @@ import {
   type PageScan,
   type PageScanRaw,
 } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
-import { buildSuggestions, toMetaSuggestion } from '../../../../web-audit-mcp/src/agent/tag-suggest/suggest.js';
+import {
+  buildSuggestions,
+  toMetaSuggestion,
+  toPinterestSuggestion,
+  toTikTokSuggestion,
+  toLinkedInSuggestion,
+  toRedditSuggestion,
+  toGoogleAdsSuggestion,
+} from '../../../../web-audit-mcp/src/agent/tag-suggest/suggest.js';
 import { analyzeForms, type RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
-import type { SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
+import type { SuggestedTag, SuggestPlatform } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 import type { TagScanResult } from '../../shared/ipc';
+
+/** Non-GA4 platform → its GA4→platform deriver (mirrors buildSuggestions' PLATFORM_DERIVERS), so the
+ *  AI-derived `extra` suggestions get the same per-platform counterparts as the engine ones. */
+const EXTRA_DERIVERS: Record<Exclude<SuggestPlatform, 'ga4'>, (ga4: SuggestedTag) => SuggestedTag | null> = {
+  meta: toMetaSuggestion,
+  pinterest: toPinterestSuggestion,
+  tiktok: toTikTokSuggestion,
+  linkedin: toLinkedInSuggestion,
+  reddit: toRedditSuggestion,
+  google_ads: toGoogleAdsSuggestion,
+};
 
 /** What one navigated page yields. Produced by a PageDriver; consumed here. */
 export interface DrivenPage {
@@ -54,7 +73,7 @@ export interface ScanOptions {
   maxDepth?: number;
   /** Which ad platforms to generate tags for (default ['ga4']). 'meta' adds Meta
    *  (Facebook) Pixel tags derived from the GA4 ones (sharing each trigger). */
-  platforms?: Array<'ga4' | 'meta'>;
+  platforms?: SuggestPlatform[];
 }
 
 /** Streamed after every page is scanned — the RUNNING (full) suggestion list so the
@@ -72,7 +91,7 @@ export interface ScanProgress {
 export type OnScanProgress = (p: ScanProgress) => void;
 
 /** The complete (full-mode) suggestion list from the pages scanned so far. */
-function runningSuggestions(pageScans: PageScan[], siteHost: string, platforms: Array<'ga4' | 'meta'> = ['ga4']): SuggestedTag[] {
+function runningSuggestions(pageScans: PageScan[], siteHost: string, platforms: SuggestPlatform[] = ['ga4']): SuggestedTag[] {
   return buildSuggestions(buildSuggestInput(pageScans, siteHost), { full: true, platforms });
 }
 
@@ -301,7 +320,7 @@ export function assembleResult(
   warnings: string[],
   opened: number,
   extra: SuggestedTag[] = [],
-  platforms: Array<'ga4' | 'meta'> = ['ga4'],
+  platforms: SuggestPlatform[] = ['ga4'],
 ): TagScanResult {
   const input = buildSuggestInput(pageScans, siteHost);
   // full: include the GA4 Configuration base tag + the All-form / All-PDF catch-alls
@@ -310,13 +329,15 @@ export function assembleResult(
   const scanned: SuggestedTag[] = buildSuggestions(input, { full: true, platforms });
   const seen = new Set(scanned.map(suggestionKey));
   // The AI-derived `extra` are GA4 tags — subject them to the SAME platform selection as the engine
-  // suggestions: keep the GA4 ones only when 'ga4' is chosen, and derive Meta counterparts (sharing
-  // each trigger, like the engine path) when 'meta' is chosen. Without this, an AI scan with Meta-only
-  // selected would leak GA4 tags, and "Both" would give AI-discovered elements no Meta counterpart.
-  const extraForPlatforms: SuggestedTag[] = [
-    ...(platforms.includes('ga4') ? extra : []),
-    ...(platforms.includes('meta') ? extra.map(toMetaSuggestion).filter((s): s is SuggestedTag => s !== null) : []),
-  ];
+  // suggestions: keep the GA4 ones only when 'ga4' is chosen, and derive each selected non-GA4
+  // platform's counterparts (sharing each trigger, like the engine path). Without this, an AI scan
+  // with a non-GA4-only selection would leak GA4 tags, and a mixed selection would give AI-discovered
+  // elements no platform counterparts.
+  const extraForPlatforms: SuggestedTag[] = [...(platforms.includes('ga4') ? extra : [])];
+  for (const platform of platforms) {
+    if (platform === 'ga4') continue;
+    extraForPlatforms.push(...extra.map(EXTRA_DERIVERS[platform]).filter((s): s is SuggestedTag => s !== null));
+  }
   // Merge the (platform-filtered) `extra`: drop exact-key dupes, semantic dupes of an engine tag (same
   // global event, or a CTA the engine already fires on), and unsafe unscoped all-clicks suggestions.
   const merged = [...scanned, ...extraForPlatforms.filter((s) => !seen.has(suggestionKey(s)) && !dropAiSuggestion(s, scanned))];
@@ -462,7 +483,7 @@ export async function scanUrls(
   urls: string[],
   siteHostHint?: string,
   onProgress?: OnScanProgress,
-  opts: { platforms?: Array<'ga4' | 'meta'> } = {},
+  opts: { platforms?: SuggestPlatform[] } = {},
 ): Promise<TagScanResult> {
   const platforms = opts.platforms ?? ['ga4'];
   const list = urls.filter(Boolean);

@@ -170,6 +170,27 @@ export async function createSuggestedTags(
     let attempt = 0;
     for (;;) {
       try {
+        // Per-platform arg set. Pixel platforms (meta/tiktok/reddit/pinterest/linkedin) + ga4_event go
+        // through the eventName/eventParameters path with measurementId as the id. google_tag uses
+        // tagId + configSettings. The Google Ads platforms read different id fields: a conversion tag
+        // needs conversionId + conversionLabel, remarketing needs conversionId, and the conversion
+        // linker needs neither — so send exactly those (measurementId holds the Conversion ID).
+        const platformArgs: Record<string, unknown> =
+          t.platform === 'google_tag'
+            ? { measurementId: t.measurementId, tagId: t.tagId ?? t.measurementId, configSettings: Array.isArray(t.configSettings) ? t.configSettings : [] }
+            : t.platform === 'google_ads_conversion'
+              ? { conversionId: t.measurementId, conversionLabel: t.conversionLabel ?? '' }
+              : t.platform === 'google_ads_remarketing'
+                ? { conversionId: t.measurementId }
+                : t.platform === 'conversion_linker'
+                  ? {}
+                  : {
+                      measurementId: t.measurementId,
+                      eventName: t.eventName,
+                      eventParameters: Array.isArray(t.eventParameters) ? t.eventParameters : [],
+                      // Companion Lookup Table variables an event param references (e.g. a per-page form_name).
+                      ...(Array.isArray(t.eventParamLookups) && t.eventParamLookups.length ? { eventParamLookups: t.eventParamLookups } : {}),
+                    };
         const out = JSON.parse(
           await execute('create_gtm_tracking_tag', {
             accountId: ids.accountId,
@@ -177,17 +198,7 @@ export async function createSuggestedTags(
             workspaceId: ids.workspaceId,
             platform: t.platform,
             tagName: t.tagName,
-            measurementId: t.measurementId,
-            // google_tag (the GA4 Configuration base tag) uses tagId + configSettings;
-            // ga4_event uses eventName + eventParameters. Send the right set per platform.
-            ...(t.platform === 'google_tag'
-              ? { tagId: t.tagId ?? t.measurementId, configSettings: Array.isArray(t.configSettings) ? t.configSettings : [] }
-              : {
-                  eventName: t.eventName,
-                  eventParameters: Array.isArray(t.eventParameters) ? t.eventParameters : [],
-                  // Companion Lookup Table variables an event param references (e.g. a per-page form_name).
-                  ...(Array.isArray(t.eventParamLookups) && t.eventParamLookups.length ? { eventParamLookups: t.eventParamLookups } : {}),
-                }),
+            ...platformArgs,
             trigger: t.trigger,
           }),
         ) as { declined?: boolean; alreadyExists?: boolean; tag?: { name?: string }; trigger?: { reused?: boolean } };
