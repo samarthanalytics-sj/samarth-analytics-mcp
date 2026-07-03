@@ -41,6 +41,7 @@ import {
   buildLinkedInCapiServerTag,
   buildHotjarTag,
   buildPinterestTag,
+  buildPinterestCapiServerTag,
   buildSnapPixelTag,
   detectMetaTags,
   findUnusedTriggers,
@@ -2151,6 +2152,62 @@ export function buildToolRegistry(
           autoMap: bln(a.autoMap),
           optimistic: bln(a.optimistic),
           requireConsent: bln(a.requireConsent),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_pinterest_capi_server_tag',
+      description:
+        'Create a Pinterest Conversions API SERVER tag from the OFFICIAL Pinterest server template (pinterest / ss-gtm-template) in a server container — the server counterpart of the create_pinterest_tag WEB pixel. Pass advertiserId (your Pinterest Ad Account ID, starts "549…") + apiAccessToken (both from Pinterest Ads Manager → "Generate conversion access token"; usually {{variables}}). By default the tag INHERITS the event name from the incoming GA4 event and reads all event/user/custom data straight from it (getAllEventData) — no explicit rows, the Pinterest analog of Meta CAPI automap. Pass `event` to force a specific Pinterest standard event (checkout [=purchase], add_to_cart, view_content, page_visit, lead, search, signup, initiate_checkout, … or a custom name → custom_event). Pass override rows (serverEventData / userData / customData as {name,value}) only to add or override specific fields. testMode routes events to Pinterest\'s test mode (verify without recording). The tag needs a SERVER trigger (create_server_trigger). Optional log, firingTriggerId, name (default "Pinterest CAPI Tag"). Requires accountId, containerId (SERVER), workspaceId, advertiserId, apiAccessToken.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional — defaults to "Pinterest CAPI Tag".' },
+          advertiserId: { type: 'string', description: 'Pinterest Advertiser / Ad Account ID (starts "549…"; usually a {{variable}}).' },
+          apiAccessToken: { type: 'string', description: 'Pinterest Conversions API access token (usually a {{variable}}).' },
+          event: { type: 'string', description: 'Optional — force a Pinterest event (checkout/add_to_cart/view_content/page_visit/lead/…, a GA4 name, or a custom name). Omit to inherit from the incoming event.' },
+          testMode: { type: 'boolean', description: 'Send as a test request (not recorded) — default false.' },
+          log: { type: 'boolean', description: 'Log requests (logMode) — default false.' },
+          serverEventData: {
+            type: 'array', description: 'Override rows { name, value } for event data (sets overrideMode on).',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          userData: {
+            type: 'array', description: 'Override rows { name, value } for user data (match keys).',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          customData: {
+            type: 'array', description: 'Override rows { name, value } for custom data (value/currency/content_ids/…).',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'advertiserId', 'apiAccessToken'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Pinterest CAPI server tag "${s(a.name).trim() || 'Pinterest CAPI Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'Pinterest CAPI Tag', 'tag'),
+      handler: async (a) => {
+        if (!s(a.advertiserId).trim()) throw new Error('advertiserId is required (the Pinterest Advertiser / Ad Account ID, starts "549…", usually a {{variable}}).');
+        if (!s(a.apiAccessToken).trim()) throw new Error('apiAccessToken is required (the Pinterest Conversions API access token, usually a {{variable}}).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'pinterest', 'ss-gtm-template');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the Pinterest server template's tag type (got "${tmpl.type}"). Import pinterest/ss-gtm-template and check list_gtm_templates.`);
+        }
+        const name = s(a.name).trim() || 'Pinterest CAPI Tag';
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildPinterestCapiServerTag(tmpl.type, name, s(a.advertiserId), s(a.apiAccessToken), {
+          event: a.event != null ? s(a.event) : undefined,
+          testMode: bln(a.testMode),
+          log: bln(a.log),
+          override: { serverEventData: rows(a.serverEventData), userData: rows(a.userData), customData: rows(a.customData) },
           firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
         });
         return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
