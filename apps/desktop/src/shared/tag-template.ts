@@ -81,6 +81,13 @@ const TAG_TYPE: Record<string, string> = {
   google_tag: 'Google Tag',
   meta_pixel: 'Meta Pixel Tag',
   ga4_event: 'GA4 Event Tag',
+  tiktok_pixel: 'TikTok Pixel Tag',
+  linkedin_insight: 'LinkedIn Insight Tag',
+  reddit_pixel: 'Reddit Pixel Tag',
+  pinterest_tag: 'Pinterest Tag',
+  google_ads_conversion: 'Google Ads Conversion',
+  conversion_linker: 'Conversion Linker',
+  google_ads_remarketing: 'Google Ads Remarketing',
 };
 
 /** One suggestion → its template block (the structure both the table + CSV use). */

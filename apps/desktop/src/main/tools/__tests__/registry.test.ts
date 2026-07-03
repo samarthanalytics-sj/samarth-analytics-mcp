@@ -1104,6 +1104,92 @@ async function main(): Promise<void> {
     assert.equal(trkParam(out, 'cacheBusterQueryParam'), undefined); // dropped when cache buster is off
   });
 
+  // The new multi-select ad platforms: pinterest/tiktok/linkedin import their gallery template (the
+  // fake importGalleryTemplate returns a cvt_ type for any owner/repo); reddit needs no import and
+  // produces an html tag. Each shares the trigger via the create/reuse-by-name path (firingTriggerId).
+  await test('create_tracking_tag (pinterest_tag) imports the Pinterest template + builds its tag (tagId from measurementId)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'pinterest_tag', tagName: 'Pinterest - lead - Contact Form Tag', measurementId: '{{Pinterest Tag ID}}', eventName: 'lead',
+        trigger: { name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'lead-form', formIdOperator: 'equals' },
+      })
+    );
+    assert.ok(fd.calls.includes('importTemplate:pinterest/ws-gtm-template'), 'imported the Pinterest web template');
+    assert.equal(out.tag.type, 'cvt_5RM3Q', 'built a tag of the template cvt_ type');
+    assert.equal(trkParam(out, 'tagId'), '{{Pinterest Tag ID}}', 'tag id defaults from measurementId');
+    assert.equal(trkParam(out, 'eventName'), 'lead', 'Pinterest event passed through');
+    assert.ok(fd.calls.some((c) => c.startsWith('createTag') && c.includes('NEW1')), 'linked to the created trigger');
+  });
+
+  await test('create_tracking_tag (tiktok_pixel) imports the TikTok template + builds pixel_code/event (pixelId wins over measurementId)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'tiktok_pixel', tagName: 'TikTok - CompletePayment - Purchase Tag', pixelId: 'ABC123', measurementId: '{{TikTok Pixel ID}}', eventName: 'CompletePayment',
+        trigger: { name: 'Purchase Trigger', kind: 'custom_event', eventName: 'purchase' },
+      })
+    );
+    assert.ok(fd.calls.includes('importTemplate:tiktok/gtm-template-pixel'), 'imported the TikTok web pixel template');
+    assert.equal(out.tag.type, 'cvt_5RM3Q');
+    assert.equal(trkParam(out, 'pixel_code'), 'ABC123', 'explicit pixelId wins');
+    assert.equal(trkParam(out, 'event'), 'CompletePayment', 'TikTok event passed through');
+  });
+
+  await test('create_tracking_tag (linkedin_insight) imports the LinkedIn template + builds partnerId (base tag)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'linkedin_insight', tagName: 'LinkedIn - Insight Tag', measurementId: '{{LinkedIn Partner ID}}', eventName: '',
+        trigger: { name: 'All Pages', kind: 'pageview' },
+      })
+    );
+    assert.ok(fd.calls.includes('importTemplate:linkedin/linkedin-gtm-community-template'), 'imported the LinkedIn community template');
+    assert.equal(out.tag.type, 'cvt_5RM3Q');
+    assert.equal(trkParam(out, 'partnerId'), '{{LinkedIn Partner ID}}', 'partner id from measurementId');
+  });
+
+  await test('create_tracking_tag (reddit_pixel base) needs NO template + builds an html tag with the rdt init snippet', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'reddit_pixel', tagName: 'Reddit - Base Pixel', measurementId: '{{Reddit Pixel ID}}', eventName: 'PageVisit',
+        trigger: { name: 'All Pages', kind: 'pageview' },
+      })
+    );
+    assert.ok(!fd.calls.some((c) => c.startsWith('importTemplate')), 'reddit needs no gallery template');
+    assert.equal(out.tag.type, 'html', 'built a Custom HTML tag');
+    const html = trkParam(out, 'html') ?? '';
+    assert.ok(html.includes("rdt('init','{{Reddit Pixel ID}}')") && html.includes("rdt('track','PageVisit')"), 'base emits the full rdt init + PageVisit');
+    assert.ok(fd.calls.some((c) => c.startsWith('createTag')), 'created the tag');
+  });
+
+  await test('create_tracking_tag (reddit_pixel event) builds a SELF-CONTAINED html tag (init + track, no base-tag dependency)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'reddit_pixel', tagName: 'Reddit - Lead - Contact Form Tag', pixelId: 't2_abc', eventName: 'Lead',
+        trigger: { name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'lead-form', formIdOperator: 'equals' },
+      })
+    );
+    assert.equal(out.tag.type, 'html');
+    const html = trkParam(out, 'html') ?? '';
+    // A non-base event tag self-initializes rdt (bootstrap + init) so it works even if the base tag
+    // was deselected or failed — then tracks its own event.
+    assert.ok(html.includes("rdt('init','t2_abc')") && html.includes("rdt('track','Lead')") && html.includes('redditstatic.com/ads/pixel.js'),
+      'a non-base event self-inits (bootstrap + init) then tracks its event');
+  });
+
   await test('create_tracking_tag (merged variants) auto-provisions the Lookup Table variable + fires on it', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, approveAsIs);

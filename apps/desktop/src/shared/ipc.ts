@@ -8,6 +8,11 @@
 export type LlmProvider = 'anthropic' | 'openai' | 'gemini';
 export type GoogleProduct = 'gtm' | 'ga4';
 
+/** Which ad platforms a Tag Suggestions scan generates tags for (mirrors web-audit's SuggestPlatform,
+ *  declared locally so the renderer/shared layer stays dependency-free). Any subset may be selected;
+ *  each maps the SAME detected elements to its own tags, sharing one trigger per detection. */
+export type SuggestPlatform = 'ga4' | 'meta' | 'google_ads' | 'tiktok' | 'linkedin' | 'reddit' | 'pinterest';
+
 export interface LlmConfigView {
   provider: LlmProvider;
   model: string;
@@ -331,10 +336,28 @@ export interface SuggestedTagView {
   /** 'ga4_event' = a GA4 event tag; 'google_tag' = the base Google tag (GA4
    *  Configuration) — uses tagId, not eventName/eventParameters. 'meta_pixel' = a
    *  Meta (Facebook) Pixel tag — measurementId holds the Meta Pixel ID (default
-   *  {{Meta Pixel ID}}), eventName is the Meta event. */
-  platform: 'ga4_event' | 'google_tag' | 'meta_pixel';
+   *  {{Meta Pixel ID}}), eventName is the Meta event. The other pixel platforms
+   *  mirror it (measurementId = that platform's ID variable): 'tiktok_pixel' /
+   *  'linkedin_insight' / 'reddit_pixel' / 'pinterest_tag'. Google Ads uses
+   *  'google_ads_conversion' (measurementId = the Conversion ID, conversionLabel =
+   *  the Conversion Label), 'google_ads_remarketing' (measurementId = the Conversion
+   *  ID), and 'conversion_linker' (no id fields). */
+  platform:
+    | 'ga4_event'
+    | 'google_tag'
+    | 'meta_pixel'
+    | 'tiktok_pixel'
+    | 'linkedin_insight'
+    | 'reddit_pixel'
+    | 'pinterest_tag'
+    | 'google_ads_conversion'
+    | 'google_ads_remarketing'
+    | 'conversion_linker';
   tagName: string;
   measurementId: string;
+  /** For platform 'google_ads_conversion': the Ads Conversion Label (default
+   *  {{Google Ads Conversion Label}}). */
+  conversionLabel?: string;
   /** For platform 'google_tag': the Measurement ID (or its {{variable}}). */
   tagId?: string;
   /** For platform 'google_tag': optional gtag config settings. */
@@ -394,9 +417,9 @@ export interface TagScanOptions {
   maxDepth?: number;
   /** Post-load settle (ms) for the browser engine — lets JS-rendered forms appear. */
   settleMs?: number;
-  /** Which ad platforms to generate tags for (default ['ga4']). 'meta' adds Meta
-   *  (Facebook) Pixel tags derived from the GA4 ones (sharing each trigger). */
-  platforms?: Array<'ga4' | 'meta'>;
+  /** Which ad platforms to generate tags for (default ['ga4']). Any subset may be selected; each
+   *  non-'ga4' platform adds tags derived from the GA4 ones (sharing each trigger). */
+  platforms?: SuggestPlatform[];
 }
 
 /** One detected clickable element (before dedup) — the raw inventory. */
