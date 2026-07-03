@@ -1322,6 +1322,240 @@ test('auditServerContainer is quiet on a healthy server container', () => {
   assert.equal(rep.hasGa4Config, true, 'GA4 client present');
 });
 
+// Helpers for the corpus-motivated server checks (Vocal Minority GTM-57RM3QCT reference).
+const clientNameEqualsGa4 = [
+  { type: 'EQUALS', parameter: [
+    { type: 'template', key: 'arg0', value: '{{Client Name}}' },
+    { type: 'template', key: 'arg1', value: 'GA4' },
+  ] },
+];
+const gaawTag = (tagId: string, name: string, measurementId: string, firingTriggerId: string[], paused = false) => ({
+  tagId, name, type: 'sgtmgaaw', firingTriggerId, blockingTriggerId: [] as string[], paused,
+  parameter: [{ type: 'template', key: 'measurementId', value: measurementId }], consentSettings: null,
+});
+// A Stape Facebook CAPI tag: pixelId + accessToken + a Facebook-distinctive key (generateFbp)
+// so isMetaCapiServerTag recognizes it and does not confuse it with a TikTok CAPI tag.
+const metaCapiTag = (tagId: string, name: string, params: Array<{ key: string; value: string }>) => ({
+  tagId, name, type: 'cvt_5TP8W', firingTriggerId: ['1'], blockingTriggerId: [] as string[], paused: false,
+  parameter: [
+    { type: 'boolean', key: 'generateFbp', value: 'true' },
+    ...params.map((p) => ({ type: 'template', key: p.key, value: p.value })),
+  ],
+  consentSettings: null,
+});
+
+test('auditServerContainer (1): flags DUPLICATE GA4 relays — same Measurement ID, equivalent triggers (different ids) → critical double-count', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    // Two ACTIVE GA4 relays on the SAME id firing on triggers #6 and #10 whose conditions are
+    // identical ("Client Name equals GA4") though the ids differ — exactly the reference defect.
+    triggers: [
+      { triggerId: '6', name: 'GA Client Trigger', type: 'ALWAYS', filter: clientNameEqualsGa4 },
+      { triggerId: '10', name: 'GA Client', type: 'ALWAYS', filter: clientNameEqualsGa4 },
+    ],
+    tags: [
+      gaawTag('7', 'GA4 Tag', 'G-VOCAL', ['6']),
+      gaawTag('15', 'Google Analytics GA4', 'G-VOCAL', ['10']),
+    ],
+  });
+  const dup = rep.findings.find((f) => /counted 2× in GA4/i.test(f.message));
+  assert.ok(dup, 'emits a duplicate-relay finding');
+  assert.equal(dup!.severity, 'critical');
+  assert.ok(/"GA4 Tag"/.test(dup!.message) && /"Google Analytics GA4"/.test(dup!.message), 'names both duplicate tags');
+  assert.ok(/G-VOCAL/.test(dup!.message), 'names the shared Measurement ID');
+});
+
+test('auditServerContainer (1): does NOT flag GA4 relays with different ids/triggers, paused, TRIGGERLESS, or different eventName overrides', () => {
+  const withEvent = (t: ReturnType<typeof gaawTag>, ev: string) => ({
+    ...t, parameter: [...t.parameter, { type: 'template', key: 'eventName', value: ev }],
+  });
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [
+      { triggerId: '6', name: 'GA Client Trigger', type: 'ALWAYS', filter: clientNameEqualsGa4 },
+      { triggerId: '20', name: 'Purchase only', type: 'ALWAYS', filter: [
+        { type: 'EQUALS', parameter: [
+          { type: 'template', key: 'arg0', value: '{{Event Name}}' },
+          { type: 'template', key: 'arg1', value: 'purchase' },
+        ] },
+      ] },
+    ],
+    tags: [
+      gaawTag('7', 'GA4 Prod', 'G-AAA', ['6']),        // distinct id
+      gaawTag('8', 'GA4 Staging', 'G-BBB', ['6']),      // distinct id, same trigger — not a dup
+      gaawTag('9', 'GA4 Narrow', 'G-AAA', ['20']),      // same id but a genuinely narrower trigger
+      { ...gaawTag('12', 'GA4 Paused Dup', 'G-AAA', ['6']), paused: true }, // paused → excluded
+      // Two ACTIVE same-id relays that NEVER fire (no trigger) — cannot double-count.
+      gaawTag('30', 'GA4 Triggerless A', 'G-CCC', []),
+      gaawTag('31', 'GA4 Triggerless B', 'G-CCC', []),
+      // Two same-id relays on the SAME trigger but stamping DIFFERENT event names — complementary.
+      withEvent(gaawTag('40', 'GA4 Purchase Relay', 'G-DDD', ['6']), 'purchase'),
+      withEvent(gaawTag('41', 'GA4 AddToCart Relay', 'G-DDD', ['6']), 'add_to_cart'),
+    ],
+  });
+  assert.ok(!rep.findings.some((f) => /counted .× in GA4/i.test(f.message)), 'no duplicate-relay false positive');
+});
+
+test('auditServerContainer (1): DOES flag two same-id relays on the same trigger that stamp the SAME event name', () => {
+  const withEvent = (t: ReturnType<typeof gaawTag>, ev: string) => ({
+    ...t, parameter: [...t.parameter, { type: 'template', key: 'eventName', value: ev }],
+  });
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [{ triggerId: '6', name: 'GA Client Trigger', type: 'ALWAYS', filter: clientNameEqualsGa4 }],
+    tags: [
+      withEvent(gaawTag('50', 'GA4 Purchase A', 'G-EEE', ['6']), 'purchase'),
+      withEvent(gaawTag('51', 'GA4 Purchase B', 'G-EEE', ['6']), 'purchase'),
+    ],
+  });
+  assert.ok(rep.findings.some((f) => f.severity === 'critical' && /counted 2× in GA4/i.test(f.message)), 'same event on same trigger IS a duplicate');
+});
+
+test('auditServerContainer (2): flags URL-ENCODED trigger filter values on BOTH camelCase (live API) and UPPER_SNAKE (export) operators, not decoded or regex values', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [
+      // camelCase operator — the shape the LIVE tagmanager API returns (the runtime audit path).
+      { triggerId: '93', name: 'Sign Petition Click Trigger', type: 'ALWAYS', filter: [
+        { type: 'contains', parameter: [
+          { type: 'template', key: 'arg0', value: '{{Event Name}}' },
+          { type: 'template', key: 'arg1', value: 'Sign+Petition+Click' },
+        ] },
+      ] },
+      // UPPER_SNAKE operator — the shape a container EXPORT uses; must also be caught.
+      { triggerId: '129', name: 'Form Submit Trigger', type: 'ALWAYS', filter: [
+        { type: 'EQUALS', parameter: [
+          { type: 'template', key: 'arg0', value: '{{Page URL Variable}}' },
+          { type: 'template', key: 'arg1', value: '/petition%2Frefugee-rights/' },
+        ] },
+      ] },
+      // Decoded event name — must NOT be flagged.
+      { triggerId: '153', name: 'Decoded Form Submit', type: 'ALWAYS', filter: [
+        { type: 'contains', parameter: [
+          { type: 'template', key: 'arg0', value: '{{Event Name}}' },
+          { type: 'template', key: 'arg1', value: 'Sign Petition Form Submission' },
+        ] },
+      ] },
+      // A regex quantifier '+' is legal — matchRegex/MATCH_REGEX must NOT be flagged (both casings).
+      { triggerId: '114', name: 'Regex URL', type: 'ALWAYS', filter: [
+        { type: 'matchRegex', parameter: [
+          { type: 'template', key: 'arg0', value: '{{Page URL Variable}}' },
+          { type: 'template', key: 'arg1', value: '/expose-plastic/|/protect-turtles/a+b' },
+        ] },
+      ] },
+    ],
+    tags: [gaawTag('7', 'GA4 Tag', 'G-1', ['6'])],
+  });
+  const encoded = rep.findings.filter((f) => f.category === 'firing' && /URL-encoded/i.test(f.message));
+  const names = encoded.map((f) => f.resource?.name).sort();
+  assert.deepEqual(names, ['Form Submit Trigger', 'Sign Petition Click Trigger'], 'flags the encoded triggers regardless of operator casing');
+  assert.ok(encoded.every((f) => f.severity === 'high'));
+  assert.ok(encoded.some((f) => /"Sign\+Petition\+Click"/.test(f.message)), 'echoes the offending value');
+  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Decoded Form Submit'), 'decoded value not flagged');
+  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Regex URL'), 'regex quantifier not flagged');
+});
+
+test('auditServerContainer (3): flags SWAPPED Pixel ID / Access Token (never echoing the token), not correct or variable-backed tags', () => {
+  const fakeToken = 'EAA' + 'x'.repeat(200); // token-shaped, NOT a real token
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [],
+    tags: [
+      // Swapped: pixelId holds the token, accessToken holds the 15-digit id (Church-in-Need defect).
+      metaCapiTag('145', 'Church Need - Sign Petition Click CAPI Tag', [
+        { key: 'pixelId', value: fakeToken },
+        { key: 'accessToken', value: '123456789012345' },
+      ]),
+      // Correct wiring — must NOT be flagged.
+      metaCapiTag('141', 'Church Need - Page View CAPI Tag', [
+        { key: 'pixelId', value: '123456789012345' },
+        { key: 'accessToken', value: fakeToken },
+      ]),
+      // Variable-backed — unknowable shape, must NOT be flagged.
+      metaCapiTag('166', 'Parkinsons - Page View CAPI Tag', [
+        { key: 'pixelId', value: '{{Parkinsons NSW Pixel ID}}' },
+        { key: 'accessToken', value: '{{Parkinsons NSW API Token}}' },
+      ]),
+    ],
+  });
+  const swapped = rep.findings.filter((f) => /swapped/i.test(f.message));
+  assert.equal(swapped.length, 1, 'exactly one swapped-field finding');
+  assert.equal(swapped[0].resource?.id, '145');
+  assert.equal(swapped[0].severity, 'high');
+  assert.equal(swapped[0].category, 'security');
+  assert.ok(!swapped[0].message.includes(fakeToken), 'never echoes the token value');
+  assert.ok(!swapped[0].recommendation.includes(fakeToken), 'never echoes the token in the recommendation');
+});
+
+test('auditServerContainer (4): flags a Test Event Code left set (testId) as medium + auto-fixable clearing it', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [],
+    tags: [
+      metaCapiTag('107', 'UNHCR - Page View CAPI Tag', [
+        { key: 'pixelId', value: '123456789012345' },
+        { key: 'accessToken', value: 'EAA' + 'x'.repeat(200) },
+        { key: 'testId', value: 'TEST30857' },
+      ]),
+      // Empty testId → production → must NOT be flagged.
+      metaCapiTag('141', 'UNHCR - Clean CAPI Tag', [
+        { key: 'pixelId', value: '123456789012345' },
+        { key: 'accessToken', value: 'EAA' + 'x'.repeat(200) },
+        { key: 'testId', value: '' },
+      ]),
+    ],
+  });
+  const testFindings = rep.findings.filter((f) => /Test Event Code/i.test(f.message));
+  assert.equal(testFindings.length, 1, 'only the tag with a non-empty testId is flagged');
+  const f = testFindings[0];
+  assert.equal(f.severity, 'medium');
+  assert.equal(f.resource?.id, '107');
+  assert.equal(f.autoFixable, true);
+  assert.equal(f.fix?.tool, 'update_gtm_tag');
+  const clears = (f.fix?.args.tag as { parameter: Array<{ key: string; value: string }> }).parameter
+    .some((p) => p.key === 'testId' && p.value === '');
+  assert.ok(clears, 'the fix clears testId');
+});
+
+test('auditServerContainer (3/4): a TikTok CAPI tag (cvt_ with pixelId+accessToken but NO generateFbp/actionSource) is NOT audited under Meta rules', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [],
+    tags: [
+      // A TikTok server tag shares the pixelId/accessToken keys but uses TikTok-distinctive
+      // fields (generateTtp/eventSource) and 'testEventCode' — not generateFbp/actionSource/testId.
+      // A digit-shaped accessToken here must NOT be read as a swapped Meta Pixel ID.
+      {
+        tagId: '139', name: 'TikTok - CareFlight CAPI Tag', type: 'cvt_TT01',
+        firingTriggerId: ['1'], blockingTriggerId: [], paused: false, consentSettings: null,
+        parameter: [
+          { type: 'boolean', key: 'generateTtp', value: 'true' },
+          { type: 'template', key: 'eventSource', value: 'web' },
+          { type: 'template', key: 'pixelId', value: '123456789012345' },
+          { type: 'template', key: 'accessToken', value: '123456789012345' },
+          { type: 'template', key: 'testEventCode', value: 'TEST123' },
+        ],
+      },
+    ],
+  });
+  assert.ok(!rep.findings.some((f) => /swapped/i.test(f.message)), 'TikTok tag not flagged for swapped Meta fields');
+  assert.ok(!rep.findings.some((f) => /Test Event Code/i.test(f.message)), 'TikTok testEventCode not read as a Meta testId');
+});
+
 test('buildMetaEmqVariables → ed variables with keyPath === key (corpus shape)', () => {
   const vars = buildMetaEmqVariables();
   const byName = new Map(vars.map((v) => [v.name, v]));

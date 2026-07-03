@@ -37,7 +37,6 @@ import {
   metaStandardEvent,
   buildTikTokCapiServerTag,
   tikTokStandardEvent,
-  auditServerContainer,
   detectMetaTags,
   findUnusedTriggers,
   findUnusedVariables,
@@ -46,7 +45,7 @@ import {
   type GtmTagResource,
 } from '../google/gtm-builders';
 import { withQuotaRetry } from '../google/quota-retry';
-import { auditWorkspace, auditChanges } from '../google/audit-runner';
+import { auditWorkspace, auditServerWorkspace, auditChanges } from '../google/audit-runner';
 import { diffSnapshots } from '../google/gtm-monitor';
 import { auditGa4 } from '../google/ga4-audit';
 import { auditGa4DataQuality } from '../google/ga4-data-quality';
@@ -383,15 +382,15 @@ export function buildToolRegistry(
     {
       name: 'audit_server_container',
       description:
-        'Audit a SERVER container workspace (server-side GTM). Checks that a client claims incoming requests, that server tags carry their destination id (GA4 Measurement ID / Ads Conversion ID+Label / remarketing id), have a firing trigger and are not paused, and that a tagging server URL is set. Returns the same findings/severity/boundary shape as audit_gtm_container — but for server resources. Requires accountId, containerId, workspaceId.',
+        'Audit a SERVER container workspace (server-side GTM). Checks that a client claims incoming requests, that server tags carry their destination id (GA4 Measurement ID / Ads Conversion ID+Label / remarketing id), have a firing trigger and are not paused, and that a tagging server URL is set. Also flags duplicate GA4 relays (2+ active GA4 tags forwarding the same Measurement ID on equivalent triggers → double-counting), URL-encoded trigger filter values (e.g. "Sign+Petition+Click") that never match a decoded event name, Meta CAPI tags with a swapped Pixel ID / Access Token, and Meta CAPI tags left with a Test Event Code (testId) set. Returns the same findings/severity/boundary shape as audit_gtm_container — but for server resources. Requires accountId, containerId, workspaceId.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
       },
-      handler: async (a) =>
-        auditServerContainer(await data.getServerContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId))),
+      handler: (a) =>
+        auditServerWorkspace(data, { accountId: s(a.accountId), containerId: s(a.containerId), workspaceId: s(a.workspaceId) }),
     },
     {
       name: 'verify_server_endpoint',

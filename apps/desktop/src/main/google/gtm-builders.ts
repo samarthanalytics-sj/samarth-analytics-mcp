@@ -2014,6 +2014,10 @@ export interface ServerContainerSnapshot {
   taggingServerUrls: string[];
   clients: Array<{ clientId: string; name: string; type: string }>;
   tags: AuditTag[];
+  /** The server workspace's triggers — needed to compare firing conditions (duplicate
+   *  GA4 relays) and to scan filter values (URL-encoded event names). Optional so older
+   *  callers/tests that omit it still type-check; treated as [] when absent. */
+  triggers?: AuditTrigger[];
   transformations: Array<{ transformationId: string; name: string; type: string }>;
 }
 
@@ -2029,6 +2033,74 @@ export const AUDIT_SERVER_RUNTIME_REQUIRED: string[] = [
 /** The Google destination server-tag types — each depends on the GA4 (gaaw) client
  *  claiming the incoming gtag/GA4 request, so any of them implies a gaaw_client is needed. */
 const GOOGLE_SERVER_TAG_TYPES = new Set(['sgtmgaaw', 'sgtmadsct', 'sgtmadscl', 'sgtmadsremarket']);
+
+/** Read a TEMPLATE param's string value off an audit tag ('' when absent/non-string). PURE. */
+function serverTagParam(t: AuditTag, key: string): string {
+  const params = Array.isArray(t.parameter) ? t.parameter : [];
+  const p = params.find((x) => (x as { key?: string }).key === key) as { value?: unknown } | undefined;
+  return p && typeof p.value === 'string' ? p.value : '';
+}
+
+/** A {{variable}} reference resolves at runtime, so its literal shape can't be checked —
+ *  credential/field/encoding checks skip these. PURE. */
+function isVariableRef(v: string): boolean {
+  return /^\{\{.*\}\}$/.test(v.trim());
+}
+
+/** The Stape "Facebook Conversions API" server template stores its destination as
+ *  `pixelId` + `accessToken` TEMPLATE params. The TikTok template ALSO uses those keys
+ *  (see buildTikTokCapiServerTag), so pixelId+accessToken alone is not enough — we also
+ *  require a Facebook-distinctive field (generateFbp / actionSource) that TikTok never emits
+ *  (it uses generateTtp / eventSource). This keeps the Meta-only swapped-field and test-code
+ *  checks from misfiring on a TikTok tag. PURE. */
+function isMetaCapiServerTag(t: AuditTag): boolean {
+  if (!t.type.startsWith('cvt_')) return false;
+  const params = Array.isArray(t.parameter) ? t.parameter : [];
+  const keys = new Set(params.map((p) => (p as { key?: string }).key));
+  if (!(keys.has('pixelId') && keys.has('accessToken'))) return false;
+  return keys.has('generateFbp') || keys.has('actionSource');
+}
+
+/** Canonical, order-independent signature of a trigger's CONDITIONS (operator + sorted
+ *  args across every filter list). Two triggers that fire on the same conditions under
+ *  different ids/names share a signature — the key to detecting duplicate GA4 relays whose
+ *  triggers are equivalent even though their ids differ. PURE. */
+function serverTriggerSignature(tr: AuditTrigger): string {
+  const conds: string[] = [];
+  const add = (arr?: Array<Record<string, unknown>>): void => {
+    for (const f of arr ?? []) {
+      const op = String((f as { type?: unknown }).type ?? '');
+      const args = (((f as { parameter?: Array<{ key?: string; value?: unknown }> }).parameter) ?? [])
+        .map((p) => `${p.key}=${String(p.value ?? '')}`)
+        .sort();
+      conds.push(`${op}(${args.join('&')})`);
+    }
+  };
+  add(tr.filter);
+  add(tr.customEventFilter);
+  add(tr.autoEventFilter);
+  conds.sort();
+  return `${tr.type}|${conds.join(';')}`;
+}
+
+/** Normalize a GTM condition operator to a casing-agnostic key. Container EXPORT JSON emits
+ *  operators UPPER_SNAKE ("STARTS_WITH"); the LIVE API emits camelCase ("startsWith"). Lowercase
+ *  + strip underscores so both map to the same token. PURE. */
+function normOp(op: string): string {
+  return op.toLowerCase().replace(/_/g, '');
+}
+
+/** GTM condition operators that match their value LITERALLY (an event name / URL text), in
+ *  normalized form (see normOp). Regex operators are excluded from the URL-encoding scan because
+ *  '+' is a legal quantifier there — flagging it would be a false positive. */
+const LITERAL_MATCH_OPS = new Set(['equals', 'contains', 'startswith', 'endswith']);
+
+/** URL-encoded text pasted into a literal filter value: a '+' between word chars (encoded
+ *  space, e.g. "Sign+Petition+Click") or a %XX escape (%20, %2F, …). GTM matches DECODED
+ *  dataLayer event names, so such a value can never match → the filter is dead. PURE. */
+function looksUrlEncoded(value: string): boolean {
+  return /\w\+\w/.test(value) || /%[0-9A-Fa-f]{2}/.test(value);
+}
 
 /** Audit a SERVER container: a client must claim requests, server tags need their
  *  destination id + a firing trigger and shouldn't be paused, and the host should be
@@ -2094,6 +2166,123 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     }
   }
 
+  const triggers = s.triggers ?? [];
+  const trigById = new Map(triggers.map((tr) => [tr.triggerId, tr]));
+
+  // (1) DUPLICATE GA4 RELAY — 2+ ACTIVE GA4 server tags forwarding the SAME Measurement ID
+  //     AS THE SAME outgoing event on equivalent triggers means every event is counted once
+  //     PER duplicate in GA4. Group active sgtmgaaw tags by (measurementId + outgoing eventName
+  //     override + firing-condition signature): the signature collapses triggers with identical
+  //     conditions (or the same all-events relay) even when their ids differ, which is exactly how
+  //     the corpus pair double-fired ("GA4 Tag" + "Google Analytics GA4", both on a "Client Name
+  //     equals GA4" trigger with no eventName override). Guards against two false positives: a tag
+  //     with NO firing trigger never fires (so it can't double-count — already flagged above), and
+  //     two relays that stamp DIFFERENT event names are complementary, not duplicates.
+  const firingSignature = (t: AuditTag): string =>
+    (t.firingTriggerId ?? [])
+      .map((id) => {
+        const tr = trigById.get(id);
+        return tr ? serverTriggerSignature(tr) : `#${id}`;
+      })
+      .sort()
+      .join('||');
+  const relayGroups = new Map<string, AuditTag[]>();
+  for (const t of s.tags) {
+    if (t.type !== 'sgtmgaaw' || t.paused) continue;
+    if (!(t.firingTriggerId ?? []).length) continue; // never fires → can't double-count
+    const mid = serverTagParam(t, 'measurementId').trim();
+    if (!mid) continue; // a blank id is already flagged above
+    const eventName = serverTagParam(t, 'eventName').trim(); // '' = forwards each event's own name
+    const key = `${mid}\n${eventName}\n${firingSignature(t)}`;
+    const arr = relayGroups.get(key) ?? [];
+    arr.push(t);
+    relayGroups.set(key, arr);
+  }
+  for (const group of relayGroups.values()) {
+    if (group.length < 2) continue;
+    const mid = serverTagParam(group[0], 'measurementId').trim();
+    const names = group.map((t) => `"${t.name}"`).join(', ');
+    const dup = group[group.length - 1];
+    push({
+      severity: 'critical',
+      category: 'ga4',
+      resource: { kind: 'tag', id: dup.tagId, name: dup.name },
+      message: `${group.length} active GA4 server tags (${names}) all forward Measurement ID ${mid} for the same event on equivalent triggers — every event is counted ${group.length}× in GA4.`,
+      recommendation: 'Keep ONE GA4 relay for this Measurement ID; pause or delete the duplicate(s) so each event is sent once.',
+      autoFixable: false,
+    });
+  }
+
+  // (2) URL-ENCODED TRIGGER VALUES — a literal (non-regex) condition whose value carries
+  //     URL-encoding ("Sign+Petition+Click", %20, %2F) can never equal/contain a DECODED
+  //     dataLayer event name, so the trigger is dead. Variable refs + regex ops are skipped.
+  for (const tr of triggers) {
+    const bad: string[] = [];
+    const scan = (arr?: Array<Record<string, unknown>>): void => {
+      for (const f of arr ?? []) {
+        const op = String((f as { type?: unknown }).type ?? '');
+        if (!LITERAL_MATCH_OPS.has(normOp(op))) continue;
+        for (const p of ((f as { parameter?: Array<{ key?: string; value?: unknown }> }).parameter) ?? []) {
+          const v = typeof p.value === 'string' ? p.value : '';
+          if (!v || isVariableRef(v)) continue;
+          if (looksUrlEncoded(v)) bad.push(v);
+        }
+      }
+    };
+    scan(tr.filter);
+    scan(tr.customEventFilter);
+    scan(tr.autoEventFilter);
+    if (bad.length) {
+      push({
+        severity: 'high',
+        category: 'firing',
+        resource: { kind: 'trigger', id: tr.triggerId, name: tr.name },
+        message: `Trigger "${tr.name}" filters on URL-encoded text (${bad.map((v) => `"${v}"`).join(', ')}) — GTM matches DECODED event names, so this condition never matches and the trigger is dead.`,
+        recommendation: 'Replace the encoded value with the real decoded text (e.g. "Sign+Petition+Click" → "Sign Petition Click").',
+        autoFixable: false,
+      });
+    }
+  }
+
+  for (const t of s.tags) {
+    if (!isMetaCapiServerTag(t)) continue;
+    const resource = { kind: 'tag' as const, id: t.tagId, name: t.name };
+    const pixelId = serverTagParam(t, 'pixelId').trim();
+    const accessToken = serverTagParam(t, 'accessToken').trim();
+
+    // (3) SWAPPED PIXEL/TOKEN FIELDS — a Pixel ID is a ~15-digit number and an access token
+    //     is a long "EAA…" string. If pixelId holds a token-shaped value and/or accessToken
+    //     holds an id-shaped value, they were pasted into the wrong boxes and the tag can't
+    //     authenticate. Values are NEVER echoed (the token is live) — only their shape.
+    const pixelLooksLikeToken = !isVariableRef(pixelId) && (pixelId.startsWith('EAA') || pixelId.length > 100);
+    const tokenLooksLikePixel = !isVariableRef(accessToken) && /^\d{14,16}$/.test(accessToken);
+    if (pixelLooksLikeToken || tokenLooksLikePixel) {
+      push({
+        severity: 'high',
+        category: 'security',
+        resource,
+        message: `Meta CAPI tag "${t.name}" looks like its Pixel ID and Access Token are swapped — the Pixel ID field holds an access-token-shaped value and/or the Access Token field holds a Pixel-ID-shaped value, so the tag can't send events.`,
+        recommendation: 'Swap them back: the Pixel ID is the ~15-digit number and the Access Token is the long "EAA…" string.',
+        autoFixable: false,
+      });
+    }
+
+    // (4) TEST EVENT CODE LEFT SET — a non-empty testId routes events to Events Manager's
+    //     TEST view, not production reporting. One-field fix: clear it.
+    const testId = serverTagParam(t, 'testId').trim();
+    if (testId && !isVariableRef(testId)) {
+      push({
+        severity: 'medium',
+        category: 'ga4',
+        resource,
+        message: `Meta CAPI tag "${t.name}" still has a Test Event Code set — its events land in Events Manager's TEST view, not production reporting.`,
+        recommendation: 'Clear the Test Event Code (testId) before go-live so events count in production.',
+        autoFixable: true,
+        fix: { tool: 'update_gtm_tag', args: { tagId: t.tagId, tag: { parameter: [{ type: 'template', key: 'testId', value: '' }] } } },
+      });
+    }
+  }
+
   const nameCounts = new Map<string, number>();
   for (const t of s.tags) nameCounts.set(t.name, (nameCounts.get(t.name) ?? 0) + 1);
   for (const [name, c] of nameCounts) if (c > 1) push({ severity: 'medium', category: 'naming', message: `Duplicate server-tag name "${name}" (${c} tags) — hard to tell them apart.`, recommendation: 'Rename so each tag is uniquely identifiable.', autoFixable: false });
@@ -2101,7 +2290,7 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
   const summary = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const f of findings) summary[f.severity]++;
   return {
-    counts: { tags: s.tags.length, triggers: 0, variables: 0, clients: s.clients.length, transformations: s.transformations.length, findings: findings.length },
+    counts: { tags: s.tags.length, triggers: triggers.length, variables: 0, clients: s.clients.length, transformations: s.transformations.length, findings: findings.length },
     summary,
     findings,
     boundary: AUDIT_SERVER_BOUNDARY,

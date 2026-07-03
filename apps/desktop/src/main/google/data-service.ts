@@ -1302,21 +1302,27 @@ export class GoogleDataService {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
-    const [container, rawTags, clients, transformations] = await Promise.all([
+    const [container, rawTags, rawTriggers, clients, transformations] = await Promise.all([
       gtm.accounts.containers.get({ path: `accounts/${accountId}/containers/${containerId}` }),
       collectPages(
         (pageToken) => gtm.accounts.containers.workspaces.tags.list({ parent, pageToken }),
         (r) => r.data.tag,
         (r) => r.data.nextPageToken
       ),
+      collectPages(
+        (pageToken) => gtm.accounts.containers.workspaces.triggers.list({ parent, pageToken }),
+        (r) => r.data.trigger,
+        (r) => r.data.nextPageToken
+      ),
       this.listGtmClients(accountId, containerId, workspaceId),
       this.listGtmTransformations(accountId, containerId, workspaceId),
     ]);
-    const { tags } = toSnapshot(rawTags, [], []);
+    const { tags, triggers } = toSnapshot(rawTags, rawTriggers, []);
     return {
       taggingServerUrls: container.data.taggingServerUrls ?? [],
       clients,
       tags,
+      triggers,
       transformations,
     };
   }
