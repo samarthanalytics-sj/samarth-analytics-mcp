@@ -11,7 +11,8 @@
 // before invoking this — write tools still only exist because a confirm fn is
 // supplied, and nothing is ever published.
 
-import { ipcMain } from 'electron';
+import { ipcMain, dialog, BrowserWindow } from 'electron';
+import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
 import { auditWorkspace } from '../google/audit-runner';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
@@ -27,6 +28,26 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     // The audit READ (list tags/triggers/variables) also trips GTM's per-minute quota
     // during heavy sessions — retry it with backoff so the panel doesn't crash on a 429.
     return withQuotaRetry(() => auditWorkspace(data, { accountId: a, containerId: c, workspaceId: w }));
+  });
+
+  // Save the container-audit findings to a file the user picks (CSV or Markdown — the renderer
+  // builds the content; this just writes it). Read-only export, no GTM access. Returns the saved
+  // path, or null if cancelled. The dialog filter is inferred from the default filename's extension.
+  ipcMain.handle('gtm:exportAudit', async (e, defaultName: unknown, content: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const name = String(defaultName ?? 'container-audit.csv').replace(/[\\/:*?"<>|]/g, '_');
+    const ext = (name.split('.').pop() ?? '').toLowerCase();
+    const filter =
+      ext === 'md'
+        ? { name: 'Markdown', extensions: ['md'] }
+        : ext === 'csv'
+          ? { name: 'CSV', extensions: ['csv'] }
+          : { name: 'All Files', extensions: ['*'] };
+    const opts = { title: 'Export container audit', defaultPath: name, filters: [filter] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    await writeFile(filePath, String(content ?? ''), 'utf8');
+    return filePath;
   });
 
   ipcMain.handle('gtm:applyFix', async (_e, fix: unknown) => {
