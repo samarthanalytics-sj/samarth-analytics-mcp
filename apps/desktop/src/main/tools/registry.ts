@@ -196,6 +196,10 @@ const GTM_GA4_TAG_TOOLS = new Set([
   'set_ga4_measurement_id_on_all_tags',
   'add_ga4_event_parameters',
   'add_ga4_event_parameters_to_all_tags',
+  // Edits a GTM server GA4 tag (sgtmgaaw) — belongs in the GTM chat, NOT the read-only GA4
+  // Analytics product. Without this entry productOf() files it under 'ga4' (the substring match)
+  // so it is filtered OUT of the GTM chat, where server-container work happens, and unreachable.
+  'add_ga4_server_parameters',
 ]);
 
 // Tool product is derived from its name (GA4 Analytics tools contain "ga4", GTM tools
