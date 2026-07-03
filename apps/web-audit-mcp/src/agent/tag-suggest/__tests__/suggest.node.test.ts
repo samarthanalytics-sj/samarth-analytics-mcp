@@ -524,5 +524,76 @@ check('names: a CTA text with ":" yields a colon-free trigger name ("Apply Now T
 const allNames = [...ctaInput, ...moreCtas, ...socialOut, ...els, ...out1, ...nlForm, ...searchForm, ...loginFormS].flatMap((s) => [s.tagName, s.trigger.name]);
 check('names: NO tag or trigger name contains the GTM-invalid ":" character', allNames.every((n) => !n.includes(':')));
 
+// ── Meta (Facebook) Pixel suggestions (platforms option) ─────────────────────
+// A form → Meta 'Lead'; the base google_tag → Meta 'PageView'. GA4 default unchanged; 'both' returns
+// GA4 + Meta with the Meta counterpart REUSING the same trigger name (so the trigger is shared on create).
+const metaInput: SuggestInput = { siteHost: 'a.com', forms: [{ page: '/contact', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'lead-form' }], elements: [] };
+// meta-only, full mode: the base pixel + the form's Lead pixel; NO GA4 tags returned.
+const metaOnly = buildSuggestions(metaInput, { full: true, platforms: ['meta'] });
+check('meta: platforms:[meta] returns ONLY meta_pixel suggestions (no GA4/google_tag)', metaOnly.length > 0 && metaOnly.every((s) => s.platform === 'meta_pixel'));
+check('meta: the base google_tag → Meta base PageView pixel', metaOnly.some((s) => s.eventName === 'PageView' && s.tagName === 'Meta Pixel - Base Code' && s.measurementId === '{{Meta Pixel ID}}' && s.trigger.kind === 'pageview'));
+const metaLead = metaOnly.find((s) => s.eventName === 'Lead');
+check('meta: a contact form → Meta "Lead" pixel, pixel id = {{Meta Pixel ID}}, no event params', !!metaLead && metaLead.measurementId === '{{Meta Pixel ID}}' && metaLead.trigger.kind === 'form_submit' && !metaLead.eventParameters);
+check('meta: default (no platforms) is unchanged — GA4 only, no meta_pixel', buildSuggestions(metaInput, { full: true }).every((s) => s.platform !== 'meta_pixel') && buildSuggestions(metaInput, { full: true }).some((s) => s.platform === 'ga4_event' || s.platform === 'google_tag'));
+// both: GA4 + Meta, Meta counterpart reuses the SAME trigger.name as its GA4 source.
+const both = buildSuggestions(metaInput, { full: true, platforms: ['ga4', 'meta'] });
+const ga4Lead = both.find((s) => s.platform === 'ga4_event' && s.eventName === 'contact_form');
+const bothMetaLead = both.find((s) => s.platform === 'meta_pixel' && s.eventName === 'Lead');
+check('meta: platforms:[ga4,meta] returns BOTH the GA4 and the Meta form tags', !!ga4Lead && !!bothMetaLead);
+check('meta: the Meta counterpart REUSES the GA4 source trigger name (shared trigger on create)', ga4Lead!.trigger.name === bothMetaLead!.trigger.name && bothMetaLead!.trigger.name === 'Contact Form Trigger');
+check('meta: the GA4 base tag + its Meta base pixel share the "All Pages" trigger', both.some((s) => s.platform === 'google_tag' && s.trigger.name === 'All Pages') && both.some((s) => s.platform === 'meta_pixel' && s.eventName === 'PageView' && s.trigger.name === 'All Pages'));
+// Event keyword mapping (derived from the GA4 event name): an "Add to Cart" CTA → Meta AddToCart; a
+// generic outbound click → null (skipped, no Meta counterpart).
+const metaEvents = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/', kind: 'cta', text: 'Add to Cart', intent: 'add_to_cart' }, // event add_to_cart_click → Meta AddToCart
+  { page: '/blog', kind: 'outbound', text: 'partner', href: 'https://partner.com' }, // generic click → no meta
+] }, { platforms: ['meta'] });
+check('meta: an "Add to Cart" CTA → Meta "AddToCart"; a generic outbound click yields NO meta counterpart', metaEvents.some((s) => s.eventName === 'AddToCart') && !metaEvents.some((s) => s.eventName === 'outbound_click') && metaEvents.every((s) => s.platform === 'meta_pixel'));
+
+// ── eCommerce funnel suggestions (websiteType-gated) ─────────────────────────
+{
+  const ECOM_EVENTS = ['view_item', 'view_item_list', 'add_to_cart', 'remove_from_cart', 'view_cart', 'begin_checkout', 'add_shipping_info', 'add_payment_info', 'purchase'];
+  // An ecommerce input emits ALL nine GA4 ecommerce funnel tags: custom_event triggers, NO event params.
+  const ecomInput: SuggestInput = { siteHost: 'shop.com', forms: [], elements: [], websiteType: 'ecommerce' };
+  const ecomGa4 = buildSuggestions(ecomInput);
+  for (const ev of ECOM_EVENTS) {
+    const t = ecomGa4.find((s) => s.platform === 'ga4_event' && s.eventName === ev);
+    check(`ecom: ecommerce input emits GA4 "${ev}" (custom_event, no params)`, !!t && t.trigger.kind === 'custom_event' && t.trigger.eventName === ev && !t.eventParameters);
+  }
+  check('ecom: all nine ecommerce GA4 tags are high-confidence and site-wide', ECOM_EVENTS.every((ev) => { const t = ecomGa4.find((s) => s.platform === 'ga4_event' && s.eventName === ev); return t?.confidence === 'high' && t?.page === 'site-wide'; }));
+
+  // A NON-ecommerce input emits NONE of them (byte-identical default behavior).
+  const nonEcom: SuggestInput = { siteHost: 'blog.com', forms: [], elements: [], websiteType: 'non_ecommerce' };
+  check('ecom: a non_ecommerce input emits NONE of the ecommerce events', buildSuggestions(nonEcom).every((s) => !ECOM_EVENTS.includes(s.eventName)));
+  // Undefined websiteType (older callers) is also treated as non-ecommerce (no ecommerce suggestions).
+  const noType: SuggestInput = { siteHost: 'blog.com', forms: [], elements: [] };
+  check('ecom: undefined websiteType emits NONE of the ecommerce events', buildSuggestions(noType).every((s) => !ECOM_EVENTS.includes(s.eventName)));
+
+  // With platforms:['ga4','meta'] the ecommerce GA4 tags get their Meta counterparts WITH ecommerce
+  // Object Properties from the dlv variables. Mapping: add_to_cart→AddToCart, purchase→Purchase,
+  // begin_checkout→InitiateCheckout, add_payment_info→AddPaymentInfo, view_item→ViewContent.
+  const ecomBoth = buildSuggestions(ecomInput, { platforms: ['ga4', 'meta'] });
+  const metaFor = (metaEvent: string) => ecomBoth.find((s) => s.platform === 'meta_pixel' && s.eventName === metaEvent);
+  // Only the safe 1:1 bindings value + currency — `contents` is intentionally NOT bound to the raw
+  // GA4 items array (Meta's contents needs a reshaped [{id,quantity,item_price}] shape).
+  const ecomMetaProps = [
+    { name: 'value', value: '{{dlv - ecommerce.value}}' },
+    { name: 'currency', value: '{{dlv - ecommerce.currency}}' },
+  ];
+  const propsMatch = (t: ReturnType<typeof buildSuggestions>[number] | undefined): boolean =>
+    !!t?.eventParameters && JSON.stringify(t.eventParameters) === JSON.stringify(ecomMetaProps);
+  check('ecom: add_to_cart → Meta AddToCart with ecommerce Object Properties (value/currency)', propsMatch(metaFor('AddToCart')));
+  check('ecom: purchase → Meta Purchase with ecommerce Object Properties', propsMatch(metaFor('Purchase')));
+  check('ecom: begin_checkout → Meta InitiateCheckout with ecommerce Object Properties', propsMatch(metaFor('InitiateCheckout')));
+  check('ecom: add_payment_info → Meta AddPaymentInfo with ecommerce Object Properties', propsMatch(metaFor('AddPaymentInfo')));
+  check('ecom: view_item → Meta ViewContent with ecommerce Object Properties', propsMatch(metaFor('ViewContent')));
+  // remove_from_cart / view_cart / add_shipping_info have NO Meta standard event → no counterpart.
+  check('ecom: remove_from_cart / view_cart / add_shipping_info have NO Meta counterpart', !ecomBoth.some((s) => s.platform === 'meta_pixel' && /remove|viewcart|shipping/i.test(s.eventName)));
+  // A NON-ecommerce Meta event (a form Lead) must NOT gain value/currency Object Properties.
+  const leadInput: SuggestInput = { siteHost: 'a.com', forms: [{ page: '/contact', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'lead-form' }], elements: [] };
+  const leadMeta = buildSuggestions(leadInput, { platforms: ['meta'] }).find((s) => s.eventName === 'Lead');
+  check('ecom: a form Lead Meta tag has NO ecommerce Object Properties (undefined eventParameters)', !!leadMeta && !leadMeta.eventParameters);
+}
+
 console.log(`\nTag-suggest: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

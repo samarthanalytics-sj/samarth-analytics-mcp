@@ -2,7 +2,7 @@
  * Element collector — pure classifier + assembler tests (no browser).
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/collect.node.test.ts
  */
-import { classifyElement, classifyPageElements, classifyCtaIntent, isStyledButton, buildSuggestInput, type RawElement, type PageScan } from '../collect.js';
+import { classifyElement, classifyPageElements, classifyCtaIntent, isStyledButton, buildSuggestInput, detectEcommerceSignals, type RawElement, type PageScan } from '../collect.js';
 import { buildSuggestions } from '../suggest.js';
 import type { PageSignals } from '../types.js';
 
@@ -190,6 +190,59 @@ check('social: internal "discord.acme.com" subdomain → null (internal nav)', c
   check('video: → a youtube_video suggestion end-to-end', buildSuggestions(vinput).some((s) => s.trigger.kind === 'youtube_video'));
   const watchOnly: PageScan = { page: '/', signals: vsig(['https://www.youtube.com/watch?v=x', 'https://maps.google.com/embed?pb=1']), forms: [], elements: [] };
   check('video: a youtube WATCH link (not /embed/) and a non-YT iframe are NOT video embeds', (buildSuggestInput([watchOnly], 'acme.com').videoEmbeds ?? []).length === 0);
+}
+
+// ── eCommerce auto-detection ─────────────────────────────────────────────────
+{
+  const ecomSig = (o: Partial<PageSignals>): PageSignals => ({ scriptSrcs: [], classNames: [], selectorsPresent: [], ...o });
+  const shopPage = (over: Partial<PageScan> = {}): PageScan => ({ page: '/', elements: [], forms: [], signals: ecomSig({}), ...over });
+
+  // STRONG signals — any ONE ⇒ ecommerce.
+  const cartBtn: PageScan = { page: '/', elements: [{ page: '/', kind: 'cta', text: 'Add to cart', intent: 'add_to_cart' }], forms: [], signals: ecomSig({}) };
+  const cartRes = buildSuggestInput([cartBtn], 'shop.com');
+  check('ecom: an add_to_cart CTA element ⇒ ecommerce', cartRes.websiteType === 'ecommerce' && (cartRes.ecommerceEvidence ?? []).some((e) => /add to cart/i.test(e)));
+
+  const checkoutForm: PageScan = { page: '/checkout', elements: [], forms: [{ purpose: 'checkout', action: '/pay' }], signals: ecomSig({}) };
+  check('ecom: a checkout-purpose form ⇒ ecommerce', buildSuggestInput([checkoutForm], 'shop.com').websiteType === 'ecommerce');
+
+  const shopify: PageScan = shopPage({ signals: ecomSig({ scriptSrcs: ['https://cdn.shopify.com/s/files/x.js'] }) });
+  check('ecom: a Shopify platform script ⇒ ecommerce', buildSuggestInput([shopify], 'shop.com').websiteType === 'ecommerce');
+
+  const woo: PageScan = shopPage({ signals: ecomSig({ scriptSrcs: ['https://x.com/wp-content/plugins/woocommerce/assets/js/frontend.js'] }) });
+  check('ecom: a WooCommerce script ⇒ ecommerce', buildSuggestInput([woo], 'shop.com').websiteType === 'ecommerce');
+
+  // MEDIUM signals — a SINGLE medium category is NOT enough (conservative; a blog with a stray /shop link).
+  const oneMediumPath: PageScan = { page: '/shop', elements: [], forms: [], signals: ecomSig({}) };
+  check('ecom: a lone /shop path is NOT enough (single medium signal) → non_ecommerce', buildSuggestInput([oneMediumPath], 'blog.com').websiteType === 'non_ecommerce');
+
+  // TWO DISTINCT medium categories ⇒ ecommerce (e.g. a /products path + a price-like text).
+  const twoMedium: PageScan = { page: '/products', elements: [{ page: '/products', kind: 'cta', text: 'Only $29.99', intent: 'generic' }], forms: [], signals: ecomSig({}) };
+  check('ecom: two distinct medium categories (path + price) ⇒ ecommerce', buildSuggestInput([twoMedium], 'shop.com').websiteType === 'ecommerce');
+
+  // A payment script alone (one medium) is NOT enough — a donation/booking page uses Stripe too.
+  const stripeOnly: PageScan = shopPage({ signals: ecomSig({ scriptSrcs: ['https://js.stripe.com/v3/'] }) });
+  check('ecom: a lone Stripe payment script (single medium) → non_ecommerce', buildSuggestInput([stripeOnly], 'donate.org').websiteType === 'non_ecommerce');
+
+  // A single "Checkout" button (text "Checkout" + href "/checkout") must NOT self-satisfy two medium
+  // categories — "checkout" is a destination word covered by the path category, not a purchase ACTION,
+  // so ONE such element is a single signal → non_ecommerce (guards the path-via-href double-count).
+  const loneCheckoutBtn: PageScan = { page: '/', elements: [{ page: '/', kind: 'cta', text: 'Checkout', href: '/checkout', intent: 'generic' }], forms: [], signals: ecomSig({}) };
+  check('ecom: a lone "Checkout" button (text + href) is ONE signal → non_ecommerce', buildSuggestInput([loneCheckoutBtn], 'saas.com').websiteType === 'non_ecommerce');
+
+  // Plain blog — no signals at all → non_ecommerce with no evidence.
+  const blog: PageScan = { page: '/blog/my-post', elements: [{ page: '/blog/my-post', kind: 'outbound', text: 'source', href: 'https://ref.com' }], forms: [], signals: ecomSig({}) };
+  const blogRes = buildSuggestInput([blog], 'blog.com');
+  check('ecom: a plain blog → non_ecommerce, no evidence', blogRes.websiteType === 'non_ecommerce' && !(blogRes.ecommerceEvidence ?? []).length);
+
+  // Direct detectEcommerceSignals unit checks (evidence populated only when ecommerce).
+  check('ecom: detectEcommerceSignals returns evidence for a strong signal', (() => {
+    const r = detectEcommerceSignals([], [{ page: '/', kind: 'cta', text: 'Add to cart', intent: 'add_to_cart' }], [{ page: '/' }], []);
+    return r.isEcommerce && r.evidence.length > 0;
+  })());
+  check('ecom: detectEcommerceSignals is conservative — one medium ⇒ not ecommerce, empty evidence', (() => {
+    const r = detectEcommerceSignals([], [], [{ page: '/shop' }], []);
+    return !r.isEcommerce && r.evidence.length === 0;
+  })());
 }
 
 console.log(`\nTag-collect: ${passed} passed, ${failed} failed`);

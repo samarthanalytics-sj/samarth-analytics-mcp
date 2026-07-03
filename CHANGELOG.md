@@ -1,3 +1,37 @@
+## [1.154.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.153.0...v1.154.0) (2026-07-03)
+
+### Features
+
+* **desktop:** detect eCommerce sites and suggest ecommerce funnel tags ([fe617a4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fe617a49c22d1fa08da23b0bd2eb4231e8ed912d))
+
+## [1.153.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.152.0...v1.153.0) (2026-07-03)
+
+### Features
+
+* **desktop:** choose GA4 / Meta / Both before a Tag Suggestions scan ([edc9c32](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/edc9c3275fd8f350709f49c25814bb0c3c911893))
+
+## [1.152.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.151.0...v1.152.0) (2026-07-03)
+
+### Features
+
+* **desktop:** show a timestamp under each chat message ([3b1ef09](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3b1ef09aeece597d87463ed163beefb0649b0abf))
+
+## [1.151.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.150.0...v1.151.0) (2026-07-03)
+
+### Features
+
+* **desktop:** Pinterest Conversions API server tag ([0a66fc1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0a66fc1c0aa7678dbf2447d5d6a916964b34e5e9))
+
+## [1.150.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.149.0...v1.150.0) (2026-07-03)
+
+### Features
+
+* **desktop:** auto-fill default event parameters on GA4 web event tags ([b343f18](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b343f18021545d6a2d69b073abc16b45780a9bc3))
+
+### Bug Fixes
+
+* **desktop:** rename "orphaned trigger" to "unused trigger" in the container audit ([e946e24](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e946e242efb1d5bd2e228e595d52d83a0c56d10b))
+
 ## [1.149.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.148.0...v1.149.0) (2026-07-03)
 
 ### Features

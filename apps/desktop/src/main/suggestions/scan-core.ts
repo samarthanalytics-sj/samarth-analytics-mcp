@@ -20,7 +20,7 @@ import {
   type PageScan,
   type PageScanRaw,
 } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
-import { buildSuggestions } from '../../../../web-audit-mcp/src/agent/tag-suggest/suggest.js';
+import { buildSuggestions, toMetaSuggestion } from '../../../../web-audit-mcp/src/agent/tag-suggest/suggest.js';
 import { analyzeForms, type RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import type { SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
@@ -52,6 +52,9 @@ export interface ScanOptions {
   maxPages?: number;
   /** Link depth from the start URL (default 2, hard cap 4). */
   maxDepth?: number;
+  /** Which ad platforms to generate tags for (default ['ga4']). 'meta' adds Meta
+   *  (Facebook) Pixel tags derived from the GA4 ones (sharing each trigger). */
+  platforms?: Array<'ga4' | 'meta'>;
 }
 
 /** Streamed after every page is scanned — the RUNNING (full) suggestion list so the
@@ -69,8 +72,8 @@ export interface ScanProgress {
 export type OnScanProgress = (p: ScanProgress) => void;
 
 /** The complete (full-mode) suggestion list from the pages scanned so far. */
-function runningSuggestions(pageScans: PageScan[], siteHost: string): SuggestedTag[] {
-  return buildSuggestions(buildSuggestInput(pageScans, siteHost), { full: true });
+function runningSuggestions(pageScans: PageScan[], siteHost: string, platforms: Array<'ga4' | 'meta'> = ['ga4']): SuggestedTag[] {
+  return buildSuggestions(buildSuggestInput(pageScans, siteHost), { full: true, platforms });
 }
 
 const clamp = (v: number | undefined, dflt: number, cap: number): number =>
@@ -298,15 +301,25 @@ export function assembleResult(
   warnings: string[],
   opened: number,
   extra: SuggestedTag[] = [],
+  platforms: Array<'ga4' | 'meta'> = ['ga4'],
 ): TagScanResult {
   const input = buildSuggestInput(pageScans, siteHost);
   // full: include the GA4 Configuration base tag + the All-form / All-PDF catch-alls
   // so the review list is the COMPLETE set of creatable tags, not only scan-derived.
-  const scanned: SuggestedTag[] = buildSuggestions(input, { full: true });
+  // platforms selects GA4 and/or the derived Meta (Facebook) Pixel counterparts.
+  const scanned: SuggestedTag[] = buildSuggestions(input, { full: true, platforms });
   const seen = new Set(scanned.map(suggestionKey));
-  // Merge AI-derived `extra`: drop exact-key dupes, semantic dupes of an engine tag (same global
-  // event, or a CTA the engine already fires on), and unsafe unscoped all-clicks suggestions.
-  const merged = [...scanned, ...extra.filter((s) => !seen.has(suggestionKey(s)) && !dropAiSuggestion(s, scanned))];
+  // The AI-derived `extra` are GA4 tags — subject them to the SAME platform selection as the engine
+  // suggestions: keep the GA4 ones only when 'ga4' is chosen, and derive Meta counterparts (sharing
+  // each trigger, like the engine path) when 'meta' is chosen. Without this, an AI scan with Meta-only
+  // selected would leak GA4 tags, and "Both" would give AI-discovered elements no Meta counterpart.
+  const extraForPlatforms: SuggestedTag[] = [
+    ...(platforms.includes('ga4') ? extra : []),
+    ...(platforms.includes('meta') ? extra.map(toMetaSuggestion).filter((s): s is SuggestedTag => s !== null) : []),
+  ];
+  // Merge the (platform-filtered) `extra`: drop exact-key dupes, semantic dupes of an engine tag (same
+  // global event, or a CTA the engine already fires on), and unsafe unscoped all-clicks suggestions.
+  const merged = [...scanned, ...extraForPlatforms.filter((s) => !seen.has(suggestionKey(s)) && !dropAiSuggestion(s, scanned))];
   // Final safety net: NEVER emit two suggestions that would create the SAME GTM tag. Keep the first.
   const suggestions = dedupSuggestions(merged);
   const byConfidence = { high: 0, medium: 0, low: 0 };
@@ -334,6 +347,11 @@ export function assembleResult(
       byConfidence,
       enhancedMeasurementOverlap: em,
       newTracking: suggestions.length - em,
+      // Auto-detected site type (from buildSuggestInput) — drives the UI badge + the ecommerce suggestions.
+      // Only when at least one page actually loaded: a failed/empty scan has no signals to judge, so it
+      // stays undefined (no misleading "Non-eCommerce site" badge on a scan that never reached the site).
+      ...(pageScans.length > 0 && input.websiteType ? { websiteType: input.websiteType } : {}),
+      ...(pageScans.length > 0 && input.ecommerceEvidence?.length ? { ecommerceEvidence: input.ecommerceEvidence } : {}),
     },
     suggestions,
     pages: pageScans.map((p) => ({ page: p.page, forms: p.forms.length, elements: p.elements.length })),
@@ -362,6 +380,7 @@ export async function crawlAndSuggest(
 ): Promise<TagScanResult> {
   const maxPages = clamp(opts.maxPages, 10, 50);
   const maxDepth = clamp(opts.maxDepth, 2, 4);
+  const platforms = opts.platforms ?? ['ga4'];
 
   const warnings: string[] = [];
   const start = normalizeUrl(startUrl, startUrl);
@@ -415,7 +434,7 @@ export async function crawlAndSuggest(
       // Stream the running list so the review panel fills in as the crawl proceeds.
       if (onProgress) {
         try {
-          onProgress({ scanned: pageScans.length, opened, queued: queue.length, suggestions: runningSuggestions(pageScans, siteHost) });
+          onProgress({ scanned: pageScans.length, opened, queued: queue.length, suggestions: runningSuggestions(pageScans, siteHost, platforms) });
         } catch {
           /* a progress sink error must never abort the crawl */
         }
@@ -428,7 +447,7 @@ export async function crawlAndSuggest(
   if (queue.length > 0) {
     warnings.push(`${queue.length} more same-site page(s) were discovered but not scanned (page budget ${maxPages}).`);
   }
-  return assembleResult(start, siteHost, pageScans, notScanned, warnings, opened);
+  return assembleResult(start, siteHost, pageScans, notScanned, warnings, opened, [], platforms);
 }
 
 /** Max pages a single "scan selected" run will deep-scan. */
@@ -438,7 +457,14 @@ export const SCAN_URLS_CAP = 60;
  * Deep-scan a SPECIFIC list of URLs (no BFS) — used after the discover step,
  * where the user picked which pages to scan. READ-ONLY.
  */
-export async function scanUrls(driver: PageDriver, urls: string[], siteHostHint?: string, onProgress?: OnScanProgress): Promise<TagScanResult> {
+export async function scanUrls(
+  driver: PageDriver,
+  urls: string[],
+  siteHostHint?: string,
+  onProgress?: OnScanProgress,
+  opts: { platforms?: Array<'ga4' | 'meta'> } = {},
+): Promise<TagScanResult> {
+  const platforms = opts.platforms ?? ['ga4'];
   const list = urls.filter(Boolean);
   const start = list[0] ? normalizeUrl(list[0], list[0]) : null;
   let siteHost = siteHostHint ?? '';
@@ -479,7 +505,7 @@ export async function scanUrls(driver: PageDriver, urls: string[], siteHostHint?
       pageScans.push(r.page);
       if (onProgress) {
         try {
-          onProgress({ scanned: pageScans.length, opened, queued: targets.length - opened, suggestions: runningSuggestions(pageScans, siteHost) });
+          onProgress({ scanned: pageScans.length, opened, queued: targets.length - opened, suggestions: runningSuggestions(pageScans, siteHost, platforms) });
         } catch {
           /* a progress sink error must never abort the scan */
         }
@@ -488,5 +514,5 @@ export async function scanUrls(driver: PageDriver, urls: string[], siteHostHint?
   } finally {
     await driver.close();
   }
-  return assembleResult(start ?? list[0] ?? '', siteHost, pageScans, notScanned, warnings, opened);
+  return assembleResult(start ?? list[0] ?? '', siteHost, pageScans, notScanned, warnings, opened, [], platforms);
 }

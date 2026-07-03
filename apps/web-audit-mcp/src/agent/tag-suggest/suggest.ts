@@ -672,6 +672,57 @@ function videoSuggestion(embeds: VideoEmbed[]): SuggestedTag | null {
   };
 }
 
+// ── eCommerce funnel suggestions (only when the site is detected as a store) ──
+// The GA4 recommended ecommerce funnel, in funnel order. Each becomes a GA4 event tag with NO event
+// parameters, so buildGa4EventTag auto-enables "Send Ecommerce data" (getEcommerceDataFrom=dataLayer)
+// — GA4 reads value/currency/items from the dataLayer ecommerce object the site pushes. They fire on a
+// Custom Event trigger matching the same dataLayer event name (view_item / add_to_cart / purchase / …).
+const ECOMMERCE_EVENTS = [
+  'view_item', 'view_item_list', 'add_to_cart', 'remove_from_cart', 'view_cart',
+  'begin_checkout', 'add_shipping_info', 'add_payment_info', 'purchase',
+] as const;
+// A human label per ecommerce event, for the tag/trigger name ("GA4 - Event - Add To Cart (Ecommerce) …").
+const ECOMMERCE_EVENT_LABEL: Record<string, string> = {
+  view_item: 'View Item',
+  view_item_list: 'View Item List',
+  add_to_cart: 'Add To Cart',
+  remove_from_cart: 'Remove From Cart',
+  view_cart: 'View Cart',
+  begin_checkout: 'Begin Checkout',
+  add_shipping_info: 'Add Shipping Info',
+  add_payment_info: 'Add Payment Info',
+  purchase: 'Purchase',
+};
+
+/** The GA4 ecommerce funnel event tags — emitted only for a detected ecommerce site (else []). Each
+ *  tag has NO eventParameters so the create flow turns on "Send Ecommerce data" (the whole dataLayer
+ *  ecommerce object → items/value/currency), and fires on a Custom Event trigger matching its dataLayer
+ *  event name. These flow through the SAME dedup/rank AND the SAME Meta derivation as every other
+ *  suggestion, so their Meta counterparts come for free. PURE. */
+export function ecommerceSuggestions(isEcommerce: boolean): SuggestedTag[] {
+  if (!isEcommerce) return [];
+  return ECOMMERCE_EVENTS.map((event) => {
+    const human = ECOMMERCE_EVENT_LABEL[event];
+    return {
+      id: hashId(`ecommerce|${event}`),
+      // These fire on the dataLayer event regardless of page, so they are site-wide.
+      page: 'site-wide',
+      label: `Ecommerce ${human} → GA4 "${event}"`,
+      evidence: `detected ecommerce site — GA4 ${event} funnel event`,
+      note: `Fires on a "${event}" Custom Event. Have the store push dataLayer.push({event:"${event}", ecommerce:{items:[…], value:…, currency:"…"${event === 'purchase' ? ', transaction_id:"…"' : ''}}}) — this tag has "Send Ecommerce data" ON, so GA4 reads items/value/currency straight from that ecommerce object.`,
+      confidence: 'high',
+      enhancedMeasurementOverlap: false,
+      platform: 'ga4_event',
+      // NO eventParameters → buildGa4EventTag auto-enables Send Ecommerce data (dataLayer object).
+      tagName: `GA4 - Event - ${human} (Ecommerce) Tag`,
+      measurementId: GA4_VAR,
+      eventName: event,
+      // Custom Event trigger matching the dataLayer event name (name uses a stable "(dataLayer)" suffix).
+      trigger: { name: `${human} (dataLayer) Trigger`, kind: 'custom_event', eventName: event },
+    };
+  });
+}
+
 // ── Always-/conditionally-offered tags (independent of which exact elements were
 //    found) — only emitted in `full` mode so the existing scan output is unchanged.
 
@@ -810,9 +861,105 @@ function extractFaqGroups(elements: DetectedElement[]): { faqTags: SuggestedTag[
   return { faqTags: [faqTagFor(grouped)], consumed };
 }
 
+// ── Meta (Facebook) Pixel suggestions ────────────────────────────────────────
+// Meta suggestions are DERIVED from the GA4 ones so a Meta tag REUSES its GA4 source's trigger name —
+// on create, the shared trigger create/reuse-by-name path attaches one trigger to both (GA4 + Meta).
+// A Meta suggestion reuses the SuggestedTag fields exactly like GA4: `measurementId` holds the Meta
+// Pixel ID (default {{Meta Pixel ID}}), `eventName` is the Meta event, no eventParameters.
+const META_PIXEL_VAR = '{{Meta Pixel ID}}';
+
+// The Meta standard events that are ECOMMERCE — their Object Properties are sourced from the ecommerce
+// dataLayer variables (value/currency/items) so the Meta tag ships with its conversion value. Non-
+// ecommerce Meta events (Lead/Contact/Subscribe/CompleteRegistration/PageView) get NO eventParameters,
+// so a form Lead is never mislabelled with a value/currency it doesn't have.
+const ECOMMERCE_META_EVENTS = new Set(['ViewContent', 'AddToCart', 'InitiateCheckout', 'AddPaymentInfo', 'Purchase', 'AddToWishlist']);
+// The Meta Object Properties for an ecommerce event — ONLY the safe 1:1 bindings value + currency
+// (from the `dlv - ecommerce.*` variables the create flow provisions). content_ids/contents are
+// intentionally omitted: Meta's `contents` expects [{id, quantity, item_price}] but the GA4 dataLayer
+// ecommerce.items array is [{item_id, item_name, price, quantity}], so a raw {{dlv - ecommerce.items}}
+// would send malformed data (this mirrors the repo's META_WEB_OBJECT_PROP_BINDING decision). The user
+// wires content_ids/contents themselves once the items array is reshaped.
+const ECOMMERCE_META_OBJECT_PROPS: Array<{ name: string; value: string }> = [
+  { name: 'value', value: '{{dlv - ecommerce.value}}' },
+  { name: 'currency', value: '{{dlv - ecommerce.currency}}' },
+];
+
+/** Map a GA4 SuggestedTag to its Meta (Facebook) Pixel counterpart, or null when there is no sensible
+ *  Meta event (generic outbound/social/video/faq/learn-more clicks). PURE. The base google_tag becomes
+ *  the Meta base PageView pixel; a ga4_event picks the Meta standard/custom event from the GA4 event
+ *  name by normalized keyword (forms with no keyword default to Lead). */
+export function toMetaSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  const clone = { ...ga4 };
+  if (ga4.platform === 'google_tag') {
+    // The GA4 base (Google tag) → the Meta BASE pixel: PageView on all pages, no object properties.
+    return {
+      ...clone,
+      platform: 'meta_pixel',
+      eventName: 'PageView',
+      measurementId: META_PIXEL_VAR,
+      tagName: 'Meta Pixel - Base Code',
+      tagId: undefined,
+      configSettings: undefined,
+      eventParameters: undefined,
+      eventParamLookups: undefined,
+      enhancedMeasurementOverlap: false,
+      id: 'meta-' + ga4.id,
+      label: 'Meta Pixel base code (PageView on all pages)',
+      trigger: ga4.trigger,
+    };
+  }
+  // ga4_event → pick the Meta event from the GA4 event name by normalized keyword.
+  const key = ga4.eventName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  let metaEvent: string | null = null;
+  if (key.includes('purchase')) metaEvent = 'Purchase';
+  // add_payment_info → AddPaymentInfo — MUST be checked before the generic add/cart branch so it
+  // doesn't accidentally fall through (it has no 'cart' token, but keep it explicit and first).
+  else if (key.includes('paymentinfo') || key.includes('addpaymentinfo')) metaEvent = 'AddPaymentInfo';
+  else if (key.includes('wishlist')) metaEvent = 'AddToWishlist';
+  else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) metaEvent = 'AddToCart';
+  else if (key.includes('checkout') || key.includes('initiatecheckout')) metaEvent = 'InitiateCheckout';
+  else if (key.includes('viewitem') || key.includes('viewcontent')) metaEvent = 'ViewContent';
+  else if (key.includes('search')) metaEvent = 'Search';
+  else if (key.includes('subscribe') || key.includes('newsletter')) metaEvent = 'Subscribe';
+  else if (key.includes('signup') || key.includes('register')) metaEvent = 'CompleteRegistration';
+  else if (key.includes('lead') || key.includes('contact') || key.includes('quote') || key.includes('demo') || key.includes('getstarted')) metaEvent = 'Lead';
+  else if (key.includes('email')) metaEvent = 'Contact';
+  else if (key.includes('phone') || key.includes('call')) metaEvent = 'Contact';
+  else if (key.includes('download')) metaEvent = 'Download';
+  else if (ga4.trigger.kind === 'form_submit') metaEvent = 'Lead'; // forms default to Lead
+  else return null; // no Meta counterpart — skip generic clicks (outbound/social/video/faq/learn_more)
+  // ECOMMERCE Meta events carry Object Properties sourced from the ecommerce dlv variables (value/
+  // currency/contents); every other Meta event keeps eventParameters undefined (a form Lead must NOT
+  // gain a value/currency it doesn't have).
+  const eventParameters = ECOMMERCE_META_EVENTS.has(metaEvent) ? ECOMMERCE_META_OBJECT_PROPS : undefined;
+  return {
+    ...clone,
+    platform: 'meta_pixel',
+    eventName: metaEvent,
+    measurementId: META_PIXEL_VAR,
+    tagName: 'Meta - ' + metaEvent + ' - ' + ga4.tagName.replace(/^GA4 - (Event - )?/, ''),
+    id: 'meta-' + ga4.id,
+    label: 'Meta ' + metaEvent + ': ' + ga4.label,
+    evidence: ga4.evidence,
+    note: ga4.note,
+    enhancedMeasurementOverlap: false,
+    eventParameters,
+    eventParamLookups: undefined,
+    tagId: undefined,
+    configSettings: undefined,
+    trigger: ga4.trigger,
+  };
+}
+
 /** opts.full prepends the GA4 Configuration tag (always) so the review list is the COMPLETE set of
- *  creatable tags — not only the scan-derived ones. */
-export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } = {}): SuggestedTag[] {
+ *  creatable tags — not only the scan-derived ones. opts.platforms (default ['ga4']) selects which
+ *  platforms to emit: 'ga4' returns the GA4 tags; 'meta' returns their Meta Pixel counterparts (derived
+ *  from the GA4 tags so the trigger name is SHARED). 'meta' only computes GA4 internally but does not
+ *  return them. */
+export function buildSuggestions(
+  input: SuggestInput,
+  opts: { full?: boolean; platforms?: Array<'ga4' | 'meta'> } = {},
+): SuggestedTag[] {
   const scopeCtx = nonUniqueFormScopes(input.forms);
   // Social trigger fires on ONLY the exact domains scraped from the site's links.
   const presentDomains = new Set(
@@ -827,6 +974,9 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
     ...faqTags,
     ...input.elements.filter((e) => !consumed.has(e)).map((e) => elementSuggestion(e, socialPattern)),
     videoSuggestion(input.videoEmbeds ?? []),
+    // eCommerce funnel event tags — only for a detected store. They flow through the SAME dedup/rank
+    // AND the SAME Meta derivation (toMetaSuggestion) below, so their Meta counterparts come for free.
+    ...ecommerceSuggestions(input.websiteType === 'ecommerce'),
   ].filter((x): x is SuggestedTag => x !== null);
 
   // Site-wide dedup: the same tag (event + trigger filter + kind) seen on multiple
@@ -853,7 +1003,17 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
       Number(a.enhancedMeasurementOverlap) - Number(b.enhancedMeasurementOverlap) ||
       a.label.localeCompare(b.label)
   );
-  if (!opts.full) return ranked;
-  // COMPLETE list: prepend the GA4 Configuration base tag (always), above the scan-derived tags.
-  return [ga4ConfigSuggestion(), ...ranked];
+  // The GA4 list (the base Google tag is prepended only in full mode).
+  const ga4Suggestions = opts.full ? [ga4ConfigSuggestion(), ...ranked] : ranked;
+
+  // Which platforms to emit (default GA4 only, so existing callers are unchanged). Meta counterparts
+  // are DERIVED from the GA4 list so each Meta tag reuses its GA4 source's trigger name (one shared
+  // trigger on create). 'meta' alone computes GA4 internally but returns only the Meta tags.
+  const platforms = opts.platforms ?? ['ga4'];
+  const out: SuggestedTag[] = [];
+  if (platforms.includes('ga4')) out.push(...ga4Suggestions);
+  if (platforms.includes('meta')) {
+    out.push(...ga4Suggestions.map(toMetaSuggestion).filter((x): x is SuggestedTag => x !== null));
+  }
+  return out;
 }

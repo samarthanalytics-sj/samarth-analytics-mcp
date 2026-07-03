@@ -78,6 +78,11 @@ check('group: google_tag → "Google Tag" tag type', gg.tagType === 'Google Tag'
 check('group: google_tag rows use configSettings (not eventParameters) as the params', gg.params.length === 1 && gg.params[0].name === 'send_page_view' && gg.params[0].variable === 'true');
 check('csv: google_tag block has Page View trigger + no when conditions', gg.triggerType === 'Page View' && gg.whens.length === 0);
 
+// ── a Meta (Facebook) Pixel tag: shows its tag name, the Meta event, and the trigger condition ──
+const metaPixel = base({ id: 'm', platform: 'meta_pixel', tagName: 'Meta - Lead - Contact Form Tag', eventName: 'Lead', measurementId: '{{Meta Pixel ID}}', trigger: { name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'lead-form', formIdOperator: 'equals' } });
+const mg = suggestionToGroup(metaPixel);
+check('group: meta_pixel → "Meta Pixel Tag" tag type, its Meta event, its trigger', mg.tagType === 'Meta Pixel Tag' && mg.eventName === 'Lead' && mg.tagName === 'Meta - Lead - Contact Form Tag' && mg.triggerType === 'Form Submission' && mg.whens[0]?.variable === '{{Form ID}}' && mg.whens[0]?.value === 'lead-form');
+
 // ── CSV layout ───────────────────────────────────────────────────────────────
 const csv = suggestionsToTemplateCsv([phone]);
 const rows = csv.split('\r\n');

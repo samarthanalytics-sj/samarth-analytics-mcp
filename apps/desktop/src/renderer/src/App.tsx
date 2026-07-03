@@ -793,6 +793,19 @@ interface ChatMessage {
   tools?: string[];
   /** Tool failures surfaced in the UI even if the model doesn't mention them. */
   toolErrors?: Array<{ name: string; error: string }>;
+  /** Epoch ms when the message was created (a query's send time / a reply's start time).
+   *  Optional — messages stored before this field existed simply render without a timestamp. */
+  ts?: number;
+}
+
+/** Short timestamp shown under a chat bubble: just the time for today's messages, date + time
+ *  for older ones (the full date/time is on the element's hover title). */
+function formatMsgTime(ts: number): string {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString()
+    ? time
+    : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
 }
 
 // Per-account + per-container chat persistence (survives tab switches AND app restarts).
@@ -899,7 +912,8 @@ function ChatView({
     if (!text || busy) return;
     onError('');
     const history: ChatTurn[] = messages.map((m) => ({ role: m.role, text: m.text }));
-    setMessages((m) => [...m, { role: 'user', text }, { role: 'assistant', text: '', tools: [] }]);
+    const now = Date.now();
+    setMessages((m) => [...m, { role: 'user', text, ts: now }, { role: 'assistant', text: '', tools: [], ts: now }]);
     setInput('');
     setBusy(true);
     setRevertable(null);
@@ -952,7 +966,7 @@ function ChatView({
       const res = await window.desktop.data.revertLastChange();
       const parts = [`Reverted ${res.reverted.length} item(s)`];
       if (res.failed.length) parts.push(`${res.failed.length} failed: ${res.failed.map((f) => f.label).join(', ')}`);
-      setMessages((m) => [...m, { role: 'assistant', text: `↩︎ ${parts.join(' · ')}.`, tools: [] }]);
+      setMessages((m) => [...m, { role: 'assistant', text: `↩︎ ${parts.join(' · ')}.`, tools: [], ts: Date.now() }]);
       setRevertable(null);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -1005,22 +1019,38 @@ function ChatView({
           </div>
         )}
         {messages.map((m, i) => (
-          <div key={i} style={m.role === 'user' ? styles.userMsg : styles.asstMsg}>
-            {m.role === 'assistant' ? (
-              <>
-                {m.text ? <Markdown text={m.text} /> : m.toolErrors?.length ? null : <span style={{ opacity: 0.6 }}>…</span>}
-                {m.toolErrors?.length ? (
-                  <div style={styles.toolErrors}>
-                    {m.toolErrors.map((te, j) => (
-                      <div key={j} style={styles.toolErrorLine}>
-                        ⚠️ <strong>{te.name}</strong> failed — {te.error}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </>
-            ) : (
-              <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              maxWidth: '75%',
+              alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+              alignItems: m.role === 'user' ? 'flex-end' : 'flex-start',
+            }}
+          >
+            <div style={{ ...(m.role === 'user' ? styles.userMsg : styles.asstMsg), maxWidth: '100%' }}>
+              {m.role === 'assistant' ? (
+                <>
+                  {m.text ? <Markdown text={m.text} /> : m.toolErrors?.length ? null : <span style={{ opacity: 0.6 }}>…</span>}
+                  {m.toolErrors?.length ? (
+                    <div style={styles.toolErrors}>
+                      {m.toolErrors.map((te, j) => (
+                        <div key={j} style={styles.toolErrorLine}>
+                          ⚠️ <strong>{te.name}</strong> failed — {te.error}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
+              )}
+            </div>
+            {m.ts != null && (
+              <div style={styles.msgTime} title={new Date(m.ts).toLocaleString()}>
+                {formatMsgTime(m.ts)}
+              </div>
             )}
           </div>
         ))}
@@ -1308,6 +1338,7 @@ function SuggestionTemplateTable({
         <thead>
           <tr>
             <th style={tplStyles.selTh} title="Tick to create this tag in GTM">✓</th>
+            <th style={tplStyles.th} title="The page this suggestion was found on">Page</th>
             {TEMPLATE_HEADERS.map((h) => <th key={h} style={tplStyles.th}>{h}</th>)}
           </tr>
         </thead>
@@ -1348,6 +1379,11 @@ function SuggestionTemplateTable({
                           {st?.state === 'err' && <div style={{ color: 'var(--c-red)', fontSize: 10, marginTop: 2 }} title={st?.msg}>✗ failed</div>}
                         </>
                       )}
+                    </td>
+                  )}
+                  {first && (
+                    <td rowSpan={g.rowCount} style={{ ...tplStyles.td, color: 'var(--text-dim)', whiteSpace: 'nowrap' }} title={`Found on ${s.page}`}>
+                      {s.page}
                     </td>
                   )}
                   {first && <td rowSpan={g.rowCount} style={tplStyles.tdTag}>{g.tagType}</td>}
@@ -1790,6 +1826,10 @@ function TagReviewPanel({
   const [settleMs, setSettleMs] = useState('2500');
   const [settleAuto, setSettleAuto] = useState(true);
   const effSettleMs = (): number | undefined => (settleAuto ? undefined : Number(settleMs) || undefined);
+  // Pre-scan platform choice: which ad platforms to generate tags for. GA4 only (default), Meta
+  // (Facebook) Pixel only, or both. Meta tags are derived from the GA4 ones so each shares one trigger.
+  const [platformChoice, setPlatformChoice] = useState<'ga4' | 'meta' | 'both'>('ga4');
+  const platforms: Array<'ga4' | 'meta'> = platformChoice === 'both' ? ['ga4', 'meta'] : [platformChoice];
   const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned']; inventory: TagScanResult['inventory']; installed: TagScanResult['installed'] } | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [discovering, setDiscovering] = useState(false);
@@ -1875,7 +1915,7 @@ function TagReviewPanel({
     setDiscovered(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
-      applyScanResult(await window.desktop.tags.scanUrlsStream([target], { settleMs: effSettleMs() }, onScanProgress));
+      applyScanResult(await window.desktop.tags.scanUrlsStream([target], { settleMs: effSettleMs(), platforms }, onScanProgress));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1897,7 +1937,7 @@ function TagReviewPanel({
     setDiscovered(null);
     loadSuggestions([]);
     try {
-      applyScanResult(await window.desktop.tags.aiScan(target, { settleMs: effSettleMs() }));
+      applyScanResult(await window.desktop.tags.aiScan(target, { settleMs: effSettleMs(), platforms }));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1940,7 +1980,7 @@ function TagReviewPanel({
     setScanProgress(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
-      applyScanResult(await window.desktop.tags.scanUrlsStream(urls, { settleMs: effSettleMs() }, onScanProgress));
+      applyScanResult(await window.desktop.tags.scanUrlsStream(urls, { settleMs: effSettleMs(), platforms }, onScanProgress));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1958,7 +1998,7 @@ function TagReviewPanel({
     setScanProgress(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
-      applyScanResult(await window.desktop.tags.scanStream(target, { maxPages: 25, maxDepth: 2, settleMs: effSettleMs() }, onScanProgress));
+      applyScanResult(await window.desktop.tags.scanStream(target, { maxPages: 25, maxDepth: 2, settleMs: effSettleMs(), platforms }, onScanProgress));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -2006,7 +2046,7 @@ function TagReviewPanel({
     setDiscovered(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
-      applyScanResult(await window.desktop.tags.scanUrlsStream(capped, { settleMs: effSettleMs() }, onScanProgress));
+      applyScanResult(await window.desktop.tags.scanUrlsStream(capped, { settleMs: effSettleMs(), platforms }, onScanProgress));
       if (capped.length < urls.length) setWarnings((w) => [`Only the first ${CSV_URL_CAP} of ${urls.length} URLs were scanned (CSV cap).`, ...w]);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -2267,6 +2307,24 @@ function TagReviewPanel({
             {discoverMode === 'ai' && <span style={styles.muted}>experimental · screenshots the page + reads it with OpenAI vision</span>}
             {discoverMode === 'csv' && <span style={styles.muted}>scan a list of landing-page URLs directly (no crawl)</span>}
           </div>
+          {/* Pre-scan platform choice: which ad platforms to generate tags for. */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={styles.muted}>Create tags for:</span>
+            {([
+              ['ga4', 'GA4'],
+              ['meta', 'Meta (Facebook)'],
+              ['both', 'Both GA4 & Meta'],
+            ] as const).map(([c, label]) => (
+              <button
+                key={c}
+                style={platformChoice === c ? styles.toggleOn : styles.toggleOff}
+                onClick={() => setPlatformChoice(c)}
+                disabled={scanning || discovering}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {discoverMode === 'csv' ? (
             <>
               <textarea
@@ -2457,6 +2515,12 @@ function TagReviewPanel({
             measurementId defaults to the <code style={mdStyles.code}>{'{{GA4 Measurement ID}}'}</code> variable — make
             sure it exists in this container, or edit a row to a real G-XXXX id.
           </div>
+          {platforms.includes('meta') && (
+            <div style={{ ...styles.muted, marginTop: 6 }}>
+              Meta tags use the <code style={mdStyles.code}>{'{{Meta Pixel ID}}'}</code> variable — set it in the
+              container (or edit the Pixel ID per row).
+            </div>
+          )}
         </div>
 
         {/* Warnings (scan or paste) */}
@@ -2612,6 +2676,17 @@ function TagReviewPanel({
                 {meta ? `${meta.pagesScanned} page(s) scanned · ` : ''}
                 {suggestions.length} suggestion(s) · {newCount} new, {emCount} already auto-tracked · {selectedIds.length}{' '}
                 selected
+                {meta?.websiteType === 'ecommerce' && (
+                  <span
+                    style={styles.ecomBadge}
+                    title={meta.ecommerceEvidence?.length ? `Detected from: ${meta.ecommerceEvidence.join(', ')}` : 'Detected as an online store'}
+                  >
+                    🛒 eCommerce site
+                  </span>
+                )}
+                {meta?.websiteType === 'non_ecommerce' && (
+                  <span style={styles.nonEcomBadge} title="No online-store signals detected">Non-eCommerce site</span>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                 {/* Selection controls apply to both Cards and Table views (shared `selected` state). */}
@@ -2753,11 +2828,11 @@ function TagReviewPanel({
 // Audit findings-filter values. Tag types use the bare GTM type string; everything else uses a
 // sentinel/prefix so the dropdown can span severity, issue type, auto-fixability, and the
 // trigger/variable cross-cuts without colliding with any GTM type.
-const ORPHAN_TRIGGER_FILTER = '__orphaned_triggers__';
+const UNUSED_TRIGGER_FILTER = '__unused_triggers__';
 const UNUSED_VAR_FILTER = '__unused_variables__';
 const FIXABLE_FILTER = '__fixable__';
 // Issue-type (finding.category) → friendly label, in display order. The "unused" category is split
-// into the granular Orphaned-triggers / Unused-variables quick filters instead of a generic entry.
+// into the granular Unused-triggers / Unused-variables quick filters instead of a generic entry.
 const AUDIT_CATEGORY_LABELS: Array<[string, string]> = [
   ['consent', 'Consent Mode'],
   ['security', 'Security'],
@@ -2778,7 +2853,7 @@ const AUDIT_SEVERITIES: Array<[string, string]> = [
 
 /** Human label for the active audit filter value — used in the "nothing matches" empty state. */
 function auditFilterLabel(v: string): string {
-  if (v === ORPHAN_TRIGGER_FILTER) return 'orphaned trigger';
+  if (v === UNUSED_TRIGGER_FILTER) return 'unused trigger';
   if (v === UNUSED_VAR_FILTER) return 'unused variable';
   if (v === FIXABLE_FILTER) return 'auto-fixable';
   if (v.startsWith('sev:')) return v.slice(4);
@@ -2813,7 +2888,7 @@ function ContainerAuditPanel({
   const [search, setSearch] = useState('');
   const [exporting, setExporting] = useState(false);
   const [exportNote, setExportNote] = useState('');
-  // Bulk-delete selection (orphaned triggers + unused variables), keyed by finding index, plus the
+  // Bulk-delete selection (unused triggers + unused variables), keyed by finding index, plus the
   // one-shot confirmation that gates a bulk delete (the captured index list to remove).
   const [selectedDel, setSelectedDel] = useState<Record<number, boolean>>({});
   const [delConfirm, setDelConfirm] = useState<{ indices: number[] } | null>(null);
@@ -2897,16 +2972,16 @@ function ContainerAuditPanel({
   const fixable = (report?.findings ?? []).filter((f) => f.autoFixable).length;
 
   // Findings filter. The dropdown lists every tag type present in the findings (with counts), plus an
-  // "Orphaned triggers" entry for the unused-trigger findings (which are about triggers, not a tag
+  // "Unused triggers" entry for the unused-trigger findings (which are about triggers, not a tag
   // type). When one is picked, both the list and the batch buttons scope to it.
   const typeCounts = new Map<string, number>();
   for (const f of findings) {
     if (f.resource?.kind === 'tag' && f.resource.type) typeCounts.set(f.resource.type, (typeCounts.get(f.resource.type) ?? 0) + 1);
   }
   const tagTypes = [...typeCounts.keys()].sort((a, b) => gtmTypeLabel(a).localeCompare(gtmTypeLabel(b)));
-  const isOrphanTrigger = (f: AuditFindingView): boolean => f.category === 'unused' && f.resource?.kind === 'trigger';
+  const isUnusedTrigger = (f: AuditFindingView): boolean => f.category === 'unused' && f.resource?.kind === 'trigger';
   const isUnusedVariable = (f: AuditFindingView): boolean => f.category === 'unused' && f.resource?.kind === 'variable';
-  const orphanCount = findings.filter(isOrphanTrigger).length;
+  const unusedTriggerCount = findings.filter(isUnusedTrigger).length;
   const unusedVarCount = findings.filter(isUnusedVariable).length;
   // Counts per severity + per issue-type (category) so each dropdown option shows how many it covers.
   const sevCounts = new Map<string, number>();
@@ -2932,7 +3007,7 @@ function ContainerAuditPanel({
       return false;
     }
     if (typeFilter === 'all') return true;
-    if (typeFilter === ORPHAN_TRIGGER_FILTER) return isOrphanTrigger(f);
+    if (typeFilter === UNUSED_TRIGGER_FILTER) return isUnusedTrigger(f);
     if (typeFilter === UNUSED_VAR_FILTER) return isUnusedVariable(f);
     if (typeFilter === FIXABLE_FILTER) return f.autoFixable;
     if (typeFilter.startsWith('sev:')) return f.severity === typeFilter.slice(4);
@@ -2963,8 +3038,8 @@ function ContainerAuditPanel({
   // Rows to render — keep each finding's ORIGINAL index so the per-row fix state still aligns.
   const visible = findings.map((f, i) => ({ f, i })).filter(({ f }) => typeMatches(f));
 
-  // ── Bulk delete (orphaned triggers + unused variables) ──────────────────────
-  // The audit's two destructive fixes — delete_gtm_trigger (orphaned triggers) and
+  // ── Bulk delete (unused triggers + unused variables) ──────────────────────
+  // The audit's two destructive fixes — delete_gtm_trigger (unused triggers) and
   // delete_gtm_variable (unused variables) — get selection checkboxes plus "Delete selected" /
   // "Delete all" buttons. Both scope to the current filter + search via `visible`, exactly like the
   // non-destructive batches. Single deletes keep their per-row two-click confirm; a bulk delete
@@ -2980,10 +3055,10 @@ function ContainerAuditPanel({
   const anyFixing = Object.values(fix).some((s) => s?.state === 'fixing');
   const delTriggerCount = (idxs: number[]): number => idxs.filter((i) => findings[i].fix?.tool === 'delete_gtm_trigger').length;
   const delVariableCount = (idxs: number[]): number => idxs.filter((i) => findings[i].fix?.tool === 'delete_gtm_variable').length;
-  // "X orphaned trigger(s) · Y unused variable(s)" — the kind breakdown for a set of delete targets.
+  // "X unused trigger(s) · Y unused variable(s)" — the kind breakdown for a set of delete targets.
   const delBreakdown = (idxs: number[]): string =>
     [
-      delTriggerCount(idxs) > 0 ? `${delTriggerCount(idxs)} orphaned trigger(s)` : '',
+      delTriggerCount(idxs) > 0 ? `${delTriggerCount(idxs)} unused trigger(s)` : '',
       delVariableCount(idxs) > 0 ? `${delVariableCount(idxs)} unused variable(s)` : '',
     ]
       .filter(Boolean)
@@ -3151,7 +3226,7 @@ function ContainerAuditPanel({
                     </option>
                   ))}
                   {fixable > 0 && <option value={FIXABLE_FILTER}>Auto-fixable ({fixable})</option>}
-                  {orphanCount > 0 && <option value={ORPHAN_TRIGGER_FILTER}>Orphaned triggers ({orphanCount})</option>}
+                  {unusedTriggerCount > 0 && <option value={UNUSED_TRIGGER_FILTER}>Unused triggers ({unusedTriggerCount})</option>}
                   {unusedVarCount > 0 && <option value={UNUSED_VAR_FILTER}>Unused variables ({unusedVarCount})</option>}
                   {tagTypes.map((t) => (
                     <option key={t} value={t}>
@@ -3236,7 +3311,7 @@ function ContainerAuditPanel({
                     ? canceling
                       ? `Stopping after the current fix… (${batchProgress?.done ?? 0}/${batchProgress?.total ?? 0})`
                       : `Applying ${batchProgress?.done ?? 0}/${batchProgress?.total ?? 0}… click Cancel to stop after the current fix.`
-                    : 'Non-destructive fixes only — bulk delete for orphaned triggers / unused variables is below; “No extra consent” skips ad pixels.'}
+                    : 'Non-destructive fixes only — bulk delete for unused triggers / variables is below; “No extra consent” skips ad pixels.'}
                 </span>
               </div>
             )}
@@ -3247,7 +3322,7 @@ function ContainerAuditPanel({
                   style={{ ...styles.dangerSolid, ...disabledStyle(applyingAll || anyFixing || selectedDelTargets.length === 0) }}
                   disabled={applyingAll || anyFixing || selectedDelTargets.length === 0}
                   onClick={() => setDelConfirm({ indices: selectedDelTargets })}
-                  title="Delete the checked orphaned triggers / unused variables — one confirmation, then each is removed from the draft workspace."
+                  title="Delete the checked unused triggers / variables — one confirmation, then each is removed from the draft workspace."
                 >
                   Delete selected ({selectedDelTargets.length})
                 </button>
@@ -3255,7 +3330,7 @@ function ContainerAuditPanel({
                   style={{ ...styles.dangerGhost, ...disabledStyle(applyingAll || anyFixing) }}
                   disabled={applyingAll || anyFixing}
                   onClick={() => setDelConfirm({ indices: deletableTargets })}
-                  title="Delete every orphaned trigger / unused variable matching the current filter + search (the rows shown below)."
+                  title="Delete every unused trigger / variable matching the current filter + search (the rows shown below)."
                 >
                   Delete all in view ({deletableTargets.length})
                 </button>
@@ -3315,7 +3390,7 @@ function ContainerAuditPanel({
         {report && findings.length === 0 && (
           <div style={styles.empty}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
-            No issues found — every tag has a trigger, nothing's mis-paused, no orphans. Looks clean.
+            No issues found — every tag has a trigger, nothing's mis-paused, nothing unused. Looks clean.
           </div>
         )}
 
@@ -4215,6 +4290,7 @@ const styles: Record<string, React.CSSProperties> = {
   empty: { color: 'var(--text-faint)', textAlign: 'center', maxWidth: 420, margin: '60px auto', lineHeight: 1.6, flexShrink: 0 },
   userMsg: { alignSelf: 'flex-end', background: '#2563eb', color: '#fff', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14 },
   asstMsg: { alignSelf: 'flex-start', background: 'var(--surface-2)', color: 'var(--text)', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14, border: '1px solid var(--border)' },
+  msgTime: { fontSize: 11, color: 'var(--text-faint)', margin: '3px 4px 0', userSelect: 'none' },
   toolTrace: { color: 'var(--c-blue)', fontSize: 11, marginBottom: 4 },
   toolErrors: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 },
   toolErrorLine: { background: 'var(--c-red-bg)', border: '1px solid var(--c-red-border)', color: 'var(--c-red)', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
@@ -4314,6 +4390,8 @@ const styles: Record<string, React.CSSProperties> = {
   typeChip: { fontSize: 11, color: 'var(--c-blue)', background: 'var(--c-blue-bg)', border: '1px solid var(--c-blue-bg)', borderRadius: 6, padding: '1px 7px' },
   emChip: { fontSize: 11, color: 'var(--c-amber)', background: 'var(--c-amber-bg)', border: '1px solid var(--c-amber-border)', borderRadius: 6, padding: '1px 7px' },
   existsChip: { fontSize: 11, color: 'var(--c-cyan)', background: 'var(--c-cyan-bg)', border: '1px solid var(--c-cyan-border)', borderRadius: 6, padding: '1px 7px' },
+  ecomBadge: { fontSize: 11, fontWeight: 600, color: 'var(--c-green)', background: 'var(--c-green-bg)', border: '1px solid var(--c-green-border)', borderRadius: 6, padding: '1px 7px', marginLeft: 8, whiteSpace: 'nowrap' },
+  nonEcomBadge: { fontSize: 11, color: 'var(--text-muted)', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '1px 7px', marginLeft: 8, whiteSpace: 'nowrap' },
   editGrid: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8, background: 'var(--bg)', borderRadius: 8, padding: '4px 12px' },
   detailGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 12, rowGap: 3, marginTop: 5, fontSize: 12.5, color: 'var(--text-dim)', alignItems: 'start' },
   detailKey: { color: 'var(--text-faint)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, paddingTop: 1 },

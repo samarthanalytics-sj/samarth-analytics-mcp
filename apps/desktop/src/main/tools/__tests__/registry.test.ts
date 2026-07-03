@@ -953,6 +953,75 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.some((c) => c.startsWith('createTrigger')), 'created its trigger');
   });
 
+  await test('create_tracking_tag (meta_pixel) imports the facebook template + creates a Meta pixel on a created trigger', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'meta_pixel', tagName: 'Meta - Lead - Contact Form Tag', measurementId: '{{Meta Pixel ID}}', eventName: 'Lead',
+        trigger: { name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'lead-form', formIdOperator: 'equals' },
+      })
+    );
+    assert.ok(fd.calls.includes('importTemplate:facebook/GoogleTagManager-WebTemplate-For-FacebookPixel'), 'imported the official Meta Pixel template');
+    assert.equal(out.tag.type, 'cvt_5RM3Q', 'built a tag of the template cvt_ type');
+    const pixelId = (out.tag.parameter ?? []).find((x: { key: string }) => x.key === 'pixelId')?.value;
+    assert.equal(pixelId, '{{Meta Pixel ID}}', 'pixel id defaults from measurementId');
+    assert.ok(fd.calls.some((c) => c.startsWith('createTrigger') && c.includes('Contact Form Trigger')), 'created its trigger');
+    assert.ok(fd.calls.some((c) => c.startsWith('createTag') && c.includes('NEW1')), 'tag linked to the created trigger (firingTriggerId)');
+  });
+
+  // "Both GA4 & Meta" shares ONE trigger: the GA4 tag creates the trigger, the Meta tag (same trigger
+  // name) REUSES it — the shared create/reuse-by-name path attaches both to the same firingTriggerId.
+  await test('create_tracking_tag (meta_pixel) reuses a same-named trigger (shared GA4+Meta trigger)', async () => {
+    const fd = fakeData({ existingTriggers: [{ triggerId: 'T9', name: 'Contact Form Trigger', type: 'formSubmission' }] });
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'meta_pixel', tagName: 'Meta - Lead - Contact Form Tag', pixelId: '123456', eventName: 'Lead',
+        trigger: { name: 'Contact Form Trigger', kind: 'form_submit' },
+      })
+    );
+    assert.equal(out.trigger.reused, true, 'reused the existing trigger by name');
+    assert.ok(!fd.calls.some((c) => c.startsWith('createTrigger')), 'did not create a duplicate trigger');
+    assert.ok(fd.calls.some((c) => c.startsWith('createTag') && c.includes('T9')), 'Meta tag linked to the shared trigger');
+    const pixelId = (out.tag.parameter ?? []).find((x: { key: string }) => x.key === 'pixelId')?.value;
+    assert.equal(pixelId, '123456', 'explicit pixelId used when provided');
+  });
+
+  // An ecommerce Meta tag's Object Properties reference {{dlv - ecommerce.*}} → the handler best-effort
+  // provisions those dataLayer variables so the tag resolves. A non-ecommerce Meta tag does NOT.
+  await test('create_tracking_tag (meta_pixel) provisions the ecommerce dlv variables when Object Properties reference {{dlv - ecommerce.*}}', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'meta_pixel', tagName: 'Meta - AddToCart - Add To Cart Ecommerce Tag', pixelId: '123456', eventName: 'AddToCart',
+        eventParameters: [
+          { name: 'value', value: '{{dlv - ecommerce.value}}' },
+          { name: 'currency', value: '{{dlv - ecommerce.currency}}' },
+          { name: 'contents', value: '{{dlv - ecommerce.items}}' },
+        ],
+        trigger: { name: 'Add To Cart (dataLayer) Trigger', kind: 'custom_event', eventName: 'add_to_cart' },
+      })
+    );
+    assert.ok(fd.calls.includes('ecomDlv:1:2:3'), 'best-effort created the ecommerce dlv variables');
+    assert.ok((out.createdVariables ?? []).includes('dlv - ecommerce.value'), 'reports the created dlv variables');
+  });
+
+  await test('create_tracking_tag (meta_pixel) with NO ecommerce Object Properties does NOT provision dlv variables', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    await reg.execute('create_gtm_tracking_tag', {
+      accountId: '1', containerId: '2', workspaceId: '3',
+      platform: 'meta_pixel', tagName: 'Meta - Lead - Contact Form Tag', pixelId: '123456', eventName: 'Lead',
+      trigger: { name: 'Contact Form Trigger', kind: 'form_submit' },
+    });
+    assert.ok(!fd.calls.some((c) => c.startsWith('ecomDlv:')), 'a non-ecommerce Meta tag does not provision dlv variables');
+  });
+
   // The 5 non-GA4 web platforms: assert the enum → correct-builder dispatch AND that the handler's
   // arg coercion (bln, countingMethod narrowing, AW- stripping, linkerDomains) flows into the tag.
   const trkParam = (out: { tag: { parameter?: Array<{ key: string; value: string }> } }, key: string) =>

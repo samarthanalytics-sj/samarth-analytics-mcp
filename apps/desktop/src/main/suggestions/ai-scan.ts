@@ -177,6 +177,9 @@ export interface AiScanInput {
   model: string;
   driver: PageDriver;
   siteHostHint?: string;
+  /** Which ad platforms to generate tags for (default ['ga4']). 'meta' adds Meta
+   *  (Facebook) Pixel counterparts derived from the GA4 ones (sharing each trigger). */
+  platforms?: Array<'ga4' | 'meta'>;
 }
 
 /** Open ONE page, screenshot it, run the vision model, and merge its picks (wired to
@@ -222,5 +225,5 @@ export async function aiScanPage(input: AiScanInput): Promise<TagScanResult> {
     }
   }
 
-  return assembleResult(url, siteHost, [pageScan], [], warnings, 1, aiSuggestions);
+  return assembleResult(url, siteHost, [pageScan], [], warnings, 1, aiSuggestions, input.platforms ?? ['ga4']);
 }

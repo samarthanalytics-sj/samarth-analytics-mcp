@@ -329,8 +329,10 @@ export interface SuggestedTagView {
   /** GA4 Enhanced Measurement already auto-tracks this — flagged, not pushed. */
   enhancedMeasurementOverlap: boolean;
   /** 'ga4_event' = a GA4 event tag; 'google_tag' = the base Google tag (GA4
-   *  Configuration) — uses tagId, not eventName/eventParameters. */
-  platform: 'ga4_event' | 'google_tag';
+   *  Configuration) — uses tagId, not eventName/eventParameters. 'meta_pixel' = a
+   *  Meta (Facebook) Pixel tag — measurementId holds the Meta Pixel ID (default
+   *  {{Meta Pixel ID}}), eventName is the Meta event. */
+  platform: 'ga4_event' | 'google_tag' | 'meta_pixel';
   tagName: string;
   measurementId: string;
   /** For platform 'google_tag': the Measurement ID (or its {{variable}}). */
@@ -392,6 +394,9 @@ export interface TagScanOptions {
   maxDepth?: number;
   /** Post-load settle (ms) for the browser engine — lets JS-rendered forms appear. */
   settleMs?: number;
+  /** Which ad platforms to generate tags for (default ['ga4']). 'meta' adds Meta
+   *  (Facebook) Pixel tags derived from the GA4 ones (sharing each trigger). */
+  platforms?: Array<'ga4' | 'meta'>;
 }
 
 /** One detected clickable element (before dedup) — the raw inventory. */
@@ -425,6 +430,11 @@ export interface TagScanResult {
     byConfidence: { high: number; medium: number; low: number };
     enhancedMeasurementOverlap: number;
     newTracking: number;
+    /** Auto-detected site type — 'ecommerce' unlocks the ecommerce funnel suggestions. Undefined on
+     *  an empty/failed scan. */
+    websiteType?: 'ecommerce' | 'non_ecommerce';
+    /** Human-readable signals behind an 'ecommerce' classification (shown in the badge tooltip). */
+    ecommerceEvidence?: string[];
   };
   suggestions: SuggestedTagView[];
   pages: Array<{ page: string; forms: number; elements: number }>;
