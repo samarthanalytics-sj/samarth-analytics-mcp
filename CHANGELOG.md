@@ -1,3 +1,9 @@
+## [1.153.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.152.0...v1.153.0) (2026-07-03)
+
+### Features
+
+* **desktop:** choose GA4 / Meta / Both before a Tag Suggestions scan ([edc9c32](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/edc9c3275fd8f350709f49c25814bb0c3c911893))
+
 ## [1.152.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.151.0...v1.152.0) (2026-07-03)
 
 ### Features
