@@ -1,3 +1,9 @@
+## [1.152.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.151.0...v1.152.0) (2026-07-03)
+
+### Features
+
+* **desktop:** show a timestamp under each chat message ([3b1ef09](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3b1ef09aeece597d87463ed163beefb0649b0abf))
+
 ## [1.151.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.150.0...v1.151.0) (2026-07-03)
 
 ### Features
