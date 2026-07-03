@@ -42,8 +42,11 @@ for (const needle of [
   'usageContext', // 1 · server container
   'clientName', 'eventName', // 2 · built-ins
   'gaaw_client', // 3 · GA4 client
+  'FPID', 'cookieManagement', // 3 · server-managed first-party cookies (reference architecture)
+  'gtm_client', 'allowedContainerIds', // 3 · first-party serving of the web container
   '"ed"', '"c"', '"rh"', // 4 · variables (event data / constant / request header)
   'customEvent', '{{_event}}', '{{Client Name}}', // 5 · per-event trigger
+  'never URL-encoded', 'ed - page_location', // 5 · exact event names + page-scoped campaign filter
   'sgtmgaaw', // 6 · GA4 server tag
   'taggingServerUrls', 'server_container_url', // 7 · host wiring
 ]) {

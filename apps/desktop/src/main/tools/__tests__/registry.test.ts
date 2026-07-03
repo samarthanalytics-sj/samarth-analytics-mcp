@@ -1519,6 +1519,16 @@ async function main(): Promise<void> {
     assert.equal(evTrig.type, 'customEvent');
     assert.ok(fd.calls.includes('createTrigger:1:2:3:ga4 - purchase'), 'created the per-event server trigger');
 
+    // pageUrlContains (campaign scoping) → auto-creates the {{ed - page_location}} variable it reads.
+    await reg.execute('create_server_trigger', { accountId: '1', containerId: '2', workspaceId: '3', name: 'ACF - Sign Petition Click', eventName: 'Sign Petition Click', clientName: 'GA4', pageUrlContains: '/petition/minister-for-children/' });
+    assert.ok(fd.calls.includes('createVar:1:2:3:ed:ed - page_location'), 'auto-created ed - page_location for the page filter');
+    assert.ok(fd.calls.includes('createTrigger:1:2:3:ACF - Sign Petition Click'), 'created the page-scoped trigger');
+    // Variable already present → reused, no duplicate create.
+    const fdHasVar = fakeData({ existingVariables: [{ variableId: 'V7', name: 'ed - page_location', type: 'ed' }] });
+    await buildToolRegistry(fdHasVar.data, approveAsIs, 'gtm').execute('create_server_trigger', { accountId: '1', containerId: '2', workspaceId: '3', name: 'X - Scoped', eventName: 'e', pageUrlContains: '/x/' });
+    assert.ok(!fdHasVar.calls.some((c) => c.startsWith('createVar:')), 'existing ed - page_location NOT re-created');
+    assert.ok(fdHasVar.calls.includes('createTrigger:1:2:3:X - Scoped'));
+
     // create_gtm_variable_typed request_header → a server rh variable (logged as createVar:…:rh:…).
     const rhVar = JSON.parse(
       await reg.execute('create_gtm_variable_typed', { accountId: '1', containerId: '2', workspaceId: '3', kind: 'request_header', name: 'X-Geo-Country', headerName: 'X-Geo-Country' }),

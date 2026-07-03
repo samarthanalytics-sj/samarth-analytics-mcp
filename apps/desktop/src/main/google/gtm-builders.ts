@@ -375,14 +375,52 @@ export interface GtmClientResource {
   priority?: number;
 }
 
-/** The GA4 client (`gaaw_client`) — claims incoming GA4 / gtag requests on a server
- *  container so server tags can read the event. Shape corpus-validated (3 server
- *  containers). `activateDefaultPaths` claims the standard /g/collect endpoints. */
-export function buildGa4Client(name: string): GtmClientResource {
+/** The GA4 client (`gaaw_client`) — claims incoming GA4 / gtag requests on a server container so
+ *  server tags can read the event; `activateDefaultPaths` claims the standard /g/collect endpoints.
+ *  Shape corpus-validated (3 server containers). By default it also enables SERVER-MANAGED first-party
+ *  ID cookies (cookieManagement=server → the httpOnly FPID cookie, 2-year age, auto domain,
+ *  migrated from the JS client id) — the production pattern from the Vocal Minority reference
+ *  server container (GTM-57RM3QCT) and Stape's recommended setup: the identifier survives
+ *  ITP/JS-cookie limits because the server sets it. Pass serverManagedCookies:false for the
+ *  plain JS-cookie client. */
+export function buildGa4Client(name: string, opts?: { serverManagedCookies?: boolean }): GtmClientResource {
+  const parameter: Param[] = [boolean('activateDefaultPaths', true), boolean('activateGtagSupport', true)];
+  if (opts?.serverManagedCookies !== false) {
+    parameter.push(
+      tpl('cookieManagement', 'server'),
+      tpl('cookieName', 'FPID'),
+      tpl('cookieDomain', 'auto'),
+      tpl('cookiePath', '/'),
+      tpl('cookieMaxAgeInSec', '63072000'),
+      boolean('migrateFromJsClientId', true)
+    );
+  }
   return {
     name: sanitizeName(name),
     type: 'gaaw_client',
-    parameter: [boolean('activateDefaultPaths', true), boolean('activateGtagSupport', true)],
+    parameter,
+  };
+}
+
+/** The server GTM client (`gtm_client`) — lets the tagging server FIRST-PARTY-SERVE gtm.js and
+ *  its dependencies for the listed WEB container(s) (the site loads GTM from the owner's domain
+ *  instead of googletagmanager.com — ad-blocker/ITP resilience). Shape validated against the
+ *  Vocal Minority reference: compression + dependency serving ON, geo resolution OFF, and
+ *  allowedContainerIds as a LIST of {containerId} maps holding the web GTM-XXXX public ids. */
+export function buildGtmClient(name: string, allowedContainerIds: string[]): GtmClientResource {
+  return {
+    name: sanitizeName(name),
+    type: 'gtm_client',
+    parameter: [
+      boolean('activateResponseCompression', true),
+      boolean('activateGeoResolution', false),
+      boolean('activateDependencyServing', true),
+      {
+        type: 'list',
+        key: 'allowedContainerIds',
+        list: allowedContainerIds.map((id) => ({ type: 'map', map: [tpl('containerId', id)] })),
+      },
+    ],
   };
 }
 
@@ -410,13 +448,22 @@ export function buildGa4ServerTag(name: string, measurementId: string, eventName
  *  produced; needs the CLIENT_NAME built-in enabled, which bootstrap does). Shape
  *  corpus-validated (server triggers are CUSTOM_EVENT with a customEventFilter on {{_event}}
  *  plus a {{Client Name}} filter). PURE. */
-export function buildServerAllEventsTrigger(name: string, clientName?: string): GtmTriggerResource {
+export function buildServerAllEventsTrigger(
+  name: string,
+  clientName?: string,
+  opts?: { pageUrlContains?: string; pageUrlVariable?: string }
+): GtmTriggerResource {
   const t: GtmTriggerResource = {
     name: sanitizeName(name),
     type: 'customEvent',
     customEventFilter: [condition('{{_event}}', 'matchRegex', '.*')],
   };
-  if (clientName && clientName.trim() !== '') t.filter = [condition('{{Client Name}}', 'equals', clientName)];
+  const filter: Param[] = [];
+  if (clientName && clientName.trim() !== '') filter.push(condition('{{Client Name}}', 'equals', clientName));
+  if (opts?.pageUrlContains && opts.pageUrlContains.trim() !== '') {
+    filter.push(condition(opts.pageUrlVariable?.trim() || '{{ed - page_location}}', 'contains', opts.pageUrlContains.trim()));
+  }
+  if (filter.length > 0) t.filter = filter;
   return t;
 }
 
@@ -425,13 +472,30 @@ export function buildServerAllEventsTrigger(name: string, clientName?: string): 
  *  the DOMINANT server trigger pattern in real containers ("event = purchase AND Client Name = GA4"),
  *  used to fire a per-event tag (GA4 Purchase, Ads Purchase conversion) only on that event. The
  *  {{Client Name}} filter needs the CLIENT_NAME built-in enabled. Shape corpus-validated. PURE. */
-export function buildServerEventTrigger(name: string, eventName: string, clientName?: string): GtmTriggerResource {
+export function buildServerEventTrigger(
+  name: string,
+  eventName: string,
+  clientName?: string,
+  opts?: {
+    /** Also scope to pages whose URL CONTAINS this substring (e.g. "/petition/minister-for-children/") —
+     *  the multi-tenant campaign pattern from the Vocal Minority reference: one event, one page/campaign,
+     *  one destination tag. Reads {{ed - page_location}} (create it via the event_data variable kind,
+     *  keyPath "page_location") unless pageUrlVariable overrides. */
+    pageUrlContains?: string;
+    pageUrlVariable?: string;
+  }
+): GtmTriggerResource {
   const t: GtmTriggerResource = {
     name: sanitizeName(name),
     type: 'customEvent',
     customEventFilter: [condition('{{_event}}', 'equals', eventName)],
   };
-  if (clientName && clientName.trim() !== '') t.filter = [condition('{{Client Name}}', 'equals', clientName)];
+  const filter: ReturnType<typeof condition>[] = [];
+  if (clientName && clientName.trim() !== '') filter.push(condition('{{Client Name}}', 'equals', clientName));
+  if (opts?.pageUrlContains && opts.pageUrlContains.trim() !== '') {
+    filter.push(condition(opts.pageUrlVariable?.trim() || '{{ed - page_location}}', 'contains', opts.pageUrlContains.trim()));
+  }
+  if (filter.length > 0) t.filter = filter;
   return t;
 }
 
