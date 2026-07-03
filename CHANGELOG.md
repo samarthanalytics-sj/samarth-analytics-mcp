@@ -1,3 +1,13 @@
+## [1.156.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.155.0...v1.156.0) (2026-07-03)
+
+### Features
+
+* **desktop:** explicit GA4 ecommerce event parameters + {{Ecommerce X}} variables ([36253a4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/36253a4442af6508adb944a00cd50de08ee687c7))
+
+### Bug Fixes
+
+* **desktop:** drop unused attribution locals in ga4-report (unblock node typecheck) ([db07caa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/db07caaf18861038a286df63069a4eef36522fb6))
+
 ## [1.155.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.154.0...v1.155.0) (2026-07-03)
 
 ### Features
