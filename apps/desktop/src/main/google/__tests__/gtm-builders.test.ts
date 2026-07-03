@@ -19,6 +19,7 @@ import {
   findExistingTrigger,
   buildEnvironmentSnippet,
   buildGa4Client,
+  buildGtmClient,
   buildGa4ServerTag,
   buildServerAllEventsTrigger,
   buildServerEventTrigger,
@@ -1682,6 +1683,71 @@ test('setCustomEventName updates the {{_event}} value in place, preserving struc
   // adds the {{_event}} condition if missing
   const t2 = setCustomEventName({ name: 'x', type: 'customEvent' }, 'add to cart') as { customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }> };
   assert.equal(t2.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'add_to_cart');
+});
+
+console.log('\nServer reference architecture (FPID client / GTM serving client / page-scoped triggers):');
+
+test('buildGa4Client: server-managed FPID cookies by DEFAULT (reference shape), plain client on opt-out', () => {
+  const c = buildGa4Client('GA4');
+  assert.equal(c.type, 'gaaw_client');
+  const params = c.parameter as Array<Record<string, unknown>>;
+  assert.equal(findParam(params, 'activateDefaultPaths')?.value, 'true');
+  assert.equal(findParam(params, 'activateGtagSupport')?.value, 'true');
+  // The FPID block — exact keys/values from the reference export (GTM-57RM3QCT).
+  assert.equal(findParam(params, 'cookieManagement')?.value, 'server');
+  assert.equal(findParam(params, 'cookieName')?.value, 'FPID');
+  assert.equal(findParam(params, 'cookieDomain')?.value, 'auto');
+  assert.equal(findParam(params, 'cookiePath')?.value, '/');
+  assert.equal(findParam(params, 'cookieMaxAgeInSec')?.value, '63072000');
+  assert.equal(findParam(params, 'migrateFromJsClientId')?.value, 'true');
+  const plain = buildGa4Client('GA4', { serverManagedCookies: false });
+  const plainParams = plain.parameter as Array<Record<string, unknown>>;
+  assert.equal(findParam(plainParams, 'cookieManagement'), undefined, 'opt-out drops the whole FPID block');
+  assert.equal(plainParams.length, 2, 'plain client keeps only the two activate flags');
+});
+
+test('buildGtmClient: first-party serving client locked to the web container ids', () => {
+  const c = buildGtmClient('GTM Web Container', ['GTM-W7M2SN98', 'GTM-ABC1234']);
+  assert.equal(c.type, 'gtm_client');
+  const params = c.parameter as Array<Record<string, unknown>>;
+  assert.equal(findParam(params, 'activateResponseCompression')?.value, 'true');
+  assert.equal(findParam(params, 'activateDependencyServing')?.value, 'true');
+  assert.equal(findParam(params, 'activateGeoResolution')?.value, 'false');
+  const list = findParam(params, 'allowedContainerIds') as { list?: Array<{ map: Array<{ key: string; value: string }> }> };
+  assert.equal(list?.list?.length, 2);
+  assert.deepEqual(
+    list.list!.map((m) => m.map.find((x) => x.key === 'containerId')?.value),
+    ['GTM-W7M2SN98', 'GTM-ABC1234'],
+    'LIST of {containerId} maps — the exact reference shape',
+  );
+});
+
+test('buildServerEventTrigger pageUrlContains: campaign-scoped trigger (event + client + page URL)', () => {
+  const t = buildServerEventTrigger('ACF - Sign Petition Click', 'Sign Petition Click', 'GA4', { pageUrlContains: '/petition/minister-for-children/' });
+  const ce = (t.customEventFilter as Array<{ parameter: Array<{ key: string; value: string }> }>)[0];
+  assert.equal(ce.parameter.find((p) => p.key === 'arg1')?.value, 'Sign Petition Click', 'event name stays EXACT (spaces, never URL-encoded)');
+  const filters = t.filter as Array<{ type: string; parameter: Array<{ key: string; value: string }> }>;
+  assert.equal(filters.length, 2);
+  assert.deepEqual(filters.map((f) => f.type), ['equals', 'contains']);
+  assert.equal(filters[0].parameter.find((p) => p.key === 'arg0')?.value, '{{Client Name}}');
+  assert.equal(filters[1].parameter.find((p) => p.key === 'arg0')?.value, '{{ed - page_location}}', 'page filter reads the ed - page_location variable by default');
+  assert.equal(filters[1].parameter.find((p) => p.key === 'arg1')?.value, '/petition/minister-for-children/');
+  // Custom page variable override + no client scope.
+  const t2 = buildServerEventTrigger('X', 'purchase', undefined, { pageUrlContains: '/shop/', pageUrlVariable: '{{Page URL Variable}}' });
+  const f2 = t2.filter as Array<{ parameter: Array<{ key: string; value: string }> }>;
+  assert.equal(f2.length, 1);
+  assert.equal(f2[0].parameter.find((p) => p.key === 'arg0')?.value, '{{Page URL Variable}}');
+});
+
+test('buildServerAllEventsTrigger pageUrlContains: all-events relay scoped to a page section', () => {
+  const t = buildServerAllEventsTrigger('Campaign - All Events', 'GA4', { pageUrlContains: '/petition/' });
+  const filters = t.filter as Array<{ type: string; parameter: Array<{ key: string; value: string }> }>;
+  assert.equal(filters.length, 2);
+  assert.equal(filters[1].type, 'contains');
+  assert.equal(filters[1].parameter.find((p) => p.key === 'arg1')?.value, '/petition/');
+  // No page filter → unchanged single client filter (back-compat).
+  const plain = buildServerAllEventsTrigger('All', 'GA4');
+  assert.equal((plain.filter as unknown[]).length, 1);
 });
 
 console.log('\nOne-shot funnel + consent + verify:');

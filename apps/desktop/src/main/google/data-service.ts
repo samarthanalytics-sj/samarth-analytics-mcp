@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, buildGtmClient, buildVariable, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
@@ -1428,12 +1428,17 @@ export class GoogleDataService {
   }
 
   /** ONE-STEP "server container from THIS web container": derive the web container's GA4 Measurement
-   *  ID, bootstrap a SERVER container (container + GA4 client + firing trigger + GA4 relay tag), and —
-   *  when a server URL is given (from the user's Cloud Run / tagging-server host) — record it on the
-   *  server container AND point the web container's Google tag at it (the web→server link). Also
-   *  scans the web container for the NON-GA4 conversion tags (Google Ads, Meta) that still need a
-   *  server-side tag built by hand, and returns them as follow-ups. Best-effort on the scan/wire so a
-   *  failure there never loses the created server container. Read-only until the user confirms. */
+   *  ID, bootstrap a SERVER container (container + GA4 client with server-managed FPID cookies +
+   *  firing trigger + GA4 relay tag), then add the production pieces the reference architecture
+   *  (Vocal Minority web+server pair) builds by hand: a GTM client that FIRST-PARTY-SERVES the web
+   *  container (allowedContainerIds = the web GTM-XXXX id) and the standard Event Data variables
+   *  server tags read (ed - event_id for Meta/TikTok dedup, ed - page_location for page-scoped
+   *  campaign triggers). When a server URL is given, records it on the server container, points the
+   *  web Google tag at it, AND wires browser↔server event dedup on the web side (imports Stape's
+   *  Unique Event ID variable template and sends event_id on every GA4 hit so CAPI copies dedup
+   *  against browser pixels). Also scans the web container for NON-GA4 conversion tags (Google Ads,
+   *  Meta) that still need a server-side tag. Every post-bootstrap step is best-effort so a failure
+   *  never loses the created server container. */
   async createServerContainerFromWeb(
     accountId: string,
     webContainerId: string,
@@ -1443,25 +1448,57 @@ export class GoogleDataService {
     serverContainer: { containerId: string; publicId: string; name: string; taggingServerUrls: string[] };
     workspaceId: string;
     measurementId: string;
-    created: { client: string; trigger: string; serverTag: string };
+    created: { client: string; trigger: string; serverTag: string; gtmClient: string | null; variables: string[] };
     serverUrlSet: boolean;
     webWired: { tagId: string; name: string } | null;
+    webDedup: { uniqueEventIdVariable: string; eventIdWired: boolean } | null;
     webNonGa4: Array<{ kind: string; name: string; detail: string }>;
   }> {
+    // Read the WEB container once for its name (fallback container name) and its GTM-XXXX public id
+    // (the GTM client's allowedContainerIds needs it).
+    const auth0 = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm0 = tagmanager({ version: 'v2', auth: auth0 });
+    let webPublicId = '';
+    let webName = 'Web';
+    try {
+      const web = await gtm0.accounts.containers.get({ path: `accounts/${accountId}/containers/${webContainerId}` });
+      webPublicId = web.data.publicId ?? '';
+      webName = web.data.name ?? 'Web';
+    } catch {
+      /* non-fatal — the GTM client is skipped below without a public id */
+    }
     // No name given → derive it from the WEB container's own name ("<web name> - Server"), so the
     // created container is identifiable (never a bare literal like "Server").
-    let containerName = name.trim();
-    if (!containerName) {
-      const auth0 = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
-      const gtm0 = tagmanager({ version: 'v2', auth: auth0 });
-      const web = await gtm0.accounts.containers.get({ path: `accounts/${accountId}/containers/${webContainerId}` });
-      containerName = `${web.data.name ?? 'Web'} - Server`;
-    }
+    const containerName = name.trim() || `${webName} - Server`;
     const measurementId = await this.deriveWebContainerMeasurementId(accountId, webContainerId);
     const boot = await this.bootstrapServerSideTagging(accountId, containerName, measurementId);
 
+    // Production pieces from the reference architecture (each best-effort).
+    let gtmClient: string | null = null;
+    if (webPublicId) {
+      try {
+        const gc = await this.createGtmClient(accountId, boot.container.containerId, boot.workspaceId, buildGtmClient('GTM Web Container', [webPublicId]) as unknown as Record<string, unknown>);
+        gtmClient = gc.name;
+      } catch {
+        /* non-fatal — first-party serving can be added later with create_gtm_client */
+      }
+    }
+    const variables: string[] = [];
+    for (const v of [
+      buildVariable({ name: 'ed - event_id', kind: 'event_data', keyPath: 'event_id' }),
+      buildVariable({ name: 'ed - page_location', kind: 'event_data', keyPath: 'page_location' }),
+    ]) {
+      try {
+        await this.createGtmVariable(accountId, boot.container.containerId, boot.workspaceId, v as unknown as Record<string, unknown>);
+        variables.push(v.name);
+      } catch {
+        /* non-fatal — server tags/triggers can reference them once created manually */
+      }
+    }
+
     let serverUrlSet = false;
     let webWired: { tagId: string; name: string } | null = null;
+    let webDedup: { uniqueEventIdVariable: string; eventIdWired: boolean } | null = null;
     const webNonGa4: Array<{ kind: string; name: string; detail: string }> = [];
     const url = serverUrl?.trim();
 
@@ -1498,7 +1535,24 @@ export class GoogleDataService {
       if (url) {
         const googtag = snap.tags.find((t) => t.type === 'googtag');
         if (googtag) {
-          const res = await this.setWebServerContainerUrl(accountId, webContainerId, webWs, googtag.tagId, url);
+          // Browser↔server dedup (reference pattern): a Unique Event ID variable on the web side,
+          // sent as event_id on every GA4 hit; the server reads it back (ed - event_id) into CAPI
+          // tags so Meta/TikTok dedup the browser-pixel copy. Best-effort — if the gallery import
+          // fails we still wire the server URL alone.
+          let dedupConfig: Array<{ key: string; value: string }> | undefined;
+          try {
+            const tpl = await this.importGalleryTemplate(accountId, webContainerId, webWs, 'stape-io', 'unique-event-id-variable');
+            const varName = 'Unique Event ID';
+            const existing = snap.variables.find((v) => v.name.trim().toLowerCase() === varName.toLowerCase());
+            if (!existing && tpl.type) {
+              await this.createGtmVariable(accountId, webContainerId, webWs, { name: varName, type: tpl.type, parameter: [] });
+            }
+            dedupConfig = [{ key: 'event_id', value: `{{${varName}}}` }];
+            webDedup = { uniqueEventIdVariable: varName, eventIdWired: true };
+          } catch {
+            webDedup = null;
+          }
+          const res = await this.setWebServerContainerUrl(accountId, webContainerId, webWs, googtag.tagId, url, dedupConfig);
           webWired = { tagId: res.tagId, name: res.name };
         }
       }
@@ -1510,9 +1564,10 @@ export class GoogleDataService {
       serverContainer: boot.container,
       workspaceId: boot.workspaceId,
       measurementId,
-      created: { client: boot.client.name, trigger: boot.trigger.name, serverTag: boot.serverTag.name },
+      created: { client: boot.client.name, trigger: boot.trigger.name, serverTag: boot.serverTag.name, gtmClient, variables },
       serverUrlSet,
       webWired,
+      webDedup,
       webNonGa4,
     };
   }
@@ -1686,7 +1741,8 @@ export class GoogleDataService {
     containerId: string,
     workspaceId: string,
     tagId: string,
-    serverUrl: string
+    serverUrl: string,
+    extraConfig?: Array<{ key: string; value: string }>
   ): Promise<{ tagId: string; name: string; serverContainerUrl: string }> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
@@ -1695,11 +1751,14 @@ export class GoogleDataService {
     if (current.type !== 'googtag') {
       throw new Error(`Tag ${tagId} is type "${current.type}", not a Google tag (googtag) — server_container_url is set on the web Google tag.`);
     }
-    const merged: Record<string, unknown> = {
-      ...current,
-      parameter: upsertGoogleTagConfig(current as Record<string, unknown>, 'server_container_url', serverUrl),
-    };
-    const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: merged });
+    // Fold every config row into ONE update (server_container_url + any extras, e.g. the
+    // event_id dedup parameter) so the tag is written once.
+    const working = { ...current } as Record<string, unknown>;
+    working.parameter = upsertGoogleTagConfig(working, 'server_container_url', serverUrl);
+    for (const row of extraConfig ?? []) {
+      working.parameter = upsertGoogleTagConfig(working, row.key, row.value);
+    }
+    const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: working });
     this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', serverContainerUrl: serverUrl };
   }

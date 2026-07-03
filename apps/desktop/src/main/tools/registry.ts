@@ -1575,7 +1575,7 @@ export function buildToolRegistry(
     {
       name: 'create_server_container_from_web',
       description:
-        "ONE STEP: create a complete server-side container FROM a web container. Derives the web container's GA4 Measurement ID, bootstraps a SERVER container (container + GA4 client + firing trigger + GA4 relay tag), and — when `serverUrl` is given (the user's deployed Cloud Run / Stape / tagging-server URL) — records it on the server container AND points the web container's Google tag at it (web→server link). Also returns the NON-GA4 conversion tags (Google Ads, Meta) still in the web container that need a server-side tag built by hand. Does NOT deploy the host and does NOT publish. Requires accountId + webContainerId (the ACTIVE web container's id); optional name (defaults from the web container) and serverUrl.",
+        "ONE STEP: create a complete, production-shaped server-side container FROM a web container (reference architecture). Derives the web container's GA4 Measurement ID and builds: the SERVER container + GA4 client with SERVER-MANAGED first-party FPID cookies + all-events firing trigger + GA4 relay tag + a GTM client that FIRST-PARTY-SERVES the web container (allowedContainerIds = its GTM-XXXX id) + the standard Event Data variables (ed - event_id for browser↔server Meta/TikTok dedup, ed - page_location for page-scoped triggers). When `serverUrl` is given (the user's deployed Cloud Run / Stape / tagging-server URL) it also records the URL on the server container, points the web Google tag at it (web→server link), AND wires dedup on the web side (Unique Event ID variable sent as event_id on every GA4 hit). Also returns the NON-GA4 conversion tags (Google Ads, Meta) still in the web container that need a server-side tag built by hand. Does NOT deploy the host and does NOT publish. Requires accountId + webContainerId (the ACTIVE web container's id); optional name (defaults from the web container) and serverUrl.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1800,7 +1800,7 @@ export function buildToolRegistry(
     {
       name: 'create_server_trigger',
       description:
-        'Create the firing trigger for a SERVER container — a Custom Event trigger, optionally SCOPED to a client via "Client Name equals <clientName>". Pass `eventName` to fire on ONE specific event ("{{_event}} equals purchase" — the dominant server pattern, e.g. to fire a GA4 Purchase or Ads Purchase conversion tag only on the purchase event); OMIT eventName to fire on ALL events (a base/relay trigger). Use THIS (not create_gtm_trigger) for server triggers — it builds the exact customEvent shape GTM requires ({{_event}} filter + the optional Client Name filter), which is easy to get wrong by hand. When clientName is given it also enables the Client Name built-in so the filter resolves. Requires accountId, containerId, workspaceId, name; optional eventName, clientName (e.g. "GA4").',
+        'Create the firing trigger for a SERVER container — a Custom Event trigger, optionally SCOPED to a client via "Client Name equals <clientName>". Pass `eventName` to fire on ONE specific event ("{{_event}} equals purchase" — the dominant server pattern, e.g. to fire a GA4 Purchase or Ads Purchase conversion tag only on the purchase event); OMIT eventName to fire on ALL events (a base/relay trigger). Use THIS (not create_gtm_trigger) for server triggers — it builds the exact customEvent shape GTM requires ({{_event}} filter + the optional Client Name filter), which is easy to get wrong by hand. When clientName is given it also enables the Client Name built-in so the filter resolves. `pageUrlContains` additionally scopes the trigger to pages whose URL contains that substring (the multi-tenant campaign pattern: one event + one page + one destination tag, e.g. per-charity petition pages); it reads {{ed - page_location}}, which is auto-created if missing. IMPORTANT: type event names EXACTLY as they arrive — with spaces, never URL-encoded ("Sign Petition Click", NOT "Sign+Petition+Click"; a pasted-encoded value silently never matches). Requires accountId, containerId, workspaceId, name; optional eventName, clientName (e.g. "GA4"), pageUrlContains.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1808,19 +1808,21 @@ export function buildToolRegistry(
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
           name: { type: 'string' },
-          eventName: { type: 'string', description: 'Fire only on this event ({{_event}} equals <eventName>, e.g. "purchase"). Omit to fire on all events.' },
+          eventName: { type: 'string', description: 'Fire only on this event ({{_event}} equals <eventName>, e.g. "purchase"). Omit to fire on all events. Use the event name EXACTLY as sent (spaces, not "+").' },
           clientName: { type: 'string', description: 'Scope the trigger to this client (Client Name equals …). Omit to fire on all events regardless of client.' },
+          pageUrlContains: { type: 'string', description: 'Also require the event page URL to CONTAIN this substring (e.g. "/petition/minister-for-children/"). Reads {{ed - page_location}} (auto-created).' },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'name'],
         additionalProperties: false,
       },
       write: true,
       summarize: (a) =>
-        `Create server trigger "${s(a.name)}"${s(a.eventName) ? ` on event "${s(a.eventName)}"` : ' (all events)'}${s(a.clientName) ? ` scoped to Client Name = ${s(a.clientName)}` : ''} in workspace ${s(a.workspaceId)}`,
+        `Create server trigger "${s(a.name)}"${s(a.eventName) ? ` on event "${s(a.eventName)}"` : ' (all events)'}${s(a.clientName) ? ` scoped to Client Name = ${s(a.clientName)}` : ''}${s(a.pageUrlContains).trim() ? ` on pages containing "${s(a.pageUrlContains).trim()}"` : ''} in workspace ${s(a.workspaceId)}`,
       precheck: (a) => findExistingByName(data, a, s(a.name), 'trigger'),
       handler: async (a) => {
         const clientName = a.clientName != null ? s(a.clientName) : '';
         const eventName = a.eventName != null ? s(a.eventName).trim() : '';
+        const pageUrlContains = a.pageUrlContains != null ? s(a.pageUrlContains).trim() : '';
         if (clientName) {
           // Enable the Client Name built-in so {{Client Name}} resolves (best-effort).
           try {
@@ -1829,8 +1831,24 @@ export function buildToolRegistry(
             /* non-fatal */
           }
         }
+        if (pageUrlContains) {
+          // The page filter reads {{ed - page_location}} — ensure it exists (idempotent, best-effort).
+          try {
+            const have = (await data.listGtmVariables(s(a.accountId), s(a.containerId), s(a.workspaceId))).some(
+              (v) => v.name.trim().toLowerCase() === 'ed - page_location'
+            );
+            if (!have) {
+              await data.createGtmVariable(
+                s(a.accountId), s(a.containerId), s(a.workspaceId),
+                buildVariable({ name: 'ed - page_location', kind: 'event_data', keyPath: 'page_location' }) as unknown as Record<string, unknown>
+              );
+            }
+          } catch {
+            /* non-fatal — the trigger still saves; the variable can be added after */
+          }
+        }
         const trigger = eventName
-          ? buildServerEventTrigger(s(a.name), eventName, clientName || undefined)
+          ? buildServerEventTrigger(s(a.name), eventName, clientName || undefined, pageUrlContains ? { pageUrlContains } : undefined)
           : buildServerAllEventsTrigger(s(a.name), clientName || undefined);
         return data.createGtmTrigger(s(a.accountId), s(a.containerId), s(a.workspaceId), trigger as unknown as Record<string, unknown>);
       },
