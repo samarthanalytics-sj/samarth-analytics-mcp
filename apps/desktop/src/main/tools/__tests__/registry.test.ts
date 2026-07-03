@@ -280,6 +280,14 @@ function fakeData(
       calls.push(`metaEmq:${a}:${c}:${w}`);
       return { created: ['ed - fbp', 'ed - fbc', 'ed - event_id'], skipped: ['ed - value'] };
     },
+    createTikTokEmqVariables: async (a: string, c: string, w: string) => {
+      calls.push(`tiktokEmq:${a}:${c}:${w}`);
+      return { created: ['ed - email_address', 'ed - value', 'ed - event_id'], skipped: [] };
+    },
+    createEcommerceDlvVariables: async (a: string, c: string, w: string) => {
+      calls.push(`ecomDlv:${a}:${c}:${w}`);
+      return { created: ['dlv - ecommerce.value', 'dlv - ecommerce.currency'], skipped: [] };
+    },
     setupEcommerceFunnel: async (a: string, c: string, w: string, mid: string, events: string[]) => {
       calls.push(`setupFunnel:${a}:${c}:${w}:${mid}:${events.join(',')}`);
       return { created: { variables: [], triggers: events.map((e) => `CE - ${e}`), tags: [] }, skipped: [] };
@@ -1539,6 +1547,15 @@ async function main(): Promise<void> {
     );
     assert.equal(metaTag.type, 'cvt_5RM3Q', 'built on the imported Meta Pixel template type');
     assert.equal(metaTag.name, 'Meta - Event - ViewContent Tag', 'default name + canonicalized event');
+    // Explicit objectProperties above → the tool did NOT ensure ecommerce dlv variables.
+    assert.ok(!fd.calls.some((c) => c.startsWith('ecomDlv:')), 'explicit objectProperties → no dlv ensure');
+    // Auto-fill path: no objectProperties passed for a standard event → the tool ensures the ecommerce
+    // dlv variables so the auto-filled {{dlv - ecommerce.*}} object properties resolve, and reports them.
+    const mpAuto = JSON.parse(
+      await reg.execute('create_meta_pixel_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '123', event: 'Purchase', firingTriggerId: ['9'] }),
+    );
+    assert.ok(fd.calls.includes('ecomDlv:1:2:3'), 'auto-filled Meta Pixel ensures the ecommerce dlv variables');
+    assert.deepEqual(mpAuto.createdVariables, ['dlv - ecommerce.value', 'dlv - ecommerce.currency'], 'reports the dlv variables it created');
     // a blank event is rejected (not silently created as an empty custom event)
     await assert.rejects(() => reg.execute('create_meta_pixel_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '1', event: '  ' }), /event is required/);
 
@@ -1566,6 +1583,19 @@ async function main(): Promise<void> {
     // (fake createGtmTag echoes a stub; the parameter[] shape is asserted in gtm-builders.test.ts)
     assert.equal(ttapi.name, 'TikTok CAPI - Purchase Tag', 'default name + GA4 purchase mapped to the current Purchase event');
     assert.ok(fd.calls.includes('importTemplate:stape-io/tiktok-tag'), 'imported the Stape TikTok server template');
+    // The TikTok tag auto-fills user_data / event-props / event_id INDEPENDENTLY, so the handler must
+    // ensure the ed- variables whenever mapEventData is on — not only when both lists are empty.
+    assert.ok(fd.calls.includes('tiktokEmq:1:2:3'), 'ensured the TikTok ed- variables (mapEventData default on)');
+    assert.deepEqual(ttapi.createdVariables, ['ed - email_address', 'ed - value', 'ed - event_id'], 'reports the ed- variables it created');
+    // Regression: a PARTIAL call (only userData — no eventProperties/eventId) STILL ensures the ed-
+    // variables, because the builder auto-fills eventProperties + event_id and would otherwise dangle.
+    const ttBefore = fd.calls.filter((c) => c.startsWith('tiktokEmq:')).length;
+    await reg.execute('create_tiktok_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: 'P', accessToken: 'T', event: 'purchase', userData: [{ name: 'external_id', value: '{{ID}}' }] });
+    assert.equal(fd.calls.filter((c) => c.startsWith('tiktokEmq:')).length, ttBefore + 1, 'partial input still ensures the ed- variables');
+    // mapEventData=false → do NOT ensure variables (the lists are left to exactly what was passed).
+    const ttBefore2 = fd.calls.filter((c) => c.startsWith('tiktokEmq:')).length;
+    await reg.execute('create_tiktok_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: 'P', accessToken: 'T', event: 'purchase', mapEventData: false });
+    assert.equal(fd.calls.filter((c) => c.startsWith('tiktokEmq:')).length, ttBefore2, 'mapEventData=false → no variable ensure');
     await assert.rejects(() => reg.execute('create_tiktok_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '1', accessToken: '', event: 'Purchase' }), /accessToken is required/);
 
     // update_gtm_trigger fixes a Custom Event trigger's Event name IN PLACE (no delete+recreate).

@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
@@ -1870,6 +1870,50 @@ export class GoogleDataService {
       created.push(v.name);
     }
     return { created, skipped };
+  }
+
+  /** Idempotently create a set of variables (skip any whose name already exists). Shared by the
+   *  EMQ / ecommerce variable-provisioning helpers so an auto-filled tag's references resolve. */
+  private async createVariablesIfMissing(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    variables: Array<{ name: string }>
+  ): Promise<{ created: string[]; skipped: string[] }> {
+    const existing = await this.listGtmVariables(accountId, containerId, workspaceId);
+    const existingNames = new Set(existing.map((v) => v.name.trim().toLowerCase()));
+    const created: string[] = [];
+    const skipped: string[] = [];
+    for (const v of variables) {
+      if (existingNames.has(v.name.trim().toLowerCase())) {
+        skipped.push(v.name);
+        continue;
+      }
+      await this.createGtmVariable(accountId, containerId, workspaceId, v as unknown as Record<string, unknown>);
+      created.push(v.name);
+    }
+    return { created, skipped };
+  }
+
+  /** Create the TikTok Events API EMQ Event Data variables (`ed - email_address/value/contents/…`)
+   *  in a SERVER container, so they can be mapped into the TikTok CAPI tag's user_data + event
+   *  properties. Idempotent. */
+  async createTikTokEmqVariables(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<{ created: string[]; skipped: string[] }> {
+    return this.createVariablesIfMissing(accountId, containerId, workspaceId, buildTikTokEmqVariables());
+  }
+
+  /** Create the ecommerce dataLayer variables (`dlv - ecommerce.value/currency/items/…`) in a WEB
+   *  container, so an auto-filled Meta Pixel tag's Object Properties resolve. Idempotent. */
+  async createEcommerceDlvVariables(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<{ created: string[]; skipped: string[] }> {
+    return this.createVariablesIfMissing(accountId, containerId, workspaceId, buildEcommerceDlvVariables());
   }
 
   /** List the CUSTOM (community-gallery) templates imported into a workspace, with the tag TYPE

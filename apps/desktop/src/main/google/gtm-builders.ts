@@ -98,18 +98,34 @@ export interface Ga4EventInput {
    *  sendEcommerceData=true + getEcommerceDataFrom='dataLayer'. Use for funnel event tags. */
   sendEcommerceData?: boolean;
 }
+/** GA4 ecommerce events whose value/currency/items ride the `ecommerce` dataLayer object. For these,
+ *  a GA4 event tag defaults "Send Ecommerce data" ON (forward the object) when the caller passes no
+ *  explicit event parameters — so the tag ships with its ecommerce payload instead of nothing. */
+export const GA4_ECOMMERCE_EVENTS = new Set([
+  'view_item', 'view_item_list', 'select_item', 'add_to_cart', 'remove_from_cart', 'view_cart',
+  'add_to_wishlist', 'begin_checkout', 'add_shipping_info', 'add_payment_info', 'purchase', 'refund',
+  'view_promotion', 'select_promotion',
+]);
+export function isGa4EcommerceEvent(event: string): boolean {
+  return GA4_ECOMMERCE_EVENTS.has((event ?? '').trim().toLowerCase());
+}
+
 export function buildGa4EventTag(o: Ga4EventInput): GtmTagResource {
   // GTM requires an (empty) measurementId tagReference plus measurementIdOverride
   // holding the actual G-XXXX / {{variable}}. Verified against a reference GTM
   // MCP server's templates.
+  // Default Send-Ecommerce ON for an ecommerce event when the caller neither set it nor passed
+  // explicit event parameters — the ecommerce object is how GA4 carries value/currency/items, so
+  // the tag ships complete instead of empty. An explicit sendEcommerceData / eventParameters wins.
+  const sendEcom = o.sendEcommerceData ?? (isGa4EcommerceEvent(o.eventName) && !(o.eventParameters?.length));
   const parameter: Param[] = [
     { type: 'tagReference', key: 'measurementId', value: '' },
     tpl('measurementIdOverride', o.measurementId),
     tpl('eventName', o.eventName),
     // Off by default — present on 99% of real GA4 event tags (corpus of 562).
-    boolean('sendEcommerceData', o.sendEcommerceData === true),
+    boolean('sendEcommerceData', sendEcom === true),
   ];
-  if (o.sendEcommerceData === true) parameter.push(tpl('getEcommerceDataFrom', 'dataLayer'));
+  if (sendEcom === true) parameter.push(tpl('getEcommerceDataFrom', 'dataLayer'));
   if (o.eventParameters?.length) {
     // Event parameters live in `eventSettingsTable` as a list of maps keyed
     // `parameter`/`parameterValue` — NOT an `eventParameters` list of name/value
@@ -2313,6 +2329,8 @@ export const META_EMQ_EVENT_DATA_KEYS: string[] = [
   'currency',
   'transaction_id',
   'content_ids',
+  'contents',
+  'num_items',
   'email_address',
   'phone_number',
   'first_name',
@@ -2409,12 +2427,38 @@ export const META_EVENT_OBJECT_PROPERTIES: Record<string, string[]> = {
   VideoPlay: ['video_title', 'video_duration', 'percent_viewed'],
 };
 
+/** Meta Pixel WEB Object Property → dataLayer variable binding, used to AUTO-FILL objectProperties
+ *  from META_EVENT_OBJECT_PROPERTIES when the caller passes none, so a created Meta Pixel tag ships
+ *  with its conversion value. ONLY value/currency: they map 1:1 to the ecommerce dlv variables. Meta's
+ *  content_ids/contents need the GA4 items array RESHAPED (ids / {id,quantity,item_price} objects) — a
+ *  raw {{dlv - ecommerce.items}} would send malformed data — so those are left for the user to wire.
+ *  Pair with the `dlv - ecommerce.*` variables (buildEcommerceDlvVariables). */
+const META_WEB_OBJECT_PROP_BINDING: Record<string, string> = {
+  value: '{{dlv - ecommerce.value}}',
+  currency: '{{dlv - ecommerce.currency}}',
+};
+/** The auto-fill object properties for a standard event: its recommended properties that have a web
+ *  binding, in order. Empty for a custom event (no recommended set). PURE. */
+export function metaWebObjectProps(std: string | null): Array<{ name: string; value: string }> {
+  const keys = std ? (META_EVENT_OBJECT_PROPERTIES[std] ?? []) : [];
+  const out: Array<{ name: string; value: string }> = [];
+  const seen = new Set<string>();
+  for (const k of keys) {
+    if (seen.has(k) || !(k in META_WEB_OBJECT_PROP_BINDING)) continue;
+    seen.add(k);
+    out.push({ name: k, value: META_WEB_OBJECT_PROP_BINDING[k] });
+  }
+  return out;
+}
+
 /** Build a Meta (Facebook) Pixel tag from the imported community template (`type` = its cvt_
  *  code). A Meta STANDARD event sets eventName='standard' + standardEventName=<canonical>;
  *  anything else sets eventName='custom' + customEventName=<the event>. The eventName SELECTOR
  *  must always be set — omitting it (only setting standardEventName) makes the template fall
  *  back to its default (standard/PageView). `objectProperties` (name→value) become the Meta
- *  Object Properties (objectPropertyList). Field shape corpus-validated (528 Meta tags). PURE. */
+ *  Object Properties (objectPropertyList). When objectProperties is UNDEFINED (caller passed none)
+ *  they are AUTO-FILLED from the event's recommended set (metaWebObjectProps); an explicit array
+ *  (even empty) is respected as-is. Field shape corpus-validated (528 Meta tags). PURE. */
 export function buildMetaPixelTag(
   type: string,
   name: string,
@@ -2427,7 +2471,8 @@ export function buildMetaPixelTag(
   const parameter: Param[] = [tpl('pixelId', pixelId), tpl('eventName', std ? 'standard' : 'custom')];
   if (std) parameter.push(tpl('standardEventName', std));
   else parameter.push(tpl('customEventName', event));
-  const props = (objectProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
+  const explicit = (objectProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
+  const props = explicit.length ? explicit : (objectProperties === undefined ? metaWebObjectProps(std) : []);
   if (props.length) {
     parameter.push(boolean('objectPropertiesFromVariable', false));
     parameter.push({
@@ -2462,15 +2507,39 @@ const META_USER_DATA_MAP: Array<[fbKey: string, emqKey: string]> = [
   ['em', 'email_address'],
   ['ph', 'phone_number'],
 ];
-/** The Meta custom_data (event/object) rows — the ecommerce fields. Corpus `customDataList` maps
- *  content_ids/contents/value/currency; order_id comes from the GA4 transaction_id. */
-const META_CUSTOM_DATA_MAP: Array<[fbKey: string, emqKey: string]> = [
-  ['content_ids', 'content_ids'],
-  ['value', 'value'],
-  ['currency', 'currency'],
-  ['order_id', 'transaction_id'],
-];
 const edRefRow = ([fbKey, emqKey]: [string, string]): Param => ({ type: 'map', map: [tpl('name', fbKey), tpl('value', `{{ed - ${emqKey}}}`)] });
+
+/** Meta custom_data fb key → its value source: an `ed - <emq key>` variable, or a LITERAL (content_type
+ *  has no clean event key → "product"). Only keys with a binding are auto-mapped; an event's other
+ *  recommended object properties (content_name, registration_method, …) are left for the user. */
+const META_CUSTOM_DATA_BINDING: Record<string, { ed: string } | { literal: string }> = {
+  content_ids: { ed: 'content_ids' },
+  contents: { ed: 'contents' },
+  content_type: { literal: 'product' },
+  value: { ed: 'value' },
+  currency: { ed: 'currency' },
+  num_items: { ed: 'num_items' },
+  order_id: { ed: 'transaction_id' },
+};
+/** Event-aware custom_data rows: the recommended object properties for `std` (minus event_id, which
+ *  is sent via serverEventDataList) that have a binding, in a stable order. For a custom event
+ *  (std null) fall back to the core ecommerce set. value + currency are always included. */
+function metaCustomDataRows(std: string | null): Param[] {
+  const keys = std ? (META_EVENT_OBJECT_PROPERTIES[std] ?? []) : ['content_ids', 'value', 'currency', 'order_id'];
+  const rows: Param[] = [];
+  const seen = new Set<string>();
+  const add = (k: string): void => {
+    if (seen.has(k)) return;
+    const b = META_CUSTOM_DATA_BINDING[k];
+    if (!b) return;
+    seen.add(k);
+    rows.push({ type: 'map', map: [tpl('name', k), tpl('value', 'ed' in b ? `{{ed - ${b.ed}}}` : b.literal)] });
+  };
+  for (const k of keys) if (k !== 'event_id') add(k);
+  add('value');
+  add('currency');
+  return rows;
+}
 
 export function buildMetaCapiServerTag(
   type: string,
@@ -2502,7 +2571,7 @@ export function buildMetaCapiServerTag(
   if (opts?.mapEmqVariables !== false) {
     parameter.push(
       { type: 'list', key: 'userDataList', list: META_USER_DATA_MAP.map(edRefRow) },
-      { type: 'list', key: 'customDataList', list: META_CUSTOM_DATA_MAP.map(edRefRow) },
+      { type: 'list', key: 'customDataList', list: metaCustomDataRows(std) },
       { type: 'list', key: 'serverEventDataList', list: [edRefRow(['event_id', 'event_id'])] },
     );
   }
@@ -2619,6 +2688,53 @@ export function tikTokStandardEvent(event: string): string | null {
  *  typically {{variables}}. Field keys verified against the live template.tpl. NOTE vs Meta CAPI:
  *  eventType IS the inherit/override control (no inheritEventName), and TikTok uses
  *  generateTtp/eventSource (not generateFbp/actionSource). PURE. */
+/** The Event Data (`ed - <key>`) variables a TikTok SERVER tag reads off the incoming event to
+ *  populate user_data + event properties + event_id — the TikTok analog of META_EMQ_EVENT_DATA_KEYS.
+ *  email/phone get a nested `user_data.*` fallback (GA4 enhanced data arrives nested). Created by
+ *  create_tiktok_emq_variables so the auto-mapped rows resolve instead of dangling. */
+export const TIKTOK_EMQ_EVENT_DATA_KEYS: string[] = [
+  'email_address', 'phone_number', 'external_id', 'event_id',
+  'value', 'currency', 'contents', 'content_ids', 'content_type',
+  'num_items', 'transaction_id', 'search_string', 'description',
+];
+export function buildTikTokEmqVariables(): GtmVariableResource[] {
+  const NESTED_FALLBACK = new Set(['email_address', 'phone_number']);
+  const out: GtmVariableResource[] = [];
+  for (const k of TIKTOK_EMQ_EVENT_DATA_KEYS) {
+    if (NESTED_FALLBACK.has(k)) {
+      out.push(buildVariable({ name: `ed - user_data.${k}`, kind: 'event_data', keyPath: `user_data.${k}` }));
+      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }));
+    } else {
+      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
+    }
+  }
+  return out;
+}
+
+/** TikTok advanced-matching rows auto-mapped when the caller passes no userData: the TikTok
+ *  key → the `ed - <emq key>` variable that feeds it. email/phone use the nested-fallback ed
+ *  variables so a GA4-nested payload still resolves. */
+const TIKTOK_USER_DATA_AUTO: Array<[tiktokKey: string, emqKey: string]> = [
+  ['email', 'email_address'],
+  ['phone', 'phone_number'],
+  ['external_id', 'external_id'],
+];
+/** TikTok event-property → `ed - <key>` binding, used to auto-fill the recommended properties for an
+ *  event (TIKTOK_EVENT_PROPERTIES) when the caller passes none. content_type has no clean event key,
+ *  so it is set to the literal "product"; order_id reads the GA4 transaction_id; query reads
+ *  search_string. Properties without a binding here are skipped (no dangling reference). */
+const TIKTOK_EVENT_PROP_BINDING: Record<string, string> = {
+  value: '{{ed - value}}',
+  currency: '{{ed - currency}}',
+  contents: '{{ed - contents}}',
+  content_ids: '{{ed - content_ids}}',
+  content_type: 'product',
+  num_items: '{{ed - num_items}}',
+  order_id: '{{ed - transaction_id}}',
+  query: '{{ed - search_string}}',
+  description: '{{ed - description}}',
+};
+
 export function buildTikTokCapiServerTag(
   type: string,
   name: string,
@@ -2634,6 +2750,10 @@ export function buildTikTokCapiServerTag(
     generateTtp?: boolean;
     eventEnhancement?: boolean;
     requireConsent?: boolean;
+    /** Auto-fill user_data + event properties + event_id from the `ed - <key>` variables when the
+     *  caller passes no explicit rows (default true), so the tag SENDS data instead of shipping empty
+     *  lists. Pair with create_tiktok_emq_variables. false = leave the lists to whatever was passed. */
+    mapEventData?: boolean;
     firingTriggerId?: string[];
   }
 ): GtmTagResource {
@@ -2642,6 +2762,21 @@ export function buildTikTokCapiServerTag(
     const low = n.trim().toLowerCase();
     return keys.includes(low) ? low : n.trim();
   };
+  // Auto-fill from the incoming event when nothing explicit was passed (default on).
+  const autoMap = opts?.mapEventData !== false;
+  let userData = opts?.userData;
+  if (autoMap && !(userData && userData.length)) {
+    userData = TIKTOK_USER_DATA_AUTO.map(([k, emq]) => ({ name: k, value: `{{ed - ${emq}}}` }));
+  }
+  let eventProperties = opts?.eventProperties;
+  if (autoMap && !(eventProperties && eventProperties.length)) {
+    const props = std ? (TIKTOK_EVENT_PROPERTIES[std] ?? []) : [];
+    eventProperties = props
+      .filter((p) => p in TIKTOK_EVENT_PROP_BINDING)
+      .map((p) => ({ name: p, value: TIKTOK_EVENT_PROP_BINDING[p] }));
+  }
+  let eventId = opts?.eventId;
+  if (autoMap && !(eventId && eventId.trim())) eventId = '{{ed - event_id}}';
   const parameter: Param[] = [
     tpl('eventSource', opts?.eventSource && opts.eventSource.trim() ? opts.eventSource.trim() : 'web'),
     tpl('accessToken', accessToken),
@@ -2652,10 +2787,10 @@ export function buildTikTokCapiServerTag(
     boolean('generateTtp', opts?.generateTtp ?? true),
     tpl('adStorageConsent', opts?.requireConsent ? 'required' : 'optional'),
   ];
-  if (opts?.eventId && opts.eventId.trim()) parameter.push(tpl('eventId', opts.eventId));
+  if (eventId && eventId.trim()) parameter.push(tpl('eventId', eventId));
   if (opts?.testEventCode && opts.testEventCode.trim()) parameter.push(tpl('testEventCode', opts.testEventCode));
 
-  const ud = (opts?.userData ?? []).filter((u) => u.name && u.name.trim() !== '');
+  const ud = (userData ?? []).filter((u) => u.name && u.name.trim() !== '');
   if (ud.length) {
     parameter.push({
       type: 'list',
@@ -2664,7 +2799,7 @@ export function buildTikTokCapiServerTag(
     });
   }
 
-  const props = (opts?.eventProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
+  const props = (eventProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
   const known = props.filter((p) => TIKTOK_CUSTOM_DATA_KEYS.includes(p.name.trim().toLowerCase()));
   const extra = props.filter((p) => !TIKTOK_CUSTOM_DATA_KEYS.includes(p.name.trim().toLowerCase()));
   if (known.length) {

@@ -27,9 +27,12 @@ import {
   buildMetaCapiServerTag,
   metaStandardEvent,
   buildTikTokCapiServerTag,
+  buildTikTokEmqVariables,
   tikTokStandardEvent,
   TIKTOK_EVENT_PROPERTIES,
   META_EVENT_OBJECT_PROPERTIES,
+  metaWebObjectProps,
+  isGa4EcommerceEvent,
   normalizeCustomEventName,
   normalizeCustomEventTrigger,
   setCustomEventName,
@@ -1582,24 +1585,130 @@ test('buildMetaEmqVariables: email/phone get a NESTED user_data.* fallback (GA4 
   }
 });
 
-test('buildMetaCapiServerTag maps EMQ user_data (em/ph ONLY) + ecommerce custom_data + event_id (Stape list shapes)', () => {
+test('buildMetaCapiServerTag maps EMQ user_data (em/ph ONLY) + EVENT-AWARE ecommerce custom_data + event_id', () => {
   const t = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - AddToCart Tag', 'P', 'T', 'AddToCart');
-  const listOf = (key: string): Array<{ map: Array<{ key?: string; value?: string }> }> =>
-    ((t.parameter ?? []).find((p) => (p as { key?: string }).key === key) as { list?: Array<{ map: Array<{ key?: string; value?: string }> }> })?.list ?? [];
-  const rows = (key: string): Array<[string, string]> =>
-    listOf(key).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
+  const listOf = (tag: typeof t, key: string): Array<{ map: Array<{ key?: string; value?: string }> }> =>
+    ((tag.parameter ?? []).find((p) => (p as { key?: string }).key === key) as { list?: Array<{ map: Array<{ key?: string; value?: string }> }> })?.list ?? [];
+  const rowsOf = (tag: typeof t, key: string): Array<[string, string]> =>
+    listOf(tag, key).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
+  const rows = (key: string): Array<[string, string]> => rowsOf(t, key);
   // user_data: em/ph ONLY — the template extracts fn/ln/ct/zp/country itself; explicit rows for those
   // would ERASE template-extracted values when the ed variable resolves undefined (lower EMQ).
   assert.deepEqual(rows('userDataList'), [['em', '{{ed - email_address}}'], ['ph', '{{ed - phone_number}}']]);
-  assert.deepEqual(rows('customDataList'), [['content_ids', '{{ed - content_ids}}'], ['value', '{{ed - value}}'], ['currency', '{{ed - currency}}'], ['order_id', '{{ed - transaction_id}}']]);
+  // custom_data is now the AddToCart recommended set (content_ids/contents/content_type/value/currency/num_items),
+  // NOT a fixed list — content_type is the literal "product"; no order_id (AddToCart has none).
+  assert.deepEqual(rows('customDataList'), [
+    ['content_ids', '{{ed - content_ids}}'],
+    ['contents', '{{ed - contents}}'],
+    ['content_type', 'product'],
+    ['value', '{{ed - value}}'],
+    ['currency', '{{ed - currency}}'],
+    ['num_items', '{{ed - num_items}}'],
+  ]);
   assert.deepEqual(rows('serverEventDataList'), [['event_id', '{{ed - event_id}}']]);
-  // Every referenced ed key is provided by buildMetaEmqVariables (the auto-provision covers them all).
+  // Purchase pulls in order_id (from transaction_id); a custom event falls back to the core set.
+  const purchase = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - Purchase Tag', 'P', 'T', 'Purchase');
+  assert.ok(rowsOf(purchase, 'customDataList').some(([n, v]) => n === 'order_id' && v === '{{ed - transaction_id}}'), 'Purchase maps order_id');
+  const custom = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - Custom Tag', 'P', 'T', 'my_custom_event');
+  assert.deepEqual(rowsOf(custom, 'customDataList').map(([n]) => n), ['content_ids', 'value', 'currency', 'order_id'], 'custom event → core ecommerce set');
+  // Every referenced {{ed - …}} variable is provided by buildMetaEmqVariables (literals like "product" are skipped).
   const provided = new Set(buildMetaEmqVariables().map((v) => v.name));
-  const referenced = [...rows('userDataList'), ...rows('customDataList'), ...rows('serverEventDataList')].map(([, v]) => v.replace(/[{}]/g, ''));
+  const referenced = [...rows('userDataList'), ...rows('customDataList'), ...rows('serverEventDataList')]
+    .map(([, v]) => v).filter((v) => v.startsWith('{{')).map((v) => v.replace(/[{}]/g, ''));
   for (const ref of referenced) assert.ok(provided.has(ref), `${ref} is created by buildMetaEmqVariables`);
   // Opt-out: mapEmqVariables false → no lists at all.
   const off = buildMetaCapiServerTag('cvt_5TP8W', 'x', 'P', 'T', 'AddToCart', { mapEmqVariables: false });
   assert.ok(!(off.parameter ?? []).some((p) => ['userDataList', 'customDataList', 'serverEventDataList'].includes(String((p as { key?: string }).key))));
+});
+
+// Shared row extractor for the auto-fill tests.
+const listRows = (tag: { parameter?: unknown }, key: string): Array<[string, string]> => {
+  const p = ((tag.parameter as Array<{ key?: string; list?: Array<{ map: Array<{ key?: string; value?: string }> }> }>) ?? [])
+    .find((x) => x.key === key);
+  return (p?.list ?? []).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
+};
+const paramVal = (tag: { parameter?: unknown }, key: string): string | undefined =>
+  ((tag.parameter as Array<{ key?: string; value?: string }>) ?? []).find((x) => x.key === key)?.value;
+
+test('buildTikTokCapiServerTag: mapEventData (default) auto-fills user_data + event props + event_id from ed- variables', () => {
+  const t = buildTikTokCapiServerTag('cvt_TT01', 'TikTok CAPI - Purchase Tag', '{{TT Pixel}}', '{{TT Token}}', 'purchase');
+  assert.deepEqual(listRows(t, 'userDataList'), [
+    ['email', '{{ed - email_address}}'],
+    ['phone', '{{ed - phone_number}}'],
+    ['external_id', '{{ed - external_id}}'],
+  ]);
+  const cd = new Map(listRows(t, 'customDataList'));
+  assert.equal(cd.get('value'), '{{ed - value}}');
+  assert.equal(cd.get('currency'), '{{ed - currency}}');
+  assert.equal(cd.get('order_id'), '{{ed - transaction_id}}'); // order_id reads the GA4 transaction_id
+  assert.equal(cd.get('content_type'), 'product'); // literal, not a variable
+  assert.equal(paramVal(t, 'eventId'), '{{ed - event_id}}');
+});
+
+test('buildTikTokCapiServerTag: mapEventData=false leaves the lists empty; explicit rows override the auto-fill', () => {
+  const off = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase', { mapEventData: false });
+  assert.ok(!((off.parameter as Array<{ key?: string }>) ?? []).some((p) => ['userDataList', 'customDataList', 'additionalEventPropertiesList'].includes(String(p.key))));
+  assert.equal(paramVal(off, 'eventId'), undefined);
+  const ex = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase', {
+    userData: [{ name: 'email', value: '{{My Email}}' }],
+    eventProperties: [{ name: 'value', value: '{{My Value}}' }],
+  });
+  assert.deepEqual(listRows(ex, 'userDataList'), [['email', '{{My Email}}']]);
+  assert.deepEqual(listRows(ex, 'customDataList'), [['value', '{{My Value}}']]);
+});
+
+test('buildTikTokEmqVariables: creates ed- variables for every auto-filled reference; email/phone get a nested fallback', () => {
+  const names = new Set(buildTikTokEmqVariables().map((v) => v.name));
+  for (const k of ['email_address', 'phone_number', 'external_id', 'event_id', 'value', 'currency', 'contents', 'content_ids', 'content_type', 'num_items', 'transaction_id', 'search_string', 'description']) {
+    assert.ok(names.has(`ed - ${k}`), `has ed - ${k}`);
+  }
+  assert.ok(names.has('ed - user_data.email_address'), 'nested email fallback exists');
+  // Every {{ed - …}} the auto-filled TikTok tag references is actually created.
+  const t = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase');
+  const refs = [
+    ...listRows(t, 'userDataList').map(([, v]) => v),
+    ...listRows(t, 'customDataList').map(([, v]) => v),
+    paramVal(t, 'eventId') ?? '',
+  ].filter((v) => v.startsWith('{{ed'));
+  for (const r of refs) assert.ok(names.has(r.replace(/[{}]/g, '')), `${r} is created by buildTikTokEmqVariables`);
+});
+
+test('buildMetaPixelTag: auto-fills Object Properties from dlv variables when omitted; explicit [] → none; explicit array → used', () => {
+  const auto = buildMetaPixelTag('cvt_5RM3Q', 'Meta - Purchase', '123', 'Purchase', ['9']);
+  const m = new Map(listRows(auto, 'objectPropertyList'));
+  // Only value + currency are auto-filled (clean 1:1 dlv mapping); content_ids/contents need the items
+  // array reshaped, so they are intentionally NOT auto-filled (a raw items array would be malformed).
+  assert.equal(m.get('value'), '{{dlv - ecommerce.value}}');
+  assert.equal(m.get('currency'), '{{dlv - ecommerce.currency}}');
+  assert.equal(m.get('content_ids'), undefined, 'content_ids not auto-filled (needs reshape)');
+  assert.equal(m.get('contents'), undefined, 'contents not auto-filled (needs reshape)');
+  // Every referenced dlv variable is created by buildEcommerceDlvVariables.
+  const dlvNames = new Set(buildEcommerceDlvVariables().map((v) => v.name));
+  for (const { value } of metaWebObjectProps('Purchase')) assert.ok(value.startsWith('{{dlv') && dlvNames.has(value.replace(/[{}]/g, '')), `${value} created`);
+  // explicit empty array → respected (no auto-fill)
+  const none = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'Purchase', undefined, []);
+  assert.equal(((none.parameter as Array<{ key?: string }>) ?? []).find((p) => p.key === 'objectPropertyList'), undefined);
+  // explicit array → used verbatim
+  const ex = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'Purchase', undefined, [{ name: 'value', value: '{{My V}}' }]);
+  assert.deepEqual(listRows(ex, 'objectPropertyList'), [['value', '{{My V}}']]);
+  // custom event → no recommended set → no auto-fill
+  const custom = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'my_custom_event');
+  assert.equal(((custom.parameter as Array<{ key?: string }>) ?? []).find((p) => p.key === 'objectPropertyList'), undefined);
+});
+
+test('buildGa4EventTag: defaults Send-Ecommerce ON for an ecommerce event with no params; OFF otherwise; explicit wins', () => {
+  const purch = buildGa4EventTag({ name: 'GA4 - Purchase', measurementId: 'G-1', eventName: 'purchase' });
+  assert.equal(paramVal(purch, 'sendEcommerceData'), 'true');
+  assert.equal(paramVal(purch, 'getEcommerceDataFrom'), 'dataLayer');
+  const login = buildGa4EventTag({ name: 'GA4 - Login', measurementId: 'G-1', eventName: 'login' });
+  assert.equal(paramVal(login, 'sendEcommerceData'), 'false');
+  // ecommerce event but caller passed explicit params → do NOT force the object
+  const withParams = buildGa4EventTag({ name: 'GA4 - ATC', measurementId: 'G-1', eventName: 'add_to_cart', eventParameters: [{ name: 'x', value: 'y' }] });
+  assert.equal(paramVal(withParams, 'sendEcommerceData'), 'false');
+  // explicit false wins even for an ecommerce event
+  const forcedOff = buildGa4EventTag({ name: 'GA4 - Purchase Off', measurementId: 'G-1', eventName: 'purchase', sendEcommerceData: false });
+  assert.equal(paramVal(forcedOff, 'sendEcommerceData'), 'false');
+  assert.ok(isGa4EcommerceEvent('add_to_cart') && !isGa4EcommerceEvent('login'));
 });
 
 test('buildVariable throws on an unknown kind (no silent empty Custom JS variable)', () => {
