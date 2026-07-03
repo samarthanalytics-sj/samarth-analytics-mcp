@@ -2577,13 +2577,28 @@ export function metaWebObjectProps(std: string | null): Array<{ name: string; va
  *  Object Properties (objectPropertyList). When objectProperties is UNDEFINED (caller passed none)
  *  they are AUTO-FILLED from the event's recommended set (metaWebObjectProps); an explicit array
  *  (even empty) is respected as-is. Field shape corpus-validated (528 Meta tags). PURE. */
+/** Facebook Advanced Matching keys the WEB Pixel template's `advancedMatchingList` SELECT accepts —
+ *  the web-pixel analog of the CAPI userDataList. NOTE the web SELECT uses the SHORT `cn` for country
+ *  (the CAPI/server user_data spec uses the long `country` — a different field name); a caller who
+ *  passes either gets `cn` via the alias below. Unknown keys pass through. Advanced matching is the
+ *  Meta Pixel's "user properties". */
+export const META_PIXEL_ADVANCED_MATCH_KEYS: string[] = ['em', 'fn', 'ln', 'ph', 'ge', 'db', 'ct', 'st', 'zp', 'cn', 'external_id'];
+/** Forgiving aliases → the exact web-Pixel SELECT value (the CAPI-style `country` is the common slip). */
+const META_PIXEL_ADVANCED_MATCH_ALIAS: Record<string, string> = { country: 'cn' };
+const canonMetaAdvancedMatchKey = (name: string): string => {
+  const low = name.trim().toLowerCase();
+  const aliased = META_PIXEL_ADVANCED_MATCH_ALIAS[low] ?? low;
+  return META_PIXEL_ADVANCED_MATCH_KEYS.includes(aliased) ? aliased : name.trim();
+};
+
 export function buildMetaPixelTag(
   type: string,
   name: string,
   pixelId: string,
   event: string,
   firingTriggerId?: string[],
-  objectProperties?: Array<{ name: string; value: string }>
+  objectProperties?: Array<{ name: string; value: string }>,
+  advancedMatching?: Array<{ name: string; value: string }>
 ): GtmTagResource {
   const std = metaStandardEvent(event);
   const parameter: Param[] = [tpl('pixelId', pixelId), tpl('eventName', std ? 'standard' : 'custom')];
@@ -2597,6 +2612,18 @@ export function buildMetaPixelTag(
       type: 'list',
       key: 'objectPropertyList',
       list: props.map((p) => ({ type: 'map', map: [tpl('name', p.name), tpl('value', p.value)] })),
+    });
+  }
+  // Advanced Matching (the Pixel's user-identity params): a BOOLEAN toggle + a list of {name,value}
+  // rows (em/fn/ln/ph/ct/st/zp/country/external_id, …). Only emitted when the caller passes rows —
+  // values are usually {{variables}} carrying hashed/raw PII the browser can see.
+  const am = (advancedMatching ?? []).filter((p) => p.name && p.name.trim() !== '');
+  if (am.length) {
+    parameter.push(boolean('advancedMatching', true));
+    parameter.push({
+      type: 'list',
+      key: 'advancedMatchingList',
+      list: am.map((p) => ({ type: 'map', map: [tpl('name', canonMetaAdvancedMatchKey(p.name)), tpl('value', p.value)] })),
     });
   }
   return {
@@ -2629,6 +2656,20 @@ const META_USER_DATA_MAP: Array<[fbKey: string, emqKey: string]> = [
   ['external_id', 'external_id'],
 ];
 const edRefRow = ([fbKey, emqKey]: [string, string]): Param => ({ type: 'map', map: [tpl('name', fbKey), tpl('value', `{{ed - ${emqKey}}}`)] });
+
+/** Keys the Stape facebook-tag `userDataList` (advanced-matching / EMQ) SELECT accepts — verified
+ *  against the live template.tpl (defaultValue "em"). Callers may pass an explicit userData row for
+ *  any of these to ADD or override the auto-mapped em/ph/external_id. Unknown keys pass through. */
+export const META_USER_DATA_KEYS: string[] = [
+  'em', 'ph', 'ge', 'db', 'ln', 'fn', 'ct', 'st', 'zp', 'country', 'external_id',
+  'client_ip_address', 'client_user_agent', 'fbc', 'fbp', 'subscription_id', 'lead_id',
+  'fb_login_id', 'anon_id', 'madid', 'page_id', 'page_scoped_user_id', 'ctwa_clid',
+  'ig_account_id', 'ig_sid',
+];
+const canonMetaUserDataKey = (name: string): string => {
+  const low = name.trim().toLowerCase();
+  return META_USER_DATA_KEYS.includes(low) ? low : name.trim();
+};
 
 /** Meta custom_data fb key → its value source: an `ed - <emq key>` variable, or a LITERAL (content_type
  *  has no clean event key → "product"). Only keys with a binding are auto-mapped; an event's other
@@ -2668,7 +2709,21 @@ export function buildMetaCapiServerTag(
   pixelId: string,
   accessToken: string,
   event: string,
-  opts?: { actionSource?: string; eventEnhancement?: boolean; generateFbp?: boolean; firingTriggerId?: string[]; mapEmqVariables?: boolean }
+  opts?: {
+    actionSource?: string;
+    eventEnhancement?: boolean;
+    generateFbp?: boolean;
+    firingTriggerId?: string[];
+    mapEmqVariables?: boolean;
+    /** Explicit advanced-matching rows to ADD to (not replace) the auto-mapped em/ph/external_id —
+     *  the Meta CAPI analog of GA4 user properties / TikTok userData. name ∈ META_USER_DATA_KEYS
+     *  (fbc, fbp, client_ip_address, subscription_id, lead_id, fb_login_id, ge, db, ct, st, zp,
+     *  country, fn, ln, …); value usually a {{variable}}. A caller row WINS a name collision with the
+     *  auto-map. Emitted even when mapEmqVariables=false, so you can hand-pick the whole user_data set. */
+    userData?: Array<{ name: string; value: string }>;
+    /** Optional `userDataObject` — a SELECT/variable whose object is merged into user_data. */
+    userDataObject?: string;
+  }
 ): GtmTagResource {
   const std = metaStandardEvent(event);
   // Event-name fields verified against the live stape-io/facebook-tag template: inheritEventName
@@ -2689,9 +2744,25 @@ export function buildMetaCapiServerTag(
   // (ecommerce), and event_id — so the created tag actually SENDS the fields instead of leaving the
   // "Add property" lists empty. Pair with create_meta_emq_variables (which creates the `ed - <key>`
   // variables these reference). Corpus-verified list shapes.
-  if (opts?.mapEmqVariables !== false) {
+  const mapEmq = opts?.mapEmqVariables !== false;
+  // user_data (advanced matching): the auto-mapped em/ph/external_id rows (when mapEmq is on) PLUS any
+  // explicit caller rows, keyed by name so a caller row REPLACES an auto row of the same name (override)
+  // and new keys append. This only ever ADDS rows the caller asked for beyond the safe auto set, so it
+  // preserves the erase-safety invariant (an undefined-resolving explicit row can't blank a value the
+  // template extracts itself — see META_USER_DATA_MAP). Emitted whenever it is non-empty, so explicit
+  // userData still ships even with mapEmqVariables=false.
+  const udByName = new Map<string, Param>();
+  if (mapEmq) for (const pair of META_USER_DATA_MAP) udByName.set(pair[0], edRefRow(pair));
+  for (const u of opts?.userData ?? []) {
+    if (!u.name || u.name.trim() === '') continue;
+    const key = canonMetaUserDataKey(u.name);
+    udByName.set(key, { type: 'map', map: [tpl('name', key), tpl('value', u.value)] });
+  }
+  if (udByName.size) parameter.push({ type: 'list', key: 'userDataList', list: [...udByName.values()] });
+  if (opts?.userDataObject && opts.userDataObject.trim()) parameter.push(tpl('userDataObject', opts.userDataObject.trim()));
+  // custom_data (ecommerce) + event_id follow the auto-map toggle — they are event-derived, not identity.
+  if (mapEmq) {
     parameter.push(
-      { type: 'list', key: 'userDataList', list: META_USER_DATA_MAP.map(edRefRow) },
       { type: 'list', key: 'customDataList', list: metaCustomDataRows(std) },
       { type: 'list', key: 'serverEventDataList', list: [edRefRow(['event_id', 'event_id'])] },
     );
@@ -3014,6 +3085,170 @@ export function buildLinkedInCapiServerTag(
     name: sanitizeName(name),
     type,
     ...(opts?.firingTriggerId && opts.firingTriggerId.length ? { firingTriggerId: opts.firingTriggerId } : {}),
+    parameter,
+  };
+}
+
+/* ───────────── Hotjar (base + identify) ───────────── */
+
+/** Build a Hotjar tracking tag as a Custom HTML tag (type 'html'). The base snippet installs the
+ *  hj() queue and loads static.hotjar.com for `siteId` (the Hotjar Site ID / hjid — a number or a
+ *  {{variable}}). When `userId` or `userAttributes` are supplied it ALSO emits
+ *  hj('identify', <userId>, { <name>: <value>, … }) — Hotjar's user-identity mechanism, the analog of
+ *  GA4 user properties. Attribute values are usually {{variables}} (e.g. {{User Email}}); they are
+ *  emitted as JS string literals so a resolved {{variable}} lands as a quoted value. Hotjar is a
+ *  session-replay/analytics pixel, so gate the created tag on analytics_storage (not the ad_* set).
+ *  Delegates to buildCustomHtmlTag so the parameter shape matches every other Custom HTML tag. PURE. */
+export function buildHotjarTag(
+  name: string,
+  siteId: string,
+  opts?: { userId?: string; userAttributes?: Array<{ name: string; value: string }>; firingTriggerId?: string[] }
+): GtmTagResource {
+  const hjid = (siteId ?? '').trim() || '0';
+  const base =
+    `(function(h,o,t,j,a,r){h.hj=h.hj||function(){(h.hj.q=h.hj.q||[]).push(arguments)};` +
+    `h._hjSettings={hjid:${hjid},hjsv:6};a=o.getElementsByTagName('head')[0];` +
+    `r=o.createElement('script');r.async=1;r.src=t+h._hjSettings.hjid+j+h._hjSettings.hjsv;` +
+    `a.appendChild(r);})(window,document,'https://static.hotjar.com/c/hotjar-','.js?sv=');`;
+  const attrs = (opts?.userAttributes ?? [])
+    .filter((p) => p.name && p.name.trim() !== '')
+    .map((p) => `${JSON.stringify(p.name.trim())}: ${JSON.stringify(String(p.value ?? ''))}`);
+  const uid = (opts?.userId ?? '').trim();
+  const identify = uid || attrs.length ? `\nhj('identify', ${uid ? JSON.stringify(uid) : 'null'}, {${attrs.join(', ')}});` : '';
+  const html = `<script>\n${base}${identify}\n</script>`;
+  return buildCustomHtmlTag({ name, html, firingTriggerId: opts?.firingTriggerId });
+}
+
+/* ───────────── Pinterest (web tag + Enhanced Match) ───────────── */
+
+/** GA4 / free-text event → the Pinterest ws-gtm-template `eventName` SELECT (lowercase). checkout is
+ *  Pinterest's purchase event. An exact Pinterest value passes through; anything unmatched becomes a
+ *  CUSTOM event (eventName='ADE' + adeEventName). Verified against the live template + the prompt. */
+export const PINTEREST_EVENTS: string[] = ['pagevisit', 'viewcategory', 'viewcontent', 'addtocart', 'checkout', 'search', 'signup', 'lead', 'watchvideo', 'custom'];
+const GA4_TO_PINTEREST: Record<string, string> = {
+  pageview: 'pagevisit',
+  pagevisit: 'pagevisit',
+  viewitem: 'viewcontent',
+  viewcontent: 'viewcontent',
+  viewitemlist: 'viewcategory',
+  viewcategory: 'viewcategory',
+  selectitem: 'viewcategory',
+  addtocart: 'addtocart',
+  purchase: 'checkout',
+  checkout: 'checkout',
+  begincheckout: 'checkout',
+  search: 'search',
+  signup: 'signup',
+  generatelead: 'lead',
+  lead: 'lead',
+};
+/** Resolve an event to a Pinterest standard event name, or null (→ ADE custom event). PURE. */
+export function pinterestEvent(event: string): string | null {
+  const raw = (event ?? '').trim();
+  if (!raw) return 'pagevisit';
+  const norm = raw.toLowerCase().replace(/[\s_-]/g, '');
+  if (PINTEREST_EVENTS.includes(norm) && norm !== 'custom') return norm;
+  if (GA4_TO_PINTEREST[norm]) return GA4_TO_PINTEREST[norm];
+  return null;
+}
+
+/** Build a Pinterest web tag (gallery pinterest/ws-gtm-template; `type` = its cvt_ code). Fields:
+ *  tagId + eventName SELECT (a custom event → eventName='ADE' + adeEventName). Enhanced Match — the
+ *  Pinterest user-identity param — is the single `em` field (a SHA-256-hashed email, usually a
+ *  {{variable}}); pass enhancedMatch.em to set it. Consent-gate the created tag on the ad_* set. PURE. */
+export function buildPinterestTag(
+  type: string,
+  name: string,
+  tagId: string,
+  event: string,
+  firingTriggerId?: string[],
+  enhancedMatch?: { em?: string }
+): GtmTagResource {
+  const std = pinterestEvent(event);
+  const parameter: Param[] = [tpl('tagId', tagId)];
+  if (std) {
+    parameter.push(tpl('eventName', std));
+  } else {
+    parameter.push(tpl('eventName', 'ADE'), tpl('adeEventName', (event ?? '').trim()));
+  }
+  const em = enhancedMatch?.em?.trim();
+  if (em) parameter.push(tpl('em', em));
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(firingTriggerId && firingTriggerId.length ? { firingTriggerId } : {}),
+    parameter,
+  };
+}
+
+/* ───────────── Snap Pixel (web tag + Advanced Matching) ───────────── */
+
+/** The Snap snapchat-google-tag-manager `event_type` SELECT values (verified against corpus
+ *  templateData). macrosInSelect → a {{variable}} is also accepted. */
+export const SNAP_EVENT_TYPES: string[] = [
+  'PAGE_VIEW', 'ADD_CART', 'SAVE', 'PURCHASE', 'LEVEL_COMPLETE', 'START_CHECKOUT', 'SIGN_UP',
+  'APP_INSTALL', 'APP_OPEN', 'ADD_BILLING', 'SEARCH', 'VIEW_CONTENT', 'SUBSCRIBE', 'AD_CLICK',
+  'AD_VIEW', 'COMPLETE_TUTORIAL', 'INVITE', 'LOGIN', 'SHARE', 'RESERVE', 'ACHIEVEMENT_UNLOCKED',
+  'ADD_TO_WISHLIST', 'SPENT_CREDITS', 'RATE', 'START_TRIAL', 'LIST_VIEW',
+  'CUSTOM_EVENT_1', 'CUSTOM_EVENT_2', 'CUSTOM_EVENT_3', 'CUSTOM_EVENT_4', 'CUSTOM_EVENT_5',
+];
+const GA4_TO_SNAP: Record<string, string> = {
+  pageview: 'PAGE_VIEW',
+  addtocart: 'ADD_CART',
+  purchase: 'PURCHASE',
+  begincheckout: 'START_CHECKOUT',
+  startcheckout: 'START_CHECKOUT',
+  signup: 'SIGN_UP',
+  search: 'SEARCH',
+  viewitem: 'VIEW_CONTENT',
+  viewcontent: 'VIEW_CONTENT',
+  subscribe: 'SUBSCRIBE',
+  addtowishlist: 'ADD_TO_WISHLIST',
+  login: 'LOGIN',
+  starttrial: 'START_TRIAL',
+  addpaymentinfo: 'ADD_BILLING',
+  addbilling: 'ADD_BILLING',
+};
+/** Resolve an event to a Snap event_type SELECT value; unknown → PAGE_VIEW (the template default). PURE. */
+export function snapEventType(event: string): string {
+  const raw = (event ?? '').trim();
+  if (!raw) return 'PAGE_VIEW';
+  const upper = raw.toUpperCase();
+  if (SNAP_EVENT_TYPES.includes(upper)) return upper; // exact SELECT value
+  const norm = raw.toLowerCase().replace(/[\s_-]/g, '');
+  return GA4_TO_SNAP[norm] ?? 'PAGE_VIEW';
+}
+
+/** The Snap Advanced-Matching (user-identity) fields — flat TEXT params on the template, each its own
+ *  row (NOT a list). Raw user_email/user_phone_number are hashed by Snap on ingest; pre-hashed values
+ *  go in the user_hashed_* fields. Order fixed for stable output. */
+export const SNAP_ADVANCED_MATCH_KEYS: string[] = [
+  'user_email', 'user_hashed_email', 'user_phone_number', 'user_hashed_phone_number',
+  'user_mobile_ad_id', 'user_hashed_mobile_ad_id',
+];
+
+/** Build a Snap Pixel web tag (gallery Snapchat/snapchat-google-tag-manager; `type` = its cvt_ code).
+ *  pixel_id + event_type SELECT. Advanced Matching — the Snap user-identity params — are the six flat
+ *  user_email/user_hashed_email/user_phone_number/user_hashed_phone_number/user_mobile_ad_id/
+ *  user_hashed_mobile_ad_id fields (each its own param, not a list); pass advancedMatching to set them.
+ *  Values usually {{variables}}. Consent-gate the created tag on the ad_* set. PURE. */
+export function buildSnapPixelTag(
+  type: string,
+  name: string,
+  pixelId: string,
+  event: string,
+  firingTriggerId?: string[],
+  advancedMatching?: Partial<Record<string, string>>
+): GtmTagResource {
+  const parameter: Param[] = [tpl('pixel_id', pixelId), tpl('event_type', snapEventType(event))];
+  for (const key of SNAP_ADVANCED_MATCH_KEYS) {
+    const v = advancedMatching?.[key];
+    if (v != null && String(v).trim() !== '') parameter.push(tpl(key, String(v).trim()));
+  }
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(firingTriggerId && firingTriggerId.length ? { firingTriggerId } : {}),
     parameter,
   };
 }

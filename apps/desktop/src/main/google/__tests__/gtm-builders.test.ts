@@ -30,6 +30,11 @@ import {
   buildTikTokCapiServerTag,
   buildTikTokEmqVariables,
   buildLinkedInCapiServerTag,
+  buildHotjarTag,
+  buildPinterestTag,
+  buildSnapPixelTag,
+  pinterestEvent,
+  snapEventType,
   tikTokStandardEvent,
   TIKTOK_EVENT_PROPERTIES,
   META_EVENT_OBJECT_PROPERTIES,
@@ -2324,6 +2329,114 @@ test('evaluateTrackingSetup: per-event server relay beats the base relay in the 
   assert.equal(purchase?.status, 'pass');
   assert.ok(purchase?.detail.includes('GA4 - Purchase Tag (Server)'));
   assert.equal(r.checks.find((c) => c.id === 'server_event_view_item')?.status, 'fail', 'paused base relay is NOT coverage');
+});
+
+/* ───────────── Marketing-tag USER IDENTITY (advanced matching) ───────────── */
+
+// Shared param/list extractors (mirror the ones above, scoped for these tests).
+const pval = (tag: { parameter?: unknown }, key: string): string | undefined =>
+  ((tag.parameter as Array<{ key?: string; value?: string }>) ?? []).find((x) => x.key === key)?.value;
+const lrows = (tag: { parameter?: unknown }, key: string): Array<[string, string]> => {
+  const p = ((tag.parameter as Array<{ key?: string; list?: Array<{ map: Array<{ key?: string; value?: string }> }> }>) ?? [])
+    .find((x) => x.key === key);
+  return (p?.list ?? []).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
+};
+
+test('buildMetaCapiServerTag: explicit userData ADDS to the auto-map; caller row wins a collision; canonicalized', () => {
+  const t = buildMetaCapiServerTag('cvt_5TP8W', 'x', 'P', 'T', 'Purchase', {
+    userData: [
+      { name: 'fbc', value: '{{fbc}}' },
+      { name: 'EM', value: '{{My Email}}' }, // collides with the auto em row → caller wins, key lowercased
+      { name: '', value: 'dropped' },        // blank name dropped
+    ],
+    userDataObject: '{{User Data Object}}',
+  });
+  const ud = new Map(lrows(t, 'userDataList'));
+  assert.equal(ud.get('em'), '{{My Email}}', 'caller em overrides the auto {{ed - email_address}}');
+  assert.equal(ud.get('ph'), '{{ed - phone_number}}', 'auto ph kept');
+  assert.equal(ud.get('external_id'), '{{ed - external_id}}', 'auto external_id kept');
+  assert.equal(ud.get('fbc'), '{{fbc}}', 'new advanced-matching key appended');
+  assert.ok(!ud.has(''), 'blank-name row dropped');
+  assert.equal(pval(t, 'userDataObject'), '{{User Data Object}}');
+});
+
+test('buildMetaCapiServerTag: userData ships even with mapEmqVariables=false (identity is not gated by the ecommerce toggle)', () => {
+  const t = buildMetaCapiServerTag('cvt_5TP8W', 'x', 'P', 'T', 'Purchase', {
+    mapEmqVariables: false,
+    userData: [{ name: 'em', value: '{{My Email}}' }],
+  });
+  assert.deepEqual(lrows(t, 'userDataList'), [['em', '{{My Email}}']], 'only the explicit row, no auto-map');
+  // ecommerce/event_id lists stay OFF under mapEmqVariables=false.
+  assert.ok(!((t.parameter as Array<{ key?: string }>) ?? []).some((p) => ['customDataList', 'serverEventDataList'].includes(String(p.key))));
+});
+
+test('buildMetaPixelTag: advancedMatching → advancedMatching=true + advancedMatchingList of {name,value}; key canonicalized; omitted → absent', () => {
+  const t = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'Purchase', ['9'], [], [
+    { name: 'EM', value: '{{Hashed Email}}' },
+    { name: 'fn', value: '{{First Name}}' },
+    { name: '', value: 'dropped' },
+  ]);
+  assert.equal(pval(t, 'advancedMatching'), 'true', 'advanced matching toggled on');
+  assert.deepEqual(lrows(t, 'advancedMatchingList'), [['em', '{{Hashed Email}}'], ['fn', '{{First Name}}']]);
+  // The web Pixel SELECT uses the SHORT `cn` for country (CAPI uses long `country`); the builder aliases it.
+  const withCountry = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'Purchase', undefined, [], [
+    { name: 'country', value: '{{Country}}' },
+    { name: 'cn', value: '{{Country 2}}' },
+  ]);
+  assert.deepEqual(lrows(withCountry, 'advancedMatchingList'), [['cn', '{{Country}}'], ['cn', '{{Country 2}}']], 'country → cn alias; cn passes through');
+  const none = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'Purchase', undefined, []);
+  assert.equal(pval(none, 'advancedMatching'), undefined, 'no advancedMatching param when none passed');
+  assert.ok(!((none.parameter as Array<{ key?: string }>) ?? []).some((p) => p.key === 'advancedMatchingList'));
+});
+
+test('buildHotjarTag: base snippet only; identify appended with userId + attributes; values quoted', () => {
+  const base = buildHotjarTag('Hotjar', '{{Hotjar Site ID}}', { firingTriggerId: ['5'] });
+  assert.equal(base.type, 'html');
+  assert.deepEqual(base.firingTriggerId, ['5']);
+  const html0 = pval(base, 'html') ?? '';
+  assert.ok(html0.includes('h._hjSettings={hjid:{{Hotjar Site ID}},hjsv:6}'), 'hjid substituted raw (variable)');
+  assert.ok(!html0.includes("hj('identify'"), 'no identify without userId/attributes');
+  assert.ok(((base.parameter as Array<{ key?: string; value?: string }>) ?? []).some((p) => p.key === 'supportDocumentWrite' && p.value === 'false'));
+
+  const id = buildHotjarTag('Hotjar', '3476610', { userId: '{{User ID}}', userAttributes: [{ name: 'email', value: '{{User Email}}' }, { name: '', value: 'x' }] });
+  const html1 = pval(id, 'html') ?? '';
+  assert.ok(html1.includes('h._hjSettings={hjid:3476610,hjsv:6}'), 'numeric site id inlined');
+  assert.ok(html1.includes(`hj('identify', "{{User ID}}", {"email": "{{User Email}}"});`), 'identify with quoted userId + attribute; blank dropped');
+});
+
+test('pinterestEvent + buildPinterestTag: standard/GA4 mapping, ADE custom fallback, Enhanced Match em', () => {
+  assert.equal(pinterestEvent('purchase'), 'checkout');
+  assert.equal(pinterestEvent('view_item'), 'viewcontent');
+  assert.equal(pinterestEvent('addtocart'), 'addtocart');
+  assert.equal(pinterestEvent('Newsletter Signup Custom'), null);
+  const t = buildPinterestTag('cvt_PIN', 'Pinterest - Purchase Tag', '{{Pinterest Tag ID}}', 'purchase', ['9'], { em: '{{Hashed Email}}' });
+  assert.equal(pval(t, 'tagId'), '{{Pinterest Tag ID}}');
+  assert.equal(pval(t, 'eventName'), 'checkout');
+  assert.equal(pval(t, 'em'), '{{Hashed Email}}');
+  assert.deepEqual(t.firingTriggerId, ['9']);
+  const custom = buildPinterestTag('cvt_PIN', 'x', '123', 'my_custom_thing');
+  assert.equal(pval(custom, 'eventName'), 'ADE');
+  assert.equal(pval(custom, 'adeEventName'), 'my_custom_thing');
+  assert.equal(pval(custom, 'em'), undefined, 'no em when none passed');
+});
+
+test('snapEventType + buildSnapPixelTag: event mapping + flat advanced-matching fields; unknown → PAGE_VIEW', () => {
+  assert.equal(snapEventType('purchase'), 'PURCHASE');
+  assert.equal(snapEventType('add_to_cart'), 'ADD_CART');
+  assert.equal(snapEventType('VIEW_CONTENT'), 'VIEW_CONTENT'); // exact SELECT value passes through
+  assert.equal(snapEventType('something_unmapped'), 'PAGE_VIEW');
+  const t = buildSnapPixelTag('cvt_SNAP', 'Snap - Purchase Tag', '{{Snap Pixel ID}}', 'purchase', ['9'], {
+    user_email: '{{User Email}}',
+    user_hashed_phone_number: '{{Hashed Phone}}',
+    bogus_key: 'ignored', // not a Snap AM field → not emitted
+  });
+  assert.equal(pval(t, 'pixel_id'), '{{Snap Pixel ID}}');
+  assert.equal(pval(t, 'event_type'), 'PURCHASE');
+  assert.equal(pval(t, 'user_email'), '{{User Email}}');
+  assert.equal(pval(t, 'user_hashed_phone_number'), '{{Hashed Phone}}');
+  assert.equal(pval(t, 'bogus_key'), undefined, 'non-AM key not emitted');
+  assert.equal(pval(t, 'user_phone_number'), undefined, 'unset AM field absent');
+  assert.deepEqual(t.firingTriggerId, ['9']);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

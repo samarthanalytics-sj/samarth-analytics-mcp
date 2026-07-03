@@ -29,6 +29,7 @@ import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
 import { Ga4Charts } from './Ga4Charts';
+import { auditToCsv, auditToMarkdown } from './audit-export';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: 'claude-opus-4-8',
@@ -2810,6 +2811,8 @@ function ContainerAuditPanel({
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportNote, setExportNote] = useState('');
   // Bulk-delete selection (orphaned triggers + unused variables), keyed by finding index, plus the
   // one-shot confirmation that gates a bulk delete (the captured index list to remove).
   const [selectedDel, setSelectedDel] = useState<Record<number, boolean>>({});
@@ -2829,10 +2832,37 @@ function ContainerAuditPanel({
     setDelConfirm(null);
     try {
       setReport(await window.desktop.gtm.audit(ctx.accountId!, ctx.containerId!, ctx.workspaceId!));
+      setExportNote('');
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setRunning(false);
+    }
+  }
+
+  // Download the FULL audit (all findings, worst-first) to a file the user picks — CSV
+  // (a findings spreadsheet) or Markdown (a shareable report). Read-only; no GTM access.
+  async function downloadAudit(format: 'csv' | 'md'): Promise<void> {
+    if (!report || exporting) return;
+    setExporting(true);
+    setExportNote('');
+    try {
+      const content =
+        format === 'csv'
+          ? auditToCsv(report)
+          : auditToMarkdown(report, {
+              account: ctx?.accountName,
+              container: ctx?.containerName,
+              workspace: ctx?.workspaceName ?? undefined,
+              generatedAt: new Date().toLocaleString(),
+            });
+      const label = (ctx?.containerName ?? 'container').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'container';
+      const saved = await window.desktop.gtm.exportAudit(`GTM audit - ${label}.${format}`, content);
+      setExportNote(saved ? `✓ Saved to ${saved}` : 'Export cancelled');
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -3087,6 +3117,19 @@ function ContainerAuditPanel({
               ({report.summary.critical} critical · {report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low ·{' '}
               {report.summary.info} info){fixable > 0 ? ` · ${fixable} auto-fixable` : ''}
             </div>
+            {report.counts.findings > 0 && (
+              <div style={styles.downloadBar}>
+                <span style={{ color: 'var(--text)', fontSize: 13.5, fontWeight: 600 }}>Download the full audit</span>
+                <button style={{ ...styles.downloadBtn, ...disabledStyle(exporting) }} onClick={() => void downloadAudit('csv')} disabled={exporting} title="Download every finding as a CSV spreadsheet">
+                  ⬇ CSV
+                </button>
+                <button style={{ ...styles.downloadBtn, ...disabledStyle(exporting) }} onClick={() => void downloadAudit('md')} disabled={exporting} title="Download the audit as a shareable Markdown report">
+                  ⬇ Markdown
+                </button>
+                {exporting && <span style={styles.muted}>Saving…</span>}
+                {exportNote && <span style={styles.muted}>{exportNote}</span>}
+              </div>
+            )}
             {findings.length > 0 && (
               <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Filter:</span>
@@ -4233,6 +4276,11 @@ const styles: Record<string, React.CSSProperties> = {
   muted: { color: 'var(--text-faint)', fontSize: 13 },
   dot: { width: 9, height: 9, borderRadius: 999, display: 'inline-block', flexShrink: 0 },
   linkBtn: { background: 'transparent', border: 'none', color: 'var(--c-blue)', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' },
+  // "Download the full audit" bar — a tinted, bordered strip so the export is an obvious call to
+  // action rather than a faint text link. Its buttons are solid but a touch smaller than primaryBtn
+  // so the "Apply all fixes" CTA still reads as the primary action.
+  downloadBar: { marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '11px 14px', background: 'rgba(37,99,235,0.1)', border: '1px solid rgba(37,99,235,0.55)', borderRadius: 10 },
+  downloadBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 15px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 },
 
   // Tag-suggestion review panel.
   reviewWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },

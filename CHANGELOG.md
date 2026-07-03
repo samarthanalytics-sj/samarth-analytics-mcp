@@ -1,3 +1,36 @@
+## [1.149.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.148.0...v1.149.0) (2026-07-03)
+
+### Features
+
+* **desktop:** user-identity / advanced-matching params across marketing tags ([e45b58f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e45b58ff861e43c82cec20d2d04178b69f98c032))
+
+## [1.148.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.147.0...v1.148.0) (2026-07-03)
+
+### Features
+
+* **desktop:** make the container-audit download option prominent ([585319e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/585319e01359c045231c63445ed7f66af0c9a5a4))
+
+## [1.147.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.146.1...v1.147.0) (2026-07-03)
+
+### Features
+
+* **desktop:** download the container audit as CSV or Markdown ([1be76cf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1be76cfba124f4cbd3e04de5c64cf754bb195ff2))
+
+## [1.146.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.146.0...v1.146.1) (2026-07-03)
+
+### Bug Fixes
+
+* **desktop:** route add_ga4_server_parameters to the GTM chat ([e7aaf59](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e7aaf59cb54e403102ff31a5488ae97e0d0d7a3a)), closes [#256](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/256)
+
+## [1.146.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.145.1...v1.146.0) (2026-07-03)
+
+### Features
+
+* **desktop:** add event parameters / user properties to GA4 server tags ([1670103](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1670103761fe66028b98b85013d1364afeed0aa4))
+* **desktop:** auto-fill needed tag properties + backing variables on create ([dcb211d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dcb211d7a9d6d61dafb3a8dedb6b334ff18fe787))
+* **desktop:** four corpus-motivated server-container audit detections ([3ee0b98](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3ee0b98412564491b336dec80a8bed1697c2de1f))
+* **desktop:** LinkedIn CAPI server tag + Meta CAPI external_id matching ([a15361c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a15361cd86a79bc357b61025fedb6439482c7862))
+
 ## [1.145.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.145.0...v1.145.1) (2026-07-03)
 
 ### Bug Fixes
