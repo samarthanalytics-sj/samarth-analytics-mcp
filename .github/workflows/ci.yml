@@ -31,3 +31,16 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # Desktop app suite (registry approval guardrails, builders, smoke). Pure
+      # Node via tsx — the Electron binary is never launched, so skip its download.
+      - name: Install desktop dependencies
+        run: npm ci --prefix apps/desktop
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Typecheck desktop
+        run: npm --prefix apps/desktop run typecheck
+
+      - name: Test desktop
+        run: npm --prefix apps/desktop test

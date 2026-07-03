@@ -136,8 +136,9 @@ One key per provider, shared by all accounts, stored encrypted in the Keychain.
 
 Select the account in the sidebar → **Chat**. Toggle **GTM / GA4**. In GTM mode,
 set the **context bar** (Account → Container → Workspace) once; the app remembers
-it. Then ask, e.g. *"create a GA4 email-click event tag."* Every write shows an
-editable approval card and applies to a **draft workspace** (never published).
+it. Then ask, e.g. *"create a GA4 email-click event tag."* Creates and edits apply
+directly to a **draft workspace** (never published); deletes show a two-step
+approval card.
 
 ---
 

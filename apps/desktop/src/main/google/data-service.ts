@@ -768,7 +768,7 @@ export class GoogleDataService {
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
-  /** Bulk, ONE approval: set the Measurement ID on EVERY GA4 tag in the workspace
+  /** Bulk, ONE call: set the Measurement ID on EVERY GA4 tag in the workspace
    *  (gaawe → measurementIdOverride, googtag → tagId). Continues past a per-tag failure
    *  and returns a summary, so one bad tag does not block the rest and the user approves
    *  the whole "all GA4 tags" operation once instead of tag-by-tag. */
@@ -799,7 +799,7 @@ export class GoogleDataService {
     return { total: targets.length, updated, failed };
   }
 
-  /** Bulk, ONE approval: append GA4 event parameters to EVERY GA4 Event tag (gaawe) in
+  /** Bulk, ONE call: append GA4 event parameters to EVERY GA4 Event tag (gaawe) in
    *  the workspace. Continues past a per-tag failure; returns a summary. */
   async addGa4EventParametersToAllTags(
     accountId: string,

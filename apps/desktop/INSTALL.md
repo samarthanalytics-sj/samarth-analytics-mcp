@@ -148,8 +148,8 @@ fresh on each computer.
    / Gemini key (one per provider, shared by all accounts).
 4. **Pick a model** → Settings → Language model (e.g. OpenAI / `gpt-4o`).
 5. **Use it** → choose **GTM** or **GA4**, set the **context bar** (account →
-   container → workspace) once, and chat. Every write shows an editable approval
-   card and applies to a **draft workspace** (never published).
+   container → workspace) once, and chat. Creates and edits apply directly to a
+   **draft workspace** (never published); deletes show a two-step approval card.
 
 ---
 

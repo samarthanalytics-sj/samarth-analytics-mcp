@@ -5,8 +5,9 @@
 //
 //   A. Read-only mode (no confirm fn): write tools are NOT registered, and
 //      trying to call one is rejected — with ZERO data-layer mutations.
-//   B. Approval required: with a DECLINING confirm, every write tool returns
-//      { declined: true } and mutates NOTHING.
+//   B. Approval is DELETE-ONLY: with a DECLINING confirm, every delete_* tool
+//      returns { declined: true } with zero delete API calls, while every other
+//      write applies directly (creates/edits never prompt).
 //   C. Liveness: with an APPROVING confirm, every tool (read + write, both
 //      products) is invoked once and returns a structured JSON response — no
 //      throw, no hang.
@@ -35,8 +36,8 @@ function record(name: string, passed: boolean, detail = ''): void {
   console.log(`  ${passed ? 'ok  ' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`);
 }
 
-// Data-layer methods that MUTATE GTM. Used to prove nothing changes unless a
-// write was explicitly approved.
+// Data-layer methods that MUTATE GTM. Used to prove read-only mode mutates
+// nothing and declined deletes never reach the API.
 const MUTATIONS = new Set([
   'createGtmWorkspace', 'createGtmTag', 'updateGtmTag', 'setGtmTagPaused',
   'addGa4EventParameters', 'setGa4MeasurementId', 'setGtmTagConsent',
@@ -230,20 +231,28 @@ async function main(): Promise<void> {
     record('read-only registry exposes the 47 read tools', readOnlyNames.size === 47, `${readOnlyNames.size} tools`);
   }
 
-  // ── B. Approval required: a DECLINING confirm mutates nothing. ──────────────
+  // ── B. Approval is DELETE-ONLY: a declining confirm blocks every delete_* tool
+  //       (no delete API call), while non-destructive writes apply directly. ────
   {
     const fd = makeFakeData();
     const reg = buildToolRegistry(fd.data, decline);
-    let declined = 0;
+    const deleteNames = writeNames.filter((n) => n.startsWith('delete_')); // all destructive tools are delete_*
+    let deletesDeclined = 0;
+    let othersApplied = 0;
     for (const name of writeNames) {
       const schema = fullList.find((t) => t.name === name)!.inputSchema;
       const out = JSON.parse(await reg.execute(name, synthesize(schema) as Record<string, unknown>));
-      if (out?.declined === true) declined++;
+      if (name.startsWith('delete_')) {
+        if (out?.declined === true) deletesDeclined++;
+      } else if (out?.declined !== true) {
+        othersApplied++;
+      }
     }
+    const deleteCalls = fd.calls.filter((c) => c.startsWith('delete')).length;
     record(
-      'declined confirm → every write returns declined, nothing mutates',
-      declined === writeNames.length && fd.mutations() === 0,
-      `${declined}/${writeNames.length} declined, ${fd.mutations()} mutations`
+      'declined confirm → every delete declines (no delete API call); creates/edits apply without approval',
+      deletesDeclined === deleteNames.length && othersApplied === writeNames.length - deleteNames.length && deleteCalls === 0,
+      `${deletesDeclined}/${deleteNames.length} deletes declined, ${othersApplied}/${writeNames.length - deleteNames.length} non-deletes applied, ${deleteCalls} delete API calls`
     );
   }
 

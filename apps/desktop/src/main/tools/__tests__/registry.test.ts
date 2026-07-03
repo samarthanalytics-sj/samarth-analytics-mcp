@@ -721,7 +721,7 @@ async function main(): Promise<void> {
     assert.equal(out.findings.some((f: { category: string }) => f.category === 'ga4' || f.category === 'consent'), false);
   });
 
-  await test('fix tools apply: unpause (one confirm), delete trigger/variable (two confirms)', async () => {
+  await test('fix tools apply: unpause (no prompt), delete trigger/variable (two confirms)', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, approveAsIs);
     await reg.execute('set_gtm_tag_paused', { accountId: '1', containerId: '2', workspaceId: '3', tagId: '7', paused: false });
@@ -1047,12 +1047,21 @@ async function main(): Promise<void> {
     assert.deepEqual([...ga4Names].sort(), [...GA4_TOOLS].sort(), 'ga4 mode = exactly the GA4 tools');
   });
 
-  await test('confirm can edit args before they are applied', async () => {
+  await test('approval is DELETE-ONLY: creates/edits apply directly without prompting; delete edits still apply', async () => {
     const { data, calls } = fakeData();
-    // Approve but rename the workspace.
-    const reg = buildToolRegistry(data, async (p) => ({ ...p.details, name: 'Edited Name' }));
+    // A confirm fn that would rename anything it sees — creates must NEVER reach it.
+    let prompted = 0;
+    const reg = buildToolRegistry(data, async (p) => {
+      prompted++;
+      return { ...p.details, name: 'Edited Name' };
+    });
     await reg.execute('create_gtm_workspace', { accountId: '1', containerId: '2', name: 'Original' });
-    assert.ok(calls.includes('createWorkspace:1:2:Edited Name'), 'applied the edited value');
+    assert.equal(prompted, 0, 'creating a workspace shows NO approval card');
+    assert.ok(calls.includes('createWorkspace:1:2:Original'), 'applied the model args unedited (no card to edit in)');
+    // Deletes still prompt (twice) and then actually apply with the (possibly edited) args.
+    await reg.execute('delete_gtm_tag', { accountId: '1', containerId: '2', workspaceId: '3', tagId: 'T9' });
+    assert.equal(prompted, 2, 'delete showed the two-step approval');
+    assert.ok(calls.includes('deleteTag:1:2:3:T9'), 'approved delete reached the API with the confirmed args');
   });
 
   await test('create_gtm_tag_with_trigger REUSES an existing trigger + enables vars + links tag', async () => {
@@ -1117,12 +1126,17 @@ async function main(): Promise<void> {
     assert.equal(fd.calls.length, 0);
   });
 
-  await test('write declines (no API call) on rejection', async () => {
+  await test('rejection only gates deletes: a create applies even under a rejecting confirm; a delete declines', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, reject);
+    // Non-destructive write: applies directly (approval is delete-only).
     const out = await reg.execute('create_gtm_workspace', { accountId: '1', containerId: '2', name: 'Draft' });
-    assert.equal(JSON.parse(out).declined, true);
-    assert.equal(fd.calls.length, 0, 'no API call when declined');
+    assert.equal(JSON.parse(out).declined, undefined, 'create is not declined');
+    assert.ok(fd.calls.includes('createWorkspace:1:2:Draft'), 'create hit the API without a prompt');
+    // Destructive write: still declined, no API call.
+    const del = await reg.execute('delete_gtm_tag', { accountId: '1', containerId: '2', workspaceId: '3', tagId: 'T1' });
+    assert.equal(JSON.parse(del).declined, true);
+    assert.ok(!fd.calls.some((c) => c.startsWith('deleteTag')), 'no delete API call when declined');
   });
 
   await test('write tool is unavailable without confirm (not registered, no API call)', async () => {
@@ -1181,7 +1195,7 @@ async function main(): Promise<void> {
     assert.equal(setCalls.length, 2, 'a failed switch does not change context');
   });
 
-  await test('folder tools create a folder and move entities (gtm write tools, confirm-gated)', async () => {
+  await test('folder tools create a folder and move entities (write tools, available only with a confirm fn)', async () => {
     const calls: string[] = [];
     const data = {
       listGtmFolders: async () => [{ folderId: '12', name: 'Marketing', path: '' }],
@@ -1215,7 +1229,7 @@ async function main(): Promise<void> {
     assert.deepEqual(calls, ['createFolder', 'move']);
   });
 
-  await test('folder rename (one confirm) + delete (two confirms, final requires typing "delete")', async () => {
+  await test('folder rename (no prompt) + delete (two confirms, final requires typing "delete")', async () => {
     const calls: string[] = [];
     const data = {
       renameGtmFolder: async (_a: string, _c: string, _w: string, folderId: string, name: string) => {
