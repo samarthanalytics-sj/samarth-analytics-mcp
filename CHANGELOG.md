@@ -1,3 +1,9 @@
+## [1.147.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.146.1...v1.147.0) (2026-07-03)
+
+### Features
+
+* **desktop:** download the container audit as CSV or Markdown ([1be76cf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1be76cfba124f4cbd3e04de5c64cf754bb195ff2))
+
 ## [1.146.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.146.0...v1.146.1) (2026-07-03)
 
 ### Bug Fixes
