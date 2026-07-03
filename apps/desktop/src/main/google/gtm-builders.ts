@@ -3181,6 +3181,95 @@ export function buildPinterestTag(
   };
 }
 
+/* ───────────── Pinterest Conversions API (server) ───────────── */
+
+/** The Pinterest SERVER template's `eventNameStandard` SELECT values (snake_case — DIFFERENT from the
+ *  web ws-gtm-template's concatenated names), verified against ss-gtm-template's template.tpl. */
+export const PINTEREST_SERVER_EVENTS: string[] = [
+  'add_payment_info', 'add_to_cart', 'add_to_wishlist', 'app_install', 'app_open', 'checkout', 'contact',
+  'custom', 'customize_product', 'find_location', 'initiate_checkout', 'lead', 'page_visit', 'schedule',
+  'search', 'signup', 'start_trial', 'submit_application', 'subscribe', 'view_category', 'view_content',
+  'watch_video',
+];
+const GA4_TO_PINTEREST_SERVER: Record<string, string> = {
+  purchase: 'checkout',
+  viewitem: 'view_content',
+  viewitemlist: 'view_category',
+  selectitem: 'view_category',
+  begincheckout: 'initiate_checkout',
+  pageview: 'page_visit',
+  generatelead: 'lead',
+};
+/** Resolve an event to a Pinterest SERVER standard event, or null (→ a custom_event). PURE. */
+export function pinterestServerEvent(event: string): string | null {
+  const raw = (event ?? '').trim();
+  if (!raw) return null;
+  const norm = raw.toLowerCase().replace(/[\s_-]/g, '');
+  for (const e of PINTEREST_SERVER_EVENTS) if (e.replace(/_/g, '') === norm) return e;
+  return GA4_TO_PINTEREST_SERVER[norm] ?? null;
+}
+
+/** Build a Pinterest Conversions API SERVER tag (gallery template pinterest/ss-gtm-template; `type` =
+ *  its cvt_ code). Needs `advertiserId` (starts 549…) + `apiAccessToken` (both usually {{variables}}).
+ *  By default eventName='inherit' + overrideMode=false, so the tag maps the event name AND reads all
+ *  event/user/custom data straight from the incoming GA4 event (getAllEventData) — no explicit rows —
+ *  the Pinterest analog of Meta CAPI automap. Pass `event` to force a specific Pinterest standard event
+ *  (or a custom one → custom_event + adeEventName). Pass override rows (serverEventData/userData/
+ *  customData, name ∈ the event's keys) to add/override; testMode routes events to Pinterest test mode.
+ *  Field shape verified against the template's template.tpl. PURE. */
+export function buildPinterestCapiServerTag(
+  type: string,
+  name: string,
+  advertiserId: string,
+  apiAccessToken: string,
+  opts?: {
+    event?: string;
+    testMode?: boolean;
+    log?: boolean;
+    override?: {
+      serverEventData?: Array<{ name: string; value: string }>;
+      userData?: Array<{ name: string; value: string }>;
+      customData?: Array<{ name: string; value: string }>;
+    };
+    firingTriggerId?: string[];
+  }
+): GtmTagResource {
+  const parameter: Param[] = [tpl('advertiserId', advertiserId), tpl('apiAccessToken', apiAccessToken)];
+  // Event name: inherit from the client (default, recommended) OR force a specific Pinterest event.
+  const event = opts?.event?.trim();
+  if (event) {
+    const std = pinterestServerEvent(event);
+    parameter.push(tpl('eventName', 'pinterestEventName'));
+    if (std) parameter.push(tpl('eventNameStandard', std));
+    else parameter.push(tpl('eventNameStandard', 'custom_event'), tpl('adeEventName', event));
+  } else {
+    parameter.push(tpl('eventName', 'inherit'));
+  }
+  // Override tables — only when explicit rows are passed (else overrideMode off → auto getAllEventData).
+  const ov = opts?.override;
+  const rows = (arr?: Array<{ name: string; value: string }>): Array<{ name: string; value: string }> =>
+    (arr ?? []).filter((r) => r.name && r.name.trim() !== '');
+  const sed = rows(ov?.serverEventData);
+  const ud = rows(ov?.userData);
+  const cd = rows(ov?.customData);
+  const hasOverride = sed.length > 0 || ud.length > 0 || cd.length > 0;
+  parameter.push(boolean('overrideMode', hasOverride));
+  const table = (key: string, r: Array<{ name: string; value: string }>): void => {
+    if (r.length) parameter.push({ type: 'list', key, list: r.map((x) => ({ type: 'map', map: [tpl('name', x.name.trim()), tpl('value', x.value)] })) });
+  };
+  table('serverEventDataList', sed);
+  table('userDataList', ud);
+  table('customDataList', cd);
+  parameter.push(boolean('testMode', opts?.testMode ?? false));
+  parameter.push(tpl('logMode', opts?.log ? 'log' : 'donotlog'));
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(opts?.firingTriggerId && opts.firingTriggerId.length ? { firingTriggerId: opts.firingTriggerId } : {}),
+    parameter,
+  };
+}
+
 /* ───────────── Snap Pixel (web tag + Advanced Matching) ───────────── */
 
 /** The Snap snapchat-google-tag-manager `event_type` SELECT values (verified against corpus

@@ -32,6 +32,8 @@ import {
   buildLinkedInCapiServerTag,
   buildHotjarTag,
   buildPinterestTag,
+  buildPinterestCapiServerTag,
+  pinterestServerEvent,
   buildSnapPixelTag,
   pinterestEvent,
   snapEventType,
@@ -2418,6 +2420,39 @@ test('pinterestEvent + buildPinterestTag: standard/GA4 mapping, ADE custom fallb
   assert.equal(pval(custom, 'eventName'), 'ADE');
   assert.equal(pval(custom, 'adeEventName'), 'my_custom_thing');
   assert.equal(pval(custom, 'em'), undefined, 'no em when none passed');
+});
+
+test('pinterestServerEvent + buildPinterestCapiServerTag: inherit by default, forced/custom event, override tables, testMode', () => {
+  assert.equal(pinterestServerEvent('purchase'), 'checkout');
+  assert.equal(pinterestServerEvent('view_item'), 'view_content');
+  assert.equal(pinterestServerEvent('add_to_cart'), 'add_to_cart');
+  assert.equal(pinterestServerEvent('page_view'), 'page_visit');
+  assert.equal(pinterestServerEvent('custom'), 'custom'); // 'custom' is a real template SELECT value (≠ custom_event)
+  assert.equal(pinterestServerEvent('some_custom'), null);
+  // Default: inherit the event + overrideMode OFF (auto getAllEventData) — a complete relay from id+token.
+  const t = buildPinterestCapiServerTag('cvt_PINS', 'Pinterest CAPI', '{{Adv ID}}', '{{Pin Token}}', { firingTriggerId: ['9'] });
+  assert.equal(t.type, 'cvt_PINS');
+  assert.equal(pval(t, 'advertiserId'), '{{Adv ID}}');
+  assert.equal(pval(t, 'apiAccessToken'), '{{Pin Token}}');
+  assert.equal(pval(t, 'eventName'), 'inherit');
+  assert.equal(pval(t, 'overrideMode'), 'false');
+  assert.equal(pval(t, 'testMode'), 'false');
+  assert.equal(pval(t, 'logMode'), 'donotlog');
+  assert.deepEqual(t.firingTriggerId, ['9']);
+  // Forced standard event → pinterestEventName + eventNameStandard.
+  const purch = buildPinterestCapiServerTag('cvt_PINS', 'x', 'A', 'T', { event: 'purchase' });
+  assert.equal(pval(purch, 'eventName'), 'pinterestEventName');
+  assert.equal(pval(purch, 'eventNameStandard'), 'checkout');
+  // Custom (non-standard) event → custom_event + adeEventName.
+  const cust = buildPinterestCapiServerTag('cvt_PINS', 'x', 'A', 'T', { event: 'my_thing' });
+  assert.equal(pval(cust, 'eventNameStandard'), 'custom_event');
+  assert.equal(pval(cust, 'adeEventName'), 'my_thing');
+  // Override rows → overrideMode ON + the table; testMode ON.
+  const ov = buildPinterestCapiServerTag('cvt_PINS', 'x', 'A', 'T', { testMode: true, override: { customData: [{ name: 'value', value: '{{V}}' }] } });
+  assert.equal(pval(ov, 'overrideMode'), 'true');
+  assert.equal(pval(ov, 'testMode'), 'true');
+  const cd = ((ov.parameter as Array<{ key?: string; list?: Array<{ map: Array<{ key?: string; value?: string }> }> }>) ?? []).find((p) => p.key === 'customDataList');
+  assert.deepEqual((cd?.list ?? []).map((r) => [r.map.find((m) => m.key === 'name')?.value, r.map.find((m) => m.key === 'value')?.value]), [['value', '{{V}}']]);
 });
 
 test('snapEventType + buildSnapPixelTag: event mapping + flat advanced-matching fields; unknown → PAGE_VIEW', () => {

@@ -487,8 +487,10 @@ async function main(): Promise<void> {
     const ga4Writes = buildGa4WriteTools(fakeData().data);
     assert.equal(ga4Writes.length, 60, 'GA4 write catalog produces 60 tools (19 resources + 6 lifecycle specials)');
     // 92 base + add_ga4_server_parameters + create_linkedin_capi_server_tag = 94, plus the three
-    // user-identity pixel tools (create_hotjar_tag, create_pinterest_tag, create_snap_pixel_tag) = 97.
-    assert.equal(withWrites.list().length, 97 + 60, 'read + write registry has 97 GTM/GA4-read/context + 60 GA4-write tools');
+    // user-identity pixel tools (create_hotjar_tag, create_pinterest_tag, create_snap_pixel_tag) = 97,
+    // plus create_pinterest_capi_server_tag = 98.
+    assert.equal(withWrites.list().length, 98 + 60, 'read + write registry has 98 GTM/GA4-read/context + 60 GA4-write tools');
+    assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     // Every catalog resource + special contributes at least one tool (catches a fully-dropped entry
     // for a resource no other assertion names — google_ads_link, firebase_link, expanded_data_set,
     // dv360, sa360, adsense, subproperty, rollup, etc.).
@@ -1744,6 +1746,15 @@ async function main(): Promise<void> {
     // required fields are enforced (no silent creation without token / conversion rule)
     await assert.rejects(() => reg.execute('create_linkedin_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', accessToken: '', conversionRuleUrn: 'R' }), /accessToken is required/);
     await assert.rejects(() => reg.execute('create_linkedin_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', accessToken: 'T', conversionRuleUrn: '  ' }), /conversionRuleUrn is required/);
+
+    // create_pinterest_capi_server_tag imports the OFFICIAL Pinterest server template + creates the CAPI tag.
+    const pinapi = JSON.parse(
+      await reg.execute('create_pinterest_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', advertiserId: '{{Adv}}', apiAccessToken: '{{Pin Token}}', firingTriggerId: ['5'] }),
+    );
+    assert.ok(fd.calls.includes('importTemplate:pinterest/ss-gtm-template'), 'imported the official Pinterest server template');
+    assert.ok(pinapi.tagId, 'created a Pinterest CAPI tag');
+    await assert.rejects(() => reg.execute('create_pinterest_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', advertiserId: '', apiAccessToken: 'T' }), /advertiserId is required/);
+    await assert.rejects(() => reg.execute('create_pinterest_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', advertiserId: 'A', apiAccessToken: '  ' }), /apiAccessToken is required/);
 
     // update_gtm_trigger fixes a Custom Event trigger's Event name IN PLACE (no delete+recreate).
     const upd = JSON.parse(
