@@ -89,9 +89,11 @@ export function buildGa4Scorecard(input: Ga4ScorecardInput): Ga4Scorecard {
   const { areas, findings } = input;
   const statusOf = new Map(areas.map((a) => [a.area, a.statusKey]));
 
-  // Data Quality category = worst of the data-quality + growth/anomaly findings.
+  // Data Quality category = worst of the data-quality + growth/anomaly + integrity findings. (The
+  // channel-grouping gate below deliberately uses ONLY 'data_quality' so an ecommerce/event integrity
+  // issue affects the Data Quality SCORE without falsely gating Channel-attribution trust.)
   const dqGrowthWorst = findings
-    .filter((f) => f.category === 'data_quality' || f.category === 'growth')
+    .filter((f) => f.category === 'data_quality' || f.category === 'growth' || f.category === 'integrity')
     .reduce((m, f) => Math.max(m, SEV_RANK[f.severity] ?? 0), 0);
   const dqStatus: 'pass' | 'partial' | 'fail' = dqGrowthWorst >= 3 ? 'fail' : dqGrowthWorst >= 1 ? 'partial' : 'pass';
 

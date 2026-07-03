@@ -64,7 +64,7 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
       ecom && sd && ed ? withQuotaRetry(() => data.getGa4Transactions(p, sd, ed)).catch(() => null) : Promise.resolve(null),
     ]);
     const integrityFindings = [
-      ...(deltas ? auditGa4EventDeltas(deltas) : []),
+      ...(deltas ? auditGa4EventDeltas({ events: deltas.events, keyEventNames: (snap.keyEvents ?? []).map((k) => k.eventName) }) : []),
       ...(txn ? auditGa4Transactions({ hasEcommerce: true, transactions: txn.transactions, notSetShare: txn.notSetShare }) : []),
     ];
     if (integrityFindings.length) {

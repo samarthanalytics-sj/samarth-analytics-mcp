@@ -16,31 +16,28 @@ function test(name: string, fn: () => void): void {
 
 console.log('\nGA4 integrity:');
 
-test('per-event: an established event that dropped to zero → high (broken tag)', () => {
-  const r = auditGa4EventDeltas({
+test('per-event: a KEY event that dropped to zero → high; a non-key event → medium (campaign/seasonal framing)', () => {
+  const hi = auditGa4EventDeltas({
     events: [
-      { name: 'purchase', count: 0, priorCount: 800 }, // stopped firing
+      { name: 'purchase', count: 0, priorCount: 800 }, // key event stopped firing
       { name: 'page_view', count: 12000, priorCount: 11500 }, // healthy
     ],
-    distinctEventCount: 20,
+    keyEventNames: ['purchase'],
   });
-  const f = r.find((x) => /stopped firing/i.test(x.message));
-  assert.ok(f && f.severity === 'high' && /purchase/.test(f.message));
-  // a tiny prior volume (< 30) is noise, not flagged
-  assert.equal(auditGa4EventDeltas({ events: [{ name: 'rare', count: 0, priorCount: 5 }], distinctEventCount: 5 }).length, 0);
+  const f = hi.find((x) => /stopped firing/i.test(x.message));
+  assert.ok(f && f.severity === 'high' && /Key event "purchase"/.test(f.message) && f.category === 'integrity');
+  // the same drop-to-zero on a NON-key event is medium and acknowledges a retired campaign/seasonal event.
+  const med = auditGa4EventDeltas({ events: [{ name: 'promo_banner_click', count: 0, priorCount: 800 }] });
+  assert.ok(med.some((x) => x.severity === 'medium' && /retired campaign or seasonal/i.test(x.message)));
+  // a tiny prior volume (< 30) is noise, not flagged.
+  assert.equal(auditGa4EventDeltas({ events: [{ name: 'rare', count: 0, priorCount: 5 }], keyEventNames: ['rare'] }).length, 0);
 });
 
 test('per-event: a >80% plunge on an established event → medium', () => {
-  const r = auditGa4EventDeltas({ events: [{ name: 'add_to_cart', count: 40, priorCount: 900 }], distinctEventCount: 10 });
+  const r = auditGa4EventDeltas({ events: [{ name: 'add_to_cart', count: 40, priorCount: 900 }] });
   assert.ok(r.some((x) => x.severity === 'medium' && /fell \d+%/.test(x.message) && /add_to_cart/.test(x.message)));
   // a mild dip (not below 20%) isn't flagged
-  assert.equal(auditGa4EventDeltas({ events: [{ name: 'add_to_cart', count: 700, priorCount: 900 }], distinctEventCount: 10 }).length, 0);
-});
-
-test('per-event: distinct-name count near/over the 500 cap → low/medium', () => {
-  assert.ok(auditGa4EventDeltas({ events: [], distinctEventCount: 470 }).some((x) => x.severity === 'low' && /500/.test(x.message)));
-  assert.ok(auditGa4EventDeltas({ events: [], distinctEventCount: 505 }).some((x) => x.severity === 'medium'));
-  assert.equal(auditGa4EventDeltas({ events: [], distinctEventCount: 200 }).length, 0);
+  assert.equal(auditGa4EventDeltas({ events: [{ name: 'add_to_cart', count: 700, priorCount: 900 }] }).length, 0);
 });
 
 test('transactions: gated on ecommerce — no findings when the property has none', () => {

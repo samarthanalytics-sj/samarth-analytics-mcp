@@ -2362,28 +2362,32 @@ export class GoogleDataService {
     });
     // Events present in the prior window but absent now (count 0) — the drop-to-zero case.
     for (const [name, priorCount] of priorMap) if (!seen.has(name)) events.push({ name, count: 0, priorCount });
-    return { events, distinctEventCount: seen.size };
+    return { events };
   }
 
-  /** Ecommerce transaction integrity: transactionId x purchase count + the "(not set)" share — for the
-   *  duplicate-transaction / missing-transaction_id engine. Read-only Data API. Caller sets hasEcommerce. */
+  /** Ecommerce transaction integrity: the per-transaction purchase counts (top-N, for duplicate
+   *  detection) + the TRUE "(not set)" share, whose denominator is a separate no-dimension
+   *  ecommercePurchases total (NOT the sum of the capped top-N rows, which would overstate it on a
+   *  store with many transaction ids). Read-only Data API. Caller sets hasEcommerce. */
   async getGa4Transactions(property: string, startDate: string, endDate: string): Promise<Omit<Ga4TransactionInput, 'hasEcommerce'>> {
-    const res = await this.runGa4Report({
-      property, startDate, endDate,
-      dimensions: ['transactionId'], metrics: ['ecommercePurchases'],
-      orderBys: [{ metric: { metricName: 'ecommercePurchases' }, desc: true }], limit: '250',
-    });
-    let total = 0;
+    const [byId, totalRes] = await Promise.all([
+      this.runGa4Report({
+        property, startDate, endDate,
+        dimensions: ['transactionId'], metrics: ['ecommercePurchases'],
+        orderBys: [{ metric: { metricName: 'ecommercePurchases' }, desc: true }], limit: '250',
+      }),
+      this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: ['ecommercePurchases'] }),
+    ]);
+    const total = Number(totalRes.rows[0]?.metrics[0] ?? 0) || 0; // true purchase total (no top-N cap)
     let notSet = 0;
     const transactions: Ga4TransactionInput['transactions'] = [];
-    for (const r of res.rows) {
+    for (const r of byId.rows) {
       const id = r.dimensions[0] ?? '';
       const purchases = Number(r.metrics[0]) || 0;
-      total += purchases;
       if (id === '' || /\(not set\)/i.test(id)) notSet += purchases;
       else transactions.push({ id, purchases });
     }
-    return { transactions, notSetShare: total > 0 ? (notSet / total) * 100 : 0 };
+    return { transactions, notSetShare: total > 0 ? Math.min(100, (notSet / total) * 100) : 0 };
   }
 
   async runGa4Report(input: {

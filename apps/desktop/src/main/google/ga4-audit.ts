@@ -107,7 +107,7 @@ function piiMatch(text: string): string | null {
 
 /** Human label for a GA4 retention enum (TWO_MONTHS → "2 months"). */
 const RETENTION_MONTHS: Record<string, number> = {
-  TWO_MONTHS: 2, FOURTEEN_MONTHS: 14, TWENTY_FIVE_MONTHS: 25, THIRTY_EIGHT_MONTHS: 38, FIFTY_MONTHS: 50,
+  TWO_MONTHS: 2, FOURTEEN_MONTHS: 14, TWENTY_SIX_MONTHS: 26, THIRTY_EIGHT_MONTHS: 38, FIFTY_MONTHS: 50,
 };
 function retentionLabel(e: string): string {
   const m = RETENTION_MONTHS[e];

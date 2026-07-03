@@ -63,6 +63,7 @@ const RISK_BY_CATEGORY: Record<string, string> = {
   customdef: "Reports/explorations can't segment by your event or user parameters",
   integrations: 'Cross-product features (Ads, Signals) unavailable',
   benchmarking: 'Industry benchmarks unavailable',
+  integrity: 'Event/revenue data may be corrupted (broken tag or double-counted purchases)',
 };
 
 const pct = (part: number, total: number): number => (total > 0 ? Math.round((part / total) * 100) : 0);
@@ -82,7 +83,7 @@ const fmtDay = (ymd: string): string => {
   return m ? `${MONTHS[Number(m[2]) - 1] ?? '?'} ${Number(m[3])}, ${m[1]}` : ymd || '—';
 };
 const RETENTION_LABELS: Record<string, string> = {
-  TWO_MONTHS: '2 months', FOURTEEN_MONTHS: '14 months', TWENTY_FIVE_MONTHS: '25 months', THIRTY_EIGHT_MONTHS: '38 months', FIFTY_MONTHS: '50 months',
+  TWO_MONTHS: '2 months', FOURTEEN_MONTHS: '14 months', TWENTY_SIX_MONTHS: '26 months', THIRTY_EIGHT_MONTHS: '38 months', FIFTY_MONTHS: '50 months',
 };
 const retentionLabel = (dr: Ga4PropertySnapshot['dataRetention']): string =>
   dr === null ? 'Not Verified' : RETENTION_LABELS[dr.eventDataRetention] ?? dr.eventDataRetention;

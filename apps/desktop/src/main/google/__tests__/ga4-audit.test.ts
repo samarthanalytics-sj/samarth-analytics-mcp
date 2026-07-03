@@ -204,6 +204,9 @@ test('counts + severity summary are consistent', () => {
 test('service-level-aware retention: GA360 at 14 months is under-retained (recommend 50); standard 14mo is fine', () => {
   const r = auditGa4(base({ serviceLevel: 'GOOGLE_ANALYTICS_360', dataRetention: { eventDataRetention: 'FOURTEEN_MONTHS', resetOnNewActivity: true } }));
   assert.ok(r.findings.some((f) => f.category === 'retention' && /50 months/.test(f.recommendation)));
+  // TWENTY_SIX_MONTHS (a real GA360 value) renders as "26 months", not the raw enum.
+  const r26 = auditGa4(base({ serviceLevel: 'GOOGLE_ANALYTICS_360', dataRetention: { eventDataRetention: 'TWENTY_SIX_MONTHS', resetOnNewActivity: true } }));
+  assert.ok(r26.findings.some((f) => f.category === 'retention' && /26 months/.test(f.message) && !/TWENTY_SIX/.test(f.message)));
   assert.ok(!cats(base({ serviceLevel: 'GOOGLE_ANALYTICS_360', dataRetention: { eventDataRetention: 'FIFTY_MONTHS', resetOnNewActivity: true } })).includes('retention'));
   assert.ok(!cats(base({ dataRetention: { eventDataRetention: 'FOURTEEN_MONTHS', resetOnNewActivity: true } })).includes('retention'));
 });

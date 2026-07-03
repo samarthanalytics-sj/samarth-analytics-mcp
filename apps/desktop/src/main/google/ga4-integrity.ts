@@ -5,7 +5,10 @@
 
 import type { ScorecardFinding } from './scorecard';
 
-const DQ = 'data_quality';
+// A dedicated category (NOT 'data_quality') so these ecommerce/event findings feed the Data Quality
+// SCORE without being mistaken for the channel-attribution ("Unassigned"/"(not set)") signal that
+// gates the Channel-attribution trust row in the scorecard.
+const INTEGRITY = 'integrity';
 const fnum = (n: number): string => Math.round(n).toLocaleString('en-US');
 
 /* ── Per-event deltas ── */
@@ -13,8 +16,9 @@ const fnum = (n: number): string => Math.round(n).toLocaleString('en-US');
 export interface Ga4EventDeltaInput {
   /** eventName → count this window and the prior equal window. */
   events: Array<{ name: string; count: number; priorCount: number }>;
-  /** Distinct event NAMES seen this window (GA4 caps registration at 500 per property). */
-  distinctEventCount: number;
+  /** The property's KEY EVENT names — a key event dropping to 0 is unambiguously serious (high); a
+   *  non-key event dropping to 0 could also be a retired campaign / seasonal event (medium). */
+  keyEventNames?: string[];
 }
 
 // An event needs a meaningful prior volume before a swing means anything (a 5→0 delta is noise).
@@ -26,18 +30,30 @@ const PLUNGE_RATIO = 0.2;
 export function auditGa4EventDeltas(input: Ga4EventDeltaInput): ScorecardFinding[] {
   const findings: ScorecardFinding[] = [];
   const events = input.events ?? [];
+  const keyEvents = new Set(input.keyEventNames ?? []);
 
-  // Events that fired meaningfully last period and are now ZERO — almost always a broken/removed tag.
+  // Events that fired meaningfully last period and are now ZERO. A KEY event going silent is almost
+  // certainly a broken tag (high); a non-key event could instead be a retired campaign / seasonal
+  // event, so it is graded medium with that framing rather than asserted broken.
   const dropped = events
     .filter((e) => e.priorCount >= MIN_PRIOR && e.count === 0)
     .sort((a, b) => b.priorCount - a.priorCount);
   for (const e of dropped.slice(0, 5)) {
-    findings.push({
-      severity: 'high',
-      category: DQ,
-      message: `Event "${e.name}" stopped firing entirely (${fnum(e.priorCount)} in the prior period, 0 now) — this is almost always a broken or removed tag, and every report or key event built on it is now empty.`,
-      recommendation: `Check the tag/trigger that sends "${e.name}" (GTM or gtag) in GA4 DebugView/Realtime; a recent site or tag release is the usual cause. Rule out seasonality only after confirming the tag still fires.`,
-    });
+    if (keyEvents.has(e.name)) {
+      findings.push({
+        severity: 'high',
+        category: INTEGRITY,
+        message: `Key event "${e.name}" stopped firing entirely (${fnum(e.priorCount)} in the prior period, 0 now) — a key event going silent is almost always a broken or removed tag, and the conversions and reports built on it are now empty.`,
+        recommendation: `Check the tag/trigger that sends "${e.name}" (GTM or gtag) in GA4 DebugView/Realtime; a recent site or tag release is the usual cause.`,
+      });
+    } else {
+      findings.push({
+        severity: 'medium',
+        category: INTEGRITY,
+        message: `Event "${e.name}" stopped firing entirely (${fnum(e.priorCount)} in the prior period, 0 now) — likely a broken/removed tag, though a retired campaign or seasonal event that legitimately ended is also possible.`,
+        recommendation: `Confirm whether "${e.name}" is meant to still fire; if so, check its tag/trigger in DebugView (a recent release is the usual cause).`,
+      });
+    }
   }
 
   // Established events that lost MOST of their volume (a partial regression), excluding the zero case above.
@@ -48,19 +64,9 @@ export function auditGa4EventDeltas(input: Ga4EventDeltaInput): ScorecardFinding
     const pctDrop = Math.round((1 - e.count / e.priorCount) * 100);
     findings.push({
       severity: 'medium',
-      category: DQ,
+      category: INTEGRITY,
       message: `Event "${e.name}" fell ${pctDrop}% (${fnum(e.priorCount)} → ${fnum(e.count)}) vs the prior period — a partial tracking regression (tag firing intermittently, a consent change) or a genuine behavior shift.`,
       recommendation: `Verify "${e.name}" still fires reliably in DebugView; rule out a tag/consent/release change before treating the drop as real.`,
-    });
-  }
-
-  // GA4 registers at most 500 distinct event NAMES per property; new names past the cap are dropped.
-  if (input.distinctEventCount >= 450) {
-    findings.push({
-      severity: input.distinctEventCount >= 500 ? 'medium' : 'low',
-      category: DQ,
-      message: `${fnum(input.distinctEventCount)} distinct event names are in use — GA4 caps event-name registration at 500 per property, after which new names are silently dropped and never appear in reports.`,
-      recommendation: 'Consolidate event names (send variants as event PARAMETERS instead of unique event names) before hitting the 500-name cap.',
     });
   }
 
@@ -88,7 +94,7 @@ export function auditGa4Transactions(input: Ga4TransactionInput): ScorecardFindi
     const extra = dupes.reduce((s, t) => s + (t.purchases - 1), 0);
     findings.push({
       severity: 'high',
-      category: DQ,
+      category: INTEGRITY,
       message: `${fnum(dupes.length)} transaction id(s) recorded more than one purchase (${fnum(extra)} duplicate purchase event(s)) — duplicate purchases double-count revenue and conversions, inflating ROAS and misinforming ad bidding.`,
       recommendation: 'Fix the double-firing purchase tag/trigger (a purchase should fire once per order) and/or add event-level deduplication; confirm in DebugView that a refresh/back-navigation does not re-fire purchase.',
     });
@@ -98,7 +104,7 @@ export function auditGa4Transactions(input: Ga4TransactionInput): ScorecardFindi
   if (input.notSetShare >= 5) {
     findings.push({
       severity: input.notSetShare >= 20 ? 'high' : 'medium',
-      category: DQ,
+      category: INTEGRITY,
       message: `${input.notSetShare.toFixed(1)}% of purchases have no transaction_id ("(not set)") — GA4 cannot deduplicate those purchases, so revenue may be double-counted and item-level reporting is unreliable.`,
       recommendation: 'Ensure every purchase event carries a unique transaction_id (and value + currency).',
     });
