@@ -590,7 +590,10 @@ async function main(): Promise<void> {
   });
 
   await test('GA4 tag-edit tools are scoped to the GTM product (reachable in the GTM chat)', async () => {
-    const editTools = ['set_ga4_measurement_id', 'set_ga4_measurement_id_on_all_tags', 'add_ga4_event_parameters', 'add_ga4_event_parameters_to_all_tags'];
+    // add_ga4_server_parameters edits a GTM server tag (sgtmgaaw) — it MUST route to the GTM chat.
+    // It shipped missing from GTM_GA4_TAG_TOOLS (PR #256), so it landed in the read-only GA4 product
+    // and was unreachable where server-container work happens; this pins it in place.
+    const editTools = ['set_ga4_measurement_id', 'set_ga4_measurement_id_on_all_tags', 'add_ga4_event_parameters', 'add_ga4_event_parameters_to_all_tags', 'add_ga4_server_parameters'];
     // GTM chat (where these belong — they edit GTM tags): all must be present.
     const gtm = buildToolRegistry(fakeData().data, approveAsIs, 'gtm').list().map((t) => t.name);
     for (const n of editTools) assert.equal(gtm.includes(n), true, `${n} must be available in the GTM chat`);
