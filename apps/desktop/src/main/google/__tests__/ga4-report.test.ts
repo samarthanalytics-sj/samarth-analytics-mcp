@@ -109,6 +109,11 @@ const baseline = (over: Partial<Ga4Baseline> = {}): Ga4Baseline => ({
     { channel: 'Paid Search', sessions: 20000, keyEvents: 900, convRate: 0.045, revenue: 180000, engagementRate: 0.55 },
     { channel: 'Direct', sessions: 15000, keyEvents: 300, convRate: 0.02, revenue: 0, engagementRate: 0.48 },
   ],
+  landingPages: [
+    { page: '/', sessions: 30000, keyEvents: 800, convRate: 0.026, revenue: 120000, engagementRate: 0.6 },
+    { page: '/pricing', sessions: 12000, keyEvents: 720, convRate: 0.06, revenue: 300000, engagementRate: 0.71 },
+    { page: '/blog/post', sessions: 8000, keyEvents: 40, convRate: 0.005, revenue: 0, engagementRate: 0.34 },
+  ],
   ...over,
 });
 
@@ -223,6 +228,21 @@ test('channel-performance table is omitted when the baseline has no channel data
   const b = baseline({ channelPerformance: [] });
   const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
   assert.ok(!/\*\*Channel performance\*\*/.test(md), 'no empty channel table');
+});
+
+test('section 6 renders a landing-page table with entry-page conversion rate + revenue', () => {
+  const md = buildGa4AuditReport(input());
+  assert.ok(/\*\*Landing pages\*\*/.test(md), 'landing-page sub-heading');
+  assert.ok(/\| Landing page \| Sessions \| Conv\. rate \| Revenue \| Engagement \|/.test(md), 'table header row');
+  assert.ok(/\| \/pricing \|/.test(md), 'a top entry-page row');
+  assert.ok(/6\.0%/.test(md), 'pricing-page conversion rate formatted as a percentage');
+  assert.ok(/\| \/blog\/post \|.*\| - \|.*%/.test(md), 'a zero-revenue entry page shows a dash placeholder, not 0');
+});
+
+test('landing-page table is omitted when the baseline has no landing-page data', () => {
+  const b = baseline({ landingPages: [] });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(!/\*\*Landing pages\*\*/.test(md), 'no empty landing-page table');
 });
 
 test('untrusted outcome metrics are flagged "not safe to quote" in the report; sessions are not', () => {

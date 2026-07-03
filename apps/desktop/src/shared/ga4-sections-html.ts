@@ -181,6 +181,20 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Channel</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cRows}</tbody></table></div>`;
   }
+  // Landing-page table — top entry pages: which convert and which leak. Paths can be long, so the page
+  // cell wraps (break-all) and the table scrolls horizontally on narrow screens.
+  if (x.landingPages && x.landingPages.length) {
+    const lRows = x.landingPages
+      .map(
+        (p) =>
+          `<tr><td ${TD}><span style="font-weight:600;word-break:break-all">${esc(p.page)}</span></td><td ${TDR}>${esc(p.sessions)}</td><td ${TDR}>${esc(p.convRate)}</td><td ${TDR}>${esc(p.revenue)}</td><td ${TDR}>${esc(p.engagement)}</td></tr>`,
+      )
+      .join('');
+    s6 +=
+      `<div style="font-size:12px;font-weight:600;color:${MUTED};margin:10px 2px 4px">Landing pages <span style="font-weight:400;color:${FAINT}">(top entry pages: which convert and which leak)</span></div>` +
+      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<table style="border-collapse:collapse;width:100%;min-width:460px"><thead><tr><th ${TH}>Landing page</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${lRows}</tbody></table></div>`;
+  }
 
   // ── Section 7 · Decision readiness ──
   let s7 = eyebrow('Section 7') + h2('Decision readiness');

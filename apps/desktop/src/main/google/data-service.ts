@@ -150,6 +150,11 @@ export interface Ga4Baseline {
    *  (0-1), revenue, engagement rate (0-1) — the "which channels actually convert/earn" table. Top by
    *  sessions. Empty if the query failed. */
   channelPerformance: Array<{ channel: string; sessions: number; keyEvents: number; convRate: number; revenue: number; engagementRate: number }>;
+  /** Top LANDING PAGES by entry sessions: session conversion rate, revenue, engagement rate (0-1) —
+   *  "which entry pages convert and which leak". Uses the `landingPage` dimension (path only — GA4
+   *  strips the query string) so entry pages aggregate cleanly instead of fragmenting across ?utm=
+   *  variants. Empty if the query failed. */
+  landingPages: Array<{ page: string; sessions: number; keyEvents: number; convRate: number; revenue: number; engagementRate: number }>;
 }
 
 export interface GtmWorkspaceView {
@@ -2265,7 +2270,7 @@ export class GoogleDataService {
     // NEWEST-FIRST at limit 1000, then reversed to chronological — so a custom range longer than the cap
     // keeps the MOST-RECENT days (what spike/trend cares about), not the oldest. Country = top-N (250).
     const emptyResult: Ga4ReportResult = { dimensionHeaders: [], metricHeaders: [], rows: [] };
-    const [curTotal, priorTotal, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf] = await Promise.all([
+    const [curTotal, priorTotal, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage] = await Promise.all([
       this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['date'], metrics: ['sessions'], orderBys: byDateDesc, limit: '1000' }),
@@ -2276,6 +2281,9 @@ export class GoogleDataService {
       this.runGa4Report({ property, startDate, endDate, dimensions: ['date', 'sessionDefaultChannelGroup'], metrics: ['sessions'], orderBys: byDateDesc, limit: '5000' }).catch(() => emptyResult),
       // Per-channel PERFORMANCE: sessions + conversion rate + revenue + engagement (top channels by sessions).
       this.runGa4Report({ property, startDate, endDate, dimensions: ['sessionDefaultChannelGroup'], metrics: ['sessions', 'keyEvents', 'sessionKeyEventRate', 'totalRevenue', 'engagementRate'], orderBys: byMetricDesc, limit: '15' }).catch(() => emptyResult),
+      // Top LANDING PAGES: same metric set, keyed on `landingPage` (path only — GA4 strips the query
+      // string) so entry pages aggregate cleanly rather than fragmenting across ?utm= variants.
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['landingPage'], metrics: ['sessions', 'keyEvents', 'sessionKeyEventRate', 'totalRevenue', 'engagementRate'], orderBys: byMetricDesc, limit: '15' }).catch(() => emptyResult),
     ]);
 
     const sessions = oneMetric(curTotal, 0);
@@ -2342,6 +2350,14 @@ export class GoogleDataService {
       topCountries: merge(pairs(byCountry)).sort((a, b) => b.sessions - a.sessions).slice(0, 5),
       channelPerformance: byChannelPerf.rows.map((r) => ({
         channel: r.dimensions[0] || '(not set)',
+        sessions: n(r.metrics[0]),
+        keyEvents: n(r.metrics[1]),
+        convRate: Number(r.metrics[2]) || 0, // sessionKeyEventRate, 0-1
+        revenue: n(r.metrics[3]),
+        engagementRate: Number(r.metrics[4]) || 0, // 0-1
+      })),
+      landingPages: byLandingPage.rows.map((r) => ({
+        page: r.dimensions[0] || '(not set)',
         sessions: n(r.metrics[0]),
         keyEvents: n(r.metrics[1]),
         convRate: Number(r.metrics[2]) || 0, // sessionKeyEventRate, 0-1

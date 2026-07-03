@@ -63,6 +63,10 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     { channel: 'Organic Search', sessions: '20,000', convRate: '3.0%', revenue: 'INR 250,000', engagement: '62%' },
     { channel: 'Paid Search', sessions: '8,000', convRate: '4.5%', revenue: 'INR 180,000', engagement: '55%' },
   ],
+  landingPages: [
+    { page: '/pricing', sessions: '12,000', convRate: '6.0%', revenue: 'INR 300,000', engagement: '71%' },
+    { page: '/blog/post', sessions: '8,000', convRate: '0.5%', revenue: '-', engagement: '34%' },
+  ],
   decisions: [
     { q: 'Which campaigns generate revenue?', status: 'Answerable', note: 'Google Ads linked' },
     { q: 'Lead quality', status: 'Not answerable', note: 'no lead key events' },
@@ -131,6 +135,24 @@ test('section 6 renders the channel-performance table (conversion rate + revenue
 test('section 6 omits the channel table when no channel data', () => {
   const h = ga4SectionsHtml(view({ channelPerformance: [] }));
   assert.ok(!/Channel performance/.test(h), 'no empty table');
+});
+
+test('section 6 renders the landing-page table (entry-page conversion rate + revenue)', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/Landing pages/.test(h), 'table heading');
+  assert.ok(h.includes('/pricing') && h.includes('6.0%') && h.includes('INR 300,000'), 'a landing-page row with conv rate + revenue');
+});
+
+test('section 6 omits the landing-page table when no landing-page data', () => {
+  const h = ga4SectionsHtml(view({ landingPages: [] }));
+  assert.ok(!/Landing pages/.test(h), 'no empty table');
+});
+
+test('section 6 landing-page paths are HTML-escaped (no injection — paths come from the audited site)', () => {
+  const h = ga4SectionsHtml(view({ landingPages: [{ page: '/x"><script>alert(1)</script>&q=1', sessions: '10', convRate: '1.0%', revenue: '-', engagement: '20%' }] }));
+  assert.ok(!h.includes('<script>alert(1)'), 'raw script tag must never reach the output');
+  assert.ok(h.includes('&lt;script&gt;'), 'angle brackets escaped');
+  assert.ok(h.includes('&amp;q=1'), 'ampersand escaped');
 });
 
 test('section 7 decision readiness pills answerable vs not answerable', () => {

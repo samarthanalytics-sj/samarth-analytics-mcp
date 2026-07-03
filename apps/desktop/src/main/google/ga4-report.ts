@@ -113,6 +113,20 @@ function channelPerfRows(baseline: Ga4Baseline | null, currency: string): Array<
   }));
 }
 
+// Top LANDING-PAGE rows (entry-page conversion rate + revenue) — same shape and formatting as the
+// channel table so both surfaces render identically. Top 10 entry pages by sessions; long paths are
+// left intact (the markdown cell escapes pipes; the HTML cell scrolls/wraps).
+function landingPageRows(baseline: Ga4Baseline | null, currency: string): Array<{ page: string; sessions: string; convRate: string; revenue: string; engagement: string }> {
+  const cur = currency ? `${currency} ` : '';
+  return (baseline?.landingPages ?? []).slice(0, 10).map((p) => ({
+    page: p.page || '(not set)',
+    sessions: num(p.sessions),
+    convRate: `${(p.convRate * 100).toFixed(1)}%`,
+    revenue: p.revenue > 0 ? `${cur}${num(Math.round(p.revenue))}` : '—',
+    engagement: `${Math.round(p.engagementRate * 100)}%`,
+  }));
+}
+
 function areaEvidence(area: string, s: Ga4PropertySnapshot, config: Ga4AuditReport): string {
   switch (area) {
     case 'Data collection':
@@ -440,7 +454,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     footer: 'Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.',
   };
 
-  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), decisions, notVerified: { gate, items: nv }, scope };
+  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), decisions, notVerified: { gate, items: nv }, scope };
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
@@ -625,6 +639,15 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
       L.push('| Channel | Sessions | Conv. rate | Revenue | Engagement |');
       L.push('|---|--:|--:|--:|--:|');
       for (const c of cperf) L.push(`| ${cell(c.channel)} | ${c.sessions} | ${c.convRate} | ${c.revenue} | ${c.engagement} |`);
+      L.push('');
+    }
+    const lpRows = landingPageRows(baseline, s.currencyCode);
+    if (lpRows.length) {
+      L.push('**Landing pages** (top entry pages — which pages convert and which leak)');
+      L.push('');
+      L.push('| Landing page | Sessions | Conv. rate | Revenue | Engagement |');
+      L.push('|---|--:|--:|--:|--:|');
+      for (const p of lpRows) L.push(`| ${cell(p.page)} | ${p.sessions} | ${p.convRate} | ${p.revenue} | ${p.engagement} |`);
       L.push('');
     }
     if (baseline.devices.length) {
