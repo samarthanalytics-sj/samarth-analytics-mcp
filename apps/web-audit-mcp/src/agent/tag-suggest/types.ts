@@ -113,6 +113,11 @@ export interface SuggestInput {
   elements: DetectedElement[];
   /** Embedded video players found across the scanned pages (YouTube → one tag). */
   videoEmbeds?: VideoEmbed[];
+  /** Auto-detected site type (set by buildSuggestInput). 'ecommerce' unlocks the ecommerce funnel
+   *  event suggestions (view_item → purchase); 'non_ecommerce' emits NONE of them. */
+  websiteType?: 'ecommerce' | 'non_ecommerce';
+  /** Human-readable signals that led to the ecommerce classification (for the UI's "why" tooltip). */
+  ecommerceEvidence?: string[];
 }
 
 export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video';

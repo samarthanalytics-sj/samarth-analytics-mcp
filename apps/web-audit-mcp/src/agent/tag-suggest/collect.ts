@@ -279,6 +279,101 @@ export interface PageScan {
   signals: PageSignals;
 }
 
+/* ── eCommerce auto-detection (pure) ─────────────────────────────────────────
+ * Inspect the already-collected forms/elements/pages + page signals and decide
+ * whether the site is an online store. Conservative by design: a blog with a
+ * stray "/shop" link must NOT be flagged, so a single MEDIUM signal is never
+ * enough — either one STRONG signal or two DISTINCT MEDIUM categories. */
+
+// STRONG: a script from a known ecommerce PLATFORM / hosted checkout ⇒ ecommerce on its own.
+const ECOMMERCE_PLATFORM_SCRIPTS: Array<{ re: RegExp; label: string }> = [
+  { re: /cdn\.shopify\.com|shopify/i, label: 'Shopify script' },
+  { re: /woocommerce|wp-content\/plugins\/woocommerce/i, label: 'WooCommerce script' },
+  { re: /magento|mage\//i, label: 'Magento script' },
+  { re: /bigcommerce/i, label: 'BigCommerce script' },
+  { re: /snipcart/i, label: 'Snipcart script' },
+  { re: /squarespace.*commerce|sqs-commerce/i, label: 'Squarespace Commerce script' },
+  { re: /cdn\.checkout\.com|checkout\.stripe\.com/i, label: 'hosted checkout script' },
+];
+// MEDIUM: a payment-provider script (present on many stores, but also on non-store donation/booking
+// pages — so it only counts toward the 2-category threshold, never alone).
+const PAYMENT_PROVIDER_SCRIPTS: Array<{ re: RegExp; label: string }> = [
+  { re: /js\.stripe\.com|stripe\.com/i, label: 'Stripe payment script' },
+  { re: /paypal(objects)?\.com|paypal/i, label: 'PayPal payment script' },
+  { re: /braintree/i, label: 'Braintree payment script' },
+];
+// MEDIUM: an ecommerce-ish path segment on a page path OR an element href.
+const ECOMMERCE_PATH_RE = /\/(cart|checkout|basket|shop|products?|collections)(\/|\?|$)/i;
+// MEDIUM: element/link TEXT that reads like a purchase ACTION. Deliberately excludes bare destination
+// words ("checkout"/"cart"/"basket") — those are already the `path` category, and letting one
+// "Checkout" button (text "Checkout" + href "/checkout") satisfy BOTH categories would clear the
+// 2-distinct-signal bar from a single element and misclassify a non-store as ecommerce.
+const ECOMMERCE_TEXT_RE = /\b(add to cart|add to bag|add to basket|buy now)\b/i;
+// MEDIUM: a price-like token (currency symbol immediately before digits, e.g. "$29", "£9.99").
+const PRICE_RE = /[$£€₹]\s?\d/;
+
+/** Decide whether the scanned site is eCommerce, with human-readable evidence. PURE.
+ *  isEcommerce = (any STRONG signal) OR (>= 2 DISTINCT MEDIUM categories). */
+export function detectEcommerceSignals(
+  forms: Array<{ purpose: FormPurpose }>,
+  elements: DetectedElement[],
+  pages: Array<{ page: string }>,
+  scriptSrcs: string[],
+): { isEcommerce: boolean; evidence: string[] } {
+  const evidence: string[] = [];
+  let strong = false;
+  // STRONG: an add-to-cart element intent.
+  if (elements.some((e) => e.kind === 'cta' && e.intent === 'add_to_cart')) {
+    strong = true;
+    evidence.push("'Add to cart' button");
+  }
+  // STRONG: a checkout-purpose form.
+  if (forms.some((f) => f.purpose === 'checkout')) {
+    strong = true;
+    evidence.push('checkout form');
+  }
+  // STRONG: an ecommerce PLATFORM script.
+  for (const { re, label } of ECOMMERCE_PLATFORM_SCRIPTS) {
+    if (scriptSrcs.some((s) => re.test(s))) {
+      strong = true;
+      evidence.push(label);
+      break;
+    }
+  }
+
+  // MEDIUM categories (each counts ONCE): ecommerce path, purchase-action text, price, payment script.
+  const medium = new Set<string>();
+  const pathHit =
+    pages.find((p) => ECOMMERCE_PATH_RE.test(p.page)) ??
+    (elements.find((e) => e.href && ECOMMERCE_PATH_RE.test(e.href)) ? { page: '' } : undefined);
+  if (pathHit) {
+    medium.add('path');
+    const sample = pages.find((p) => ECOMMERCE_PATH_RE.test(p.page))?.page
+      ?? elements.find((e) => e.href && ECOMMERCE_PATH_RE.test(e.href))?.href;
+    const seg = sample ? (ECOMMERCE_PATH_RE.exec(sample)?.[1] ?? '') : '';
+    evidence.push(seg ? `ecommerce path /${seg}` : 'ecommerce path');
+  }
+  if (elements.some((e) => ECOMMERCE_TEXT_RE.test(e.text || ''))) {
+    medium.add('text');
+    const m = elements.map((e) => ECOMMERCE_TEXT_RE.exec(e.text || '')?.[0]).find(Boolean);
+    evidence.push(m ? `"${m}" text` : 'purchase-action text');
+  }
+  if (elements.some((e) => PRICE_RE.test(e.text || ''))) {
+    medium.add('price');
+    evidence.push('price-like text');
+  }
+  for (const { re, label } of PAYMENT_PROVIDER_SCRIPTS) {
+    if (scriptSrcs.some((s) => re.test(s))) {
+      medium.add('payment');
+      evidence.push(label);
+      break;
+    }
+  }
+
+  const isEcommerce = strong || medium.size >= 2;
+  return { isEcommerce, evidence: isEcommerce ? evidence : [] };
+}
+
 /** Combine per-page scans into the Phase-1 engine's SuggestInput, attaching a
  *  detected provider to every form. Pure — the buildSuggestions() engine then
  *  maps + dedups + ranks. */
@@ -331,7 +426,18 @@ export function buildSuggestInput(pages: PageScan[], siteHost: string): SuggestI
       }
     }
   }
-  return { siteHost, forms, elements, ...(videoEmbeds.length ? { videoEmbeds } : {}) };
+  // Auto-detect eCommerce from everything collected (forms/elements/pages + page scripts). An
+  // ecommerce site unlocks the ecommerce funnel event suggestions; a non-ecommerce site emits none.
+  const scriptSrcs = pages.flatMap((p) => p.signals.scriptSrcs);
+  const { isEcommerce, evidence } = detectEcommerceSignals(forms, elements, pages, scriptSrcs);
+  return {
+    siteHost,
+    forms,
+    elements,
+    ...(videoEmbeds.length ? { videoEmbeds } : {}),
+    websiteType: isEcommerce ? 'ecommerce' : 'non_ecommerce',
+    ...(evidence.length ? { ecommerceEvidence: evidence } : {}),
+  };
 }
 
 /** Playwright wrapper: run the in-page collector on an already-navigated page. */

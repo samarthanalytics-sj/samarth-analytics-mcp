@@ -1338,6 +1338,7 @@ function SuggestionTemplateTable({
         <thead>
           <tr>
             <th style={tplStyles.selTh} title="Tick to create this tag in GTM">✓</th>
+            <th style={tplStyles.th} title="The page this suggestion was found on">Page</th>
             {TEMPLATE_HEADERS.map((h) => <th key={h} style={tplStyles.th}>{h}</th>)}
           </tr>
         </thead>
@@ -1378,6 +1379,11 @@ function SuggestionTemplateTable({
                           {st?.state === 'err' && <div style={{ color: 'var(--c-red)', fontSize: 10, marginTop: 2 }} title={st?.msg}>✗ failed</div>}
                         </>
                       )}
+                    </td>
+                  )}
+                  {first && (
+                    <td rowSpan={g.rowCount} style={{ ...tplStyles.td, color: 'var(--text-dim)', whiteSpace: 'nowrap' }} title={`Found on ${s.page}`}>
+                      {s.page}
                     </td>
                   )}
                   {first && <td rowSpan={g.rowCount} style={tplStyles.tdTag}>{g.tagType}</td>}
@@ -2670,6 +2676,17 @@ function TagReviewPanel({
                 {meta ? `${meta.pagesScanned} page(s) scanned · ` : ''}
                 {suggestions.length} suggestion(s) · {newCount} new, {emCount} already auto-tracked · {selectedIds.length}{' '}
                 selected
+                {meta?.websiteType === 'ecommerce' && (
+                  <span
+                    style={styles.ecomBadge}
+                    title={meta.ecommerceEvidence?.length ? `Detected from: ${meta.ecommerceEvidence.join(', ')}` : 'Detected as an online store'}
+                  >
+                    🛒 eCommerce site
+                  </span>
+                )}
+                {meta?.websiteType === 'non_ecommerce' && (
+                  <span style={styles.nonEcomBadge} title="No online-store signals detected">Non-eCommerce site</span>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                 {/* Selection controls apply to both Cards and Table views (shared `selected` state). */}
@@ -4373,6 +4390,8 @@ const styles: Record<string, React.CSSProperties> = {
   typeChip: { fontSize: 11, color: 'var(--c-blue)', background: 'var(--c-blue-bg)', border: '1px solid var(--c-blue-bg)', borderRadius: 6, padding: '1px 7px' },
   emChip: { fontSize: 11, color: 'var(--c-amber)', background: 'var(--c-amber-bg)', border: '1px solid var(--c-amber-border)', borderRadius: 6, padding: '1px 7px' },
   existsChip: { fontSize: 11, color: 'var(--c-cyan)', background: 'var(--c-cyan-bg)', border: '1px solid var(--c-cyan-border)', borderRadius: 6, padding: '1px 7px' },
+  ecomBadge: { fontSize: 11, fontWeight: 600, color: 'var(--c-green)', background: 'var(--c-green-bg)', border: '1px solid var(--c-green-border)', borderRadius: 6, padding: '1px 7px', marginLeft: 8, whiteSpace: 'nowrap' },
+  nonEcomBadge: { fontSize: 11, color: 'var(--text-muted)', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, padding: '1px 7px', marginLeft: 8, whiteSpace: 'nowrap' },
   editGrid: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 8, background: 'var(--bg)', borderRadius: 8, padding: '4px 12px' },
   detailGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 12, rowGap: 3, marginTop: 5, fontSize: 12.5, color: 'var(--text-dim)', alignItems: 'start' },
   detailKey: { color: 'var(--text-faint)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, paddingTop: 1 },
