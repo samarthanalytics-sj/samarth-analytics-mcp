@@ -1,3 +1,13 @@
+## [1.150.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.149.0...v1.150.0) (2026-07-03)
+
+### Features
+
+* **desktop:** auto-fill default event parameters on GA4 web event tags ([b343f18](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b343f18021545d6a2d69b073abc16b45780a9bc3))
+
+### Bug Fixes
+
+* **desktop:** rename "orphaned trigger" to "unused trigger" in the container audit ([e946e24](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e946e242efb1d5bd2e228e595d52d83a0c56d10b))
+
 ## [1.149.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.148.0...v1.149.0) (2026-07-03)
 
 ### Features
