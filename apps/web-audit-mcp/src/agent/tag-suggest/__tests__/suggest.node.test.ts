@@ -550,6 +550,86 @@ const metaEvents = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
 ] }, { platforms: ['meta'] });
 check('meta: an "Add to Cart" CTA → Meta "AddToCart"; a generic outbound click yields NO meta counterpart', metaEvents.some((s) => s.eventName === 'AddToCart') && !metaEvents.some((s) => s.eventName === 'outbound_click') && metaEvents.every((s) => s.platform === 'meta_pixel'));
 
+// ── Additional ad platforms (multi-select: pinterest / tiktok / linkedin / reddit / google_ads) ──
+// Each platform derives from the SAME GA4 suggestions and REUSES their trigger name (shared trigger on
+// create). A form → the platform's lead/registration event; the base google_tag → the platform's base
+// tag; an add_to_cart CTA → the platform's AddToCart-equivalent. Default platforms:['ga4'] unchanged.
+{
+  const formInput: SuggestInput = { siteHost: 'a.com', forms: [{ page: '/contact', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'lead-form' }], elements: [] };
+  const ga4Base = buildSuggestions(formInput, { full: true }); // GA4 config + the contact_form tag
+  const ga4Trig = new Set(ga4Base.map((s) => s.trigger.name));
+
+  // Pinterest: base google_tag → Pinterest base ('pagevisit'); a contact form → Pinterest 'lead'.
+  const pin = buildSuggestions(formInput, { full: true, platforms: ['pinterest'] });
+  check('pinterest: platforms:[pinterest] returns ONLY pinterest_tag suggestions', pin.length > 0 && pin.every((s) => s.platform === 'pinterest_tag'));
+  check('pinterest: base google_tag → Pinterest base tag (pagevisit, All Pages, {{Pinterest Tag ID}})',
+    pin.some((s) => s.eventName === 'pagevisit' && s.tagName === 'Pinterest - Base Tag' && s.measurementId === '{{Pinterest Tag ID}}' && s.trigger.name === 'All Pages'));
+  const pinLead = pin.find((s) => s.eventName === 'lead');
+  check('pinterest: a contact form → Pinterest "lead", no event params, reuses the GA4 trigger name',
+    !!pinLead && pinLead.measurementId === '{{Pinterest Tag ID}}' && !pinLead.eventParameters && ga4Trig.has(pinLead.trigger.name) && pinLead.trigger.name === 'Contact Form Trigger');
+
+  // TikTok: base → 'Pageview'; contact form → 'Contact' (contact_form matches the "contact" keyword).
+  const tik = buildSuggestions(formInput, { full: true, platforms: ['tiktok'] });
+  check('tiktok: platforms:[tiktok] returns ONLY tiktok_pixel suggestions', tik.length > 0 && tik.every((s) => s.platform === 'tiktok_pixel'));
+  check('tiktok: base google_tag → TikTok base pixel (Pageview, All Pages, {{TikTok Pixel ID}})',
+    tik.some((s) => s.eventName === 'Pageview' && s.tagName === 'TikTok - Base Pixel' && s.measurementId === '{{TikTok Pixel ID}}' && s.trigger.name === 'All Pages'));
+  const tikForm = tik.find((s) => s.eventName === 'Contact');
+  check('tiktok: a contact form → TikTok "Contact", reuses the GA4 trigger name', !!tikForm && !tikForm.eventParameters && ga4Trig.has(tikForm.trigger.name));
+  // A generate_lead-style event → TikTok "SubmitForm" (the design's form→SubmitForm mapping). A CTA
+  // labelled "Generate Lead" yields the GA4 event generate_lead_click → normalizes to generatelead… → SubmitForm.
+  const tikLead = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Generate Lead', intent: 'generic' }] }, { platforms: ['tiktok'] });
+  check('tiktok: a generate_lead-style event → TikTok "SubmitForm"', tikLead.some((s) => s.eventName === 'SubmitForm'));
+
+  // LinkedIn: ONLY the base Insight tag (per-event conversions are Campaign-Manager-side).
+  const li = buildSuggestions(formInput, { full: true, platforms: ['linkedin'] });
+  check('linkedin: platforms:[linkedin] returns EXACTLY the one base Insight tag',
+    li.length === 1 && li[0].platform === 'linkedin_insight' && li[0].tagName === 'LinkedIn - Insight Tag' && li[0].measurementId === '{{LinkedIn Partner ID}}' && li[0].trigger.name === 'All Pages');
+  check('linkedin: a ga4_event yields NO LinkedIn counterpart (only the base tag)', !li.some((s) => s.eventName === 'contact_form' || s.eventName === 'Lead'));
+
+  // Reddit: base → 'PageVisit'; contact form → 'Lead'.
+  const rd = buildSuggestions(formInput, { full: true, platforms: ['reddit'] });
+  check('reddit: platforms:[reddit] returns ONLY reddit_pixel suggestions', rd.length > 0 && rd.every((s) => s.platform === 'reddit_pixel'));
+  check('reddit: base google_tag → Reddit base pixel (PageVisit, All Pages, {{Reddit Pixel ID}})',
+    rd.some((s) => s.eventName === 'PageVisit' && s.tagName === 'Reddit - Base Pixel' && s.measurementId === '{{Reddit Pixel ID}}' && s.trigger.name === 'All Pages'));
+  const rdLead = rd.find((s) => s.eventName === 'Lead');
+  check('reddit: a contact form → Reddit "Lead", reuses the GA4 trigger name', !!rdLead && !rdLead.eventParameters && ga4Trig.has(rdLead.trigger.name));
+
+  // Google Ads: base → Conversion Linker; a form (conversion) → Google Ads Conversion with ID + Label.
+  const ads = buildSuggestions(formInput, { full: true, platforms: ['google_ads'] });
+  check('google_ads: base google_tag → a Conversion Linker (All Pages, no id fields)',
+    ads.some((s) => s.platform === 'conversion_linker' && s.tagName === 'Google Ads - Conversion Linker' && s.trigger.name === 'All Pages'));
+  const adsConv = ads.find((s) => s.platform === 'google_ads_conversion');
+  check('google_ads: a contact form → Google Ads Conversion (Conversion ID + Label vars), reuses the GA4 trigger name',
+    !!adsConv && adsConv.measurementId === '{{Google Ads Conversion ID}}' && adsConv.conversionLabel === '{{Google Ads Conversion Label}}' && ga4Trig.has(adsConv.trigger.name));
+
+  // add_to_cart CTA → each platform's AddToCart-equivalent (Pinterest addtocart, TikTok/Reddit AddToCart).
+  const cartInput: SuggestInput = { siteHost: 'a.com', forms: [], elements: [{ page: '/p', kind: 'cta', text: 'Add to Cart', intent: 'add_to_cart' }] };
+  const cartPin = buildSuggestions(cartInput, { platforms: ['pinterest'] });
+  const cartTik = buildSuggestions(cartInput, { platforms: ['tiktok'] });
+  const cartRd = buildSuggestions(cartInput, { platforms: ['reddit'] });
+  check('add_to_cart CTA → Pinterest "addtocart" / TikTok "AddToCart" / Reddit "AddToCart"',
+    cartPin.some((s) => s.eventName === 'addtocart') && cartTik.some((s) => s.eventName === 'AddToCart') && cartRd.some((s) => s.eventName === 'AddToCart'));
+
+  // A generic outbound click → NO counterpart for any conversion-focused platform.
+  const outInput: SuggestInput = { siteHost: 'a.com', forms: [], elements: [{ page: '/b', kind: 'outbound', text: 'partner', href: 'https://partner.com' }] };
+  check('google_ads: a generic outbound click yields NO Google Ads conversion (conversion-focused)',
+    !buildSuggestions(outInput, { platforms: ['google_ads'] }).some((s) => s.platform === 'google_ads_conversion'));
+  check('pinterest/tiktok/reddit: a generic outbound click yields NO pixel event counterpart',
+    !buildSuggestions(outInput, { platforms: ['pinterest'] }).length && !buildSuggestions(outInput, { platforms: ['tiktok'] }).length && !buildSuggestions(outInput, { platforms: ['reddit'] }).length);
+
+  // Multiple platforms at once: GA4 + all five → each platform's tags present, each reusing a GA4 trigger.
+  const allSel = buildSuggestions(formInput, { full: true, platforms: ['ga4', 'meta', 'pinterest', 'tiktok', 'linkedin', 'reddit', 'google_ads'] });
+  const allGa4Trig = new Set(allSel.filter((s) => s.platform === 'ga4_event' || s.platform === 'google_tag').map((s) => s.trigger.name));
+  check('multi: GA4 + Meta + Pinterest + TikTok + LinkedIn + Reddit + Google Ads all present',
+    ['ga4_event', 'meta_pixel', 'pinterest_tag', 'tiktok_pixel', 'linkedin_insight', 'reddit_pixel', 'conversion_linker'].every((pl) => allSel.some((s) => s.platform === pl)));
+  check('multi: every non-GA4 tag reuses a GA4 trigger name (shared trigger on create)',
+    allSel.filter((s) => s.platform !== 'ga4_event' && s.platform !== 'google_tag').every((s) => allGa4Trig.has(s.trigger.name)));
+
+  // Default (platforms:['ga4']) is byte-identical to no-platforms: no non-GA4 tag leaks.
+  check('default: platforms:[ga4] emits NO non-GA4 platform tags (unchanged behavior)',
+    buildSuggestions(formInput, { full: true, platforms: ['ga4'] }).every((s) => s.platform === 'ga4_event' || s.platform === 'google_tag'));
+}
+
 // ── eCommerce funnel suggestions (websiteType-gated) ─────────────────────────
 {
   const ECOM_EVENTS = ['view_item', 'view_item_list', 'add_to_cart', 'remove_from_cart', 'view_cart', 'begin_checkout', 'add_shipping_info', 'add_payment_info', 'purchase'];
