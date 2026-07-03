@@ -1,3 +1,9 @@
+## [1.148.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.147.0...v1.148.0) (2026-07-03)
+
+### Features
+
+* **desktop:** make the container-audit download option prominent ([585319e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/585319e01359c045231c63445ed7f66af0c9a5a4))
+
 ## [1.147.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.146.1...v1.147.0) (2026-07-03)
 
 ### Features
