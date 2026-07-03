@@ -1,3 +1,12 @@
+## [1.146.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.145.1...v1.146.0) (2026-07-03)
+
+### Features
+
+* **desktop:** add event parameters / user properties to GA4 server tags ([1670103](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1670103761fe66028b98b85013d1364afeed0aa4))
+* **desktop:** auto-fill needed tag properties + backing variables on create ([dcb211d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dcb211d7a9d6d61dafb3a8dedb6b334ff18fe787))
+* **desktop:** four corpus-motivated server-container audit detections ([3ee0b98](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3ee0b98412564491b336dec80a8bed1697c2de1f))
+* **desktop:** LinkedIn CAPI server tag + Meta CAPI external_id matching ([a15361c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a15361cd86a79bc357b61025fedb6439482c7862))
+
 ## [1.145.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.145.0...v1.145.1) (2026-07-03)
 
 ### Bug Fixes
