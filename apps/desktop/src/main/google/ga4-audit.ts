@@ -7,8 +7,30 @@ export interface Ga4DataStreamConfig {
   displayName: string;
   /** WEB_DATA_STREAM | ANDROID_APP_DATA_STREAM | IOS_APP_DATA_STREAM */
   type: string;
-  /** Enhanced measurement on/off for WEB streams; null = unknown / not a web stream. */
+  /** Enhanced measurement MASTER on/off for WEB streams; null = unknown / not a web stream. */
   enhancedMeasurementEnabled: boolean | null;
+  /** Enhanced-measurement SUB-toggles (web streams only; null when the master is off/unread). Only the
+   *  high-value ones that silently drop whole behavior categories when off. */
+  enhancedMeasurement?: {
+    siteSearchEnabled: boolean;
+    pageChangesEnabled: boolean; // SPA / history-based page views
+    formInteractionsEnabled: boolean;
+  } | null;
+}
+
+/** Reporting attribution config — the model + lookback windows that reshape every channel-credit number. */
+export interface Ga4AttributionConfig {
+  reportingAttributionModel: string;
+  /** Acquisition-conversion lookback window enum (e.g. ..._30_DAYS / _7_DAYS). */
+  acquisitionLookback: string;
+  /** Other-conversion lookback window enum (e.g. ..._90_DAYS / _30_DAYS). */
+  otherLookback: string;
+}
+/** BigQuery export link summary — presence + which exports are actually on. */
+export interface Ga4BigQueryLinkConfig {
+  project: string;
+  dailyExportEnabled: boolean;
+  streamingExportEnabled: boolean;
 }
 export interface Ga4CustomDimensionConfig {
   parameterName: string;
@@ -31,11 +53,19 @@ export interface Ga4PropertySnapshot {
   googleAdsLinks: number | null;
   /** Google Signals state (e.g. GOOGLE_SIGNALS_ENABLED / _DISABLED); null = unread. */
   googleSignals: string | null;
+  /** GA360 vs standard — determines the retention cap (14mo standard, 50mo 360). '' = unread. */
+  serviceLevel?: string;
+  /** Reporting attribution model + lookback windows; null = unread. */
+  attribution?: Ga4AttributionConfig | null;
+  /** BigQuery export links; [] = none configured, null = unread. */
+  bigQueryLinks?: Ga4BigQueryLinkConfig[] | null;
+  /** Number of configured audiences (remarketing/segmentation); null = unread. */
+  audiences?: number | null;
 }
 
 export interface Ga4Finding {
   severity: 'high' | 'medium' | 'low' | 'info';
-  /** collection | retention | conversions | measurement | privacy | integrations | benchmarking | customdef */
+  /** collection | retention | conversions | measurement | privacy | integrations | benchmarking | customdef | attribution */
   category: string;
   message: string;
   recommendation: string;
@@ -75,6 +105,17 @@ function piiMatch(text: string): string | null {
   return m ? m[0] : null;
 }
 
+/** Human label for a GA4 retention enum (TWO_MONTHS → "2 months"). */
+const RETENTION_MONTHS: Record<string, number> = {
+  TWO_MONTHS: 2, FOURTEEN_MONTHS: 14, TWENTY_FIVE_MONTHS: 25, THIRTY_EIGHT_MONTHS: 38, FIFTY_MONTHS: 50,
+};
+function retentionLabel(e: string): string {
+  const m = RETENTION_MONTHS[e];
+  return m ? `${m} month${m === 1 ? '' : 's'}` : e || 'unknown';
+}
+/** Lowercase a SCREAMING_SNAKE enum into readable words. */
+const prettyEnum = (e: string): string => (e || '').toLowerCase().replace(/_/g, ' ').trim();
+
 export function auditGa4(s: Ga4PropertySnapshot): Ga4AuditReport {
   const findings: Ga4Finding[] = [];
 
@@ -87,13 +128,26 @@ export function auditGa4(s: Ga4PropertySnapshot): Ga4AuditReport {
     });
   }
 
-  if (s.dataRetention && s.dataRetention.eventDataRetention === 'TWO_MONTHS') {
-    findings.push({
-      severity: 'medium',
-      category: 'retention',
-      message: 'Event data retention is 2 months (the default) — exploration/report data older than 2 months is discarded.',
-      recommendation: 'Increase it to 14 months in Admin → Data settings → Data retention (the max for standard properties).',
-    });
+  // Retention is service-level aware: the cap is 14 months on standard properties but 50 months on
+  // Google Analytics 360, so a 360 property sitting below 50mo is under-retained even at 14mo.
+  const is360 = (s.serviceLevel ?? '') === 'GOOGLE_ANALYTICS_360';
+  if (s.dataRetention) {
+    const ret = s.dataRetention.eventDataRetention;
+    if (is360 && ret !== 'FIFTY_MONTHS' && ret !== '') {
+      findings.push({
+        severity: ret === 'TWO_MONTHS' ? 'medium' : 'low',
+        category: 'retention',
+        message: `Event data retention is ${retentionLabel(ret)} on a Google Analytics 360 property — 360 supports up to 50 months, so exploration/report data is discarded earlier than it needs to be.`,
+        recommendation: 'Increase it to 50 months in Admin → Data settings → Data retention (the max for 360 properties).',
+      });
+    } else if (!is360 && ret === 'TWO_MONTHS') {
+      findings.push({
+        severity: 'medium',
+        category: 'retention',
+        message: 'Event data retention is 2 months (the default) — exploration/report data older than 2 months is discarded.',
+        recommendation: 'Increase it to 14 months in Admin → Data settings → Data retention (the max for standard properties).',
+      });
+    }
   }
 
   if (s.keyEvents !== null && s.keyEvents.length === 0) {
@@ -216,6 +270,92 @@ export function auditGa4(s: Ga4PropertySnapshot): Ga4AuditReport {
     });
   }
 
+  // Attribution model + lookback silently reshape every channel-credit number in the report, so grade
+  // them (data-driven cross-channel is GA4's recommended default).
+  if (s.attribution) {
+    const model = s.attribution.reportingAttributionModel;
+    if (model && !/DATA_DRIVEN/i.test(model) && /LAST_CLICK/i.test(model)) {
+      findings.push({
+        severity: 'low',
+        category: 'attribution',
+        message: `Reporting attribution uses a last-click model (${prettyEnum(model)}) — it credits only the final channel, under-crediting the channels that started the journey and skewing every channel-credit number in this report.`,
+        recommendation: 'Switch to "Data-driven" in Admin → Attribution settings unless last-click is a deliberate policy.',
+      });
+    }
+    const other = s.attribution.otherLookback;
+    if (other && !/90_DAYS/i.test(other)) {
+      findings.push({
+        severity: 'info',
+        category: 'attribution',
+        message: `The conversion lookback for non-acquisition events is ${prettyEnum(other)} (max is 90 days) — conversions from touchpoints older than that window get no credit.`,
+        recommendation: 'Set the lookback to 90 days in Admin → Attribution settings unless your consideration cycle is genuinely shorter.',
+      });
+    }
+  }
+
+  // Enhanced-measurement SUB-toggles: the master can be ON while high-value sub-features are OFF, so
+  // whole interaction categories go unmeasured on a property that looks configured.
+  for (const stream of s.dataStreams) {
+    if (stream.type === 'WEB_DATA_STREAM' && stream.enhancedMeasurementEnabled === true && stream.enhancedMeasurement) {
+      const off: string[] = [];
+      if (!stream.enhancedMeasurement.siteSearchEnabled) off.push('site search');
+      if (!stream.enhancedMeasurement.pageChangesEnabled) off.push('SPA page changes (history events)');
+      if (!stream.enhancedMeasurement.formInteractionsEnabled) off.push('form interactions');
+      if (off.length) {
+        findings.push({
+          severity: 'low',
+          category: 'measurement',
+          message: `Enhanced measurement is ON for web stream "${stream.displayName}" but ${off.join(', ')} ${off.length === 1 ? 'is' : 'are'} off — those interactions are not auto-collected despite the stream looking configured.`,
+          recommendation: `Enable ${off.join(', ')} in the web stream's Enhanced measurement settings (or collect them via custom events).`,
+        });
+      }
+    }
+  }
+
+  // BigQuery export: absence caps every advanced/unsampled analysis; a link with no export enabled is a
+  // silent failure. null = unread (not flagged).
+  if (Array.isArray(s.bigQueryLinks)) {
+    if (s.bigQueryLinks.length === 0) {
+      findings.push({
+        severity: 'info',
+        category: 'integrations',
+        message: 'No BigQuery export is configured — raw, unsampled event-level data is unavailable, and BigQuery is the standard escape hatch from GA4 report sampling and the data-retention limit.',
+        recommendation: 'Link a BigQuery project in Admin → Product links → BigQuery links if you need event-level data or hit sampling/retention limits.',
+      });
+    } else {
+      const dead = s.bigQueryLinks.filter((l) => !l.dailyExportEnabled && !l.streamingExportEnabled);
+      if (dead.length) {
+        findings.push({
+          severity: 'low',
+          category: 'integrations',
+          message: `A BigQuery link exists but no export is enabled${dead.some((l) => l.project) ? ` (${dead.map((l) => l.project).filter(Boolean).join(', ')})` : ''} — the link is configured yet silently sends no data.`,
+          recommendation: 'Enable daily and/or streaming export on the BigQuery link, or remove it if unused.',
+        });
+      }
+    }
+  }
+
+  // Audiences: none while Ads is linked + key events marked is a missed remarketing-activation.
+  if (typeof s.audiences === 'number' && s.audiences === 0 && (s.keyEvents?.length ?? 0) > 0 && (s.googleAdsLinks ?? 0) > 0) {
+    findings.push({
+      severity: 'info',
+      category: 'integrations',
+      message: 'No audiences are configured while Google Ads is linked — you cannot build remarketing lists or audience-triggered events from GA4 behavior.',
+      recommendation: 'Create audiences (e.g. cart abandoners, high-value users) in Admin → Audiences to activate remarketing to the linked Ads account.',
+    });
+  }
+
+  // Reporting currency unset → revenue can be reported inconsistently. (A wrong-but-set currency vs
+  // actual revenue is cross-checked in the report, which has the revenue figure.)
+  if (s.currencyCode === '') {
+    findings.push({
+      severity: 'info',
+      category: 'collection',
+      message: 'No reporting currency is set on the property — monetary values may be reported inconsistently.',
+      recommendation: 'Set the reporting currency in Admin → Property details.',
+    });
+  }
+
   // Per-area coverage (Pass / Partial / Fail / Not Verified) — so the audit reports WHAT it checked,
   // not only the problems. not_verified = the backing config sub-resource couldn't be read.
   const areaStatus = (categories: string[]): Ga4AreaStatus['status'] => {
@@ -238,13 +378,18 @@ export function auditGa4(s: Ga4PropertySnapshot): Ga4AuditReport {
       : dims.length === 0 && s.customMetrics.length === 0
         ? 'partial'
         : areaStatus(['customdef']);
+  const hasWebStream = s.dataStreams.some((d) => d.type === 'WEB_DATA_STREAM');
+  const integrationsVerified =
+    s.googleAdsLinks !== null || s.googleSignals !== null || Array.isArray(s.bigQueryLinks) || typeof s.audiences === 'number';
   const areas: Ga4AreaStatus[] = [
     { area: 'Data collection', status: collectionStatus },
     { area: 'Data retention', status: areaOf(['retention'], s.dataRetention !== null) },
     { area: 'Key events', status: areaOf(['conversions'], s.keyEvents !== null) },
+    { area: 'Enhanced measurement', status: areaOf(['measurement'], hasWebStream) },
     { area: 'Custom definitions', status: customDefStatus },
+    { area: 'Attribution', status: areaOf(['attribution'], s.attribution != null) },
     { area: 'Privacy (PII)', status: areaOf(['privacy'], s.customDimensions !== null) },
-    { area: 'Integrations', status: areaOf(['integrations'], s.googleAdsLinks !== null || s.googleSignals !== null) },
+    { area: 'Integrations', status: areaOf(['integrations'], integrationsVerified) },
     { area: 'Benchmarking', status: areaOf(['benchmarking'], true) },
   ];
 

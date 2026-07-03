@@ -480,12 +480,18 @@ export class GoogleDataService {
     const dataStreams = await Promise.all(
       streams.map(async (s) => {
         let enhancedMeasurementEnabled: boolean | null = null;
+        let enhancedMeasurement: { siteSearchEnabled: boolean; pageChangesEnabled: boolean; formInteractionsEnabled: boolean } | null = null;
         if (s.type === 'WEB_DATA_STREAM' && s.name) {
           try {
             const em = await adminAlpha.properties.dataStreams.getEnhancedMeasurementSettings({
               name: `${s.name}/enhancedMeasurementSettings`,
             });
             enhancedMeasurementEnabled = em.data.streamEnabled ?? null;
+            enhancedMeasurement = {
+              siteSearchEnabled: em.data.siteSearchEnabled ?? false,
+              pageChangesEnabled: em.data.pageChangesEnabled ?? false,
+              formInteractionsEnabled: em.data.formInteractionsEnabled ?? false,
+            };
           } catch {
             enhancedMeasurementEnabled = null;
           }
@@ -495,9 +501,26 @@ export class GoogleDataService {
           displayName: s.displayName ?? '(unnamed)',
           type: s.type ?? '',
           enhancedMeasurementEnabled,
+          enhancedMeasurement,
         };
       })
     );
+
+    // Attribution + BigQuery + audiences (all v1alpha, best-effort — a failed read → null so the audit
+    // reports "not verified" rather than a false zero). These feed the new config findings.
+    const [attributionRes, bigQueryRes, audiencesRes] = await Promise.all([
+      adminAlpha.properties.getAttributionSettings({ name: `${property}/attributionSettings` }).then((r) => r.data).catch(() => null),
+      collectPages(
+        (pageToken) => adminAlpha.properties.bigQueryLinks.list({ parent: property, pageToken }),
+        (r) => r.data.bigqueryLinks,
+        (r) => r.data.nextPageToken
+      ).catch((): Array<{ project?: string | null; dailyExportEnabled?: boolean | null; streamingExportEnabled?: boolean | null }> | null => null),
+      collectPages(
+        (pageToken) => adminAlpha.properties.audiences.list({ parent: property, pageToken }),
+        (r) => r.data.audiences,
+        (r) => r.data.nextPageToken
+      ).catch((): unknown[] | null => null),
+    ]);
 
     return {
       property,
@@ -527,6 +550,23 @@ export class GoogleDataService {
       dataStreams,
       googleAdsLinks: adsLinks === null ? null : adsLinks.length,
       googleSignals,
+      serviceLevel: prop.data.serviceLevel ?? '',
+      attribution: attributionRes
+        ? {
+            reportingAttributionModel: attributionRes.reportingAttributionModel ?? '',
+            acquisitionLookback: attributionRes.acquisitionConversionEventLookbackWindow ?? '',
+            otherLookback: attributionRes.otherConversionEventLookbackWindow ?? '',
+          }
+        : null,
+      bigQueryLinks:
+        bigQueryRes === null
+          ? null
+          : bigQueryRes.map((l) => ({
+              project: l.project ?? '',
+              dailyExportEnabled: l.dailyExportEnabled ?? false,
+              streamingExportEnabled: l.streamingExportEnabled ?? false,
+            })),
+      audiences: audiencesRes === null ? null : audiencesRes.length,
     };
   }
 
@@ -2342,6 +2382,7 @@ export class GoogleDataService {
     let startDate: string;
     let endDate: string;
     let windowDays: number;
+    let todayYmd: string | undefined;
     if (typeof window === 'object') {
       // Explicit custom range — query exactly these dates (interpreted in the property's timezone
       // by the Data API), so the displayed range == the queried range. windowDays = inclusive span.
@@ -2365,7 +2406,8 @@ export class GoogleDataService {
         day: '2-digit',
       }).formatToParts(new Date());
       const part = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
-      ({ startDate, endDate } = windowDates(`${part('year')}-${part('month')}-${part('day')}`, window));
+      todayYmd = `${part('year')}-${part('month')}-${part('day')}`;
+      ({ startDate, endDate } = windowDates(todayYmd, window));
       windowDays = window;
     }
     const run = async (dimension: string, ordered: boolean) => {
@@ -2397,7 +2439,7 @@ export class GoogleDataService {
     });
     const totalSessions =
       Number(totalRes.data.rows?.[0]?.metricValues?.[0]?.value ?? 0) || channelGroups.reduce((s, c) => s + c.sessions, 0);
-    return { totalSessions, channelGroups, sourceMediums, windowDays, startDate, endDate };
+    return { totalSessions, channelGroups, sourceMediums, windowDays, startDate, endDate, todayYmd };
   }
 
   /** Every GA4 WEB-stream measurement id (G-XXXX) the user can access, with its

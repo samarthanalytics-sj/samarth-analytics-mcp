@@ -265,7 +265,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
 export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
   const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
   const daily = baseline?.dailySessions ?? [];
-  const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups });
+  const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
   // Channel-attribution trust comes from the same Data Trust Matrix the Executive Summary uses.
   const allFindings = buildAllFindings(config, dq, growth);
   const areaRows = buildAreaRows(s, config, attribution, audienceCount, hasEcommerce(s));
@@ -346,7 +346,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
 
   let trendPattern: string | null = null;
   if (baseline && baseline.dailySessions.length >= 5) {
-    const trend = analyzeGa4Trend({ dailySessions: baseline.dailySessions, peakDayChannels: baseline.peakDayChannels, windowChannels: dqCounts.channelGroups });
+    const trend = analyzeGa4Trend({ dailySessions: baseline.dailySessions, peakDayChannels: baseline.peakDayChannels, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
     trendPattern = `${trend.patternLabel}. ${trend.summary}`;
   }
   const outcomes =
@@ -547,7 +547,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   }
   // Trend pattern: is the change a one-day spike or a sustained trend, and which platform drove it?
   if (baseline && baseline.dailySessions.length >= 5) {
-    const trend = analyzeGa4Trend({ dailySessions: baseline.dailySessions, peakDayChannels: baseline.peakDayChannels, windowChannels: dqCounts.channelGroups });
+    const trend = analyzeGa4Trend({ dailySessions: baseline.dailySessions, peakDayChannels: baseline.peakDayChannels, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
     L.push('');
     L.push(`**Trend pattern:** ${trend.patternLabel}. ${trend.summary}`);
   }
