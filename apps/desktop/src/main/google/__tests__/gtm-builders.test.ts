@@ -62,6 +62,7 @@ import {
   evaluateTrackingSetup,
   auditContainer,
   sanitizeName,
+  matchesServerContainer,
   findGa4BaseTag,
   ga4VariablePlan,
 } from '../gtm-builders';
@@ -1222,21 +1223,41 @@ test('upsertGoogleTagConfig adds server_container_url, preserves other settings,
   assert.ok(fresh.some((p) => (p as { key?: string }).key === 'configSettingsTable'), 'creates the table when absent');
 });
 
+test('matchesServerContainer: case-insensitive name + server usageContext; ignores web containers', () => {
+  const want = 'www.example.com - Server';
+  // Exact match.
+  assert.equal(matchesServerContainer({ name: 'www.example.com - Server', usageContext: ['server'] }, want), true);
+  // GTM may echo usageContext uppercase; name casing may differ — still a match.
+  assert.equal(matchesServerContainer({ name: 'WWW.EXAMPLE.COM - SERVER', usageContext: ['SERVER'] }, want), true);
+  // A WEB container with the same name is NOT a server container.
+  assert.equal(matchesServerContainer({ name: 'www.example.com - Server', usageContext: ['web'] }, want), false);
+  // Different name → no match.
+  assert.equal(matchesServerContainer({ name: 'other - Server', usageContext: ['server'] }, want), false);
+  // Missing/empty usageContext → no match (never reuse a container we can't confirm is server).
+  assert.equal(matchesServerContainer({ name: want, usageContext: null }, want), false);
+  assert.equal(matchesServerContainer({ name: want }, want), false);
+});
+
 test('Ads server tag builders emit the corpus-validated sgtm types + key fields', () => {
-  const conv = buildAdsConversionServerTag('Ads - Purchase', 'AW-123', 'abcLABEL');
+  // conversionId MUST be the numeric id: the sgtmadsct/sgtmadsremarket templates validate it as a
+  // positive integer, so the "AW-" prefix is stripped (an "AW-12345678" input became a 400 before).
+  const conv = buildAdsConversionServerTag('Ads - Purchase', 'AW-12345678', 'abcLABEL');
   assert.equal(conv.type, 'sgtmadsct');
   const cp = (conv.parameter ?? []) as Array<{ key: string; value: string }>;
-  assert.equal(cp.find((x) => x.key === 'conversionId')?.value, 'AW-123');
+  assert.equal(cp.find((x) => x.key === 'conversionId')?.value, '12345678', 'AW- prefix stripped to the numeric id');
   assert.equal(cp.find((x) => x.key === 'conversionLabel')?.value, 'abcLABEL');
   assert.equal(cp.find((x) => x.key === 'enableConversionLinker')?.value, 'true');
+  // A {{variable}} conversion id passes through untouched.
+  const convVar = buildAdsConversionServerTag('Ads', '{{Ads ID}}', 'L');
+  assert.equal(((convVar.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'conversionId')?.value, '{{Ads ID}}');
 
   const linker = buildAdsConversionLinkerServerTag('Ads - Linker');
   assert.equal(linker.type, 'sgtmadscl');
 
-  const rmkt = buildAdsRemarketingServerTag('Ads - Remarketing', 'AW-123');
+  const rmkt = buildAdsRemarketingServerTag('Ads - Remarketing', 'AW-12345678');
   assert.equal(rmkt.type, 'sgtmadsremarket');
   const rp = (rmkt.parameter ?? []) as Array<{ key: string; value: string }>;
-  assert.equal(rp.find((x) => x.key === 'conversionId')?.value, 'AW-123');
+  assert.equal(rp.find((x) => x.key === 'conversionId')?.value, '12345678', 'remarketing conversionId also stripped');
   assert.equal(rp.find((x) => x.key === 'enableDynamicRemarketing')?.value, 'true');
   assert.equal(rp.find((x) => x.key === 'remarketingEventDataSource')?.value, 'EVENT_DATA');
 });
