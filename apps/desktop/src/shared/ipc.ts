@@ -13,6 +13,13 @@ export type GoogleProduct = 'gtm' | 'ga4';
  *  each maps the SAME detected elements to its own tags, sharing one trigger per detection. */
 export type SuggestPlatform = 'ga4' | 'meta' | 'google_ads' | 'tiktok' | 'linkedin' | 'reddit' | 'pinterest';
 
+/** The classified intent of a CTA (mirrors web-audit's CtaIntent, declared locally so the
+ *  renderer/shared layer stays dependency-free). Carried on a CTA-derived SuggestedTagView so the
+ *  platform derivations map by intent (authoritative) rather than the event-name text. */
+export type CtaIntent =
+  | 'add_to_cart' | 'subscribe' | 'book_demo' | 'request_quote' | 'contact_sales'
+  | 'contact' | 'download' | 'get_started' | 'login' | 'search' | 'learn_more' | 'faq' | 'generic';
+
 export interface LlmConfigView {
   provider: LlmProvider;
   model: string;
@@ -362,6 +369,9 @@ export interface SuggestedTagView {
   tagId?: string;
   /** For platform 'google_tag': optional gtag config settings. */
   configSettings?: Array<{ name: string; value: string }>;
+  /** For a CTA-derived tag: the classified CTA intent, so platform derivations map by intent
+   *  (authoritative) rather than the event-name text. */
+  ctaIntent?: CtaIntent;
   eventName: string;
   eventParameters?: Array<{ name: string; value: string }>;
   /** Companion Lookup Table variable(s) an event parameter VALUE references by {{name}} (e.g.
