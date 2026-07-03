@@ -18,10 +18,44 @@ export function getGuardrailConfig(): GuardrailConfig {
     publishEnabled: process.env.GTM_MCP_ENABLE_PUBLISH === 'true',
     deletesEnabled: process.env.GTM_MCP_ENABLE_DELETES === 'true',
     dryRun: process.env.DRY_RUN === 'true',
+    ga4WritesEnabled: process.env.GA4_MCP_ENABLE_WRITES === 'true',
+    ga4DeletesEnabled: process.env.GA4_MCP_ENABLE_DELETES === 'true',
   };
 }
 
 export type OperationType = 'write' | 'delete' | 'publish';
+
+/** GA4 Admin operation gating. `write` = create/update (needs GA4_MCP_ENABLE_WRITES);
+ *  `delete` = delete OR archive (needs GA4_MCP_ENABLE_DELETES). confirm=true is
+ *  ALWAYS required, mirroring the GTM guardrail. Returns { dryRun } so the caller
+ *  can short-circuit the actual API call under DRY_RUN. */
+export function checkGa4Guardrails(
+  opType: 'write' | 'delete',
+  confirm: boolean | undefined,
+  config: GuardrailConfig
+): { dryRun: boolean } {
+  if (confirm !== true) {
+    throw new McpError(
+      ErrorCode.InvalidRequest,
+      `This GA4 change requires confirm=true to proceed. Pass confirm: true to confirm you want to modify GA4.`
+    );
+  }
+  if (opType === 'write' && !config.ga4WritesEnabled) {
+    throw new McpError(
+      ErrorCode.InvalidRequest,
+      `GA4 write operations are disabled. Set GA4_MCP_ENABLE_WRITES=true in your .env to enable GA4 creates and updates. ` +
+        `(This also requires the analytics.edit scope — re-run the auth flow if you granted read-only before.)`
+    );
+  }
+  if (opType === 'delete' && !config.ga4DeletesEnabled) {
+    throw new McpError(
+      ErrorCode.InvalidRequest,
+      `GA4 delete/archive operations are disabled. Set GA4_MCP_ENABLE_DELETES=true in your .env to enable them. ` +
+        `Archiving a custom dimension/metric or audience is effectively permanent.`
+    );
+  }
+  return { dryRun: config.dryRun };
+}
 
 /**
  * Enforce guardrails for a given operation.

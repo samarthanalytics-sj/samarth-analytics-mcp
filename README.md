@@ -184,9 +184,11 @@ https://www.googleapis.com/auth/tagmanager.manage.accounts
 https://www.googleapis.com/auth/tagmanager.manage.users
 https://www.googleapis.com/auth/tagmanager.publish
 https://www.googleapis.com/auth/analytics.readonly
+https://www.googleapis.com/auth/analytics.edit
+https://www.googleapis.com/auth/analytics.manage.users
 ```
 
-These are the least-privilege scopes needed to cover the server's full tool surface. The final scope, `analytics.readonly`, powers both the **read-only GA4 Admin tools** (`ga4_*`) and the **read-only GA4 Data API reporting tools** (`ga4_run_report`, `ga4_run_realtime_report`) and grants no write access to Google Analytics. Read-only deployments can re-run `npm run auth:google` after removing the `edit.*`, `manage.*`, and `publish` scopes from your OAuth consent screen; keep `tagmanager.readonly` and `analytics.readonly` for full read coverage.
+These are the least-privilege scopes needed to cover the server's full tool surface. `analytics.readonly` powers both the **read-only GA4 Admin tools** (`ga4_*_list` / `ga4_*_get`) and the **read-only GA4 Data API reporting tools** (`ga4_run_report`, `ga4_run_realtime_report`). `analytics.edit` powers the **GA4 Admin write tools** (`ga4_create_*` / `ga4_update_*` / `ga4_delete_*` / `ga4_archive_*`), and `analytics.manage.users` the **access-binding** (user-permission) write tools — but those tools do nothing until you also opt in via `GA4_MCP_ENABLE_WRITES` / `GA4_MCP_ENABLE_DELETES` (default off) and pass `confirm=true`; the GA4 Data API stays read-only. Read-only deployments can re-run `npm run auth:google` after removing the `edit.*`, `manage.*`, `publish`, `analytics.edit`, and `analytics.manage.users` scopes from your OAuth consent screen; keep `tagmanager.readonly` and `analytics.readonly` for full read coverage.
 
 ---
 
@@ -229,6 +231,8 @@ These are the least-privilege scopes needed to cover the server's full tool surf
    - `https://www.googleapis.com/auth/tagmanager.manage.users`
    - `https://www.googleapis.com/auth/tagmanager.publish`
    - `https://www.googleapis.com/auth/analytics.readonly` (read-only GA4 Admin **and** Data API tools)
+   - `https://www.googleapis.com/auth/analytics.edit` (GA4 Admin write tools — gated by `GA4_MCP_ENABLE_WRITES`)
+   - `https://www.googleapis.com/auth/analytics.manage.users` (GA4 access-binding write tools)
 5. Add your Google account as a **test user** (while the app is in "testing" mode)
 
 > **Note**: For personal/agency use, keeping the app in "Testing" mode is fine. You will need to re-authorize every 7 days unless you publish the app or get it verified.

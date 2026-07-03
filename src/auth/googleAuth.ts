@@ -55,18 +55,25 @@ export const GTM_SCOPES = [
   'https://www.googleapis.com/auth/tagmanager.publish',
 ];
 
-// Google Analytics read-only scope. Powers BOTH the read-only GA4 Admin tools
+// Google Analytics read-only scope. Powers the read-only GA4 Admin tools
 // (account/property summaries, data streams, custom dimensions/metrics, data
 // retention, etc.) AND the read-only GA4 Data API reporting tools
 // (ga4_run_report / ga4_run_realtime_report). The Data API needs no additional
-// scope. This is the ONLY GA4 scope the server requests — it grants no
-// write/delete capability on GA4 resources.
+// scope. `analytics.edit` grants create/update/delete on GA4 config resources
+// (key events, dimensions, metrics, streams, links, audiences, channel groups,
+// …); `analytics.manage.users` additionally authorizes access-binding (user
+// permission) writes. Both write scopes are requested so a single consent covers
+// the full tool surface — but every write is STILL gated at runtime behind
+// GA4_MCP_ENABLE_WRITES / GA4_MCP_ENABLE_DELETES (default off) plus confirm=true.
 export const GA4_ADMIN_READONLY_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
+export const GA4_ADMIN_EDIT_SCOPE = 'https://www.googleapis.com/auth/analytics.edit';
+export const GA4_MANAGE_USERS_SCOPE = 'https://www.googleapis.com/auth/analytics.manage.users';
+export const GA4_SCOPES = [GA4_ADMIN_READONLY_SCOPE, GA4_ADMIN_EDIT_SCOPE, GA4_MANAGE_USERS_SCOPE];
 
 // Full set of scopes requested during the OAuth onboarding flow. A single
-// consent grant covers both the GTM tool surface and the read-only GA4 Admin
-// tools, so users only authorize once.
-export const ALL_SCOPES = [...GTM_SCOPES, GA4_ADMIN_READONLY_SCOPE];
+// consent grant covers the GTM tool surface and the GA4 Admin tools (read +
+// gated write), so users only authorize once.
+export const ALL_SCOPES = [...GTM_SCOPES, ...GA4_SCOPES];
 
 export type AuthMode = 'oauth2' | 'service_account';
 

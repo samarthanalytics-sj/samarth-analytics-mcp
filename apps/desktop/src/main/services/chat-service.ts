@@ -53,6 +53,13 @@ export const GA4_ECOMMERCE_REFERENCE =
 /** Evidence-based GA4 PROPERTY AUDIT framework — appended to the GA4 system prompt so a
  *  "property audit" produces the same structured, chart-ready, non-templated-prose output on any
  *  model (a faithful condensation of the GA4 Property Audit Brain). Exported for testing. */
+/** GA4 write guidance — used only when the GA4 chat has a confirm fn (writes enabled). */
+export const GA4_WRITE_GUIDANCE =
+  'GA4 WRITES ARE ENABLED — you CAN modify GA4 Admin configuration, not just read it. Available: create/update/delete key events; create/update + ARCHIVE custom dimensions and custom metrics (they have NO hard delete — archive is permanent); create/update/delete data streams, Measurement Protocol secrets, Google Ads links, Firebase links, channel groups, calculated metrics, event-create rules, Display&Video360 / Search Ads 360 / AdSense links, expanded data sets + subproperty filters + rollup source links (360); create/update + ARCHIVE audiences; create/update/delete property and account ACCESS BINDINGS (user permissions); create/update/soft-delete PROPERTIES; update data retention; rename accounts and soft-delete accounts. ' +
+  'IMPORTANT DIFFERENCES FROM GTM: GA4 changes apply DIRECTLY to the LIVE property — there is no draft/publish step. So state plainly WHAT you are about to change BEFORE calling the tool, then report exactly what changed after. Creates and updates apply with no approval card; DELETES and ARCHIVES show a two-step approval card (archive/soft-delete is effectively permanent). ' +
+  'TO UPDATE / DELETE / ARCHIVE you need the resource\'s FULL name (e.g. "properties/123/keyEvents/456") — call the matching list_ga4_* tool FIRST to get the id, never guess it. Use ARCHIVE (not delete) for custom dimensions, custom metrics, and audiences; use DELETE for key events, data streams, links, MP secrets, and access bindings. ' +
+  'ACCESS BINDINGS change who can access the account/property — double-check the exact email and roles (predefinedRoles/viewer|analyst|editor|admin, or predefinedRoles/read) before granting or revoking, and confirm intent with the user first. PROPERTY/ACCOUNT delete is a soft-delete (trash, recoverable for a limited time) but high blast radius — a deleted account takes ALL its properties. For nested/advanced fields not exposed as flat arguments (audience filterClauses, channel groupingRule, event-rule conditions, DV360/SA360 settings), pass a `body` object. Never claim GA4 is read-only or that a change must be made in the GA4 UI when a matching tool exists — call the tool. ';
+
 export const GA4_PROPERTY_AUDIT =
   'GA4 PROPERTY AUDIT — when the user asks to "audit" / "property audit" / "full audit" / review / health-check this GA4 property, run this structured, evidence-based audit (ONE property at a time; never carry assumptions between properties):\n' +
   '1) GATHER REAL VALUES FIRST, before writing any finding: call audit_ga4_property and audit_ga4_data_quality, PLUS get_ga4_data_retention, get_ga4_property_details, get_ga4_google_signals, get_ga4_attribution_settings, get_ga4_enhanced_measurement, list_ga4_key_events, list_ga4_custom_dimensions, list_ga4_custom_metrics, list_ga4_audiences, list_ga4_google_ads_links, list_ga4_bigquery_links, list_ga4_firebase_links, and run_ga4_report over ~90 days WITH a comparison (channel mix, top pages, key-event trend, new vs returning, device). Check the data-retention window first and never run a trend longer than retention. ' +
@@ -148,8 +155,10 @@ export class ChatService {
             },
           }
         : undefined;
-    // GA4 is read-only; only GTM gets write tools (and thus the confirm flow).
-    const tools = buildToolRegistry(this.data, product === 'gtm' ? confirm : undefined, product, this.history, ctxControl);
+    // Both products get write tools (and the confirm flow) when a confirm fn is
+    // provided. GTM writes land in a draft workspace; GA4 Admin writes apply to
+    // the live property (deletes/archives are approval-gated).
+    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl);
 
     const productLabel = product === 'gtm' ? 'Google Tag Manager (GTM)' : 'Google Analytics 4 (GA4)';
     const system =
@@ -250,8 +259,10 @@ export class ChatService {
             '(today, yesterday, NdaysAgo) or explicit YYYY-MM-DD computed from the current date above — ' +
             'never assume the year. GA4 has NO data for dates after today, and the most recent 1–2 days ' +
             'may still be processing (partial); report dates resolve in the property\'s timezone. ' +
-            'GA4 is READ-ONLY — you cannot apply fixes; give the user ' +
-            'the exact change to make in the GA4 Admin UI. ' +
+            (confirm
+              ? GA4_WRITE_GUIDANCE
+              : 'GA4 is READ-ONLY — you cannot apply fixes; give the user ' +
+                'the exact change to make in the GA4 Admin UI. ') +
             GA4_PROPERTY_AUDIT) +
       (product === 'gtm' && active.gtmContext?.containerId
         ? `The user is working in GTM account ${active.gtmContext.accountId} ` +

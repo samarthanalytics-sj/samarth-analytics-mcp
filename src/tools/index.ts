@@ -27,6 +27,7 @@ import { registerEnvironmentTools } from './environments.js';
 import { registerUserPermissionTools } from './userPermissions.js';
 import { registerServerSideTools } from './serverSide.js';
 import { registerGa4AdminTools } from './ga4Admin.js';
+import { registerGa4AdminWriteTools } from './ga4AdminWrite.js';
 import { registerGa4DataTools } from './ga4Data.js';
 
 export function registerAllTools(
@@ -52,5 +53,6 @@ export function registerAllTools(
   registerAuditTools(server, getClient);
   registerExportTools(server, getClient);
   registerGa4AdminTools(server, getGa4Client, getGa4AlphaClient);
+  registerGa4AdminWriteTools(server, getGa4Client, getGa4AlphaClient);
   registerGa4DataTools(server, getGa4DataClient);
 }
