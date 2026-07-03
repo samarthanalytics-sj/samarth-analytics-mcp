@@ -1,3 +1,9 @@
+## [1.143.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.142.0...v1.143.0) (2026-07-03)
+
+### Features
+
+* **desktop:** delete-only write approvals in chat ([c867510](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c867510e47315dd17e03f1d05c3422495d42b7ee))
+
 ## [1.142.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.141.1...v1.142.0) (2026-07-02)
 
 ### Features
