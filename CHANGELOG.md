@@ -1,3 +1,9 @@
+## [1.149.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.148.0...v1.149.0) (2026-07-03)
+
+### Features
+
+* **desktop:** user-identity / advanced-matching params across marketing tags ([e45b58f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e45b58ff861e43c82cec20d2d04178b69f98c032))
+
 ## [1.148.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.147.0...v1.148.0) (2026-07-03)
 
 ### Features
