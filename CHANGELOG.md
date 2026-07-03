@@ -1,3 +1,9 @@
+## [1.146.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.146.0...v1.146.1) (2026-07-03)
+
+### Bug Fixes
+
+* **desktop:** route add_ga4_server_parameters to the GTM chat ([e7aaf59](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e7aaf59cb54e403102ff31a5488ae97e0d0d7a3a)), closes [#256](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/256)
+
 ## [1.146.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.145.1...v1.146.0) (2026-07-03)
 
 ### Features
