@@ -1,3 +1,9 @@
+## [1.144.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.143.0...v1.144.0) (2026-07-03)
+
+### Features
+
+* **desktop:** production-shaped server containers from the web container ([265b726](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/265b726a2c25352718b6490d8e75b1df7dffe03f))
+
 ## [1.143.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.142.0...v1.143.0) (2026-07-03)
 
 ### Features
