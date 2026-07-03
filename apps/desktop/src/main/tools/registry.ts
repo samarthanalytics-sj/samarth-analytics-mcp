@@ -1060,7 +1060,7 @@ export function buildToolRegistry(
       name: 'create_gtm_tracking_tag',
       description:
         'PREFERRED way to create a tag that fires on an event — builds a CORRECT GTM resource from simple fields (you do not write raw GTM JSON). One call (applies directly to the draft workspace): enables needed built-in variables, reuses an existing same-named trigger or creates it, and creates the tag linked to it. ' +
-        'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for Facebook/LinkedIn/TikTok/other pixels); ' +
+        'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "meta_pixel" (a Meta/Facebook Pixel via the OFFICIAL gallery template — needs pixelId (or measurementId as the pixel id, e.g. a {{Meta Pixel ID}} variable) + eventName = the Meta event (PageView/Lead/AddToCart/Purchase/ViewContent/InitiateCheckout/Search/Subscribe/CompleteRegistration/Contact/…), optional eventParameters → Meta Object Properties); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for LinkedIn/TikTok/other pixels); ' +
         '"conversion_linker" (Google Ads Conversion Linker; no fields required; optional enableCrossDomain plus comma-separated linkerDomains); "google_ads_call_conversion" (needs phoneNumber exactly as shown on the page, conversionId, conversionLabel); "google_ads_remarketing" (needs conversionId; an all-pages audience tag); "floodlight" (Campaign Manager / DV360 Floodlight counter; needs advertiserId, groupTag, activityTag; optional countingMethod standard|unique); "custom_image" (a beacon/pixel; needs url). ' +
         'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event; optional ANDed scope conditions — formIdValue, pagePathValue/pagePathOperator, pageUrlValue — e.g. event form_submit AND {{Page Path}} contains /contact, the corpus-standard data-layer form pattern), "pageview", "timer" (REQUIRES trigger.intervalMs in ms, optional trigger.limit), "form_submit" (optional formIdValue and/or formClassesValue, each with a *Operator — scopes the trigger to ONE form via {{Form ID}}/{{Form Classes}}; or pagePathValue/pagePathOperator to scope to a single page via {{Page Path}} when the form has no id/class; omit all and it fires on every form submit). ' +
         'eventParameters values may be GTM built-in variables (e.g. {{Click URL}}, {{Click Text}}, {{Form ID}}, {{Form URL}}) — the needed built-in variables are auto-enabled.',
@@ -1070,9 +1070,10 @@ export function buildToolRegistry(
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          platform: { type: 'string', enum: ['ga4_event', 'google_tag', 'google_ads_conversion', 'custom_html', 'conversion_linker', 'google_ads_call_conversion', 'google_ads_remarketing', 'floodlight', 'custom_image'] },
+          platform: { type: 'string', enum: ['ga4_event', 'google_tag', 'meta_pixel', 'google_ads_conversion', 'custom_html', 'conversion_linker', 'google_ads_call_conversion', 'google_ads_remarketing', 'floodlight', 'custom_image'] },
           tagName: { type: 'string' },
           measurementId: { type: 'string' },
+          pixelId: { type: 'string' },
           eventName: { type: 'string' },
           eventParameters: {
             type: 'array',
@@ -1197,6 +1198,20 @@ export function buildToolRegistry(
           });
         } else if (platform === 'custom_image') {
           tag = buildCustomImageTag({ name: s(a.tagName), url: s(a.url), useCacheBuster: bln(a.useCacheBuster), cacheBusterQueryParam: a.cacheBusterQueryParam != null ? s(a.cacheBusterQueryParam) : undefined });
+        } else if (platform === 'meta_pixel') {
+          // Meta (Facebook) Pixel via the OFFICIAL gallery template (not Custom HTML). The pixel id is
+          // pixelId (or measurementId, e.g. a {{Meta Pixel ID}} variable); eventName is the Meta event.
+          const tmpl = await data.importGalleryTemplate(accountId, containerId, workspaceId, 'facebook', 'GoogleTagManager-WebTemplate-For-FacebookPixel');
+          if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+            throw new Error(`Could not resolve the Meta Pixel template's tag type (got "${tmpl.type}").`);
+          }
+          const pixelId = s(a.pixelId).trim() || s(a.measurementId).trim();
+          const event = s(a.eventName).trim() || 'PageView';
+          const objProps = Array.isArray(a.eventParameters)
+            ? a.eventParameters.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name)
+            : [];
+          // The shared trigger logic below attaches firingTriggerId — do NOT pass it here.
+          tag = buildMetaPixelTag(tmpl.type, s(a.tagName), pixelId, event, undefined, objProps);
         } else {
           throw new Error(`unknown platform: ${platform}`);
         }

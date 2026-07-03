@@ -75,6 +75,14 @@ export interface TemplateGroup {
   rowCount: number;
 }
 
+// Our platform → the template's "Tag Type" wording. meta_pixel shows its Meta event + pixel id like a
+// GA4 event tag (eventName column = the Meta event, params = Object Properties).
+const TAG_TYPE: Record<string, string> = {
+  google_tag: 'Google Tag',
+  meta_pixel: 'Meta Pixel Tag',
+  ga4_event: 'GA4 Event Tag',
+};
+
 /** One suggestion → its template block (the structure both the table + CSV use). */
 export function suggestionToGroup(s: SuggestedTagView): TemplateGroup {
   const params = s.platform === 'google_tag'
@@ -82,7 +90,7 @@ export function suggestionToGroup(s: SuggestedTagView): TemplateGroup {
     : (s.eventParameters ?? []).map((p) => ({ name: p.name, variable: p.value }));
   const whens = triggerWhens(s);
   return {
-    tagType: s.platform === 'google_tag' ? 'Google Tag' : 'GA4 Event Tag',
+    tagType: TAG_TYPE[s.platform] ?? 'GA4 Event Tag',
     tagName: s.tagName,
     eventName: s.eventName,
     triggerName: s.trigger.name,

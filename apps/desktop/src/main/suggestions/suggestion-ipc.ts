@@ -67,7 +67,7 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     const settleMs = clampSettle((opts ?? {}).settleMs);
     const driver = createElectronDriver(settleMs !== undefined ? { settleMs } : {});
     const { aiScanPage } = await import('./ai-scan');
-    return aiScanPage({ url: target, apiKey, model: 'gpt-4o', driver });
+    return aiScanPage({ url: target, apiKey, model: 'gpt-4o', driver, platforms: (opts ?? {}).platforms ?? ['ga4'] });
   });
 
   // Read-only: the container's existing tag names + whether a GA4 base/config tag is
@@ -99,7 +99,7 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
     const o = opts ?? {};
     const driver = await makeDriver(o);
-    return crawlAndSuggest(driver, target, { maxPages: o.maxPages, maxDepth: o.maxDepth });
+    return crawlAndSuggest(driver, target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'] });
   });
 
   // Enumerate same-site pages (sitemap/crawl) so the user can pick which to scan.
@@ -114,14 +114,15 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
   ipcMain.handle('suggestions:scanUrls', async (_e, urls: unknown, opts?: TagScanOptions) => {
     const list = Array.isArray(urls) ? urls.map((u) => String(u)).filter(Boolean) : [];
     if (list.length === 0) throw new Error('No pages selected to scan.');
-    const driver = await makeDriver(opts ?? {});
+    const o = opts ?? {};
+    const driver = await makeDriver(o);
     let siteHost: string | undefined;
     try {
       siteHost = new URL(list[0]).hostname;
     } catch {
       /* per-URL admission still applies in scanUrls */
     }
-    return scanUrls(driver, list, siteHost);
+    return scanUrls(driver, list, siteHost, undefined, { platforms: o.platforms ?? ['ga4'] });
   });
 
   // Streaming variants — push 'suggestions:scan:event' (the RUNNING suggestion list +
@@ -138,20 +139,21 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
     const o = opts ?? {};
     const driver = await makeDriver(o);
-    return crawlAndSuggest(driver, target, { maxPages: o.maxPages, maxDepth: o.maxDepth }, streamSink(event, String(requestId ?? '')));
+    return crawlAndSuggest(driver, target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'] }, streamSink(event, String(requestId ?? '')));
   });
 
   ipcMain.handle('suggestions:scanUrlsStream', async (event, requestId: unknown, urls: unknown, opts?: TagScanOptions) => {
     const list = Array.isArray(urls) ? urls.map((u) => String(u)).filter(Boolean) : [];
     if (list.length === 0) throw new Error('No pages selected to scan.');
-    const driver = await makeDriver(opts ?? {});
+    const o = opts ?? {};
+    const driver = await makeDriver(o);
     let siteHost: string | undefined;
     try {
       siteHost = new URL(list[0]).hostname;
     } catch {
       /* per-URL admission still applies */
     }
-    return scanUrls(driver, list, siteHost, streamSink(event, String(requestId ?? '')));
+    return scanUrls(driver, list, siteHost, streamSink(event, String(requestId ?? '')), { platforms: o.platforms ?? ['ga4'] });
   });
 
   ipcMain.handle(

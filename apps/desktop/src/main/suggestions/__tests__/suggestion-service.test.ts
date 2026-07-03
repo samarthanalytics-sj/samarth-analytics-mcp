@@ -5,7 +5,8 @@
 //   • createSuggestedTags() — the approved-create loop (outcome mapping).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/suggestion-service.test.ts
 
-import { crawlAndSuggest, scanUrls, detectInstalled, type PageDriver, type DrivenPage, type ScanProgress } from '../scan-core';
+import { crawlAndSuggest, scanUrls, assembleResult, detectInstalled, type PageDriver, type DrivenPage, type ScanProgress } from '../scan-core';
+import type { SuggestedTag } from '../../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import { mergeDriven } from '../multi-driver';
 import { parseSitemapLocs, extractCrawlLinks } from '../discover';
 import { parseSuggestions, suggestionsFromData, createSuggestedTags, planGoogleTagVars, provisionVariables } from '../suggestion-service';
@@ -151,6 +152,18 @@ async function main(): Promise<void> {
     check('stream: the list GROWS across pages (page 1 ≤ page 2)', progressEvents[0].suggestions.length <= progressEvents[1].suggestions.length);
     check('stream: GA4 Configuration is present from the very first event', progressEvents[0].suggestions.some((s) => s.platform === 'google_tag'));
     check('stream: progress carries scanned/opened counters', progressEvents[0].scanned === 1 && progressEvents[1].scanned === 2);
+
+    // Meta platform: platforms:['ga4','meta'] yields BOTH GA4 and Meta pixel tags; each Meta tag reuses
+    // its GA4 source's trigger name (shared trigger on create). Default (no platforms) stays GA4-only.
+    const fdM = fakeDriver({ 'https://acme.com/': home, 'https://acme.com/contact': contact });
+    const resM = await crawlAndSuggest(fdM.driver, 'https://acme.com/', { maxPages: 10, maxDepth: 2, platforms: ['ga4', 'meta'] });
+    check('meta: both platforms → GA4 + meta_pixel suggestions present', resM.suggestions.some((s) => s.platform === 'ga4_event') && resM.suggestions.some((s) => s.platform === 'meta_pixel'));
+    check('meta: the Meta base pixel (PageView) + a Lead pixel are emitted', resM.suggestions.some((s) => s.platform === 'meta_pixel' && s.eventName === 'PageView') && resM.suggestions.some((s) => s.platform === 'meta_pixel' && s.eventName === 'Lead'));
+    // Each meta tag's trigger name is shared with a GA4 tag's trigger name.
+    const gaTrigNames = new Set(resM.suggestions.filter((s) => s.platform !== 'meta_pixel').map((s) => s.trigger.name));
+    check('meta: every Meta tag reuses a GA4 trigger name (shared trigger on create)', resM.suggestions.filter((s) => s.platform === 'meta_pixel').every((s) => gaTrigNames.has(s.trigger.name)));
+    const resGa4Only = await crawlAndSuggest(fakeDriver({ 'https://acme.com/': home, 'https://acme.com/contact': contact }).driver, 'https://acme.com/', { maxPages: 10, maxDepth: 2 });
+    check('meta: default (no platforms) is unchanged — no meta_pixel suggestions', !resGa4Only.suggestions.some((s) => s.platform === 'meta_pixel'));
   }
 
   // ── maxDepth clamps to a minimum of 1, so a linked page is still reached ────
@@ -336,6 +349,39 @@ async function main(): Promise<void> {
     const gexec = async (_n: string, args: Record<string, unknown>): Promise<string> => { gcalls.push(args); return JSON.stringify({ tag: { name: 'GA4 Configuration' } }); };
     await createSuggestedTags(gexec, { accountId: '1', containerId: '2', workspaceId: '3' }, [gtag], fast);
     check('create: google_tag sends platform + tagId + configSettings and OMITS eventName', gcalls[0].platform === 'google_tag' && gcalls[0].tagId === '{{GA4 Measurement ID}}' && Array.isArray(gcalls[0].configSettings) && gcalls[0].eventName === undefined);
+
+    // A meta_pixel suggestion drives a create_gtm_tracking_tag call with platform 'meta_pixel', sending
+    // the pixel id via measurementId and the Meta event via eventName (the registry's meta branch reads
+    // those). No change to createSuggestedTags was needed — it already forwards these for non-google_tag.
+    const metaTag: SuggestedTagView = {
+      id: 'm', page: '/contact', label: 'Meta Lead', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
+      platform: 'meta_pixel', tagName: 'Meta - Lead - Contact Form Tag', measurementId: '{{Meta Pixel ID}}',
+      eventName: 'Lead', trigger: { name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'lead-form', formIdOperator: 'equals' },
+    };
+    const mcalls: Array<Record<string, unknown>> = [];
+    const mexec = async (_n: string, args: Record<string, unknown>): Promise<string> => { mcalls.push(args); return JSON.stringify({ tag: { name: 'Meta - Lead - Contact Form Tag' }, trigger: { reused: false } }); };
+    const mout = await createSuggestedTags(mexec, { accountId: '1', containerId: '2', workspaceId: '3' }, [metaTag], fast);
+    check('create: meta_pixel drives a create call with platform meta_pixel + pixel id (measurementId) + Meta eventName',
+      mcalls[0].platform === 'meta_pixel' && mcalls[0].measurementId === '{{Meta Pixel ID}}' && mcalls[0].eventName === 'Lead' && mout[0].ok === true);
+  }
+
+  // ── assembleResult: the AI-derived `extra` respects the platform selection too ──
+  {
+    // A GA4 tag the AI path would merge in as `extra`. Meta-only must NOT leak it, and "Both" must
+    // ALSO derive its Meta counterpart (mirrors the engine path) — the platform-leak fix.
+    const ga4Extra = {
+      id: 'ai1', page: '/contact', label: 'Contact form', evidence: 'ai', confidence: 'high',
+      enhancedMeasurementOverlap: false, platform: 'ga4_event', tagName: 'GA4 - Event - Contact Form (Lead)',
+      measurementId: '{{GA4 Measurement ID}}', eventName: 'generate_lead',
+      trigger: { name: 'Contact Form submit', kind: 'form_submit', formIdValue: 'c', formIdOperator: 'equals' },
+    } as unknown as SuggestedTag;
+    const metaOnly = assembleResult('https://x.com', 'x.com', [], [], [], 0, [ga4Extra], ['meta']).suggestions;
+    check('assembleResult: meta-only drops the GA4 AI extra (no ga4_event leaks)', !metaOnly.some((s) => s.platform === 'ga4_event'));
+    check('assembleResult: meta-only derives a Meta counterpart of the GA4 AI extra',
+      metaOnly.some((s) => s.platform === 'meta_pixel' && s.eventName === 'Lead' && s.id === 'meta-ai1'));
+    const both = assembleResult('https://x.com', 'x.com', [], [], [], 0, [ga4Extra], ['ga4', 'meta']).suggestions;
+    check('assembleResult: both keeps the GA4 AI extra AND its Meta counterpart',
+      both.some((s) => s.id === 'ai1' && s.platform === 'ga4_event') && both.some((s) => s.id === 'meta-ai1' && s.platform === 'meta_pixel'));
   }
 
   // ── createSuggestedTags: GTM quota / rate-limit retry-with-backoff ─────────
