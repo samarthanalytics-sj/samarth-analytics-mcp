@@ -23,6 +23,20 @@ export function sanitizeName(name: string): string {
   return cleaned || 'Unnamed';
 }
 
+/** True when a container is the SERVER container with the given name (case-insensitive on both
+ *  the name and the usageContext, since GTM may echo usageContext as "server" or "SERVER").
+ *  Used to make "create server container from web" idempotent — a retry reuses the container a
+ *  prior (quota-interrupted) run created instead of creating a duplicate. PURE. */
+export function matchesServerContainer(
+  c: { name?: string | null; usageContext?: Array<string | null> | null },
+  name: string
+): boolean {
+  return (
+    (c.name ?? '').trim().toLowerCase() === name.trim().toLowerCase() &&
+    (c.usageContext ?? []).some((u) => (u ?? '').toLowerCase() === 'server')
+  );
+}
+
 /**
  * Build the GTM install snippet for an ENVIRONMENT — the normal container snippet plus the
  * environment's gtm_auth (authorizationCode), gtm_preview (env-<environmentId>) and
@@ -500,14 +514,16 @@ export function buildServerEventTrigger(
 }
 
 /** Server-side Google Ads CONVERSION tag (`sgtmadsct`). Shape corpus-validated. Reads the
- *  conversion value/currency from the event the client received; conversionId is the AW-
- *  account id, conversionLabel the per-conversion label (both may be {{variables}}). */
+ *  conversion value/currency from the event the client received; conversionId is the Ads
+ *  account id, conversionLabel the per-conversion label (both may be {{variables}}). The
+ *  sgtmadsct template validates conversionId as a POSITIVE INTEGER, so the "AW-" prefix is
+ *  stripped (an "AW-12345678" input becomes "12345678"); a {{variable}} is passed through. */
 export function buildAdsConversionServerTag(name: string, conversionId: string, conversionLabel: string, firingTriggerId?: string[]): GtmTagResource {
   return {
     name: sanitizeName(name),
     type: 'sgtmadsct',
     parameter: [
-      tpl('conversionId', conversionId),
+      tpl('conversionId', normalizeAdsConversionId(conversionId)),
       tpl('conversionLabel', conversionLabel),
       boolean('enableConversionLinker', true),
       tpl('productReportingDataSource', 'EVENT'),
@@ -530,13 +546,14 @@ export function buildAdsConversionLinkerServerTag(name: string, firingTriggerId?
 }
 
 /** Server-side Google Ads REMARKETING tag (`sgtmadsremarket`). Shape corpus-validated.
- *  Dynamic remarketing reads item data from the event; conversionId is the AW- id. */
+ *  Dynamic remarketing reads item data from the event; conversionId is the Ads id (the
+ *  "AW-" prefix is stripped to the numeric id the template requires; {{variables}} pass through). */
 export function buildAdsRemarketingServerTag(name: string, conversionId: string, firingTriggerId?: string[]): GtmTagResource {
   return {
     name: sanitizeName(name),
     type: 'sgtmadsremarket',
     parameter: [
-      tpl('conversionId', conversionId),
+      tpl('conversionId', normalizeAdsConversionId(conversionId)),
       boolean('enableConversionLinker', true),
       boolean('enableDynamicRemarketing', true),
       tpl('remarketingEventDataSource', 'EVENT_DATA'),
