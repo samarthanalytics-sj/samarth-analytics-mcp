@@ -1,3 +1,9 @@
+## [1.145.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.145.0...v1.145.1) (2026-07-03)
+
+### Bug Fixes
+
+* **desktop:** make the one-shot tracking flow quota-safe and idempotent ([08e4a96](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/08e4a9685c15461e6943598f92925ea0ed340a85))
+
 ## [1.145.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.144.0...v1.145.0) (2026-07-03)
 
 ### Features
