@@ -19,6 +19,9 @@ export interface DataQualityCounts {
   /** YYYY-MM-DD window bounds in the property's timezone (set by the data layer). */
   startDate?: string;
   endDate?: string;
+  /** The current date in the property's timezone (YYYY-MM-DD) — set for trailing-N-day windows so the
+   *  trend engine can exclude an in-progress final day. Undefined for custom historical ranges. */
+  todayYmd?: string;
 }
 
 export interface Ga4DataQualityResult {

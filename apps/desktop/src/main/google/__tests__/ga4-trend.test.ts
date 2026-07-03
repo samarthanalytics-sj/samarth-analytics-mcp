@@ -87,5 +87,21 @@ test('fewer than 5 days → insufficient, no crash', () => {
   assert.equal(r.peak, null);
 });
 
+test('trailing in-progress (partial) day is excluded so it does not force a false downtrend', () => {
+  const vals = [100, 100, 100, 100, 100, 100, 5]; // 6 steady days + a low partial "today" (20260607)
+  const guarded = analyzeGa4Trend(inp(vals, { todayYmd: '20260607' }));
+  assert.equal(guarded.partialLastDayExcluded, true);
+  assert.equal(guarded.pattern, 'steady'); // the partial day is dropped → no false drop
+  assert.match(guarded.summary, /in-progress day is excluded/);
+  // Without the guard, the same low partial day forces a downtrend classification.
+  const unguarded = analyzeGa4Trend(inp(vals));
+  assert.equal(unguarded.partialLastDayExcluded, false);
+  assert.equal(unguarded.pattern, 'downtrend');
+  // A todayYmd that isn't the last series day (historical range) → no exclusion.
+  assert.equal(analyzeGa4Trend(inp(vals, { todayYmd: '20260615' })).partialLastDayExcluded, false);
+  // Dashed YYYY-MM-DD is accepted too.
+  assert.equal(analyzeGa4Trend(inp(vals, { todayYmd: '2026-06-07' })).partialLastDayExcluded, true);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

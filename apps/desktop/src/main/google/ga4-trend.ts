@@ -11,6 +11,10 @@ export interface Ga4TrendInput {
   dailySessions: Ga4DayPoint[];
   peakDayChannels: Array<{ name: string; sessions: number }> | null;
   windowChannels: Array<{ name: string; sessions: number }>;
+  /** The current date in the property's timezone (YYYY-MM-DD or YYYYMMDD). When the last series day
+   *  is this in-progress day, its partial count is excluded from spike/trend classification so it
+   *  isn't misread as a real drop or spike. */
+  todayYmd?: string;
 }
 export type Ga4TrendPattern = 'one_day_spike' | 'multi_day_spike' | 'uptrend' | 'downtrend' | 'volatile' | 'steady' | 'insufficient';
 
@@ -25,6 +29,8 @@ export interface Ga4TrendResult {
   drivingChannel: { name: string; dayShare: number; windowShare: number } | null;
   /** Back-half vs front-half change (rounded %); null if not computable. */
   deltaPct: number | null;
+  /** True when the trailing in-progress (partial) day was excluded from classification. */
+  partialLastDayExcluded: boolean;
   summary: string;
 }
 
@@ -38,11 +44,17 @@ const sum = (a: number[]): number => a.reduce((s, v) => s + v, 0);
 const avg = (a: number[]): number => (a.length ? sum(a) / a.length : 0);
 
 export function analyzeGa4Trend(input: Ga4TrendInput): Ga4TrendResult {
-  const series = input.dailySessions ?? [];
+  const raw = input.dailySessions ?? [];
+  // Exclude a trailing in-progress (partial) day from classification: its incomplete count would
+  // otherwise read as a false drop/downtrend (or a false low). Only when it still leaves >= 5 days.
+  const norm = (d?: string): string => (d ?? '').replace(/-/g, '');
+  const lastIsPartial =
+    raw.length > 5 && input.todayYmd != null && norm(raw[raw.length - 1]?.date) === norm(input.todayYmd);
+  const series = lastIsPartial ? raw.slice(0, -1) : raw;
   const vals = series.map((d) => d.sessions);
   const n = vals.length;
   if (n < 5) {
-    return { pattern: 'insufficient', patternLabel: 'Insufficient data', peak: null, peakIndex: -1, drivingChannel: null, deltaPct: null, summary: 'Not enough days in this window to characterise the traffic trend.' };
+    return { pattern: 'insufficient', patternLabel: 'Insufficient data', peak: null, peakIndex: -1, drivingChannel: null, deltaPct: null, partialLastDayExcluded: lastIsPartial, summary: 'Not enough days in this window to characterise the traffic trend.' };
   }
 
   const mean = avg(vals);
@@ -115,5 +127,6 @@ export function analyzeGa4Trend(input: Ga4TrendInput): Ga4TrendResult {
     summary = `Traffic is steady across the window with no spike or clear trend (peak ${fmtDay(peak!.date)} at ${max.toLocaleString('en-US')}).`;
   }
 
-  return { pattern, patternLabel, peak, peakIndex, drivingChannel, deltaPct, summary };
+  if (lastIsPartial) summary += " (today's in-progress day is excluded so it isn't misread as a drop).";
+  return { pattern, patternLabel, peak, peakIndex, drivingChannel, deltaPct, partialLastDayExcluded: lastIsPartial, summary };
 }

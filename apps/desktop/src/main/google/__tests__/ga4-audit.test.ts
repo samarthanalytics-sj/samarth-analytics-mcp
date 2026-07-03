@@ -201,5 +201,50 @@ test('counts + severity summary are consistent', () => {
   assert.equal(r.counts.dataStreams, 0);
 });
 
+test('service-level-aware retention: GA360 at 14 months is under-retained (recommend 50); standard 14mo is fine', () => {
+  const r = auditGa4(base({ serviceLevel: 'GOOGLE_ANALYTICS_360', dataRetention: { eventDataRetention: 'FOURTEEN_MONTHS', resetOnNewActivity: true } }));
+  assert.ok(r.findings.some((f) => f.category === 'retention' && /50 months/.test(f.recommendation)));
+  // TWENTY_SIX_MONTHS (a real GA360 value) renders as "26 months", not the raw enum.
+  const r26 = auditGa4(base({ serviceLevel: 'GOOGLE_ANALYTICS_360', dataRetention: { eventDataRetention: 'TWENTY_SIX_MONTHS', resetOnNewActivity: true } }));
+  assert.ok(r26.findings.some((f) => f.category === 'retention' && /26 months/.test(f.message) && !/TWENTY_SIX/.test(f.message)));
+  assert.ok(!cats(base({ serviceLevel: 'GOOGLE_ANALYTICS_360', dataRetention: { eventDataRetention: 'FIFTY_MONTHS', resetOnNewActivity: true } })).includes('retention'));
+  assert.ok(!cats(base({ dataRetention: { eventDataRetention: 'FOURTEEN_MONTHS', resetOnNewActivity: true } })).includes('retention'));
+});
+
+test('attribution: last-click model + short "other" lookback → findings; data-driven + 90d is clean; unread → Not Verified', () => {
+  const bad = auditGa4(base({ attribution: { reportingAttributionModel: 'PAID_AND_ORGANIC_CHANNELS_LAST_CLICK', acquisitionLookback: 'X_30_DAYS', otherLookback: 'CONVERSION_EVENT_LOOKBACK_WINDOW_30_DAYS' } }));
+  assert.ok(bad.findings.some((f) => f.category === 'attribution' && /last-click/i.test(f.message)));
+  assert.ok(bad.findings.some((f) => f.category === 'attribution' && /lookback/i.test(f.message)));
+  assert.equal(bad.areas.find((a) => a.area === 'Attribution')?.status, 'partial');
+  const good = auditGa4(base({ attribution: { reportingAttributionModel: 'PAID_AND_ORGANIC_CHANNELS_DATA_DRIVEN', acquisitionLookback: 'X', otherLookback: 'CONVERSION_EVENT_LOOKBACK_WINDOW_90_DAYS' } }));
+  assert.ok(!good.findings.some((f) => f.category === 'attribution'));
+  assert.equal(good.areas.find((a) => a.area === 'Attribution')?.status, 'pass');
+  assert.equal(auditGa4(base()).areas.find((a) => a.area === 'Attribution')?.status, 'not_verified');
+});
+
+test('enhanced-measurement sub-toggles off while master on → measurement finding', () => {
+  const r = auditGa4(base({ dataStreams: [{ name: 'p/1/dataStreams/9', displayName: 'Web', type: 'WEB_DATA_STREAM', enhancedMeasurementEnabled: true, enhancedMeasurement: { siteSearchEnabled: false, pageChangesEnabled: false, formInteractionsEnabled: true } }] }));
+  assert.ok(r.findings.some((f) => f.category === 'measurement' && /site search/i.test(f.message) && /SPA page changes/i.test(f.message)));
+  assert.equal(r.areas.find((a) => a.area === 'Enhanced measurement')?.status, 'partial');
+  assert.ok(!cats(base({ dataStreams: [{ name: 'x', displayName: 'Web', type: 'WEB_DATA_STREAM', enhancedMeasurementEnabled: true, enhancedMeasurement: { siteSearchEnabled: true, pageChangesEnabled: true, formInteractionsEnabled: true } }] })).includes('measurement'));
+});
+
+test('BigQuery: none configured → info; a link with no export enabled → low; a working link → clean', () => {
+  assert.ok(auditGa4(base({ bigQueryLinks: [] })).findings.some((f) => f.category === 'integrations' && /No BigQuery/i.test(f.message)));
+  assert.ok(auditGa4(base({ bigQueryLinks: [{ project: 'my-gcp', dailyExportEnabled: false, streamingExportEnabled: false }] })).findings.some((f) => f.category === 'integrations' && f.severity === 'low' && /no export/i.test(f.message)));
+  assert.ok(!auditGa4(base({ bigQueryLinks: [{ project: 'my-gcp', dailyExportEnabled: true, streamingExportEnabled: false }] })).findings.some((f) => /BigQuery/i.test(f.message)));
+});
+
+test('audiences: none while Ads linked + key events → integrations info; not flagged without Ads or when present', () => {
+  assert.ok(auditGa4(base({ audiences: 0 })).findings.some((f) => /No audiences/i.test(f.message)));
+  assert.ok(!auditGa4(base({ audiences: 0, googleAdsLinks: 0 })).findings.some((f) => /No audiences/i.test(f.message)));
+  assert.ok(!auditGa4(base({ audiences: 3 })).findings.some((f) => /No audiences/i.test(f.message)));
+});
+
+test('reporting currency unset → info collection finding', () => {
+  assert.ok(auditGa4(base({ currencyCode: '' })).findings.some((f) => f.category === 'collection' && /currency/i.test(f.message)));
+  assert.ok(!auditGa4(base({ currencyCode: 'EUR' })).findings.some((f) => /currency/i.test(f.message)));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

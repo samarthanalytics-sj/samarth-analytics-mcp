@@ -294,7 +294,7 @@ test('buildGa4ExecSummary returns the structured exec used by the panel + styled
   assert.equal(exec.categories.length, 6);
   assert.equal(exec.trust.length, 5);
   assert.equal(exec.trust.find((t) => t.metric === 'Revenue / AOV / ROAS')!.safe, false, 'revenue do-not-quote under a spike');
-  assert.equal(exec.coverage.checked, 11);
+  assert.equal(exec.coverage.checked, 12); // config areas 9 (+Enhanced measurement +Attribution, graded) + Audiences/Ecommerce/Consent
   // The markdown section 1 and the structured exec agree on the headline number.
   const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b, 'Organic Social') }));
   assert.ok(md.includes(`${exec.composite}/100`), 'markdown + structured exec share the composite');

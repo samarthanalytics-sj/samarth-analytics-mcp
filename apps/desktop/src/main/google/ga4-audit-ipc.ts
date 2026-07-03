@@ -9,6 +9,7 @@ import { auditGa4 } from './ga4-audit';
 import { auditGa4DataQuality } from './ga4-data-quality';
 import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Visuals, buildGa4Sections } from './ga4-report';
 import { auditGa4Growth } from './ga4-growth';
+import { auditGa4EventDeltas, auditGa4Transactions } from './ga4-integrity';
 import { reportHtmlDocument } from './ga4-report-export';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { ga4VisualsHtml, stripDuplicateCharts } from '../../shared/ga4-visuals-html';
@@ -50,7 +51,26 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
       withQuotaRetry(() => data.getGa4DataQuality(p, win)),
     ]);
     const config = auditGa4(snap);
-    const dataQuality = auditGa4DataQuality(dqCounts);
+    let dataQuality = auditGa4DataQuality(dqCounts);
+    // Data-integrity (reporting data): per-event regressions (a key event dropped to 0 = broken tag)
+    // and — for ecommerce properties — duplicate / unlabelled transactions (double-counted revenue).
+    // Best-effort; a failed query just omits those findings. Merged into the data-quality findings so
+    // they flow through the whole report; the "no issues" all-clear is dropped when a real one appears.
+    const ecom = (snap.keyEvents ?? []).some((k) => /purchase|add_to_cart|begin_checkout|view_item|add_payment_info/i.test(k.eventName));
+    const sd = dqCounts.startDate ?? '';
+    const ed = dqCounts.endDate ?? '';
+    const [deltas, txn] = await Promise.all([
+      sd && ed ? withQuotaRetry(() => data.getGa4EventDeltas(p, sd, ed)).catch(() => null) : Promise.resolve(null),
+      ecom && sd && ed ? withQuotaRetry(() => data.getGa4Transactions(p, sd, ed)).catch(() => null) : Promise.resolve(null),
+    ]);
+    const integrityFindings = [
+      ...(deltas ? auditGa4EventDeltas({ events: deltas.events, keyEventNames: (snap.keyEvents ?? []).map((k) => k.eventName) }) : []),
+      ...(txn ? auditGa4Transactions({ hasEcommerce: true, transactions: txn.transactions, notSetShare: txn.notSetShare }) : []),
+    ];
+    if (integrityFindings.length) {
+      const base = dataQuality.findings.filter((f) => !(f.severity === 'info' && /No major data-quality issues/.test(f.message)));
+      dataQuality = { ...dataQuality, findings: [...base, ...integrityFindings] };
+    }
     // Best-effort enrichments for the report doc — a failure just degrades that section to
     // Not Verified, it never fails the audit (config + data quality always return).
     const baseline = await withQuotaRetry(() => data.getGa4Baseline(p, dqCounts.startDate ?? '', dqCounts.endDate ?? '')).catch(() => null);
