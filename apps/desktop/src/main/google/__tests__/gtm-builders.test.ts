@@ -28,6 +28,7 @@ import {
   metaStandardEvent,
   buildTikTokCapiServerTag,
   buildTikTokEmqVariables,
+  buildLinkedInCapiServerTag,
   tikTokStandardEvent,
   TIKTOK_EVENT_PROPERTIES,
   META_EVENT_OBJECT_PROPERTIES,
@@ -1610,9 +1611,16 @@ test('buildMetaCapiServerTag maps EMQ user_data (em/ph ONLY) + EVENT-AWARE ecomm
   const rowsOf = (tag: typeof t, key: string): Array<[string, string]> =>
     listOf(tag, key).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
   const rows = (key: string): Array<[string, string]> => rowsOf(t, key);
-  // user_data: em/ph ONLY — the template extracts fn/ln/ct/zp/country itself; explicit rows for those
-  // would ERASE template-extracted values when the ed variable resolves undefined (lower EMQ).
-  assert.deepEqual(rows('userDataList'), [['em', '{{ed - email_address}}'], ['ph', '{{ed - phone_number}}']]);
+  // user_data: em/ph/external_id — the template extracts fn/ln/ct/zp/country itself (explicit rows for
+  // those would ERASE template-extracted values when the ed variable resolves undefined); external_id is
+  // NOT template-extracted, so adding it only ADDS matching (Meta's user-id field).
+  assert.deepEqual(rows('userDataList'), [['em', '{{ed - email_address}}'], ['ph', '{{ed - phone_number}}'], ['external_id', '{{ed - external_id}}']]);
+  // ed - external_id falls back to the GA4 user_id so it resolves whether the event has external_id or user_id.
+  const emq = buildMetaEmqVariables();
+  const extVar = emq.find((v) => v.name === 'ed - external_id');
+  const extDefault = (extVar?.parameter ?? []).find((p) => (p as { key?: string }).key === 'defaultValue') as { value?: string } | undefined;
+  assert.equal(extDefault?.value, '{{ed - user_id}}', 'external_id ed variable falls back to user_id');
+  assert.ok(emq.some((v) => v.name === 'ed - user_id'), 'ed - user_id is created');
   // custom_data is now the AddToCart recommended set (content_ids/contents/content_type/value/currency/num_items),
   // NOT a fixed list — content_type is the literal "product"; no order_id (AddToCart has none).
   assert.deepEqual(rows('customDataList'), [
@@ -1727,6 +1735,33 @@ test('buildGa4EventTag: defaults Send-Ecommerce ON for an ecommerce event with n
   const forcedOff = buildGa4EventTag({ name: 'GA4 - Purchase Off', measurementId: 'G-1', eventName: 'purchase', sendEcommerceData: false });
   assert.equal(paramVal(forcedOff, 'sendEcommerceData'), 'false');
   assert.ok(isGa4EcommerceEvent('add_to_cart') && !isGa4EcommerceEvent('login'));
+});
+
+test('buildLinkedInCapiServerTag: conversion tag (token + rule + automap on); eventId → eventData row; explicit rows + opt-outs', () => {
+  const t = buildLinkedInCapiServerTag('cvt_LI01', 'LinkedIn CAPI', '{{LI Token}}', '{{LI Rule}}', { eventId: '{{Event ID}}', firingTriggerId: ['9'] });
+  assert.equal(t.type, 'cvt_LI01');
+  assert.equal(paramVal(t, 'type'), 'conversion');
+  assert.equal(paramVal(t, 'accessToken'), '{{LI Token}}');
+  assert.equal(paramVal(t, 'conversionRuleUrn'), '{{LI Rule}}');
+  assert.equal(paramVal(t, 'autoMapUserIds'), 'true');
+  assert.equal(paramVal(t, 'autoMapEventData'), 'true');
+  assert.equal(paramVal(t, 'autoMapExternalIds'), 'false');
+  assert.equal(paramVal(t, 'adStorageConsent'), 'optional');
+  assert.deepEqual(listRows(t, 'eventData'), [['eventId', '{{Event ID}}']]);
+  assert.deepEqual(t.firingTriggerId, ['9']);
+  // explicit rows + opt-outs (autoMap off, consent required)
+  const t2 = buildLinkedInCapiServerTag('cvt_LI01', 'x', 'T', 'R', {
+    autoMap: false, requireConsent: true,
+    userIds: [{ name: 'email', value: '{{Hashed Email}}' }],
+    userInfo: [{ name: 'firstName', value: '{{First}}' }],
+  });
+  assert.equal(paramVal(t2, 'autoMapUserIds'), 'false');
+  assert.equal(paramVal(t2, 'adStorageConsent'), 'required');
+  assert.deepEqual(listRows(t2, 'userIds'), [['email', '{{Hashed Email}}']]);
+  assert.deepEqual(listRows(t2, 'userInfo'), [['firstName', '{{First}}']]);
+  // no SIMPLE_TABLE lists when there's nothing to add and no eventId
+  const bare = buildLinkedInCapiServerTag('cvt_LI01', 'x', 'T', 'R');
+  assert.ok(!((bare.parameter as Array<{ key?: string }>) ?? []).some((p) => ['eventData', 'userIds', 'userInfo'].includes(String(p.key))), 'no tables when empty');
 });
 
 test('buildVariable throws on an unknown kind (no silent empty Custom JS variable)', () => {

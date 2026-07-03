@@ -38,6 +38,7 @@ import {
   metaStandardEvent,
   buildTikTokCapiServerTag,
   tikTokStandardEvent,
+  buildLinkedInCapiServerTag,
   detectMetaTags,
   findUnusedTriggers,
   findUnusedVariables,
@@ -2040,6 +2041,69 @@ export function buildToolRegistry(
         });
         const created = await data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
         return { ...created, createdVariables };
+      },
+    },
+    {
+      name: 'create_linkedin_capi_server_tag',
+      description:
+        'Create a LinkedIn Conversions API SERVER tag from the Stape "LinkedIn Conversion API" community template (stape-io / linkedin-tag) in a server container. LinkedIn conversions are keyed by a pre-defined Conversion Rule (NOT an event name), so pass accessToken + conversionRuleUrn (both usually {{variables}}); get them from LinkedIn Campaign Manager → Measurement → Conversions (the token via Manage sources → Google Tag Manager → Generate token; the rule ID on the conversion rule settings). By default autoMapEventData/UserIds/UserInfo are ON, so the tag derives currency/amount + the match IDs (hashed email, LinkedIn first-party li_fat_id, …) + user info from the incoming GA4 event with no explicit rows — the LinkedIn analog of Meta CAPI automap. Pass eventId for dedup with the LinkedIn Insight Tag. Optionally add/override rows: userIds (name ∈ email/linkedinFirstPartyId/acxiomID/moatID/ipAddress/googleAid), userInfo (name ∈ firstName/lastName/jobTitle/companyName/countryCode), eventData (name ∈ conversionHappenedAt/currency/amount/eventId) — values usually {{variables}}. Imports the Stape template if needed (you do NOT pass the cvt_ type). The tag needs a SERVER trigger (create_server_trigger). Optional autoMap, optimistic, requireConsent, firingTriggerId, name (default "LinkedIn CAPI Tag"). Requires accountId, containerId (SERVER), workspaceId, accessToken, conversionRuleUrn.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional — defaults to "LinkedIn CAPI Tag".' },
+          accessToken: { type: 'string', description: 'LinkedIn Conversions API access token (usually a {{variable}}).' },
+          conversionRuleUrn: { type: 'string', description: 'LinkedIn Conversion Rule ID / URN from Campaign Manager (usually a {{variable}}).' },
+          eventId: { type: 'string', description: 'Event ID for dedup with the LinkedIn Insight Tag (usually a {{variable}}).' },
+          userIds: {
+            type: 'array',
+            description: 'Match-ID rows { name, value }; name ∈ email/linkedinFirstPartyId/acxiomID/moatID/ipAddress/googleAid.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          userInfo: {
+            type: 'array',
+            description: 'User-info rows { name, value }; name ∈ firstName/lastName/jobTitle/companyName/countryCode.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          eventData: {
+            type: 'array',
+            description: 'Event-data rows { name, value }; name ∈ conversionHappenedAt/currency/amount/eventId.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          autoMap: { type: 'boolean', description: 'Auto-derive event data + match IDs + user info from the incoming event — default true. false = only the rows you pass.' },
+          optimistic: { type: 'boolean', description: 'Optimistic scenario (gtmOnSuccess without waiting for LinkedIn) — default false.' },
+          requireConsent: { type: 'boolean', description: 'Gate on ad_storage consent — default false (optional).' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'accessToken', 'conversionRuleUrn'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create LinkedIn CAPI server tag "${s(a.name).trim() || 'LinkedIn CAPI Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'LinkedIn CAPI Tag', 'tag'),
+      handler: async (a) => {
+        if (!s(a.accessToken).trim()) throw new Error('accessToken is required (the LinkedIn Conversions API access token, usually a {{variable}}).');
+        if (!s(a.conversionRuleUrn).trim()) throw new Error('conversionRuleUrn is required (the LinkedIn Conversion Rule ID/URN from Campaign Manager, usually a {{variable}}).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'linkedin-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the Stape LinkedIn template's tag type (got "${tmpl.type}"). Import stape-io/linkedin-tag and check list_gtm_templates.`);
+        }
+        const name = s(a.name).trim() || 'LinkedIn CAPI Tag';
+        const mapRows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildLinkedInCapiServerTag(tmpl.type, name, s(a.accessToken), s(a.conversionRuleUrn), {
+          eventId: a.eventId != null ? s(a.eventId) : undefined,
+          userIds: mapRows(a.userIds),
+          userInfo: mapRows(a.userInfo),
+          eventData: mapRows(a.eventData),
+          autoMap: bln(a.autoMap),
+          optimistic: bln(a.optimistic),
+          requireConsent: bln(a.requireConsent),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
       },
     },
     {

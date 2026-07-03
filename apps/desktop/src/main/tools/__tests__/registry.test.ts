@@ -440,9 +440,10 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 93, 'read + write registry has 93 tools');
+    assert.equal(withWrites.list().length, 94, 'read + write registry has 94 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
     assert.equal(withWrites.list().some((t) => t.name === 'add_ga4_server_parameters'), true, 'add_ga4_server_parameters present');
+    assert.equal(withWrites.list().some((t) => t.name === 'create_linkedin_capi_server_tag'), true, 'create_linkedin_capi_server_tag present');
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
     }
@@ -1598,6 +1599,16 @@ async function main(): Promise<void> {
     await reg.execute('create_tiktok_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: 'P', accessToken: 'T', event: 'purchase', mapEventData: false });
     assert.equal(fd.calls.filter((c) => c.startsWith('tiktokEmq:')).length, ttBefore2, 'mapEventData=false → no variable ensure');
     await assert.rejects(() => reg.execute('create_tiktok_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '1', accessToken: '', event: 'Purchase' }), /accessToken is required/);
+
+    // create_linkedin_capi_server_tag imports the Stape LinkedIn template + creates the CAPI server tag.
+    const liapi = JSON.parse(
+      await reg.execute('create_linkedin_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', accessToken: '{{LI Token}}', conversionRuleUrn: '{{LI Rule}}', eventId: '{{Event ID}}', firingTriggerId: ['5'] }),
+    );
+    assert.ok(fd.calls.includes('importTemplate:stape-io/linkedin-tag'), 'imported the Stape LinkedIn server template');
+    assert.ok(liapi.tagId, 'created a LinkedIn CAPI tag');
+    // required fields are enforced (no silent creation without token / conversion rule)
+    await assert.rejects(() => reg.execute('create_linkedin_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', accessToken: '', conversionRuleUrn: 'R' }), /accessToken is required/);
+    await assert.rejects(() => reg.execute('create_linkedin_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', accessToken: 'T', conversionRuleUrn: '  ' }), /conversionRuleUrn is required/);
 
     // update_gtm_trigger fixes a Custom Event trigger's Event name IN PLACE (no delete+recreate).
     const upd = JSON.parse(

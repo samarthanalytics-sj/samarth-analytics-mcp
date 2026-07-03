@@ -2347,6 +2347,8 @@ export const META_EMQ_EVENT_DATA_KEYS: string[] = [
   'num_items',
   'email_address',
   'phone_number',
+  'external_id',
+  'user_id',
   'first_name',
   'last_name',
   'country',
@@ -2510,16 +2512,19 @@ export function buildMetaPixelTag(
  *  incoming event_name. pixelId/accessToken are typically {{variables}}. Field keys
  *  corpus-validated (cvt_5TP8W). The EMQ user-data params come from create_meta_emq_variables. PURE. */
 /** The Meta user_data (advanced-matching / EMQ) rows the CAPI tag sends, as [Facebook key → the
- *  `ed - <emq key>` variable that feeds it]. ONLY em/ph: the Stape template's own addUserData already
- *  extracts fn/ln/ct/zp/country (and the nested GA4 user_data.* shapes) from the incoming event, and
- *  its overrideDataIfNeeded applies explicit rows UNCONDITIONALLY — so an explicit row whose variable
- *  resolves undefined would ERASE what the template extracted (lower EMQ). em/ph rows carry the
- *  top-level email_address/phone_number keys the template misses, and their ed variables fall back to
- *  the nested user_data.* path (see buildMetaEmqVariables), so they never blank a found value. fbp/fbc
- *  are omitted — the template generates _fbp and reads _fbc from the cookie itself. */
+ *  `ed - <emq key>` variable that feeds it]. em/ph/external_id ONLY: the Stape template's own
+ *  addUserData already extracts fn/ln/ct/zp/country (and the nested GA4 user_data.* shapes) from the
+ *  incoming event, and its overrideDataIfNeeded applies explicit rows UNCONDITIONALLY — so an explicit
+ *  row for THOSE whose variable resolves undefined would ERASE what the template extracted (lower EMQ).
+ *  em/ph carry the top-level email_address/phone_number keys the template misses (their ed variables
+ *  fall back to the nested user_data.* path). external_id (a stable user id — Meta's user_id field) is
+ *  NOT auto-extracted by the template, so adding it can only ADD matching, never erase; its ed variable
+ *  falls back to the GA4 user_id (see buildMetaEmqVariables). fbp/fbc are omitted — the template
+ *  generates _fbp and reads _fbc from the cookie itself. */
 const META_USER_DATA_MAP: Array<[fbKey: string, emqKey: string]> = [
   ['em', 'email_address'],
   ['ph', 'phone_number'],
+  ['external_id', 'external_id'],
 ];
 const edRefRow = ([fbKey, emqKey]: [string, string]): Param => ({ type: 'map', map: [tpl('name', fbKey), tpl('value', `{{ed - ${emqKey}}}`)] });
 
@@ -2605,11 +2610,16 @@ export function buildMetaCapiServerTag(
  *  template would have found. PURE. */
 export function buildMetaEmqVariables(): GtmVariableResource[] {
   const NESTED_FALLBACK = new Set(['email_address', 'phone_number']);
+  // external_id (Meta's stable-user-id field) falls back to the GA4 user_id, so it resolves whether the
+  // event carries `external_id` or `user_id`. (A missing referenced variable is a harmless empty string.)
+  const SIBLING_FALLBACK: Record<string, string> = { external_id: 'user_id' };
   const out: GtmVariableResource[] = [];
   for (const k of META_EMQ_EVENT_DATA_KEYS) {
     if (NESTED_FALLBACK.has(k)) {
       out.push(buildVariable({ name: `ed - user_data.${k}`, kind: 'event_data', keyPath: `user_data.${k}` }));
       out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }));
+    } else if (SIBLING_FALLBACK[k]) {
+      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - ${SIBLING_FALLBACK[k]}}}` }));
     } else {
       out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
     }
@@ -2831,6 +2841,73 @@ export function buildTikTokCapiServerTag(
     });
   }
 
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(opts?.firingTriggerId && opts.firingTriggerId.length ? { firingTriggerId: opts.firingTriggerId } : {}),
+    parameter,
+  };
+}
+
+/* ───────────── LinkedIn CAPI (server) ───────────── */
+
+/** The SIMPLE_TABLE `name`-column options the Stape LinkedIn tag accepts (verified against its
+ *  template.tpl). userIds = the acceptable match IDs (LinkedIn needs ≥1, or first+last name);
+ *  userInfo = additional matching fields; eventData = the conversion event fields. */
+export const LINKEDIN_USER_ID_KEYS: string[] = ['email', 'linkedinFirstPartyId', 'acxiomID', 'moatID', 'ipAddress', 'googleAid'];
+export const LINKEDIN_USER_INFO_KEYS: string[] = ['firstName', 'lastName', 'jobTitle', 'companyName', 'countryCode'];
+export const LINKEDIN_EVENT_DATA_KEYS: string[] = ['conversionHappenedAt', 'currency', 'amount', 'eventId'];
+
+/** Build a Stape "LinkedIn Conversions API" SERVER tag (gallery template stape-io/linkedin-tag;
+ *  `type` = its cvt_ code). A CONVERSION tag (type='conversion') needs the LinkedIn `accessToken` +
+ *  `conversionRuleUrn` (both usually {{variables}}) — LinkedIn conversions are keyed by a pre-defined
+ *  Conversion Rule, so there is no event-name mapping. autoMapEventData/UserIds/UserInfo default ON,
+ *  so the template derives currency/amount + the match IDs (hashed email, li_fat_id, …) + user info
+ *  from the incoming GA4 event with no explicit rows — the LinkedIn analog of Meta's automap. Pass
+ *  explicit userIds/userInfo/eventData rows (name ∈ the LINKEDIN_*_KEYS) to add or override, and
+ *  eventId for dedup with the LinkedIn Insight Tag. Field shape verified against the template.tpl. PURE. */
+export function buildLinkedInCapiServerTag(
+  type: string,
+  name: string,
+  accessToken: string,
+  conversionRuleUrn: string,
+  opts?: {
+    eventId?: string;
+    userIds?: Array<{ name: string; value: string }>;
+    userInfo?: Array<{ name: string; value: string }>;
+    eventData?: Array<{ name: string; value: string }>;
+    autoMap?: boolean;
+    optimistic?: boolean;
+    requireConsent?: boolean;
+    firingTriggerId?: string[];
+  }
+): GtmTagResource {
+  const auto = opts?.autoMap !== false;
+  const parameter: Param[] = [
+    tpl('type', 'conversion'),
+    tpl('accessToken', accessToken),
+    tpl('conversionRuleUrn', conversionRuleUrn),
+    boolean('enablePageViewFromBrowser', false),
+    boolean('useOptimisticScenario', opts?.optimistic ?? false),
+    boolean('autoMapEventData', auto),
+    boolean('autoMapUserIds', auto),
+    boolean('autoMapUserInfo', auto),
+    boolean('autoMapExternalIds', false),
+    tpl('adStorageConsent', opts?.requireConsent ? 'required' : 'optional'),
+  ];
+  const table = (key: string, rows: Array<{ name: string; value: string }>): void => {
+    const clean = rows.filter((r) => r.name && r.name.trim() !== '');
+    if (!clean.length) return;
+    parameter.push({ type: 'list', key, list: clean.map((r) => ({ type: 'map', map: [tpl('name', r.name.trim()), tpl('value', r.value)] })) });
+  };
+  // eventId → an eventData row (dedup with the LinkedIn Insight Tag); merged with any explicit rows.
+  const eventData = [...(opts?.eventData ?? [])];
+  if (opts?.eventId && opts.eventId.trim() !== '' && !eventData.some((r) => r.name === 'eventId')) {
+    eventData.push({ name: 'eventId', value: opts.eventId });
+  }
+  table('eventData', eventData);
+  table('userIds', opts?.userIds ?? []);
+  table('userInfo', opts?.userInfo ?? []);
   return {
     name: sanitizeName(name),
     type,
