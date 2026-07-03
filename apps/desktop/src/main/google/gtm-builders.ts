@@ -112,7 +112,22 @@ export interface Ga4EventInput {
    *  value, currency, transaction_id, …) with no per-param variables. Corpus shape:
    *  sendEcommerceData=true + getEcommerceDataFrom='dataLayer'. Use for funnel event tags. */
   sendEcommerceData?: boolean;
+  /** When no eventParameters are passed, auto-fill DEFAULT_GA4_EVENT_PARAMS (default true). Set false
+   *  to create a bare tag with no event parameters. */
+  autoEventParameters?: boolean;
 }
+
+/** Default GA4 event parameters auto-added to a GA4 event tag when the caller passes none: page_url +
+ *  previous_page, bound to the default-enabled {{Page URL}} / {{Referrer}} built-in variables. These are
+ *  CUSTOM names (not GA4's auto-collected page_location/page_referrer), so they add reportable data
+ *  without clashing with automatic collection, and their variables need no setup. Mirrors the
+ *  measurement-plan scan (ai-scan.ts PAGE_PARAMS). GA4 auto-collects session/engagement/geo/device, so
+ *  those are intentionally not re-added; context params (click_text, form_id) are added per-event by
+ *  the scan / passed explicitly. */
+export const DEFAULT_GA4_EVENT_PARAMS: Array<{ name: string; value: string }> = [
+  { name: 'page_url', value: '{{Page URL}}' },
+  { name: 'previous_page', value: '{{Referrer}}' },
+];
 /** GA4 ecommerce events whose value/currency/items ride the `ecommerce` dataLayer object. For these,
  *  a GA4 event tag defaults "Send Ecommerce data" ON (forward the object) when the caller passes no
  *  explicit event parameters — so the tag ships with its ecommerce payload instead of nothing. */
@@ -132,7 +147,13 @@ export function buildGa4EventTag(o: Ga4EventInput): GtmTagResource {
   // Default Send-Ecommerce ON for an ecommerce event when the caller neither set it nor passed
   // explicit event parameters — the ecommerce object is how GA4 carries value/currency/items, so
   // the tag ships complete instead of empty. An explicit sendEcommerceData / eventParameters wins.
-  const sendEcom = o.sendEcommerceData ?? (isGa4EcommerceEvent(o.eventName) && !(o.eventParameters?.length));
+  const callerParams = o.eventParameters ?? [];
+  const sendEcom = o.sendEcommerceData ?? (isGa4EcommerceEvent(o.eventName) && callerParams.length === 0);
+  // Auto-fill the default event parameters when the caller passes none (opt out with
+  // autoEventParameters:false) — so a created GA4 event tag ships with reportable page context instead
+  // of an empty Event Parameters table. Computed off the CALLER's params so it never flips the
+  // sendEcommerceData decision above.
+  const params = callerParams.length ? callerParams : (o.autoEventParameters !== false ? DEFAULT_GA4_EVENT_PARAMS : []);
   const parameter: Param[] = [
     { type: 'tagReference', key: 'measurementId', value: '' },
     tpl('measurementIdOverride', o.measurementId),
@@ -141,7 +162,7 @@ export function buildGa4EventTag(o: Ga4EventInput): GtmTagResource {
     boolean('sendEcommerceData', sendEcom === true),
   ];
   if (sendEcom === true) parameter.push(tpl('getEcommerceDataFrom', 'dataLayer'));
-  if (o.eventParameters?.length) {
+  if (params.length) {
     // Event parameters live in `eventSettingsTable` as a list of maps keyed
     // `parameter`/`parameterValue` — NOT an `eventParameters` list of name/value
     // maps (0 of 8,148 real GA4 tags use that; 5,127 use eventSettingsTable).
@@ -149,7 +170,7 @@ export function buildGa4EventTag(o: Ga4EventInput): GtmTagResource {
     parameter.push({
       type: 'list',
       key: 'eventSettingsTable',
-      list: o.eventParameters.map((p) => ({
+      list: params.map((p) => ({
         type: 'map',
         map: [tpl('parameter', p.name), tpl('parameterValue', p.value)],
       })),
