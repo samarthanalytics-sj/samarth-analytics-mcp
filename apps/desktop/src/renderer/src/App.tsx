@@ -1818,6 +1818,9 @@ function TagReviewPanel({
   // never which ids are selected/created.
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'click' | 'form' | 'other'>('all');
+  // Filter the suggestion list by ad PLATFORM (GA4 / Meta / Google Ads / TikTok / …) — only shown when a
+  // scan produced more than one platform (e.g. a "Both" or multi-select scan). 'all' = no platform filter.
+  const [platformFilter, setPlatformFilter] = useState<SuggestPlatform | 'all'>('all');
   const [statuses, setStatuses] = useState<Record<string, RowStatus>>({});
   const [confirming, setConfirming] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -2088,7 +2091,32 @@ function TagReviewPanel({
     form: searchMatches.filter((s) => kindCategory(s) === 'form').length,
     other: searchMatches.filter((s) => kindCategory(s) === 'other').length,
   };
-  const filtered = searchMatches.filter((s) => typeFilter === 'all' || kindCategory(s) === typeFilter);
+  // The ad-platform group a suggestion belongs to (GA4 covers the GA4 event tags + the GA4 Configuration;
+  // Google Ads covers the conversion / remarketing / conversion-linker tags). Drives the platform filter.
+  const platformGroupOf = (s: SuggestedTagView): SuggestPlatform => {
+    switch (s.platform) {
+      case 'meta_pixel': return 'meta';
+      case 'tiktok_pixel': return 'tiktok';
+      case 'linkedin_insight': return 'linkedin';
+      case 'reddit_pixel': return 'reddit';
+      case 'pinterest_tag': return 'pinterest';
+      case 'google_ads_conversion':
+      case 'google_ads_remarketing':
+      case 'conversion_linker': return 'google_ads';
+      default: return 'ga4'; // ga4_event, google_tag
+    }
+  };
+  const PLATFORM_LABEL: Record<SuggestPlatform, string> = { ga4: 'GA4', meta: 'Meta', google_ads: 'Google Ads', tiktok: 'TikTok', linkedin: 'LinkedIn', reddit: 'Reddit', pinterest: 'Pinterest' };
+  const PLATFORM_ORDER: SuggestPlatform[] = ['ga4', 'meta', 'google_ads', 'tiktok', 'linkedin', 'reddit', 'pinterest'];
+  const platformCounts = new Map<SuggestPlatform, number>();
+  for (const s of searchMatches) platformCounts.set(platformGroupOf(s), (platformCounts.get(platformGroupOf(s)) ?? 0) + 1);
+  const platformsPresent = PLATFORM_ORDER.filter((g) => (platformCounts.get(g) ?? 0) > 0);
+  // Ignore a stale platform filter whose platform a later scan no longer produced (else the list would
+  // be stuck empty with the dropdown hidden). The dropdown binds to this too, so it never shows a phantom.
+  const activePlatformFilter: SuggestPlatform | 'all' = platformFilter !== 'all' && platformsPresent.includes(platformFilter) ? platformFilter : 'all';
+  const filtered = searchMatches.filter(
+    (s) => (typeFilter === 'all' || kindCategory(s) === typeFilter) && (activePlatformFilter === 'all' || platformGroupOf(s) === activePlatformFilter),
+  );
   // Selected tags float to the TOP (stable within each group, so relative order is otherwise preserved)
   // — the user's picks stay grouped and visible instead of scattered down a long list. Array.sort is
   // stable in the Electron/V8 runtime, so equal-rank rows keep their original order.
@@ -2769,8 +2797,22 @@ function TagReviewPanel({
                     </button>
                   ))}
                 </span>
-                {(search || typeFilter !== 'all') && (
-                  <button style={styles.linkBtn} onClick={() => { setSearch(''); setTypeFilter('all'); }}>
+                {/* Platform filter — only when a scan produced more than one ad platform. */}
+                {platformsPresent.length > 1 && (
+                  <select
+                    value={activePlatformFilter}
+                    onChange={(e) => setPlatformFilter(e.target.value as SuggestPlatform | 'all')}
+                    style={styles.select}
+                    title="Filter suggestions by ad platform (GA4, Meta, Google Ads, …)"
+                  >
+                    <option value="all">All platforms ({searchMatches.length})</option>
+                    {platformsPresent.map((g) => (
+                      <option key={g} value={g}>{PLATFORM_LABEL[g]} ({platformCounts.get(g)})</option>
+                    ))}
+                  </select>
+                )}
+                {(search || typeFilter !== 'all' || activePlatformFilter !== 'all') && (
+                  <button style={styles.linkBtn} onClick={() => { setSearch(''); setTypeFilter('all'); setPlatformFilter('all'); }}>
                     Clear filters
                   </button>
                 )}
