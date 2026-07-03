@@ -46,7 +46,9 @@ const decisionPill = (status: string): string => {
   return `<span style="display:inline-block;white-space:nowrap;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:${bg};color:${c}">${esc(status)}</span>`;
 };
 const TH = `style="text-align:left;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:${FAINT};padding:6px 10px;border-bottom:2px solid ${BORDER}"`;
+const THR = `style="text-align:right;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:${FAINT};padding:6px 10px;border-bottom:2px solid ${BORDER}"`;
 const TD = `style="padding:7px 10px;border-bottom:1px solid ${BORDER};font-size:12.5px;color:${TEXT};vertical-align:top"`;
+const TDR = `style="padding:7px 10px;border-bottom:1px solid ${BORDER};font-size:12.5px;color:${TEXT};vertical-align:top;text-align:right;font-variant-numeric:tabular-nums"`;
 const metaRow = (lbl: string, val: string): string =>
   `<div style="font-size:12.5px;color:${TEXT};margin:3px 0;line-height:1.45"><span style="font-weight:700;color:${MUTED}">${esc(lbl)}:</span> ${esc(val)}</div>`;
 
@@ -165,6 +167,19 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
     );
   } else {
     s6 += card(`<div style="font-size:13px;color:${MUTED}">Baseline traffic metrics could not be retrieved - Not Verified.</div>`, BORDER);
+  }
+  // Channel performance table — which channels convert and earn, not just their traffic share.
+  if (x.channelPerformance && x.channelPerformance.length) {
+    const cRows = x.channelPerformance
+      .map(
+        (c) =>
+          `<tr><td ${TD}><span style="font-weight:600">${esc(c.channel)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDR}>${esc(c.convRate)}</td><td ${TDR}>${esc(c.revenue)}</td><td ${TDR}>${esc(c.engagement)}</td></tr>`,
+      )
+      .join('');
+    s6 +=
+      `<div style="font-size:12px;font-weight:600;color:${MUTED};margin:10px 2px 4px">Channel performance <span style="font-weight:400;color:${FAINT}">(conversion rate and revenue per channel, not just traffic share)</span></div>` +
+      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Channel</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cRows}</tbody></table></div>`;
   }
 
   // ── Section 7 · Decision readiness ──

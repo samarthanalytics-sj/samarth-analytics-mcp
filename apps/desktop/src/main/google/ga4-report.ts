@@ -99,6 +99,20 @@ function shareLabel(pairs: Array<{ name: string; sessions: number }>): string {
   return pairs.map((p) => `${p.name || '(not set)'} ${pct(p.sessions, total)}%`).join(', ');
 }
 
+// Per-channel PERFORMANCE rows (conversion rate + revenue per channel, not just session share) —
+// formatted ONCE here so the markdown table and the structured/HTML view read identically. Top 10 by
+// sessions; revenue prefixed with the property currency; rates as percentages.
+function channelPerfRows(baseline: Ga4Baseline | null, currency: string): Array<{ channel: string; sessions: string; convRate: string; revenue: string; engagement: string }> {
+  const cur = currency ? `${currency} ` : '';
+  return (baseline?.channelPerformance ?? []).slice(0, 10).map((c) => ({
+    channel: c.channel || '(not set)',
+    sessions: num(c.sessions),
+    convRate: `${(c.convRate * 100).toFixed(1)}%`,
+    revenue: c.revenue > 0 ? `${cur}${num(Math.round(c.revenue))}` : '—',
+    engagement: `${Math.round(c.engagementRate * 100)}%`,
+  }));
+}
+
 function areaEvidence(area: string, s: Ga4PropertySnapshot, config: Ga4AuditReport): string {
   switch (area) {
     case 'Data collection':
@@ -243,7 +257,7 @@ function buildAreaRows(
 /** Structured Executive Summary (section 1) — drives the markdown report, the on-screen card panel
  *  and the styled PDF/Word export from one rule-based computation. */
 export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
-  const { snapshot: s, config, dataQuality: dq, growth, attribution, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, growth, audienceCount } = input;
   const pid = input.property.replace('properties/', '');
   const ecom = hasEcommerce(s);
   const allFindings = buildAllFindings(config, dq, growth);
@@ -277,7 +291,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
 /** Structured visualisations payload (daily trend line + colour-coded device/channel bars) for the
  *  panel + PDF charts. */
 export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
-  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount } = input;
   const daily = baseline?.dailySessions ?? [];
   const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
   // Channel-attribution trust comes from the same Data Trust Matrix the Executive Summary uses.
@@ -315,7 +329,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
 /** Structured body sections (2-4) for the designed card panel + styled export. Computed from the same
  *  pure builders the markdown report uses, so the two surfaces can't drift. */
 export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
-  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount } = input;
   const ecom = hasEcommerce(s);
   const allFindings = buildAllFindings(config, dq, growth);
   const actionable = allFindings.filter((f) => f.severity !== 'info');
@@ -426,11 +440,11 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     footer: 'Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.',
   };
 
-  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, decisions, notVerified: { gate, items: nv }, scope };
+  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), decisions, notVerified: { gate, items: nv }, scope };
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
-  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, attribution, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount } = input;
   const pid = input.property.replace('properties/', '');
   const ecom = hasEcommerce(s);
   const L: string[] = [];
@@ -604,6 +618,15 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     L.push(`- **New vs returning:** ${shareLabel(baseline.newVsReturning)}`);
     L.push(`- **Top markets:** ${baseline.topCountries.length ? baseline.topCountries.map((c) => `${c.name || '(not set)'} ${pct(c.sessions, baseline.sessions)}%`).join(', ') : 'Not Verified'}`);
     L.push('');
+    const cperf = channelPerfRows(baseline, s.currencyCode);
+    if (cperf.length) {
+      L.push('**Channel performance** (which channels convert and earn, not just their traffic share)');
+      L.push('');
+      L.push('| Channel | Sessions | Conv. rate | Revenue | Engagement |');
+      L.push('|---|--:|--:|--:|--:|');
+      for (const c of cperf) L.push(`| ${cell(c.channel)} | ${c.sessions} | ${c.convRate} | ${c.revenue} | ${c.engagement} |`);
+      L.push('');
+    }
     if (baseline.devices.length) {
       // Divide by the device report's OWN total (not the date-report total) so the shares sum to ~100%.
       const devTotal = baseline.devices.reduce((acc, d) => acc + d.sessions, 0) || 1;

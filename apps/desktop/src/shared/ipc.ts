@@ -275,6 +275,8 @@ export interface Ga4SectionsView {
     newVsReturning: string;
     topMarkets: string | null;
   } | null;
+  /** Section 6 — per-channel performance (conversion rate + revenue per channel, not just share). */
+  channelPerformance: Array<{ channel: string; sessions: string; convRate: string; revenue: string; engagement: string }>;
   /** Section 7 — decision readiness (which business questions the data can answer). */
   decisions: Array<{ q: string; status: string; note: string }>;
   /** Section 8 — what was not verified, and what gates sign-off. */

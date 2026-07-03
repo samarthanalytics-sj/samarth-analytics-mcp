@@ -59,6 +59,10 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     newVsReturning: 'new 78%, returning 21%',
     topMarkets: 'India 96%, United States 1%',
   },
+  channelPerformance: [
+    { channel: 'Organic Search', sessions: '20,000', convRate: '3.0%', revenue: 'INR 250,000', engagement: '62%' },
+    { channel: 'Paid Search', sessions: '8,000', convRate: '4.5%', revenue: 'INR 180,000', engagement: '55%' },
+  ],
   decisions: [
     { q: 'Which campaigns generate revenue?', status: 'Answerable', note: 'Google Ads linked' },
     { q: 'Lead quality', status: 'Not answerable', note: 'no lead key events' },
@@ -115,6 +119,18 @@ test('section 6 baseline shows sessions, growth (with trust-matrix flag), peak d
   assert.ok(h.includes('Property baseline'));
   assert.ok(h.includes('33,453') && h.includes('India 96%'));
   assert.ok(/flagged in the data trust matrix/.test(h), 'flagged growth figures point at the trust matrix (verdict-aware, not a blanket "not safe")');
+});
+
+test('section 6 renders the channel-performance table (conversion rate + revenue per channel)', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/Channel performance/.test(h), 'table heading');
+  assert.ok(h.includes('Conv. rate') && h.includes('Engagement'), 'column headers');
+  assert.ok(h.includes('Organic Search') && h.includes('4.5%') && h.includes('INR 250,000'), 'a channel row with conv rate + revenue');
+});
+
+test('section 6 omits the channel table when no channel data', () => {
+  const h = ga4SectionsHtml(view({ channelPerformance: [] }));
+  assert.ok(!/Channel performance/.test(h), 'no empty table');
 });
 
 test('section 7 decision readiness pills answerable vs not answerable', () => {

@@ -104,6 +104,11 @@ const baseline = (over: Partial<Ga4Baseline> = {}): Ga4Baseline => ({
     { name: 'returning', sessions: 31506 },
   ],
   topCountries: [{ name: 'India', sessions: 70000 }, { name: 'United States', sessions: 4000 }],
+  channelPerformance: [
+    { channel: 'Organic Search', sessions: 40000, keyEvents: 1200, convRate: 0.03, revenue: 250000, engagementRate: 0.62 },
+    { channel: 'Paid Search', sessions: 20000, keyEvents: 900, convRate: 0.045, revenue: 180000, engagementRate: 0.55 },
+    { channel: 'Direct', sessions: 15000, keyEvents: 300, convRate: 0.02, revenue: 0, engagementRate: 0.48 },
+  ],
   ...over,
 });
 
@@ -203,6 +208,21 @@ test('a doubled-traffic spike conversions did not track → CRITICAL (worst unve
   assert.ok(!/Well-configured/.test(md), 'never a false all-clear');
   assert.ok(/## 2 · What is wrong/.test(md) && /If unconfirmed:/.test(md), 'top finding is expanded with the worse branch');
   assert.ok(/Growth signals \(vs prior\)/.test(md), 'growth signals shown in baseline');
+});
+
+test('section 6 renders a channel-performance table with conversion rate + revenue per channel', () => {
+  const md = buildGa4AuditReport(input());
+  assert.ok(/\*\*Channel performance\*\*/.test(md), 'channel-performance sub-heading');
+  assert.ok(/\| Channel \| Sessions \| Conv\. rate \| Revenue \| Engagement \|/.test(md), 'table header row');
+  assert.ok(/\| Organic Search \|/.test(md), 'top channel row');
+  assert.ok(/4\.5%/.test(md), 'paid-search conversion rate formatted as a percentage');
+  assert.ok(/\| Direct \|.*\| - \|.*%/.test(md), 'a zero-revenue channel shows a dash placeholder, not 0 (em-dash stripped to hyphen on output)');
+});
+
+test('channel-performance table is omitted when the baseline has no channel data', () => {
+  const b = baseline({ channelPerformance: [] });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(!/\*\*Channel performance\*\*/.test(md), 'no empty channel table');
 });
 
 test('untrusted outcome metrics are flagged "not safe to quote" in the report; sessions are not', () => {
