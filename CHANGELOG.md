@@ -1,3 +1,9 @@
+## [1.154.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.153.0...v1.154.0) (2026-07-03)
+
+### Features
+
+* **desktop:** detect eCommerce sites and suggest ecommerce funnel tags ([fe617a4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fe617a49c22d1fa08da23b0bd2eb4231e8ed912d))
+
 ## [1.153.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.152.0...v1.153.0) (2026-07-03)
 
 ### Features
