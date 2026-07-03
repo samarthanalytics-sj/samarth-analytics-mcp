@@ -1353,6 +1353,13 @@ export function buildToolRegistry(
         for (const val of templateVals) {
           for (const m of String(val ?? '').matchAll(/\{\{(URL - [^}]+)\}\}/g)) urlVarNames.add(m[1]);
         }
+        // GA4 ecommerce event tags reference {{Ecommerce X}} Data Layer variables (items/value/currency/
+        // item_list_id/…) — collect the referenced ones so the block below best-effort creates each as a
+        // Data Layer variable reading ecommerce.<param> (the reverse of the engine's ecommerceParamVar).
+        const ecommerceVarNames = new Set<string>();
+        for (const val of templateVals) {
+          for (const m of String(val ?? '').matchAll(/\{\{(Ecommerce [^}]+)\}\}/g)) ecommerceVarNames.add(m[1]);
+        }
         const createdVariables: string[] = [];
         // An ecommerce Meta tag references {{dlv - ecommerce.*}} in its Object Properties — best-effort
         // create those dataLayer variables so they resolve (idempotent; never fails the tag create).
@@ -1363,10 +1370,22 @@ export function buildToolRegistry(
             createdVariables.push(...(await data.createEcommerceDlvVariables(accountId, containerId, workspaceId)).created);
           } catch { /* best-effort: existing containers may already have them; the user can create them in GTM */ }
         }
-        if (urlVarNames.size || triggerInput.lookupTable || paramLookups.length || needsFormName) {
+        if (urlVarNames.size || ecommerceVarNames.size || triggerInput.lookupTable || paramLookups.length || needsFormName) {
           const existingVarNames = new Set(
             (await data.listGtmVariables(accountId, containerId, workspaceId)).map((v) => v.name.toLowerCase())
           );
+          // GA4 ecommerce parameter variables: {{Ecommerce Item List ID}} → a Data Layer variable reading
+          // ecommerce.item_list_id (drop "Ecommerce ", lowercase each word, join with "_"). Created only
+          // when missing — never overwrites an existing same-named variable.
+          for (const name of ecommerceVarNames) {
+            if (existingVarNames.has(name.toLowerCase())) continue;
+            const key = name.replace(/^Ecommerce /, '').trim().split(/\s+/).map((w) => w.toLowerCase()).join('_');
+            try {
+              await data.createGtmVariable(accountId, containerId, workspaceId, buildVariable({ name, kind: 'data_layer', dataLayerName: `ecommerce.${key}` }) as unknown as Record<string, unknown>);
+              createdVariables.push(name);
+              existingVarNames.add(name.toLowerCase());
+            } catch { /* best-effort: the tag still references it; the user can create it in GTM */ }
+          }
           // The shared "Form Name" Custom JS variable (GTM has no built-in {{Form Name}}) — derives the
           // form name from the submitted {{Form Element}} at fire time. Created once, referenced by every
           // form tag; never overwrites an existing same-named variable.
