@@ -347,6 +347,11 @@ export function assembleResult(
       byConfidence,
       enhancedMeasurementOverlap: em,
       newTracking: suggestions.length - em,
+      // Auto-detected site type (from buildSuggestInput) — drives the UI badge + the ecommerce suggestions.
+      // Only when at least one page actually loaded: a failed/empty scan has no signals to judge, so it
+      // stays undefined (no misleading "Non-eCommerce site" badge on a scan that never reached the site).
+      ...(pageScans.length > 0 && input.websiteType ? { websiteType: input.websiteType } : {}),
+      ...(pageScans.length > 0 && input.ecommerceEvidence?.length ? { ecommerceEvidence: input.ecommerceEvidence } : {}),
     },
     suggestions,
     pages: pageScans.map((p) => ({ page: p.page, forms: p.forms.length, elements: p.elements.length })),

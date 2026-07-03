@@ -1159,6 +1159,9 @@ export function buildToolRegistry(
         const platform = s(a.platform);
 
         let tag;
+        // Set by the meta_pixel branch when the tag's Object Properties reference {{dlv - ecommerce.*}} —
+        // triggers best-effort provisioning of those ecommerce dataLayer variables below.
+        let needsEcommerceDlv = false;
         if (platform === 'ga4_event') {
           tag = buildGa4EventTag({
             name: s(a.tagName),
@@ -1210,6 +1213,10 @@ export function buildToolRegistry(
           const objProps = Array.isArray(a.eventParameters)
             ? a.eventParameters.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name)
             : [];
+          // An ecommerce Meta tag's Object Properties reference the `{{dlv - ecommerce.*}}` variables —
+          // flag it so the variable-provisioning block below best-effort creates those dlv variables
+          // (so the tag's Object Properties resolve instead of reading nothing).
+          needsEcommerceDlv = objProps.some((p) => p.value.includes('{{dlv - ecommerce.'));
           // The shared trigger logic below attaches firingTriggerId — do NOT pass it here.
           tag = buildMetaPixelTag(tmpl.type, s(a.tagName), pixelId, event, undefined, objProps);
         } else {
@@ -1306,6 +1313,15 @@ export function buildToolRegistry(
           for (const m of String(val ?? '').matchAll(/\{\{(URL - [^}]+)\}\}/g)) urlVarNames.add(m[1]);
         }
         const createdVariables: string[] = [];
+        // An ecommerce Meta tag references {{dlv - ecommerce.*}} in its Object Properties — best-effort
+        // create those dataLayer variables so they resolve (idempotent; never fails the tag create).
+        // GA4 ecommerce tags use "Send Ecommerce data" (the whole dataLayer object), so they need NO dlv
+        // vars — only this Meta path does.
+        if (needsEcommerceDlv) {
+          try {
+            createdVariables.push(...(await data.createEcommerceDlvVariables(accountId, containerId, workspaceId)).created);
+          } catch { /* best-effort: existing containers may already have them; the user can create them in GTM */ }
+        }
         if (urlVarNames.size || triggerInput.lookupTable || paramLookups.length || needsFormName) {
           const existingVarNames = new Set(
             (await data.listGtmVariables(accountId, containerId, workspaceId)).map((v) => v.name.toLowerCase())

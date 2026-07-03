@@ -430,6 +430,11 @@ export interface TagScanResult {
     byConfidence: { high: number; medium: number; low: number };
     enhancedMeasurementOverlap: number;
     newTracking: number;
+    /** Auto-detected site type — 'ecommerce' unlocks the ecommerce funnel suggestions. Undefined on
+     *  an empty/failed scan. */
+    websiteType?: 'ecommerce' | 'non_ecommerce';
+    /** Human-readable signals behind an 'ecommerce' classification (shown in the badge tooltip). */
+    ecommerceEvidence?: string[];
   };
   suggestions: SuggestedTagView[];
   pages: Array<{ page: string; forms: number; elements: number }>;
