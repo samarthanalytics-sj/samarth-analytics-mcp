@@ -155,6 +155,12 @@ export interface Ga4Baseline {
    *  strips the query string) so entry pages aggregate cleanly instead of fragmenting across ?utm=
    *  variants. Empty if the query failed. */
   landingPages: Array<{ page: string; sessions: number; keyEvents: number; convRate: number; revenue: number; engagementRate: number }>;
+  /** Per-DEVICE performance (deviceCategory): sessions, key events, session conversion rate (0-1),
+   *  revenue, engagement rate (0-1) — "how each device type converts and spends". Empty if failed. */
+  devicePerformance: Array<{ device: string; sessions: number; keyEvents: number; convRate: number; revenue: number; engagementRate: number }>;
+  /** Top MARKETS performance (country): same shape — "which geographies convert and spend". Top by
+   *  sessions. Empty if the query failed. */
+  geoPerformance: Array<{ country: string; sessions: number; keyEvents: number; convRate: number; revenue: number; engagementRate: number }>;
 }
 
 export interface GtmWorkspaceView {
@@ -2270,7 +2276,7 @@ export class GoogleDataService {
     // NEWEST-FIRST at limit 1000, then reversed to chronological — so a custom range longer than the cap
     // keeps the MOST-RECENT days (what spike/trend cares about), not the oldest. Country = top-N (250).
     const emptyResult: Ga4ReportResult = { dimensionHeaders: [], metricHeaders: [], rows: [] };
-    const [curTotal, priorTotal, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage] = await Promise.all([
+    const [curTotal, priorTotal, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage, byDevicePerf, byGeoPerf] = await Promise.all([
       this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['date'], metrics: ['sessions'], orderBys: byDateDesc, limit: '1000' }),
@@ -2284,6 +2290,12 @@ export class GoogleDataService {
       // Top LANDING PAGES: same metric set, keyed on `landingPage` (path only — GA4 strips the query
       // string) so entry pages aggregate cleanly rather than fragmenting across ?utm= variants.
       this.runGa4Report({ property, startDate, endDate, dimensions: ['landingPage'], metrics: ['sessions', 'keyEvents', 'sessionKeyEventRate', 'totalRevenue', 'engagementRate'], orderBys: byMetricDesc, limit: '15' }).catch(() => emptyResult),
+      // Per-DEVICE performance (deviceCategory): how each device type converts and spends. Dedicated
+      // query — the byDevice query above stays session-only for the device-split bars/chart.
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['deviceCategory'], metrics: ['sessions', 'keyEvents', 'sessionKeyEventRate', 'totalRevenue', 'engagementRate'], orderBys: byMetricDesc, limit: '10' }).catch(() => emptyResult),
+      // Top MARKETS performance (country): which geographies convert and spend. Dedicated query — the
+      // byCountry query above stays session-only for the top-markets share line.
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['country'], metrics: ['sessions', 'keyEvents', 'sessionKeyEventRate', 'totalRevenue', 'engagementRate'], orderBys: byMetricDesc, limit: '15' }).catch(() => emptyResult),
     ]);
 
     const sessions = oneMetric(curTotal, 0);
@@ -2358,6 +2370,22 @@ export class GoogleDataService {
       })),
       landingPages: byLandingPage.rows.map((r) => ({
         page: r.dimensions[0] || '(not set)',
+        sessions: n(r.metrics[0]),
+        keyEvents: n(r.metrics[1]),
+        convRate: Number(r.metrics[2]) || 0, // sessionKeyEventRate, 0-1
+        revenue: n(r.metrics[3]),
+        engagementRate: Number(r.metrics[4]) || 0, // 0-1
+      })),
+      devicePerformance: byDevicePerf.rows.map((r) => ({
+        device: r.dimensions[0] || '(not set)',
+        sessions: n(r.metrics[0]),
+        keyEvents: n(r.metrics[1]),
+        convRate: Number(r.metrics[2]) || 0, // sessionKeyEventRate, 0-1
+        revenue: n(r.metrics[3]),
+        engagementRate: Number(r.metrics[4]) || 0, // 0-1
+      })),
+      geoPerformance: byGeoPerf.rows.map((r) => ({
+        country: r.dimensions[0] || '(not set)',
         sessions: n(r.metrics[0]),
         keyEvents: n(r.metrics[1]),
         convRate: Number(r.metrics[2]) || 0, // sessionKeyEventRate, 0-1

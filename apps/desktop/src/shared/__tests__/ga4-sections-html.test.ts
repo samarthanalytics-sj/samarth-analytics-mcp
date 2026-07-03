@@ -67,6 +67,14 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     { page: '/pricing', sessions: '12,000', convRate: '6.0%', revenue: 'INR 300,000', engagement: '71%' },
     { page: '/blog/post', sessions: '8,000', convRate: '0.5%', revenue: '-', engagement: '34%' },
   ],
+  devicePerformance: [
+    { device: 'mobile', sessions: '50,000', convRate: '3.0%', revenue: 'INR 200,000', engagement: '52%' },
+    { device: 'desktop', sessions: '25,000', convRate: '4.0%', revenue: 'INR 320,000', engagement: '68%' },
+  ],
+  geoPerformance: [
+    { country: 'India', sessions: '70,000', convRate: '3.0%', revenue: 'INR 400,000', engagement: '55%' },
+    { country: 'United States', sessions: '4,000', convRate: '8.0%', revenue: 'INR 250,000', engagement: '72%' },
+  ],
   decisions: [
     { q: 'Which campaigns generate revenue?', status: 'Answerable', note: 'Google Ads linked' },
     { q: 'Lead quality', status: 'Not answerable', note: 'no lead key events' },
@@ -153,6 +161,31 @@ test('section 6 landing-page paths are HTML-escaped (no injection — paths come
   assert.ok(!h.includes('<script>alert(1)'), 'raw script tag must never reach the output');
   assert.ok(h.includes('&lt;script&gt;'), 'angle brackets escaped');
   assert.ok(h.includes('&amp;q=1'), 'ampersand escaped');
+});
+
+test('section 6 renders the device + market performance tables', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/Device performance/.test(h) && /Market performance/.test(h), 'both table headings');
+  assert.ok(h.includes('mobile') && h.includes('4.0%'), 'a device row with conv rate');
+  assert.ok(h.includes('United States') && h.includes('INR 400,000'), 'a market row with revenue');
+});
+
+test('section 6 omits the device + market tables when no such data', () => {
+  const h = ga4SectionsHtml(view({ devicePerformance: [], geoPerformance: [] }));
+  assert.ok(!/Device performance/.test(h) && !/Market performance/.test(h), 'no empty tables');
+});
+
+test('section 6 device/market performance: zero-revenue rows render a dash placeholder', () => {
+  // Empty the other two tables so the ONLY zero-revenue dash cells come from device + market. Pass the
+  // em-dash the formatter actually emits, to also prove ga4SectionsHtml strips it to a hyphen on output.
+  const h = ga4SectionsHtml(view({
+    channelPerformance: [], landingPages: [],
+    devicePerformance: [{ device: 'tablet', sessions: '2,506', convRate: '1.2%', revenue: '—', engagement: '40%' }],
+    geoPerformance: [{ country: '(not set)', sessions: '1,200', convRate: '0.0%', revenue: '—', engagement: '20%' }],
+  }));
+  assert.ok(!/—/.test(h), 'em-dash is stripped to a hyphen on output');
+  const dashCells = (h.match(/<td[^>]*>-<\/td>/g) || []).length;
+  assert.ok(dashCells >= 2, 'each zero-revenue device/market row renders a dash cell');
 });
 
 test('section 7 decision readiness pills answerable vs not answerable', () => {

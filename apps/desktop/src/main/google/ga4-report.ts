@@ -127,6 +127,32 @@ function landingPageRows(baseline: Ga4Baseline | null, currency: string): Array<
   }));
 }
 
+// Per-DEVICE performance rows (how each device type converts and spends) — same shape/formatting as the
+// channel + landing tables so all breakdowns render identically.
+function devicePerfRows(baseline: Ga4Baseline | null, currency: string): Array<{ device: string; sessions: string; convRate: string; revenue: string; engagement: string }> {
+  const cur = currency ? `${currency} ` : '';
+  return (baseline?.devicePerformance ?? []).slice(0, 10).map((d) => ({
+    device: d.device || '(not set)',
+    sessions: num(d.sessions),
+    convRate: `${(d.convRate * 100).toFixed(1)}%`,
+    revenue: d.revenue > 0 ? `${cur}${num(Math.round(d.revenue))}` : '—',
+    engagement: `${Math.round(d.engagementRate * 100)}%`,
+  }));
+}
+
+// Top-MARKET performance rows (which geographies convert and spend) — same shape/formatting again. Top
+// 10 markets by sessions.
+function geoPerfRows(baseline: Ga4Baseline | null, currency: string): Array<{ country: string; sessions: string; convRate: string; revenue: string; engagement: string }> {
+  const cur = currency ? `${currency} ` : '';
+  return (baseline?.geoPerformance ?? []).slice(0, 10).map((g) => ({
+    country: g.country || '(not set)',
+    sessions: num(g.sessions),
+    convRate: `${(g.convRate * 100).toFixed(1)}%`,
+    revenue: g.revenue > 0 ? `${cur}${num(Math.round(g.revenue))}` : '—',
+    engagement: `${Math.round(g.engagementRate * 100)}%`,
+  }));
+}
+
 function areaEvidence(area: string, s: Ga4PropertySnapshot, config: Ga4AuditReport): string {
   switch (area) {
     case 'Data collection':
@@ -454,7 +480,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     footer: 'Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.',
   };
 
-  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), decisions, notVerified: { gate, items: nv }, scope };
+  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), decisions, notVerified: { gate, items: nv }, scope };
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
@@ -648,6 +674,24 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
       L.push('| Landing page | Sessions | Conv. rate | Revenue | Engagement |');
       L.push('|---|--:|--:|--:|--:|');
       for (const p of lpRows) L.push(`| ${cell(p.page)} | ${p.sessions} | ${p.convRate} | ${p.revenue} | ${p.engagement} |`);
+      L.push('');
+    }
+    const dpRows = devicePerfRows(baseline, s.currencyCode);
+    if (dpRows.length) {
+      L.push('**Device performance** (how each device type converts and spends)');
+      L.push('');
+      L.push('| Device | Sessions | Conv. rate | Revenue | Engagement |');
+      L.push('|---|--:|--:|--:|--:|');
+      for (const d of dpRows) L.push(`| ${cell(d.device)} | ${d.sessions} | ${d.convRate} | ${d.revenue} | ${d.engagement} |`);
+      L.push('');
+    }
+    const gpRows = geoPerfRows(baseline, s.currencyCode);
+    if (gpRows.length) {
+      L.push('**Market performance** (which geographies convert and spend, top 10 by sessions)');
+      L.push('');
+      L.push('| Market | Sessions | Conv. rate | Revenue | Engagement |');
+      L.push('|---|--:|--:|--:|--:|');
+      for (const g of gpRows) L.push(`| ${cell(g.country)} | ${g.sessions} | ${g.convRate} | ${g.revenue} | ${g.engagement} |`);
       L.push('');
     }
     if (baseline.devices.length) {

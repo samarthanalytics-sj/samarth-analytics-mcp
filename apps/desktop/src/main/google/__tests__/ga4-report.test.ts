@@ -114,6 +114,16 @@ const baseline = (over: Partial<Ga4Baseline> = {}): Ga4Baseline => ({
     { page: '/pricing', sessions: 12000, keyEvents: 720, convRate: 0.06, revenue: 300000, engagementRate: 0.71 },
     { page: '/blog/post', sessions: 8000, keyEvents: 40, convRate: 0.005, revenue: 0, engagementRate: 0.34 },
   ],
+  devicePerformance: [
+    { device: 'mobile', sessions: 50000, keyEvents: 1500, convRate: 0.03, revenue: 200000, engagementRate: 0.52 },
+    { device: 'desktop', sessions: 25000, keyEvents: 1000, convRate: 0.04, revenue: 320000, engagementRate: 0.68 },
+    { device: 'tablet', sessions: 2506, keyEvents: 30, convRate: 0.012, revenue: 0, engagementRate: 0.4 },
+  ],
+  geoPerformance: [
+    { country: 'India', sessions: 70000, keyEvents: 2100, convRate: 0.03, revenue: 400000, engagementRate: 0.55 },
+    { country: 'United States', sessions: 4000, keyEvents: 320, convRate: 0.08, revenue: 250000, engagementRate: 0.72 },
+    { country: '(not set)', sessions: 1200, keyEvents: 0, convRate: 0, revenue: 0, engagementRate: 0.2 },
+  ],
   ...over,
 });
 
@@ -243,6 +253,24 @@ test('landing-page table is omitted when the baseline has no landing-page data',
   const b = baseline({ landingPages: [] });
   const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
   assert.ok(!/\*\*Landing pages\*\*/.test(md), 'no empty landing-page table');
+});
+
+test('section 6 renders device + market performance tables with conversion rate + revenue', () => {
+  const md = buildGa4AuditReport(input());
+  assert.ok(/\*\*Device performance\*\*/.test(md), 'device-performance sub-heading');
+  assert.ok(/\| Device \| Sessions \| Conv\. rate \| Revenue \| Engagement \|/.test(md), 'device table header');
+  assert.ok(/\| desktop \|.*4\.0%/.test(md), 'a device row with its conversion rate');
+  assert.ok(/\*\*Market performance\*\*/.test(md), 'market-performance sub-heading');
+  assert.ok(/\| Market \| Sessions \| Conv\. rate \| Revenue \| Engagement \|/.test(md), 'market table header');
+  assert.ok(/\| United States \|.*8\.0%/.test(md), 'a market row with its conversion rate');
+  assert.ok(/\| tablet \|.*\| - \|.*%/.test(md), 'a zero-revenue device shows a dash placeholder');
+});
+
+test('device + market tables are omitted when the baseline has no such data', () => {
+  const b = baseline({ devicePerformance: [], geoPerformance: [] });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(!/\*\*Device performance\*\*/.test(md), 'no empty device table');
+  assert.ok(!/\*\*Market performance\*\*/.test(md), 'no empty market table');
 });
 
 test('untrusted outcome metrics are flagged "not safe to quote" in the report; sessions are not', () => {

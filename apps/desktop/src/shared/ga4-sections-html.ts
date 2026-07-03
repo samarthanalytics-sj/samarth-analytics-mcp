@@ -195,6 +195,32 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:460px"><thead><tr><th ${TH}>Landing page</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${lRows}</tbody></table></div>`;
   }
+  // Device performance table — how each device type converts and spends.
+  if (x.devicePerformance && x.devicePerformance.length) {
+    const dRows = x.devicePerformance
+      .map(
+        (d) =>
+          `<tr><td ${TD}><span style="font-weight:600;text-transform:capitalize">${esc(d.device)}</span></td><td ${TDR}>${esc(d.sessions)}</td><td ${TDR}>${esc(d.convRate)}</td><td ${TDR}>${esc(d.revenue)}</td><td ${TDR}>${esc(d.engagement)}</td></tr>`,
+      )
+      .join('');
+    s6 +=
+      `<div style="font-size:12px;font-weight:600;color:${MUTED};margin:10px 2px 4px">Device performance <span style="font-weight:400;color:${FAINT}">(how each device type converts and spends)</span></div>` +
+      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Device</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${dRows}</tbody></table></div>`;
+  }
+  // Market performance table — which geographies convert and spend (top markets by sessions).
+  if (x.geoPerformance && x.geoPerformance.length) {
+    const gRows = x.geoPerformance
+      .map(
+        (g) =>
+          `<tr><td ${TD}><span style="font-weight:600">${esc(g.country)}</span></td><td ${TDR}>${esc(g.sessions)}</td><td ${TDR}>${esc(g.convRate)}</td><td ${TDR}>${esc(g.revenue)}</td><td ${TDR}>${esc(g.engagement)}</td></tr>`,
+      )
+      .join('');
+    s6 +=
+      `<div style="font-size:12px;font-weight:600;color:${MUTED};margin:10px 2px 4px">Market performance <span style="font-weight:400;color:${FAINT}">(which geographies convert and spend)</span></div>` +
+      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Market</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${gRows}</tbody></table></div>`;
+  }
 
   // ── Section 7 · Decision readiness ──
   let s7 = eyebrow('Section 7') + h2('Decision readiness');
