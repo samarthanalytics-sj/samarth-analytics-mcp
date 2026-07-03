@@ -39,6 +39,9 @@ import {
   buildTikTokCapiServerTag,
   tikTokStandardEvent,
   buildLinkedInCapiServerTag,
+  buildHotjarTag,
+  buildPinterestTag,
+  buildSnapPixelTag,
   detectMetaTags,
   findUnusedTriggers,
   findUnusedVariables,
@@ -1880,7 +1883,7 @@ export function buildToolRegistry(
     {
       name: 'create_meta_pixel_tag',
       description:
-        'Create a Meta (Facebook) Pixel tag from the official community template with the CORRECT event fields — use this instead of hand-building a cvt_ template tag (which gets the event wrong). Pass the Meta `event`: a STANDARD event (PageView, ViewContent, Search, AddToCart, AddToWishlist, InitiateCheckout, AddPaymentInfo, Purchase, Lead, CompleteRegistration, Contact, CustomizeProduct, Donate, FindLocation, Schedule, StartTrial, SubmitApplication, Subscribe) is set as eventName=standard + standardEventName; ANY other value becomes a CUSTOM event (eventName=custom + customEventName=<event>). Free text like "add to cart" resolves to AddToCart. `objectProperties` is an array of {name, value} → the Meta Object Properties (event params). If you OMIT it, the tool AUTO-FILLS the event\'s recommended properties (e.g. Purchase/ViewContent → value, currency, content_ids, content_type) from {{dlv - ecommerce.*}} dataLayer variables and auto-creates those variables, so the tag ships with its event params; pass an explicit array to override, or [] for none. `name` is OPTIONAL — defaults to "Meta - Event - <Event> Tag". Imports Facebook\'s OFFICIAL Meta Pixel template if needed (you do NOT pass the cvt_ type). Optional firingTriggerId (create/identify the trigger first — without it the tag will not fire). Requires accountId, containerId, workspaceId, pixelId, event.',
+        'Create a Meta (Facebook) Pixel tag from the official community template with the CORRECT event fields — use this instead of hand-building a cvt_ template tag (which gets the event wrong). Pass the Meta `event`: a STANDARD event (PageView, ViewContent, Search, AddToCart, AddToWishlist, InitiateCheckout, AddPaymentInfo, Purchase, Lead, CompleteRegistration, Contact, CustomizeProduct, Donate, FindLocation, Schedule, StartTrial, SubmitApplication, Subscribe) is set as eventName=standard + standardEventName; ANY other value becomes a CUSTOM event (eventName=custom + customEventName=<event>). Free text like "add to cart" resolves to AddToCart. `objectProperties` is an array of {name, value} → the Meta Object Properties (event params). If you OMIT it, the tool AUTO-FILLS the event\'s recommended properties (e.g. Purchase/ViewContent → value, currency, content_ids, content_type) from {{dlv - ecommerce.*}} dataLayer variables and auto-creates those variables, so the tag ships with its event params; pass an explicit array to override, or [] for none. `advancedMatching` (OPTIONAL) is the Pixel\'s USER-IDENTITY params (the web analog of GA4 user properties / CAPI user_data): {name, value} rows where name ∈ em/fn/ln/ph/ct/st/zp/cn/external_id/ge/db (country uses the SHORT web-Pixel code `cn`; passing "country" is auto-mapped to it) and value is usually a {{variable}} carrying the (hashed or raw) PII — passing any rows turns Advanced Matching ON. `name` is OPTIONAL — defaults to "Meta - Event - <Event> Tag". Imports Facebook\'s OFFICIAL Meta Pixel template if needed (you do NOT pass the cvt_ type). Optional firingTriggerId (create/identify the trigger first — without it the tag will not fire). Requires accountId, containerId, workspaceId, pixelId, event.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1893,6 +1896,16 @@ export function buildToolRegistry(
           objectProperties: {
             type: 'array',
             description: 'Meta Object Properties (event params): {name, value} rows, e.g. {name:"value", value:"{{Ecommerce Value}}"}.',
+            items: {
+              type: 'object',
+              properties: { name: { type: 'string' }, value: { type: 'string' } },
+              required: ['name', 'value'],
+              additionalProperties: false,
+            },
+          },
+          advancedMatching: {
+            type: 'array',
+            description: 'Advanced Matching (user-identity) rows { name, value }; name ∈ em/fn/ln/ph/ct/st/zp/cn/external_id/ge/db (country → cn, auto-mapped), value usually a {{variable}}. Any rows turn Advanced Matching ON.',
             items: {
               type: 'object',
               properties: { name: { type: 'string' }, value: { type: 'string' } },
@@ -1919,6 +1932,9 @@ export function buildToolRegistry(
         const objProps = Array.isArray(a.objectProperties)
           ? a.objectProperties.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name)
           : undefined;
+        const advancedMatching = Array.isArray(a.advancedMatching)
+          ? a.advancedMatching.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name)
+          : undefined;
         // Auto-fill path (no objectProperties passed): the builder fills the event's recommended props
         // from {{dlv - ecommerce.*}} variables — create those first (idempotent) so they resolve.
         let createdVariables: string[] = [];
@@ -1927,7 +1943,7 @@ export function buildToolRegistry(
             createdVariables = (await data.createEcommerceDlvVariables(s(a.accountId), s(a.containerId), s(a.workspaceId))).created;
           } catch { /* best-effort: existing containers may already have them */ }
         }
-        const tag = buildMetaPixelTag(tmpl.type, metaPixelTagName(a), s(a.pixelId), event, ftid, objProps);
+        const tag = buildMetaPixelTag(tmpl.type, metaPixelTagName(a), s(a.pixelId), event, ftid, objProps, advancedMatching);
         const created = await data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
         return { ...created, createdVariables };
       },
@@ -1935,7 +1951,7 @@ export function buildToolRegistry(
     {
       name: 'create_meta_capi_server_tag',
       description:
-        'Create a Meta/Facebook Conversions API (CAPI) SERVER tag from the Stape "Facebook Conversion API" community template (stape-io / facebook-tag), tuned for high Event Match Quality: action source = website, Event Enhancement (gtmeec cookie) ON, generate _fbp ON, and the EMQ user-data (em/ph from {{ed - email_address}}/{{ed - phone_number}} with nested user_data.* fallbacks), ecommerce custom_data (content_ids/value/currency/order_id) and event_id AUTO-MAPPED into the tag — it also auto-creates those `ed - …` Event Data variables when missing (idempotent), so ONE call yields a complete, working tag. Pass mapEmqVariables=false to skip the mapping (the template still auto-extracts user data from the incoming event). Pass pixelId + accessToken (typically {{Facebook Pixel ID}} / {{Facebook Api Token}} variables) and the Meta `event` — a STANDARD event (ViewContent, AddToCart, Purchase, Lead, …) sets eventNameStandard with Override; anything else inherits the incoming event_name. Imports the Stape template if needed (you do NOT pass the cvt_ type). Optional firingTriggerId, eventEnhancement, generateFbp, actionSource, mapEmqVariables, name (defaults to "Meta CAPI - <Event> Tag"). Requires accountId, containerId (SERVER), workspaceId, pixelId, accessToken, event.',
+        'Create a Meta/Facebook Conversions API (CAPI) SERVER tag from the Stape "Facebook Conversion API" community template (stape-io / facebook-tag), tuned for high Event Match Quality: action source = website, Event Enhancement (gtmeec cookie) ON, generate _fbp ON, and the EMQ user-data (em/ph from {{ed - email_address}}/{{ed - phone_number}} with nested user_data.* fallbacks), ecommerce custom_data (content_ids/value/currency/order_id) and event_id AUTO-MAPPED into the tag — it also auto-creates those `ed - …` Event Data variables when missing (idempotent), so ONE call yields a complete, working tag. Pass mapEmqVariables=false to skip the mapping (the template still auto-extracts user data from the incoming event). Pass pixelId + accessToken (typically {{Facebook Pixel ID}} / {{Facebook Api Token}} variables) and the Meta `event` — a STANDARD event (ViewContent, AddToCart, Purchase, Lead, …) sets eventNameStandard with Override; anything else inherits the incoming event_name. USER-IDENTITY OVERRIDE: pass `userData` to ADD explicit advanced-matching rows ON TOP of the auto-map — {name, value} rows where name ∈ em/ph/fn/ln/ct/st/zp/country/external_id/fbc/fbp/client_ip_address/client_user_agent/subscription_id/lead_id/fb_login_id/ge/db (value usually a {{variable}}); a caller row WINS a name collision with the auto-mapped em/ph/external_id, and these rows still ship even with mapEmqVariables=false. Imports the Stape template if needed (you do NOT pass the cvt_ type). Optional firingTriggerId, eventEnhancement, generateFbp, actionSource, mapEmqVariables, userData, name (defaults to "Meta CAPI - <Event> Tag"). Requires accountId, containerId (SERVER), workspaceId, pixelId, accessToken, event.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1950,6 +1966,12 @@ export function buildToolRegistry(
           eventEnhancement: { type: 'boolean', description: 'Event Enhancement (gtmeec) — default true.' },
           generateFbp: { type: 'boolean', description: 'Generate _fbp cookie — default true.' },
           mapEmqVariables: { type: 'boolean', description: 'Map the ed-variable EMQ/ecommerce rows into the tag (default true). false = leave the lists empty; the template still auto-extracts from the event.' },
+          userData: {
+            type: 'array',
+            description: 'Explicit advanced-matching rows { name, value } ADDED to the auto-map (caller wins a name collision); name ∈ em/ph/fn/ln/ct/st/zp/country/external_id/fbc/fbp/client_ip_address/client_user_agent/subscription_id/lead_id/fb_login_id/ge/db, value usually a {{variable}}. Ships even when mapEmqVariables=false.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          userDataObject: { type: 'string', description: 'Optional variable whose object is merged into user_data (the template\'s userDataObject field).' },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'accessToken', 'event'],
@@ -1976,11 +1998,16 @@ export function buildToolRegistry(
           } catch { /* best-effort: existing containers may already have them */ }
         }
         const name = s(a.name).trim() || `Meta CAPI - ${metaStandardEvent(event) ?? event} Tag`;
+        const userData = Array.isArray(a.userData)
+          ? a.userData.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name)
+          : undefined;
         const tag = buildMetaCapiServerTag(tmpl.type, name, s(a.pixelId), s(a.accessToken), event, {
           actionSource: a.actionSource != null ? s(a.actionSource) : undefined,
           eventEnhancement: bln(a.eventEnhancement),
           generateFbp: bln(a.generateFbp),
           mapEmqVariables: mapEmq,
+          userData,
+          userDataObject: a.userDataObject != null && s(a.userDataObject).trim() ? s(a.userDataObject) : undefined,
           firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
         });
         const created = await data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
@@ -2126,6 +2153,143 @@ export function buildToolRegistry(
           requireConsent: bln(a.requireConsent),
           firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
         });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_hotjar_tag',
+      description:
+        'Create a Hotjar tracking tag (a Custom HTML tag that installs the hj() queue + loads static.hotjar.com). Pass `siteId` = the Hotjar Site ID (hjid) — a number or a {{variable}}. USER IDENTITY: pass `userId` and/or `userAttributes` to ALSO emit hj(\'identify\', <userId>, { … }) — Hotjar\'s user-identity mechanism, the analog of GA4 user properties (attributes like email, plan, signup_date; values usually {{variables}}). Hotjar has NO gallery template that carries identify, so this is intentionally a Custom HTML tag. Hotjar is a session-replay/analytics pixel, so AFTER creating it call set_gtm_tag_consent with consentStatus "needed" and consentTypes ["analytics_storage"] (NOT the ad_* set). Optional firingTriggerId (usually the All Pages / Consent Initialization trigger — create/identify it first), name (defaults to "Hotjar - Tracking Code"). Requires accountId, containerId, workspaceId, siteId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional — defaults to "Hotjar - Tracking Code".' },
+          siteId: { type: 'string', description: 'Hotjar Site ID (hjid), numeric or a {{variable}}.' },
+          userId: { type: 'string', description: 'Optional stable user id for hj(\'identify\', …) — usually a {{variable}}.' },
+          userAttributes: {
+            type: 'array',
+            description: 'Optional identity/user attributes { name, value } sent via hj(\'identify\', userId, {…}); values usually {{variables}} (e.g. {name:"email", value:"{{User Email}}"}).',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'siteId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Hotjar tag "${s(a.name).trim() || 'Hotjar - Tracking Code'}" (site ${s(a.siteId)})`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'Hotjar - Tracking Code', 'tag'),
+      handler: async (a) => {
+        if (!s(a.siteId).trim()) throw new Error('siteId is required (the Hotjar Site ID / hjid, a number or a {{variable}}).');
+        const name = s(a.name).trim() || 'Hotjar - Tracking Code';
+        const userAttributes = Array.isArray(a.userAttributes)
+          ? a.userAttributes.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name)
+          : undefined;
+        const tag = buildHotjarTag(name, s(a.siteId), {
+          userId: a.userId != null ? s(a.userId) : undefined,
+          userAttributes,
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_pinterest_tag',
+      description:
+        'Create a Pinterest web tag from the Pinterest community template (pinterest / ws-gtm-template). Pass `tagId` (the Pinterest Tag ID) and `event`: a standard Pinterest event (pagevisit, viewcategory, viewcontent, addtocart, checkout [=purchase], search, signup, lead, watchvideo) — GA4 names are mapped (page_view→pagevisit, view_item→viewcontent, add_to_cart→addtocart, purchase→checkout, generate_lead→lead, sign_up→signup); ANY other value becomes a CUSTOM event (eventName="ADE" + adeEventName). ENHANCED MATCH (Pinterest\'s user-identity param, analog of GA4 user properties): pass `enhancedMatchEmail` = a SHA-256-hashed email (usually a {{variable}}) → the tag\'s `em` field. Imports the template if needed (you do NOT pass the cvt_ type). AFTER creating, call set_gtm_tag_consent with consentStatus "needed" and consentTypes ["ad_storage","ad_user_data","ad_personalization"] (Pinterest is a marketing pixel with no built-in Consent Mode). Optional firingTriggerId (create/identify first), name (defaults to "Pinterest - <Event> Tag"). Requires accountId, containerId, workspaceId, tagId, event.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional — defaults to "Pinterest - <Event> Tag".' },
+          tagId: { type: 'string', description: 'Pinterest Tag ID (usually numeric or a {{variable}}).' },
+          event: { type: 'string', description: 'Pinterest event, e.g. checkout / addtocart / viewcontent, a GA4 name, or a custom name.' },
+          enhancedMatchEmail: { type: 'string', description: 'Enhanced Match: a SHA-256-hashed email (usually a {{variable}}) → the tag\'s em field.' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tagId', 'event'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Pinterest tag for ${s(a.event)} (tag ${s(a.tagId)})`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || `Pinterest - ${s(a.event).trim()} Tag`, 'tag'),
+      handler: async (a) => {
+        const event = s(a.event).trim();
+        if (!event) throw new Error('event is required (a Pinterest event like checkout/addtocart/viewcontent, a GA4 name, or a custom name).');
+        if (!s(a.tagId).trim()) throw new Error('tagId is required (the Pinterest Tag ID).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'pinterest', 'ws-gtm-template');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the Pinterest template's tag type (got "${tmpl.type}"). Import pinterest/ws-gtm-template and check list_gtm_templates.`);
+        }
+        const name = s(a.name).trim() || `Pinterest - ${event} Tag`;
+        const em = a.enhancedMatchEmail != null && s(a.enhancedMatchEmail).trim() ? s(a.enhancedMatchEmail).trim() : undefined;
+        const tag = buildPinterestTag(
+          tmpl.type,
+          name,
+          s(a.tagId),
+          event,
+          Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+          em ? { em } : undefined,
+        );
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_snap_pixel_tag',
+      description:
+        'Create a Snap Pixel web tag from the Snapchat community template (Snapchat / snapchat-google-tag-manager). Pass `pixelId` (the Snap Pixel ID, a UUID or {{variable}}) and `event` → the event_type SELECT: a Snap event (PAGE_VIEW, ADD_CART, PURCHASE, START_CHECKOUT, SIGN_UP, SEARCH, VIEW_CONTENT, SUBSCRIBE, ADD_TO_WISHLIST, LOGIN, START_TRIAL, ADD_BILLING, …) — GA4 names are mapped (page_view→PAGE_VIEW, add_to_cart→ADD_CART, purchase→PURCHASE, begin_checkout→START_CHECKOUT, view_item→VIEW_CONTENT, sign_up→SIGN_UP); unrecognised → PAGE_VIEW. ADVANCED MATCHING (Snap\'s user-identity params, analog of GA4 user properties): pass `advancedMatching` rows { name, value } where name ∈ user_email / user_hashed_email / user_phone_number / user_hashed_phone_number / user_mobile_ad_id / user_hashed_mobile_ad_id (raw user_email/user_phone_number are hashed by Snap on ingest; pre-hashed values go in the user_hashed_* fields; values usually {{variables}}). Imports the template if needed (you do NOT pass the cvt_ type). AFTER creating, call set_gtm_tag_consent with consentStatus "needed" and consentTypes ["ad_storage","ad_user_data","ad_personalization"] (Snap is a marketing pixel with no built-in Consent Mode). Optional firingTriggerId (create/identify first), name (defaults to "Snap - <Event> Tag"). Requires accountId, containerId, workspaceId, pixelId, event.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional — defaults to "Snap - <Event> Tag".' },
+          pixelId: { type: 'string', description: 'Snap Pixel ID (a UUID or a {{variable}}).' },
+          event: { type: 'string', description: 'Snap event_type, e.g. PURCHASE / ADD_CART / VIEW_CONTENT, a GA4 name, or a custom name.' },
+          advancedMatching: {
+            type: 'array',
+            description: 'Advanced-matching (user-identity) rows { name, value }; name ∈ user_email/user_hashed_email/user_phone_number/user_hashed_phone_number/user_mobile_ad_id/user_hashed_mobile_ad_id, value usually a {{variable}}.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'event'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Snap Pixel tag for ${s(a.event)} (pixel ${s(a.pixelId)})`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || `Snap - ${s(a.event).trim()} Tag`, 'tag'),
+      handler: async (a) => {
+        const event = s(a.event).trim();
+        if (!event) throw new Error('event is required (a Snap event like PURCHASE/ADD_CART/VIEW_CONTENT, a GA4 name, or a custom name).');
+        if (!s(a.pixelId).trim()) throw new Error('pixelId is required (the Snap Pixel ID).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'Snapchat', 'snapchat-google-tag-manager');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the Snap template's tag type (got "${tmpl.type}"). Import Snapchat/snapchat-google-tag-manager and check list_gtm_templates.`);
+        }
+        const name = s(a.name).trim() || `Snap - ${event} Tag`;
+        const advancedMatching: Record<string, string> = {};
+        if (Array.isArray(a.advancedMatching)) {
+          for (const p of a.advancedMatching) {
+            const nm = s(obj(p).name).trim();
+            const v = s(obj(p).value);
+            if (nm) advancedMatching[nm] = v;
+          }
+        }
+        const tag = buildSnapPixelTag(
+          tmpl.type,
+          name,
+          s(a.pixelId),
+          event,
+          Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+          Object.keys(advancedMatching).length ? advancedMatching : undefined,
+        );
         return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
       },
     },

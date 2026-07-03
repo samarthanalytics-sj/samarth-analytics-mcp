@@ -486,8 +486,9 @@ async function main(): Promise<void> {
     // dropped catalog entry or verb fails here instead of moving both sides together.
     const ga4Writes = buildGa4WriteTools(fakeData().data);
     assert.equal(ga4Writes.length, 60, 'GA4 write catalog produces 60 tools (19 resources + 6 lifecycle specials)');
-    // 92 base + add_ga4_server_parameters + create_linkedin_capi_server_tag = 94 GTM/GA4-read/context.
-    assert.equal(withWrites.list().length, 94 + 60, 'read + write registry has 94 GTM/GA4-read/context + 60 GA4-write tools');
+    // 92 base + add_ga4_server_parameters + create_linkedin_capi_server_tag = 94, plus the three
+    // user-identity pixel tools (create_hotjar_tag, create_pinterest_tag, create_snap_pixel_tag) = 97.
+    assert.equal(withWrites.list().length, 97 + 60, 'read + write registry has 97 GTM/GA4-read/context + 60 GA4-write tools');
     // Every catalog resource + special contributes at least one tool (catches a fully-dropped entry
     // for a resource no other assertion names — google_ads_link, firebase_link, expanded_data_set,
     // dv360, sa360, adsense, subproperty, rollup, etc.).
