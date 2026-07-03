@@ -1,3 +1,9 @@
+## [1.145.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.144.0...v1.145.0) (2026-07-03)
+
+### Features
+
+* GA4 Admin write tools (create/update/delete/archive) on both surfaces ([686d844](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/686d844402d63c91aa14b19158fdd4a5b7910a27))
+
 ## [1.144.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.143.0...v1.144.0) (2026-07-03)
 
 ### Features
