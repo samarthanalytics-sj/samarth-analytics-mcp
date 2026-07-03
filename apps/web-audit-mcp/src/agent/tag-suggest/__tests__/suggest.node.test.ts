@@ -632,15 +632,35 @@ check('meta: an "Add to Cart" CTA → Meta "AddToCart"; a generic outbound click
 
 // ── eCommerce funnel suggestions (websiteType-gated) ─────────────────────────
 {
-  const ECOM_EVENTS = ['view_item', 'view_item_list', 'add_to_cart', 'remove_from_cart', 'view_cart', 'begin_checkout', 'add_shipping_info', 'add_payment_info', 'purchase'];
-  // An ecommerce input emits ALL nine GA4 ecommerce funnel tags: custom_event triggers, NO event params.
+  const ECOM_EVENTS = ['view_item_list', 'select_item', 'view_item', 'add_to_cart', 'remove_from_cart', 'view_cart', 'begin_checkout', 'add_shipping_info', 'add_payment_info', 'purchase'];
+  // The explicit GA4 event parameters each ecommerce event carries (from the GA4 ecommerce reference).
+  const ECOM_PARAMS: Record<string, string[]> = {
+    view_item_list: ['items', 'item_list_id', 'item_list_name'],
+    select_item: ['items', 'item_list_id', 'item_list_name'],
+    view_item: ['items', 'value', 'currency'],
+    add_to_cart: ['items', 'value', 'currency'],
+    remove_from_cart: ['items', 'value', 'currency'],
+    view_cart: ['items', 'value', 'currency'],
+    begin_checkout: ['items', 'value', 'currency', 'coupon'],
+    add_shipping_info: ['items', 'value', 'currency', 'coupon', 'shipping_tier'],
+    add_payment_info: ['items', 'value', 'currency', 'coupon', 'payment_type'],
+    purchase: ['items', 'value', 'currency', 'transaction_id', 'coupon', 'shipping', 'tax'],
+  };
+  // An ecommerce input emits ALL ten GA4 ecommerce funnel tags: custom_event triggers + EXPLICIT event
+  // parameters valued from {{Ecommerce X}} Data Layer variables.
   const ecomInput: SuggestInput = { siteHost: 'shop.com', forms: [], elements: [], websiteType: 'ecommerce' };
   const ecomGa4 = buildSuggestions(ecomInput);
   for (const ev of ECOM_EVENTS) {
     const t = ecomGa4.find((s) => s.platform === 'ga4_event' && s.eventName === ev);
-    check(`ecom: ecommerce input emits GA4 "${ev}" (custom_event, no params)`, !!t && t.trigger.kind === 'custom_event' && t.trigger.eventName === ev && !t.eventParameters);
+    const gotParams = (t?.eventParameters ?? []).map((p) => `${p.name}=${p.value}`);
+    const wantParams = ECOM_PARAMS[ev].map((p) => {
+      const words = p.split('_').map((w) => (w === 'id' ? 'ID' : w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
+      return `${p}={{Ecommerce ${words}}}`;
+    });
+    check(`ecom: ecommerce input emits GA4 "${ev}" (custom_event + explicit {{Ecommerce X}} params)`,
+      !!t && t.trigger.kind === 'custom_event' && t.trigger.eventName === ev && JSON.stringify(gotParams) === JSON.stringify(wantParams));
   }
-  check('ecom: all nine ecommerce GA4 tags are high-confidence and site-wide', ECOM_EVENTS.every((ev) => { const t = ecomGa4.find((s) => s.platform === 'ga4_event' && s.eventName === ev); return t?.confidence === 'high' && t?.page === 'site-wide'; }));
+  check('ecom: all ten ecommerce GA4 tags are high-confidence and site-wide', ECOM_EVENTS.every((ev) => { const t = ecomGa4.find((s) => s.platform === 'ga4_event' && s.eventName === ev); return t?.confidence === 'high' && t?.page === 'site-wide'; }));
 
   // A NON-ecommerce input emits NONE of them (byte-identical default behavior).
   const nonEcom: SuggestInput = { siteHost: 'blog.com', forms: [], elements: [], websiteType: 'non_ecommerce' };

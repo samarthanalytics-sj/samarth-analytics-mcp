@@ -1250,6 +1250,27 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.some((c) => c.startsWith('enableVars:1:2:3:') && c.includes('formElement')), 'auto-enabled the Form Element built-in');
   });
 
+  await test('create_tracking_tag (ecommerce params) auto-provisions the {{Ecommerce X}} Data Layer variables', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'ga4_event', tagName: 'GA4 - Event - View Item List (Ecommerce) Tag', measurementId: '{{GA4 Measurement ID}}', eventName: 'view_item_list',
+        eventParameters: [
+          { name: 'items', value: '{{Ecommerce Items}}' },
+          { name: 'item_list_id', value: '{{Ecommerce Item List ID}}' },
+          { name: 'item_list_name', value: '{{Ecommerce Item List Name}}' },
+        ],
+        trigger: { name: 'View Item List (dataLayer) Trigger', kind: 'custom_event', eventName: 'view_item_list' },
+      })
+    );
+    // Each {{Ecommerce X}} reference → a Data Layer (type "v") variable reading ecommerce.<param>.
+    assert.deepEqual(out.createdVariables, ['Ecommerce Items', 'Ecommerce Item List ID', 'Ecommerce Item List Name']);
+    assert.ok(fd.calls.some((c) => c.startsWith('createVar:1:2:3:v:Ecommerce Items')), 'created the Ecommerce Items data-layer variable');
+    assert.ok(fd.calls.some((c) => c.startsWith('createVar:1:2:3:v:Ecommerce Item List ID')), 'created the Ecommerce Item List ID data-layer variable');
+  });
+
   await test('create_tracking_tag (timer) maps intervalMs/limit to top-level Trigger fields; missing interval fails loudly', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, approveAsIs);

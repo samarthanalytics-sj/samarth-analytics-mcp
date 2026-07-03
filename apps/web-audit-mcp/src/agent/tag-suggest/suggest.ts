@@ -673,18 +673,20 @@ function videoSuggestion(embeds: VideoEmbed[]): SuggestedTag | null {
 }
 
 // ── eCommerce funnel suggestions (only when the site is detected as a store) ──
-// The GA4 recommended ecommerce funnel, in funnel order. Each becomes a GA4 event tag with NO event
-// parameters, so buildGa4EventTag auto-enables "Send Ecommerce data" (getEcommerceDataFrom=dataLayer)
-// — GA4 reads value/currency/items from the dataLayer ecommerce object the site pushes. They fire on a
-// Custom Event trigger matching the same dataLayer event name (view_item / add_to_cart / purchase / …).
+// The GA4 recommended ecommerce funnel, in funnel order. Each becomes a GA4 event tag with the EXPLICIT
+// event parameters GA4 recommends for that event (items/value/currency/…), each valued from an
+// {{Ecommerce X}} Data Layer variable the create flow auto-provisions (reading ecommerce.<param>). This
+// is the explicit-config alternative to the "Send Ecommerce data" toggle, so the Parameters column is
+// populated. They fire on a Custom Event trigger matching the same dataLayer event name.
 const ECOMMERCE_EVENTS = [
-  'view_item', 'view_item_list', 'add_to_cart', 'remove_from_cart', 'view_cart',
+  'view_item_list', 'select_item', 'view_item', 'add_to_cart', 'remove_from_cart', 'view_cart',
   'begin_checkout', 'add_shipping_info', 'add_payment_info', 'purchase',
 ] as const;
 // A human label per ecommerce event, for the tag/trigger name ("GA4 - Event - Add To Cart (Ecommerce) …").
 const ECOMMERCE_EVENT_LABEL: Record<string, string> = {
-  view_item: 'View Item',
   view_item_list: 'View Item List',
+  select_item: 'Select Item',
+  view_item: 'View Item',
   add_to_cart: 'Add To Cart',
   remove_from_cart: 'Remove From Cart',
   view_cart: 'View Cart',
@@ -693,30 +695,58 @@ const ECOMMERCE_EVENT_LABEL: Record<string, string> = {
   add_payment_info: 'Add Payment Info',
   purchase: 'Purchase',
 };
+// GA4 ecommerce event → its recommended event parameters (the GA4 ecommerce reference), in order. Each
+// param's value is the matching {{Ecommerce X}} Data Layer variable (see ecommerceParamVar).
+const GA4_ECOMMERCE_PARAMS: Record<string, readonly string[]> = {
+  view_item_list: ['items', 'item_list_id', 'item_list_name'],
+  select_item: ['items', 'item_list_id', 'item_list_name'],
+  view_item: ['items', 'value', 'currency'],
+  add_to_cart: ['items', 'value', 'currency'],
+  remove_from_cart: ['items', 'value', 'currency'],
+  view_cart: ['items', 'value', 'currency'],
+  begin_checkout: ['items', 'value', 'currency', 'coupon'],
+  add_shipping_info: ['items', 'value', 'currency', 'coupon', 'shipping_tier'],
+  add_payment_info: ['items', 'value', 'currency', 'coupon', 'payment_type'],
+  purchase: ['items', 'value', 'currency', 'transaction_id', 'coupon', 'shipping', 'tax'],
+};
+
+/** A GA4 ecommerce param (snake_case, e.g. item_list_id) → its Data Layer variable NAME
+ *  ("Ecommerce Item List ID"). The create flow provisions a matching Data Layer variable that reads
+ *  ecommerce.<param>. Kept in lockstep with the desktop provisioner's reverse derivation
+ *  ("Ecommerce Item List ID" → ecommerce.item_list_id). PURE. */
+export function ecommerceParamVar(param: string): string {
+  const words = param
+    .split('_')
+    .map((w) => (w === 'id' ? 'ID' : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+  return `Ecommerce ${words}`;
+}
 
 /** The GA4 ecommerce funnel event tags — emitted only for a detected ecommerce site (else []). Each
- *  tag has NO eventParameters so the create flow turns on "Send Ecommerce data" (the whole dataLayer
- *  ecommerce object → items/value/currency), and fires on a Custom Event trigger matching its dataLayer
- *  event name. These flow through the SAME dedup/rank AND the SAME Meta derivation as every other
- *  suggestion, so their Meta counterparts come for free. PURE. */
+ *  tag carries the EXPLICIT GA4 event parameters for its event (items/value/currency/…), valued from
+ *  {{Ecommerce X}} Data Layer variables the create flow auto-provisions, and fires on a Custom Event
+ *  trigger matching its dataLayer event name. These flow through the SAME dedup/rank AND the SAME
+ *  per-platform derivation as every other suggestion (Meta/etc. counterparts come for free). PURE. */
 export function ecommerceSuggestions(isEcommerce: boolean): SuggestedTag[] {
   if (!isEcommerce) return [];
   return ECOMMERCE_EVENTS.map((event) => {
     const human = ECOMMERCE_EVENT_LABEL[event];
+    const params = GA4_ECOMMERCE_PARAMS[event] ?? [];
     return {
       id: hashId(`ecommerce|${event}`),
       // These fire on the dataLayer event regardless of page, so they are site-wide.
       page: 'site-wide',
       label: `Ecommerce ${human} → GA4 "${event}"`,
       evidence: `detected ecommerce site — GA4 ${event} funnel event`,
-      note: `Fires on a "${event}" Custom Event. Have the store push dataLayer.push({event:"${event}", ecommerce:{items:[…], value:…, currency:"…"${event === 'purchase' ? ', transaction_id:"…"' : ''}}}) — this tag has "Send Ecommerce data" ON, so GA4 reads items/value/currency straight from that ecommerce object.`,
+      note: `Fires on a "${event}" Custom Event. Have the store push dataLayer.push({event:"${event}", ecommerce:{${params.filter((p) => p !== 'items').map((p) => `${p}:…`).join(', ')}${params.length > 1 ? ', ' : ''}items:[…]}}). Its ${params.length} event parameter(s) read the {{Ecommerce …}} Data Layer variables (auto-created on create).`,
       confidence: 'high',
       enhancedMeasurementOverlap: false,
       platform: 'ga4_event',
-      // NO eventParameters → buildGa4EventTag auto-enables Send Ecommerce data (dataLayer object).
       tagName: `GA4 - Event - ${human} (Ecommerce) Tag`,
       measurementId: GA4_VAR,
       eventName: event,
+      // Explicit GA4 ecommerce parameters (items/value/currency/…), each from an {{Ecommerce X}} DLV.
+      eventParameters: params.map((p) => ({ name: p, value: `{{${ecommerceParamVar(p)}}}` })),
       // Custom Event trigger matching the dataLayer event name (name uses a stable "(dataLayer)" suffix).
       trigger: { name: `${human} (dataLayer) Trigger`, kind: 'custom_event', eventName: event },
     };
