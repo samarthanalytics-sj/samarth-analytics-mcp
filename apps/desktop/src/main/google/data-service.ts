@@ -11,6 +11,7 @@ import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
+import type { Ga4EventDeltaInput, Ga4TransactionInput } from './ga4-integrity';
 import { mergeParametersByKey, addEventParameters, addServerGa4Params, setTemplateParam, type GtmParam } from './tag-params';
 import { changeJournal, type EntityKind } from './change-journal';
 import type { Ga4AccountView, Ga4PropertyListItem, GtmAccountView } from '../../shared/ipc';
@@ -2334,6 +2335,55 @@ export class GoogleDataService {
       newVsReturning: merge(pairs(byNvR)),
       topCountries: merge(pairs(byCountry)).sort((a, b) => b.sessions - a.sessions).slice(0, 5),
     };
+  }
+
+  /** eventName x eventCount for the window AND the prior equal window — for the per-event regression
+   *  engine (a key event silently dropping to 0 = a broken tag). Read-only Data API. */
+  async getGa4EventDeltas(property: string, startDate: string, endDate: string): Promise<Ga4EventDeltaInput> {
+    const DAY = 86400000;
+    const sd = Date.parse(`${startDate}T00:00:00Z`);
+    const ed = Date.parse(`${endDate}T00:00:00Z`);
+    const span = Number.isFinite(sd) && Number.isFinite(ed) ? Math.max(1, Math.round((ed - sd) / DAY) + 1) : 1;
+    const ymd = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
+    const priorEndDate = ymd(sd - DAY);
+    const priorStartDate = ymd(sd - span * DAY);
+    const byEvents = [{ metric: { metricName: 'eventCount' }, desc: true }];
+    const [cur, prior] = await Promise.all([
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['eventName'], metrics: ['eventCount'], orderBys: byEvents, limit: '500' }),
+      this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: ['eventName'], metrics: ['eventCount'], orderBys: byEvents, limit: '500' }),
+    ]);
+    const priorMap = new Map<string, number>();
+    for (const r of prior.rows) priorMap.set(r.dimensions[0] ?? '', Number(r.metrics[0]) || 0);
+    const seen = new Set<string>();
+    const events: Ga4EventDeltaInput['events'] = cur.rows.map((r) => {
+      const name = r.dimensions[0] ?? '';
+      seen.add(name);
+      return { name, count: Number(r.metrics[0]) || 0, priorCount: priorMap.get(name) ?? 0 };
+    });
+    // Events present in the prior window but absent now (count 0) — the drop-to-zero case.
+    for (const [name, priorCount] of priorMap) if (!seen.has(name)) events.push({ name, count: 0, priorCount });
+    return { events, distinctEventCount: seen.size };
+  }
+
+  /** Ecommerce transaction integrity: transactionId x purchase count + the "(not set)" share — for the
+   *  duplicate-transaction / missing-transaction_id engine. Read-only Data API. Caller sets hasEcommerce. */
+  async getGa4Transactions(property: string, startDate: string, endDate: string): Promise<Omit<Ga4TransactionInput, 'hasEcommerce'>> {
+    const res = await this.runGa4Report({
+      property, startDate, endDate,
+      dimensions: ['transactionId'], metrics: ['ecommercePurchases'],
+      orderBys: [{ metric: { metricName: 'ecommercePurchases' }, desc: true }], limit: '250',
+    });
+    let total = 0;
+    let notSet = 0;
+    const transactions: Ga4TransactionInput['transactions'] = [];
+    for (const r of res.rows) {
+      const id = r.dimensions[0] ?? '';
+      const purchases = Number(r.metrics[0]) || 0;
+      total += purchases;
+      if (id === '' || /\(not set\)/i.test(id)) notSet += purchases;
+      else transactions.push({ id, purchases });
+    }
+    return { transactions, notSetShare: total > 0 ? (notSet / total) * 100 : 0 };
   }
 
   async runGa4Report(input: {
