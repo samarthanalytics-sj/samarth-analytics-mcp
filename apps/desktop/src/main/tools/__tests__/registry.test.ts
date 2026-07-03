@@ -265,6 +265,14 @@ function fakeData(
       calls.push(`updateTrigger:${triggerId}:${patch.eventName ?? ''}:${patch.name ?? ''}`);
       return { triggerId, name: patch.name ?? 'CE - Purchase', type: 'customEvent', customEventName: patch.eventName ?? '' };
     },
+    addGa4UserProperties: async (a: string, c: string, w: string, tagId: string, props: Array<{ name: string; value: string }>) => {
+      calls.push(`addUserProps:${a}:${c}:${w}:${tagId}:${props.map((p) => `${p.name}=${p.value}`).join(',')}`);
+      return { tagId, name: 'X', type: 'gaawe' };
+    },
+    addGa4UserPropertiesToAllTags: async (a: string, c: string, w: string, props: Array<{ name: string; value: string }>) => {
+      calls.push(`addUserPropsAll:${a}:${c}:${w}:${props.map((p) => p.name).join(',')}`);
+      return { total: 2, updated: ['A', 'B'], failed: [] };
+    },
     createGtmTag: async (a: string, c: string, w: string, tag: Record<string, unknown>) => {
       calls.push(`createTag:${a}:${c}:${w}:${JSON.stringify(tag.firingTriggerId ?? [])}`);
       return { tagId: 'TAG1', name: String(tag.name ?? ''), type: String(tag.type ?? ''), parameter: tag.parameter };
@@ -478,7 +486,9 @@ async function main(): Promise<void> {
     // dropped catalog entry or verb fails here instead of moving both sides together.
     const ga4Writes = buildGa4WriteTools(fakeData().data);
     assert.equal(ga4Writes.length, 60, 'GA4 write catalog produces 60 tools (19 resources + 6 lifecycle specials)');
-    assert.equal(withWrites.list().length, 92 + 60, 'read + write registry has 92 GTM/GA4-read/context + 60 GA4-write tools');
+    assert.equal(withWrites.list().length, 94 + 60, 'read + write registry has 94 GTM/GA4-read/context + 60 GA4-write tools');
+    assert.equal(withWrites.list().some((t) => t.name === 'add_ga4_user_properties'), true);
+    assert.equal(withWrites.list().some((t) => t.name === 'add_ga4_user_properties_to_all_tags'), true);
     // Every catalog resource + special contributes at least one tool (catches a fully-dropped entry
     // for a resource no other assertion names — google_ads_link, firebase_link, expanded_data_set,
     // dv360, sa360, adsense, subproperty, rollup, etc.).
@@ -578,8 +588,25 @@ async function main(): Promise<void> {
     );
   });
 
+  await test('GA4 user-property tools: routed to the GTM product, write the userProperties list', async () => {
+    // Scoped to GTM (they edit GTM tags despite the "ga4" in the name), not the read-only GA4 chat.
+    const gtm = buildToolRegistry(fakeData().data, approveAsIs, 'gtm').list().map((t) => t.name);
+    assert.ok(gtm.includes('add_ga4_user_properties') && gtm.includes('add_ga4_user_properties_to_all_tags'), 'user-property tools reachable in GTM chat');
+    const ga4 = buildToolRegistry(fakeData().data, approveAsIs, 'ga4').list().map((t) => t.name);
+    assert.ok(!ga4.includes('add_ga4_user_properties') && !ga4.includes('add_ga4_user_properties_to_all_tags'), 'not in the GA4 Analytics chat');
+    // Single-tag: routes name/value user properties through the data layer.
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs, 'gtm');
+    await reg.execute('add_ga4_user_properties', { accountId: '1', containerId: '2', workspaceId: '3', tagId: '9', properties: [{ name: 'user_id', value: '{{User ID}}' }] });
+    assert.ok(fd.calls.includes('addUserProps:1:2:3:9:user_id={{User ID}}'), `routed wrong: ${fd.calls.filter((c) => c.startsWith('addUserProps')).join(' | ')}`);
+    // Bulk: one call over all gaawe tags.
+    const out = JSON.parse(await reg.execute('add_ga4_user_properties_to_all_tags', { accountId: '1', containerId: '2', workspaceId: '3', properties: [{ name: 'membership_tier', value: '{{Tier}}' }] }));
+    assert.equal(out.updated.length, 2);
+    assert.ok(fd.calls.includes('addUserPropsAll:1:2:3:membership_tier'));
+  });
+
   await test('GA4 tag-edit tools are scoped to the GTM product (reachable in the GTM chat)', async () => {
-    const editTools = ['set_ga4_measurement_id', 'set_ga4_measurement_id_on_all_tags', 'add_ga4_event_parameters', 'add_ga4_event_parameters_to_all_tags'];
+    const editTools = ['set_ga4_measurement_id', 'set_ga4_measurement_id_on_all_tags', 'add_ga4_event_parameters', 'add_ga4_event_parameters_to_all_tags', 'add_ga4_user_properties', 'add_ga4_user_properties_to_all_tags'];
     // GTM chat (where these belong — they edit GTM tags): all must be present.
     const gtm = buildToolRegistry(fakeData().data, approveAsIs, 'gtm').list().map((t) => t.name);
     for (const n of editTools) assert.equal(gtm.includes(n), true, `${n} must be available in the GTM chat`);

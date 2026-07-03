@@ -195,6 +195,8 @@ const GTM_GA4_TAG_TOOLS = new Set([
   'set_ga4_measurement_id_on_all_tags',
   'add_ga4_event_parameters',
   'add_ga4_event_parameters_to_all_tags',
+  'add_ga4_user_properties',
+  'add_ga4_user_properties_to_all_tags',
 ]);
 
 // Tool product is derived from its name (GA4 Analytics tools contain "ga4", GTM tools
@@ -2243,6 +2245,78 @@ export function buildToolRegistry(
           s(a.workspaceId),
           s(a.tagId),
           (Array.isArray(a.parameters) ? a.parameters : []) as Array<{ name: string; value: string }>
+        ),
+    },
+    {
+      name: 'add_ga4_user_properties',
+      description:
+        'Add GA4 USER PROPERTIES (user-SCOPED, distinct from event parameters) to an existing GA4 Event tag (type "gaawe"). Appends them to the tag\'s `userProperties` list (name/value shape — NOT eventSettingsTable), preserving eventName/measurementId/event parameters. A property whose name already exists has its value updated (not duplicated). Use for "user-level parameters" / user properties like user_id, login_status, membership_tier, or first-touch source. In a SERVER-side setup these reach GA4 automatically through the GA4 relay tag (upToIncludeDropdown=all) — you do NOT add them on the server tag; you set them on the WEB GA4 event tags here and the server forwards them. Values may be GTM variables like {{User ID}}. Call once per tag (or use add_ga4_user_properties_to_all_tags).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          tagId: { type: 'string', description: 'The GA4 Event (gaawe) tag ID.' },
+          properties: {
+            type: 'array',
+            description: 'User properties (user-scoped) to add.',
+            items: {
+              type: 'object',
+              properties: { name: { type: 'string' }, value: { type: 'string' } },
+              required: ['name', 'value'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tagId', 'properties'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) =>
+        `Add ${(Array.isArray(a.properties) ? a.properties.length : 0)} GA4 user propert(ies) to tag ${s(a.tagId)} in workspace ${s(a.workspaceId)}`,
+      handler: (a) =>
+        data.addGa4UserProperties(
+          s(a.accountId),
+          s(a.containerId),
+          s(a.workspaceId),
+          s(a.tagId),
+          (Array.isArray(a.properties) ? a.properties : []) as Array<{ name: string; value: string }>
+        ),
+    },
+    {
+      name: 'add_ga4_user_properties_to_all_tags',
+      description:
+        'Add GA4 user properties (user-scoped) to ALL GA4 Event tags (gaawe) in the workspace in ONE call. PREFER this whenever the user says "user-level parameters" / "user properties" for "all GA4 tags" (e.g. "send user_id and membership_tier as user properties on every GA4 event tag"). It appends to each tag\'s `userProperties` list, updates a value in place if the name already exists, preserves each tag, continues past any single failure, and returns a summary. In a server setup the GA4 relay forwards these to GA4 automatically (upToIncludeDropdown=all). Values may be GTM variables like {{User ID}}.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          properties: {
+            type: 'array',
+            description: 'User properties (user-scoped) to add to every gaawe tag.',
+            items: {
+              type: 'object',
+              properties: { name: { type: 'string' }, value: { type: 'string' } },
+              required: ['name', 'value'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'properties'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) =>
+        `Add ${(Array.isArray(a.properties) ? a.properties.length : 0)} GA4 user propert(ies) to EVERY GA4 event tag in workspace ${s(a.workspaceId)}`,
+      handler: (a) =>
+        data.addGa4UserPropertiesToAllTags(
+          s(a.accountId),
+          s(a.containerId),
+          s(a.workspaceId),
+          (Array.isArray(a.properties) ? a.properties : []) as Array<{ name: string; value: string }>
         ),
     },
     {

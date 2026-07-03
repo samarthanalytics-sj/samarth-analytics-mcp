@@ -189,6 +189,14 @@ export class ChatService {
           'WHEN THE USER SAYS "ALL GA4 TAGS" / "every GA4 tag", use the BULK tool — ONE call — ' +
           'NOT a per-tag loop: set_ga4_measurement_id_on_all_tags to change the Measurement ID on every GA4 ' +
           'tag, and add_ga4_event_parameters_to_all_tags to add event parameters to every GA4 event tag. ' +
+          'USER PROPERTIES vs EVENT PARAMETERS: "user-level parameters" / "user properties" (user_id, login_status, ' +
+          'membership_tier, first-touch source, …) are USER-SCOPED and are a DIFFERENT field from event parameters. ' +
+          'Use add_ga4_user_properties (one tag) or add_ga4_user_properties_to_all_tags (every GA4 event tag) — NOT ' +
+          'add_ga4_event_parameters — for those. IN A SERVER-SIDE SETUP you do NOT add user properties on the server ' +
+          'GA4 relay tag: the relay already forwards ALL user properties (upToIncludeDropdown=all). Set them on the ' +
+          'WEB GA4 event tags with add_ga4_user_properties_to_all_tags and the server forwards them to GA4 automatically; ' +
+          'if a downstream SERVER tag (Meta/TikTok CAPI) must READ a user property, add an Event Data variable ' +
+          '(create_gtm_variable_typed kind event_data) reading its keyPath on the server. ' +
           'Do NOT call set_gtm_tag_paused, delete_gtm_tag/trigger, or any unrelated tool for these requests. ' +
           'set_gtm_tag_paused ONLY pauses or enables a tag — it does NOT change a Measurement ID, event parameters, ' +
           'or any tag config; never use it to edit a GA4 tag. ' +

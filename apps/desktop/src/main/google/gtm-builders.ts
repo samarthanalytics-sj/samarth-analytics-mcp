@@ -106,6 +106,11 @@ export interface Ga4EventInput {
   measurementId: string; // G-XXXX (or {{Variable}})
   eventName: string;
   eventParameters?: Array<{ name: string; value: string }>;
+  /** GA4 USER PROPERTIES (user-scoped). Emitted as the `userProperties` list of {name,value}
+   *  maps — corpus-validated, distinct from event parameters' eventSettingsTable
+   *  (parameter/parameterValue). In a server setup these reach GA4 via the relay's
+   *  upToIncludeDropdown='all'. */
+  userProperties?: Array<{ name: string; value: string }>;
   firingTriggerId?: string[];
   /** GA4 "Send Ecommerce data" from the dataLayer — forwards the WHOLE ecommerce object (items,
    *  value, currency, transaction_id, …) with no per-param variables. Corpus shape:
@@ -135,6 +140,18 @@ export function buildGa4EventTag(o: Ga4EventInput): GtmTagResource {
       list: o.eventParameters.map((p) => ({
         type: 'map',
         map: [tpl('parameter', p.name), tpl('parameterValue', p.value)],
+      })),
+    });
+  }
+  if (o.userProperties?.length) {
+    // USER PROPERTIES use the `userProperties` list keyed name/value (corpus-validated) — a
+    // different shape from eventSettingsTable's parameter/parameterValue.
+    parameter.push({
+      type: 'list',
+      key: 'userProperties',
+      list: o.userProperties.map((p) => ({
+        type: 'map',
+        map: [tpl('name', p.name), tpl('value', p.value)],
       })),
     });
   }

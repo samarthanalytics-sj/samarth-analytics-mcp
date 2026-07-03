@@ -11,7 +11,7 @@ import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
-import { mergeParametersByKey, addEventParameters, setTemplateParam, type GtmParam } from './tag-params';
+import { mergeParametersByKey, addEventParameters, addUserProperties, setTemplateParam, type GtmParam } from './tag-params';
 import { changeJournal, type EntityKind } from './change-journal';
 import type { Ga4AccountView, Ga4PropertyListItem, GtmAccountView } from '../../shared/ipc';
 
@@ -825,6 +825,63 @@ export class GoogleDataService {
       }
     }
     console.error(`[gtm] addGa4EventParametersToAllTags DONE: ${updated.length} updated, ${failed.length} failed`);
+    return { total: targets.length, updated, failed };
+  }
+
+  /** Add GA4 USER PROPERTIES (user-scoped) to a GA4 Event tag (gaawe) by merging them into its
+   *  `userProperties` list, preserving eventName / measurementId / event parameters. Read-modify-write.
+   *  Distinct from event parameters: user properties persist across the user's events, and in a
+   *  server setup they reach GA4 via the relay's upToIncludeDropdown='all'. Rejects non-gaawe tags. */
+  async addGa4UserProperties(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    tagId: string,
+    properties: Array<{ name: string; value: string }>
+  ): Promise<GtmTagView> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
+    const current = (await gtm.accounts.containers.workspaces.tags.get({ path })).data;
+    console.error(`[gtm] addGa4UserProperties tag=${tagId} type=${current.type} props=[${properties.map((p) => p.name).join(', ')}]`);
+    if (current.type !== 'gaawe') {
+      throw new Error(
+        `Tag ${tagId} is type "${current.type ?? 'unknown'}", not a GA4 Event tag (gaawe). add_ga4_user_properties only edits GA4 event tags.`
+      );
+    }
+    const updated = addUserProperties(current as Record<string, unknown>, properties);
+    const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
+    console.error(`[gtm]   ✓ tag ${tagId} (${res.data.name}) saved`);
+    this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
+    return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  /** Bulk, ONE call: add GA4 user properties to EVERY GA4 Event tag (gaawe) in the workspace.
+   *  Continues past a per-tag failure; returns a summary. */
+  async addGa4UserPropertiesToAllTags(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    properties: Array<{ name: string; value: string }>
+  ): Promise<{ total: number; updated: string[]; failed: Array<{ tag: string; error: string }> }> {
+    const allTags = await this.listGtmTags(accountId, containerId, workspaceId);
+    const targets = allTags.filter((t) => t.type === 'gaawe');
+    console.error(
+      `[gtm] addGa4UserPropertiesToAllTags: ${allTags.length} tag(s) in workspace, ${targets.length} gaawe target(s) · props=[${properties.map((p) => p.name).join(', ')}]`
+    );
+    const updated: string[] = [];
+    const failed: Array<{ tag: string; error: string }> = [];
+    for (const t of targets) {
+      try {
+        await this.addGa4UserProperties(accountId, containerId, workspaceId, t.tagId, properties);
+        updated.push(t.name);
+      } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        failed.push({ tag: t.name, error });
+        console.error(`[gtm]   ✗ ${t.name}#${t.tagId}: ${error}`);
+      }
+    }
+    console.error(`[gtm] addGa4UserPropertiesToAllTags DONE: ${updated.length} updated, ${failed.length} failed`);
     return { total: targets.length, updated, failed };
   }
 

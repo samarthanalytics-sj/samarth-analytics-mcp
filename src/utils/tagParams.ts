@@ -66,3 +66,44 @@ export function addEventParameters(tag: Tag, params: Array<{ name: string; value
 
   return { ...tag, parameter };
 }
+
+/** A GA4 USER-PROPERTY map entry — keyed `name`/`value` (corpus-validated), NOT the
+ *  `parameter`/`parameterValue` an event parameter uses. */
+function userPropMap(name: string, value: string): Param {
+  return {
+    type: 'map',
+    map: [
+      { type: 'template', key: 'name', value: name },
+      { type: 'template', key: 'value', value },
+    ],
+  };
+}
+const upName = (m: Param): string | undefined => (m.map ?? []).find((x) => x.key === 'name')?.value ?? undefined;
+
+/** Add GA4 USER PROPERTIES (user-SCOPED) to a GA4 Event tag (type 'gaawe') by appending them to
+ *  the tag's `userProperties` list (MAP of name/value — distinct from event parameters'
+ *  eventSettingsTable), creating that list if absent. A property whose name already exists has its
+ *  VALUE updated rather than duplicated. Every other field of the tag is preserved. PURE. In a
+ *  server-side setup these reach GA4 through the relay's upToIncludeDropdown='all'. */
+export function addUserProperties(tag: Tag, props: Array<{ name: string; value: string }>): Tag {
+  const parameter: Param[] = [...(tag.parameter ?? [])];
+  const idx = parameter.findIndex((p) => p.key === 'userProperties');
+  const list: Param[] = idx >= 0 ? [...(parameter[idx].list ?? [])] : [];
+
+  for (const { name, value } of props) {
+    if (!name) continue;
+    const existing = list.findIndex((m) => upName(m) === name);
+    if (existing >= 0) {
+      const map = (list[existing].map ?? []).map((x) => (x.key === 'value' ? { ...x, value } : x));
+      list[existing] = { ...list[existing], map };
+    } else {
+      list.push(userPropMap(name, value));
+    }
+  }
+
+  const table: Param = { type: 'list', key: 'userProperties', list };
+  if (idx >= 0) parameter[idx] = table;
+  else parameter.push(table);
+
+  return { ...tag, parameter };
+}

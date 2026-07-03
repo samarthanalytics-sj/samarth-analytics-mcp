@@ -2,7 +2,7 @@
  * Tests the safe tag-parameter editing helpers (read-modify-write merge +
  * eventSettingsTable append). Run: tsx src/__tests__/tag-params.test.ts
  */
-import { addEventParameters, mergeParametersByKey } from '../utils/tagParams.js';
+import { addEventParameters, addUserProperties, mergeParametersByKey } from '../utils/tagParams.js';
 import { gtmParameterArray } from '../utils/paramSchema.js';
 import type { tagmanager_v2 } from 'googleapis';
 
@@ -61,6 +61,22 @@ check('addEvent: existing param name updates value, not duplicated', paramNames(
 
 // ── purity: the input tag is never mutated ───────────────────────────────────
 check('addEvent: input tag is NOT mutated (pure)', (estOf(ga4Tag)?.list ?? []).length === 1 && paramNames(ga4Tag).length === 1);
+
+// ── addUserProperties: user-scoped, separate userProperties list keyed name/value ─
+const upOf = (t: Tag): tagmanager_v2.Schema$Parameter | undefined => (t.parameter ?? []).find((p) => p.key === 'userProperties');
+const upNames = (t: Tag): (string | undefined | null)[] => (upOf(t)?.list ?? []).map((m) => (m.map ?? []).find((x) => x.key === 'name')?.value);
+const upValueOf = (t: Tag, n: string): string | undefined | null => {
+  const row = (upOf(t)?.list ?? []).find((m) => (m.map ?? []).find((x) => x.key === 'name')?.value === n);
+  return (row?.map ?? []).find((x) => x.key === 'value')?.value;
+};
+const wp = addUserProperties(out, [{ name: 'user_id', value: '{{User ID}}' }, { name: 'membership_tier', value: '{{Tier}}' }]);
+check('addUser: userProperties list created with name/value maps', upNames(wp).includes('user_id') && upNames(wp).includes('membership_tier') && (upOf(wp)?.list ?? []).length === 2);
+check('addUser: map keys are name/value (NOT parameter/parameterValue)', (upOf(wp)?.list?.[0]?.map ?? []).some((x) => x.key === 'name') && (upOf(wp)?.list?.[0]?.map ?? []).some((x) => x.key === 'value'));
+check('addUser: value as given', upValueOf(wp, 'user_id') === '{{User ID}}');
+check('addUser: event params + eventName untouched (separate from userProperties)', !!estOf(wp) && paramNames(wp).length === 3 && (wp.parameter ?? []).find((p) => p.key === 'eventName')?.value === 'email_click');
+const wp2 = addUserProperties(wp, [{ name: 'user_id', value: '{{New}}' }]);
+check('addUser: existing name updates value, not duplicated', upNames(wp2).filter((n) => n === 'user_id').length === 1 && upValueOf(wp2, 'user_id') === '{{New}}');
+check('addUser: pure (input had no userProperties)', upOf(out) === undefined);
 
 // ── mergeParametersByKey ─────────────────────────────────────────────────────
 const existing: Param[] = [

@@ -1786,6 +1786,26 @@ test('buildGa4EventTag sendEcommerceData: emits the flag + getEcommerceDataFrom 
   assert.equal(findParam(offParams, 'getEcommerceDataFrom'), undefined, 'source only present when forwarding');
 });
 
+test('buildGa4EventTag userProperties: emits the userProperties list keyed name/value (distinct from eventSettingsTable)', () => {
+  const t = buildGa4EventTag({
+    name: 'GA4 - Event - Login Tag', measurementId: 'G-1', eventName: 'login',
+    eventParameters: [{ name: 'method', value: 'google' }],
+    userProperties: [{ name: 'user_id', value: '{{User ID}}' }, { name: 'membership_tier', value: '{{Tier}}' }],
+  });
+  const params = t.parameter as Array<Record<string, unknown>>;
+  const up = findParam(params, 'userProperties') as { type?: string; list?: Array<{ map: Array<{ key: string; value: string }> }> } | undefined;
+  assert.ok(up && up.type === 'list', 'userProperties is a list');
+  assert.equal(up!.list!.length, 2);
+  // user properties use name/value keys; event params use parameter/parameterValue — must not collide.
+  assert.deepEqual(up!.list![0].map.map((x) => x.key), ['name', 'value']);
+  assert.equal(up!.list![0].map.find((x) => x.key === 'name')?.value, 'user_id');
+  const ep = findParam(params, 'eventSettingsTable') as { list?: Array<{ map: Array<{ key: string }> }> } | undefined;
+  assert.deepEqual(ep!.list![0].map.map((x) => x.key), ['parameter', 'parameterValue'], 'event params keep their own shape');
+  // absent when not requested
+  const none = buildGa4EventTag({ name: 'x', measurementId: 'G-1', eventName: 'e' });
+  assert.equal(findParam(none.parameter as Array<Record<string, unknown>>, 'userProperties'), undefined);
+});
+
 test('buildEcommerceDlvVariables: one dlv per corpus ecommerce key', () => {
   const vars = buildEcommerceDlvVariables();
   assert.equal(vars.length, ECOMMERCE_DLV_KEYS.length);

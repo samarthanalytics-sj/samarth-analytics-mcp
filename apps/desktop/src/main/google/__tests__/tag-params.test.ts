@@ -1,6 +1,6 @@
 /** Desktop tag-parameter helpers: read-modify-write merge + eventSettingsTable append.
  *  Run: tsx src/main/google/__tests__/tag-params.test.ts */
-import { addEventParameters, mergeParametersByKey, setTemplateParam, type GtmParam } from '../tag-params';
+import { addEventParameters, addUserProperties, mergeParametersByKey, setTemplateParam, type GtmParam } from '../tag-params';
 
 let passed = 0;
 let failed = 0;
@@ -61,6 +61,25 @@ check('setTemplateParam: measurementIdOverride updated to the variable', params(
 check('setTemplateParam: eventName + measurementId tagReference + event table preserved', params(sm).some((p) => p.key === 'eventName' && p.value === 'email_click') && params(sm).some((p) => p.key === 'measurementId' && p.type === 'tagReference') && !!est(sm));
 check('setTemplateParam: adds the key when absent (googtag tagId)', (() => { const g = setTemplateParam({ type: 'googtag', parameter: [] }, 'tagId', '{{GA4 Variable}}'); return (g.parameter as GtmParam[])[0]?.key === 'tagId' && (g.parameter as GtmParam[])[0]?.value === '{{GA4 Variable}}'; })());
 check('setTemplateParam: input not mutated (pure)', params(ga4).find((p) => p.key === 'measurementIdOverride')?.value === '{{GA4 Measurement ID}}');
+
+// ── addUserProperties: user-SCOPED, separate `userProperties` list keyed name/value ──
+const up = (t: Record<string, unknown>): GtmParam | undefined => params(t).find((p) => p.key === 'userProperties');
+const upNames = (t: Record<string, unknown>): (string | undefined)[] =>
+  (up(t)?.list ?? []).map((m) => (m.map ?? []).find((x) => x.key === 'name')?.value);
+const upValue = (t: Record<string, unknown>, n: string): string | undefined => {
+  const row = (up(t)?.list ?? []).find((m) => (m.map ?? []).find((x) => x.key === 'name')?.value === n);
+  return (row?.map ?? []).find((x) => x.key === 'value')?.value;
+};
+
+const wp = addUserProperties(ga4, [{ name: 'user_id', value: '{{User ID}}' }, { name: 'membership_tier', value: '{{Tier}}' }]);
+check('user properties added to a NEW userProperties list (name/value shape)', upNames(wp).includes('user_id') && upNames(wp).includes('membership_tier') && (up(wp)?.list ?? []).length === 2);
+check('user-property map uses name/value keys (NOT parameter/parameterValue)', (up(wp)?.list?.[0]?.map ?? []).some((x) => x.key === 'name') && (up(wp)?.list?.[0]?.map ?? []).some((x) => x.key === 'value'));
+check('user property value as given', upValue(wp, 'user_id') === '{{User ID}}');
+check('event params + measurementIdOverride untouched by user-property add', !!est(wp) && names(wp).length === 1 && params(wp).find((p) => p.key === 'measurementIdOverride')?.value === '{{GA4 Measurement ID}}');
+check('event params and user properties are SEPARATE lists', est(wp)?.key === 'eventSettingsTable' && up(wp)?.key === 'userProperties' && est(wp) !== up(wp));
+const wp2 = addUserProperties(wp, [{ name: 'user_id', value: '{{New ID}}' }]);
+check('existing user property name updates value, not duplicated', upNames(wp2).filter((n) => n === 'user_id').length === 1 && upValue(wp2, 'user_id') === '{{New ID}}');
+check('addUserProperties is pure (input untouched)', up(ga4) === undefined);
 
 console.log(`\ndesktop tag-params: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

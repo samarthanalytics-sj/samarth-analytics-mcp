@@ -82,3 +82,48 @@ export function addEventParameters(
 
   return { ...tag, parameter };
 }
+
+/** A GA4 USER-PROPERTY map — note the keys are `name`/`value` (corpus-validated), NOT the
+ *  `parameter`/`parameterValue` an event parameter uses. This is the whole reason user
+ *  properties need their own helper. */
+function userPropMap(name: string, value: string): GtmParam {
+  return {
+    type: 'map',
+    map: [
+      { type: 'template', key: 'name', value: name },
+      { type: 'template', key: 'value', value },
+    ],
+  };
+}
+const upName = (m: GtmParam): string | undefined => (m.map ?? []).find((x) => x.key === 'name')?.value;
+
+/** Append GA4 USER PROPERTIES (user-SCOPED, distinct from event parameters) to a GA4 Event tag
+ *  by adding them to its `userProperties` LIST (MAP of name/value), creating that list if absent.
+ *  A property whose name already exists has its VALUE updated instead of duplicated. Every other
+ *  field is preserved. PURE — returns a NEW tag object (the caller PUTs it back). In a server
+ *  setup these flow to GA4 through the relay's upToIncludeDropdown='all'. */
+export function addUserProperties(
+  tag: Record<string, unknown>,
+  props: Array<{ name: string; value: string }>,
+): Record<string, unknown> {
+  const parameter: GtmParam[] = [...((tag.parameter as GtmParam[] | undefined) ?? [])];
+  const idx = parameter.findIndex((p) => p.key === 'userProperties');
+  const list: GtmParam[] = idx >= 0 ? [...(parameter[idx].list ?? [])] : [];
+
+  for (const { name, value } of props) {
+    if (!name) continue;
+    const existing = list.findIndex((m) => upName(m) === name);
+    if (existing >= 0) {
+      const map = (list[existing].map ?? []).map((x) => (x.key === 'value' ? { ...x, value } : x));
+      list[existing] = { ...list[existing], map };
+    } else {
+      list.push(userPropMap(name, value));
+    }
+  }
+
+  const table: GtmParam = { type: 'list', key: 'userProperties', list };
+  if (idx >= 0) parameter[idx] = table;
+  else parameter.push(table);
+
+  return { ...tag, parameter };
+}

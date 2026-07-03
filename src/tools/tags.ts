@@ -8,7 +8,7 @@ import type { GtmClient } from '../utils/gtmClient.js';
 import { checkGuardrails, getGuardrailConfig } from '../utils/guardrails.js';
 import { paginate, paginationFields, buildListResult } from '../utils/pagination.js';
 import { jsonResult, textResult, errorResult } from '../utils/toolResponse.js';
-import { addEventParameters, mergeParametersByKey } from '../utils/tagParams.js';
+import { addEventParameters, addUserProperties, mergeParametersByKey } from '../utils/tagParams.js';
 import { gtmParameterArray as parameterSchema } from '../utils/paramSchema.js';
 
 const wsBase = z.object({
@@ -206,6 +206,55 @@ export function registerTagTools(server: McpServer, getClient: () => GtmClient):
         return jsonResult(res.data);
       } catch (err) {
         return errorResult('tags_add_ga4_event_parameters', err);
+      }
+    }
+  );
+
+  // ── tags/add GA4 user properties ─────────────────────────────────────────
+  server.registerTool(
+    'tags_add_ga4_user_properties',
+    {
+      description:
+        '[WRITE] Add GA4 USER PROPERTIES (user-SCOPED, distinct from event parameters) to a GA4 Event tag (type "gaawe"). ' +
+        'Requires GTM_MCP_ENABLE_WRITES=true and confirm=true. Fetches the tag, APPENDS the properties to its `userProperties` list ' +
+        '(name/value shape — NOT eventSettingsTable), and saves the FULL tag so eventName/measurementId/event parameters stay intact. ' +
+        'A property whose name already exists has its value updated (not duplicated). Use for user_id, login_status, membership_tier, ' +
+        'first-touch source, etc. In a SERVER-side setup you set these on the WEB GA4 event tags; the server GA4 relay forwards all user ' +
+        'properties to GA4 automatically (upToIncludeDropdown=all), so you do NOT add them on the server tag. Values may be GTM variables like {{User ID}}.',
+      inputSchema: wsBase.extend({
+        tagId: z.string().describe('The GA4 Event (gaawe) tag ID to update.'),
+        properties: z
+          .array(z.object({ name: z.string(), value: z.string() }))
+          .min(1)
+          .describe('User properties (user-scoped) to add, e.g. [{"name":"user_id","value":"{{User ID}}"},{"name":"membership_tier","value":"{{Tier}}"}].'),
+        confirm: z.boolean().describe('Must be true to confirm this write operation.'),
+      }),
+    },
+    async ({ accountId, containerId, workspaceId, tagId, properties, confirm }) => {
+      try {
+        const config = getGuardrailConfig();
+        const { dryRun } = checkGuardrails('write', confirm, config);
+        if (dryRun) {
+          return textResult(`[DRY RUN] Would add ${properties.length} user propert(ies) to GA4 tag ${tagId}`);
+        }
+        const client = getClient();
+        const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
+        const existing = (await client.accounts.containers.workspaces.tags.get({ path })).data;
+        if (existing.type !== 'gaawe') {
+          return errorResult(
+            'tags_add_ga4_user_properties',
+            new Error(`Tag ${tagId} is type "${existing.type ?? 'unknown'}", not a GA4 Event tag (gaawe). This tool only edits gaawe tags.`),
+          );
+        }
+        const updated = addUserProperties(existing, properties);
+        const res = await client.accounts.containers.workspaces.tags.update({
+          path,
+          fingerprint: existing.fingerprint ?? undefined,
+          requestBody: updated,
+        });
+        return jsonResult(res.data);
+      } catch (err) {
+        return errorResult('tags_add_ga4_user_properties', err);
       }
     }
   );
