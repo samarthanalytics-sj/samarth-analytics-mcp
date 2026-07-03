@@ -810,9 +810,81 @@ function extractFaqGroups(elements: DetectedElement[]): { faqTags: SuggestedTag[
   return { faqTags: [faqTagFor(grouped)], consumed };
 }
 
+// ── Meta (Facebook) Pixel suggestions ────────────────────────────────────────
+// Meta suggestions are DERIVED from the GA4 ones so a Meta tag REUSES its GA4 source's trigger name —
+// on create, the shared trigger create/reuse-by-name path attaches one trigger to both (GA4 + Meta).
+// A Meta suggestion reuses the SuggestedTag fields exactly like GA4: `measurementId` holds the Meta
+// Pixel ID (default {{Meta Pixel ID}}), `eventName` is the Meta event, no eventParameters.
+const META_PIXEL_VAR = '{{Meta Pixel ID}}';
+
+/** Map a GA4 SuggestedTag to its Meta (Facebook) Pixel counterpart, or null when there is no sensible
+ *  Meta event (generic outbound/social/video/faq/learn-more clicks). PURE. The base google_tag becomes
+ *  the Meta base PageView pixel; a ga4_event picks the Meta standard/custom event from the GA4 event
+ *  name by normalized keyword (forms with no keyword default to Lead). */
+export function toMetaSuggestion(ga4: SuggestedTag): SuggestedTag | null {
+  const clone = { ...ga4 };
+  if (ga4.platform === 'google_tag') {
+    // The GA4 base (Google tag) → the Meta BASE pixel: PageView on all pages, no object properties.
+    return {
+      ...clone,
+      platform: 'meta_pixel',
+      eventName: 'PageView',
+      measurementId: META_PIXEL_VAR,
+      tagName: 'Meta Pixel - Base Code',
+      tagId: undefined,
+      configSettings: undefined,
+      eventParameters: undefined,
+      eventParamLookups: undefined,
+      enhancedMeasurementOverlap: false,
+      id: 'meta-' + ga4.id,
+      label: 'Meta Pixel base code (PageView on all pages)',
+      trigger: ga4.trigger,
+    };
+  }
+  // ga4_event → pick the Meta event from the GA4 event name by normalized keyword.
+  const key = ga4.eventName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  let metaEvent: string | null = null;
+  if (key.includes('purchase')) metaEvent = 'Purchase';
+  else if (key.includes('addtocart') || (key.includes('add') && key.includes('cart'))) metaEvent = 'AddToCart';
+  else if (key.includes('checkout') || key.includes('initiatecheckout')) metaEvent = 'InitiateCheckout';
+  else if (key.includes('viewitem') || key.includes('viewcontent')) metaEvent = 'ViewContent';
+  else if (key.includes('search')) metaEvent = 'Search';
+  else if (key.includes('subscribe') || key.includes('newsletter')) metaEvent = 'Subscribe';
+  else if (key.includes('signup') || key.includes('register')) metaEvent = 'CompleteRegistration';
+  else if (key.includes('lead') || key.includes('contact') || key.includes('quote') || key.includes('demo') || key.includes('getstarted')) metaEvent = 'Lead';
+  else if (key.includes('email')) metaEvent = 'Contact';
+  else if (key.includes('phone') || key.includes('call')) metaEvent = 'Contact';
+  else if (key.includes('download')) metaEvent = 'Download';
+  else if (ga4.trigger.kind === 'form_submit') metaEvent = 'Lead'; // forms default to Lead
+  else return null; // no Meta counterpart — skip generic clicks (outbound/social/video/faq/learn_more)
+  return {
+    ...clone,
+    platform: 'meta_pixel',
+    eventName: metaEvent,
+    measurementId: META_PIXEL_VAR,
+    tagName: 'Meta - ' + metaEvent + ' - ' + ga4.tagName.replace(/^GA4 - (Event - )?/, ''),
+    id: 'meta-' + ga4.id,
+    label: 'Meta ' + metaEvent + ': ' + ga4.label,
+    evidence: ga4.evidence,
+    note: ga4.note,
+    enhancedMeasurementOverlap: false,
+    eventParameters: undefined,
+    eventParamLookups: undefined,
+    tagId: undefined,
+    configSettings: undefined,
+    trigger: ga4.trigger,
+  };
+}
+
 /** opts.full prepends the GA4 Configuration tag (always) so the review list is the COMPLETE set of
- *  creatable tags — not only the scan-derived ones. */
-export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } = {}): SuggestedTag[] {
+ *  creatable tags — not only the scan-derived ones. opts.platforms (default ['ga4']) selects which
+ *  platforms to emit: 'ga4' returns the GA4 tags; 'meta' returns their Meta Pixel counterparts (derived
+ *  from the GA4 tags so the trigger name is SHARED). 'meta' only computes GA4 internally but does not
+ *  return them. */
+export function buildSuggestions(
+  input: SuggestInput,
+  opts: { full?: boolean; platforms?: Array<'ga4' | 'meta'> } = {},
+): SuggestedTag[] {
   const scopeCtx = nonUniqueFormScopes(input.forms);
   // Social trigger fires on ONLY the exact domains scraped from the site's links.
   const presentDomains = new Set(
@@ -853,7 +925,17 @@ export function buildSuggestions(input: SuggestInput, opts: { full?: boolean } =
       Number(a.enhancedMeasurementOverlap) - Number(b.enhancedMeasurementOverlap) ||
       a.label.localeCompare(b.label)
   );
-  if (!opts.full) return ranked;
-  // COMPLETE list: prepend the GA4 Configuration base tag (always), above the scan-derived tags.
-  return [ga4ConfigSuggestion(), ...ranked];
+  // The GA4 list (the base Google tag is prepended only in full mode).
+  const ga4Suggestions = opts.full ? [ga4ConfigSuggestion(), ...ranked] : ranked;
+
+  // Which platforms to emit (default GA4 only, so existing callers are unchanged). Meta counterparts
+  // are DERIVED from the GA4 list so each Meta tag reuses its GA4 source's trigger name (one shared
+  // trigger on create). 'meta' alone computes GA4 internally but returns only the Meta tags.
+  const platforms = opts.platforms ?? ['ga4'];
+  const out: SuggestedTag[] = [];
+  if (platforms.includes('ga4')) out.push(...ga4Suggestions);
+  if (platforms.includes('meta')) {
+    out.push(...ga4Suggestions.map(toMetaSuggestion).filter((x): x is SuggestedTag => x !== null));
+  }
+  return out;
 }

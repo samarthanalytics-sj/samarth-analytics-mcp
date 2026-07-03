@@ -953,6 +953,43 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.some((c) => c.startsWith('createTrigger')), 'created its trigger');
   });
 
+  await test('create_tracking_tag (meta_pixel) imports the facebook template + creates a Meta pixel on a created trigger', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'meta_pixel', tagName: 'Meta - Lead - Contact Form Tag', measurementId: '{{Meta Pixel ID}}', eventName: 'Lead',
+        trigger: { name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'lead-form', formIdOperator: 'equals' },
+      })
+    );
+    assert.ok(fd.calls.includes('importTemplate:facebook/GoogleTagManager-WebTemplate-For-FacebookPixel'), 'imported the official Meta Pixel template');
+    assert.equal(out.tag.type, 'cvt_5RM3Q', 'built a tag of the template cvt_ type');
+    const pixelId = (out.tag.parameter ?? []).find((x: { key: string }) => x.key === 'pixelId')?.value;
+    assert.equal(pixelId, '{{Meta Pixel ID}}', 'pixel id defaults from measurementId');
+    assert.ok(fd.calls.some((c) => c.startsWith('createTrigger') && c.includes('Contact Form Trigger')), 'created its trigger');
+    assert.ok(fd.calls.some((c) => c.startsWith('createTag') && c.includes('NEW1')), 'tag linked to the created trigger (firingTriggerId)');
+  });
+
+  // "Both GA4 & Meta" shares ONE trigger: the GA4 tag creates the trigger, the Meta tag (same trigger
+  // name) REUSES it — the shared create/reuse-by-name path attaches both to the same firingTriggerId.
+  await test('create_tracking_tag (meta_pixel) reuses a same-named trigger (shared GA4+Meta trigger)', async () => {
+    const fd = fakeData({ existingTriggers: [{ triggerId: 'T9', name: 'Contact Form Trigger', type: 'formSubmission' }] });
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'meta_pixel', tagName: 'Meta - Lead - Contact Form Tag', pixelId: '123456', eventName: 'Lead',
+        trigger: { name: 'Contact Form Trigger', kind: 'form_submit' },
+      })
+    );
+    assert.equal(out.trigger.reused, true, 'reused the existing trigger by name');
+    assert.ok(!fd.calls.some((c) => c.startsWith('createTrigger')), 'did not create a duplicate trigger');
+    assert.ok(fd.calls.some((c) => c.startsWith('createTag') && c.includes('T9')), 'Meta tag linked to the shared trigger');
+    const pixelId = (out.tag.parameter ?? []).find((x: { key: string }) => x.key === 'pixelId')?.value;
+    assert.equal(pixelId, '123456', 'explicit pixelId used when provided');
+  });
+
   // The 5 non-GA4 web platforms: assert the enum → correct-builder dispatch AND that the handler's
   // arg coercion (bln, countingMethod narrowing, AW- stripping, linkerDomains) flows into the tag.
   const trkParam = (out: { tag: { parameter?: Array<{ key: string; value: string }> } }, key: string) =>

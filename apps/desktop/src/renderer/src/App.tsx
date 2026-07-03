@@ -1820,6 +1820,10 @@ function TagReviewPanel({
   const [settleMs, setSettleMs] = useState('2500');
   const [settleAuto, setSettleAuto] = useState(true);
   const effSettleMs = (): number | undefined => (settleAuto ? undefined : Number(settleMs) || undefined);
+  // Pre-scan platform choice: which ad platforms to generate tags for. GA4 only (default), Meta
+  // (Facebook) Pixel only, or both. Meta tags are derived from the GA4 ones so each shares one trigger.
+  const [platformChoice, setPlatformChoice] = useState<'ga4' | 'meta' | 'both'>('ga4');
+  const platforms: Array<'ga4' | 'meta'> = platformChoice === 'both' ? ['ga4', 'meta'] : [platformChoice];
   const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned']; inventory: TagScanResult['inventory']; installed: TagScanResult['installed'] } | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [discovering, setDiscovering] = useState(false);
@@ -1905,7 +1909,7 @@ function TagReviewPanel({
     setDiscovered(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
-      applyScanResult(await window.desktop.tags.scanUrlsStream([target], { settleMs: effSettleMs() }, onScanProgress));
+      applyScanResult(await window.desktop.tags.scanUrlsStream([target], { settleMs: effSettleMs(), platforms }, onScanProgress));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1927,7 +1931,7 @@ function TagReviewPanel({
     setDiscovered(null);
     loadSuggestions([]);
     try {
-      applyScanResult(await window.desktop.tags.aiScan(target, { settleMs: effSettleMs() }));
+      applyScanResult(await window.desktop.tags.aiScan(target, { settleMs: effSettleMs(), platforms }));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1970,7 +1974,7 @@ function TagReviewPanel({
     setScanProgress(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
-      applyScanResult(await window.desktop.tags.scanUrlsStream(urls, { settleMs: effSettleMs() }, onScanProgress));
+      applyScanResult(await window.desktop.tags.scanUrlsStream(urls, { settleMs: effSettleMs(), platforms }, onScanProgress));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1988,7 +1992,7 @@ function TagReviewPanel({
     setScanProgress(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
-      applyScanResult(await window.desktop.tags.scanStream(target, { maxPages: 25, maxDepth: 2, settleMs: effSettleMs() }, onScanProgress));
+      applyScanResult(await window.desktop.tags.scanStream(target, { maxPages: 25, maxDepth: 2, settleMs: effSettleMs(), platforms }, onScanProgress));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -2036,7 +2040,7 @@ function TagReviewPanel({
     setDiscovered(null);
     loadSuggestions([]); // clear any prior scan's rows so streamed state is never stale
     try {
-      applyScanResult(await window.desktop.tags.scanUrlsStream(capped, { settleMs: effSettleMs() }, onScanProgress));
+      applyScanResult(await window.desktop.tags.scanUrlsStream(capped, { settleMs: effSettleMs(), platforms }, onScanProgress));
       if (capped.length < urls.length) setWarnings((w) => [`Only the first ${CSV_URL_CAP} of ${urls.length} URLs were scanned (CSV cap).`, ...w]);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -2297,6 +2301,24 @@ function TagReviewPanel({
             {discoverMode === 'ai' && <span style={styles.muted}>experimental · screenshots the page + reads it with OpenAI vision</span>}
             {discoverMode === 'csv' && <span style={styles.muted}>scan a list of landing-page URLs directly (no crawl)</span>}
           </div>
+          {/* Pre-scan platform choice: which ad platforms to generate tags for. */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={styles.muted}>Create tags for:</span>
+            {([
+              ['ga4', 'GA4'],
+              ['meta', 'Meta (Facebook)'],
+              ['both', 'Both GA4 & Meta'],
+            ] as const).map(([c, label]) => (
+              <button
+                key={c}
+                style={platformChoice === c ? styles.toggleOn : styles.toggleOff}
+                onClick={() => setPlatformChoice(c)}
+                disabled={scanning || discovering}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {discoverMode === 'csv' ? (
             <>
               <textarea
@@ -2487,6 +2509,12 @@ function TagReviewPanel({
             measurementId defaults to the <code style={mdStyles.code}>{'{{GA4 Measurement ID}}'}</code> variable — make
             sure it exists in this container, or edit a row to a real G-XXXX id.
           </div>
+          {platforms.includes('meta') && (
+            <div style={{ ...styles.muted, marginTop: 6 }}>
+              Meta tags use the <code style={mdStyles.code}>{'{{Meta Pixel ID}}'}</code> variable — set it in the
+              container (or edit the Pixel ID per row).
+            </div>
+          )}
         </div>
 
         {/* Warnings (scan or paste) */}

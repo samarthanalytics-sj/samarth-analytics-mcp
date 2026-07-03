@@ -136,10 +136,14 @@ export interface SuggestedTag {
   // ── create_gtm_tracking_tag payload ──
   /** 'ga4_event' = a GA4 event tag (gaawe). 'google_tag' = the base Google tag
    *  (the "GA4 Configuration" that loads GA4 on every page) — uses tagId, not
-   *  eventName/eventParameters. */
-  platform: 'ga4_event' | 'google_tag';
+   *  eventName/eventParameters. 'meta_pixel' = a Meta (Facebook) Pixel tag built via
+   *  the official gallery template — here `measurementId` holds the Meta Pixel ID
+   *  (default {{Meta Pixel ID}}), `eventName` is the Meta standard/custom event
+   *  (PageView/Lead/Purchase/…), and `eventParameters` are optional Object Properties. */
+  platform: 'ga4_event' | 'google_tag' | 'meta_pixel';
   tagName: string;
-  /** Defaults to the {{GA4 Measurement ID}} variable; user can override at create. */
+  /** Defaults to the {{GA4 Measurement ID}} variable; user can override at create.
+   *  For platform 'meta_pixel' this is the Meta Pixel ID (default {{Meta Pixel ID}}). */
   measurementId: string;
   /** For platform 'google_tag': the Measurement ID (or its {{variable}}) the base
    *  tag loads. Ignored for 'ga4_event'. */
