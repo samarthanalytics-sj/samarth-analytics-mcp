@@ -4,6 +4,7 @@
 // parameter/parameterValue, etc.). No I/O — fully unit-testable.
 
 import { classifyPixel } from './pixel-signatures';
+import { serverGa4ParamList } from './tag-params';
 
 type Param = Record<string, unknown>;
 const tpl = (key: string, value: string): Param => ({ type: 'template', key, value });
@@ -112,18 +113,34 @@ export interface Ga4EventInput {
    *  sendEcommerceData=true + getEcommerceDataFrom='dataLayer'. Use for funnel event tags. */
   sendEcommerceData?: boolean;
 }
+/** GA4 ecommerce events whose value/currency/items ride the `ecommerce` dataLayer object. For these,
+ *  a GA4 event tag defaults "Send Ecommerce data" ON (forward the object) when the caller passes no
+ *  explicit event parameters — so the tag ships with its ecommerce payload instead of nothing. */
+export const GA4_ECOMMERCE_EVENTS = new Set([
+  'view_item', 'view_item_list', 'select_item', 'add_to_cart', 'remove_from_cart', 'view_cart',
+  'add_to_wishlist', 'begin_checkout', 'add_shipping_info', 'add_payment_info', 'purchase', 'refund',
+  'view_promotion', 'select_promotion',
+]);
+export function isGa4EcommerceEvent(event: string): boolean {
+  return GA4_ECOMMERCE_EVENTS.has((event ?? '').trim().toLowerCase());
+}
+
 export function buildGa4EventTag(o: Ga4EventInput): GtmTagResource {
   // GTM requires an (empty) measurementId tagReference plus measurementIdOverride
   // holding the actual G-XXXX / {{variable}}. Verified against a reference GTM
   // MCP server's templates.
+  // Default Send-Ecommerce ON for an ecommerce event when the caller neither set it nor passed
+  // explicit event parameters — the ecommerce object is how GA4 carries value/currency/items, so
+  // the tag ships complete instead of empty. An explicit sendEcommerceData / eventParameters wins.
+  const sendEcom = o.sendEcommerceData ?? (isGa4EcommerceEvent(o.eventName) && !(o.eventParameters?.length));
   const parameter: Param[] = [
     { type: 'tagReference', key: 'measurementId', value: '' },
     tpl('measurementIdOverride', o.measurementId),
     tpl('eventName', o.eventName),
     // Off by default — present on 99% of real GA4 event tags (corpus of 562).
-    boolean('sendEcommerceData', o.sendEcommerceData === true),
+    boolean('sendEcommerceData', sendEcom === true),
   ];
-  if (o.sendEcommerceData === true) parameter.push(tpl('getEcommerceDataFrom', 'dataLayer'));
+  if (sendEcom === true) parameter.push(tpl('getEcommerceDataFrom', 'dataLayer'));
   if (o.eventParameters?.length) {
     // Event parameters live in `eventSettingsTable` as a list of maps keyed
     // `parameter`/`parameterValue` — NOT an `eventParameters` list of name/value
@@ -444,10 +461,23 @@ export function buildGtmClient(name: string, allowedContainerIds: string[]): Gtm
  *  this also avoids depending on the {{Event Name}} built-in being enabled). Pass a literal
  *  (e.g. "purchase") for a per-event tag. ep/upToIncludeDropdown='all' forwards all event +
  *  user parameters. */
-export function buildGa4ServerTag(name: string, measurementId: string, eventName?: string, firingTriggerId?: string[]): GtmTagResource {
+export function buildGa4ServerTag(
+  name: string,
+  measurementId: string,
+  eventName?: string,
+  firingTriggerId?: string[],
+  opts?: { eventParameters?: Array<{ name: string; value: string }>; userProperties?: Array<{ name: string; value: string }> },
+): GtmTagResource {
   const parameter: Param[] = [];
   if (eventName && eventName.trim() !== '') parameter.push(tpl('eventName', eventName));
   parameter.push(tpl('measurementId', measurementId), tpl('epToIncludeDropdown', 'all'), tpl('upToIncludeDropdown', 'all'));
+  // Optional "Parameters to Add / Edit" (epToAdd) + "User Properties to Add / Edit" (upToAdd) — for
+  // ENRICHMENT (server-derived values not already on the incoming event; the event's own params flow
+  // via epToIncludeDropdown='all'). Row shape via serverGa4ParamList — see its Preview-verify note.
+  const eps = (opts?.eventParameters ?? []).filter((p) => p.name && p.name.trim() !== '');
+  const ups = (opts?.userProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
+  if (eps.length) parameter.push(serverGa4ParamList('epToAdd', eps) as Param);
+  if (ups.length) parameter.push(serverGa4ParamList('upToAdd', ups) as Param);
   return {
     name: sanitizeName(name),
     type: 'sgtmgaaw',
@@ -2095,6 +2125,10 @@ export interface ServerContainerSnapshot {
   taggingServerUrls: string[];
   clients: Array<{ clientId: string; name: string; type: string }>;
   tags: AuditTag[];
+  /** The server workspace's triggers — needed to compare firing conditions (duplicate
+   *  GA4 relays) and to scan filter values (URL-encoded event names). Optional so older
+   *  callers/tests that omit it still type-check; treated as [] when absent. */
+  triggers?: AuditTrigger[];
   transformations: Array<{ transformationId: string; name: string; type: string }>;
 }
 
@@ -2110,6 +2144,74 @@ export const AUDIT_SERVER_RUNTIME_REQUIRED: string[] = [
 /** The Google destination server-tag types — each depends on the GA4 (gaaw) client
  *  claiming the incoming gtag/GA4 request, so any of them implies a gaaw_client is needed. */
 const GOOGLE_SERVER_TAG_TYPES = new Set(['sgtmgaaw', 'sgtmadsct', 'sgtmadscl', 'sgtmadsremarket']);
+
+/** Read a TEMPLATE param's string value off an audit tag ('' when absent/non-string). PURE. */
+function serverTagParam(t: AuditTag, key: string): string {
+  const params = Array.isArray(t.parameter) ? t.parameter : [];
+  const p = params.find((x) => (x as { key?: string }).key === key) as { value?: unknown } | undefined;
+  return p && typeof p.value === 'string' ? p.value : '';
+}
+
+/** A {{variable}} reference resolves at runtime, so its literal shape can't be checked —
+ *  credential/field/encoding checks skip these. PURE. */
+function isVariableRef(v: string): boolean {
+  return /^\{\{.*\}\}$/.test(v.trim());
+}
+
+/** The Stape "Facebook Conversions API" server template stores its destination as
+ *  `pixelId` + `accessToken` TEMPLATE params. The TikTok template ALSO uses those keys
+ *  (see buildTikTokCapiServerTag), so pixelId+accessToken alone is not enough — we also
+ *  require a Facebook-distinctive field (generateFbp / actionSource) that TikTok never emits
+ *  (it uses generateTtp / eventSource). This keeps the Meta-only swapped-field and test-code
+ *  checks from misfiring on a TikTok tag. PURE. */
+function isMetaCapiServerTag(t: AuditTag): boolean {
+  if (!t.type.startsWith('cvt_')) return false;
+  const params = Array.isArray(t.parameter) ? t.parameter : [];
+  const keys = new Set(params.map((p) => (p as { key?: string }).key));
+  if (!(keys.has('pixelId') && keys.has('accessToken'))) return false;
+  return keys.has('generateFbp') || keys.has('actionSource');
+}
+
+/** Canonical, order-independent signature of a trigger's CONDITIONS (operator + sorted
+ *  args across every filter list). Two triggers that fire on the same conditions under
+ *  different ids/names share a signature — the key to detecting duplicate GA4 relays whose
+ *  triggers are equivalent even though their ids differ. PURE. */
+function serverTriggerSignature(tr: AuditTrigger): string {
+  const conds: string[] = [];
+  const add = (arr?: Array<Record<string, unknown>>): void => {
+    for (const f of arr ?? []) {
+      const op = String((f as { type?: unknown }).type ?? '');
+      const args = (((f as { parameter?: Array<{ key?: string; value?: unknown }> }).parameter) ?? [])
+        .map((p) => `${p.key}=${String(p.value ?? '')}`)
+        .sort();
+      conds.push(`${op}(${args.join('&')})`);
+    }
+  };
+  add(tr.filter);
+  add(tr.customEventFilter);
+  add(tr.autoEventFilter);
+  conds.sort();
+  return `${tr.type}|${conds.join(';')}`;
+}
+
+/** Normalize a GTM condition operator to a casing-agnostic key. Container EXPORT JSON emits
+ *  operators UPPER_SNAKE ("STARTS_WITH"); the LIVE API emits camelCase ("startsWith"). Lowercase
+ *  + strip underscores so both map to the same token. PURE. */
+function normOp(op: string): string {
+  return op.toLowerCase().replace(/_/g, '');
+}
+
+/** GTM condition operators that match their value LITERALLY (an event name / URL text), in
+ *  normalized form (see normOp). Regex operators are excluded from the URL-encoding scan because
+ *  '+' is a legal quantifier there — flagging it would be a false positive. */
+const LITERAL_MATCH_OPS = new Set(['equals', 'contains', 'startswith', 'endswith']);
+
+/** URL-encoded text pasted into a literal filter value: a '+' between word chars (encoded
+ *  space, e.g. "Sign+Petition+Click") or a %XX escape (%20, %2F, …). GTM matches DECODED
+ *  dataLayer event names, so such a value can never match → the filter is dead. PURE. */
+function looksUrlEncoded(value: string): boolean {
+  return /\w\+\w/.test(value) || /%[0-9A-Fa-f]{2}/.test(value);
+}
 
 /** Audit a SERVER container: a client must claim requests, server tags need their
  *  destination id + a firing trigger and shouldn't be paused, and the host should be
@@ -2175,6 +2277,123 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     }
   }
 
+  const triggers = s.triggers ?? [];
+  const trigById = new Map(triggers.map((tr) => [tr.triggerId, tr]));
+
+  // (1) DUPLICATE GA4 RELAY — 2+ ACTIVE GA4 server tags forwarding the SAME Measurement ID
+  //     AS THE SAME outgoing event on equivalent triggers means every event is counted once
+  //     PER duplicate in GA4. Group active sgtmgaaw tags by (measurementId + outgoing eventName
+  //     override + firing-condition signature): the signature collapses triggers with identical
+  //     conditions (or the same all-events relay) even when their ids differ, which is exactly how
+  //     the corpus pair double-fired ("GA4 Tag" + "Google Analytics GA4", both on a "Client Name
+  //     equals GA4" trigger with no eventName override). Guards against two false positives: a tag
+  //     with NO firing trigger never fires (so it can't double-count — already flagged above), and
+  //     two relays that stamp DIFFERENT event names are complementary, not duplicates.
+  const firingSignature = (t: AuditTag): string =>
+    (t.firingTriggerId ?? [])
+      .map((id) => {
+        const tr = trigById.get(id);
+        return tr ? serverTriggerSignature(tr) : `#${id}`;
+      })
+      .sort()
+      .join('||');
+  const relayGroups = new Map<string, AuditTag[]>();
+  for (const t of s.tags) {
+    if (t.type !== 'sgtmgaaw' || t.paused) continue;
+    if (!(t.firingTriggerId ?? []).length) continue; // never fires → can't double-count
+    const mid = serverTagParam(t, 'measurementId').trim();
+    if (!mid) continue; // a blank id is already flagged above
+    const eventName = serverTagParam(t, 'eventName').trim(); // '' = forwards each event's own name
+    const key = `${mid}\n${eventName}\n${firingSignature(t)}`;
+    const arr = relayGroups.get(key) ?? [];
+    arr.push(t);
+    relayGroups.set(key, arr);
+  }
+  for (const group of relayGroups.values()) {
+    if (group.length < 2) continue;
+    const mid = serverTagParam(group[0], 'measurementId').trim();
+    const names = group.map((t) => `"${t.name}"`).join(', ');
+    const dup = group[group.length - 1];
+    push({
+      severity: 'critical',
+      category: 'ga4',
+      resource: { kind: 'tag', id: dup.tagId, name: dup.name },
+      message: `${group.length} active GA4 server tags (${names}) all forward Measurement ID ${mid} for the same event on equivalent triggers — every event is counted ${group.length}× in GA4.`,
+      recommendation: 'Keep ONE GA4 relay for this Measurement ID; pause or delete the duplicate(s) so each event is sent once.',
+      autoFixable: false,
+    });
+  }
+
+  // (2) URL-ENCODED TRIGGER VALUES — a literal (non-regex) condition whose value carries
+  //     URL-encoding ("Sign+Petition+Click", %20, %2F) can never equal/contain a DECODED
+  //     dataLayer event name, so the trigger is dead. Variable refs + regex ops are skipped.
+  for (const tr of triggers) {
+    const bad: string[] = [];
+    const scan = (arr?: Array<Record<string, unknown>>): void => {
+      for (const f of arr ?? []) {
+        const op = String((f as { type?: unknown }).type ?? '');
+        if (!LITERAL_MATCH_OPS.has(normOp(op))) continue;
+        for (const p of ((f as { parameter?: Array<{ key?: string; value?: unknown }> }).parameter) ?? []) {
+          const v = typeof p.value === 'string' ? p.value : '';
+          if (!v || isVariableRef(v)) continue;
+          if (looksUrlEncoded(v)) bad.push(v);
+        }
+      }
+    };
+    scan(tr.filter);
+    scan(tr.customEventFilter);
+    scan(tr.autoEventFilter);
+    if (bad.length) {
+      push({
+        severity: 'high',
+        category: 'firing',
+        resource: { kind: 'trigger', id: tr.triggerId, name: tr.name },
+        message: `Trigger "${tr.name}" filters on URL-encoded text (${bad.map((v) => `"${v}"`).join(', ')}) — GTM matches DECODED event names, so this condition never matches and the trigger is dead.`,
+        recommendation: 'Replace the encoded value with the real decoded text (e.g. "Sign+Petition+Click" → "Sign Petition Click").',
+        autoFixable: false,
+      });
+    }
+  }
+
+  for (const t of s.tags) {
+    if (!isMetaCapiServerTag(t)) continue;
+    const resource = { kind: 'tag' as const, id: t.tagId, name: t.name };
+    const pixelId = serverTagParam(t, 'pixelId').trim();
+    const accessToken = serverTagParam(t, 'accessToken').trim();
+
+    // (3) SWAPPED PIXEL/TOKEN FIELDS — a Pixel ID is a ~15-digit number and an access token
+    //     is a long "EAA…" string. If pixelId holds a token-shaped value and/or accessToken
+    //     holds an id-shaped value, they were pasted into the wrong boxes and the tag can't
+    //     authenticate. Values are NEVER echoed (the token is live) — only their shape.
+    const pixelLooksLikeToken = !isVariableRef(pixelId) && (pixelId.startsWith('EAA') || pixelId.length > 100);
+    const tokenLooksLikePixel = !isVariableRef(accessToken) && /^\d{14,16}$/.test(accessToken);
+    if (pixelLooksLikeToken || tokenLooksLikePixel) {
+      push({
+        severity: 'high',
+        category: 'security',
+        resource,
+        message: `Meta CAPI tag "${t.name}" looks like its Pixel ID and Access Token are swapped — the Pixel ID field holds an access-token-shaped value and/or the Access Token field holds a Pixel-ID-shaped value, so the tag can't send events.`,
+        recommendation: 'Swap them back: the Pixel ID is the ~15-digit number and the Access Token is the long "EAA…" string.',
+        autoFixable: false,
+      });
+    }
+
+    // (4) TEST EVENT CODE LEFT SET — a non-empty testId routes events to Events Manager's
+    //     TEST view, not production reporting. One-field fix: clear it.
+    const testId = serverTagParam(t, 'testId').trim();
+    if (testId && !isVariableRef(testId)) {
+      push({
+        severity: 'medium',
+        category: 'ga4',
+        resource,
+        message: `Meta CAPI tag "${t.name}" still has a Test Event Code set — its events land in Events Manager's TEST view, not production reporting.`,
+        recommendation: 'Clear the Test Event Code (testId) before go-live so events count in production.',
+        autoFixable: true,
+        fix: { tool: 'update_gtm_tag', args: { tagId: t.tagId, tag: { parameter: [{ type: 'template', key: 'testId', value: '' }] } } },
+      });
+    }
+  }
+
   const nameCounts = new Map<string, number>();
   for (const t of s.tags) nameCounts.set(t.name, (nameCounts.get(t.name) ?? 0) + 1);
   for (const [name, c] of nameCounts) if (c > 1) push({ severity: 'medium', category: 'naming', message: `Duplicate server-tag name "${name}" (${c} tags) — hard to tell them apart.`, recommendation: 'Rename so each tag is uniquely identifiable.', autoFixable: false });
@@ -2182,7 +2401,7 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
   const summary = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const f of findings) summary[f.severity]++;
   return {
-    counts: { tags: s.tags.length, triggers: 0, variables: 0, clients: s.clients.length, transformations: s.transformations.length, findings: findings.length },
+    counts: { tags: s.tags.length, triggers: triggers.length, variables: 0, clients: s.clients.length, transformations: s.transformations.length, findings: findings.length },
     summary,
     findings,
     boundary: AUDIT_SERVER_BOUNDARY,
@@ -2205,8 +2424,12 @@ export const META_EMQ_EVENT_DATA_KEYS: string[] = [
   'currency',
   'transaction_id',
   'content_ids',
+  'contents',
+  'num_items',
   'email_address',
   'phone_number',
+  'external_id',
+  'user_id',
   'first_name',
   'last_name',
   'country',
@@ -2301,12 +2524,38 @@ export const META_EVENT_OBJECT_PROPERTIES: Record<string, string[]> = {
   VideoPlay: ['video_title', 'video_duration', 'percent_viewed'],
 };
 
+/** Meta Pixel WEB Object Property → dataLayer variable binding, used to AUTO-FILL objectProperties
+ *  from META_EVENT_OBJECT_PROPERTIES when the caller passes none, so a created Meta Pixel tag ships
+ *  with its conversion value. ONLY value/currency: they map 1:1 to the ecommerce dlv variables. Meta's
+ *  content_ids/contents need the GA4 items array RESHAPED (ids / {id,quantity,item_price} objects) — a
+ *  raw {{dlv - ecommerce.items}} would send malformed data — so those are left for the user to wire.
+ *  Pair with the `dlv - ecommerce.*` variables (buildEcommerceDlvVariables). */
+const META_WEB_OBJECT_PROP_BINDING: Record<string, string> = {
+  value: '{{dlv - ecommerce.value}}',
+  currency: '{{dlv - ecommerce.currency}}',
+};
+/** The auto-fill object properties for a standard event: its recommended properties that have a web
+ *  binding, in order. Empty for a custom event (no recommended set). PURE. */
+export function metaWebObjectProps(std: string | null): Array<{ name: string; value: string }> {
+  const keys = std ? (META_EVENT_OBJECT_PROPERTIES[std] ?? []) : [];
+  const out: Array<{ name: string; value: string }> = [];
+  const seen = new Set<string>();
+  for (const k of keys) {
+    if (seen.has(k) || !(k in META_WEB_OBJECT_PROP_BINDING)) continue;
+    seen.add(k);
+    out.push({ name: k, value: META_WEB_OBJECT_PROP_BINDING[k] });
+  }
+  return out;
+}
+
 /** Build a Meta (Facebook) Pixel tag from the imported community template (`type` = its cvt_
  *  code). A Meta STANDARD event sets eventName='standard' + standardEventName=<canonical>;
  *  anything else sets eventName='custom' + customEventName=<the event>. The eventName SELECTOR
  *  must always be set — omitting it (only setting standardEventName) makes the template fall
  *  back to its default (standard/PageView). `objectProperties` (name→value) become the Meta
- *  Object Properties (objectPropertyList). Field shape corpus-validated (528 Meta tags). PURE. */
+ *  Object Properties (objectPropertyList). When objectProperties is UNDEFINED (caller passed none)
+ *  they are AUTO-FILLED from the event's recommended set (metaWebObjectProps); an explicit array
+ *  (even empty) is respected as-is. Field shape corpus-validated (528 Meta tags). PURE. */
 export function buildMetaPixelTag(
   type: string,
   name: string,
@@ -2319,7 +2568,8 @@ export function buildMetaPixelTag(
   const parameter: Param[] = [tpl('pixelId', pixelId), tpl('eventName', std ? 'standard' : 'custom')];
   if (std) parameter.push(tpl('standardEventName', std));
   else parameter.push(tpl('customEventName', event));
-  const props = (objectProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
+  const explicit = (objectProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
+  const props = explicit.length ? explicit : (objectProperties === undefined ? metaWebObjectProps(std) : []);
   if (props.length) {
     parameter.push(boolean('objectPropertiesFromVariable', false));
     parameter.push({
@@ -2343,26 +2593,53 @@ export function buildMetaPixelTag(
  *  incoming event_name. pixelId/accessToken are typically {{variables}}. Field keys
  *  corpus-validated (cvt_5TP8W). The EMQ user-data params come from create_meta_emq_variables. PURE. */
 /** The Meta user_data (advanced-matching / EMQ) rows the CAPI tag sends, as [Facebook key → the
- *  `ed - <emq key>` variable that feeds it]. ONLY em/ph: the Stape template's own addUserData already
- *  extracts fn/ln/ct/zp/country (and the nested GA4 user_data.* shapes) from the incoming event, and
- *  its overrideDataIfNeeded applies explicit rows UNCONDITIONALLY — so an explicit row whose variable
- *  resolves undefined would ERASE what the template extracted (lower EMQ). em/ph rows carry the
- *  top-level email_address/phone_number keys the template misses, and their ed variables fall back to
- *  the nested user_data.* path (see buildMetaEmqVariables), so they never blank a found value. fbp/fbc
- *  are omitted — the template generates _fbp and reads _fbc from the cookie itself. */
+ *  `ed - <emq key>` variable that feeds it]. em/ph/external_id ONLY: the Stape template's own
+ *  addUserData already extracts fn/ln/ct/zp/country (and the nested GA4 user_data.* shapes) from the
+ *  incoming event, and its overrideDataIfNeeded applies explicit rows UNCONDITIONALLY — so an explicit
+ *  row for THOSE whose variable resolves undefined would ERASE what the template extracted (lower EMQ).
+ *  em/ph carry the top-level email_address/phone_number keys the template misses (their ed variables
+ *  fall back to the nested user_data.* path). external_id (a stable user id — Meta's user_id field) is
+ *  NOT auto-extracted by the template, so adding it can only ADD matching, never erase; its ed variable
+ *  falls back to the GA4 user_id (see buildMetaEmqVariables). fbp/fbc are omitted — the template
+ *  generates _fbp and reads _fbc from the cookie itself. */
 const META_USER_DATA_MAP: Array<[fbKey: string, emqKey: string]> = [
   ['em', 'email_address'],
   ['ph', 'phone_number'],
-];
-/** The Meta custom_data (event/object) rows — the ecommerce fields. Corpus `customDataList` maps
- *  content_ids/contents/value/currency; order_id comes from the GA4 transaction_id. */
-const META_CUSTOM_DATA_MAP: Array<[fbKey: string, emqKey: string]> = [
-  ['content_ids', 'content_ids'],
-  ['value', 'value'],
-  ['currency', 'currency'],
-  ['order_id', 'transaction_id'],
+  ['external_id', 'external_id'],
 ];
 const edRefRow = ([fbKey, emqKey]: [string, string]): Param => ({ type: 'map', map: [tpl('name', fbKey), tpl('value', `{{ed - ${emqKey}}}`)] });
+
+/** Meta custom_data fb key → its value source: an `ed - <emq key>` variable, or a LITERAL (content_type
+ *  has no clean event key → "product"). Only keys with a binding are auto-mapped; an event's other
+ *  recommended object properties (content_name, registration_method, …) are left for the user. */
+const META_CUSTOM_DATA_BINDING: Record<string, { ed: string } | { literal: string }> = {
+  content_ids: { ed: 'content_ids' },
+  contents: { ed: 'contents' },
+  content_type: { literal: 'product' },
+  value: { ed: 'value' },
+  currency: { ed: 'currency' },
+  num_items: { ed: 'num_items' },
+  order_id: { ed: 'transaction_id' },
+};
+/** Event-aware custom_data rows: the recommended object properties for `std` (minus event_id, which
+ *  is sent via serverEventDataList) that have a binding, in a stable order. For a custom event
+ *  (std null) fall back to the core ecommerce set. value + currency are always included. */
+function metaCustomDataRows(std: string | null): Param[] {
+  const keys = std ? (META_EVENT_OBJECT_PROPERTIES[std] ?? []) : ['content_ids', 'value', 'currency', 'order_id'];
+  const rows: Param[] = [];
+  const seen = new Set<string>();
+  const add = (k: string): void => {
+    if (seen.has(k)) return;
+    const b = META_CUSTOM_DATA_BINDING[k];
+    if (!b) return;
+    seen.add(k);
+    rows.push({ type: 'map', map: [tpl('name', k), tpl('value', 'ed' in b ? `{{ed - ${b.ed}}}` : b.literal)] });
+  };
+  for (const k of keys) if (k !== 'event_id') add(k);
+  add('value');
+  add('currency');
+  return rows;
+}
 
 export function buildMetaCapiServerTag(
   type: string,
@@ -2394,7 +2671,7 @@ export function buildMetaCapiServerTag(
   if (opts?.mapEmqVariables !== false) {
     parameter.push(
       { type: 'list', key: 'userDataList', list: META_USER_DATA_MAP.map(edRefRow) },
-      { type: 'list', key: 'customDataList', list: META_CUSTOM_DATA_MAP.map(edRefRow) },
+      { type: 'list', key: 'customDataList', list: metaCustomDataRows(std) },
       { type: 'list', key: 'serverEventDataList', list: [edRefRow(['event_id', 'event_id'])] },
     );
   }
@@ -2414,11 +2691,16 @@ export function buildMetaCapiServerTag(
  *  template would have found. PURE. */
 export function buildMetaEmqVariables(): GtmVariableResource[] {
   const NESTED_FALLBACK = new Set(['email_address', 'phone_number']);
+  // external_id (Meta's stable-user-id field) falls back to the GA4 user_id, so it resolves whether the
+  // event carries `external_id` or `user_id`. (A missing referenced variable is a harmless empty string.)
+  const SIBLING_FALLBACK: Record<string, string> = { external_id: 'user_id' };
   const out: GtmVariableResource[] = [];
   for (const k of META_EMQ_EVENT_DATA_KEYS) {
     if (NESTED_FALLBACK.has(k)) {
       out.push(buildVariable({ name: `ed - user_data.${k}`, kind: 'event_data', keyPath: `user_data.${k}` }));
       out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }));
+    } else if (SIBLING_FALLBACK[k]) {
+      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - ${SIBLING_FALLBACK[k]}}}` }));
     } else {
       out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
     }
@@ -2511,6 +2793,53 @@ export function tikTokStandardEvent(event: string): string | null {
  *  typically {{variables}}. Field keys verified against the live template.tpl. NOTE vs Meta CAPI:
  *  eventType IS the inherit/override control (no inheritEventName), and TikTok uses
  *  generateTtp/eventSource (not generateFbp/actionSource). PURE. */
+/** The Event Data (`ed - <key>`) variables a TikTok SERVER tag reads off the incoming event to
+ *  populate user_data + event properties + event_id — the TikTok analog of META_EMQ_EVENT_DATA_KEYS.
+ *  email/phone get a nested `user_data.*` fallback (GA4 enhanced data arrives nested). Created by
+ *  create_tiktok_emq_variables so the auto-mapped rows resolve instead of dangling. */
+export const TIKTOK_EMQ_EVENT_DATA_KEYS: string[] = [
+  'email_address', 'phone_number', 'external_id', 'event_id',
+  'value', 'currency', 'contents', 'content_ids', 'content_type',
+  'num_items', 'transaction_id', 'search_string', 'description',
+];
+export function buildTikTokEmqVariables(): GtmVariableResource[] {
+  const NESTED_FALLBACK = new Set(['email_address', 'phone_number']);
+  const out: GtmVariableResource[] = [];
+  for (const k of TIKTOK_EMQ_EVENT_DATA_KEYS) {
+    if (NESTED_FALLBACK.has(k)) {
+      out.push(buildVariable({ name: `ed - user_data.${k}`, kind: 'event_data', keyPath: `user_data.${k}` }));
+      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }));
+    } else {
+      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
+    }
+  }
+  return out;
+}
+
+/** TikTok advanced-matching rows auto-mapped when the caller passes no userData: the TikTok
+ *  key → the `ed - <emq key>` variable that feeds it. email/phone use the nested-fallback ed
+ *  variables so a GA4-nested payload still resolves. */
+const TIKTOK_USER_DATA_AUTO: Array<[tiktokKey: string, emqKey: string]> = [
+  ['email', 'email_address'],
+  ['phone', 'phone_number'],
+  ['external_id', 'external_id'],
+];
+/** TikTok event-property → `ed - <key>` binding, used to auto-fill the recommended properties for an
+ *  event (TIKTOK_EVENT_PROPERTIES) when the caller passes none. content_type has no clean event key,
+ *  so it is set to the literal "product"; order_id reads the GA4 transaction_id; query reads
+ *  search_string. Properties without a binding here are skipped (no dangling reference). */
+const TIKTOK_EVENT_PROP_BINDING: Record<string, string> = {
+  value: '{{ed - value}}',
+  currency: '{{ed - currency}}',
+  contents: '{{ed - contents}}',
+  content_ids: '{{ed - content_ids}}',
+  content_type: 'product',
+  num_items: '{{ed - num_items}}',
+  order_id: '{{ed - transaction_id}}',
+  query: '{{ed - search_string}}',
+  description: '{{ed - description}}',
+};
+
 export function buildTikTokCapiServerTag(
   type: string,
   name: string,
@@ -2526,6 +2855,10 @@ export function buildTikTokCapiServerTag(
     generateTtp?: boolean;
     eventEnhancement?: boolean;
     requireConsent?: boolean;
+    /** Auto-fill user_data + event properties + event_id from the `ed - <key>` variables when the
+     *  caller passes no explicit rows (default true), so the tag SENDS data instead of shipping empty
+     *  lists. Pair with create_tiktok_emq_variables. false = leave the lists to whatever was passed. */
+    mapEventData?: boolean;
     firingTriggerId?: string[];
   }
 ): GtmTagResource {
@@ -2534,6 +2867,21 @@ export function buildTikTokCapiServerTag(
     const low = n.trim().toLowerCase();
     return keys.includes(low) ? low : n.trim();
   };
+  // Auto-fill from the incoming event when nothing explicit was passed (default on).
+  const autoMap = opts?.mapEventData !== false;
+  let userData = opts?.userData;
+  if (autoMap && !(userData && userData.length)) {
+    userData = TIKTOK_USER_DATA_AUTO.map(([k, emq]) => ({ name: k, value: `{{ed - ${emq}}}` }));
+  }
+  let eventProperties = opts?.eventProperties;
+  if (autoMap && !(eventProperties && eventProperties.length)) {
+    const props = std ? (TIKTOK_EVENT_PROPERTIES[std] ?? []) : [];
+    eventProperties = props
+      .filter((p) => p in TIKTOK_EVENT_PROP_BINDING)
+      .map((p) => ({ name: p, value: TIKTOK_EVENT_PROP_BINDING[p] }));
+  }
+  let eventId = opts?.eventId;
+  if (autoMap && !(eventId && eventId.trim())) eventId = '{{ed - event_id}}';
   const parameter: Param[] = [
     tpl('eventSource', opts?.eventSource && opts.eventSource.trim() ? opts.eventSource.trim() : 'web'),
     tpl('accessToken', accessToken),
@@ -2544,10 +2892,10 @@ export function buildTikTokCapiServerTag(
     boolean('generateTtp', opts?.generateTtp ?? true),
     tpl('adStorageConsent', opts?.requireConsent ? 'required' : 'optional'),
   ];
-  if (opts?.eventId && opts.eventId.trim()) parameter.push(tpl('eventId', opts.eventId));
+  if (eventId && eventId.trim()) parameter.push(tpl('eventId', eventId));
   if (opts?.testEventCode && opts.testEventCode.trim()) parameter.push(tpl('testEventCode', opts.testEventCode));
 
-  const ud = (opts?.userData ?? []).filter((u) => u.name && u.name.trim() !== '');
+  const ud = (userData ?? []).filter((u) => u.name && u.name.trim() !== '');
   if (ud.length) {
     parameter.push({
       type: 'list',
@@ -2556,7 +2904,7 @@ export function buildTikTokCapiServerTag(
     });
   }
 
-  const props = (opts?.eventProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
+  const props = (eventProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
   const known = props.filter((p) => TIKTOK_CUSTOM_DATA_KEYS.includes(p.name.trim().toLowerCase()));
   const extra = props.filter((p) => !TIKTOK_CUSTOM_DATA_KEYS.includes(p.name.trim().toLowerCase()));
   if (known.length) {
@@ -2574,6 +2922,73 @@ export function buildTikTokCapiServerTag(
     });
   }
 
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(opts?.firingTriggerId && opts.firingTriggerId.length ? { firingTriggerId: opts.firingTriggerId } : {}),
+    parameter,
+  };
+}
+
+/* ───────────── LinkedIn CAPI (server) ───────────── */
+
+/** The SIMPLE_TABLE `name`-column options the Stape LinkedIn tag accepts (verified against its
+ *  template.tpl). userIds = the acceptable match IDs (LinkedIn needs ≥1, or first+last name);
+ *  userInfo = additional matching fields; eventData = the conversion event fields. */
+export const LINKEDIN_USER_ID_KEYS: string[] = ['email', 'linkedinFirstPartyId', 'acxiomID', 'moatID', 'ipAddress', 'googleAid'];
+export const LINKEDIN_USER_INFO_KEYS: string[] = ['firstName', 'lastName', 'jobTitle', 'companyName', 'countryCode'];
+export const LINKEDIN_EVENT_DATA_KEYS: string[] = ['conversionHappenedAt', 'currency', 'amount', 'eventId'];
+
+/** Build a Stape "LinkedIn Conversions API" SERVER tag (gallery template stape-io/linkedin-tag;
+ *  `type` = its cvt_ code). A CONVERSION tag (type='conversion') needs the LinkedIn `accessToken` +
+ *  `conversionRuleUrn` (both usually {{variables}}) — LinkedIn conversions are keyed by a pre-defined
+ *  Conversion Rule, so there is no event-name mapping. autoMapEventData/UserIds/UserInfo default ON,
+ *  so the template derives currency/amount + the match IDs (hashed email, li_fat_id, …) + user info
+ *  from the incoming GA4 event with no explicit rows — the LinkedIn analog of Meta's automap. Pass
+ *  explicit userIds/userInfo/eventData rows (name ∈ the LINKEDIN_*_KEYS) to add or override, and
+ *  eventId for dedup with the LinkedIn Insight Tag. Field shape verified against the template.tpl. PURE. */
+export function buildLinkedInCapiServerTag(
+  type: string,
+  name: string,
+  accessToken: string,
+  conversionRuleUrn: string,
+  opts?: {
+    eventId?: string;
+    userIds?: Array<{ name: string; value: string }>;
+    userInfo?: Array<{ name: string; value: string }>;
+    eventData?: Array<{ name: string; value: string }>;
+    autoMap?: boolean;
+    optimistic?: boolean;
+    requireConsent?: boolean;
+    firingTriggerId?: string[];
+  }
+): GtmTagResource {
+  const auto = opts?.autoMap !== false;
+  const parameter: Param[] = [
+    tpl('type', 'conversion'),
+    tpl('accessToken', accessToken),
+    tpl('conversionRuleUrn', conversionRuleUrn),
+    boolean('enablePageViewFromBrowser', false),
+    boolean('useOptimisticScenario', opts?.optimistic ?? false),
+    boolean('autoMapEventData', auto),
+    boolean('autoMapUserIds', auto),
+    boolean('autoMapUserInfo', auto),
+    boolean('autoMapExternalIds', false),
+    tpl('adStorageConsent', opts?.requireConsent ? 'required' : 'optional'),
+  ];
+  const table = (key: string, rows: Array<{ name: string; value: string }>): void => {
+    const clean = rows.filter((r) => r.name && r.name.trim() !== '');
+    if (!clean.length) return;
+    parameter.push({ type: 'list', key, list: clean.map((r) => ({ type: 'map', map: [tpl('name', r.name.trim()), tpl('value', r.value)] })) });
+  };
+  // eventId → an eventData row (dedup with the LinkedIn Insight Tag); merged with any explicit rows.
+  const eventData = [...(opts?.eventData ?? [])];
+  if (opts?.eventId && opts.eventId.trim() !== '' && !eventData.some((r) => r.name === 'eventId')) {
+    eventData.push({ name: 'eventId', value: opts.eventId });
+  }
+  table('eventData', eventData);
+  table('userIds', opts?.userIds ?? []);
+  table('userInfo', opts?.userInfo ?? []);
   return {
     name: sanitizeName(name),
     type,

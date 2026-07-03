@@ -1,5 +1,5 @@
 import type { GoogleDataService } from './data-service';
-import { auditContainer, type AuditReport } from './gtm-builders';
+import { auditContainer, auditServerContainer, type AuditReport } from './gtm-builders';
 import { diffAudits, type AuditDrift } from './gtm-monitor';
 import { AuditHistoryStore } from '../storage/audit-history';
 
@@ -21,6 +21,29 @@ export interface WorkspaceCtx {
 export async function auditWorkspace(data: GoogleDataService, ctx: WorkspaceCtx): Promise<AuditReport> {
   const report = auditContainer(
     await data.getGtmContainerSnapshot(ctx.accountId, ctx.containerId, ctx.workspaceId)
+  );
+  for (const f of report.findings) {
+    if (f.fix) {
+      f.fix.args = {
+        ...f.fix.args,
+        accountId: ctx.accountId,
+        containerId: ctx.containerId,
+        workspaceId: ctx.workspaceId,
+      };
+    }
+  }
+  return report;
+}
+
+/**
+ * Audit a SERVER container workspace and, like {@link auditWorkspace}, write the validated
+ * workspace ids LAST onto every auto-fixable finding's `fix.args` so a fix (e.g. clearing a
+ * Meta CAPI Test Event Code, unpausing a server tag) can be applied directly and can never be
+ * retargeted at another container.
+ */
+export async function auditServerWorkspace(data: GoogleDataService, ctx: WorkspaceCtx): Promise<AuditReport> {
+  const report = auditServerContainer(
+    await data.getServerContainerSnapshot(ctx.accountId, ctx.containerId, ctx.workspaceId)
   );
   for (const f of report.findings) {
     if (f.fix) {

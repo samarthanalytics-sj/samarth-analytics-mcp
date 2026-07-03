@@ -33,11 +33,12 @@ import {
   buildConsentModeDefaultTag,
   GA4_ECOMMERCE_FUNNEL_EVENTS,
   buildMetaPixelTag,
+  metaWebObjectProps,
   buildMetaCapiServerTag,
   metaStandardEvent,
   buildTikTokCapiServerTag,
   tikTokStandardEvent,
-  auditServerContainer,
+  buildLinkedInCapiServerTag,
   detectMetaTags,
   findUnusedTriggers,
   findUnusedVariables,
@@ -47,7 +48,7 @@ import {
 } from '../google/gtm-builders';
 import { buildGa4WriteTools } from './ga4-write-tools';
 import { withQuotaRetry } from '../google/quota-retry';
-import { auditWorkspace, auditChanges } from '../google/audit-runner';
+import { auditWorkspace, auditServerWorkspace, auditChanges } from '../google/audit-runner';
 import { diffSnapshots } from '../google/gtm-monitor';
 import { auditGa4 } from '../google/ga4-audit';
 import { auditGa4DataQuality } from '../google/ga4-data-quality';
@@ -384,15 +385,15 @@ export function buildToolRegistry(
     {
       name: 'audit_server_container',
       description:
-        'Audit a SERVER container workspace (server-side GTM). Checks that a client claims incoming requests, that server tags carry their destination id (GA4 Measurement ID / Ads Conversion ID+Label / remarketing id), have a firing trigger and are not paused, and that a tagging server URL is set. Returns the same findings/severity/boundary shape as audit_gtm_container — but for server resources. Requires accountId, containerId, workspaceId.',
+        'Audit a SERVER container workspace (server-side GTM). Checks that a client claims incoming requests, that server tags carry their destination id (GA4 Measurement ID / Ads Conversion ID+Label / remarketing id), have a firing trigger and are not paused, and that a tagging server URL is set. Also flags duplicate GA4 relays (2+ active GA4 tags forwarding the same Measurement ID on equivalent triggers → double-counting), URL-encoded trigger filter values (e.g. "Sign+Petition+Click") that never match a decoded event name, Meta CAPI tags with a swapped Pixel ID / Access Token, and Meta CAPI tags left with a Test Event Code (testId) set. Returns the same findings/severity/boundary shape as audit_gtm_container — but for server resources. Requires accountId, containerId, workspaceId.',
       inputSchema: {
         type: 'object',
         properties: { accountId: { type: 'string' }, containerId: { type: 'string' }, workspaceId: { type: 'string' } },
         required: ['accountId', 'containerId', 'workspaceId'],
         additionalProperties: false,
       },
-      handler: async (a) =>
-        auditServerContainer(await data.getServerContainerSnapshot(s(a.accountId), s(a.containerId), s(a.workspaceId))),
+      handler: (a) =>
+        auditServerWorkspace(data, { accountId: s(a.accountId), containerId: s(a.containerId), workspaceId: s(a.workspaceId) }),
     },
     {
       name: 'verify_server_endpoint',
@@ -1875,7 +1876,7 @@ export function buildToolRegistry(
     {
       name: 'create_meta_pixel_tag',
       description:
-        'Create a Meta (Facebook) Pixel tag from the official community template with the CORRECT event fields — use this instead of hand-building a cvt_ template tag (which gets the event wrong). Pass the Meta `event`: a STANDARD event (PageView, ViewContent, Search, AddToCart, AddToWishlist, InitiateCheckout, AddPaymentInfo, Purchase, Lead, CompleteRegistration, Contact, CustomizeProduct, Donate, FindLocation, Schedule, StartTrial, SubmitApplication, Subscribe) is set as eventName=standard + standardEventName; ANY other value becomes a CUSTOM event (eventName=custom + customEventName=<event>). Free text like "add to cart" resolves to AddToCart. `objectProperties` is an array of {name, value} → the Meta Object Properties (event params) — pass the ones recommended for the event (e.g. Purchase: value, currency, content_ids, content_type; ViewContent: content_ids, content_type, value, currency) with values referencing the container\'s ecommerce variables (e.g. {{Ecommerce Value}}); use list_gtm_variables to find them. `name` is OPTIONAL — defaults to "Meta - Event - <Event> Tag". Imports Facebook\'s OFFICIAL Meta Pixel template if needed (you do NOT pass the cvt_ type). Optional firingTriggerId (create/identify the trigger first — without it the tag will not fire). Requires accountId, containerId, workspaceId, pixelId, event.',
+        'Create a Meta (Facebook) Pixel tag from the official community template with the CORRECT event fields — use this instead of hand-building a cvt_ template tag (which gets the event wrong). Pass the Meta `event`: a STANDARD event (PageView, ViewContent, Search, AddToCart, AddToWishlist, InitiateCheckout, AddPaymentInfo, Purchase, Lead, CompleteRegistration, Contact, CustomizeProduct, Donate, FindLocation, Schedule, StartTrial, SubmitApplication, Subscribe) is set as eventName=standard + standardEventName; ANY other value becomes a CUSTOM event (eventName=custom + customEventName=<event>). Free text like "add to cart" resolves to AddToCart. `objectProperties` is an array of {name, value} → the Meta Object Properties (event params). If you OMIT it, the tool AUTO-FILLS the event\'s recommended properties (e.g. Purchase/ViewContent → value, currency, content_ids, content_type) from {{dlv - ecommerce.*}} dataLayer variables and auto-creates those variables, so the tag ships with its event params; pass an explicit array to override, or [] for none. `name` is OPTIONAL — defaults to "Meta - Event - <Event> Tag". Imports Facebook\'s OFFICIAL Meta Pixel template if needed (you do NOT pass the cvt_ type). Optional firingTriggerId (create/identify the trigger first — without it the tag will not fire). Requires accountId, containerId, workspaceId, pixelId, event.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1914,8 +1915,17 @@ export function buildToolRegistry(
         const objProps = Array.isArray(a.objectProperties)
           ? a.objectProperties.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name)
           : undefined;
+        // Auto-fill path (no objectProperties passed): the builder fills the event's recommended props
+        // from {{dlv - ecommerce.*}} variables — create those first (idempotent) so they resolve.
+        let createdVariables: string[] = [];
+        if (objProps === undefined && metaWebObjectProps(metaStandardEvent(event)).length) {
+          try {
+            createdVariables = (await data.createEcommerceDlvVariables(s(a.accountId), s(a.containerId), s(a.workspaceId))).created;
+          } catch { /* best-effort: existing containers may already have them */ }
+        }
         const tag = buildMetaPixelTag(tmpl.type, metaPixelTagName(a), s(a.pixelId), event, ftid, objProps);
-        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+        const created = await data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+        return { ...created, createdVariables };
       },
     },
     {
@@ -1976,7 +1986,7 @@ export function buildToolRegistry(
     {
       name: 'create_tiktok_capi_server_tag',
       description:
-        'Create a TikTok Events API SERVER tag from the Stape "TikTok Events API" community template (stape-io / tiktok-tag), tuned for match quality: Event Enhancement ON, generate _ttp ON. This is the SERVER-side Events API tag — DISTINCT from the TikTok WEB pixel (tiktok / gtm-template-pixel) and it uses DIFFERENT field keys (pixelId / accessToken / eventName, NOT the web pixel_code / event). Pass pixelId + accessToken (the TikTok Events Manager access token, usually {{variables}}) and the `event`. A TikTok STANDARD event sets eventName (Purchase, AddToCart, ViewContent, InitiateCheckout, CompleteRegistration, SubmitForm, Search, …); GA4 names are mapped (purchase→Purchase [NOT the legacy CompletePayment], add_to_cart→AddToCart, view_item→ViewContent, begin_checkout→InitiateCheckout, generate_lead→SubmitForm, sign_up→CompleteRegistration, file_download→Download); anything unrecognised becomes a custom event. For match quality, pass userData rows (name ∈ email/phone/external_id/ttclid/ttp/ip/user_agent/first_name/last_name/city/state/country/zip_code — values usually {{variables}}) and eventId for deduplication with the web pixel. ALWAYS pass eventProperties for the event: Purchase → contents, content_type, value, currency, order_id (from transaction_id), description; ViewContent → content_type, contents, value, currency, description; AddToCart/AddToWishlist/AddPaymentInfo → contents, content_type, value, currency; InitiateCheckout → contents, content_type, value, currency, num_items; Search → query, content_type; Subscribe → value, currency, subscription_type; CompleteRegistration → registration_method; SubmitForm → form_name, value (commerce keys land in the TikTok customDataList, the rest in additional properties — the tool routes them automatically). Imports the Stape template if needed (you do NOT pass the cvt_ type). The tag needs a SERVER trigger (create_server_trigger) scoped to the client that claims the events. Optional eventSource (web/app/offline/crm, default web), testEventCode, generateTtp, eventEnhancement, requireConsent, firingTriggerId, name (defaults to "TikTok CAPI - <Event> Tag"). Requires accountId, containerId (SERVER), workspaceId, pixelId, accessToken, event.',
+        'Create a TikTok Events API SERVER tag from the Stape "TikTok Events API" community template (stape-io / tiktok-tag), tuned for match quality: Event Enhancement ON, generate _ttp ON. This is the SERVER-side Events API tag — DISTINCT from the TikTok WEB pixel (tiktok / gtm-template-pixel) and it uses DIFFERENT field keys (pixelId / accessToken / eventName, NOT the web pixel_code / event). Pass pixelId + accessToken (the TikTok Events Manager access token, usually {{variables}}) and the `event`. A TikTok STANDARD event sets eventName (Purchase, AddToCart, ViewContent, InitiateCheckout, CompleteRegistration, SubmitForm, Search, …); GA4 names are mapped (purchase→Purchase [NOT the legacy CompletePayment], add_to_cart→AddToCart, view_item→ViewContent, begin_checkout→InitiateCheckout, generate_lead→SubmitForm, sign_up→CompleteRegistration, file_download→Download); anything unrecognised becomes a custom event. By default (mapEventData) the tag AUTO-FILLS user_data (email/phone/external_id), the event\'s recommended eventProperties, and event_id from ed- Event Data variables — and auto-creates those variables — so ONE call yields a complete, sending tag. Pass explicit userData / eventProperties / eventId to override (name ∈ email/phone/external_id/ttclid/ttp/ip/user_agent/first_name/last_name/city/state/country/zip_code for userData; commerce keys like contents/content_type/value/currency/num_items/order_id/query for eventProperties — commerce keys land in the TikTok customDataList, the rest in additional properties, routed automatically). Pass mapEventData=false to leave the lists to exactly what you pass. Imports the Stape template if needed (you do NOT pass the cvt_ type). The tag needs a SERVER trigger (create_server_trigger) scoped to the client that claims the events. Optional eventSource (web/app/offline/crm, default web), testEventCode, generateTtp, eventEnhancement, requireConsent, firingTriggerId, name (defaults to "TikTok CAPI - <Event> Tag"). Requires accountId, containerId (SERVER), workspaceId, pixelId, accessToken, event.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2003,6 +2013,7 @@ export function buildToolRegistry(
           generateTtp: { type: 'boolean', description: 'Generate _ttp cookie — default true.' },
           eventEnhancement: { type: 'boolean', description: 'Event Enhancement — default true.' },
           requireConsent: { type: 'boolean', description: 'Gate on ad_storage consent — default false (optional).' },
+          mapEventData: { type: 'boolean', description: 'Auto-fill user_data (email/phone/external_id) + the event\'s properties + event_id from ed- Event Data variables when you pass no explicit userData/eventProperties (default true; also auto-creates those variables). false = leave the lists to what you passed.' },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'accessToken', 'event'],
@@ -2022,14 +2033,92 @@ export function buildToolRegistry(
         const name = s(a.name).trim() || `TikTok CAPI - ${tikTokStandardEvent(event) ?? event} Tag`;
         const mapRows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
           Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const userData = mapRows(a.userData);
+        const eventProperties = mapRows(a.eventProperties);
+        const mapEd = bln(a.mapEventData) !== false; // default true; only an explicit false skips
+        // When auto-filling, the builder fills user_data, event properties, AND event_id INDEPENDENTLY
+        // (each gated only on its own emptiness) — so even a partial call (only userData, or both lists
+        // but no eventId) still emits {{ed - …}} references. Create the variables whenever mapEd is on
+        // (idempotent) so none dangle; gating on "both lists empty" under-creates and the tag create fails.
+        let createdVariables: string[] = [];
+        if (mapEd) {
+          try {
+            createdVariables = (await data.createTikTokEmqVariables(s(a.accountId), s(a.containerId), s(a.workspaceId))).created;
+          } catch { /* best-effort: existing containers may already have them */ }
+        }
         const tag = buildTikTokCapiServerTag(tmpl.type, name, s(a.pixelId), s(a.accessToken), event, {
           eventSource: a.eventSource != null ? s(a.eventSource) : undefined,
           eventId: a.eventId != null ? s(a.eventId) : undefined,
-          userData: mapRows(a.userData),
-          eventProperties: mapRows(a.eventProperties),
+          userData,
+          eventProperties,
           testEventCode: a.testEventCode != null ? s(a.testEventCode) : undefined,
           generateTtp: bln(a.generateTtp),
           eventEnhancement: bln(a.eventEnhancement),
+          requireConsent: bln(a.requireConsent),
+          mapEventData: mapEd,
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        const created = await data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+        return { ...created, createdVariables };
+      },
+    },
+    {
+      name: 'create_linkedin_capi_server_tag',
+      description:
+        'Create a LinkedIn Conversions API SERVER tag from the Stape "LinkedIn Conversion API" community template (stape-io / linkedin-tag) in a server container. LinkedIn conversions are keyed by a pre-defined Conversion Rule (NOT an event name), so pass accessToken + conversionRuleUrn (both usually {{variables}}); get them from LinkedIn Campaign Manager → Measurement → Conversions (the token via Manage sources → Google Tag Manager → Generate token; the rule ID on the conversion rule settings). By default autoMapEventData/UserIds/UserInfo are ON, so the tag derives currency/amount + the match IDs (hashed email, LinkedIn first-party li_fat_id, …) + user info from the incoming GA4 event with no explicit rows — the LinkedIn analog of Meta CAPI automap. Pass eventId for dedup with the LinkedIn Insight Tag. Optionally add/override rows: userIds (name ∈ email/linkedinFirstPartyId/acxiomID/moatID/ipAddress/googleAid), userInfo (name ∈ firstName/lastName/jobTitle/companyName/countryCode), eventData (name ∈ conversionHappenedAt/currency/amount/eventId) — values usually {{variables}}. Imports the Stape template if needed (you do NOT pass the cvt_ type). The tag needs a SERVER trigger (create_server_trigger). Optional autoMap, optimistic, requireConsent, firingTriggerId, name (default "LinkedIn CAPI Tag"). Requires accountId, containerId (SERVER), workspaceId, accessToken, conversionRuleUrn.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional — defaults to "LinkedIn CAPI Tag".' },
+          accessToken: { type: 'string', description: 'LinkedIn Conversions API access token (usually a {{variable}}).' },
+          conversionRuleUrn: { type: 'string', description: 'LinkedIn Conversion Rule ID / URN from Campaign Manager (usually a {{variable}}).' },
+          eventId: { type: 'string', description: 'Event ID for dedup with the LinkedIn Insight Tag (usually a {{variable}}).' },
+          userIds: {
+            type: 'array',
+            description: 'Match-ID rows { name, value }; name ∈ email/linkedinFirstPartyId/acxiomID/moatID/ipAddress/googleAid.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          userInfo: {
+            type: 'array',
+            description: 'User-info rows { name, value }; name ∈ firstName/lastName/jobTitle/companyName/countryCode.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          eventData: {
+            type: 'array',
+            description: 'Event-data rows { name, value }; name ∈ conversionHappenedAt/currency/amount/eventId.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          autoMap: { type: 'boolean', description: 'Auto-derive event data + match IDs + user info from the incoming event — default true. false = only the rows you pass.' },
+          optimistic: { type: 'boolean', description: 'Optimistic scenario (gtmOnSuccess without waiting for LinkedIn) — default false.' },
+          requireConsent: { type: 'boolean', description: 'Gate on ad_storage consent — default false (optional).' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'accessToken', 'conversionRuleUrn'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create LinkedIn CAPI server tag "${s(a.name).trim() || 'LinkedIn CAPI Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'LinkedIn CAPI Tag', 'tag'),
+      handler: async (a) => {
+        if (!s(a.accessToken).trim()) throw new Error('accessToken is required (the LinkedIn Conversions API access token, usually a {{variable}}).');
+        if (!s(a.conversionRuleUrn).trim()) throw new Error('conversionRuleUrn is required (the LinkedIn Conversion Rule ID/URN from Campaign Manager, usually a {{variable}}).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'linkedin-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the Stape LinkedIn template's tag type (got "${tmpl.type}"). Import stape-io/linkedin-tag and check list_gtm_templates.`);
+        }
+        const name = s(a.name).trim() || 'LinkedIn CAPI Tag';
+        const mapRows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildLinkedInCapiServerTag(tmpl.type, name, s(a.accessToken), s(a.conversionRuleUrn), {
+          eventId: a.eventId != null ? s(a.eventId) : undefined,
+          userIds: mapRows(a.userIds),
+          userInfo: mapRows(a.userInfo),
+          eventData: mapRows(a.eventData),
+          autoMap: bln(a.autoMap),
+          optimistic: bln(a.optimistic),
           requireConsent: bln(a.requireConsent),
           firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
         });
@@ -2244,6 +2333,40 @@ export function buildToolRegistry(
           s(a.tagId),
           (Array.isArray(a.parameters) ? a.parameters : []) as Array<{ name: string; value: string }>
         ),
+    },
+    {
+      name: 'add_ga4_server_parameters',
+      description:
+        'Add event parameters ("Parameters to Add / Edit" → epToAdd) and/or user properties ("Properties to Add / Edit" → upToAdd) to a GA4 SERVER tag (type "sgtmgaaw") in a server container — the server-side counterpart of add_ga4_event_parameters. Read-modify-write: preserves measurementId / eventName / "Include: All" / excludes / triggers, and a repeated name updates its value instead of duplicating. NOTE: a straight GA4 server relay already forwards every parameter of the incoming event (Default Parameters to Include: All) — including client_id, user_id, and the ecommerce fields — so use this only for ENRICHMENT: server-derived values NOT already on the incoming event (e.g. a country from a request-header {{rh - ...}} variable, a hashed id, a corrected page_location) or to override a value. Values may be {{variables}}. Requires accountId, containerId (SERVER), workspaceId, tagId, and at least one of eventParameters / userProperties.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          tagId: { type: 'string', description: 'The GA4 SERVER (sgtmgaaw) tag ID.' },
+          eventParameters: {
+            type: 'array',
+            description: 'Event parameters to add/edit (epToAdd): {name, value} rows.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          userProperties: {
+            type: 'array',
+            description: 'User properties to add/edit (upToAdd): {name, value} rows.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tagId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) =>
+        `Add ${(Array.isArray(a.eventParameters) ? a.eventParameters.length : 0)} event parameter(s) + ${(Array.isArray(a.userProperties) ? a.userProperties.length : 0)} user propert(y/ies) to GA4 server tag ${s(a.tagId)}`,
+      handler: (a) =>
+        data.addGa4ServerParameters(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId), {
+          eventParameters: (Array.isArray(a.eventParameters) ? a.eventParameters.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })) : []),
+          userProperties: (Array.isArray(a.userProperties) ? a.userProperties.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })) : []),
+        }),
     },
     {
       name: 'set_ga4_measurement_id',

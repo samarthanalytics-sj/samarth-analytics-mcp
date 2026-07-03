@@ -28,9 +28,13 @@ import {
   buildMetaCapiServerTag,
   metaStandardEvent,
   buildTikTokCapiServerTag,
+  buildTikTokEmqVariables,
+  buildLinkedInCapiServerTag,
   tikTokStandardEvent,
   TIKTOK_EVENT_PROPERTIES,
   META_EVENT_OBJECT_PROPERTIES,
+  metaWebObjectProps,
+  isGa4EcommerceEvent,
   normalizeCustomEventName,
   normalizeCustomEventTrigger,
   setCustomEventName,
@@ -1153,6 +1157,24 @@ test('buildGa4ServerTag builds an sgtmgaaw tag relaying to the Measurement ID', 
   // a per-event tag uses a literal event name
   const purchase = buildGa4ServerTag('GA4 - Purchase', 'G-ABC123', 'purchase');
   assert.equal(((purchase.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'eventName')?.value, 'purchase');
+  // no epToAdd/upToAdd unless explicitly requested (the plain relay forwards everything via "All")
+  assert.equal(p.find((x) => x.key === 'epToAdd'), undefined, 'no add-parameters list on a plain relay');
+});
+
+test('buildGa4ServerTag: optional eventParameters/userProperties → epToAdd/upToAdd (name/value rows)', () => {
+  const t = buildGa4ServerTag('GA4 - Enriched', 'G-1', 'purchase', ['9'], {
+    eventParameters: [{ name: 'page_type', value: 'checkout' }, { name: '', value: 'dropped' }],
+    userProperties: [{ name: 'membership', value: '{{User Tier}}' }],
+  });
+  const rowsOf = (key: string): Array<[string, string]> => {
+    const p = ((t.parameter as Array<{ key?: string; list?: Array<{ map: Array<{ key?: string; value?: string }> }> }>) ?? []).find((x) => x.key === key);
+    return (p?.list ?? []).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
+  };
+  assert.deepEqual(rowsOf('epToAdd'), [['page_type', 'checkout']], 'empty-name row dropped');
+  assert.deepEqual(rowsOf('upToAdd'), [['membership', '{{User Tier}}']]);
+  // the relay still keeps its base config
+  const keys = (t.parameter as Array<{ key?: string }>).map((x) => x.key);
+  assert.ok(keys.includes('measurementId') && keys.includes('epToIncludeDropdown'), 'base relay config preserved');
 });
 
 test('buildServerAllEventsTrigger → CUSTOM_EVENT firing on every event ({{_event}} matches .*)', () => {
@@ -1344,6 +1366,240 @@ test('auditServerContainer is quiet on a healthy server container', () => {
   assert.equal(rep.hasGa4Config, true, 'GA4 client present');
 });
 
+// Helpers for the corpus-motivated server checks (Vocal Minority GTM-57RM3QCT reference).
+const clientNameEqualsGa4 = [
+  { type: 'EQUALS', parameter: [
+    { type: 'template', key: 'arg0', value: '{{Client Name}}' },
+    { type: 'template', key: 'arg1', value: 'GA4' },
+  ] },
+];
+const gaawTag = (tagId: string, name: string, measurementId: string, firingTriggerId: string[], paused = false) => ({
+  tagId, name, type: 'sgtmgaaw', firingTriggerId, blockingTriggerId: [] as string[], paused,
+  parameter: [{ type: 'template', key: 'measurementId', value: measurementId }], consentSettings: null,
+});
+// A Stape Facebook CAPI tag: pixelId + accessToken + a Facebook-distinctive key (generateFbp)
+// so isMetaCapiServerTag recognizes it and does not confuse it with a TikTok CAPI tag.
+const metaCapiTag = (tagId: string, name: string, params: Array<{ key: string; value: string }>) => ({
+  tagId, name, type: 'cvt_5TP8W', firingTriggerId: ['1'], blockingTriggerId: [] as string[], paused: false,
+  parameter: [
+    { type: 'boolean', key: 'generateFbp', value: 'true' },
+    ...params.map((p) => ({ type: 'template', key: p.key, value: p.value })),
+  ],
+  consentSettings: null,
+});
+
+test('auditServerContainer (1): flags DUPLICATE GA4 relays — same Measurement ID, equivalent triggers (different ids) → critical double-count', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    // Two ACTIVE GA4 relays on the SAME id firing on triggers #6 and #10 whose conditions are
+    // identical ("Client Name equals GA4") though the ids differ — exactly the reference defect.
+    triggers: [
+      { triggerId: '6', name: 'GA Client Trigger', type: 'ALWAYS', filter: clientNameEqualsGa4 },
+      { triggerId: '10', name: 'GA Client', type: 'ALWAYS', filter: clientNameEqualsGa4 },
+    ],
+    tags: [
+      gaawTag('7', 'GA4 Tag', 'G-VOCAL', ['6']),
+      gaawTag('15', 'Google Analytics GA4', 'G-VOCAL', ['10']),
+    ],
+  });
+  const dup = rep.findings.find((f) => /counted 2× in GA4/i.test(f.message));
+  assert.ok(dup, 'emits a duplicate-relay finding');
+  assert.equal(dup!.severity, 'critical');
+  assert.ok(/"GA4 Tag"/.test(dup!.message) && /"Google Analytics GA4"/.test(dup!.message), 'names both duplicate tags');
+  assert.ok(/G-VOCAL/.test(dup!.message), 'names the shared Measurement ID');
+});
+
+test('auditServerContainer (1): does NOT flag GA4 relays with different ids/triggers, paused, TRIGGERLESS, or different eventName overrides', () => {
+  const withEvent = (t: ReturnType<typeof gaawTag>, ev: string) => ({
+    ...t, parameter: [...t.parameter, { type: 'template', key: 'eventName', value: ev }],
+  });
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [
+      { triggerId: '6', name: 'GA Client Trigger', type: 'ALWAYS', filter: clientNameEqualsGa4 },
+      { triggerId: '20', name: 'Purchase only', type: 'ALWAYS', filter: [
+        { type: 'EQUALS', parameter: [
+          { type: 'template', key: 'arg0', value: '{{Event Name}}' },
+          { type: 'template', key: 'arg1', value: 'purchase' },
+        ] },
+      ] },
+    ],
+    tags: [
+      gaawTag('7', 'GA4 Prod', 'G-AAA', ['6']),        // distinct id
+      gaawTag('8', 'GA4 Staging', 'G-BBB', ['6']),      // distinct id, same trigger — not a dup
+      gaawTag('9', 'GA4 Narrow', 'G-AAA', ['20']),      // same id but a genuinely narrower trigger
+      { ...gaawTag('12', 'GA4 Paused Dup', 'G-AAA', ['6']), paused: true }, // paused → excluded
+      // Two ACTIVE same-id relays that NEVER fire (no trigger) — cannot double-count.
+      gaawTag('30', 'GA4 Triggerless A', 'G-CCC', []),
+      gaawTag('31', 'GA4 Triggerless B', 'G-CCC', []),
+      // Two same-id relays on the SAME trigger but stamping DIFFERENT event names — complementary.
+      withEvent(gaawTag('40', 'GA4 Purchase Relay', 'G-DDD', ['6']), 'purchase'),
+      withEvent(gaawTag('41', 'GA4 AddToCart Relay', 'G-DDD', ['6']), 'add_to_cart'),
+    ],
+  });
+  assert.ok(!rep.findings.some((f) => /counted .× in GA4/i.test(f.message)), 'no duplicate-relay false positive');
+});
+
+test('auditServerContainer (1): DOES flag two same-id relays on the same trigger that stamp the SAME event name', () => {
+  const withEvent = (t: ReturnType<typeof gaawTag>, ev: string) => ({
+    ...t, parameter: [...t.parameter, { type: 'template', key: 'eventName', value: ev }],
+  });
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [{ triggerId: '6', name: 'GA Client Trigger', type: 'ALWAYS', filter: clientNameEqualsGa4 }],
+    tags: [
+      withEvent(gaawTag('50', 'GA4 Purchase A', 'G-EEE', ['6']), 'purchase'),
+      withEvent(gaawTag('51', 'GA4 Purchase B', 'G-EEE', ['6']), 'purchase'),
+    ],
+  });
+  assert.ok(rep.findings.some((f) => f.severity === 'critical' && /counted 2× in GA4/i.test(f.message)), 'same event on same trigger IS a duplicate');
+});
+
+test('auditServerContainer (2): flags URL-ENCODED trigger filter values on BOTH camelCase (live API) and UPPER_SNAKE (export) operators, not decoded or regex values', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [
+      // camelCase operator — the shape the LIVE tagmanager API returns (the runtime audit path).
+      { triggerId: '93', name: 'Sign Petition Click Trigger', type: 'ALWAYS', filter: [
+        { type: 'contains', parameter: [
+          { type: 'template', key: 'arg0', value: '{{Event Name}}' },
+          { type: 'template', key: 'arg1', value: 'Sign+Petition+Click' },
+        ] },
+      ] },
+      // UPPER_SNAKE operator — the shape a container EXPORT uses; must also be caught.
+      { triggerId: '129', name: 'Form Submit Trigger', type: 'ALWAYS', filter: [
+        { type: 'EQUALS', parameter: [
+          { type: 'template', key: 'arg0', value: '{{Page URL Variable}}' },
+          { type: 'template', key: 'arg1', value: '/petition%2Frefugee-rights/' },
+        ] },
+      ] },
+      // Decoded event name — must NOT be flagged.
+      { triggerId: '153', name: 'Decoded Form Submit', type: 'ALWAYS', filter: [
+        { type: 'contains', parameter: [
+          { type: 'template', key: 'arg0', value: '{{Event Name}}' },
+          { type: 'template', key: 'arg1', value: 'Sign Petition Form Submission' },
+        ] },
+      ] },
+      // A regex quantifier '+' is legal — matchRegex/MATCH_REGEX must NOT be flagged (both casings).
+      { triggerId: '114', name: 'Regex URL', type: 'ALWAYS', filter: [
+        { type: 'matchRegex', parameter: [
+          { type: 'template', key: 'arg0', value: '{{Page URL Variable}}' },
+          { type: 'template', key: 'arg1', value: '/expose-plastic/|/protect-turtles/a+b' },
+        ] },
+      ] },
+    ],
+    tags: [gaawTag('7', 'GA4 Tag', 'G-1', ['6'])],
+  });
+  const encoded = rep.findings.filter((f) => f.category === 'firing' && /URL-encoded/i.test(f.message));
+  const names = encoded.map((f) => f.resource?.name).sort();
+  assert.deepEqual(names, ['Form Submit Trigger', 'Sign Petition Click Trigger'], 'flags the encoded triggers regardless of operator casing');
+  assert.ok(encoded.every((f) => f.severity === 'high'));
+  assert.ok(encoded.some((f) => /"Sign\+Petition\+Click"/.test(f.message)), 'echoes the offending value');
+  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Decoded Form Submit'), 'decoded value not flagged');
+  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Regex URL'), 'regex quantifier not flagged');
+});
+
+test('auditServerContainer (3): flags SWAPPED Pixel ID / Access Token (never echoing the token), not correct or variable-backed tags', () => {
+  const fakeToken = 'EAA' + 'x'.repeat(200); // token-shaped, NOT a real token
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [],
+    tags: [
+      // Swapped: pixelId holds the token, accessToken holds the 15-digit id (Church-in-Need defect).
+      metaCapiTag('145', 'Church Need - Sign Petition Click CAPI Tag', [
+        { key: 'pixelId', value: fakeToken },
+        { key: 'accessToken', value: '123456789012345' },
+      ]),
+      // Correct wiring — must NOT be flagged.
+      metaCapiTag('141', 'Church Need - Page View CAPI Tag', [
+        { key: 'pixelId', value: '123456789012345' },
+        { key: 'accessToken', value: fakeToken },
+      ]),
+      // Variable-backed — unknowable shape, must NOT be flagged.
+      metaCapiTag('166', 'Parkinsons - Page View CAPI Tag', [
+        { key: 'pixelId', value: '{{Parkinsons NSW Pixel ID}}' },
+        { key: 'accessToken', value: '{{Parkinsons NSW API Token}}' },
+      ]),
+    ],
+  });
+  const swapped = rep.findings.filter((f) => /swapped/i.test(f.message));
+  assert.equal(swapped.length, 1, 'exactly one swapped-field finding');
+  assert.equal(swapped[0].resource?.id, '145');
+  assert.equal(swapped[0].severity, 'high');
+  assert.equal(swapped[0].category, 'security');
+  assert.ok(!swapped[0].message.includes(fakeToken), 'never echoes the token value');
+  assert.ok(!swapped[0].recommendation.includes(fakeToken), 'never echoes the token in the recommendation');
+});
+
+test('auditServerContainer (4): flags a Test Event Code left set (testId) as medium + auto-fixable clearing it', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [],
+    tags: [
+      metaCapiTag('107', 'UNHCR - Page View CAPI Tag', [
+        { key: 'pixelId', value: '123456789012345' },
+        { key: 'accessToken', value: 'EAA' + 'x'.repeat(200) },
+        { key: 'testId', value: 'TEST30857' },
+      ]),
+      // Empty testId → production → must NOT be flagged.
+      metaCapiTag('141', 'UNHCR - Clean CAPI Tag', [
+        { key: 'pixelId', value: '123456789012345' },
+        { key: 'accessToken', value: 'EAA' + 'x'.repeat(200) },
+        { key: 'testId', value: '' },
+      ]),
+    ],
+  });
+  const testFindings = rep.findings.filter((f) => /Test Event Code/i.test(f.message));
+  assert.equal(testFindings.length, 1, 'only the tag with a non-empty testId is flagged');
+  const f = testFindings[0];
+  assert.equal(f.severity, 'medium');
+  assert.equal(f.resource?.id, '107');
+  assert.equal(f.autoFixable, true);
+  assert.equal(f.fix?.tool, 'update_gtm_tag');
+  const clears = (f.fix?.args.tag as { parameter: Array<{ key: string; value: string }> }).parameter
+    .some((p) => p.key === 'testId' && p.value === '');
+  assert.ok(clears, 'the fix clears testId');
+});
+
+test('auditServerContainer (3/4): a TikTok CAPI tag (cvt_ with pixelId+accessToken but NO generateFbp/actionSource) is NOT audited under Meta rules', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [],
+    tags: [
+      // A TikTok server tag shares the pixelId/accessToken keys but uses TikTok-distinctive
+      // fields (generateTtp/eventSource) and 'testEventCode' — not generateFbp/actionSource/testId.
+      // A digit-shaped accessToken here must NOT be read as a swapped Meta Pixel ID.
+      {
+        tagId: '139', name: 'TikTok - CareFlight CAPI Tag', type: 'cvt_TT01',
+        firingTriggerId: ['1'], blockingTriggerId: [], paused: false, consentSettings: null,
+        parameter: [
+          { type: 'boolean', key: 'generateTtp', value: 'true' },
+          { type: 'template', key: 'eventSource', value: 'web' },
+          { type: 'template', key: 'pixelId', value: '123456789012345' },
+          { type: 'template', key: 'accessToken', value: '123456789012345' },
+          { type: 'template', key: 'testEventCode', value: 'TEST123' },
+        ],
+      },
+    ],
+  });
+  assert.ok(!rep.findings.some((f) => /swapped/i.test(f.message)), 'TikTok tag not flagged for swapped Meta fields');
+  assert.ok(!rep.findings.some((f) => /Test Event Code/i.test(f.message)), 'TikTok testEventCode not read as a Meta testId');
+});
+
 test('buildMetaEmqVariables → ed variables with keyPath === key (corpus shape)', () => {
   const vars = buildMetaEmqVariables();
   const byName = new Map(vars.map((v) => [v.name, v]));
@@ -1370,24 +1626,164 @@ test('buildMetaEmqVariables: email/phone get a NESTED user_data.* fallback (GA4 
   }
 });
 
-test('buildMetaCapiServerTag maps EMQ user_data (em/ph ONLY) + ecommerce custom_data + event_id (Stape list shapes)', () => {
+test('buildMetaCapiServerTag maps EMQ user_data (em/ph ONLY) + EVENT-AWARE ecommerce custom_data + event_id', () => {
   const t = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - AddToCart Tag', 'P', 'T', 'AddToCart');
-  const listOf = (key: string): Array<{ map: Array<{ key?: string; value?: string }> }> =>
-    ((t.parameter ?? []).find((p) => (p as { key?: string }).key === key) as { list?: Array<{ map: Array<{ key?: string; value?: string }> }> })?.list ?? [];
-  const rows = (key: string): Array<[string, string]> =>
-    listOf(key).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
-  // user_data: em/ph ONLY — the template extracts fn/ln/ct/zp/country itself; explicit rows for those
-  // would ERASE template-extracted values when the ed variable resolves undefined (lower EMQ).
-  assert.deepEqual(rows('userDataList'), [['em', '{{ed - email_address}}'], ['ph', '{{ed - phone_number}}']]);
-  assert.deepEqual(rows('customDataList'), [['content_ids', '{{ed - content_ids}}'], ['value', '{{ed - value}}'], ['currency', '{{ed - currency}}'], ['order_id', '{{ed - transaction_id}}']]);
+  const listOf = (tag: typeof t, key: string): Array<{ map: Array<{ key?: string; value?: string }> }> =>
+    ((tag.parameter ?? []).find((p) => (p as { key?: string }).key === key) as { list?: Array<{ map: Array<{ key?: string; value?: string }> }> })?.list ?? [];
+  const rowsOf = (tag: typeof t, key: string): Array<[string, string]> =>
+    listOf(tag, key).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
+  const rows = (key: string): Array<[string, string]> => rowsOf(t, key);
+  // user_data: em/ph/external_id — the template extracts fn/ln/ct/zp/country itself (explicit rows for
+  // those would ERASE template-extracted values when the ed variable resolves undefined); external_id is
+  // NOT template-extracted, so adding it only ADDS matching (Meta's user-id field).
+  assert.deepEqual(rows('userDataList'), [['em', '{{ed - email_address}}'], ['ph', '{{ed - phone_number}}'], ['external_id', '{{ed - external_id}}']]);
+  // ed - external_id falls back to the GA4 user_id so it resolves whether the event has external_id or user_id.
+  const emq = buildMetaEmqVariables();
+  const extVar = emq.find((v) => v.name === 'ed - external_id');
+  const extDefault = (extVar?.parameter ?? []).find((p) => (p as { key?: string }).key === 'defaultValue') as { value?: string } | undefined;
+  assert.equal(extDefault?.value, '{{ed - user_id}}', 'external_id ed variable falls back to user_id');
+  assert.ok(emq.some((v) => v.name === 'ed - user_id'), 'ed - user_id is created');
+  // custom_data is now the AddToCart recommended set (content_ids/contents/content_type/value/currency/num_items),
+  // NOT a fixed list — content_type is the literal "product"; no order_id (AddToCart has none).
+  assert.deepEqual(rows('customDataList'), [
+    ['content_ids', '{{ed - content_ids}}'],
+    ['contents', '{{ed - contents}}'],
+    ['content_type', 'product'],
+    ['value', '{{ed - value}}'],
+    ['currency', '{{ed - currency}}'],
+    ['num_items', '{{ed - num_items}}'],
+  ]);
   assert.deepEqual(rows('serverEventDataList'), [['event_id', '{{ed - event_id}}']]);
-  // Every referenced ed key is provided by buildMetaEmqVariables (the auto-provision covers them all).
+  // Purchase pulls in order_id (from transaction_id); a custom event falls back to the core set.
+  const purchase = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - Purchase Tag', 'P', 'T', 'Purchase');
+  assert.ok(rowsOf(purchase, 'customDataList').some(([n, v]) => n === 'order_id' && v === '{{ed - transaction_id}}'), 'Purchase maps order_id');
+  const custom = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - Custom Tag', 'P', 'T', 'my_custom_event');
+  assert.deepEqual(rowsOf(custom, 'customDataList').map(([n]) => n), ['content_ids', 'value', 'currency', 'order_id'], 'custom event → core ecommerce set');
+  // Every referenced {{ed - …}} variable is provided by buildMetaEmqVariables (literals like "product" are skipped).
   const provided = new Set(buildMetaEmqVariables().map((v) => v.name));
-  const referenced = [...rows('userDataList'), ...rows('customDataList'), ...rows('serverEventDataList')].map(([, v]) => v.replace(/[{}]/g, ''));
+  const referenced = [...rows('userDataList'), ...rows('customDataList'), ...rows('serverEventDataList')]
+    .map(([, v]) => v).filter((v) => v.startsWith('{{')).map((v) => v.replace(/[{}]/g, ''));
   for (const ref of referenced) assert.ok(provided.has(ref), `${ref} is created by buildMetaEmqVariables`);
   // Opt-out: mapEmqVariables false → no lists at all.
   const off = buildMetaCapiServerTag('cvt_5TP8W', 'x', 'P', 'T', 'AddToCart', { mapEmqVariables: false });
   assert.ok(!(off.parameter ?? []).some((p) => ['userDataList', 'customDataList', 'serverEventDataList'].includes(String((p as { key?: string }).key))));
+});
+
+// Shared row extractor for the auto-fill tests.
+const listRows = (tag: { parameter?: unknown }, key: string): Array<[string, string]> => {
+  const p = ((tag.parameter as Array<{ key?: string; list?: Array<{ map: Array<{ key?: string; value?: string }> }> }>) ?? [])
+    .find((x) => x.key === key);
+  return (p?.list ?? []).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
+};
+const paramVal = (tag: { parameter?: unknown }, key: string): string | undefined =>
+  ((tag.parameter as Array<{ key?: string; value?: string }>) ?? []).find((x) => x.key === key)?.value;
+
+test('buildTikTokCapiServerTag: mapEventData (default) auto-fills user_data + event props + event_id from ed- variables', () => {
+  const t = buildTikTokCapiServerTag('cvt_TT01', 'TikTok CAPI - Purchase Tag', '{{TT Pixel}}', '{{TT Token}}', 'purchase');
+  assert.deepEqual(listRows(t, 'userDataList'), [
+    ['email', '{{ed - email_address}}'],
+    ['phone', '{{ed - phone_number}}'],
+    ['external_id', '{{ed - external_id}}'],
+  ]);
+  const cd = new Map(listRows(t, 'customDataList'));
+  assert.equal(cd.get('value'), '{{ed - value}}');
+  assert.equal(cd.get('currency'), '{{ed - currency}}');
+  assert.equal(cd.get('order_id'), '{{ed - transaction_id}}'); // order_id reads the GA4 transaction_id
+  assert.equal(cd.get('content_type'), 'product'); // literal, not a variable
+  assert.equal(paramVal(t, 'eventId'), '{{ed - event_id}}');
+});
+
+test('buildTikTokCapiServerTag: mapEventData=false leaves the lists empty; explicit rows override the auto-fill', () => {
+  const off = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase', { mapEventData: false });
+  assert.ok(!((off.parameter as Array<{ key?: string }>) ?? []).some((p) => ['userDataList', 'customDataList', 'additionalEventPropertiesList'].includes(String(p.key))));
+  assert.equal(paramVal(off, 'eventId'), undefined);
+  const ex = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase', {
+    userData: [{ name: 'email', value: '{{My Email}}' }],
+    eventProperties: [{ name: 'value', value: '{{My Value}}' }],
+  });
+  assert.deepEqual(listRows(ex, 'userDataList'), [['email', '{{My Email}}']]);
+  assert.deepEqual(listRows(ex, 'customDataList'), [['value', '{{My Value}}']]);
+});
+
+test('buildTikTokEmqVariables: creates ed- variables for every auto-filled reference; email/phone get a nested fallback', () => {
+  const names = new Set(buildTikTokEmqVariables().map((v) => v.name));
+  for (const k of ['email_address', 'phone_number', 'external_id', 'event_id', 'value', 'currency', 'contents', 'content_ids', 'content_type', 'num_items', 'transaction_id', 'search_string', 'description']) {
+    assert.ok(names.has(`ed - ${k}`), `has ed - ${k}`);
+  }
+  assert.ok(names.has('ed - user_data.email_address'), 'nested email fallback exists');
+  // Every {{ed - …}} the auto-filled TikTok tag references is actually created.
+  const t = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase');
+  const refs = [
+    ...listRows(t, 'userDataList').map(([, v]) => v),
+    ...listRows(t, 'customDataList').map(([, v]) => v),
+    paramVal(t, 'eventId') ?? '',
+  ].filter((v) => v.startsWith('{{ed'));
+  for (const r of refs) assert.ok(names.has(r.replace(/[{}]/g, '')), `${r} is created by buildTikTokEmqVariables`);
+});
+
+test('buildMetaPixelTag: auto-fills Object Properties from dlv variables when omitted; explicit [] → none; explicit array → used', () => {
+  const auto = buildMetaPixelTag('cvt_5RM3Q', 'Meta - Purchase', '123', 'Purchase', ['9']);
+  const m = new Map(listRows(auto, 'objectPropertyList'));
+  // Only value + currency are auto-filled (clean 1:1 dlv mapping); content_ids/contents need the items
+  // array reshaped, so they are intentionally NOT auto-filled (a raw items array would be malformed).
+  assert.equal(m.get('value'), '{{dlv - ecommerce.value}}');
+  assert.equal(m.get('currency'), '{{dlv - ecommerce.currency}}');
+  assert.equal(m.get('content_ids'), undefined, 'content_ids not auto-filled (needs reshape)');
+  assert.equal(m.get('contents'), undefined, 'contents not auto-filled (needs reshape)');
+  // Every referenced dlv variable is created by buildEcommerceDlvVariables.
+  const dlvNames = new Set(buildEcommerceDlvVariables().map((v) => v.name));
+  for (const { value } of metaWebObjectProps('Purchase')) assert.ok(value.startsWith('{{dlv') && dlvNames.has(value.replace(/[{}]/g, '')), `${value} created`);
+  // explicit empty array → respected (no auto-fill)
+  const none = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'Purchase', undefined, []);
+  assert.equal(((none.parameter as Array<{ key?: string }>) ?? []).find((p) => p.key === 'objectPropertyList'), undefined);
+  // explicit array → used verbatim
+  const ex = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'Purchase', undefined, [{ name: 'value', value: '{{My V}}' }]);
+  assert.deepEqual(listRows(ex, 'objectPropertyList'), [['value', '{{My V}}']]);
+  // custom event → no recommended set → no auto-fill
+  const custom = buildMetaPixelTag('cvt_5RM3Q', 'x', '123', 'my_custom_event');
+  assert.equal(((custom.parameter as Array<{ key?: string }>) ?? []).find((p) => p.key === 'objectPropertyList'), undefined);
+});
+
+test('buildGa4EventTag: defaults Send-Ecommerce ON for an ecommerce event with no params; OFF otherwise; explicit wins', () => {
+  const purch = buildGa4EventTag({ name: 'GA4 - Purchase', measurementId: 'G-1', eventName: 'purchase' });
+  assert.equal(paramVal(purch, 'sendEcommerceData'), 'true');
+  assert.equal(paramVal(purch, 'getEcommerceDataFrom'), 'dataLayer');
+  const login = buildGa4EventTag({ name: 'GA4 - Login', measurementId: 'G-1', eventName: 'login' });
+  assert.equal(paramVal(login, 'sendEcommerceData'), 'false');
+  // ecommerce event but caller passed explicit params → do NOT force the object
+  const withParams = buildGa4EventTag({ name: 'GA4 - ATC', measurementId: 'G-1', eventName: 'add_to_cart', eventParameters: [{ name: 'x', value: 'y' }] });
+  assert.equal(paramVal(withParams, 'sendEcommerceData'), 'false');
+  // explicit false wins even for an ecommerce event
+  const forcedOff = buildGa4EventTag({ name: 'GA4 - Purchase Off', measurementId: 'G-1', eventName: 'purchase', sendEcommerceData: false });
+  assert.equal(paramVal(forcedOff, 'sendEcommerceData'), 'false');
+  assert.ok(isGa4EcommerceEvent('add_to_cart') && !isGa4EcommerceEvent('login'));
+});
+
+test('buildLinkedInCapiServerTag: conversion tag (token + rule + automap on); eventId → eventData row; explicit rows + opt-outs', () => {
+  const t = buildLinkedInCapiServerTag('cvt_LI01', 'LinkedIn CAPI', '{{LI Token}}', '{{LI Rule}}', { eventId: '{{Event ID}}', firingTriggerId: ['9'] });
+  assert.equal(t.type, 'cvt_LI01');
+  assert.equal(paramVal(t, 'type'), 'conversion');
+  assert.equal(paramVal(t, 'accessToken'), '{{LI Token}}');
+  assert.equal(paramVal(t, 'conversionRuleUrn'), '{{LI Rule}}');
+  assert.equal(paramVal(t, 'autoMapUserIds'), 'true');
+  assert.equal(paramVal(t, 'autoMapEventData'), 'true');
+  assert.equal(paramVal(t, 'autoMapExternalIds'), 'false');
+  assert.equal(paramVal(t, 'adStorageConsent'), 'optional');
+  assert.deepEqual(listRows(t, 'eventData'), [['eventId', '{{Event ID}}']]);
+  assert.deepEqual(t.firingTriggerId, ['9']);
+  // explicit rows + opt-outs (autoMap off, consent required)
+  const t2 = buildLinkedInCapiServerTag('cvt_LI01', 'x', 'T', 'R', {
+    autoMap: false, requireConsent: true,
+    userIds: [{ name: 'email', value: '{{Hashed Email}}' }],
+    userInfo: [{ name: 'firstName', value: '{{First}}' }],
+  });
+  assert.equal(paramVal(t2, 'autoMapUserIds'), 'false');
+  assert.equal(paramVal(t2, 'adStorageConsent'), 'required');
+  assert.deepEqual(listRows(t2, 'userIds'), [['email', '{{Hashed Email}}']]);
+  assert.deepEqual(listRows(t2, 'userInfo'), [['firstName', '{{First}}']]);
+  // no SIMPLE_TABLE lists when there's nothing to add and no eventId
+  const bare = buildLinkedInCapiServerTag('cvt_LI01', 'x', 'T', 'R');
+  assert.ok(!((bare.parameter as Array<{ key?: string }>) ?? []).some((p) => ['eventData', 'userIds', 'userInfo'].includes(String(p.key))), 'no tables when empty');
 });
 
 test('buildVariable throws on an unknown kind (no silent empty Custom JS variable)', () => {
