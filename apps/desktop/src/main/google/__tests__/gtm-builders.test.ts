@@ -1154,6 +1154,24 @@ test('buildGa4ServerTag builds an sgtmgaaw tag relaying to the Measurement ID', 
   // a per-event tag uses a literal event name
   const purchase = buildGa4ServerTag('GA4 - Purchase', 'G-ABC123', 'purchase');
   assert.equal(((purchase.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'eventName')?.value, 'purchase');
+  // no epToAdd/upToAdd unless explicitly requested (the plain relay forwards everything via "All")
+  assert.equal(p.find((x) => x.key === 'epToAdd'), undefined, 'no add-parameters list on a plain relay');
+});
+
+test('buildGa4ServerTag: optional eventParameters/userProperties → epToAdd/upToAdd (name/value rows)', () => {
+  const t = buildGa4ServerTag('GA4 - Enriched', 'G-1', 'purchase', ['9'], {
+    eventParameters: [{ name: 'page_type', value: 'checkout' }, { name: '', value: 'dropped' }],
+    userProperties: [{ name: 'membership', value: '{{User Tier}}' }],
+  });
+  const rowsOf = (key: string): Array<[string, string]> => {
+    const p = ((t.parameter as Array<{ key?: string; list?: Array<{ map: Array<{ key?: string; value?: string }> }> }>) ?? []).find((x) => x.key === key);
+    return (p?.list ?? []).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
+  };
+  assert.deepEqual(rowsOf('epToAdd'), [['page_type', 'checkout']], 'empty-name row dropped');
+  assert.deepEqual(rowsOf('upToAdd'), [['membership', '{{User Tier}}']]);
+  // the relay still keeps its base config
+  const keys = (t.parameter as Array<{ key?: string }>).map((x) => x.key);
+  assert.ok(keys.includes('measurementId') && keys.includes('epToIncludeDropdown'), 'base relay config preserved');
 });
 
 test('buildServerAllEventsTrigger → CUSTOM_EVENT firing on every event ({{_event}} matches .*)', () => {

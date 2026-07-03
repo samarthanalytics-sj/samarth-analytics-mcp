@@ -4,6 +4,7 @@
 // parameter/parameterValue, etc.). No I/O — fully unit-testable.
 
 import { classifyPixel } from './pixel-signatures';
+import { serverGa4ParamList } from './tag-params';
 
 type Param = Record<string, unknown>;
 const tpl = (key: string, value: string): Param => ({ type: 'template', key, value });
@@ -408,10 +409,23 @@ export function buildGa4Client(name: string): GtmClientResource {
  *  this also avoids depending on the {{Event Name}} built-in being enabled). Pass a literal
  *  (e.g. "purchase") for a per-event tag. ep/upToIncludeDropdown='all' forwards all event +
  *  user parameters. */
-export function buildGa4ServerTag(name: string, measurementId: string, eventName?: string, firingTriggerId?: string[]): GtmTagResource {
+export function buildGa4ServerTag(
+  name: string,
+  measurementId: string,
+  eventName?: string,
+  firingTriggerId?: string[],
+  opts?: { eventParameters?: Array<{ name: string; value: string }>; userProperties?: Array<{ name: string; value: string }> },
+): GtmTagResource {
   const parameter: Param[] = [];
   if (eventName && eventName.trim() !== '') parameter.push(tpl('eventName', eventName));
   parameter.push(tpl('measurementId', measurementId), tpl('epToIncludeDropdown', 'all'), tpl('upToIncludeDropdown', 'all'));
+  // Optional "Parameters to Add / Edit" (epToAdd) + "User Properties to Add / Edit" (upToAdd) — for
+  // ENRICHMENT (server-derived values not already on the incoming event; the event's own params flow
+  // via epToIncludeDropdown='all'). Row shape via serverGa4ParamList — see its Preview-verify note.
+  const eps = (opts?.eventParameters ?? []).filter((p) => p.name && p.name.trim() !== '');
+  const ups = (opts?.userProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
+  if (eps.length) parameter.push(serverGa4ParamList('epToAdd', eps) as Param);
+  if (ups.length) parameter.push(serverGa4ParamList('upToAdd', ups) as Param);
   return {
     name: sanitizeName(name),
     type: 'sgtmgaaw',

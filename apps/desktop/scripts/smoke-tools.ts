@@ -40,7 +40,7 @@ function record(name: string, passed: boolean, detail = ''): void {
 // nothing and declined deletes never reach the API.
 const MUTATIONS = new Set([
   'createGtmWorkspace', 'createGtmTag', 'updateGtmTag', 'setGtmTagPaused',
-  'addGa4EventParameters', 'setGa4MeasurementId', 'setGtmTagConsent',
+  'addGa4EventParameters', 'addGa4ServerParameters', 'setGa4MeasurementId', 'setGtmTagConsent',
   'addGa4EventParametersToAllTags', 'setGa4MeasurementIdOnAllTags',
   'deleteGtmTag', 'deleteGtmTrigger', 'deleteGtmVariable',
   'enableGtmBuiltInVariables', 'createGtmTrigger', 'updateGtmTrigger', 'createGtmVariable',
@@ -156,6 +156,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     createGtmTag: () => r('createGtmTag', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
     updateGtmTag: () => r('updateGtmTag', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
     addGa4EventParameters: () => r('addGa4EventParameters', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
+    addGa4ServerParameters: () => r('addGa4ServerParameters', { tagId: 'TAG15', name: 'GA4 Server', type: 'sgtmgaaw' }),
     setGa4MeasurementId: () => r('setGa4MeasurementId', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
     setGtmTagConsent: () => r('setGtmTagConsent', { tagId: 'TAG1', name: 'X', type: 'gaawe' }),
     addGa4EventParametersToAllTags: () => r('addGa4EventParametersToAllTags', { total: 1, updated: ['X'], failed: [] }),

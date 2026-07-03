@@ -440,8 +440,9 @@ async function main(): Promise<void> {
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
-    assert.equal(withWrites.list().length, 92, 'read + write registry has 92 tools');
+    assert.equal(withWrites.list().length, 93, 'read + write registry has 93 tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_gtm_tracking_tag'), true);
+    assert.equal(withWrites.list().some((t) => t.name === 'add_ga4_server_parameters'), true, 'add_ga4_server_parameters present');
     for (const n of ['create_gtm_folder', 'move_gtm_entities_to_folder', 'rename_gtm_folder', 'delete_gtm_folder']) {
       assert.equal(withWrites.list().some((t) => t.name === n), true, `${n} present`);
     }

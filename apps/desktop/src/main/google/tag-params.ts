@@ -82,3 +82,50 @@ export function addEventParameters(
 
   return { ...tag, parameter };
 }
+
+/* ── Server GA4 (sgtmgaaw) "Parameters / Properties to Add / Edit" ── */
+
+/** The map key for a server GA4 (`sgtmgaaw`) "Parameters/Properties to Add / Edit" row's NAME column.
+ *  This is the documented GA4 server-tag shape but is NOT corpus-validated — the training corpus is
+ *  WEB containers only, so no server export shows this list. The sibling `epToExclude` list stores its
+ *  name under `fieldName`, so if a server-container Preview shows added rows being DROPPED, change this
+ *  to 'fieldName': it is the single place the shape is defined for both create and edit. */
+export const SERVER_PARAM_NAME_KEY = 'name';
+
+function serverParamRow(name: string, value: string): GtmParam {
+  return { type: 'map', map: [{ type: 'template', key: SERVER_PARAM_NAME_KEY, value: name }, { type: 'template', key: 'value', value }] };
+}
+const serverRowName = (m: GtmParam): string | undefined => (m.map ?? []).find((x) => x.key === SERVER_PARAM_NAME_KEY)?.value;
+
+/** Build a fresh server GA4 add-list Param (`epToAdd` = event parameters, `upToAdd` = user
+ *  properties) from name/value rows (empty-name rows dropped). PURE. */
+export function serverGa4ParamList(listKey: 'epToAdd' | 'upToAdd', rows: Array<{ name: string; value: string }>): GtmParam {
+  return { type: 'list', key: listKey, list: rows.filter((r) => r.name && r.name.trim() !== '').map((r) => serverParamRow(r.name, r.value)) };
+}
+
+/** Add event parameters (`epToAdd`) and/or user properties (`upToAdd`) to a server GA4 (`sgtmgaaw`)
+ *  tag, read-modify-write: an existing NAME has its value updated (not duplicated), a new name is
+ *  appended, and every other field (measurementId, eventName, epToIncludeDropdown, epToExclude,
+ *  triggers) is preserved. PURE — returns a NEW tag object the caller PUTs back. */
+export function addServerGa4Params(
+  tag: Record<string, unknown>,
+  opts: { eventParameters?: Array<{ name: string; value: string }>; userProperties?: Array<{ name: string; value: string }> },
+): Record<string, unknown> {
+  let parameter: GtmParam[] = [...((tag.parameter as GtmParam[] | undefined) ?? [])];
+  const upsert = (listKey: string, rows: Array<{ name: string; value: string }>): void => {
+    const clean = rows.filter((r) => r.name && r.name.trim() !== '');
+    if (!clean.length) return;
+    const idx = parameter.findIndex((p) => p.key === listKey);
+    const list: GtmParam[] = idx >= 0 ? [...(parameter[idx].list ?? [])] : [];
+    for (const { name, value } of clean) {
+      const at = list.findIndex((m) => serverRowName(m) === name);
+      if (at >= 0) list[at] = { ...list[at], map: (list[at].map ?? []).map((x) => (x.key === 'value' ? { ...x, value } : x)) };
+      else list.push(serverParamRow(name, value));
+    }
+    const table: GtmParam = { type: 'list', key: listKey, list };
+    parameter = idx >= 0 ? parameter.map((p, i) => (i === idx ? table : p)) : [...parameter, table];
+  };
+  upsert('epToAdd', opts.eventParameters ?? []);
+  upsert('upToAdd', opts.userProperties ?? []);
+  return { ...tag, parameter };
+}

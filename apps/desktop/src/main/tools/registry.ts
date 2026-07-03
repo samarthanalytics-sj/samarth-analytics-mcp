@@ -2252,6 +2252,40 @@ export function buildToolRegistry(
         ),
     },
     {
+      name: 'add_ga4_server_parameters',
+      description:
+        'Add event parameters ("Parameters to Add / Edit" → epToAdd) and/or user properties ("Properties to Add / Edit" → upToAdd) to a GA4 SERVER tag (type "sgtmgaaw") in a server container — the server-side counterpart of add_ga4_event_parameters. Read-modify-write: preserves measurementId / eventName / "Include: All" / excludes / triggers, and a repeated name updates its value instead of duplicating. NOTE: a straight GA4 server relay already forwards every parameter of the incoming event (Default Parameters to Include: All) — including client_id, user_id, and the ecommerce fields — so use this only for ENRICHMENT: server-derived values NOT already on the incoming event (e.g. a country from a request-header {{rh - ...}} variable, a hashed id, a corrected page_location) or to override a value. Values may be {{variables}}. Requires accountId, containerId (SERVER), workspaceId, tagId, and at least one of eventParameters / userProperties.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          tagId: { type: 'string', description: 'The GA4 SERVER (sgtmgaaw) tag ID.' },
+          eventParameters: {
+            type: 'array',
+            description: 'Event parameters to add/edit (epToAdd): {name, value} rows.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          userProperties: {
+            type: 'array',
+            description: 'User properties to add/edit (upToAdd): {name, value} rows.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tagId'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) =>
+        `Add ${(Array.isArray(a.eventParameters) ? a.eventParameters.length : 0)} event parameter(s) + ${(Array.isArray(a.userProperties) ? a.userProperties.length : 0)} user propert(y/ies) to GA4 server tag ${s(a.tagId)}`,
+      handler: (a) =>
+        data.addGa4ServerParameters(s(a.accountId), s(a.containerId), s(a.workspaceId), s(a.tagId), {
+          eventParameters: (Array.isArray(a.eventParameters) ? a.eventParameters.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })) : []),
+          userProperties: (Array.isArray(a.userProperties) ? a.userProperties.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })) : []),
+        }),
+    },
+    {
       name: 'set_ga4_measurement_id',
       description:
         'Set/replace the Measurement ID on a GA4 tag. The value may be a literal id (G-XXXX, AW-XXXX, GT-XXXX) OR a GTM variable like {{GA4 Variable}}. For a GA4 Event tag (gaawe) it sets measurementIdOverride; for a Google tag (googtag) it sets the tag ID. Use this for requests like "replace {{GA4 Measurement ID}} with {{GA4 Variable}} on all GA4 tags" or "point all GA4 tags at G-1234567890" — it builds the parameter correctly and preserves the rest of the tag, so it never produces the "measurementIdOverride/template key" errors you get from hand-editing the tag. Call once per tag.',

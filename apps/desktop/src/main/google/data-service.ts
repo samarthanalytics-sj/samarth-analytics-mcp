@@ -11,7 +11,7 @@ import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
-import { mergeParametersByKey, addEventParameters, setTemplateParam, type GtmParam } from './tag-params';
+import { mergeParametersByKey, addEventParameters, addServerGa4Params, setTemplateParam, type GtmParam } from './tag-params';
 import { changeJournal, type EntityKind } from './change-journal';
 import type { Ga4AccountView, Ga4PropertyListItem, GtmAccountView } from '../../shared/ipc';
 
@@ -699,6 +699,35 @@ export class GoogleDataService {
       );
     }
     const updated = addEventParameters(current as Record<string, unknown>, parameters);
+    const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
+    console.error(`[gtm]   ✓ tag ${tagId} (${res.data.name}) saved`);
+    this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
+    return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  /** Add event parameters (`epToAdd`) and/or user properties (`upToAdd`) to a SERVER GA4 tag
+   *  (`sgtmgaaw`) — the "Parameters/Properties to Add / Edit" sections. Read-modify-write, so the
+   *  measurementId / eventName / include-all dropdowns / triggers are preserved and a repeated name
+   *  updates its value rather than duplicating. Rejects non-sgtmgaaw tags. (For a straight relay the
+   *  incoming event's own params already flow via "Include: All" — use this for ENRICHMENT.) */
+  async addGa4ServerParameters(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    tagId: string,
+    opts: { eventParameters?: Array<{ name: string; value: string }>; userProperties?: Array<{ name: string; value: string }> }
+  ): Promise<GtmTagView> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const path = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}/tags/${tagId}`;
+    const current = (await gtm.accounts.containers.workspaces.tags.get({ path })).data;
+    console.error(`[gtm] addGa4ServerParameters tag=${tagId} type=${current.type} ep=[${(opts.eventParameters ?? []).map((p) => p.name).join(', ')}] up=[${(opts.userProperties ?? []).map((p) => p.name).join(', ')}]`);
+    if (current.type !== 'sgtmgaaw') {
+      throw new Error(
+        `Tag ${tagId} is type "${current.type ?? 'unknown'}", not a GA4 SERVER tag (sgtmgaaw). add_ga4_server_parameters only edits GA4 server tags.`
+      );
+    }
+    const updated = addServerGa4Params(current as Record<string, unknown>, opts);
     const res = await gtm.accounts.containers.workspaces.tags.update({ path, requestBody: updated });
     console.error(`[gtm]   ✓ tag ${tagId} (${res.data.name}) saved`);
     this.journal('tag', accountId, containerId, workspaceId, tagId, `${res.data.name ?? 'tag'} (#${tagId})`);
