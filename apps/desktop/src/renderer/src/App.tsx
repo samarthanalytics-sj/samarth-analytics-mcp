@@ -16,7 +16,6 @@ import type {
   GtmContext,
   GtmWorkspaceView,
   LlmProvider,
-  MonitorStatus,
   ProviderStatus,
   ScanProgressView,
   SecretSelfTest,
@@ -4212,12 +4211,6 @@ function SettingsView({
       </section>
 
       <section style={styles.card}>
-        <h2 style={styles.h2}>Continuous monitoring</h2>
-        <p style={styles.settingsSub}>Automatically re-audit the container you are working in and flag new issues as they appear. Read-only.</p>
-        <MonitoringEditor onError={onError} />
-      </section>
-
-      <section style={styles.card}>
         <h2 style={styles.h2}>Diagnostics</h2>
         {selfTest && (
           <div style={styles.kv}>
@@ -4407,17 +4400,6 @@ function ProvidersEditor({
   );
 }
 
-/** Google OAuth client id is public (it appears in the auth URL), but it is long — show a short form
- *  that keeps the recognisable …apps.googleusercontent.com suffix. */
-function shortClientId(id: string): string {
-  const suffix = '.apps.googleusercontent.com';
-  if (id.endsWith(suffix)) {
-    const head = id.slice(0, id.length - suffix.length);
-    return `${head.length > 12 ? `${head.slice(0, 12)}…` : head}${suffix}`; // only elide when actually truncated
-  }
-  return id.length > 24 ? `${id.slice(0, 12)}…${id.slice(-8)}` : id;
-}
-
 function OAuthClientCard({ google }: { google: GoogleClientStatus | null }): JSX.Element {
   if (!google) return <p style={styles.muted}>Checking…</p>;
   if (!google.configured) {
@@ -4430,132 +4412,22 @@ function OAuthClientCard({ google }: { google: GoogleClientStatus | null }): JSX
     );
   }
   const source = google.source === 'env' ? 'Environment variable' : google.source === 'file' ? 'Config file' : 'unknown';
+  // The client id itself is intentionally not shown. When its shape looks off we still warn — without
+  // rendering the value.
+  const shapeOff = google.clientIdLooksValid === false;
   return (
     <>
       <div style={styles.kv}><span>Status</span><b style={{ color: 'var(--c-green)', fontWeight: 500 }}>✓ Configured</b></div>
-      <div style={styles.kv}><span>Loaded from</span><b style={{ fontWeight: 500, color: 'var(--text-dim)' }}>{source}</b></div>
-      <div style={{ ...styles.kv, borderBottom: 'none' }}>
-        <span>Client ID</span>
-        <b style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, fontWeight: 500 }}>
-          {google.clientId ? shortClientId(google.clientId) : 'unknown'}
-          {google.clientIdLooksValid === false && <span style={{ color: 'var(--c-amber)' }}> ⚠ unexpected shape</span>}
-        </b>
+      <div style={{ ...styles.kv, borderBottom: shapeOff ? '1px solid var(--border)' : 'none' }}>
+        <span>Loaded from</span><b style={{ fontWeight: 500, color: 'var(--text-dim)' }}>{source}</b>
       </div>
-    </>
-  );
-}
-
-function MonitoringEditor({ onError }: { onError: (m: string) => void }): JSX.Element {
-  const [status, setStatus] = useState<MonitorStatus | null>(null);
-  const [intervalStr, setIntervalStr] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    window.desktop.monitor
-      .status()
-      .then((s) => {
-        setStatus(s);
-        setIntervalStr(String(s.intervalMinutes));
-      })
-      .catch((e) => onError(String(e)));
-  }, []);
-
-  // Keep the panel live while it is open: refresh on a pushed regression alert, and poll periodically so
-  // "last checked" stays current even on clean runs. Both only touch `status`, never the interval field the
-  // user may be mid-edit on.
-  useEffect(() => {
-    const refresh = (): void => {
-      window.desktop.monitor.status().then(setStatus).catch((e) => onError(String(e)));
-    };
-    const off = window.desktop.monitor.onAlert(refresh);
-    const poll = setInterval(refresh, 60_000);
-    return () => {
-      off();
-      clearInterval(poll);
-    };
-  }, []);
-
-  async function patch(p: Partial<{ enabled: boolean; intervalMinutes: number }>): Promise<void> {
-    setBusy(true);
-    try {
-      const next = await window.desktop.monitor.configure(p);
-      setStatus(next);
-      setIntervalStr(String(next.intervalMinutes));
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-  function commitInterval(): void {
-    if (!status) return;
-    const n = Math.max(5, Math.floor(Number(intervalStr) || status.intervalMinutes));
-    if (n === status.intervalMinutes) setIntervalStr(String(status.intervalMinutes)); // snap back a bad edit
-    else void patch({ intervalMinutes: n });
-  }
-  async function auditNow(): Promise<void> {
-    setBusy(true);
-    try {
-      await window.desktop.monitor.runNow();
-      setStatus(await window.desktop.monitor.status());
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (!status) return <p style={styles.muted}>Checking…</p>;
-  const lastRun = status.lastRunAt ? new Date(status.lastRunAt).toLocaleString() : 'never';
-  const alertCount = status.lastAlert?.newFindings.length ?? 0;
-  return (
-    <div>
-      <div style={styles.kv}>
-        <span>Auto re-audit</span>
-        <div style={styles.toggle}>
-          <button disabled={busy} style={status.enabled ? styles.toggleActive : styles.toggleBtn} onClick={() => patch({ enabled: true })}>On</button>
-          <button disabled={busy} style={!status.enabled ? styles.toggleActive : styles.toggleBtn} onClick={() => patch({ enabled: false })}>Off</button>
-        </div>
-      </div>
-      <div style={styles.kv}>
-        <span>Check every</span>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <input
-            style={{ ...styles.input, flex: 'none', width: 64, minWidth: 0, textAlign: 'right' }}
-            type="number"
-            min={5}
-            value={intervalStr}
-            disabled={busy}
-            onChange={(e) => setIntervalStr(e.target.value)}
-            onBlur={commitInterval}
-          />
-          <span style={styles.muted}>minutes (min 5)</span>
-        </div>
-      </div>
-      <div style={{ ...styles.kv, borderBottom: status.lastError || alertCount ? '1px solid var(--border)' : 'none' }}>
-        <span>Status</span>
-        <b style={{ fontWeight: 500, color: status.running ? 'var(--c-green)' : 'var(--text-muted)' }}>
-          {status.running ? 'running' : 'stopped'} · last checked {lastRun}
-        </b>
-      </div>
-      {status.lastError && (
-        <div style={{ ...styles.kv, borderBottom: alertCount ? '1px solid var(--border)' : 'none' }}>
-          <span>Last error</span>
-          <b style={{ fontWeight: 500, color: 'var(--c-red)', textAlign: 'right' }}>{status.lastError}</b>
-        </div>
-      )}
-      {alertCount > 0 && (
+      {shapeOff && (
         <div style={{ ...styles.kv, borderBottom: 'none' }}>
-          <span>Last alert</span>
-          <b style={{ fontWeight: 500, color: 'var(--c-amber)', textAlign: 'right' }}>
-            {alertCount} new finding{alertCount === 1 ? '' : 's'}{status.lastAlert?.containerName ? ` in ${status.lastAlert.containerName}` : ''}
-          </b>
+          <span>Client ID</span>
+          <b style={{ color: 'var(--c-amber)', fontWeight: 500 }}>⚠ unexpected shape</b>
         </div>
       )}
-      <div style={{ marginTop: 12 }}>
-        <button disabled={busy} style={styles.ghostBtn} onClick={auditNow}>Audit now</button>
-      </div>
-    </div>
+    </>
   );
 }
 
