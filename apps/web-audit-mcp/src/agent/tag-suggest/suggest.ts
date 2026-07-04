@@ -616,19 +616,31 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
     case 'cta': {
       const def = CTA_BY_INTENT[el.intent ?? 'generic'];
       const isSpecific = def.intent !== 'generic';
-      // Fire on the EXACT button/link text the user sees with "{{Click Text}} equals <text>" — a
-      // precise, readable condition (the label from the page, e.g. "Get a Quote") rather than a broad
-      // "contains" (which also fires on "Get a Quote Now") or an intent regex. NOTE: GTM's {{Click
-      // Text}} is the RENDERED text of the clicked node; a button that wraps an icon / hidden a11y span
-      // may have a runtime text that differs from the scraped label, in which case this exact match
-      // needs widening to "contains". The intent still selects the semantic GA4 event (book_demo_click,
-      // …) + confidence; a CTA with different text becomes its OWN tag, and the SAME text on multiple
-      // pages still collapses site-wide (dedup key is the click-text value).
+      // Trigger TYPE follows the element. A true <a href> link → "Click - Just Links" (link_click):
+      // GTM bubbles a click on any child (icon/image/span) up to the link and evaluates the condition
+      // on the link, giving a clean, consistent link-level signal (and reliable {{Click URL}}). A
+      // non-link control — a <button>, a div/span/icon, or a JS-routed <a> with no href — → "Click -
+      // All Elements" (all_clicks), the ONLY type that fires on non-link elements (Just Links can't
+      // cover a <button>). el.href is set by the collector ONLY for real anchors (buttons carry ''),
+      // so it is the authoritative link test. This picks the tightest correct trigger for each: All
+      // Elements over-captures for links, Just Links can't fire on buttons.
+      const isLink = typeof el.href === 'string' && el.href.length > 0;
+      const kind: 'link_click' | 'all_clicks' = isLink ? 'link_click' : 'all_clicks';
+      // Fire on the EXACT text the user sees with "{{Click Text}} equals <text>" — a precise, readable
+      // condition (the label from the page, e.g. "Get a Quote") rather than a broad "contains" (which
+      // also fires on "Get a Quote Now") or an intent regex. Works on BOTH trigger types: Just Links
+      // exposes the link's {{Click Text}}, All Elements the clicked element's. NOTE: on an All-Elements
+      // trigger a <button> wrapping an icon / hidden a11y span may have a runtime text that differs from
+      // the scraped label, in which case this exact match needs widening to "contains"; a Just-Links
+      // trigger avoids that because the text always bubbles to the link. The intent still selects the
+      // semantic GA4 event (book_demo_click, …) + confidence; a CTA with different text becomes its OWN
+      // tag, and the SAME text+type on multiple pages still collapses site-wide (dedup key includes the
+      // click-text value and the kind).
       const ctaText = el.text.replace(/\s+/g, ' ').trim();
       const displayLabel = ctaText.slice(0, 60) || def.label;
       const trigger: SuggestedTag['trigger'] = {
-        name: trigNameOf(displayLabel, 'all_clicks'),
-        kind: 'all_clicks',
+        name: trigNameOf(displayLabel, kind),
+        kind,
         clickTextValue: ctaText || def.label,
         clickTextOperator: 'equals',
       };
@@ -637,9 +649,9 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
       const ctaEvent = eventFromLabel(displayLabel, 'click');
       return {
         ...base(ctaEvent, isSpecific ? 'medium' : 'low', false),
-        tagName: tagNameOf(displayLabel, 'all_clicks'),
+        tagName: tagNameOf(displayLabel, kind),
         label: `"${displayLabel}" → GA4 "${ctaEvent}"`,
-        evidence: `button/link text "${el.text}"` + (isSpecific ? ` (intent: ${el.intent})` : ''),
+        evidence: `${isLink ? 'link' : 'button'} text "${el.text}"` + (isSpecific ? ` (intent: ${el.intent})` : ''),
         // Carry the classified intent so the platform derivations map by intent (authoritative for
         // CTAs) instead of the event-name text — a CTA whose event name lacks a keyword still gets its
         // correct Meta/Ads/etc. counterpart.
