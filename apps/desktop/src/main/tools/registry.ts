@@ -499,7 +499,7 @@ export function buildToolRegistry(
       name: 'runtime_synthetic_test',
       description:
         'RUNTIME synthetic test (READ-ONLY, SAFE): load a live URL in headless Chromium, push SYNTHETIC dataLayer funnel events (view_item…purchase, with obviously-fake values like transaction_id "SYNTHETIC_TEST_TXN"), and capture the analytics /collect hits each tag would send — to verify per-event that GA4 (and Meta/TikTok/your server) actually fire at RUNTIME with the right params. ' +
-        'CRITICAL SAFETY: every analytics collector request (GA4 google-analytics.com /g/collect, Meta facebook.com/tr, TikTok analytics.tiktok.com/api, and your optional serverUrl host) is ABORTED before it leaves the browser — NOTHING reaches GA4/Meta/TikTok, so this never pollutes your analytics with a fake purchase. It only reads: it fires synthetic events and aborts the resulting hits. ' +
+        'CRITICAL SAFETY: during the synthetic-firing window EVERY analytics beacon is ABORTED before it leaves the browser — known collectors (GA4/Meta/TikTok/Google Ads/Pinterest/Snap/LinkedIn/Reddit/Bing) AND same-site FIRST-PARTY collector proxies (Stape / Cloudflare Zaraz / a self-hosted sGTM on a custom path like /fbevents or /g/collect). So no SYNTHETIC event — no fake purchase/conversion — is ever delivered to any destination or your tagging server. (A normal page-load hit such as page_view may fire on navigation, exactly as any real visit would; it carries no synthetic funnel event.) It only reads: fires synthetic events and aborts the resulting beacons. ' +
         'Needs a URL where the GTM container is actually installed (so the tags exist to fire), and requires a LOCAL Playwright install (`npm i playwright && npx playwright install chromium` in apps/desktop); if Playwright is missing it returns a clear error instead of running. Returns, per expected event: whether a GA4 hit fired, any missing GA4 required params, and which destinations fired — plus a note confirming no real hits were sent. Requires url; optional events (default: the 7-event ecommerce funnel) and serverUrl.',
       inputSchema: {
         type: 'object',
@@ -536,7 +536,7 @@ export function buildToolRegistry(
           capturedHitCount: run.capturedHits.length,
           collectorsAborted: run.capturedHits.map((h) => ({ collector: h.collector, url: h.url })),
           safety:
-            'SAFE: this fired SYNTHETIC events only and ABORTED every analytics /collect hit before it left the browser — NO real hits were sent to GA4/Meta/TikTok or your tagging server. Nothing was written to your analytics.',
+            'SAFE: fired SYNTHETIC events only and ABORTED every analytics beacon they triggered before it left the browser — including same-site first-party collector proxies — so NO synthetic conversion was delivered to GA4/Meta/TikTok/Ads or your tagging server.',
         };
       },
     },

@@ -28,16 +28,6 @@ interface PwRoute {
   abort(): Promise<void>;
 }
 
-/** First-party test: same host, or a subdomain either direction, = first-party (not cross-site). */
-function isCrossSite(reqUrl: string, pageHost: string | null): boolean {
-  if (!pageHost) return false;
-  try {
-    const h = new URL(reqUrl).hostname.toLowerCase();
-    return !(h === pageHost || h.endsWith(`.${pageHost}`) || pageHost.endsWith(`.${h}`));
-  } catch {
-    return false;
-  }
-}
 /** Resource types that carry a tracking BEACON, not a page asset. Scripts/styles/fonts/documents are
  *  allowed (so a tag can still load its library and fire); everything else (xhr/fetch/image/ping/
  *  beacon/…) is a beacon transport we kill during the synthetic window. */
@@ -147,8 +137,7 @@ export async function runSyntheticTest(url: string, opts: SyntheticTestOptions =
     const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
 
     // The page's own host — first-party requests are allowed; cross-site beacons are killed during
-    // the synthetic window (below). syntheticPhase is armed only while we push events.
-    const pageHost = serverHostOf(url);
+    // syntheticPhase is armed only while we push events (below).
     let syntheticPhase = false;
 
     // ── ABORT-FIRST interception — installed BEFORE any navigation or injection. ──────────────
@@ -163,16 +152,21 @@ export async function runSyntheticTest(url: string, opts: SyntheticTestOptions =
         void route.abort();
         return;
       }
-      // DEFENSE IN DEPTH: while we are firing synthetic events, abort every CROSS-SITE data beacon we
-      // did NOT explicitly classify (an unlisted ad/analytics pixel) — so a synthetic event can never
-      // deliver a real hit even to a tracker we don't recognise. Scripts/styles/fonts/documents still
-      // load, so a tag that lazy-loads its library on trigger can still fire; only beacons are killed.
-      if (syntheticPhase && isCrossSite(reqUrl, pageHost) && isBeaconType(req.resourceType())) {
+      // DEFENSE IN DEPTH: while we are firing synthetic events, abort EVERY data beacon we did not
+      // explicitly classify — including SAME-SITE ones. This is the critical guard: a first-party
+      // collector proxy (Stape / Cloudflare Zaraz / a first-party sGTM on a custom path like
+      // /fbevents or /api/track) is same-site and unknown-path, so "same-site ⇒ trusted" would leak a
+      // real synthetic conversion. During the synthetic window every beacon is a tag firing, so we
+      // kill them all. Scripts/styles/fonts/documents still load, so a tag can load its library and
+      // fire; only the beacon transports (xhr/fetch/image/ping/…) are aborted. (Before the synthetic
+      // window, only KNOWN collectors above are aborted — the page's own load-time hits, which fire on
+      // any normal visit and carry no synthetic funnel event, are left alone.)
+      if (syntheticPhase && isBeaconType(req.resourceType())) {
         capturedHits.push({ url: reqUrl, body: safePostData(req), collector: 'ad' });
         void route.abort();
         return;
       }
-      // Non-collector: normal SSRF guard (continue if allowed, else abort).
+      // Non-beacon (or pre-synthetic-window): normal SSRF guard (continue if allowed, else abort).
       void requestAllowed(reqUrl).then(
         (ok) => (ok ? route.continue() : route.abort()),
         () => route.abort(),
