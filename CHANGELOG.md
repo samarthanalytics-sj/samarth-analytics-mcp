@@ -1,3 +1,9 @@
+## [1.168.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.168.1...v1.168.2) (2026-07-04)
+
+### Bug Fixes
+
+* **desktop:** a failing engagement metric no longer wipes the whole GA4 baseline ([100c106](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/100c10681a252cc1322d25413c5afb9672a2a031))
+
 ## [1.168.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.168.0...v1.168.1) (2026-07-04)
 
 ### Bug Fixes
