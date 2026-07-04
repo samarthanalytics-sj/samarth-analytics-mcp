@@ -33,6 +33,7 @@ import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
 import { Ga4Charts } from './Ga4Charts';
 import { Ga4MonitoringPanel } from './Ga4MonitoringPanel';
+import { TagTypeIcon } from './TagTypeIcon';
 import { auditToCsv, auditToMarkdown } from './audit-export';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
@@ -3591,9 +3592,14 @@ function ContainerAuditPanel({
                   <span style={{ ...styles.badge, ...(SEV_BADGE[f.severity] ?? SEV_BADGE.info), marginTop: 2 }}>{f.severity}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600 }}>
+                      {f.resource?.kind === 'tag' && (
+                        <span style={{ marginRight: 6, display: 'inline-block', verticalAlign: '-2px' }} title={f.resource.type ? gtmTypeLabel(f.resource.type) : 'Tag'}>
+                          <TagTypeIcon type={f.resource.type} name={f.resource.name} />
+                        </span>
+                      )}
                       {f.resource ? `${f.resource.name} ` : ''}
                       <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 12 }}>
-                        {f.resource ? `(${f.resource.kind})` : f.category}
+                        {f.resource ? `(${f.resource.kind === 'tag' && f.resource.type ? gtmTypeLabel(f.resource.type) : f.resource.kind})` : f.category}
                       </span>
                       {f.category === 'paused' && (
                         <span style={{ fontWeight: 700, color: 'var(--c-amber)', fontSize: 14, marginLeft: 6 }}>(Paused)</span>
