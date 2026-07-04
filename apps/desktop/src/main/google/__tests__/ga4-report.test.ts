@@ -186,6 +186,22 @@ test('report has all 9 verdict-first sections', () => {
   assert.ok(md.indexOf('## 1 · Executive summary') < md.indexOf('## 9 · Scope'), 'exec summary before metadata');
 });
 
+test('decision readiness: Customer lifetime value is graded by BigQuery export / Google Signals, not hardcoded', () => {
+  const clvRow = (md: string): string => (md.split('\n').find((l) => l.includes('Customer lifetime value')) ?? '');
+
+  // BigQuery event-level export on → Answerable.
+  const bqMd = buildGa4AuditReport(input({ snapshot: snap({ bigQueryLinks: [{ project: 'proj', dailyExportEnabled: true, streamingExportEnabled: false }] }) }));
+  assert.ok(/\| Customer lifetime value \| Answerable \|/.test(bqMd), `BigQuery export → Answerable, got: ${clvRow(bqMd)}`);
+
+  // No export but Google Signals on → Partial (cross-device approximation).
+  const sigMd = buildGa4AuditReport(input({ snapshot: snap({ bigQueryLinks: [], googleSignals: 'GOOGLE_SIGNALS_ENABLED' }) }));
+  assert.ok(/\| Customer lifetime value \| Partial \|/.test(sigMd), `Signals only → Partial, got: ${clvRow(sigMd)}`);
+
+  // Neither → Not answerable (original behaviour preserved).
+  const noneMd = buildGa4AuditReport(input({ snapshot: snap({ bigQueryLinks: [], googleSignals: 'GOOGLE_SIGNALS_DISABLED' }) }));
+  assert.ok(/\| Customer lifetime value \| Not answerable \|/.test(noneMd), `neither → Not answerable, got: ${clvRow(noneMd)}`);
+});
+
 test('area-status grades on evidence with coloured dots: Data collection + zero-config Custom definitions are Partial', () => {
   const md = buildGa4AuditReport(input());
   assert.ok(/\| Data collection \| 🟡 Partial \| Likely \|/.test(md), 'collection Partial (deep health unverifiable)');

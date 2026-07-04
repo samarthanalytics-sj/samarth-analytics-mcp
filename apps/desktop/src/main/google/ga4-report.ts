@@ -265,12 +265,22 @@ function decisionReadiness(s: Ga4PropertySnapshot): Array<{ q: string; status: s
   const ecom = hasEcommerce(s);
   const lead = hasKeyEvent(s, /lead|sign_up|contact|submit/i);
   const refund = hasKeyEvent(s, /refund|return/i);
+  // Event-level export (BigQuery) is what makes a true LTV computable; Google Signals gives a
+  // cross-device approximation. Mirror the conditional grading of the other rows instead of a
+  // hardcoded "Not answerable" (which stayed red even when BigQuery export was on).
+  const bq = (s.bigQueryLinks ?? []).some((l) => l.dailyExportEnabled || l.streamingExportEnabled);
+  const clvStatus = bq ? 'Answerable' : signals ? 'Partial' : 'Not answerable';
+  const clvNote = bq
+    ? 'BigQuery export enabled - compute true LTV from event-level data'
+    : signals
+      ? 'Google Signals on for cross-device stitching; enable BigQuery export or User-ID for true LTV'
+      : 'needs User-ID and/or server-side/BigQuery data';
   return [
     { q: 'Which campaigns generate revenue?', status: ads ? 'Answerable' : 'Partial', note: ads ? 'Google Ads linked + conversions' : 'link Google Ads to attribute revenue to campaigns' },
     { q: 'Abandonment by product/page?', status: ecom ? 'Answerable' : 'Not answerable', note: ecom ? 'ecommerce events present' : 'no ecommerce/funnel events' },
     { q: 'CAC by channel', status: ads ? 'Answerable' : 'Partial', note: ads ? 'sessions + cost via Google Ads link' : 'needs ad cost (Google Ads link)' },
     { q: 'Lead quality', status: lead ? 'Partial' : 'Not answerable', note: lead ? 'lead events exist; CRM import needed for true quality' : 'no lead/sign-up key events; no CRM import' },
-    { q: 'Customer lifetime value', status: 'Not answerable', note: 'needs User-ID and/or server-side/BigQuery data' },
+    { q: 'Customer lifetime value', status: clvStatus, note: clvNote },
     { q: 'Refund/return rate', status: refund ? 'Answerable' : 'Not answerable', note: refund ? 'refund events present' : 'no refund/return events' },
     { q: 'Repeat/churn within 90 days', status: signals ? 'Answerable' : 'Partial', note: signals ? 'Google Signals → cross-device repeat rate' : 'enable Google Signals or User-ID for reliable repeat rate' },
   ];
