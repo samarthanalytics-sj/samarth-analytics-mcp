@@ -1607,6 +1607,56 @@ test('auditServerContainer (3/4): a TikTok CAPI tag (cvt_ with pixelId+accessTok
   assert.ok(!rep.findings.some((f) => /Test Event Code/i.test(f.message)), 'TikTok testEventCode not read as a Meta testId');
 });
 
+// A TikTok Events API server tag: generateTtp + eventSource (never generateFbp/actionSource), so
+// isTikTokCapiServerTag recognizes it and isMetaCapiServerTag does not.
+const tiktokCapiTag = (tagId: string, name: string, extra: Array<{ type: string; key: string; value?: string; list?: unknown }>) => ({
+  tagId, name, type: 'cvt_TT9', firingTriggerId: ['1'], blockingTriggerId: [] as string[], paused: false, consentSettings: null,
+  parameter: [
+    { type: 'boolean', key: 'generateTtp', value: 'true' },
+    { type: 'template', key: 'eventSource', value: 'web' },
+    { type: 'template', key: 'pixelId', value: '123456789012345' },
+    { type: 'template', key: 'accessToken', value: 'TTTOKEN' },
+    ...extra,
+  ],
+});
+
+test('auditServerContainer (5): flags a CAPI server tag with no event_id (browser↔server dedup), not one that carries it', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [{ triggerId: '1', name: 'All', type: 'customEvent' }],
+    tags: [
+      // Meta CAPI with NO serverEventDataList → no event_id → flagged.
+      metaCapiTag('2', 'Meta CAPI - no id', [{ key: 'pixelId', value: '123456789012345' }, { key: 'accessToken', value: 'EAAtoken' }]),
+      // Meta CAPI from our builder → carries event_id in serverEventDataList → NOT flagged.
+      { ...buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - with id', 'P', 'T', 'Purchase', { firingTriggerId: ['1'] }), tagId: '3', firingTriggerId: ['1'], paused: false, blockingTriggerId: [], consentSettings: null },
+      // TikTok CAPI with no eventId → flagged; with eventId → not.
+      tiktokCapiTag('4', 'TikTok CAPI - no id', []),
+      tiktokCapiTag('5', 'TikTok CAPI - with id', [{ type: 'template', key: 'eventId', value: '{{ed - event_id}}' }]),
+    ],
+  });
+  const noId = rep.findings.filter((f) => /sends no event_id/.test(f.message));
+  assert.equal(noId.length, 2, 'flags exactly the two tags missing event_id (Meta + TikTok)');
+  assert.ok(noId.every((f) => f.severity === 'medium' && f.confidence === 'likely'), 'medium + likely (conditional on a browser Pixel)');
+  assert.ok(noId.some((f) => /Meta CAPI - no id/.test(f.message)) && noId.some((f) => /TikTok CAPI - no id/.test(f.message)), 'names both missing-id tags');
+  assert.ok(!noId.some((f) => /with id/.test(f.message)), 'the event_id-carrying tags are NOT flagged');
+});
+
+test('auditServerContainer (5): does not flag paused or trigger-less CAPI tags (they cannot double-count)', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [],
+    tags: [
+      { ...metaCapiTag('2', 'Paused', [{ key: 'pixelId', value: '1' }, { key: 'accessToken', value: 'EAA' }]), paused: true },
+      { ...metaCapiTag('3', 'No trigger', [{ key: 'pixelId', value: '1' }, { key: 'accessToken', value: 'EAA' }]), firingTriggerId: [] },
+    ],
+  });
+  assert.ok(!rep.findings.some((f) => /sends no event_id/.test(f.message)), 'paused + trigger-less CAPI tags are not flagged for dedup');
+});
+
 test('buildMetaEmqVariables → ed variables with keyPath === key (corpus shape)', () => {
   const vars = buildMetaEmqVariables();
   const byName = new Map(vars.map((v) => [v.name, v]));
