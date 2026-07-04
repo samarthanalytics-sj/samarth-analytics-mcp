@@ -174,6 +174,14 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
   } else {
     s6 += card(`<div style="font-size:13px;color:${MUTED}">Baseline traffic metrics could not be retrieved - Not Verified.</div>`, BORDER);
   }
+  // Key insights — rule-based highlights (peaks/lows, top performers, the near-100%-conv data-quality
+  // flag). A green-accented card above the detailed tables so the reader gets the "so what" first.
+  if (x.insights && x.insights.length) {
+    const items = x.insights.map((i) => `<li style="margin:4px 0">${esc(i)}</li>`).join('');
+    s6 +=
+      tableCaption('Key insights', '(the notable peaks, lows, and points from the breakdowns below)') +
+      card(`<ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.5;color:${TEXT}">${items}</ul>`, GREEN);
+  }
   // Channel performance table — which channels convert and earn, not just their traffic share.
   if (x.channelPerformance && x.channelPerformance.length) {
     const cRows = x.channelPerformance

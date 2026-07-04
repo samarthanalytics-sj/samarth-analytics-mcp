@@ -268,6 +268,14 @@ test('engagement line keeps time + rate but drops the per-user figure when it is
   assert.ok(!/engaged sessions\/user/.test(md), 'per-user figure dropped when 0 (no "0.0 engaged sessions/user")');
 });
 
+test('section 6 renders a Key insights block derived from the breakdown data', () => {
+  const md = buildGa4AuditReport(input());
+  assert.ok(/\*\*Key insights\*\*/.test(md), 'Key insights heading');
+  assert.ok(/- Biggest funnel drop-off: View item to Add to cart, where 60% of users leave\./.test(md), 'funnel drop-off insight (10000 -> 4000)');
+  assert.ok(/- AI assistants sent [\d,]+ sessions/.test(md), 'AI-channel materiality insight');
+  assert.ok(/- \/ is your top entry page \([\d,]+ sessions\) but converts at only/.test(md), 'landing-page leak insight');
+});
+
 test('section 6 renders a channel-performance table with conversion rate + revenue per channel', () => {
   const md = buildGa4AuditReport(input());
   assert.ok(/\*\*Channel performance\*\*/.test(md), 'channel-performance sub-heading');
