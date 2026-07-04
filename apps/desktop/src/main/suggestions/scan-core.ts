@@ -221,14 +221,15 @@ async function scanTarget(
 const suggestionKey = (s: SuggestedTag): string =>
   `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.clickElementValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}|${s.trigger.pageUrlValue ?? ''}`;
 
-/** Remove suggestions that would create the SAME GTM tag — identity = platform + tag name + event +
- *  trigger filter — keeping the FIRST occurrence. Exact dupes slip in when the vision pass proposes
- *  one button twice, or a cross-source pair the trigger-key filter didn't catch; GTM tag names must be
- *  unique anyway, so a second copy is always noise. PURE. */
+/** Remove suggestions that would create the SAME GTM tag, keeping the FIRST occurrence. Identity is
+ *  platform + tag NAME only: GTM tag names MUST be unique, so two suggestions sharing a name can never
+ *  both be created — the second is always noise, even if its trigger differs slightly (the classic
+ *  case: an engine tag and the AI vision pass's copy of the same button, whose triggers vary just
+ *  enough to slip past the trigger-key filter). Deduping by name collapses those to one. PURE. */
 export function dedupSuggestions(list: SuggestedTag[]): SuggestedTag[] {
   const byIdentity = new Map<string, SuggestedTag>();
   for (const s of list) {
-    const k = `${s.platform}|${s.tagName.trim().toLowerCase()}|${suggestionKey(s)}`;
+    const k = `${s.platform}|${s.tagName.trim().toLowerCase()}`;
     if (!byIdentity.has(k)) byIdentity.set(k, s);
   }
   return [...byIdentity.values()];
