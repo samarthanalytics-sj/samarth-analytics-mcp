@@ -1,3 +1,9 @@
+## [1.175.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.175.0...v1.175.1) (2026-07-04)
+
+### Bug Fixes
+
+* **desktop:** stable checkId for the server-CAPI dedup finding ([c08a3fa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c08a3fa969b3f8464e615fd480935f36c8a1cb6b))
+
 ## [1.175.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.174.0...v1.175.0) (2026-07-04)
 
 ### Features
