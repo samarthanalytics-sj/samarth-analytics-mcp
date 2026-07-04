@@ -2193,6 +2193,31 @@ function isMetaCapiServerTag(t: AuditTag): boolean {
   return keys.has('generateFbp') || keys.has('actionSource');
 }
 
+/** The TikTok "Events API" server template ALSO stores pixelId + accessToken, but is distinguished from
+ *  Meta by its TikTok-only fields (generateTtp / eventSource, vs Meta's generateFbp / actionSource). PURE. */
+function isTikTokCapiServerTag(t: AuditTag): boolean {
+  if (!t.type.startsWith('cvt_')) return false;
+  const keys = new Set((Array.isArray(t.parameter) ? t.parameter : []).map((p) => (p as { key?: string }).key));
+  if (!(keys.has('pixelId') && keys.has('accessToken'))) return false;
+  return keys.has('generateTtp') || keys.has('eventSource');
+}
+
+/** Does a Meta CAPI tag carry an event_id in its serverEventDataList? Meta matches a browser Pixel event
+ *  and a server CAPI event by a shared event_id (+ event_name), so this row is the dedup key. Reads the
+ *  list param directly (serverTagParam only reads string/template params). PURE. */
+function metaCapiHasEventId(t: AuditTag): boolean {
+  const list = (Array.isArray(t.parameter) ? t.parameter : []).find((p) => (p as { key?: string }).key === 'serverEventDataList') as
+    | { list?: Array<{ map?: Array<{ key?: string; value?: unknown }> }> }
+    | undefined;
+  for (const row of list?.list ?? []) {
+    const m = row.map ?? [];
+    const name = m.find((e) => e.key === 'name')?.value;
+    const val = m.find((e) => e.key === 'value')?.value;
+    if (name === 'event_id' && typeof val === 'string' && val.trim() !== '') return true;
+  }
+  return false;
+}
+
 /** Canonical, order-independent signature of a trigger's CONDITIONS (operator + sorted
  *  args across every filter list). Two triggers that fire on the same conditions under
  *  different ids/names share a signature — the key to detecting duplicate GA4 relays whose
@@ -2413,6 +2438,32 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
         fix: { tool: 'update_gtm_tag', args: { tagId: t.tagId, tag: { parameter: [{ type: 'template', key: 'testId', value: '' }] } } },
       });
     }
+  }
+
+  // (5) NO EVENT_ID FOR BROWSER↔SERVER DEDUP — Meta and TikTok match a browser Pixel event and a server
+  //     event by a SHARED event_id (+ event_name). A CAPI server tag that carries no event_id therefore
+  //     can't be deduplicated, so if the SAME conversion also fires the browser Pixel (the usual hybrid
+  //     setup) it is counted twice. Conditional — a server-only setup (no Pixel) needs no event_id, and
+  //     this container can't see the web side — so it's MEDIUM and phrased "if a Pixel also fires". Skips
+  //     paused / never-firing tags (they can't double-count). Meta stores it in serverEventDataList;
+  //     TikTok/others in an `eventId` field.
+  for (const t of s.tags) {
+    if (t.paused || !(t.firingTriggerId ?? []).length) continue;
+    const meta = isMetaCapiServerTag(t);
+    const tiktok = !meta && isTikTokCapiServerTag(t);
+    if (!meta && !tiktok) continue;
+    const hasEventId = meta ? metaCapiHasEventId(t) : serverTagParam(t, 'eventId').trim() !== '';
+    if (hasEventId) continue;
+    const platform = meta ? 'Meta' : 'TikTok';
+    push({
+      severity: 'medium',
+      confidence: 'likely',
+      category: 'ga4',
+      resource: { kind: 'tag', id: t.tagId, name: t.name },
+      message: `${platform} CAPI server tag "${t.name}" sends no event_id — if the same conversion also fires the browser ${platform} Pixel (the usual hybrid setup), ${platform} can't deduplicate the browser and server events and counts the conversion twice.`,
+      recommendation: `Send the SAME event_id on the browser Pixel and this server tag (map it from the event, e.g. {{ed - event_id}}), so ${platform} deduplicates browser + server events. If you run server-only (no Pixel), you can ignore this.`,
+      autoFixable: false,
+    });
   }
 
   const nameCounts = new Map<string, number>();
