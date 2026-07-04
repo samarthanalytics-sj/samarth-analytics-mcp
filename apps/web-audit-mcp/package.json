@@ -5,7 +5,8 @@
   "description": "MCP server with a built-in site-audit agent: crawls a website with Playwright, inventories forms, interacts with consent banners (CMP), and runs Consent Mode v2 compliance audits.",
   "type": "module",
   "bin": {
-    "samarth-web-audit-mcp": "./dist/web-audit-mcp/src/index.js"
+    "samarth-web-audit-mcp": "./dist/web-audit-mcp/src/index.js",
+    "samarth-verify": "./dist/web-audit-mcp/src/verify/cli.js"
   },
   "main": "./dist/web-audit-mcp/src/index.js",
   "scripts": {
@@ -14,7 +15,10 @@
     "start": "node dist/web-audit-mcp/src/index.js",
     "start:http": "WEB_AUDIT_TRANSPORT=http node dist/web-audit-mcp/src/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx src/__tests__/web-audit.node.test.ts"
+    "verify": "tsx src/verify/cli.ts",
+    "test": "tsx src/__tests__/web-audit.node.test.ts",
+    "test:verify": "tsx src/verify/__tests__/ga4-hits.node.test.ts && tsx src/verify/__tests__/consent-signals.node.test.ts && tsx src/verify/__tests__/spec-schema.node.test.ts && tsx src/verify/__tests__/assert-engine.node.test.ts && tsx src/verify/__tests__/report.node.test.ts && tsx src/verify/__tests__/determinism.node.test.ts",
+    "test:verify:browser": "tsx src/verify/__tests__/capture.browser.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.4",
