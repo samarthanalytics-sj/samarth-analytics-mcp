@@ -1650,16 +1650,18 @@ test('buildMetaCapiServerTag maps EMQ user_data (em/ph ONLY) + EVENT-AWARE ecomm
   const extDefault = (extVar?.parameter ?? []).find((p) => (p as { key?: string }).key === 'defaultValue') as { value?: string } | undefined;
   assert.equal(extDefault?.value, '{{ed - user_id}}', 'external_id ed variable falls back to user_id');
   assert.ok(emq.some((v) => v.name === 'ed - user_id'), 'ed - user_id is created');
-  // custom_data is now the AddToCart recommended set (content_ids/contents/content_type/value/currency/num_items),
-  // NOT a fixed list — content_type is the literal "product"; no order_id (AddToCart has none).
+  // custom_data is the AddToCart recommended set (content_ids/contents/value/currency/num_items), NOT a
+  // fixed list — no order_id (AddToCart has none). content_type is deliberately OMITTED so the template's
+  // own product/product_group auto-detection is not clobbered by a hard-coded literal.
   assert.deepEqual(rows('customDataList'), [
     ['content_ids', '{{ed - content_ids}}'],
     ['contents', '{{ed - contents}}'],
-    ['content_type', 'product'],
     ['value', '{{ed - value}}'],
     ['currency', '{{ed - currency}}'],
     ['num_items', '{{ed - num_items}}'],
   ]);
+  // content_type is never emitted as a custom_data row (the template auto-detects it).
+  assert.ok(!rows('customDataList').some(([n]) => n === 'content_type'), 'content_type is left to the template');
   assert.deepEqual(rows('serverEventDataList'), [['event_id', '{{ed - event_id}}']]);
   // Purchase pulls in order_id (from transaction_id); a custom event falls back to the core set.
   const purchase = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - Purchase Tag', 'P', 'T', 'Purchase');
@@ -1927,7 +1929,14 @@ test('TIKTOK_EVENT_PROPERTIES: per-event recommended properties cover the commer
   assert.deepEqual(TIKTOK_EVENT_PROPERTIES.Purchase, ['contents', 'content_type', 'value', 'currency', 'order_id', 'description']);
   assert.ok(TIKTOK_EVENT_PROPERTIES.ViewContent.includes('content_type') && TIKTOK_EVENT_PROPERTIES.ViewContent.includes('contents'));
   assert.ok(TIKTOK_EVENT_PROPERTIES.InitiateCheckout.includes('num_items'));
-  assert.deepEqual(TIKTOK_EVENT_PROPERTIES.Search, ['query', 'content_type']);
+  // Search's only recommended property is the query (search_string); content_type is NOT a Search
+  // parameter (it means product/product_group for catalog events) so it was removed to avoid emitting a
+  // spurious content_type='product' on a search event.
+  assert.deepEqual(TIKTOK_EVENT_PROPERTIES.Search, ['query']);
+  // page_url / referrer are NOT properties — TikTok carries page context in a separate `page` object the
+  // template auto-fills, so no event lists them (Pageview has no property row; ClickButton is button_name only).
+  assert.equal(TIKTOK_EVENT_PROPERTIES.Pageview, undefined);
+  assert.deepEqual(TIKTOK_EVENT_PROPERTIES.ClickButton, ['button_name']);
   // a non-commerce event's props (routed to additional properties — not in TIKTOK_CUSTOM_DATA_KEYS)
   assert.deepEqual(TIKTOK_EVENT_PROPERTIES.SubmitForm, ['form_name', 'value']);
 });
@@ -2453,6 +2462,32 @@ test('pinterestServerEvent + buildPinterestCapiServerTag: inherit by default, fo
   assert.equal(pval(ov, 'testMode'), 'true');
   const cd = ((ov.parameter as Array<{ key?: string; list?: Array<{ map: Array<{ key?: string; value?: string }> }> }>) ?? []).find((p) => p.key === 'customDataList');
   assert.deepEqual((cd?.list ?? []).map((r) => [r.map.find((m) => m.key === 'name')?.value, r.map.find((m) => m.key === 'value')?.value]), [['value', '{{V}}']]);
+});
+
+test('buildPinterestCapiServerTag: override rows are canonicalized to Pinterest keys and blank-value rows are dropped', () => {
+  const t = buildPinterestCapiServerTag('cvt_PINS', 'x', 'A', 'T', {
+    override: {
+      userData: [
+        { name: 'email', value: '{{Email}}' },     // alias → em
+        { name: 'Phone', value: '{{Phone}}' },      // alias + casing → ph
+        { name: 'zip_code', value: '{{Zip}}' },     // alias → zp
+        { name: 'external_id', value: '   ' },       // blank value → dropped (erase-safety)
+      ],
+      customData: [
+        { name: 'transaction_id', value: '{{Txn}}' }, // alias → order_id
+        { name: 'value', value: '{{V}}' },            // already canonical
+        { name: 'my_custom', value: '{{C}}' },        // off-list → passed through verbatim
+      ],
+    },
+  });
+  // aliases corrected; the blank-value external_id row is not emitted.
+  assert.deepEqual(listRows(t, 'userDataList'), [['em', '{{Email}}'], ['ph', '{{Phone}}'], ['zp', '{{Zip}}']]);
+  assert.deepEqual(listRows(t, 'customDataList'), [['order_id', '{{Txn}}'], ['value', '{{V}}'], ['my_custom', '{{C}}']]);
+  assert.equal(paramVal(t, 'overrideMode'), 'true');
+  // A table of ONLY blank-value rows contributes nothing and leaves overrideMode off.
+  const blank = buildPinterestCapiServerTag('cvt_PINS', 'x', 'A', 'T', { override: { userData: [{ name: 'em', value: '' }] } });
+  assert.equal(paramVal(blank, 'overrideMode'), 'false');
+  assert.ok(!((blank.parameter as Array<{ key?: string }>) ?? []).some((p) => p.key === 'userDataList'));
 });
 
 test('snapEventType + buildSnapPixelTag: event mapping + flat advanced-matching fields; unknown → PAGE_VIEW', () => {
