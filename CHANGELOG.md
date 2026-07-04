@@ -1,3 +1,9 @@
+## [1.160.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.159.1...v1.160.0) (2026-07-04)
+
+### Features
+
+* **desktop:** dead custom-dimension detection in GA4 audit ([d2c22b3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d2c22b3b2be0721da02361d60e8e2fbc26fc4399))
+
 ## [1.159.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.159.0...v1.159.1) (2026-07-04)
 
 ### Bug Fixes
