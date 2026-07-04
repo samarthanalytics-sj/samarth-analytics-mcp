@@ -25,6 +25,9 @@ import type {
   MonitorAlert,
   MonitorConfig,
   MonitorStatus,
+  Ga4MonitorConfig,
+  Ga4MonitorStatus,
+  Ga4MonitorRun,
   DiscoverResult,
   ParsedSuggestionsResult,
   ProviderStatus,
@@ -267,6 +270,24 @@ const api = {
       const listener = (_e: unknown, alert: MonitorAlert): void => cb(alert);
       ipcRenderer.on('monitor:alert', listener);
       return () => ipcRenderer.removeListener('monitor:alert', listener);
+    },
+  },
+
+  // GA4 Monitoring: schedule background health checks of a chosen GA4 property (data flow, key
+  // events, spikes/drops, revenue integrity) and receive a run whenever it completes; new issues can
+  // be posted to a per-account Slack webhook.
+  ga4monitoring: {
+    status: (): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:status'),
+    configure: (patch: Partial<Ga4MonitorConfig>): Promise<Ga4MonitorStatus> =>
+      ipcRenderer.invoke('ga4monitoring:configure', patch),
+    runNow: (): Promise<Ga4MonitorRun | null> => ipcRenderer.invoke('ga4monitoring:runNow'),
+    setWebhook: (url: string): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:setWebhook', url),
+    clearWebhook: (): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:clearWebhook'),
+    // Subscribe to pushed runs (background + on-demand); returns an unsubscribe function.
+    onRun: (cb: (run: Ga4MonitorRun) => void): (() => void) => {
+      const listener = (_e: unknown, run: Ga4MonitorRun): void => cb(run);
+      ipcRenderer.on('ga4monitoring:run', listener);
+      return () => ipcRenderer.removeListener('ga4monitoring:run', listener);
     },
   },
 };

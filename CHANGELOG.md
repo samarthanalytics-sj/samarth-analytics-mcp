@@ -1,3 +1,37 @@
+## [1.175.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.174.0...v1.175.0) (2026-07-04)
+
+### Features
+
+* **desktop:** consent-drift alert + configurable alert threshold for GA4 monitoring ([deb99c7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/deb99c7fcbdf525d4811bdc7981df63a3116be36))
+* **desktop:** GA4 monitor alert-level control + cross-tab alert banner ([e3cc35f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e3cc35f58b046d9de5b1b6e8caa3511e3ef4b835))
+* **desktop:** GA4 monitoring engine + Slack webhook notifier (pure cores) ([72a8a12](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/72a8a1279e9a74005648822c865ee7ed140d5bcd))
+* **desktop:** GA4 monitoring scheduler service (config, dedup, Slack-on-new) ([457a289](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/457a2893738576890d791563c794c78f915c3ca0))
+* **desktop:** wire GA4 monitoring — tool, IPC, scheduler, and a new tab ([c0962ef](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c0962ef8d78dae54ec6444fd739a51dcb971efb7))
+
+## [1.174.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.173.0...v1.174.0) (2026-07-04)
+
+### Features
+
+* **desktop:** add a verification state to GA4 findings (confirmed/observed/blocked) ([f7c1e65](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f7c1e6518566fcb8937b5d6c04f898b02719a0ce))
+
+### Bug Fixes
+
+* **desktop:** flag GA4 Section 6 insights + perf tables as provisional when unverified ([9fdd514](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9fdd514789f8ca2f31b95c1acaa2309fb3410551))
+* **desktop:** gate GA4 decision readiness + outcomes on the data trust matrix ([2983a37](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2983a3729eb0500151f1fa9690fd245019187b68))
+* **desktop:** grade GA4 CLV decision readiness by BigQuery export/Signals ([61a0321](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/61a0321bd8b564ed6fdda305f77518435aa3dfbb))
+
+## [1.173.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.172.1...v1.173.0) (2026-07-04)
+
+### Features
+
+* **desktop:** rework the Settings tab (model pickers, monitoring, richer diagnostics) ([d4a0fbb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d4a0fbb2664370e251944de0f902e200b1cbaee7))
+
+## [1.172.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.172.0...v1.172.1) (2026-07-04)
+
+### Bug Fixes
+
+* **desktop:** gate CAPI event_id dedup audit on the auto-map toggle ([d2ee2f0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d2ee2f06d619bd330ce63db65363b73991cb9792))
+
 ## [1.172.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.171.0...v1.172.0) (2026-07-04)
 
 ### Features

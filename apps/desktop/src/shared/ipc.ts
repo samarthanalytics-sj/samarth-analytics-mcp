@@ -240,6 +240,9 @@ export interface Ga4FindingCardView {
   message: string;
   businessRisk: string;
   recommendation: string;
+  /** Verification state, orthogonal to severity: confirmed | unconfirmed | blocked. Drives the
+   *  Section-4 state chip so an inference-heavy read isn't shown as an established fact. */
+  state?: 'confirmed' | 'unconfirmed' | 'blocked';
 }
 /** Structured body sections (2-4 so far) for the designed card panel + styled export, mirroring the
  *  markdown report so the on-screen panel and the PDF render the same content as Section 1. */
@@ -282,6 +285,9 @@ export interface Ga4SectionsView {
   } | null;
   /** Section 4 — every finding, highest severity first. */
   findings: Ga4FindingCardView[];
+  /** Section 4 — "Blocked by verification": checks that could not run this window (unmeasured, not a
+   *  clean pass). Rendered as a distinct blocked-state group; kept out of the severity counts. */
+  blocked?: Array<{ area: string; message: string; recommendation: string }>;
   actionableCount: number;
   /** Section 5 — area coverage (status + confidence + evidence). */
   areas: Array<{ area: string; statusKey: string; confidence: string; evidence: string }>;
@@ -311,6 +317,9 @@ export interface Ga4SectionsView {
   llmTraffic: { rows: Array<{ source: string; sessions: string; convRate: string; revenue: string; engagement: string }>; share: string } | null;
   /** Section 6 — rule-based "Key insights" bullets (peaks/lows, top performers, the near-100%-conv flag). */
   insights: string[];
+  /** Section 6 — true when the conversion-rate/revenue columns of the performance tables lean on a
+   *  metric the Data Trust Matrix hasn't confirmed, so the renderer flags them as provisional. */
+  perfProvisional?: boolean;
   /** Section 6 — ecommerce funnel step reach (users per step + step conversion + depth). An event-
    *  coverage approximation, not a strict sequential funnel. null when the property has no view_item. */
   funnel: { steps: Array<{ label: string; users: string; pctEntry: string; stepConv: string }>; overall: string } | null;
@@ -589,6 +598,69 @@ export interface MonitorAlert {
   workspaceId?: string;
   newFindings: MonitorFinding[];
   resolvedCount: number;
+}
+
+// ── GA4 Monitoring ───────────────────────────────────────────────────────────
+// A background health monitor for a chosen GA4 property: re-checks data flow, key
+// events, spikes/drops and revenue integrity on a timer and (optionally) Slacks new issues.
+
+/** Persisted config for the GA4 monitor (single active property, mirrors the GTM MonitorConfig). */
+export interface Ga4MonitorConfig {
+  enabled: boolean;
+  /** Minutes between automatic checks (clamped to a sane minimum in main). */
+  intervalMinutes: number;
+  /** Property to monitor, like "properties/123456"; null until one is chosen in the tab. */
+  propertyId: string | null;
+  /** Display name for the property (for Slack + the tab header). */
+  propertyLabel: string;
+  /** Lookback window (days) for trend + per-event regression detection. */
+  days: number;
+  /** Post new issues to the active account's Slack webhook (requires a stored webhook). */
+  slackEnabled: boolean;
+  /** Only surface/Slack alerts at this severity and worse — a noise knob (default 'medium'). */
+  alertMinSeverity: 'critical' | 'high' | 'medium';
+}
+
+export interface Ga4MonitorAlertView {
+  id: string;
+  kind: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  title: string;
+  detail: string;
+  recommendation?: string;
+}
+
+export interface Ga4MonitorCheckView {
+  id: string;
+  label: string;
+  status: 'pass' | 'warn' | 'fail' | 'skip';
+  detail: string;
+}
+
+/** The result of one monitor run — shown in the tab and (for new alerts) sent to Slack. */
+export interface Ga4MonitorRun {
+  at: number;
+  property: string;
+  propertyLabel: string;
+  health: 'healthy' | 'warning' | 'critical';
+  summary: string;
+  checks: Ga4MonitorCheckView[];
+  alerts: Ga4MonitorAlertView[];
+  /** ids of the alerts that are NEW vs the previous run (the set that triggered Slack). */
+  newAlertIds: string[];
+  /** How many Slack messages were sent this run, and any send error (null when fine/skipped). */
+  slackSent: number;
+  slackError: string | null;
+}
+
+export interface Ga4MonitorStatus extends Ga4MonitorConfig {
+  running: boolean;
+  lastRunAt: number | null;
+  lastError: string | null;
+  /** Whether a Slack webhook is stored for the active account (drives the settings UI state). */
+  hasWebhook: boolean;
+  /** The most recent run so the tab can render on mount even if it wasn't open when it ran. */
+  lastRun: Ga4MonitorRun | null;
 }
 
 export interface GoogleClientStatus {

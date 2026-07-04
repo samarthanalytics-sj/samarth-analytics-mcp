@@ -8,6 +8,7 @@ import type {
   ChatTurn,
   CreateTagOutcome,
   DiscoverResult,
+  Ga4MonitorRun,
   Ga4PropertyAuditResult,
   Ga4PropertyListItem,
   GoogleClientStatus,
@@ -16,6 +17,7 @@ import type {
   GtmContext,
   GtmWorkspaceView,
   LlmProvider,
+  ProviderStatus,
   ScanProgressView,
   SecretSelfTest,
   ServerContainerResultView,
@@ -30,6 +32,7 @@ import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
 import { Ga4Charts } from './Ga4Charts';
+import { Ga4MonitoringPanel } from './Ga4MonitoringPanel';
 import { auditToCsv, auditToMarkdown } from './audit-export';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
@@ -38,7 +41,33 @@ const DEFAULT_MODEL: Record<LlmProvider, string> = {
   gemini: 'gemini-2.0-flash',
 };
 
-type View = 'chat' | 'gtm' | 'ga4audit' | 'prompts' | 'settings';
+// Sentinel value for the "Custom…" option in the model picker.
+const CUSTOM_MODEL = '__custom__';
+
+/** Curated model choices per provider for the Settings picker. The FIRST entry doubles as the sensible
+ *  default. This list only saves users from typing exact ids — any model the provider accepts still
+ *  works via "Custom…", so it never restricts what can run. Keep DEFAULT_MODEL pointing at a listed id. */
+const MODEL_OPTIONS: Record<LlmProvider, Array<{ id: string; label: string }>> = {
+  anthropic: [
+    { id: 'claude-opus-4-8', label: 'Claude Opus 4.8 (most capable)' },
+    { id: 'claude-sonnet-5', label: 'Claude Sonnet 5 (balanced)' },
+    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (fastest)' },
+  ],
+  openai: [
+    { id: 'gpt-4o', label: 'GPT-4o' },
+    { id: 'gpt-4o-mini', label: 'GPT-4o mini (cheaper)' },
+    { id: 'gpt-4.1', label: 'GPT-4.1' },
+    { id: 'o3', label: 'o3 (reasoning)' },
+    { id: 'o4-mini', label: 'o4-mini (reasoning, cheaper)' },
+  ],
+  gemini: [
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+  ],
+};
+
+type View = 'chat' | 'gtm' | 'ga4audit' | 'ga4monitoring' | 'prompts' | 'settings';
 type GtmTab = 'suggestions' | 'audit' | 'server';
 
 /* Friendly labels for GTM type codes, so approvals read in plain English. */
@@ -610,6 +639,8 @@ export function App(): JSX.Element {
   const [chatSeed, setChatSeed] = useState<{ text: string; nonce: number; product?: 'gtm' | 'ga4' } | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState('');
+  // Cross-tab GA4 monitoring banner: a background run with NEW issues surfaces here on any tab.
+  const [monitorAlert, setMonitorAlert] = useState<Ga4MonitorRun | null>(null);
 
   const active = accounts.find((a) => a.isActive);
 
@@ -626,7 +657,12 @@ export function App(): JSX.Element {
     const off = window.desktop.accounts.onChanged(() => {
       refresh().catch((e) => setError(String(e)));
     });
-    return off;
+    // Background GA4 monitoring runs push here: raise the cross-tab banner only when a run has NEW
+    // issues (so an already-seen ongoing problem, or a clean run, doesn't nag).
+    const offRun = window.desktop.ga4monitoring.onRun((run) => {
+      if (run.newAlertIds.length > 0 && run.health !== 'healthy') setMonitorAlert(run);
+    });
+    return () => { off(); offRun(); };
   }, []);
 
   async function run(fn: () => Promise<unknown>): Promise<void> {
@@ -729,6 +765,12 @@ export function App(): JSX.Element {
             📊 GA4 Audit
           </button>
           <button
+            style={{ ...styles.navItem, ...(view === 'ga4monitoring' ? styles.navActive : {}) }}
+            onClick={() => setView('ga4monitoring')}
+          >
+            🔔 GA4 Monitor
+          </button>
+          <button
             style={{ ...styles.navItem, ...(view === 'prompts' ? styles.navActive : {}) }}
             onClick={() => setView('prompts')}
           >
@@ -754,6 +796,16 @@ export function App(): JSX.Element {
           </div>
         )}
 
+        {monitorAlert && (
+          <div style={monitorAlert.health === 'critical' ? styles.monitorBarCrit : styles.monitorBarWarn}>
+            <span style={{ flex: 1 }}>
+              {monitorAlert.health === 'critical' ? '🔴' : '🟠'} GA4 Monitor · <b>{monitorAlert.propertyLabel}</b>: {monitorAlert.newAlertIds.length} new issue{monitorAlert.newAlertIds.length === 1 ? '' : 's'} — {monitorAlert.alerts.find((a) => monitorAlert.newAlertIds.includes(a.id))?.title ?? monitorAlert.summary}
+            </span>
+            <button style={styles.monitorBarBtn} onClick={() => { setView('ga4monitoring'); setMonitorAlert(null); }}>View</button>
+            <button style={styles.errorClose} onClick={() => setMonitorAlert(null)}>✕</button>
+          </div>
+        )}
+
         {/* ChatView stays MOUNTED across tab switches (hidden, not unmounted) so an in-flight
             response keeps streaming and the conversation isn't lost when you pop into GTM Tools. */}
         <div style={{ display: view === 'chat' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -763,6 +815,8 @@ export function App(): JSX.Element {
           <GtmToolsView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
         ) : view === 'ga4audit' ? (
           <Ga4AuditPanel key={active?.id ?? 'none'} active={active} onError={setError} />
+        ) : view === 'ga4monitoring' ? (
+          <Ga4MonitoringPanel key={active?.id ?? 'none'} active={active} onError={setError} />
         ) : view === 'prompts' ? (
           <PromptsView
             onUse={(text, product) => {
@@ -4107,40 +4161,52 @@ function SettingsView({
     saveTheme(t);
     applyTheme(t);
   };
+  // Single source of truth for app-level provider keys so the Language-model hint and the Providers editor
+  // never disagree — a key change in one updates the other immediately, and a probe failure surfaces.
+  const [provStatus, setProvStatus] = useState<ProviderStatus | null>(null);
+  useEffect(() => {
+    window.desktop.providers.status().then(setProvStatus).catch((e) => onError(String(e)));
+  }, []);
   return (
     <div style={styles.settings}>
       <h1 style={styles.settingsTitle}>Settings</h1>
 
       <section style={styles.card}>
         <h2 style={styles.h2}>Appearance</h2>
-        <div style={styles.kv}>
+        <div style={{ ...styles.kv, borderBottom: 'none' }}>
           <span>Theme</span>
           <div style={styles.toggle}>
             <button style={theme === 'dark' ? styles.toggleActive : styles.toggleBtn} onClick={() => setTheme('dark')}>
               🌙 Dark
             </button>
             <button style={theme === 'light' ? styles.toggleActive : styles.toggleBtn} onClick={() => setTheme('light')}>
-              ☀ Light
+              ☀️ Light
             </button>
           </div>
         </div>
       </section>
 
-      {google && !google.configured && (
-        <section style={styles.warn}>
-          <strong>Google OAuth client not configured.</strong> Create a Google “Desktop app” OAuth
-          client, then drop a file at:
-          <pre style={styles.codeBlock}>{google.configPath}</pre>
-          <code>{'{ "clientId": "…apps.googleusercontent.com", "clientSecret": "…" }'}</code>
-        </section>
-      )}
+      <section style={styles.card}>
+        <h2 style={styles.h2}>Google sign-in (OAuth client)</h2>
+        <OAuthClientCard google={google} />
+      </section>
+
       {active ? (
         <>
           <section style={styles.card}>
             <h2 style={styles.h2}>Active account</h2>
             <div style={styles.kv}><span>Email</span><b>{active.email}</b></div>
-            <div style={styles.kv}><span>Google</span><b>{active.hasGoogleToken ? '✓ signed in' : '— not connected'}</b></div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <div style={styles.kv}>
+              <span>Google</span>
+              <b style={{ color: active.hasGoogleToken ? 'var(--c-green)' : 'var(--text-muted)' }}>
+                {active.hasGoogleToken ? '✓ signed in' : 'not connected'}
+              </b>
+            </div>
+            <div style={{ ...styles.kv, borderBottom: 'none' }}>
+              <span>Added</span>
+              <b style={{ fontWeight: 500, color: 'var(--text-dim)' }}>{new Date(active.createdAt).toLocaleDateString()}</b>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
               {active.hasGoogleToken && (
                 <button style={styles.ghostBtn} onClick={() => run(() => window.desktop.google.disconnect(active.id))}>
                   Disconnect Google
@@ -4154,31 +4220,43 @@ function SettingsView({
 
           <section style={styles.card}>
             <h2 style={styles.h2}>Language model</h2>
-            <LlmEditor account={active} onChange={refresh} onError={onError} />
+            <p style={styles.settingsSub}>The model this account uses for chat. Pick a preset or choose Custom to enter any model id.</p>
+            {/* key by account id so switching accounts re-reads the newly active account's saved config. */}
+            <LlmEditor key={active.id} account={active} provStatus={provStatus} onChange={refresh} onError={onError} />
           </section>
         </>
       ) : (
         <section style={styles.card}>
-          <p style={styles.muted}>Connect a Google account to configure it.</p>
+          <h2 style={styles.h2}>Active account</h2>
+          <p style={styles.muted}>Connect a Google account from the sidebar to configure it.</p>
         </section>
       )}
 
       <section style={styles.card}>
         <h2 style={styles.h2}>Providers (API keys)</h2>
-        <ProvidersEditor onChange={refresh} onError={onError} />
+        <ProvidersEditor status={provStatus} onStatus={setProvStatus} onChange={refresh} onError={onError} />
       </section>
 
       <section style={styles.card}>
         <h2 style={styles.h2}>Diagnostics</h2>
         {selfTest && (
-          <div style={{ color: selfTest.ok ? 'var(--c-green)' : 'var(--c-red)', marginBottom: 8 }}>
-            Secret store (DPAPI): {selfTest.ok ? '✓ working' : `✗ ${selfTest.detail}`}
+          <div style={styles.kv}>
+            <span>Secret store (DPAPI)</span>
+            <b style={{ color: selfTest.ok ? 'var(--c-green)' : 'var(--c-red)', fontWeight: 500 }}>
+              {selfTest.ok ? '✓ working' : `✗ ${selfTest.detail}`}
+            </b>
           </div>
         )}
         {info && (
-          <div style={styles.muted}>
-            Electron {info.electron} · Node {info.node} · {info.platform}
-          </div>
+          <>
+            <div style={styles.kv}><span>App</span><b>{info.name} {info.version}</b></div>
+            <div style={{ ...styles.kv, borderBottom: 'none' }}>
+              <span>Runtime</span>
+              <b style={{ fontWeight: 500, color: 'var(--text-dim)', textAlign: 'right' }}>
+                Electron {info.electron} · Chrome {info.chrome} · Node {info.node} · {info.platform}
+              </b>
+            </div>
+          </>
         )}
       </section>
     </div>
@@ -4187,20 +4265,54 @@ function SettingsView({
 
 function LlmEditor({
   account,
+  provStatus,
   onChange,
   onError,
 }: {
   account: AccountView;
+  /** Shared app-level key status (single source of truth from SettingsView) — null until loaded. */
+  provStatus: ProviderStatus | null;
   onChange: () => Promise<void>;
   onError: (m: string) => void;
 }): JSX.Element {
-  const [provider, setProvider] = useState<LlmProvider>(account.llm?.provider ?? 'openai');
-  const [model, setModel] = useState(account.llm?.model ?? DEFAULT_MODEL.openai);
+  const initialProvider = account.llm?.provider ?? 'openai';
+  const initialModel = account.llm?.model ?? DEFAULT_MODEL[initialProvider];
+  const [provider, setProvider] = useState<LlmProvider>(initialProvider);
+  const [model, setModel] = useState(initialModel);
+  // Custom-vs-preset is STICKY state, not derived — so typing a custom id that transiently equals a preset
+  // (e.g. "gpt-4o" on the way to "gpt-4o-2024-11-20") never collapses the input mid-edit.
+  const [customMode, setCustomMode] = useState(
+    () => initialModel.trim() !== '' && !MODEL_OPTIONS[initialProvider].some((o) => o.id === initialModel)
+  );
   const [saved, setSaved] = useState('');
 
+  const presets = MODEL_OPTIONS[provider];
+  // Live app-level key status for the SELECTED provider; fall back to the account's saved flag only for its
+  // own provider (and only until the shared status loads).
+  const hasKey = provStatus?.[provider] ?? (account.llm?.provider === provider ? Boolean(account.llm?.hasApiKey) : false);
+
+  function changeProvider(p: LlmProvider): void {
+    setProvider(p);
+    setModel(DEFAULT_MODEL[p]); // a listed preset
+    setCustomMode(false);
+  }
+  function changeModelSelect(value: string): void {
+    if (value === CUSTOM_MODEL) {
+      setCustomMode(true);
+      setModel('');
+    } else {
+      setCustomMode(false);
+      setModel(value);
+    }
+  }
   async function save(): Promise<void> {
+    const m = model.trim();
+    if (!m) {
+      onError('Enter a model id (or pick a preset).');
+      return;
+    }
     try {
-      await window.desktop.accounts.setLlmConfig(account.id, provider, model);
+      await window.desktop.accounts.setLlmConfig(account.id, provider, m);
       await onChange();
       setSaved('Saved');
       setTimeout(() => setSaved(''), 1500);
@@ -4212,26 +4324,38 @@ function LlmEditor({
   return (
     <div>
       <div style={styles.formRow}>
-        <select
-          style={styles.select}
-          value={provider}
-          onChange={(e) => {
-            const p = e.target.value as LlmProvider;
-            setProvider(p);
-            setModel(DEFAULT_MODEL[p]);
-          }}
-        >
-          <option value="openai">OpenAI</option>
+        <select style={styles.select} value={provider} onChange={(e) => changeProvider(e.target.value as LlmProvider)}>
           <option value="anthropic">Anthropic</option>
+          <option value="openai">OpenAI</option>
           <option value="gemini">Gemini</option>
         </select>
-        <input style={styles.input} value={model} onChange={(e) => setModel(e.target.value)} placeholder="model" />
+        <select
+          style={{ ...styles.select, flex: 1, minWidth: 180 }}
+          value={customMode ? CUSTOM_MODEL : model}
+          onChange={(e) => changeModelSelect(e.target.value)}
+        >
+          {presets.map((m) => (
+            <option key={m.id} value={m.id}>{m.label}</option>
+          ))}
+          <option value={CUSTOM_MODEL}>Custom…</option>
+        </select>
         <button style={styles.ghostBtn} onClick={save}>
           Save
         </button>
       </div>
+      {customMode && (
+        <div style={styles.formRow}>
+          <input
+            style={styles.input}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="exact model id (e.g. gpt-4.1-mini)"
+            autoFocus
+          />
+        </div>
+      )}
       <div style={styles.muted}>
-        API key: {account.llm?.hasApiKey ? `✓ using the app-level ${account.llm.provider} key` : '✗ not set — add it under Providers below'}
+        API key: {hasKey ? `✓ using the app-level ${provider} key` : `not set (add the ${provider} key under Providers below)`}
         {saved && <span style={{ color: 'var(--c-green)' }}> · {saved}</span>}
       </div>
     </div>
@@ -4239,24 +4363,25 @@ function LlmEditor({
 }
 
 function ProvidersEditor({
+  status,
+  onStatus,
   onChange,
   onError,
 }: {
+  /** Shared app-level key status from SettingsView (null until loaded). */
+  status: ProviderStatus | null;
+  /** Push the new status up so the Language-model hint updates immediately after a key change. */
+  onStatus: (s: ProviderStatus) => void;
   onChange: () => Promise<void>;
   onError: (m: string) => void;
 }): JSX.Element {
   const providers: LlmProvider[] = ['openai', 'anthropic', 'gemini'];
-  const [status, setStatus] = useState<Record<string, boolean>>({});
   const [keys, setKeys] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    window.desktop.providers.status().then(setStatus).catch((e) => onError(String(e)));
-  }, []);
+  const st = status ?? ({} as ProviderStatus);
 
   async function save(p: LlmProvider): Promise<void> {
     try {
-      const next = await window.desktop.providers.setKey(p, keys[p] ?? '');
-      setStatus(next);
+      onStatus(await window.desktop.providers.setKey(p, keys[p] ?? ''));
       setKeys((k) => ({ ...k, [p]: '' }));
       await onChange();
     } catch (e) {
@@ -4266,7 +4391,7 @@ function ProvidersEditor({
 
   async function clear(p: LlmProvider): Promise<void> {
     try {
-      setStatus(await window.desktop.providers.clearKey(p));
+      onStatus(await window.desktop.providers.clearKey(p));
       await onChange();
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -4279,19 +4404,19 @@ function ProvidersEditor({
       {providers.map((p) => (
         <div key={p} style={styles.formRow}>
           <span style={{ width: 90, fontSize: 13, alignSelf: 'center', textTransform: 'capitalize' }}>
-            {p} {status[p] ? '✓' : ''}
+            {p} {st[p] ? '✓' : ''}
           </span>
           <input
             style={styles.input}
             type="password"
             value={keys[p] ?? ''}
             onChange={(e) => setKeys((k) => ({ ...k, [p]: e.target.value }))}
-            placeholder={status[p] ? 'key saved — enter to replace' : 'API key'}
+            placeholder={st[p] ? 'key saved (enter to replace)' : 'API key'}
           />
           <button style={styles.ghostBtn} onClick={() => save(p)}>
             Save
           </button>
-          {status[p] && (
+          {st[p] && (
             <button style={styles.dangerGhost} onClick={() => clear(p)}>
               Clear
             </button>
@@ -4299,6 +4424,37 @@ function ProvidersEditor({
         </div>
       ))}
     </div>
+  );
+}
+
+function OAuthClientCard({ google }: { google: GoogleClientStatus | null }): JSX.Element {
+  if (!google) return <p style={styles.muted}>Checking…</p>;
+  if (!google.configured) {
+    return (
+      <div style={styles.warn}>
+        <strong>Not configured.</strong> Create a Google “Desktop app” OAuth client, then drop a file at:
+        <pre style={styles.codeBlock}>{google.configPath}</pre>
+        <code>{'{ "clientId": "…apps.googleusercontent.com", "clientSecret": "…" }'}</code>
+      </div>
+    );
+  }
+  const source = google.source === 'env' ? 'Environment variable' : google.source === 'file' ? 'Config file' : 'unknown';
+  // The client id itself is intentionally not shown. When its shape looks off we still warn — without
+  // rendering the value.
+  const shapeOff = google.clientIdLooksValid === false;
+  return (
+    <>
+      <div style={styles.kv}><span>Status</span><b style={{ color: 'var(--c-green)', fontWeight: 500 }}>✓ Configured</b></div>
+      <div style={{ ...styles.kv, borderBottom: shapeOff ? '1px solid var(--border)' : 'none' }}>
+        <span>Loaded from</span><b style={{ fontWeight: 500, color: 'var(--text-dim)' }}>{source}</b>
+      </div>
+      {shapeOff && (
+        <div style={{ ...styles.kv, borderBottom: 'none' }}>
+          <span>Client ID</span>
+          <b style={{ color: 'var(--c-amber)', fontWeight: 500 }}>⚠ unexpected shape</b>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -4365,6 +4521,9 @@ const styles: Record<string, React.CSSProperties> = {
   promptCopy: { background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer' },
   errorBar: { background: 'var(--c-red-bg)', borderBottom: '1px solid var(--c-red-border)', color: 'var(--c-red)', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 },
   errorClose: { background: 'transparent', border: 'none', color: 'var(--c-red)', cursor: 'pointer' },
+  monitorBarCrit: { background: 'var(--c-red-bg)', borderBottom: '1px solid var(--c-red-border)', color: 'var(--c-red)', padding: '9px 16px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 },
+  monitorBarWarn: { background: 'var(--c-amber-bg)', borderBottom: '1px solid var(--c-amber-border)', color: 'var(--c-amber)', padding: '9px 16px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 },
+  monitorBarBtn: { background: 'transparent', border: '1px solid currentColor', color: 'inherit', borderRadius: 7, padding: '3px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' },
 
   chatWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   chatHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border)' },
@@ -4424,6 +4583,7 @@ const styles: Record<string, React.CSSProperties> = {
 
   settings: { flex: 1, overflowY: 'auto', padding: 24, maxWidth: 720 },
   settingsTitle: { fontSize: 22, fontWeight: 700, margin: '0 0 16px' },
+  settingsSub: { color: 'var(--text-muted)', fontSize: 12.5, margin: '-4px 0 12px', lineHeight: 1.5 },
   card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 18, marginBottom: 16, flexShrink: 0 },
   h2: { fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-muted)', margin: '0 0 12px' },
   kv: { display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border)', fontSize: 14 },

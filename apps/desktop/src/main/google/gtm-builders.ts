@@ -2232,20 +2232,32 @@ function isTikTokCapiServerTag(t: AuditTag): boolean {
   return keys.has('generateTtp') || keys.has('eventSource');
 }
 
-/** Does a Meta CAPI tag carry an event_id in its serverEventDataList? Meta matches a browser Pixel event
- *  and a server CAPI event by a shared event_id (+ event_name), so this row is the dedup key. Reads the
- *  list param directly (serverTagParam only reads string/template params). PURE. */
-function metaCapiHasEventId(t: AuditTag): boolean {
-  const list = (Array.isArray(t.parameter) ? t.parameter : []).find((p) => (p as { key?: string }).key === 'serverEventDataList') as
+/** Does a CAPI tag carry a non-empty row named `rowName` inside its list param `listKey`? Meta stores an
+ *  explicit dedup event_id as a serverEventDataList row {name:'event_id'} — an OVERRIDE of the value the
+ *  stape template auto-extracts, so its PRESENCE proves an id is sent (its absence proves nothing, because
+ *  auto-map may still forward one). Reads the list param directly (serverTagParam only reads
+ *  string/template params). PURE. */
+function capiListRowSet(t: AuditTag, listKey: string, rowName: string): boolean {
+  const list = (Array.isArray(t.parameter) ? t.parameter : []).find((p) => (p as { key?: string }).key === listKey) as
     | { list?: Array<{ map?: Array<{ key?: string; value?: unknown }> }> }
     | undefined;
   for (const row of list?.list ?? []) {
     const m = row.map ?? [];
     const name = m.find((e) => e.key === 'name')?.value;
     const val = m.find((e) => e.key === 'value')?.value;
-    if (name === 'event_id' && typeof val === 'string' && val.trim() !== '') return true;
+    if (name === rowName && typeof val === 'string' && val.trim() !== '') return true;
   }
   return false;
+}
+
+/** Is a boolean template param EXPLICITLY set to false on the tag? Absent → returns false, mirroring the
+ *  stape templates' `hasOwnProperty(x) ? data[x] : true` guard (a MISSING auto-map toggle DEFAULTS ON, so
+ *  absence must not read as off). Only a present-and-false toggle proves the auto-extraction path is
+ *  disabled. PURE. */
+function serverToggleExplicitlyOff(t: AuditTag, key: string): boolean {
+  const p = (Array.isArray(t.parameter) ? t.parameter : []).find((x) => (x as { key?: string }).key === key) as { value?: unknown } | undefined;
+  if (!p) return false;
+  return p.value === false || p.value === 'false';
 }
 
 /** Canonical, order-independent signature of a trigger's CONDITIONS (operator + sorted
@@ -2470,28 +2482,48 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     }
   }
 
-  // (5) NO EVENT_ID FOR BROWSER↔SERVER DEDUP — Meta and TikTok match a browser Pixel event and a server
-  //     event by a SHARED event_id (+ event_name). A CAPI server tag that carries no event_id therefore
-  //     can't be deduplicated, so if the SAME conversion also fires the browser Pixel (the usual hybrid
-  //     setup) it is counted twice. Conditional — a server-only setup (no Pixel) needs no event_id, and
-  //     this container can't see the web side — so it's MEDIUM and phrased "if a Pixel also fires". Skips
-  //     paused / never-firing tags (they can't double-count). Meta stores it in serverEventDataList;
-  //     TikTok/others in an `eventId` field.
+  // (5) CAPI DEDUP event_id NOT GUARANTEED (Meta / TikTok, server-side, CONDITIONAL) — Meta and TikTok
+  //     dedupe a browser Pixel event against the server CAPI event by a shared event_id. It is TEMPTING to
+  //     flag any CAPI tag that carries no explicit event_id field, but that is a FALSE POSITIVE: both stape
+  //     templates AUTO-EXTRACT event_id from the incoming event (getAllEventData → event_id ||
+  //     transaction_id) whenever their auto-map toggle is on, and that toggle DEFAULTS ON. So a tag with no
+  //     explicit id still forwards one at runtime as long as the (server-invisible) web side sends it. The
+  //     ONLY config-visible state that PROVES the tag won't send an id is: the auto-map toggle is
+  //     EXPLICITLY off AND no explicit id is mapped. Even then a double-count only happens if a browser
+  //     Pixel also fires the same conversion — which this container cannot see — so it is LOW +
+  //     runtime-required and phrased as guidance, not a proven defect. Toggle field: Meta
+  //     autoMapServerEventData, TikTok autoMapCommonEventData (absent = default on = NOT flagged). Verified
+  //     against stape-io/facebook-tag (template.tpl) + stape-io/tiktok-tag (template.js).
+  //     LinkedIn (unconditional getAllEventData, NO toggle) and Pinterest (autoMapServerEventDataParameters
+  //     default on) are NOT config-checkable — a server-only audit can never prove they omit event_id — so
+  //     they are intentionally left OUT of this check (adding a false-positive flag for them is worse than
+  //     silence). Skips paused / never-firing tags (they can't double-count).
   for (const t of s.tags) {
     if (t.paused || !(t.firingTriggerId ?? []).length) continue;
-    const meta = isMetaCapiServerTag(t);
-    const tiktok = !meta && isTikTokCapiServerTag(t);
-    if (!meta && !tiktok) continue;
-    const hasEventId = meta ? metaCapiHasEventId(t) : serverTagParam(t, 'eventId').trim() !== '';
-    if (hasEventId) continue;
-    const platform = meta ? 'Meta' : 'TikTok';
+    let platform: 'Meta' | 'TikTok' | null = null;
+    let autoMapOff = false;
+    let hasExplicitId = false;
+    if (isMetaCapiServerTag(t)) {
+      platform = 'Meta';
+      autoMapOff = serverToggleExplicitlyOff(t, 'autoMapServerEventData');
+      hasExplicitId = capiListRowSet(t, 'serverEventDataList', 'event_id');
+    } else if (isTikTokCapiServerTag(t)) {
+      platform = 'TikTok';
+      autoMapOff = serverToggleExplicitlyOff(t, 'autoMapCommonEventData');
+      hasExplicitId = serverTagParam(t, 'eventId').trim() !== '';
+    }
+    if (!platform || !autoMapOff || hasExplicitId) continue;
+    const toggle = platform === 'Meta' ? 'autoMapServerEventData' : 'autoMapCommonEventData';
     push({
-      severity: 'medium',
-      confidence: 'likely',
+      severity: 'low',
+      confidence: 'runtime-required',
       category: 'ga4',
+      // Stable id for the browser↔server dedup finding, so consumers (e.g. the unified tracking-status
+      // dedup dimension) match on this instead of the finding's prose, which is free to be reworded.
+      checkId: 'server_capi_no_event_id',
       resource: { kind: 'tag', id: t.tagId, name: t.name },
-      message: `${platform} CAPI server tag "${t.name}" sends no event_id — if the same conversion also fires the browser ${platform} Pixel (the usual hybrid setup), ${platform} can't deduplicate the browser and server events and counts the conversion twice.`,
-      recommendation: `Send the SAME event_id on the browser Pixel and this server tag (map it from the event, e.g. {{ed - event_id}}), so ${platform} deduplicates browser + server events. If you run server-only (no Pixel), you can ignore this.`,
+      message: `${platform} CAPI server tag "${t.name}" has auto-map (${toggle}) turned off and maps no explicit event_id, so it only sends one if the incoming event already carries it — which can't be confirmed from the server container. If the same conversion also fires the browser ${platform} Pixel without a shared event_id, the browser and server events can double-count.`,
+      recommendation: `Map an explicit event_id on this tag (e.g. {{ed - event_id}}) and send the SAME id from the browser ${platform} Pixel, or re-enable auto-mapping (${toggle}) so the tag forwards the event's own event_id. If you run server-only (no Pixel), you can ignore this.`,
       autoFixable: false,
     });
   }

@@ -39,7 +39,7 @@ export interface TrackingStatusInput {
   setup?: Pick<TrackingSetupReport, 'checks'> | null;
   /** Findings from the SERVER container audit (auditServerContainer().findings) —
    *  the source of the dedup + consent signals. */
-  serverFindings?: Array<Pick<AuditFinding, 'severity' | 'category' | 'message'>> | null;
+  serverFindings?: Array<Pick<AuditFinding, 'severity' | 'category' | 'message' | 'checkId'>> | null;
   /** Install-manifest drift (diffManifest()). */
   drift?: Pick<DriftReport, 'summary'> | null;
   /** True when a SERVER container was actually audited — lets `dedup` distinguish
@@ -107,12 +107,12 @@ function isSetupCheck(id: string): boolean {
   );
 }
 
-/** The single dedup finding auditServerContainer emits carries NO checkId and its
- *  category is the generic 'ga4' — so it is identified by its message signature:
- *  "sends no event_id" AND "deduplicate the browser and server events". */
-export function isDedupFinding(f: { message?: string }): boolean {
-  const m = f.message ?? '';
-  return m.includes('sends no event_id') && m.includes('deduplicate the browser and server events');
+/** The browser↔server dedup finding auditServerContainer emits, identified by its STABLE checkId
+ *  (`server_capi_no_event_id`). A message fallback is kept for older audit builds / reworded prose. */
+export function isDedupFinding(f: { checkId?: string; message?: string }): boolean {
+  if (f.checkId === 'server_capi_no_event_id') return true;
+  const m = (f.message ?? '').toLowerCase();
+  return m.includes('event_id') && (m.includes('double-count') || m.includes('deduplicat'));
 }
 
 // ── per-dimension mappings ─────────────────────────────────────────────────────
@@ -237,7 +237,7 @@ export function buildTrackingStatus(input: TrackingStatusInput): TrackingStatusR
   const byId = (pred: (id: string) => boolean): CheckLike[] =>
     ((input.setup?.checks ?? []) as TrackingSetupCheck[]).filter((c) => pred(c.id));
 
-  const findings = (input.serverFindings ?? []) as Array<Pick<AuditFinding, 'severity' | 'category' | 'message'>>;
+  const findings = (input.serverFindings ?? []) as Array<Pick<AuditFinding, 'severity' | 'category' | 'message' | 'checkId'>>;
   const consentFindings = findings.filter((f) => f.category === 'consent');
   const dedupFindings = findings.filter(isDedupFinding);
 

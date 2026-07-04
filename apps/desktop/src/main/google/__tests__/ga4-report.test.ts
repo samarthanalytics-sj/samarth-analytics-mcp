@@ -186,6 +186,22 @@ test('report has all 9 verdict-first sections', () => {
   assert.ok(md.indexOf('## 1 · Executive summary') < md.indexOf('## 9 · Scope'), 'exec summary before metadata');
 });
 
+test('decision readiness: Customer lifetime value is graded by BigQuery export / Google Signals, not hardcoded', () => {
+  const clvRow = (md: string): string => (md.split('\n').find((l) => l.includes('Customer lifetime value')) ?? '');
+
+  // BigQuery event-level export on → Answerable.
+  const bqMd = buildGa4AuditReport(input({ snapshot: snap({ bigQueryLinks: [{ project: 'proj', dailyExportEnabled: true, streamingExportEnabled: false }] }) }));
+  assert.ok(/\| Customer lifetime value \| Answerable \|/.test(bqMd), `BigQuery export → Answerable, got: ${clvRow(bqMd)}`);
+
+  // No export but Google Signals on → Partial (cross-device approximation).
+  const sigMd = buildGa4AuditReport(input({ snapshot: snap({ bigQueryLinks: [], googleSignals: 'GOOGLE_SIGNALS_ENABLED' }) }));
+  assert.ok(/\| Customer lifetime value \| Partial \|/.test(sigMd), `Signals only → Partial, got: ${clvRow(sigMd)}`);
+
+  // Neither → Not answerable (original behaviour preserved).
+  const noneMd = buildGa4AuditReport(input({ snapshot: snap({ bigQueryLinks: [], googleSignals: 'GOOGLE_SIGNALS_DISABLED' }) }));
+  assert.ok(/\| Customer lifetime value \| Not answerable \|/.test(noneMd), `neither → Not answerable, got: ${clvRow(noneMd)}`);
+});
+
 test('area-status grades on evidence with coloured dots: Data collection + zero-config Custom definitions are Partial', () => {
   const md = buildGa4AuditReport(input());
   assert.ok(/\| Data collection \| 🟡 Partial \| Likely \|/.test(md), 'collection Partial (deep health unverifiable)');
@@ -210,10 +226,29 @@ test('bar percentages are clamped to 0..100 (never print an out-of-range share)'
   for (const m of md.matchAll(/(\d+)%/g)) assert.ok(Number(m[1]) <= 100, `bar over 100%: ${m[0]}`);
 });
 
-test('decision readiness derives from config (ecommerce absent → abandonment Not answerable)', () => {
+test('decision readiness derives from config and is gated by the data trust matrix', () => {
   const md = buildGa4AuditReport(input());
-  assert.ok(/Abandonment by product\/page\? \| Not answerable/.test(md));
-  assert.ok(/Which campaigns generate revenue\? \| Answerable/.test(md)); // Ads linked
+  assert.ok(/Abandonment by product\/page\? \| Not answerable/.test(md), 'no ecommerce events → Not answerable');
+  // Ads are linked, but revenue is unverified in this fixture, so the revenue decision is capped at
+  // Partial rather than claimed Answerable on wiring alone.
+  assert.ok(/Which campaigns generate revenue\? \| Partial/.test(md), 'revenue unverified → Partial despite Ads link');
+});
+
+test('decision readiness caps trust-dependent decisions at Partial when conversion/revenue are unverified', () => {
+  // Default fixture: revenue is unverified (no ecommerce setup to gate on), so the revenue decision
+  // is Partial even though conversion counts are trusted here. Google Signals alone is a cross-device
+  // approximation, not robust identity, so repeat/churn is Partial even with Signals on (was
+  // Answerable before this gating).
+  const md = buildGa4AuditReport(input());
+  assert.ok(/Which campaigns generate revenue\? \| Partial/.test(md), 'revenue-dependent decision gated to Partial');
+  assert.ok(/Repeat\/churn within 90 days \| Partial/.test(md), 'Signals-only repeat/churn is Partial, not Answerable');
+
+  // When the trust matrix marks conversions do-not-quote (a >=2x traffic spike that conversions did
+  // not track), conversion-dependent decisions must also drop to Partial.
+  const b = baseline({ sessions: 32165, priorSessions: 8819, keyEvents: 210, priorKeyEvents: 200, revenue: 1000, priorRevenue: 950 });
+  const spikeMd = buildGa4AuditReport(input({ snapshot: snap({ keyEvents: [{ eventName: 'generate_lead' }, { eventName: 'refund' }] }), baseline: b, growth: growthOf(b, 'Organic Social') }));
+  assert.ok(/CAC by channel \| Partial/.test(spikeMd), 'conversions do-not-quote → CAC Partial');
+  assert.ok(/Refund\/return rate \| Partial/.test(spikeMd), 'conversions do-not-quote → refund Partial despite refund events');
 });
 
 test('a data-quality finding lands in the All-findings table with a business-risk column', () => {
@@ -225,6 +260,25 @@ test('a data-quality finding lands in the All-findings table with a business-ris
   assert.ok(/## 4 · All findings/.test(md));
   assert.ok(/Business risk/.test(md), 'findings table has a business-risk column');
   assert.ok(/Unassigned/.test(md));
+  // A deterministically-measured data-quality finding is Confirmed, not merely observed.
+  assert.ok(/Unassigned.*\| Confirmed \|/.test(md), 'data-quality finding carries the Confirmed state');
+});
+
+test('section 4 carries a verification state per finding and a "Blocked by verification" group', () => {
+  // A growth read is graded to its worst branch (carries an "if unconfirmed" branch), so it is
+  // OBSERVED, not confirmed.
+  const b = baseline({ sessions: 32165, priorSessions: 8819, keyEvents: 210, priorKeyEvents: 200, revenue: 1000, priorRevenue: 950 });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b, 'Organic Social') }));
+  assert.ok(/\| Severity \| Area \| Issue \| Business risk \| Fix \| State \|/.test(md), 'findings table has a State column');
+  assert.ok(/\| CRITICAL \| Growth \|.*\| Observed \|/.test(md), 'the growth read is Observed (unconfirmed)');
+  // Verification blockers are promoted into Section 4 as a first-class Blocked group.
+  assert.ok(/\*\*Blocked by verification\*\*/.test(md), 'blocked group heading');
+  assert.ok(/- \*\*Consent:\*\*/.test(md), 'consent is a blocked item');
+  assert.ok(/- \*\*Measurement:\*\*/.test(md), 'per-event parameter coverage is a blocked item');
+  // The ecommerce blocker only appears once purchase/item key events exist.
+  assert.ok(!/- \*\*Ecommerce:\*\*/.test(md), 'no ecommerce blocker without ecommerce events');
+  const ecomMd = buildGa4AuditReport(input({ snapshot: snap({ keyEvents: [{ eventName: 'purchase' }, { eventName: 'add_to_cart' }] }) }));
+  assert.ok(/- \*\*Ecommerce:\*\* Ecommerce item parameters and duplicate transactions/.test(ecomMd), 'ecommerce item-params/duplicate blocker surfaced');
 });
 
 test('a doubled-traffic spike conversions did not track → CRITICAL (worst unverified branch), "Do not trust yet"', () => {
@@ -274,6 +328,14 @@ test('section 6 renders a Key insights block derived from the breakdown data', (
   assert.ok(/- Biggest funnel drop-off: View item to Add to cart, where 60% of users leave\./.test(md), 'funnel drop-off insight (10000 -> 4000)');
   assert.ok(/- AI assistants sent [\d,]+ sessions/.test(md), 'AI-channel materiality insight');
   assert.ok(/- \/ is your top entry page \([\d,]+ sessions\) but converts at only/.test(md), 'landing-page leak insight');
+});
+
+test('section 6 flags perf tables + insights as provisional when revenue/conversion are unverified', () => {
+  // Default fixture: revenue is unverified, so the revenue columns get a provisional note and the
+  // revenue-derived Key insight is tagged, rather than reading as verified fact.
+  const md = buildGa4AuditReport(input());
+  assert.ok(/Revenue columns below are provisional - revenue is unverified/.test(md), 'perf-table provisional note');
+  assert.ok(/brings the most revenue.*\(provisional - revenue unverified\)/.test(md), 'revenue insight tagged provisional');
 });
 
 test('section 6 renders a channel-performance table with conversion rate + revenue per channel', () => {

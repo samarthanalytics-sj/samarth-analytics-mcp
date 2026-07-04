@@ -1620,41 +1620,109 @@ const tiktokCapiTag = (tagId: string, name: string, extra: Array<{ type: string;
   ],
 });
 
-test('auditServerContainer (5): flags a CAPI server tag with no event_id (browser↔server dedup), not one that carries it', () => {
+// A Stape Meta CAPI tag with an explicit auto-map toggle (autoMapServerEventData) and an optional
+// serverEventDataList event_id OVERRIDE row. autoMapValue null = toggle absent (template default ON).
+const metaCapiToggled = (tagId: string, name: string, autoMapValue: string | null, eventIdRow: boolean) => ({
+  tagId, name, type: 'cvt_5TP8W', firingTriggerId: ['1'], blockingTriggerId: [] as string[], paused: false, consentSettings: null,
+  parameter: [
+    { type: 'boolean', key: 'generateFbp', value: 'true' },
+    { type: 'template', key: 'pixelId', value: '123456789012345' },
+    { type: 'template', key: 'accessToken', value: 'EAAtoken' },
+    ...(autoMapValue !== null ? [{ type: 'boolean', key: 'autoMapServerEventData', value: autoMapValue }] : []),
+    ...(eventIdRow
+      ? [{ type: 'list', key: 'serverEventDataList', list: [{ type: 'map', map: [{ type: 'template', key: 'name', value: 'event_id' }, { type: 'template', key: 'value', value: '{{ed - event_id}}' }] }] }]
+      : []),
+  ],
+});
+// A LinkedIn CAPI server tag: distinguished by conversionRuleUrn (never pixelId), so isMeta/isTikTok never
+// match it. Its template always auto-extracts eventId (getAllEventData, no toggle) → never config-flaggable.
+const linkedinCapiTag = (tagId: string, name: string) => ({
+  tagId, name, type: 'cvt_LI7', firingTriggerId: ['1'], blockingTriggerId: [] as string[], paused: false, consentSettings: null,
+  parameter: [
+    { type: 'template', key: 'type', value: 'conversion' },
+    { type: 'template', key: 'accessToken', value: 'LITOKEN' },
+    { type: 'template', key: 'conversionRuleUrn', value: 'urn:lla:llaPartnerConversion:99' },
+  ],
+});
+// A Pinterest CAPI server tag: advertiserId + apiAccessToken (never pixelId/accessToken), auto-extracts
+// event_id via getAllEventData (autoMapServerEventDataParameters default on) → never config-flaggable.
+const pinterestCapiTag = (tagId: string, name: string) => ({
+  tagId, name, type: 'cvt_PIN', firingTriggerId: ['1'], blockingTriggerId: [] as string[], paused: false, consentSettings: null,
+  parameter: [
+    { type: 'template', key: 'advertiserId', value: '549123456789' },
+    { type: 'template', key: 'apiAccessToken', value: 'PINTOKEN' },
+  ],
+});
+const dedupNoId = (f: { message: string }): boolean => /turned off and maps no explicit event_id/.test(f.message);
+
+test('auditServerContainer (5): flags a Meta/TikTok CAPI tag ONLY when auto-map is explicitly off AND no explicit event_id', () => {
   const rep = auditServerContainer({
     taggingServerUrls: ['https://sgtm.example.com'],
     clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
     transformations: [],
     triggers: [{ triggerId: '1', name: 'All', type: 'customEvent' }],
     tags: [
-      // Meta CAPI with NO serverEventDataList → no event_id → flagged.
-      metaCapiTag('2', 'Meta CAPI - no id', [{ key: 'pixelId', value: '123456789012345' }, { key: 'accessToken', value: 'EAAtoken' }]),
-      // Meta CAPI from our builder → carries event_id in serverEventDataList → NOT flagged.
-      { ...buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - with id', 'P', 'T', 'Purchase', { firingTriggerId: ['1'] }), tagId: '3', firingTriggerId: ['1'], paused: false, blockingTriggerId: [], consentSettings: null },
-      // TikTok CAPI with no eventId → flagged; with eventId → not.
-      tiktokCapiTag('4', 'TikTok CAPI - no id', []),
-      tiktokCapiTag('5', 'TikTok CAPI - with id', [{ type: 'template', key: 'eventId', value: '{{ed - event_id}}' }]),
+      // Meta: auto-map explicitly OFF + no override row → the one config that proves no id is sent → FLAGGED.
+      metaCapiToggled('2', 'Meta off no id', 'false', false),
+      // Meta: auto-map OFF but an explicit event_id override row present → id IS sent → NOT flagged.
+      metaCapiToggled('3', 'Meta off with id', 'false', true),
+      // Meta: toggle absent (template default ON) + no row → auto-extracts at runtime → NOT flagged (regression:
+      // the old rule false-positived here).
+      metaCapiToggled('4', 'Meta default no id', null, false),
+      // Meta: auto-map explicitly ON + no row → auto-extracts → NOT flagged.
+      metaCapiToggled('5', 'Meta on no id', 'true', false),
+      // Meta from our builder → carries an event_id override row → NOT flagged.
+      { ...buildMetaCapiServerTag('cvt_5TP8W', 'Meta builder with id', 'P', 'T', 'Purchase', { firingTriggerId: ['1'] }), tagId: '6', firingTriggerId: ['1'], paused: false, blockingTriggerId: [], consentSettings: null },
+      // TikTok: auto-map explicitly OFF + no eventId → FLAGGED.
+      tiktokCapiTag('7', 'TikTok off no id', [{ type: 'boolean', key: 'autoMapCommonEventData', value: 'false' }]),
+      // TikTok: auto-map OFF but explicit eventId mapped → NOT flagged.
+      tiktokCapiTag('8', 'TikTok off with id', [{ type: 'boolean', key: 'autoMapCommonEventData', value: 'false' }, { type: 'template', key: 'eventId', value: '{{ed - event_id}}' }]),
+      // TikTok: toggle absent (default ON) + no eventId → NOT flagged (regression).
+      tiktokCapiTag('9', 'TikTok default no id', []),
     ],
   });
-  const noId = rep.findings.filter((f) => /sends no event_id/.test(f.message));
-  assert.equal(noId.length, 2, 'flags exactly the two tags missing event_id (Meta + TikTok)');
-  assert.ok(noId.every((f) => f.severity === 'medium' && f.confidence === 'likely'), 'medium + likely (conditional on a browser Pixel)');
-  assert.ok(noId.some((f) => /Meta CAPI - no id/.test(f.message)) && noId.some((f) => /TikTok CAPI - no id/.test(f.message)), 'names both missing-id tags');
-  assert.ok(!noId.some((f) => /with id/.test(f.message)), 'the event_id-carrying tags are NOT flagged');
+  const noId = rep.findings.filter(dedupNoId);
+  assert.equal(noId.length, 2, 'flags exactly the two auto-map-OFF + no-id tags (Meta + TikTok)');
+  // Anchor the computed `${platform}` PREFIX to the specific tag so a future label swap (Meta detected as
+  // TikTok or vice-versa) fails here — an unanchored /Meta off no id/ would still match inside the quoted
+  // tag name and hide the regression.
+  assert.ok(noId.some((f) => /^Meta CAPI server tag "Meta off no id"/.test(f.message)), 'the Meta tag is labeled Meta');
+  assert.ok(noId.some((f) => /^TikTok CAPI server tag "TikTok off no id"/.test(f.message)), 'the TikTok tag is labeled TikTok');
+  assert.ok(noId.every((f) => f.severity === 'low' && f.confidence === 'runtime-required'), 'advisory: low + runtime-required (the web side is invisible)');
+  assert.ok(noId.every((f) => /can double-count/.test(f.message) && !/counts the conversion twice/.test(f.message)), 'phrased conditionally, never as a proven double-count');
+  assert.ok(noId.every((f) => f.checkId === 'server_capi_no_event_id'), 'carries the STABLE dedup checkId (consumed by the tracking-status dedup dimension)');
+  // None of the auto-map-ON / explicit-id / builder tags are flagged.
+  for (const nm of ['Meta off with id', 'Meta default no id', 'Meta on no id', 'Meta builder with id', 'TikTok off with id', 'TikTok default no id']) {
+    assert.ok(!noId.some((f) => new RegExp(nm).test(f.message)), `${nm} must NOT be flagged`);
+  }
 });
 
-test('auditServerContainer (5): does not flag paused or trigger-less CAPI tags (they cannot double-count)', () => {
+test('auditServerContainer (5): excludes LinkedIn and Pinterest CAPI tags (they auto-extract event_id, not config-checkable)', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
+    transformations: [],
+    triggers: [{ triggerId: '1', name: 'All', type: 'customEvent' }],
+    tags: [
+      linkedinCapiTag('2', 'LinkedIn CAPI - no explicit id'),
+      pinterestCapiTag('3', 'Pinterest CAPI - no explicit id'),
+    ],
+  });
+  assert.ok(!rep.findings.some(dedupNoId), 'LinkedIn/Pinterest are never flagged for a missing event_id (auto-extract is invisible to a server-only audit)');
+});
+
+test('auditServerContainer (5): does not flag paused or trigger-less CAPI tags even when auto-map is off', () => {
   const rep = auditServerContainer({
     taggingServerUrls: ['https://sgtm.example.com'],
     clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
     transformations: [],
     triggers: [],
     tags: [
-      { ...metaCapiTag('2', 'Paused', [{ key: 'pixelId', value: '1' }, { key: 'accessToken', value: 'EAA' }]), paused: true },
-      { ...metaCapiTag('3', 'No trigger', [{ key: 'pixelId', value: '1' }, { key: 'accessToken', value: 'EAA' }]), firingTriggerId: [] },
+      { ...metaCapiToggled('2', 'Paused', 'false', false), paused: true },
+      { ...metaCapiToggled('3', 'No trigger', 'false', false), firingTriggerId: [] },
     ],
   });
-  assert.ok(!rep.findings.some((f) => /sends no event_id/.test(f.message)), 'paused + trigger-less CAPI tags are not flagged for dedup');
+  assert.ok(!rep.findings.some(dedupNoId), 'paused + trigger-less CAPI tags are not flagged for dedup');
 });
 
 test('buildMetaEmqVariables → ed variables with keyPath === key (corpus shape)', () => {
