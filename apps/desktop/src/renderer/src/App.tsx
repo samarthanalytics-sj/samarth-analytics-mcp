@@ -34,6 +34,7 @@ import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
 import { Ga4Charts } from './Ga4Charts';
 import { Ga4MonitoringPanel } from './Ga4MonitoringPanel';
 import { TagTypeIcon } from './TagTypeIcon';
+import { gtmTypeLabel } from '../../shared/tag-brand';
 import { auditToCsv, auditToMarkdown } from './audit-export';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
@@ -71,34 +72,8 @@ const MODEL_OPTIONS: Record<LlmProvider, Array<{ id: string; label: string }>> =
 type View = 'chat' | 'gtm' | 'ga4audit' | 'ga4monitoring' | 'prompts' | 'settings';
 type GtmTab = 'suggestions' | 'audit' | 'server';
 
-/* Friendly labels for GTM type codes, so approvals read in plain English. */
-const GTM_TYPE_LABELS: Record<string, string> = {
-  gaawe: 'GA4 Event',
-  gaawc: 'GA4 Configuration',
-  googtag: 'Google Tag',
-  awct: 'Google Ads Conversion',
-  sp: 'Google Ads Remarketing',
-  gclidw: 'Conversion Linker',
-  flc: 'Floodlight Counter',
-  fls: 'Floodlight Sales',
-  baut: 'Microsoft Ads UET',
-  bzi: 'LinkedIn Insight',
-  hjtc: 'Hotjar',
-  ua: 'Universal Analytics',
-  html: 'Custom HTML',
-  img: 'Custom Image',
-  linkClick: 'Click — Just Links',
-  click: 'Click — All Elements',
-  pageview: 'Page View',
-  domReady: 'DOM Ready',
-  windowLoaded: 'Window Loaded',
-  formSubmission: 'Form Submission',
-  c: 'Constant',
-  jsm: 'Custom JavaScript',
-  v: 'Data Layer Variable',
-  smm: 'Lookup Table',
-};
-const gtmTypeLabel = (t: string): string => GTM_TYPE_LABELS[t] ?? t;
+// GTM type labels + gtmTypeLabel now live in shared/tag-brand.ts (imported above) so the PDF export
+// and this panel can't drift.
 
 const OP_LABELS: Record<string, string> = {
   equals: 'equals',
@@ -3110,7 +3085,12 @@ function ContainerAuditPanel({
       const label = (ctx?.containerName ?? 'container').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'container';
       const saved =
         format === 'pdf'
-          ? await window.desktop.gtm.exportAuditPdf(`GTM audit - ${label}`, md())
+          ? await window.desktop.gtm.exportAuditPdf(`GTM audit - ${label}`, report, {
+              account: ctx?.accountName,
+              container: ctx?.containerName,
+              workspace: ctx?.workspaceName ?? undefined,
+              generatedAt: new Date().toLocaleString(),
+            })
           : await window.desktop.gtm.exportAudit(`GTM audit - ${label}.${format}`, format === 'csv' ? auditToCsv(report) : md());
       setExportNote(saved ? `✓ Saved to ${saved}` : 'Export cancelled');
     } catch (e) {

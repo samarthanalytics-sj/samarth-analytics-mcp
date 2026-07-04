@@ -19,6 +19,8 @@ import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-builders';
 import { withQuotaRetry } from '../google/quota-retry';
 import { reportHtmlDocument, dedupedReportPath } from '../google/ga4-report-export';
+import { gtmAuditHtml, type GtmAuditHtmlMeta } from '../../shared/gtm-audit-html';
+import type { AuditReportView } from '../../shared/ipc';
 
 // A prior download of the same report may still be open in a PDF viewer, which locks the file
 // (EBUSY/EPERM/EACCES on Windows). Fall back to a suffixed name so a re-download always succeeds.
@@ -68,14 +70,19 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     return filePath;
   });
 
-  // Save the container-audit as a styled PDF: the renderer sends the Markdown report; it is rendered
-  // in a hidden, script-disabled window and printed to PDF — the same pipeline as the GA4 report.
-  ipcMain.handle('gtm:exportAuditPdf', async (e, defaultName: unknown, markdown: unknown) => {
+  // Save the container-audit as a styled PDF that mirrors the panel: the renderer sends the FULL
+  // structured report + scope meta; gtmAuditHtml() renders the same severity cards / icons / type
+  // labels the UI shows, and the document is printed in a hidden, script-disabled window — the same
+  // pipeline as the GA4 report.
+  ipcMain.handle('gtm:exportAuditPdf', async (e, defaultName: unknown, report: unknown, meta: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const base = String(defaultName ?? 'GTM container audit')
       .replace(/[\\/:*?"<>|]/g, '_')
       .replace(/\.pdf$/i, '')
       .trim() || 'GTM container audit';
+    const r = report as AuditReportView;
+    if (!r || !Array.isArray(r.findings) || !r.counts || !r.summary) throw new Error('Invalid audit report.');
+    const m: GtmAuditHtmlMeta = meta && typeof meta === 'object' ? (meta as GtmAuditHtmlMeta) : {};
     const opts = { title: 'Export container audit', defaultPath: `${base}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] };
     const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (canceled || !filePath) return null;
@@ -84,7 +91,8 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
       webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false },
     });
     try {
-      await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(reportHtmlDocument(base, String(markdown ?? ''))));
+      const html = reportHtmlDocument(base, '', { execHtml: gtmAuditHtml(r, m) });
+      await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
       const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
       return await writeReportFile(filePath, pdf);
     } finally {
