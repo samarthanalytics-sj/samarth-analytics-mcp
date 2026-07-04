@@ -123,3 +123,17 @@ export function reportHtmlDocument(title: string, md: string, opts: { word?: boo
   const body = `${opts.execHtml ?? ''}${markdownToHtml(md)}`;
   return `<!DOCTYPE html><html${ns}><head><meta charset="utf-8"><title>${esc(title)}</title><style>${REPORT_CSS}</style></head><body>${body}</body></html>`;
 }
+
+/** The i-th candidate save path: i<=0 → the chosen path unchanged; i>=1 → "name (i).ext" (the counter
+ *  inserted before the extension, e.g. "report (2).pdf"). Used to fall back to a fresh filename when the
+ *  chosen file is LOCKED (still open in a PDF/Word viewer) so a re-download doesn't fail with EBUSY.
+ *  Pure + separator-aware (handles both \\ and /); a dot only counts as the extension when it comes
+ *  after the last path separator (so "C:\\a.b\\report" isn't mis-split). */
+export function dedupedReportPath(filePath: string, i: number): string {
+  if (i <= 0) return filePath;
+  const sep = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+  const dot = filePath.lastIndexOf('.');
+  return dot > sep && dot >= 0
+    ? `${filePath.slice(0, dot)} (${i})${filePath.slice(dot)}`
+    : `${filePath} (${i})`;
+}
