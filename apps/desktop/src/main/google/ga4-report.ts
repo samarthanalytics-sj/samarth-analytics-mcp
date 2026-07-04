@@ -99,6 +99,22 @@ function shareLabel(pairs: Array<{ name: string; sessions: number }>): string {
   return pairs.map((p) => `${p.name || '(not set)'} ${pct(p.sessions, total)}%`).join(', ');
 }
 
+function fmtSeconds(s: number): string {
+  const sec = Math.max(0, Math.round(s));
+  const m = Math.floor(sec / 60);
+  return m > 0 ? `${m}m ${sec % 60}s` : `${sec}s`;
+}
+
+// Engagement (attention) one-liner for the baseline block: average engagement time per session (the
+// honest attention figure — excludes idle time, unlike session duration), the engaged-session rate, and
+// engaged sessions per active user. null when there is no session data to derive it from.
+function engagementLabel(baseline: Ga4Baseline): string | null {
+  if (baseline.sessions <= 0) return null;
+  const parts = [`${fmtSeconds(baseline.avgEngagementSec)} avg engagement time/session`, `${(baseline.engagementRate * 100).toFixed(1)}% engaged-session rate`];
+  if (baseline.engagedSessionsPerUser > 0) parts.push(`${baseline.engagedSessionsPerUser.toFixed(1)} engaged sessions/user`);
+  return parts.join(' · ');
+}
+
 // Per-channel PERFORMANCE rows (conversion rate + revenue per channel, not just session share) —
 // formatted ONCE here so the markdown table and the structured/HTML view read identically. Top 10 by
 // sessions; revenue prefixed with the property currency; rates as percentages.
@@ -461,6 +477,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
         peakDay: baseline.peakDay ? `${fmtDay(baseline.peakDay.date)} — ${num(baseline.peakDay.sessions)} sessions` : null,
         newVsReturning: shareLabel(baseline.newVsReturning),
         topMarkets: baseline.topCountries.length ? baseline.topCountries.map((c) => `${c.name || '(not set)'} ${pct(c.sessions, baseline.sessions)}%`).join(', ') : null,
+        engagement: engagementLabel(baseline),
       }
     : null;
 
@@ -681,6 +698,8 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     L.push(`- **Peak day:** ${baseline.peakDay ? `${fmtDay(baseline.peakDay.date)} — ${num(baseline.peakDay.sessions)} sessions` : 'Not Verified'}`);
     L.push(`- **New vs returning:** ${shareLabel(baseline.newVsReturning)}`);
     L.push(`- **Top markets:** ${baseline.topCountries.length ? baseline.topCountries.map((c) => `${c.name || '(not set)'} ${pct(c.sessions, baseline.sessions)}%`).join(', ') : 'Not Verified'}`);
+    const engLine = engagementLabel(baseline);
+    if (engLine) L.push(`- **Engagement:** ${engLine}`);
     L.push('');
     const cperf = channelPerfRows(baseline, s.currencyCode);
     if (cperf.length) {

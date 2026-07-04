@@ -286,6 +286,8 @@ export interface Ga4SectionsView {
     peakDay: string | null;
     newVsReturning: string;
     topMarkets: string | null;
+    /** Engagement one-liner: avg engagement time/session, engaged-session rate, engaged sessions/user. */
+    engagement: string | null;
   } | null;
   /** Section 6 — per-channel performance (conversion rate + revenue per channel, not just share). */
   channelPerformance: Array<{ channel: string; sessions: string; convRate: string; revenue: string; engagement: string }>;

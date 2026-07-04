@@ -104,6 +104,9 @@ const baseline = (over: Partial<Ga4Baseline> = {}): Ga4Baseline => ({
     { name: 'returning', sessions: 31506 },
   ],
   topCountries: [{ name: 'India', sessions: 70000 }, { name: 'United States', sessions: 4000 }],
+  avgEngagementSec: 83,
+  engagementRate: 0.612,
+  engagedSessionsPerUser: 1.4,
   channelPerformance: [
     { channel: 'Organic Search', sessions: 40000, keyEvents: 1200, convRate: 0.03, revenue: 250000, engagementRate: 0.62 },
     { channel: 'Paid Search', sessions: 20000, keyEvents: 900, convRate: 0.045, revenue: 180000, engagementRate: 0.55 },
@@ -229,6 +232,28 @@ test('a doubled-traffic spike conversions did not track → CRITICAL (worst unve
   assert.ok(!/Well-configured/.test(md), 'never a false all-clear');
   assert.ok(/## 2 · What is wrong/.test(md) && /If unconfirmed:/.test(md), 'top finding is expanded with the worse branch');
   assert.ok(/Growth signals \(vs prior\)/.test(md), 'growth signals shown in baseline');
+});
+
+test('section 6 baseline includes an engagement line (avg time/session formatted mm ss, engaged rate, per user)', () => {
+  const md = buildGa4AuditReport(input());
+  assert.ok(/- \*\*Engagement:\*\*/.test(md), 'engagement metaRow present');
+  assert.ok(/1m 23s avg engagement time\/session/.test(md), '83s formats as 1m 23s');
+  assert.ok(/61\.2% engaged-session rate/.test(md), 'engagementRate 0.612 → 61.2%');
+  assert.ok(/1\.4 engaged sessions\/user/.test(md), 'engaged sessions per user shown');
+});
+
+test('engagement line is omitted when the baseline has no sessions', () => {
+  const b = baseline({ sessions: 0, avgEngagementSec: 0, engagementRate: 0, engagedSessionsPerUser: 0 });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(!/- \*\*Engagement:\*\*/.test(md), 'no engagement line without sessions to derive it from');
+});
+
+test('engagement line keeps time + rate but drops the per-user figure when it is zero', () => {
+  const b = baseline({ sessions: 100, avgEngagementSec: 60, engagementRate: 0.5, engagedSessionsPerUser: 0 });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(/- \*\*Engagement:\*\*/.test(md) && /1m 0s avg engagement time\/session/.test(md), 'line still present with time');
+  assert.ok(/50\.0% engaged-session rate/.test(md), 'rate still shown');
+  assert.ok(!/engaged sessions\/user/.test(md), 'per-user figure dropped when 0 (no "0.0 engaged sessions/user")');
 });
 
 test('section 6 renders a channel-performance table with conversion rate + revenue per channel', () => {
