@@ -1,0 +1,150 @@
+import assert from 'node:assert/strict';
+import { monitorGa4, firstMetric, type Ga4MonitorInput } from '../ga4-monitor';
+import type { Ga4Baseline } from '../data-service';
+import type { DataQualityCounts } from '../ga4-data-quality';
+
+let passed = 0;
+let failed = 0;
+function test(name: string, fn: () => void): void {
+  try {
+    fn();
+    console.log(`  ✓ ${name}`);
+    passed++;
+  } catch (e) {
+    console.error(`  ✗ ${name}: ${(e as Error).message}`);
+    failed++;
+  }
+}
+
+// A healthy baseline: steady daily sessions, outcomes moving with traffic. Tests override the fields
+// they exercise.
+const baseline = (over: Partial<Ga4Baseline> = {}): Ga4Baseline => ({
+  startDate: '2026-06-01', endDate: '2026-06-30', priorStartDate: '2026-05-01', priorEndDate: '2026-05-31',
+  sessions: 10000, priorSessions: 9500, keyEvents: 500, priorKeyEvents: 480, revenue: 200000, priorRevenue: 190000,
+  avgEngagementSec: 60, engagementRate: 0.5, engagedSessionsPerUser: 1.2, trendPct: 5,
+  peakDay: { date: '20260615', sessions: 360 },
+  dailySessions: [
+    { date: '20260610', sessions: 330 }, { date: '20260611', sessions: 340 }, { date: '20260612', sessions: 335 },
+    { date: '20260613', sessions: 345 }, { date: '20260614', sessions: 338 }, { date: '20260615', sessions: 360 },
+    { date: '20260616', sessions: 342 }, { date: '20260617', sessions: 336 },
+  ],
+  peakDayChannels: null, channelDaily: [], devices: [], newVsReturning: [], topCountries: [],
+  channelPerformance: [{ channel: 'Organic Search', sessions: 6000, keyEvents: 300, convRate: 0.05, revenue: 120000, engagementRate: 0.6 }],
+  landingPages: [], devicePerformance: [], geoPerformance: [], llmTraffic: [], funnelSteps: [],
+  ...over,
+});
+
+const dq = (over: Partial<DataQualityCounts> = {}): DataQualityCounts => ({
+  totalSessions: 10000,
+  channelGroups: [{ name: 'Organic Search', sessions: 6000 }, { name: 'Direct', sessions: 4000 }],
+  sourceMediums: [{ name: 'google / organic', sessions: 6000 }],
+  windowDays: 30, startDate: '2026-06-01', endDate: '2026-06-30', todayYmd: '2026-07-01',
+  ...over,
+});
+
+const input = (over: Partial<Ga4MonitorInput> = {}): Ga4MonitorInput => ({
+  property: 'properties/123',
+  realtimeActiveUsers: 12,
+  baseline: baseline(),
+  dqCounts: dq(),
+  eventDeltas: { events: [{ name: 'purchase', count: 500, priorCount: 480 }], keyEventNames: ['purchase'] },
+  transactions: null,
+  keyEventNames: ['purchase'],
+  hasEcommerce: false,
+  ...over,
+});
+
+console.log('\nGA4 monitor:');
+
+test('a healthy property produces no alerts and reports healthy', () => {
+  const r = monitorGa4(input());
+  assert.equal(r.health, 'healthy', r.summary);
+  assert.equal(r.alerts.length, 0, JSON.stringify(r.alerts));
+  assert.ok(r.checks.find((c) => c.id === 'data_flow')?.status === 'pass', 'data flow passes');
+});
+
+test('no realtime + empty last complete day on a normally-trafficked property = critical no-data alert', () => {
+  // Last complete day (20260617, since todayYmd 2026-07-01 is not in the series) has 0 sessions.
+  const b = baseline({ dailySessions: [
+    { date: '20260613', sessions: 345 }, { date: '20260614', sessions: 338 }, { date: '20260615', sessions: 360 },
+    { date: '20260616', sessions: 342 }, { date: '20260617', sessions: 0 },
+  ] });
+  const r = monitorGa4(input({ realtimeActiveUsers: 0, baseline: b }));
+  const a = r.alerts.find((x) => x.kind === 'no_data');
+  assert.ok(a, 'no_data alert present: ' + JSON.stringify(r.alerts));
+  assert.equal(a.id, 'no_data');
+  assert.equal(a.severity, 'critical');
+  assert.equal(r.health, 'critical');
+});
+
+test('a partial trailing day (today) is not misread as a data outage', () => {
+  // The last series day IS today → excluded; the prior complete day has real traffic → no alert.
+  const b = baseline({ dailySessions: [
+    { date: '20260628', sessions: 340 }, { date: '20260629', sessions: 345 }, { date: '20260630', sessions: 338 },
+    { date: '20260701', sessions: 5 }, // partial "today"
+  ] });
+  const r = monitorGa4(input({ realtimeActiveUsers: 0, baseline: b, dqCounts: dq({ todayYmd: '2026-07-01' }) }));
+  assert.ok(!r.alerts.some((a) => a.kind === 'no_data'), 'no false no-data on a partial today: ' + JSON.stringify(r.alerts));
+});
+
+test('a key event that stopped firing is a critical event_stopped alert with a stable id', () => {
+  const r = monitorGa4(input({
+    eventDeltas: { events: [{ name: 'purchase', count: 0, priorCount: 480 }], keyEventNames: ['purchase'] },
+    keyEventNames: ['purchase'],
+  }));
+  const a = r.alerts.find((x) => x.kind === 'event_stopped');
+  assert.ok(a, 'event_stopped alert present: ' + JSON.stringify(r.alerts));
+  assert.equal(a.id, 'event_stopped:purchase', 'stable dedup id keyed on the event name');
+  assert.equal(a.severity, 'high');
+  assert.equal(r.health, 'critical');
+});
+
+test('a sudden one-day spike raises a medium spike alert', () => {
+  const b = baseline({ dailySessions: [
+    { date: '20260610', sessions: 300 }, { date: '20260611', sessions: 310 }, { date: '20260612', sessions: 305 },
+    { date: '20260613', sessions: 315 }, { date: '20260614', sessions: 1600 }, { date: '20260615', sessions: 320 },
+    { date: '20260616', sessions: 308 },
+  ] });
+  const r = monitorGa4(input({ baseline: b }));
+  const a = r.alerts.find((x) => x.kind === 'spike');
+  assert.ok(a, 'spike alert present: ' + JSON.stringify(r.alerts.map((z) => z.kind)));
+  assert.equal(a.severity, 'medium');
+});
+
+test('duplicate transactions raise a revenue-integrity alert only when ecommerce is on', () => {
+  const withDup = monitorGa4(input({ hasEcommerce: true, transactions: { transactions: [{ id: 'T-1', purchases: 3 }], notSetShare: 0 } }));
+  assert.ok(withDup.alerts.some((a) => a.kind === 'duplicate_tx'), 'dup alert when ecommerce on');
+  // Same data but ecommerce off → no transaction check runs.
+  const off = monitorGa4(input({ hasEcommerce: false, transactions: { transactions: [{ id: 'T-1', purchases: 3 }], notSetShare: 0 } }));
+  assert.ok(!off.alerts.some((a) => a.kind === 'duplicate_tx'), 'no dup alert when ecommerce off');
+});
+
+test('missing inputs degrade to skipped checks, never false alarms', () => {
+  const r = monitorGa4({ property: 'properties/1', realtimeActiveUsers: null, baseline: null, dqCounts: null, eventDeltas: null, transactions: null, keyEventNames: [], hasEcommerce: false });
+  assert.equal(r.alerts.length, 0, 'no alerts with no data');
+  assert.equal(r.health, 'healthy');
+  assert.ok(r.checks.every((c) => c.status === 'skip'), 'every check skipped');
+});
+
+test('alerts are ordered worst-severity first', () => {
+  const r = monitorGa4(input({
+    realtimeActiveUsers: 0,
+    baseline: baseline({ dailySessions: [
+      { date: '20260613', sessions: 345 }, { date: '20260614', sessions: 338 }, { date: '20260615', sessions: 360 },
+      { date: '20260616', sessions: 342 }, { date: '20260617', sessions: 0 },
+    ] }),
+    eventDeltas: { events: [{ name: 'view_item', count: 0, priorCount: 900 }], keyEventNames: ['purchase'] },
+  }));
+  assert.ok(r.alerts.length >= 2, 'multiple alerts: ' + JSON.stringify(r.alerts.map((a) => a.severity)));
+  const ranks = r.alerts.map((a) => (a.severity === 'critical' ? 0 : a.severity === 'high' ? 1 : a.severity === 'medium' ? 2 : 3));
+  assert.deepEqual(ranks, [...ranks].sort((x, y) => x - y), 'sorted worst-first');
+});
+
+test('firstMetric reads a scalar realtime metric, null when absent', () => {
+  assert.equal(firstMetric({ dimensionHeaders: [], metricHeaders: ['activeUsers'], rows: [{ dimensions: [], metrics: ['42'] }] }), 42);
+  assert.equal(firstMetric({ dimensionHeaders: [], metricHeaders: ['activeUsers'], rows: [] }), null);
+  assert.equal(firstMetric(null), null);
+});
+
+console.log(`\n${passed} passed, ${failed} failed`);
+if (failed > 0) process.exit(1);
