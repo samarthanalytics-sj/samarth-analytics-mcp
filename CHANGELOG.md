@@ -1,3 +1,9 @@
+## [1.161.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.160.0...v1.161.0) (2026-07-04)
+
+### Features
+
+* **desktop:** recommended-event coverage in GA4 audit ([5cbf599](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5cbf5999a6eebde4897b0845ffc04ee38e12b0f1))
+
 ## [1.160.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.159.1...v1.160.0) (2026-07-04)
 
 ### Features
