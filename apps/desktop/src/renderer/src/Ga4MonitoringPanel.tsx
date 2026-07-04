@@ -33,10 +33,16 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
   const [lastRun, setLastRun] = useState<Ga4MonitorRun | null>(null);
   const [running, setRunning] = useState(false);
   const [webhookInput, setWebhookInput] = useState('');
+  const [labelInput, setLabelInput] = useState('');
+  const [labelDirty, setLabelDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
 
   const apply = (st: Ga4MonitorStatus): void => { setStatus(st); if (st.lastRun) setLastRun(st.lastRun); };
+  // Seed the label field from saved config until the user starts editing (then keep their draft).
+  useEffect(() => {
+    if (!labelDirty) setLabelInput(status?.slackLabel ?? '');
+  }, [status?.slackLabel, labelDirty]);
 
   async function refreshStatus(): Promise<void> {
     try { apply(await window.desktop.ga4monitoring.status()); } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
@@ -67,15 +73,32 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
     } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setRunning(false); }
   }
 
+  // Save the webhook URL (if one was entered) and/or the channel label. Lets the user update just the
+  // label (leave the URL box empty) or connect a new webhook + label together.
   async function saveWebhook(): Promise<void> {
+    const url = webhookInput.trim();
+    if (!url && !labelDirty) return;
     setBusy(true); onError(''); setNote('');
-    try { apply(await window.desktop.ga4monitoring.setWebhook(webhookInput.trim())); setWebhookInput(''); setNote('Slack webhook saved (encrypted).'); }
-    catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+    try {
+      let st = status ?? undefined;
+      if (url) { st = await window.desktop.ga4monitoring.setWebhook(url); setWebhookInput(''); }
+      st = await window.desktop.ga4monitoring.configure({ slackLabel: labelInput.trim() });
+      setLabelDirty(false);
+      if (st) apply(st);
+      setNote(url ? 'Slack webhook saved (encrypted).' : 'Slack channel label saved.');
+    } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
   async function clearWebhook(): Promise<void> {
     setBusy(true); onError('');
     try { apply(await window.desktop.ga4monitoring.clearWebhook()); setNote('Slack webhook removed.'); }
     catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  }
+  async function sendTest(): Promise<void> {
+    setBusy(true); onError(''); setNote('');
+    try {
+      const r = await window.desktop.ga4monitoring.sendTest();
+      setNote(r.ok ? 'Test message sent — check your Slack channel to confirm where alerts land.' : `Test failed: ${r.error ?? 'unknown error'}`);
+    } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
 
   const selectedProperty = status?.propertyId ?? '';
@@ -133,7 +156,12 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       {/* ── Slack ── */}
       <div style={box}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <span style={{ fontWeight: 600 }}>Slack alerts {status?.hasWebhook ? <span style={{ color: 'var(--c-green)', fontSize: 12 }}>· webhook set</span> : <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>· not configured</span>}</span>
+          <span style={{ fontWeight: 600 }}>
+            Slack alerts{' '}
+            {status?.hasWebhook
+              ? <span style={{ color: 'var(--c-green)', fontSize: 12 }}>· connected{status?.slackLabel ? ` to ${status.slackLabel}` : ''}</span>
+              : <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>· not configured</span>}
+          </span>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
             <input type="checkbox" checked={Boolean(status?.slackEnabled)} disabled={busy} onChange={(e) => void configure({ slackEnabled: e.target.checked })} />
             Send new issues to Slack
@@ -141,8 +169,14 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <input style={{ ...input, flex: 1, minWidth: 260 }} type="password" placeholder="https://hooks.slack.com/services/…" value={webhookInput} onChange={(e) => setWebhookInput(e.target.value)} />
-          <button style={btn} onClick={() => void saveWebhook()} disabled={busy || !webhookInput.trim()}>Save webhook</button>
+          <button style={btn} onClick={() => void saveWebhook()} disabled={busy || (!webhookInput.trim() && !labelDirty)}>Save webhook</button>
+          {status?.hasWebhook && <button style={btn} onClick={() => void sendTest()} disabled={busy} title="Post a confirmation message so you can see which channel receives alerts">Send test</button>}
           {status?.hasWebhook && <button style={btn} onClick={() => void clearWebhook()} disabled={busy}>Remove</button>}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 8 }}>
+          <span style={label}>Channel &amp; workspace (label)</span>
+          <input style={{ ...input, maxWidth: 420 }} type="text" placeholder="#ga4-alerts · Acme workspace" value={labelInput} onChange={(e) => { setLabelInput(e.target.value); setLabelDirty(true); }} />
+          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>Slack doesn’t expose the channel or workspace from a webhook URL, so note them here — it’s shown as the connection status. Use “Send test” to confirm where alerts actually land.</span>
         </div>
         <details style={{ marginTop: 8 }}>
           <summary style={{ fontSize: 12, color: 'var(--c-blue)', cursor: 'pointer', userSelect: 'none' }}>How do I get a webhook URL? (choose the channel to alert)</summary>

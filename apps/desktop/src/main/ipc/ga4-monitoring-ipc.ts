@@ -13,4 +13,5 @@ export function registerGa4MonitoringIpc(service: Ga4MonitoringService): void {
   ipcMain.handle('ga4monitoring:runNow', () => service.runOnce());
   ipcMain.handle('ga4monitoring:setWebhook', (_e, url: unknown) => service.setWebhook(String(url ?? '')));
   ipcMain.handle('ga4monitoring:clearWebhook', () => service.clearWebhook());
+  ipcMain.handle('ga4monitoring:sendTest', () => service.sendTest());
 }

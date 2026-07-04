@@ -104,6 +104,32 @@ test('setWebhook rejects a non-Slack URL and stores a valid one', async () => {
   assert.equal(svc.status().hasWebhook, false, 'clearWebhook removes it');
 });
 
+test('sendTest posts a confirmation to the webhook, and fails cleanly when none is stored', async () => {
+  const secrets = makeSecrets();
+  const posts: string[] = [];
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account }, data: fakeData(), secrets, emit: () => {},
+    slackFetch: async (_url, init) => { posts.push(init.body); return { ok: true, status: 200, text: async () => 'ok' }; },
+  });
+  svc.configure({ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: false });
+  // No webhook yet → clean failure, no POST.
+  const noHook = await svc.sendTest();
+  assert.ok(!noHook.ok && /No Slack webhook/.test(noHook.error ?? ''), JSON.stringify(noHook));
+  assert.equal(posts.length, 0, 'no POST without a webhook');
+  // With a webhook → posts a test message naming the property.
+  svc.setWebhook('https://hooks.slack.com/services/T/B/x');
+  const ok = await svc.sendTest();
+  assert.ok(ok.ok, JSON.stringify(ok));
+  assert.equal(posts.length, 1, 'one test POST');
+  assert.ok(posts[0].includes('Acme'), 'the test message names the property');
+});
+
+test('slackLabel round-trips through configure and status', async () => {
+  const svc = new Ga4MonitoringService({ registry: { getActiveView: () => account }, data: fakeData(), secrets: makeSecrets(), emit: () => {} });
+  const st = svc.configure({ slackLabel: '#ga4-alerts · Acme' });
+  assert.equal(st.slackLabel, '#ga4-alerts · Acme', 'label persists in status');
+});
+
 test('runOnce is a no-op without an active signed-in account or a chosen property', async () => {
   const secrets = makeSecrets();
   const noProp = new Ga4MonitoringService({ registry: { getActiveView: () => account }, data: fakeData(), secrets, emit: () => {} });
