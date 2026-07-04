@@ -1,3 +1,9 @@
+## [1.159.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.159.0...v1.159.1) (2026-07-04)
+
+### Bug Fixes
+
+* **desktop:** remove Select all from the sitemap page picker ([938f047](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/938f047510618fdeff4ccabf0f05ce1bc3921cf9))
+
 ## [1.159.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.158.0...v1.159.0) (2026-07-04)
 
 ### Features
