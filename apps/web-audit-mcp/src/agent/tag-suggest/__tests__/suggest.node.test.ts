@@ -361,6 +361,25 @@ const genericCtas = ctaInput.filter((s) => s.eventName === 'buy_now_click');
 check('cta: generic "Buy now" → label-derived event buy_now_click, {{Click Text}} equals "Buy now", same text collapses site-wide', genericCtas.length === 1 && genericCtas[0].page === 'site-wide' && genericCtas[0].trigger.clickTextValue === 'Buy now' && genericCtas[0].trigger.clickTextOperator === 'equals' && genericCtas[0].trigger.name === 'Buy Now Click Trigger');
 check('cta: every CTA carries dynamic click_text={{Click Text}}', ctaInput.every((s) => s.eventParameters?.some((p) => p.name === 'click_text' && p.value === '{{Click Text}}')));
 check('cta: ALL CTA triggers use a plain "equals" condition (no regex)', ctaInput.every((s) => s.trigger.clickTextOperator === 'equals'));
+// The hrefless CTAs above (buttons / JS controls) all pick "Click - All Elements".
+check('cta: a hrefless CTA (button / JS control) uses all_clicks (Click - All Elements)', ctaInput.every((s) => s.trigger.kind === 'all_clicks'));
+
+// ── CTA trigger TYPE follows the element: <a href> → Just Links, button/control → All Elements ──
+const trigType = buildSuggestions({ siteHost: 'shop.example', forms: [], elements: [
+  { page: '/', kind: 'cta', text: 'Buy now', intent: 'generic' },                                                    // <button> → all_clicks
+  { page: '/p', kind: 'cta', text: 'View size chart', intent: 'learn_more', href: 'https://shop.example/p#size-chart' }, // <a href> → link_click
+  { page: '/', kind: 'cta', text: 'Free Audit', intent: 'get_started', href: 'https://shop.example/free-audit' },     // <a href> → link_click
+  { page: '/', kind: 'cta', text: 'Add to cart', intent: 'add_to_cart' },                                            // JS control, no href → all_clicks
+] });
+const byName = (n: string) => trigType.find((s) => s.tagName === n);
+check('cta type: <button> "Buy now" (no href) → all_clicks (Click - All Elements)', byName('GA4 - Event - Buy Now Click Tag')?.trigger.kind === 'all_clicks');
+check('cta type: <a href> "View size chart" (#size-chart) → link_click (Click - Just Links)', byName('GA4 - Event - View Size Chart Click Tag')?.trigger.kind === 'link_click');
+check('cta type: <a href> "Free Audit" → link_click', byName('GA4 - Event - Free Audit Click Tag')?.trigger.kind === 'link_click');
+check('cta type: hrefless "Add to cart" control → all_clicks', byName('GA4 - Event - Add To Cart Click Tag')?.trigger.kind === 'all_clicks');
+check('cta type: switching the type does NOT change the tag/trigger name or the {{Click Text}} equals condition',
+  byName('GA4 - Event - Free Audit Click Tag')?.trigger.name === 'Free Audit Click Trigger' &&
+  byName('GA4 - Event - Free Audit Click Tag')?.trigger.clickTextValue === 'Free Audit' &&
+  byName('GA4 - Event - Free Audit Click Tag')?.trigger.clickTextOperator === 'equals');
 
 // Newly tracked CTAs: login + search.
 const moreCtas = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [

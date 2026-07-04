@@ -285,8 +285,13 @@ export function dropAiSuggestion(a: SuggestedTag, engine: SuggestedTag[]): boole
   // per-question AI tag — its class-route trigger has no click-text condition, so ctaTriggerFiresOn
   // can't see the coverage; match on the question shape instead.
   if (/\?\s*$/.test(a.trigger.clickTextValue ?? '') && engine.some((e) => e.eventName === 'faq_click')) return true;
-  if (a.trigger.kind === 'all_clicks' && a.trigger.clickTextOperator !== 'matchRegex' && a.trigger.clickTextValue) {
-    return engine.some((e) => e.trigger.kind === 'all_clicks' && ctaTriggerFiresOn(e.trigger, a.trigger.clickTextValue ?? ''));
+  // A click-text CTA the engine already fires on is a duplicate — regardless of whether either tag is a
+  // "Click - All Elements" (all_clicks) or "Click - Just Links" (link_click) trigger. A CTA's trigger
+  // type now follows the element (a real <a href> → link_click, a button/control → all_clicks), so the
+  // engine copy of the same button may be either type; match on the click-text coverage, not the kind.
+  const isClickCta = (t: SuggestedTag['trigger']): boolean => t.kind === 'all_clicks' || t.kind === 'link_click';
+  if (isClickCta(a.trigger) && a.trigger.clickTextOperator !== 'matchRegex' && a.trigger.clickTextValue) {
+    return engine.some((e) => isClickCta(e.trigger) && ctaTriggerFiresOn(e.trigger, a.trigger.clickTextValue ?? ''));
   }
   return false;
 }
