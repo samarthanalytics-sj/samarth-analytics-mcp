@@ -1,3 +1,24 @@
+## [1.159.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.159.0...v1.159.1) (2026-07-04)
+
+### Bug Fixes
+
+* **desktop:** remove Select all from the sitemap page picker ([938f047](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/938f047510618fdeff4ccabf0f05ce1bc3921cf9))
+
+## [1.159.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.158.0...v1.159.0) (2026-07-04)
+
+### Features
+
+* **desktop:** cap Main website + Landing-page CSV scans at 50 pages and surface it in the UI ([34fe684](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/34fe684ba611b32faf459ad11a99febb94064615))
+
+## [1.158.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.157.1...v1.158.0) (2026-07-04)
+
+### Features
+
+* **desktop:** channel-performance table in GA4 audit report ([261f6ec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/261f6ec124a43770dcc4249036e499d0ef67edcb))
+* **desktop:** device + market performance tables in GA4 audit report ([bcb02d1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bcb02d1be6a3aaa09c18b3188b2f33e7ad9ba5d8))
+* **desktop:** ecommerce funnel drop-off in GA4 audit report ([72a12fc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/72a12fc7b1975f23888bc3a6b45d11459ab41c6b))
+* **desktop:** landing-page table in GA4 audit report ([2a76ae1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2a76ae16c72e1e18624fb71a155d16b019f26111))
+
 ## [1.157.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.157.0...v1.157.1) (2026-07-04)
 
 ### Bug Fixes
