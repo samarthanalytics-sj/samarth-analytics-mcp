@@ -56,7 +56,7 @@ export interface SendResult {
   error?: string;
 }
 
-type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
+export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
 
 /** POST a payload to a Slack Incoming Webhook. Returns a structured result instead of throwing so the
  *  scheduler can log a failed send without crashing the monitor loop. `fetchImpl` defaults to the
