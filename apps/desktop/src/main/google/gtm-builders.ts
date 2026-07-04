@@ -3562,6 +3562,269 @@ export function buildPinterestCapiServerTag(
   };
 }
 
+/* ───────────── StackAdapt (server pixel) ───────────── */
+
+/** A blank-name/blank-value-safe SIMPLE_TABLE param (list of {name,value} maps). Stape/vendor server
+ *  templates store their override tables this way, with the two columns keyed literally "name" and
+ *  "value". Rows with an empty name OR value are dropped so an unresolved {{variable}} can never blank a
+ *  field the template extracts itself. PURE. */
+function nameValueTable(key: string, rows: Array<{ name: string; value: string }>): Param | null {
+  const clean = rows.filter((r) => r.name && r.name.trim() !== '' && r.value != null && String(r.value).trim() !== '');
+  if (!clean.length) return null;
+  return { type: 'list', key, list: clean.map((r) => ({ type: 'map', map: [tpl('name', r.name.trim()), tpl('value', r.value)] })) };
+}
+
+/** StackAdapt server pixel type (endpoint + id semantics). Verified against StackAdapt/
+ *  stackadapt-gtm-server-side-pixel template.tpl (pixelType SELECT). */
+export const STACKADAPT_PIXEL_TYPES: string[] = ['rt', 'lal', 'conv', 'universal'];
+/** commonProperties name-column SELECT set (verified). Off-list names are silently ignored by StackAdapt. */
+export const STACKADAPT_COMMON_KEYS: string[] = [
+  'email', 'first_name', 'last_name', 'phone', 'order_id', 'revenue',
+  'product_id', 'product_name', 'product_price', 'product_category', 'action',
+];
+
+/** Build a StackAdapt SERVER pixel tag (StackAdapt/stackadapt-gtm-server-side-pixel; `type` = its cvt_
+ *  code). UNLIKE the CAPI tags this template is ID-ONLY over HTTPS GET: its ONLY config is `pixelID` (the
+ *  audience/conversion/universal id, sent as sid=/cid=/uid= depending on `pixelType`) + `pixelType`
+ *  (rt=retargeting audience, lal=lookalike, conv=conversion event, universal=universal event). There is
+ *  NO access token and NO browser↔server event_id dedup field (identity is cookie-based, sa-userid /
+ *  sa-postbackid, handled by the template at runtime). The semantic action name for a conversion is a
+ *  `commonProperties` row named "action" — pass `action` to set it. Extra standard fields go in
+ *  `commonProperties` (name ∈ STACKADAPT_COMMON_KEYS), arbitrary ones in `customProperties`. Both tables
+ *  use columns "name"/"value". Field shape verified against template.tpl. PURE. */
+export function buildStackAdaptServerTag(
+  type: string,
+  name: string,
+  pixelID: string,
+  pixelType: string,
+  opts?: {
+    action?: string;
+    commonProperties?: Array<{ name: string; value: string }>;
+    customProperties?: Array<{ name: string; value: string }>;
+    firingTriggerId?: string[];
+  }
+): GtmTagResource {
+  const pt = STACKADAPT_PIXEL_TYPES.includes(pixelType) ? pixelType : 'conv';
+  const parameter: Param[] = [tpl('pixelID', pixelID), tpl('pixelType', pt)];
+  const common = [...(opts?.commonProperties ?? [])];
+  const action = opts?.action?.trim();
+  if (action && !common.some((r) => r.name === 'action')) common.push({ name: 'action', value: action });
+  const commonTable = nameValueTable('commonProperties', common);
+  if (commonTable) parameter.push(commonTable);
+  const customTable = nameValueTable('customProperties', opts?.customProperties ?? []);
+  if (customTable) parameter.push(customTable);
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(opts?.firingTriggerId && opts.firingTriggerId.length ? { firingTriggerId: opts.firingTriggerId } : {}),
+    parameter,
+  };
+}
+
+/* ───────────── Reddit Conversions API (server) ───────────── */
+
+/** Reddit SERVER standard events (UPPER_SNAKE, from stape-io/reddit-tag eventName SELECT). */
+export const REDDIT_SERVER_EVENTS: string[] = [
+  'PAGE_VISIT', 'VIEW_CONTENT', 'SEARCH', 'ADD_TO_CART', 'ADD_TO_WISHLIST', 'PURCHASE', 'LEAD', 'SIGN_UP',
+];
+const GA4_TO_REDDIT: Record<string, string> = {
+  pageview: 'PAGE_VISIT', pagevisit: 'PAGE_VISIT',
+  viewitem: 'VIEW_CONTENT', viewcontent: 'VIEW_CONTENT', viewitemlist: 'VIEW_CONTENT',
+  search: 'SEARCH', viewsearchresults: 'SEARCH',
+  addtocart: 'ADD_TO_CART', addtowishlist: 'ADD_TO_WISHLIST',
+  purchase: 'PURCHASE', generatelead: 'LEAD', lead: 'LEAD', signup: 'SIGN_UP',
+};
+/** Resolve an event to a Reddit SERVER standard event, or null (→ a custom event). PURE. */
+export function redditServerEvent(event: string): string | null {
+  const raw = (event ?? '').trim();
+  if (!raw) return null;
+  const norm = raw.toLowerCase().replace(/[\s_-]/g, '');
+  for (const e of REDDIT_SERVER_EVENTS) if (e.replace(/_/g, '').toLowerCase() === norm) return e;
+  return GA4_TO_REDDIT[norm] ?? null;
+}
+/** serverEventDataList / userDataList name-column SELECT sets (verified against template.tpl). */
+export const REDDIT_SERVER_EVENT_DATA_KEYS: string[] = ['conversion_id', 'currency', 'item_count', 'products', 'value', 'value_decimal'];
+export const REDDIT_USER_DATA_KEYS: string[] = [
+  'email', 'phone_number', 'external_id', 'idfa', 'aaid', 'ip_address', 'user_agent',
+  'screen_dimensions', 'uuid', 'opt_out', 'data_processing_options.country', 'data_processing_options.region',
+];
+
+/** Build a Reddit Conversions API SERVER tag (stape-io/reddit-tag; `type` = its cvt_ code). Needs
+ *  `accountId` (Reddit Pixel/Advertiser id, t2_/a2_) + `accessToken` (Conversion Access Token) — both
+ *  usually {{variables}}. By default the event name is INHERITED from the incoming client event; pass
+ *  `event` to force a Reddit standard event (PAGE_VISIT/VIEW_CONTENT/ADD_TO_CART/PURCHASE/… or a GA4
+ *  name) or a custom name. autoMap (default true) turns on autoMapCommonEventData/ServerEventData/UserData
+ *  so the tag derives the conversion_id (from the incoming event's event_id || transaction_id), currency,
+ *  value and match keys with no explicit rows. Pass `eventId` for dedup with the Reddit Pixel — it lands
+ *  as the `conversion_id` override row in serverEventDataList (overriding the auto value). Optional
+ *  override rows: serverEventData (name ∈ REDDIT_SERVER_EVENT_DATA_KEYS) + userData (name ∈
+ *  REDDIT_USER_DATA_KEYS). Optional testId (Reddit Event Testing), clickId (rdt_cid), eventSourceUrl,
+ *  optimistic (useOptimisticScenario), requireConsent (adStorageConsent). Field shape verified against
+ *  template.tpl. PURE. */
+export function buildRedditCapiServerTag(
+  type: string,
+  name: string,
+  accountId: string,
+  accessToken: string,
+  opts?: {
+    event?: string;
+    eventId?: string;
+    testId?: string;
+    clickId?: string;
+    eventSourceUrl?: string;
+    actionSource?: string;
+    userData?: Array<{ name: string; value: string }>;
+    serverEventData?: Array<{ name: string; value: string }>;
+    autoMap?: boolean;
+    optimistic?: boolean;
+    requireConsent?: boolean;
+    firingTriggerId?: string[];
+  }
+): GtmTagResource {
+  const auto = opts?.autoMap !== false;
+  const parameter: Param[] = [];
+  // Event name: eventType RADIO (standard | inherit | custom) + exactly one of eventName / eventNameCustom.
+  const event = opts?.event?.trim();
+  if (!event) {
+    parameter.push(tpl('eventType', 'inherit'));
+  } else {
+    const std = redditServerEvent(event);
+    if (std) parameter.push(tpl('eventType', 'standard'), tpl('eventName', std));
+    else parameter.push(tpl('eventType', 'custom'), tpl('eventNameCustom', event));
+  }
+  parameter.push(tpl('accountId', accountId), tpl('accessToken', accessToken));
+  parameter.push(tpl('actionSource', (opts?.actionSource ?? '').trim() || 'WEBSITE'));
+  if (opts?.testId && opts.testId.trim()) parameter.push(tpl('testId', opts.testId.trim()));
+  parameter.push(boolean('useOptimisticScenario', opts?.optimistic ?? false));
+  parameter.push(boolean('autoMapCommonEventData', auto));
+  if (opts?.clickId && opts.clickId.trim()) parameter.push(tpl('clickId', opts.clickId.trim()));
+  if (opts?.eventSourceUrl && opts.eventSourceUrl.trim()) parameter.push(tpl('eventSourceUrl', opts.eventSourceUrl.trim()));
+  parameter.push(boolean('autoMapServerEventData', auto));
+  parameter.push(boolean('autoMapUserData', auto));
+  parameter.push(tpl('adStorageConsent', opts?.requireConsent ? 'required' : 'optional'));
+  // eventId → the conversion_id override row (dedup with the Reddit Pixel); merged with explicit rows.
+  const sed = [...(opts?.serverEventData ?? [])];
+  if (opts?.eventId && opts.eventId.trim() !== '' && !sed.some((r) => r.name === 'conversion_id')) {
+    sed.push({ name: 'conversion_id', value: opts.eventId });
+  }
+  const sedTable = nameValueTable('serverEventDataList', sed);
+  if (sedTable) parameter.push(sedTable);
+  const udTable = nameValueTable('userDataList', opts?.userData ?? []);
+  if (udTable) parameter.push(udTable);
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(opts?.firingTriggerId && opts.firingTriggerId.length ? { firingTriggerId: opts.firingTriggerId } : {}),
+    parameter,
+  };
+}
+
+/* ───────────── Amazon Ads Conversions API (server) ───────────── */
+
+/** Amazon SERVER standard events (from stape-io/amazon-tag eventNameStandard SELECT). Keep the hyphen in
+ *  "Off-AmazonPurchases" (the purchase event) verbatim. */
+export const AMAZON_SERVER_EVENTS: string[] = [
+  'AddToShoppingCart', 'Contact', 'Checkout', 'PageView', 'Search', 'Signup',
+  'Application', 'Subscribe', 'Other', 'Lead', 'Off-AmazonPurchases',
+];
+const GA4_TO_AMAZON: Record<string, string> = {
+  pageview: 'PageView', gtmdom: 'PageView', signup: 'Signup', generatelead: 'Lead', lead: 'Lead',
+  search: 'Search', viewsearchresults: 'Search', addtocart: 'AddToShoppingCart',
+  begincheckout: 'Checkout', checkout: 'Checkout', purchase: 'Off-AmazonPurchases',
+  contact: 'Contact', subscribe: 'Subscribe',
+};
+/** Resolve an event to an Amazon SERVER standard event, or null (→ a custom event). PURE. */
+export function amazonServerEvent(event: string): string | null {
+  const raw = (event ?? '').trim();
+  if (!raw) return null;
+  const norm = raw.toLowerCase().replace(/[\s_-]/g, '');
+  for (const e of AMAZON_SERVER_EVENTS) if (e.replace(/[\s_-]/g, '').toLowerCase() === norm) return e;
+  return GA4_TO_AMAZON[norm] ?? null;
+}
+/** defaultAttributesList / offAmazonPurchasesAttributesList / userDataAttributesList name-column SELECT
+ *  sets (verified against template.tpl). */
+export const AMAZON_DEFAULT_ATTR_KEYS: string[] = [
+  'clientDedupeId', 'value', 'brand', 'category', 'productId',
+  'attr1', 'attr2', 'attr3', 'attr4', 'attr5', 'attr6', 'attr7', 'attr8', 'attr9', 'attr10',
+];
+export const AMAZON_PURCHASE_ATTR_KEYS: string[] = ['currencyCode', 'unitsSold'];
+export const AMAZON_USER_DATA_KEYS: string[] = ['email', 'phonenumber'];
+
+/** Build an Amazon Ads Conversions API SERVER tag (stape-io/amazon-tag; `type` = its cvt_ code). Amazon
+ *  has NO api key / OAuth here: the only "credential" is `tagIds` — one or more Amazon Ads Tag IDs (UUIDs
+ *  from Events Manager → View Tag Code), each a row in the tagIdsList table (single "value" column); the
+ *  event is sent to every id. `tagRegion` is 'NA' or 'EU'. By default the event name is INHERITED from
+ *  the incoming event; pass `event` to force an Amazon standard event (PageView/AddToShoppingCart/
+ *  Checkout/Off-AmazonPurchases/… or a GA4 name) or a custom name. Pass `eventId` for dedup — it lands as
+ *  the `clientDedupeId` row in defaultAttributesList (Amazon otherwise auto-derives it from the incoming
+ *  event's event_id || transaction_id). Optional matchId (default reads eventData.user_id), ipAddress,
+ *  countryCode; enableAdvancedMatching + userData (name ∈ email/phonenumber, hashed by Amazon); override
+ *  tables defaultAttributes (name ∈ AMAZON_DEFAULT_ATTR_KEYS), purchaseAttributes (currencyCode/
+ *  unitsSold), customAttributes (free-form). All tables use columns "name"/"value" except tagIdsList
+ *  ("value" only). Field shape verified against template.tpl. PURE. */
+export function buildAmazonCapiServerTag(
+  type: string,
+  name: string,
+  tagIds: string[],
+  tagRegion: string,
+  opts?: {
+    event?: string;
+    eventId?: string;
+    matchId?: string;
+    ipAddress?: string;
+    countryCode?: string;
+    enableAdvancedMatching?: boolean;
+    userData?: Array<{ name: string; value: string }>;
+    defaultAttributes?: Array<{ name: string; value: string }>;
+    purchaseAttributes?: Array<{ name: string; value: string }>;
+    customAttributes?: Array<{ name: string; value: string }>;
+    firingTriggerId?: string[];
+  }
+): GtmTagResource {
+  const region = tagRegion === 'EU' ? 'EU' : 'NA';
+  const parameter: Param[] = [];
+  // Event name: eventType RADIO (standard | inherit | custom) + eventNameStandard / eventNameCustom.
+  const event = opts?.event?.trim();
+  if (!event) {
+    parameter.push(tpl('eventType', 'inherit'));
+  } else {
+    const std = amazonServerEvent(event);
+    if (std) parameter.push(tpl('eventType', 'standard'), tpl('eventNameStandard', std));
+    else parameter.push(tpl('eventType', 'custom'), tpl('eventNameCustom', event));
+  }
+  parameter.push(tpl('tagRegion', region));
+  // tagIdsList: SIMPLE_TABLE with a SINGLE column keyed "value" (NOT name/value).
+  const ids = tagIds.map((v) => (v ?? '').trim()).filter((v) => v !== '');
+  if (ids.length) parameter.push({ type: 'list', key: 'tagIdsList', list: ids.map((v) => ({ type: 'map', map: [tpl('value', v)] })) });
+  if (opts?.matchId && opts.matchId.trim()) parameter.push(tpl('matchId', opts.matchId.trim()));
+  if (opts?.ipAddress && opts.ipAddress.trim()) parameter.push(tpl('ipAddress', opts.ipAddress.trim()));
+  if (opts?.countryCode && opts.countryCode.trim()) parameter.push(tpl('countryCode', opts.countryCode.trim()));
+  const advanced = opts?.enableAdvancedMatching ?? false;
+  parameter.push(boolean('enableAdvancedMatching', advanced));
+  // eventId → the clientDedupeId override row in defaultAttributesList (dedup with the Amazon pixel).
+  const def = [...(opts?.defaultAttributes ?? [])];
+  if (opts?.eventId && opts.eventId.trim() !== '' && !def.some((r) => r.name === 'clientDedupeId')) {
+    def.push({ name: 'clientDedupeId', value: opts.eventId });
+  }
+  const defTable = nameValueTable('defaultAttributesList', def);
+  if (defTable) parameter.push(defTable);
+  const purchaseTable = nameValueTable('offAmazonPurchasesAttributesList', opts?.purchaseAttributes ?? []);
+  if (purchaseTable) parameter.push(purchaseTable);
+  const customTable = nameValueTable('eventCustomAttributesList', opts?.customAttributes ?? []);
+  if (customTable) parameter.push(customTable);
+  // userDataAttributesList only applies when advanced matching is on (the template hides it otherwise).
+  if (advanced) {
+    const udTable = nameValueTable('userDataAttributesList', opts?.userData ?? []);
+    if (udTable) parameter.push(udTable);
+  }
+  return {
+    name: sanitizeName(name),
+    type,
+    ...(opts?.firingTriggerId && opts.firingTriggerId.length ? { firingTriggerId: opts.firingTriggerId } : {}),
+    parameter,
+  };
+}
+
 /* ───────────── Snap Pixel (web tag + Advanced Matching) ───────────── */
 
 /** The Snap snapchat-google-tag-manager `event_type` SELECT values (verified against corpus
