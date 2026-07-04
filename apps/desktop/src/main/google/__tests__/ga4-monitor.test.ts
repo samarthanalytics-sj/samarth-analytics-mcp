@@ -64,6 +64,22 @@ test('a healthy property produces no alerts and reports healthy', () => {
   assert.ok(r.checks.find((c) => c.id === 'data_flow')?.status === 'pass', 'data flow passes');
 });
 
+test('copy reads cleanly: dates are formatted and there are no em dashes', () => {
+  // Force a no-data alert (dates appear in the message) + a conversion break (shared-engine copy).
+  const b = baseline({ dailySessions: [
+    { date: '20260613', sessions: 345 }, { date: '20260614', sessions: 338 }, { date: '20260615', sessions: 360 },
+    { date: '20260616', sessions: 342 }, { date: '20260617', sessions: 0 },
+  ] });
+  const r = monitorGa4(input({ realtimeActiveUsers: 0, baseline: b }));
+  const all = JSON.stringify(r);
+  assert.ok(/Jun 17, 2026/.test(all), 'YYYYMMDD dates are rendered as "Jun 17, 2026", not raw: ' + all.slice(0, 200));
+  assert.ok(!/\b20260617\b/.test(all), 'no raw YYYYMMDD date leaks into the copy');
+  assert.ok(!/[—–]/.test(all), 'no em/en dashes in any alert or check text');
+  // Healthy-path plural: "1 active user" not "1 active user(s)".
+  const one = JSON.stringify(monitorGa4(input({ realtimeActiveUsers: 1 })));
+  assert.ok(!/user\(s\)|session\(s\)|issue\(s\)/.test(one), 'no clunky "(s)" pluralisation');
+});
+
 test('no realtime + empty last complete day on a normally-trafficked property = critical no-data alert', () => {
   // Last complete day (20260617, since todayYmd 2026-07-01 is not in the series) has 0 sessions.
   const b = baseline({ dailySessions: [
