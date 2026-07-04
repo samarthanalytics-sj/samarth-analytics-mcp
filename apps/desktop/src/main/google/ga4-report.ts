@@ -171,6 +171,36 @@ function geoPerfRows(baseline: Ga4Baseline | null, currency: string): Array<{ co
   }));
 }
 
+// Per-AI/LLM-source referral rows — which AI assistants send traffic that converts and earns. Same
+// shape/formatting as the other breakdown tables (first column is the source host). Shows ALL matched
+// sources (the AI-host list is small and the query caps at 20), so the rows always reconcile with the
+// aggregate share in the caption — unlike the top-10 tables, this table must be exhaustive.
+function llmTrafficRows(baseline: Ga4Baseline | null, currency: string): Array<{ source: string; sessions: string; convRate: string; revenue: string; engagement: string }> {
+  const cur = currency ? `${currency} ` : '';
+  return (baseline?.llmTraffic ?? []).slice(0, 20).map((c) => ({
+    source: c.source || '(not set)',
+    sessions: num(c.sessions),
+    convRate: `${(c.convRate * 100).toFixed(1)}%`,
+    revenue: c.revenue > 0 ? `${cur}${num(Math.round(c.revenue))}` : '—',
+    engagement: `${Math.round(c.engagementRate * 100)}%`,
+  }));
+}
+
+// The LLM-traffic block: rows + an aggregate materiality line (AI sessions and their share of all
+// sessions). null when the site has no AI-referral traffic in the window.
+function llmTrafficView(baseline: Ga4Baseline | null, currency: string): { rows: ReturnType<typeof llmTrafficRows>; share: string } | null {
+  const rows = llmTrafficRows(baseline, currency);
+  if (!rows.length) return null;
+  // Sum the SAME sources the table shows (slice matches llmTrafficRows), so the share never claims more
+  // than the rows account for.
+  const raw = (baseline?.llmTraffic ?? []).slice(0, 20);
+  const aiSessions = raw.reduce((a, c) => a + c.sessions, 0);
+  const total = baseline?.sessions ?? 0;
+  const pct = total > 0 ? (aiSessions / total) * 100 : 0;
+  const pctText = pct > 0 && pct < 0.1 ? '<0.1' : pct.toFixed(1);
+  return { rows, share: `${num(aiSessions)} sessions, ${pctText}% of all` };
+}
+
 const FUNNEL_LABELS: Record<string, string> = { view_item: 'View item', add_to_cart: 'Add to cart', begin_checkout: 'Begin checkout', purchase: 'Purchase' };
 
 // Ecommerce funnel view — distinct users reaching each step, with step-to-step conversion and depth vs
@@ -524,7 +554,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     footer: 'Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.',
   };
 
-  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), funnel: funnelView(baseline), decisions, notVerified: { gate, items: nv }, scope };
+  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), llmTraffic: llmTrafficView(baseline, s.currencyCode), funnel: funnelView(baseline), decisions, notVerified: { gate, items: nv }, scope };
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
@@ -739,6 +769,17 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
       L.push('| Market | Sessions | Conv. rate | Revenue | Engagement |');
       L.push('|---|--:|--:|--:|--:|');
       for (const g of gpRows) L.push(`| ${cell(g.country)} | ${g.sessions} | ${g.convRate} | ${g.revenue} | ${g.engagement} |`);
+      L.push('');
+    }
+    const llm = llmTrafficView(baseline, s.currencyCode);
+    if (llm) {
+      L.push(`**AI assistant traffic** (which AI referrers convert and earn — ${llm.share})`);
+      L.push('');
+      L.push('| AI source | Sessions | Conv. rate | Revenue | Engagement |');
+      L.push('|---|--:|--:|--:|--:|');
+      for (const c of llm.rows) L.push(`| ${cell(c.source)} | ${c.sessions} | ${c.convRate} | ${c.revenue} | ${c.engagement} |`);
+      L.push('');
+      L.push('_AI-referral traffic is a systematic undercount — visits from AI mobile/in-app browsers and copied links arrive with no referrer and land in Direct._');
       L.push('');
     }
     const fun = funnelView(baseline);

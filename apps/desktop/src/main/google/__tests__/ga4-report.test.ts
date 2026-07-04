@@ -127,6 +127,11 @@ const baseline = (over: Partial<Ga4Baseline> = {}): Ga4Baseline => ({
     { country: 'United States', sessions: 4000, keyEvents: 320, convRate: 0.08, revenue: 250000, engagementRate: 0.72 },
     { country: '(not set)', sessions: 1200, keyEvents: 0, convRate: 0, revenue: 0, engagementRate: 0.2 },
   ],
+  llmTraffic: [
+    { source: 'claude.ai', sessions: 3000, keyEvents: 180, convRate: 0.06, revenue: 90000, engagementRate: 0.68 },
+    { source: 'perplexity.ai', sessions: 1500, keyEvents: 60, convRate: 0.04, revenue: 30000, engagementRate: 0.55 },
+    { source: 'chatgpt.com', sessions: 800, keyEvents: 24, convRate: 0.03, revenue: 0, engagementRate: 0.42 },
+  ],
   funnelSteps: [
     { event: 'view_item', users: 10000 },
     { event: 'add_to_cart', users: 4000 },
@@ -309,6 +314,31 @@ test('device + market tables are omitted when the baseline has no such data', ()
   const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
   assert.ok(!/\*\*Device performance\*\*/.test(md), 'no empty device table');
   assert.ok(!/\*\*Market performance\*\*/.test(md), 'no empty market table');
+});
+
+test('section 6 renders the AI-assistant traffic table with share + the undercount caveat', () => {
+  const md = buildGa4AuditReport(input());
+  assert.ok(/\*\*AI assistant traffic\*\*/.test(md), 'AI traffic sub-heading');
+  assert.ok(/\| AI source \| Sessions \| Conv\. rate \| Revenue \| Engagement \|/.test(md), 'table header');
+  assert.ok(/\| claude\.ai \|/.test(md) && /\| perplexity\.ai \|/.test(md), 'AI-source rows');
+  // AI sessions 3000+1500+800 = 5300 of 77506 total = 6.8%.
+  assert.ok(/5,300 sessions, 6\.8% of all/.test(md), 'aggregate share of total sessions');
+  assert.ok(/\| chatgpt\.com \|.*\| - \|/.test(md), 'zero-revenue AI source shows a dash');
+  assert.ok(/systematic undercount/.test(md), 'undercount caveat present');
+});
+
+test('AI-assistant traffic table is omitted when there is no AI referral traffic', () => {
+  const b = baseline({ llmTraffic: [] });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(!/\*\*AI assistant traffic\*\*/.test(md), 'no empty AI table');
+});
+
+test('AI-assistant table shows all matched sources and the share reconciles with the rows (no top-10 truncation)', () => {
+  const many = Array.from({ length: 12 }, (_, i) => ({ source: `ai-src-${i}.com`, sessions: 100, keyEvents: 5, convRate: 0.05, revenue: 0, engagementRate: 0.5 }));
+  const b = baseline({ llmTraffic: many });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(/\| ai-src-11\.com \|/.test(md), 'the 11th+ source is still shown (rows are not truncated at 10)');
+  assert.ok(/1,200 sessions, 1\.5% of all/.test(md), 'the share sums exactly the rows shown (12 x 100 of 77,506)');
 });
 
 test('section 6 renders the ecommerce funnel with step conversion + depth + the approximation caveat', () => {
