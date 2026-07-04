@@ -2479,9 +2479,13 @@ export class GoogleDataService {
     limit?: string;
     /** GA4 orderBys passthrough — pair with a small limit to fetch the top-N by a metric. */
     orderBys?: Array<{ metric?: { metricName: string }; dimension?: { dimensionName: string }; desc?: boolean }>;
-    /** GA4 dimensionFilter passthrough — restrict rows server-side (e.g. an inListFilter on eventName)
-     *  so an EXACT target set comes back, never sampled from a truncated top-N. */
-    dimensionFilter?: { filter?: { fieldName?: string; inListFilter?: { values?: string[]; caseSensitive?: boolean }; stringFilter?: { value?: string } } };
+    /** GA4 dimensionFilter passthrough — restrict rows server-side (e.g. an inListFilter on eventName,
+     *  or a notExpression to EXCLUDE values like "(not set)") so an EXACT target set comes back, never
+     *  sampled from a truncated top-N. */
+    dimensionFilter?: {
+      filter?: { fieldName?: string; inListFilter?: { values?: string[]; caseSensitive?: boolean }; stringFilter?: { value?: string } };
+      notExpression?: { filter?: { fieldName?: string; inListFilter?: { values?: string[]; caseSensitive?: boolean }; stringFilter?: { value?: string } } };
+    };
   }): Promise<Ga4ReportResult> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
     const data = analyticsdata({ version: 'v1beta', auth });
@@ -2504,6 +2508,62 @@ export class GoogleDataService {
         metrics: (r.metricValues ?? []).map((v) => v.value ?? ''),
       })),
     };
+  }
+
+  /** DATA-PRESENCE probe per registered custom dimension, for the dead-custom-dimension audit. One
+   *  minimal Data API report per EVENT/USER-scoped dimension over a WIDE 90-day window — GA4 never
+   *  backfills, so a short window would falsely flag low-frequency dimensions. `hasData` is true only
+   *  when a real (non-"(not set)") value came back with a non-zero metric. ITEM-scoped and unrecognised-
+   *  scope dimensions are left `checked:false` (inconclusive — item metrics + non-ecommerce properties
+   *  are a false-positive minefield); a query error/throttle is also `checked:false`, NEVER flagged dead.
+   *  Batched to stay under GA4's per-property concurrent-request limit. Read-only. */
+  async getGa4CustomDimensionUsage(
+    property: string,
+    dims: Array<{ parameterName: string; displayName: string; scope: string }>
+  ): Promise<Array<{ parameterName: string; displayName: string; scope: string; hasData: boolean; checked: boolean }>> {
+    // Data API dimension prefix + a scope-COMPATIBLE metric per scope (a scope mismatch errors).
+    const SCOPE: Record<string, { prefix: string; metric: string }> = {
+      EVENT: { prefix: 'customEvent:', metric: 'eventCount' },
+      USER: { prefix: 'customUser:', metric: 'activeUsers' },
+    };
+    // GA4 caps a standard property at 50 event + 25 user custom dimensions; 100 is generous headroom.
+    // Dimensions beyond the cap are returned as `checked:false` (inconclusive) rather than silently
+    // dropped, so the engine never treats an unchecked dimension as dead.
+    const CAP = 100;
+    const toQuery = dims.slice(0, CAP);
+    const overflow = dims.slice(CAP).map((d) => ({ ...d, hasData: false, checked: false }));
+    const out: Array<{ parameterName: string; displayName: string; scope: string; hasData: boolean; checked: boolean }> = [];
+    const BATCH = 6; // well under the 10 concurrent-requests-per-property limit, leaving headroom
+    for (let i = 0; i < toQuery.length; i += BATCH) {
+      const chunk = toQuery.slice(i, i + BATCH);
+      const settled = await Promise.all(
+        chunk.map(async (d) => {
+          const q = SCOPE[(d.scope || '').toUpperCase()];
+          if (!q || !d.parameterName) return { ...d, hasData: false, checked: false };
+          const field = `${q.prefix}${d.parameterName}`;
+          try {
+            // Ask GA4 directly for rows where this dimension holds a REAL value (exclude "(not set)"),
+            // so detection never depends on how the dimension's values rank by volume. keepEmptyRows is
+            // false by default, so any returned row is a populated value with a non-zero metric => live.
+            const res = await this.runGa4Report({
+              property,
+              startDate: '90daysAgo',
+              endDate: 'today',
+              dimensions: [field],
+              metrics: [q.metric],
+              dimensionFilter: { notExpression: { filter: { fieldName: field, inListFilter: { values: ['(not set)'], caseSensitive: false } } } },
+              limit: '5',
+            });
+            const hasData = res.rows.some((r) => (r.dimensions[0] ?? '').trim() !== '');
+            return { ...d, hasData, checked: true };
+          } catch {
+            return { ...d, hasData: false, checked: false };
+          }
+        })
+      );
+      out.push(...settled);
+    }
+    return [...out, ...overflow];
   }
 
   /** Session counts by channel group and by source/medium over a window — either the last `days`

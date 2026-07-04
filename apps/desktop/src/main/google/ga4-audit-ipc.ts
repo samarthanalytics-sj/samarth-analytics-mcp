@@ -10,6 +10,7 @@ import { auditGa4DataQuality } from './ga4-data-quality';
 import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Visuals, buildGa4Sections } from './ga4-report';
 import { auditGa4Growth } from './ga4-growth';
 import { auditGa4EventDeltas, auditGa4Transactions } from './ga4-integrity';
+import { auditGa4DeadDimensions } from './ga4-dead-dimensions';
 import { reportHtmlDocument } from './ga4-report-export';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { ga4VisualsHtml, stripDuplicateCharts } from '../../shared/ga4-visuals-html';
@@ -50,7 +51,14 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
       withQuotaRetry(() => data.getGa4PropertySnapshot(p)),
       withQuotaRetry(() => data.getGa4DataQuality(p, win)),
     ]);
-    const config = auditGa4(snap);
+    // Dead custom-dimension probe (best-effort, read-only): which registered dimensions receive no data
+    // over a wide 90-day window. Fired here so it overlaps the enrichment queries below; its finding is
+    // seeded into auditGa4 so the Custom-definitions area/summary/counts stay consistent. category
+    // 'customdef' → feeds Event Tracking, never gates channel-attribution trust.
+    const registeredDims = snap.customDimensions ?? [];
+    const dimUsageP = registeredDims.length
+      ? data.getGa4CustomDimensionUsage(p, registeredDims).catch(() => null)
+      : Promise.resolve(null);
     let dataQuality = auditGa4DataQuality(dqCounts);
     // Data-integrity (reporting data): per-event regressions (a key event dropped to 0 = broken tag)
     // and — for ecommerce properties — duplicate / unlabelled transactions (double-counted revenue).
@@ -100,6 +108,13 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
         noSourceSharePct: dqTotal > 0 ? Math.min(100, (Math.max(unassigned, notSet) / dqTotal) * 100) : null,
       });
     }
+    // Resolve the dead-dimension probe (overlapped with the queries above) and fold its advisory into
+    // the config audit. `activelyMeasuring` gates it: with no traffic every dimension looks empty.
+    const dimUsage = await dimUsageP;
+    const deadDimensionFindings = dimUsage
+      ? auditGa4DeadDimensions({ usage: dimUsage, activelyMeasuring: (dqCounts.totalSessions || 0) > 0, windowDays: 90 })
+      : [];
+    const config = auditGa4(snap, deadDimensionFindings);
     const reportInput = {
       property: p,
       displayName: snap.displayName,
