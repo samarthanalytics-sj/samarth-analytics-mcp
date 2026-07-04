@@ -50,6 +50,19 @@ export function buildSlackPayload(propertyLabel: string, result: Ga4MonitorResul
   return { text: truncate(text, 3000), blocks };
 }
 
+/** A confirmation message for the "Send test" button — it lands in whatever channel the webhook is
+ *  bound to, so the user can SEE which channel/workspace they connected. */
+export function buildSlackTestPayload(propertyLabel: string): SlackPayload {
+  const label = propertyLabel || 'your GA4 property';
+  return {
+    text: `:white_check_mark: GA4 monitoring is connected — alerts for ${label} will appear in this channel.`,
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: `:white_check_mark: *GA4 monitoring is connected to this channel.*\nHealth alerts for *${truncate(label, 200)}* (no data, key events stopping, sudden spikes/drops, consent drift, revenue integrity) will post here.` } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: 'This is a test message from Samarth Analytics GA4 monitoring.' }] },
+    ],
+  };
+}
+
 export interface SendResult {
   ok: boolean;
   status: number;

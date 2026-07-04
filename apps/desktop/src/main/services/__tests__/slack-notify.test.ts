@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildSlackPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from '../slack-notify';
+import { buildSlackPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from '../slack-notify';
 import type { Ga4MonitorResult, Ga4MonitorAlert } from '../../google/ga4-monitor';
 
 let passed = 0;
@@ -38,6 +38,12 @@ wrap('buildSlackPayload renders a header, health line, and one section per alert
   assert.ok(types.includes('section'), 'has section blocks');
   const json = JSON.stringify(p.blocks);
   assert.ok(json.includes('CRITICAL') && json.includes('*Fix:*'), 'health + fix rendered');
+});
+
+wrap('buildSlackTestPayload names the property and reads as a connection confirmation', () => {
+  const p = buildSlackTestPayload('Acme (123)');
+  assert.ok(p.text.includes('Acme (123)') && /connected/i.test(p.text), 'fallback text confirms the connection');
+  assert.ok(JSON.stringify(p.blocks).includes('Acme (123)'), 'property named in the message');
 });
 
 wrap('buildSlackPayload caps at 10 alert sections and notes the remainder', () => {

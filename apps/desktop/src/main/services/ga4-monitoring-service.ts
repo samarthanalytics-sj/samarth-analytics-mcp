@@ -6,13 +6,13 @@
 
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
 import { monitorGa4, firstMetric, noSourceSharePct, type Ga4MonitorInput } from '../google/ga4-monitor';
-import { buildSlackPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
+import { buildSlackPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
 import { withQuotaRetry } from '../google/quota-retry';
 import type { GoogleDataService } from '../google/data-service';
 import type { AccountView, Ga4MonitorConfig, Ga4MonitorRun, Ga4MonitorStatus } from '../../shared/ipc';
 
 const MIN_INTERVAL_MINUTES = 15; // GA4 realtime + report quota — never hammer the API
-const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, propertyId: null, propertyLabel: '', days: 28, slackEnabled: true };
+const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, propertyId: null, propertyLabel: '', days: 28, slackEnabled: true, slackLabel: '' };
 
 /** Per-account secret ref for the Slack webhook (the URL is stored encrypted in the OS keychain). */
 export const slackWebhookRef = (accountId: string): string => `ga4-slack-webhook:${accountId}`;
@@ -126,6 +126,7 @@ export class Ga4MonitoringService {
       propertyLabel: c?.propertyLabel ? String(c.propertyLabel) : '',
       days: Math.min(365, Math.max(1, Math.floor(Number(c?.days) || DEFAULT_CONFIG.days))),
       slackEnabled: c?.slackEnabled === undefined ? true : Boolean(c.slackEnabled),
+      slackLabel: c?.slackLabel ? String(c.slackLabel).slice(0, 120) : '',
     };
   }
 
@@ -175,6 +176,17 @@ export class Ga4MonitoringService {
     const ref = this.webhookRefForActive();
     if (ref) this.deps.secrets.delete(ref);
     return this.status();
+  }
+
+  /** Post a confirmation message to the stored webhook so the user can SEE which channel/workspace it
+   *  lands in (Slack does not expose that from the URL). Returns a structured result, never throws. */
+  async sendTest(): Promise<{ ok: boolean; error: string | null }> {
+    const ref = this.webhookRefForActive();
+    const webhook = ref ? this.deps.secrets.get(ref) : null;
+    if (!webhook) return { ok: false, error: 'No Slack webhook is saved for this account.' };
+    const label = this.config.propertyLabel || this.config.propertyId || 'your GA4 property';
+    const res = await sendSlackWebhook(webhook, buildSlackTestPayload(label), { fetchImpl: this.deps.slackFetch });
+    return { ok: res.ok, error: res.ok ? null : res.error ?? 'Slack send failed.' };
   }
 
   start(runNow = false): void {

@@ -283,6 +283,7 @@ const api = {
     runNow: (): Promise<Ga4MonitorRun | null> => ipcRenderer.invoke('ga4monitoring:runNow'),
     setWebhook: (url: string): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:setWebhook', url),
     clearWebhook: (): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:clearWebhook'),
+    sendTest: (): Promise<{ ok: boolean; error: string | null }> => ipcRenderer.invoke('ga4monitoring:sendTest'),
     // Subscribe to pushed runs (background + on-demand); returns an unsubscribe function.
     onRun: (cb: (run: Ga4MonitorRun) => void): (() => void) => {
       const listener = (_e: unknown, run: Ga4MonitorRun): void => cb(run);

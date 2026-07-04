@@ -617,6 +617,9 @@ export interface Ga4MonitorConfig {
   days: number;
   /** Post new issues to the active account's Slack webhook (requires a stored webhook). */
   slackEnabled: boolean;
+  /** Human label for the connected Slack channel + workspace (e.g. "#ga4-alerts · Acme"). Slack does
+   *  not expose these from a webhook URL, so the user records them; shown as the connection status. */
+  slackLabel: string;
 }
 
 export interface Ga4MonitorAlertView {
