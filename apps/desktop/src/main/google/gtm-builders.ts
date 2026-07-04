@@ -5,6 +5,7 @@
 
 import { classifyPixel } from './pixel-signatures';
 import { serverGa4ParamList } from './tag-params';
+import { classifyEventName, validateEventParams, EVENT_CONTRACT } from '../../shared/tracking-contract';
 
 type Param = Record<string, unknown>;
 const tpl = (key: string, value: string): Param => ({ type: 'template', key, value });
@@ -1267,6 +1268,11 @@ export function evaluateTrackingSetup(
 ): TrackingSetupReport {
   const checks: TrackingSetupCheck[] = [];
   const ecommerceEvents = new Set<string>(GA4_ECOMMERCE_FUNNEL_EVENTS);
+  // Event parameters explicitly mapped on a gaawe tag (eventSettingsTable rows keyed parameter/parameterValue).
+  const ga4TagParamNames = (tag: Record<string, unknown>): string[] => {
+    const list = (tag.parameter as Array<{ key?: string; list?: Array<{ map?: Array<{ key?: string; value?: string }> }> }> | undefined)?.find((p) => p.key === 'eventSettingsTable')?.list ?? [];
+    return list.map((row) => row.map?.find((m) => m.key === 'parameter')?.value ?? '').filter(Boolean);
+  };
 
   // 1. The web Google tag (GA4 loader).
   const googleTag = webTags.find((t) => t.type === 'googtag');
@@ -1308,6 +1314,30 @@ export function evaluateTrackingSetup(
     else if (!Array.isArray(tag.firingTriggerId) || (tag.firingTriggerId as unknown[]).length === 0) checks.push({ id, label, status: 'warn', detail: `"${name}" has NO firing trigger — it never fires.` });
     else if (ecommerceEvents.has(ev) && tagParam(tag, 'sendEcommerceData') !== 'true') checks.push({ id, label, status: 'warn', detail: `"${name}" fires but does not forward the dataLayer ecommerce object (Send Ecommerce data is off) — items/value/currency will be missing.` });
     else checks.push({ id, label, status: 'pass', detail: `"${name}" fires${ecommerceEvents.has(ev) ? ' and forwards ecommerce data' : ''}.` });
+
+    // TAXONOMY (contract): flag an event NAME GA4 will reject or drop.
+    const nameClass = classifyEventName(ev);
+    if (nameClass.kind === 'reserved' || nameClass.kind === 'malformed') {
+      checks.push({ id: `schema_${ev}_name`, label: `Schema: ${ev} name`, status: nameClass.kind === 'reserved' ? 'fail' : 'warn', detail: nameClass.message });
+    }
+    // SCHEMA (contract): required parameters for a recommended event. When the tag forwards the whole
+    // ecommerce object (Send Ecommerce data), the required params ride along — the tool can only assert
+    // the PLUMBING, so it names what the site's dataLayer must include for a runtime (DebugView) check.
+    const schema = EVENT_CONTRACT[ev];
+    if (schema) {
+      const sid = `schema_${ev}`;
+      const slabel = `Schema: ${ev}`;
+      if (schema.category === 'ecommerce' && tagParam(tag, 'sendEcommerceData') === 'true') {
+        checks.push({ id: sid, label: slabel, status: 'pass', detail: `Forwards the ecommerce object — the site must push ${schema.requiredParams.join(', ')} in the dataLayer (confirm in GA4 DebugView).` });
+      } else {
+        const v = validateEventParams(ev, ga4TagParamNames(tag));
+        checks.push(
+          v.missingRequired.length
+            ? { id: sid, label: slabel, status: 'warn', detail: `"${name}" is missing required parameter(s): ${v.missingRequired.join(', ')}${schema.category === 'ecommerce' ? ' — add them or turn on Send Ecommerce data' : ''}.` }
+            : { id: sid, label: slabel, status: 'pass', detail: `"${name}" carries the required parameter(s)${v.missingRecommended.length ? ` (recommended still missing: ${v.missingRecommended.join(', ')})` : ''}.` }
+        );
+      }
+    }
   }
 
   if (server) {
