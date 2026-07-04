@@ -226,10 +226,29 @@ test('bar percentages are clamped to 0..100 (never print an out-of-range share)'
   for (const m of md.matchAll(/(\d+)%/g)) assert.ok(Number(m[1]) <= 100, `bar over 100%: ${m[0]}`);
 });
 
-test('decision readiness derives from config (ecommerce absent → abandonment Not answerable)', () => {
+test('decision readiness derives from config and is gated by the data trust matrix', () => {
   const md = buildGa4AuditReport(input());
-  assert.ok(/Abandonment by product\/page\? \| Not answerable/.test(md));
-  assert.ok(/Which campaigns generate revenue\? \| Answerable/.test(md)); // Ads linked
+  assert.ok(/Abandonment by product\/page\? \| Not answerable/.test(md), 'no ecommerce events → Not answerable');
+  // Ads are linked, but revenue is unverified in this fixture, so the revenue decision is capped at
+  // Partial rather than claimed Answerable on wiring alone.
+  assert.ok(/Which campaigns generate revenue\? \| Partial/.test(md), 'revenue unverified → Partial despite Ads link');
+});
+
+test('decision readiness caps trust-dependent decisions at Partial when conversion/revenue are unverified', () => {
+  // Default fixture: revenue is unverified (no ecommerce setup to gate on), so the revenue decision
+  // is Partial even though conversion counts are trusted here. Google Signals alone is a cross-device
+  // approximation, not robust identity, so repeat/churn is Partial even with Signals on (was
+  // Answerable before this gating).
+  const md = buildGa4AuditReport(input());
+  assert.ok(/Which campaigns generate revenue\? \| Partial/.test(md), 'revenue-dependent decision gated to Partial');
+  assert.ok(/Repeat\/churn within 90 days \| Partial/.test(md), 'Signals-only repeat/churn is Partial, not Answerable');
+
+  // When the trust matrix marks conversions do-not-quote (a >=2x traffic spike that conversions did
+  // not track), conversion-dependent decisions must also drop to Partial.
+  const b = baseline({ sessions: 32165, priorSessions: 8819, keyEvents: 210, priorKeyEvents: 200, revenue: 1000, priorRevenue: 950 });
+  const spikeMd = buildGa4AuditReport(input({ snapshot: snap({ keyEvents: [{ eventName: 'generate_lead' }, { eventName: 'refund' }] }), baseline: b, growth: growthOf(b, 'Organic Social') }));
+  assert.ok(/CAC by channel \| Partial/.test(spikeMd), 'conversions do-not-quote → CAC Partial');
+  assert.ok(/Refund\/return rate \| Partial/.test(spikeMd), 'conversions do-not-quote → refund Partial despite refund events');
 });
 
 test('a data-quality finding lands in the All-findings table with a business-risk column', () => {
