@@ -1,3 +1,9 @@
+## [1.168.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.167.0...v1.168.0) (2026-07-04)
+
+### Features
+
+* **desktop:** polish GA4 audit report layout (data points, fonts, tables) ([7524a2d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7524a2d955fd3f395d1bcc239345dbf5fc55a68e))
+
 ## [1.167.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.166.0...v1.167.0) (2026-07-04)
 
 ### Features
