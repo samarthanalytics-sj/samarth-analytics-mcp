@@ -3598,7 +3598,7 @@ function ContainerAuditPanel({
                         </span>
                       )}
                       {f.resource ? `${f.resource.name} ` : ''}
-                      <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 12 }}>
+                      <span style={{ fontWeight: 700, color: 'var(--c-blue)', fontSize: 12 }}>
                         {f.resource ? `(${f.resource.kind === 'tag' && f.resource.type ? gtmTypeLabel(f.resource.type) : f.resource.kind})` : f.category}
                       </span>
                       {f.category === 'paused' && (
