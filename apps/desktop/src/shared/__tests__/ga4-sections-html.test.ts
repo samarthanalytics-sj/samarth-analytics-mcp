@@ -58,6 +58,7 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     peakDay: 'Jun 28 — 2,236 sessions',
     newVsReturning: 'new 78%, returning 21%',
     topMarkets: 'India 96%, United States 1%',
+    engagement: '1m 23s avg engagement time/session · 61.2% engaged-session rate · 1.4 engaged sessions/user',
   },
   channelPerformance: [
     { channel: 'Organic Search', sessions: '20,000', convRate: '3.0%', revenue: 'INR 250,000', engagement: '62%' },
@@ -140,6 +141,13 @@ test('section 6 baseline shows sessions, growth (with trust-matrix flag), peak d
   assert.ok(h.includes('Property baseline'));
   assert.ok(h.includes('33,453') && h.includes('India 96%'));
   assert.ok(/flagged in the data trust matrix/.test(h), 'flagged growth figures point at the trust matrix (verdict-aware, not a blanket "not safe")');
+});
+
+test('section 6 baseline renders the engagement line, and omits it when null', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/Engagement/.test(h) && h.includes('1m 23s avg engagement time/session'), 'engagement metaRow shown');
+  const h2 = ga4SectionsHtml(view({ baseline: { ...view().baseline!, engagement: null } }));
+  assert.ok(!/Engagement:/.test(h2), 'no engagement row when the figure is null');
 });
 
 test('section 6 renders the channel-performance table (conversion rate + revenue per channel)', () => {

@@ -133,6 +133,12 @@ export interface Ga4Baseline {
   /** Total revenue — window and prior — for the same correlation. */
   revenue: number;
   priorRevenue: number;
+  /** Engagement (attention) figures for the baseline block: average engagement time per session in
+   *  SECONDS (userEngagementDuration/sessions — active foreground time, excludes idle, unlike session
+   *  duration), the engaged-session rate (0-1), and engaged sessions per active user. 0 if unavailable. */
+  avgEngagementSec: number;
+  engagementRate: number;
+  engagedSessionsPerUser: number;
   /** % change vs the prior period (rounded); null if the prior period had no sessions. */
   trendPct: number | null;
   /** Highest-session day in the window (GA4 "date" = YYYYMMDD); null if no data. */
@@ -2278,7 +2284,10 @@ export class GoogleDataService {
     // funnel query can filter to exactly these event names server-side.
     const FUNNEL_EVENTS = ['view_item', 'add_to_cart', 'begin_checkout', 'purchase'];
     // Sessions + the outcomes that should move with real growth, current and prior, in one row each.
-    const TREND_METRICS = ['sessions', 'keyEvents', 'totalRevenue'];
+    // 0=sessions 1=keyEvents 2=totalRevenue, then the engagement trio: 3=userEngagementDuration (sec,
+    // total), 4=engagementRate (0-1), 5=engagedSessionsPerUser. Appended, so the leading indices are
+    // unchanged. (Prior period queries them too and just ignores them — one shared metric list.)
+    const TREND_METRICS = ['sessions', 'keyEvents', 'totalRevenue', 'userEngagementDuration', 'engagementRate', 'engagedSessionsPerUser'];
 
     // Totals come from NO-dimension reports (one exact row each) — never the per-day report, which a
     // 100-row cap would truncate for windows > 100 days. The daily series is the per-day report ordered
@@ -2371,6 +2380,11 @@ export class GoogleDataService {
       priorKeyEvents: oneMetric(priorTotal, 1),
       revenue: oneMetric(curTotal, 2),
       priorRevenue: oneMetric(priorTotal, 2),
+      // "Average engagement time per session" has no direct GA4 metric — it is userEngagementDuration
+      // (total engaged seconds, idx 3) / sessions. Rate (idx 4) is 0-1; engaged sessions/user is idx 5.
+      avgEngagementSec: sessions > 0 ? oneMetric(curTotal, 3) / sessions : 0,
+      engagementRate: oneMetric(curTotal, 4),
+      engagedSessionsPerUser: oneMetric(curTotal, 5),
       trendPct: priorSessions > 0 ? Math.round(((sessions - priorSessions) / priorSessions) * 100) : null,
       peakDay,
       dailySessions,

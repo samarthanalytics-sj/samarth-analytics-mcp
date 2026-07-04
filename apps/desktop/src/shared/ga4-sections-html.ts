@@ -162,7 +162,8 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
         growthLine +
         metaRow('Peak day', b.peakDay ?? 'Not Verified') +
         metaRow('New vs returning', b.newVsReturning) +
-        metaRow('Top markets', b.topMarkets ?? 'Not Verified'),
+        metaRow('Top markets', b.topMarkets ?? 'Not Verified') +
+        (b.engagement ? metaRow('Engagement', b.engagement) : ''),
       BLUE,
     );
   } else {
