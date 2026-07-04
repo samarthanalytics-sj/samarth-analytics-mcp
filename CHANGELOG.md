@@ -1,3 +1,13 @@
+## [1.175.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.174.0...v1.175.0) (2026-07-04)
+
+### Features
+
+* **desktop:** consent-drift alert + configurable alert threshold for GA4 monitoring ([deb99c7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/deb99c7fcbdf525d4811bdc7981df63a3116be36))
+* **desktop:** GA4 monitor alert-level control + cross-tab alert banner ([e3cc35f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e3cc35f58b046d9de5b1b6e8caa3511e3ef4b835))
+* **desktop:** GA4 monitoring engine + Slack webhook notifier (pure cores) ([72a8a12](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/72a8a1279e9a74005648822c865ee7ed140d5bcd))
+* **desktop:** GA4 monitoring scheduler service (config, dedup, Slack-on-new) ([457a289](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/457a2893738576890d791563c794c78f915c3ca0))
+* **desktop:** wire GA4 monitoring — tool, IPC, scheduler, and a new tab ([c0962ef](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c0962ef8d78dae54ec6444fd739a51dcb971efb7))
+
 ## [1.174.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.173.0...v1.174.0) (2026-07-04)
 
 ### Features
