@@ -108,6 +108,25 @@ export function suggestionToGroup(s: SuggestedTagView): TemplateGroup {
   };
 }
 
+/** Collapse suggestions that would create the SAME GTM tag, keeping the FIRST. Identity is
+ *  platform + tag NAME (trimmed, case-insensitive): GTM tag names must be unique, so two rows sharing
+ *  a name can never both be created — showing the second is always noise, even if a trigger detail
+ *  differs. The scan pipeline already dedups its FINAL result (scan-core dedupSuggestions), but the
+ *  live-streamed running list is only key-deduped; applying the same name-dedup at every point the
+ *  review list is set guarantees the table, the CSV export, and the create flow never show a visual
+ *  duplicate — including mid-scan. Pure + idempotent. */
+export function dedupeViewsByGtmName(list: SuggestedTagView[]): SuggestedTagView[] {
+  const seen = new Set<string>();
+  const out: SuggestedTagView[] = [];
+  for (const s of list) {
+    const k = `${s.platform}|${s.tagName.trim().toLowerCase()}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
 const escapeCsv = (v: string): string => (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
 
 /** The suggestions as a CSV string in the template's exact column + block layout
