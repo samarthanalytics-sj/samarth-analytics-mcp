@@ -1,3 +1,9 @@
+## [1.172.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.172.0...v1.172.1) (2026-07-04)
+
+### Bug Fixes
+
+* **desktop:** gate CAPI event_id dedup audit on the auto-map toggle ([d2ee2f0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d2ee2f06d619bd330ce63db65363b73991cb9792))
+
 ## [1.172.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.171.0...v1.172.0) (2026-07-04)
 
 ### Features
