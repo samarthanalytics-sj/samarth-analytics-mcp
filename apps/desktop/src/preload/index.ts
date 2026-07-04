@@ -228,9 +228,9 @@ const api = {
       ipcRenderer.invoke('gtm:applyFix', fix),
     exportAudit: (defaultName: string, content: string): Promise<string | null> =>
       ipcRenderer.invoke('gtm:exportAudit', defaultName, content),
-    // Save the audit as a styled PDF (Markdown rendered through the same pipeline as the GA4 report).
-    exportAuditPdf: (defaultName: string, markdown: string): Promise<string | null> =>
-      ipcRenderer.invoke('gtm:exportAuditPdf', defaultName, markdown),
+    // Save the audit as a styled PDF that mirrors the panel (severity cards, icons, type labels).
+    exportAuditPdf: (defaultName: string, report: AuditReportView, meta: { account?: string; container?: string; workspace?: string; generatedAt?: string }): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportAuditPdf', defaultName, report, meta),
     ensureGa4Config: (ctx: {
       accountId: string;
       containerId: string;
