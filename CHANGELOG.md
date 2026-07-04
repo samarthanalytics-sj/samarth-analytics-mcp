@@ -1,3 +1,9 @@
+## [1.180.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.179.0...v1.180.0) (2026-07-04)
+
+### Features
+
+* **desktop:** show connected Slack channel/workspace + a Send test button ([4502c77](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4502c77b1b75cd1892981c65e6aafeb573c01727)), closes [#ga4-alerts](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/ga4-alerts)
+
 ## [1.179.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.178.0...v1.179.0) (2026-07-04)
 
 ### Features
