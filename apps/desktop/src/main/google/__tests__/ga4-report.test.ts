@@ -104,6 +104,32 @@ const baseline = (over: Partial<Ga4Baseline> = {}): Ga4Baseline => ({
     { name: 'returning', sessions: 31506 },
   ],
   topCountries: [{ name: 'India', sessions: 70000 }, { name: 'United States', sessions: 4000 }],
+  channelPerformance: [
+    { channel: 'Organic Search', sessions: 40000, keyEvents: 1200, convRate: 0.03, revenue: 250000, engagementRate: 0.62 },
+    { channel: 'Paid Search', sessions: 20000, keyEvents: 900, convRate: 0.045, revenue: 180000, engagementRate: 0.55 },
+    { channel: 'Direct', sessions: 15000, keyEvents: 300, convRate: 0.02, revenue: 0, engagementRate: 0.48 },
+  ],
+  landingPages: [
+    { page: '/', sessions: 30000, keyEvents: 800, convRate: 0.026, revenue: 120000, engagementRate: 0.6 },
+    { page: '/pricing', sessions: 12000, keyEvents: 720, convRate: 0.06, revenue: 300000, engagementRate: 0.71 },
+    { page: '/blog/post', sessions: 8000, keyEvents: 40, convRate: 0.005, revenue: 0, engagementRate: 0.34 },
+  ],
+  devicePerformance: [
+    { device: 'mobile', sessions: 50000, keyEvents: 1500, convRate: 0.03, revenue: 200000, engagementRate: 0.52 },
+    { device: 'desktop', sessions: 25000, keyEvents: 1000, convRate: 0.04, revenue: 320000, engagementRate: 0.68 },
+    { device: 'tablet', sessions: 2506, keyEvents: 30, convRate: 0.012, revenue: 0, engagementRate: 0.4 },
+  ],
+  geoPerformance: [
+    { country: 'India', sessions: 70000, keyEvents: 2100, convRate: 0.03, revenue: 400000, engagementRate: 0.55 },
+    { country: 'United States', sessions: 4000, keyEvents: 320, convRate: 0.08, revenue: 250000, engagementRate: 0.72 },
+    { country: '(not set)', sessions: 1200, keyEvents: 0, convRate: 0, revenue: 0, engagementRate: 0.2 },
+  ],
+  funnelSteps: [
+    { event: 'view_item', users: 10000 },
+    { event: 'add_to_cart', users: 4000 },
+    { event: 'begin_checkout', users: 2000 },
+    { event: 'purchase', users: 1000 },
+  ],
   ...over,
 });
 
@@ -203,6 +229,82 @@ test('a doubled-traffic spike conversions did not track → CRITICAL (worst unve
   assert.ok(!/Well-configured/.test(md), 'never a false all-clear');
   assert.ok(/## 2 · What is wrong/.test(md) && /If unconfirmed:/.test(md), 'top finding is expanded with the worse branch');
   assert.ok(/Growth signals \(vs prior\)/.test(md), 'growth signals shown in baseline');
+});
+
+test('section 6 renders a channel-performance table with conversion rate + revenue per channel', () => {
+  const md = buildGa4AuditReport(input());
+  assert.ok(/\*\*Channel performance\*\*/.test(md), 'channel-performance sub-heading');
+  assert.ok(/\| Channel \| Sessions \| Conv\. rate \| Revenue \| Engagement \|/.test(md), 'table header row');
+  assert.ok(/\| Organic Search \|/.test(md), 'top channel row');
+  assert.ok(/4\.5%/.test(md), 'paid-search conversion rate formatted as a percentage');
+  assert.ok(/\| Direct \|.*\| - \|.*%/.test(md), 'a zero-revenue channel shows a dash placeholder, not 0 (em-dash stripped to hyphen on output)');
+});
+
+test('channel-performance table is omitted when the baseline has no channel data', () => {
+  const b = baseline({ channelPerformance: [] });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(!/\*\*Channel performance\*\*/.test(md), 'no empty channel table');
+});
+
+test('section 6 renders a landing-page table with entry-page conversion rate + revenue', () => {
+  const md = buildGa4AuditReport(input());
+  assert.ok(/\*\*Landing pages\*\*/.test(md), 'landing-page sub-heading');
+  assert.ok(/\| Landing page \| Sessions \| Conv\. rate \| Revenue \| Engagement \|/.test(md), 'table header row');
+  assert.ok(/\| \/pricing \|/.test(md), 'a top entry-page row');
+  assert.ok(/6\.0%/.test(md), 'pricing-page conversion rate formatted as a percentage');
+  assert.ok(/\| \/blog\/post \|.*\| - \|.*%/.test(md), 'a zero-revenue entry page shows a dash placeholder, not 0');
+});
+
+test('landing-page table is omitted when the baseline has no landing-page data', () => {
+  const b = baseline({ landingPages: [] });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(!/\*\*Landing pages\*\*/.test(md), 'no empty landing-page table');
+});
+
+test('section 6 renders device + market performance tables with conversion rate + revenue', () => {
+  const md = buildGa4AuditReport(input());
+  assert.ok(/\*\*Device performance\*\*/.test(md), 'device-performance sub-heading');
+  assert.ok(/\| Device \| Sessions \| Conv\. rate \| Revenue \| Engagement \|/.test(md), 'device table header');
+  assert.ok(/\| desktop \|.*4\.0%/.test(md), 'a device row with its conversion rate');
+  assert.ok(/\*\*Market performance\*\*/.test(md), 'market-performance sub-heading');
+  assert.ok(/\| Market \| Sessions \| Conv\. rate \| Revenue \| Engagement \|/.test(md), 'market table header');
+  assert.ok(/\| United States \|.*8\.0%/.test(md), 'a market row with its conversion rate');
+  assert.ok(/\| tablet \|.*\| - \|.*%/.test(md), 'a zero-revenue device shows a dash placeholder');
+});
+
+test('device + market tables are omitted when the baseline has no such data', () => {
+  const b = baseline({ devicePerformance: [], geoPerformance: [] });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(!/\*\*Device performance\*\*/.test(md), 'no empty device table');
+  assert.ok(!/\*\*Market performance\*\*/.test(md), 'no empty market table');
+});
+
+test('section 6 renders the ecommerce funnel with step conversion + depth + the approximation caveat', () => {
+  const md = buildGa4AuditReport(input());
+  assert.ok(/\*\*Ecommerce funnel\*\*/.test(md), 'funnel sub-heading');
+  assert.ok(/overall view-to-purchase 10\.0%/.test(md), 'overall view→purchase rate (1000/10000)');
+  assert.ok(/\| Step \| Users \| % of entry \| Step conversion \|/.test(md), 'funnel table header');
+  // begin_checkout: % of entry = 2000/10000 = 20%; step conversion (from add_to_cart) = 2000/4000 = 50% — distinct columns
+  assert.ok(/\| Begin checkout \| 2,000 \| 20% \| 50% \|/.test(md), 'depth vs step-conversion are different columns');
+  assert.ok(/\| View item \| 10,000 \| 100% \| - \|/.test(md), 'entry step has no step-conversion (em-dash stripped to hyphen on output)');
+  assert.ok(/not a strict sequential path/.test(md), 'honesty caveat present');
+});
+
+test('ecommerce funnel is omitted when there is no view_item reach (non-ecommerce property)', () => {
+  const noView = baseline({ funnelSteps: [{ event: 'view_item', users: 0 }, { event: 'add_to_cart', users: 0 }, { event: 'begin_checkout', users: 0 }, { event: 'purchase', users: 0 }] });
+  assert.ok(!/\*\*Ecommerce funnel\*\*/.test(buildGa4AuditReport(input({ baseline: noView, growth: growthOf(noView) }))), 'no funnel without an entry step');
+  const noData = baseline({ funnelSteps: [] });
+  assert.ok(!/\*\*Ecommerce funnel\*\*/.test(buildGa4AuditReport(input({ baseline: noData, growth: growthOf(noData) }))), 'no funnel when the query returned nothing');
+});
+
+test('ecommerce funnel guards divide-by-zero and never clamps a step above 100%', () => {
+  // begin_checkout not tracked (0 users) but purchase fires — a real tracking-gap shape.
+  const gap = baseline({ funnelSteps: [{ event: 'view_item', users: 5000 }, { event: 'add_to_cart', users: 2000 }, { event: 'begin_checkout', users: 0 }, { event: 'purchase', users: 300 }] });
+  const md = buildGa4AuditReport(input({ baseline: gap, growth: growthOf(gap) }));
+  assert.ok(/\| Purchase \| 300 \| 6% \| - \|/.test(md), 'purchase step-conversion is a dash when the prior step is 0 (no divide-by-zero)');
+  // A later step exceeding an earlier one shows the true ratio, not a clamp.
+  const anomaly = baseline({ funnelSteps: [{ event: 'view_item', users: 1000 }, { event: 'add_to_cart', users: 1200 }, { event: 'begin_checkout', users: 600 }, { event: 'purchase', users: 300 }] });
+  assert.ok(/\| Add to cart \| 1,200 \| 120% \| 120% \|/.test(buildGa4AuditReport(input({ baseline: anomaly, growth: growthOf(anomaly) }))), 'a >100% step is shown, not clamped');
 });
 
 test('untrusted outcome metrics are flagged "not safe to quote" in the report; sessions are not', () => {

@@ -287,6 +287,17 @@ export interface Ga4SectionsView {
     newVsReturning: string;
     topMarkets: string | null;
   } | null;
+  /** Section 6 — per-channel performance (conversion rate + revenue per channel, not just share). */
+  channelPerformance: Array<{ channel: string; sessions: string; convRate: string; revenue: string; engagement: string }>;
+  /** Section 6 — top landing pages (entry-page conversion rate + revenue: which pages convert/leak). */
+  landingPages: Array<{ page: string; sessions: string; convRate: string; revenue: string; engagement: string }>;
+  /** Section 6 — device performance (how each device type converts and spends). */
+  devicePerformance: Array<{ device: string; sessions: string; convRate: string; revenue: string; engagement: string }>;
+  /** Section 6 — market performance (which geographies convert and spend). */
+  geoPerformance: Array<{ country: string; sessions: string; convRate: string; revenue: string; engagement: string }>;
+  /** Section 6 — ecommerce funnel step reach (users per step + step conversion + depth). An event-
+   *  coverage approximation, not a strict sequential funnel. null when the property has no view_item. */
+  funnel: { steps: Array<{ label: string; users: string; pctEntry: string; stepConv: string }>; overall: string } | null;
   /** Section 7 — decision readiness (which business questions the data can answer). */
   decisions: Array<{ q: string; status: string; note: string }>;
   /** Section 8 — what was not verified, and what gates sign-off. */

@@ -99,6 +99,84 @@ function shareLabel(pairs: Array<{ name: string; sessions: number }>): string {
   return pairs.map((p) => `${p.name || '(not set)'} ${pct(p.sessions, total)}%`).join(', ');
 }
 
+// Per-channel PERFORMANCE rows (conversion rate + revenue per channel, not just session share) —
+// formatted ONCE here so the markdown table and the structured/HTML view read identically. Top 10 by
+// sessions; revenue prefixed with the property currency; rates as percentages.
+function channelPerfRows(baseline: Ga4Baseline | null, currency: string): Array<{ channel: string; sessions: string; convRate: string; revenue: string; engagement: string }> {
+  const cur = currency ? `${currency} ` : '';
+  return (baseline?.channelPerformance ?? []).slice(0, 10).map((c) => ({
+    channel: c.channel || '(not set)',
+    sessions: num(c.sessions),
+    convRate: `${(c.convRate * 100).toFixed(1)}%`,
+    revenue: c.revenue > 0 ? `${cur}${num(Math.round(c.revenue))}` : '—',
+    engagement: `${Math.round(c.engagementRate * 100)}%`,
+  }));
+}
+
+// Top LANDING-PAGE rows (entry-page conversion rate + revenue) — same shape and formatting as the
+// channel table so both surfaces render identically. Top 10 entry pages by sessions; long paths are
+// left intact (the markdown cell escapes pipes; the HTML cell scrolls/wraps).
+function landingPageRows(baseline: Ga4Baseline | null, currency: string): Array<{ page: string; sessions: string; convRate: string; revenue: string; engagement: string }> {
+  const cur = currency ? `${currency} ` : '';
+  return (baseline?.landingPages ?? []).slice(0, 10).map((p) => ({
+    page: p.page || '(not set)',
+    sessions: num(p.sessions),
+    convRate: `${(p.convRate * 100).toFixed(1)}%`,
+    revenue: p.revenue > 0 ? `${cur}${num(Math.round(p.revenue))}` : '—',
+    engagement: `${Math.round(p.engagementRate * 100)}%`,
+  }));
+}
+
+// Per-DEVICE performance rows (how each device type converts and spends) — same shape/formatting as the
+// channel + landing tables so all breakdowns render identically.
+function devicePerfRows(baseline: Ga4Baseline | null, currency: string): Array<{ device: string; sessions: string; convRate: string; revenue: string; engagement: string }> {
+  const cur = currency ? `${currency} ` : '';
+  return (baseline?.devicePerformance ?? []).slice(0, 10).map((d) => ({
+    device: d.device || '(not set)',
+    sessions: num(d.sessions),
+    convRate: `${(d.convRate * 100).toFixed(1)}%`,
+    revenue: d.revenue > 0 ? `${cur}${num(Math.round(d.revenue))}` : '—',
+    engagement: `${Math.round(d.engagementRate * 100)}%`,
+  }));
+}
+
+// Top-MARKET performance rows (which geographies convert and spend) — same shape/formatting again. Top
+// 10 markets by sessions.
+function geoPerfRows(baseline: Ga4Baseline | null, currency: string): Array<{ country: string; sessions: string; convRate: string; revenue: string; engagement: string }> {
+  const cur = currency ? `${currency} ` : '';
+  return (baseline?.geoPerformance ?? []).slice(0, 10).map((g) => ({
+    country: g.country || '(not set)',
+    sessions: num(g.sessions),
+    convRate: `${(g.convRate * 100).toFixed(1)}%`,
+    revenue: g.revenue > 0 ? `${cur}${num(Math.round(g.revenue))}` : '—',
+    engagement: `${Math.round(g.engagementRate * 100)}%`,
+  }));
+}
+
+const FUNNEL_LABELS: Record<string, string> = { view_item: 'View item', add_to_cart: 'Add to cart', begin_checkout: 'Begin checkout', purchase: 'Purchase' };
+
+// Ecommerce funnel view — distinct users reaching each step, with step-to-step conversion and depth vs
+// the entry step. IMPORTANT: this is an event-COVERAGE approximation (GA4's true sequential funnel is
+// UI/v1alpha-only), so a later step can legitimately exceed an earlier one; we render the real ratio
+// (never clamp — a >100% step is itself a tracking-gap signal) and guard divide-by-zero. Returns null
+// (table omitted) when there is no view_item reach to anchor the funnel.
+function funnelView(baseline: Ga4Baseline | null): { steps: Array<{ label: string; users: string; pctEntry: string; stepConv: string }>; overall: string } | null {
+  const raw = baseline?.funnelSteps ?? [];
+  const entry = raw[0]?.users ?? 0;
+  if (raw.length < 2 || entry <= 0) return null;
+  const steps = raw.map((s, i) => {
+    const prev = i > 0 ? raw[i - 1].users : 0;
+    return {
+      label: FUNNEL_LABELS[s.event] ?? s.event,
+      users: num(s.users),
+      pctEntry: `${Math.round((s.users / entry) * 100)}%`,
+      stepConv: i === 0 ? '—' : prev > 0 ? `${Math.round((s.users / prev) * 100)}%` : '—',
+    };
+  });
+  const last = raw[raw.length - 1]?.users ?? 0;
+  return { steps, overall: `${((last / entry) * 100).toFixed(1)}%` };
+}
+
 function areaEvidence(area: string, s: Ga4PropertySnapshot, config: Ga4AuditReport): string {
   switch (area) {
     case 'Data collection':
@@ -426,7 +504,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     footer: 'Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.',
   };
 
-  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, decisions, notVerified: { gate, items: nv }, scope };
+  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), funnel: funnelView(baseline), decisions, notVerified: { gate, items: nv }, scope };
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
@@ -604,6 +682,53 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     L.push(`- **New vs returning:** ${shareLabel(baseline.newVsReturning)}`);
     L.push(`- **Top markets:** ${baseline.topCountries.length ? baseline.topCountries.map((c) => `${c.name || '(not set)'} ${pct(c.sessions, baseline.sessions)}%`).join(', ') : 'Not Verified'}`);
     L.push('');
+    const cperf = channelPerfRows(baseline, s.currencyCode);
+    if (cperf.length) {
+      L.push('**Channel performance** (which channels convert and earn, not just their traffic share)');
+      L.push('');
+      L.push('| Channel | Sessions | Conv. rate | Revenue | Engagement |');
+      L.push('|---|--:|--:|--:|--:|');
+      for (const c of cperf) L.push(`| ${cell(c.channel)} | ${c.sessions} | ${c.convRate} | ${c.revenue} | ${c.engagement} |`);
+      L.push('');
+    }
+    const lpRows = landingPageRows(baseline, s.currencyCode);
+    if (lpRows.length) {
+      L.push('**Landing pages** (top entry pages — which pages convert and which leak)');
+      L.push('');
+      L.push('| Landing page | Sessions | Conv. rate | Revenue | Engagement |');
+      L.push('|---|--:|--:|--:|--:|');
+      for (const p of lpRows) L.push(`| ${cell(p.page)} | ${p.sessions} | ${p.convRate} | ${p.revenue} | ${p.engagement} |`);
+      L.push('');
+    }
+    const dpRows = devicePerfRows(baseline, s.currencyCode);
+    if (dpRows.length) {
+      L.push('**Device performance** (how each device type converts and spends)');
+      L.push('');
+      L.push('| Device | Sessions | Conv. rate | Revenue | Engagement |');
+      L.push('|---|--:|--:|--:|--:|');
+      for (const d of dpRows) L.push(`| ${cell(d.device)} | ${d.sessions} | ${d.convRate} | ${d.revenue} | ${d.engagement} |`);
+      L.push('');
+    }
+    const gpRows = geoPerfRows(baseline, s.currencyCode);
+    if (gpRows.length) {
+      L.push('**Market performance** (which geographies convert and spend, top 10 by sessions)');
+      L.push('');
+      L.push('| Market | Sessions | Conv. rate | Revenue | Engagement |');
+      L.push('|---|--:|--:|--:|--:|');
+      for (const g of gpRows) L.push(`| ${cell(g.country)} | ${g.sessions} | ${g.convRate} | ${g.revenue} | ${g.engagement} |`);
+      L.push('');
+    }
+    const fun = funnelView(baseline);
+    if (fun) {
+      L.push(`**Ecommerce funnel** (distinct users per step; overall view-to-purchase ${fun.overall})`);
+      L.push('');
+      L.push('| Step | Users | % of entry | Step conversion |');
+      L.push('|---|--:|--:|--:|');
+      for (const st of fun.steps) L.push(`| ${cell(st.label)} | ${st.users} | ${st.pctEntry} | ${st.stepConv} |`);
+      L.push('');
+      L.push('_Event-coverage approximation, not a strict sequential path — a later step can exceed an earlier one (saved carts, express checkout, or a missing step tag)._');
+      L.push('');
+    }
     if (baseline.devices.length) {
       // Divide by the device report's OWN total (not the date-report total) so the shares sum to ~100%.
       const devTotal = baseline.devices.reduce((acc, d) => acc + d.sessions, 0) || 1;

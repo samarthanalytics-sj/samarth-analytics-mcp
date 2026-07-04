@@ -59,6 +59,31 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     newVsReturning: 'new 78%, returning 21%',
     topMarkets: 'India 96%, United States 1%',
   },
+  channelPerformance: [
+    { channel: 'Organic Search', sessions: '20,000', convRate: '3.0%', revenue: 'INR 250,000', engagement: '62%' },
+    { channel: 'Paid Search', sessions: '8,000', convRate: '4.5%', revenue: 'INR 180,000', engagement: '55%' },
+  ],
+  landingPages: [
+    { page: '/pricing', sessions: '12,000', convRate: '6.0%', revenue: 'INR 300,000', engagement: '71%' },
+    { page: '/blog/post', sessions: '8,000', convRate: '0.5%', revenue: '-', engagement: '34%' },
+  ],
+  devicePerformance: [
+    { device: 'mobile', sessions: '50,000', convRate: '3.0%', revenue: 'INR 200,000', engagement: '52%' },
+    { device: 'desktop', sessions: '25,000', convRate: '4.0%', revenue: 'INR 320,000', engagement: '68%' },
+  ],
+  geoPerformance: [
+    { country: 'India', sessions: '70,000', convRate: '3.0%', revenue: 'INR 400,000', engagement: '55%' },
+    { country: 'United States', sessions: '4,000', convRate: '8.0%', revenue: 'INR 250,000', engagement: '72%' },
+  ],
+  funnel: {
+    steps: [
+      { label: 'View item', users: '10,000', pctEntry: '100%', stepConv: '—' },
+      { label: 'Add to cart', users: '4,000', pctEntry: '40%', stepConv: '40%' },
+      { label: 'Begin checkout', users: '2,000', pctEntry: '20%', stepConv: '50%' },
+      { label: 'Purchase', users: '1,000', pctEntry: '10%', stepConv: '50%' },
+    ],
+    overall: '10.0%',
+  },
   decisions: [
     { q: 'Which campaigns generate revenue?', status: 'Answerable', note: 'Google Ads linked' },
     { q: 'Lead quality', status: 'Not answerable', note: 'no lead key events' },
@@ -115,6 +140,75 @@ test('section 6 baseline shows sessions, growth (with trust-matrix flag), peak d
   assert.ok(h.includes('Property baseline'));
   assert.ok(h.includes('33,453') && h.includes('India 96%'));
   assert.ok(/flagged in the data trust matrix/.test(h), 'flagged growth figures point at the trust matrix (verdict-aware, not a blanket "not safe")');
+});
+
+test('section 6 renders the channel-performance table (conversion rate + revenue per channel)', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/Channel performance/.test(h), 'table heading');
+  assert.ok(h.includes('Conv. rate') && h.includes('Engagement'), 'column headers');
+  assert.ok(h.includes('Organic Search') && h.includes('4.5%') && h.includes('INR 250,000'), 'a channel row with conv rate + revenue');
+});
+
+test('section 6 omits the channel table when no channel data', () => {
+  const h = ga4SectionsHtml(view({ channelPerformance: [] }));
+  assert.ok(!/Channel performance/.test(h), 'no empty table');
+});
+
+test('section 6 renders the landing-page table (entry-page conversion rate + revenue)', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/Landing pages/.test(h), 'table heading');
+  assert.ok(h.includes('/pricing') && h.includes('6.0%') && h.includes('INR 300,000'), 'a landing-page row with conv rate + revenue');
+});
+
+test('section 6 omits the landing-page table when no landing-page data', () => {
+  const h = ga4SectionsHtml(view({ landingPages: [] }));
+  assert.ok(!/Landing pages/.test(h), 'no empty table');
+});
+
+test('section 6 landing-page paths are HTML-escaped (no injection — paths come from the audited site)', () => {
+  const h = ga4SectionsHtml(view({ landingPages: [{ page: '/x"><script>alert(1)</script>&q=1', sessions: '10', convRate: '1.0%', revenue: '-', engagement: '20%' }] }));
+  assert.ok(!h.includes('<script>alert(1)'), 'raw script tag must never reach the output');
+  assert.ok(h.includes('&lt;script&gt;'), 'angle brackets escaped');
+  assert.ok(h.includes('&amp;q=1'), 'ampersand escaped');
+});
+
+test('section 6 renders the device + market performance tables', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/Device performance/.test(h) && /Market performance/.test(h), 'both table headings');
+  assert.ok(h.includes('mobile') && h.includes('4.0%'), 'a device row with conv rate');
+  assert.ok(h.includes('United States') && h.includes('INR 400,000'), 'a market row with revenue');
+});
+
+test('section 6 omits the device + market tables when no such data', () => {
+  const h = ga4SectionsHtml(view({ devicePerformance: [], geoPerformance: [] }));
+  assert.ok(!/Device performance/.test(h) && !/Market performance/.test(h), 'no empty tables');
+});
+
+test('section 6 renders the ecommerce funnel with steps, overall rate, and the approximation caveat', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/Ecommerce funnel/.test(h), 'funnel heading');
+  assert.ok(/view-to-purchase 10\.0%/.test(h), 'overall rate in the caption');
+  assert.ok(h.includes('Begin checkout') && h.includes('50%'), 'a funnel step with its step conversion');
+  assert.ok(/Step conversion/.test(h) && /% of entry/.test(h), 'both funnel columns');
+  assert.ok(/not a strict sequential path/.test(h), 'honesty caveat present');
+});
+
+test('section 6 omits the funnel when it is null (non-ecommerce property)', () => {
+  const h = ga4SectionsHtml(view({ funnel: null }));
+  assert.ok(!/Ecommerce funnel/.test(h), 'no funnel block');
+});
+
+test('section 6 device/market performance: zero-revenue rows render a dash placeholder', () => {
+  // Empty the other two tables so the ONLY zero-revenue dash cells come from device + market. Pass the
+  // em-dash the formatter actually emits, to also prove ga4SectionsHtml strips it to a hyphen on output.
+  const h = ga4SectionsHtml(view({
+    channelPerformance: [], landingPages: [],
+    devicePerformance: [{ device: 'tablet', sessions: '2,506', convRate: '1.2%', revenue: '—', engagement: '40%' }],
+    geoPerformance: [{ country: '(not set)', sessions: '1,200', convRate: '0.0%', revenue: '—', engagement: '20%' }],
+  }));
+  assert.ok(!/—/.test(h), 'em-dash is stripped to a hyphen on output');
+  const dashCells = (h.match(/<td[^>]*>-<\/td>/g) || []).length;
+  assert.ok(dashCells >= 2, 'each zero-revenue device/market row renders a dash cell');
 });
 
 test('section 7 decision readiness pills answerable vs not answerable', () => {

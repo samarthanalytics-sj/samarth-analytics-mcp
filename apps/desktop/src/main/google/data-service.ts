@@ -146,6 +146,27 @@ export interface Ga4Baseline {
   devices: Array<{ name: string; sessions: number }>;
   newVsReturning: Array<{ name: string; sessions: number }>;
   topCountries: Array<{ name: string; sessions: number }>;
+  /** Per-channel PERFORMANCE (not just session share): sessions, key events, session conversion rate
+   *  (0-1), revenue, engagement rate (0-1) — the "which channels actually convert/earn" table. Top by
+   *  sessions. Empty if the query failed. */
+  channelPerformance: Array<{ channel: string; sessions: number; keyEvents: number; convRate: number; revenue: number; engagementRate: number }>;
+  /** Top LANDING PAGES by entry sessions: session conversion rate, revenue, engagement rate (0-1) —
+   *  "which entry pages convert and which leak". Uses the `landingPage` dimension (path only — GA4
+   *  strips the query string) so entry pages aggregate cleanly instead of fragmenting across ?utm=
+   *  variants. Empty if the query failed. */
+  landingPages: Array<{ page: string; sessions: number; keyEvents: number; convRate: number; revenue: number; engagementRate: number }>;
+  /** Per-DEVICE performance (deviceCategory): sessions, key events, session conversion rate (0-1),
+   *  revenue, engagement rate (0-1) — "how each device type converts and spends". Empty if failed. */
+  devicePerformance: Array<{ device: string; sessions: number; keyEvents: number; convRate: number; revenue: number; engagementRate: number }>;
+  /** Top MARKETS performance (country): same shape — "which geographies convert and spend". Top by
+   *  sessions. Empty if the query failed. */
+  geoPerformance: Array<{ country: string; sessions: number; keyEvents: number; convRate: number; revenue: number; engagementRate: number }>;
+  /** Ecommerce funnel step reach — distinct USERS who fired each canonical funnel event (view_item →
+   *  add_to_cart → begin_checkout → purchase), in order. Queried with a server-side inListFilter, so
+   *  `users` is 0 only when that event genuinely has no reach (never a top-N truncation artifact). This
+   *  is an event-COVERAGE approximation (each step counts users independently, no order enforced), not a
+   *  strict sequential funnel; the report labels it as such and omits it when there is no view_item. */
+  funnelSteps: Array<{ event: string; users: number }>;
 }
 
 export interface GtmWorkspaceView {
@@ -2253,6 +2274,9 @@ export class GoogleDataService {
     const oneMetric = (r: Ga4ReportResult, i: number): number => (r.rows[0] ? n(r.rows[0].metrics[i] ?? '0') : 0);
     const byMetricDesc = [{ metric: { metricName: 'sessions' }, desc: true }];
     const byDateDesc = [{ dimension: { dimensionName: 'date' }, desc: true }];
+    // Canonical GA4 recommended-ecommerce funnel, in order. Declared before the Promise.all so the
+    // funnel query can filter to exactly these event names server-side.
+    const FUNNEL_EVENTS = ['view_item', 'add_to_cart', 'begin_checkout', 'purchase'];
     // Sessions + the outcomes that should move with real growth, current and prior, in one row each.
     const TREND_METRICS = ['sessions', 'keyEvents', 'totalRevenue'];
 
@@ -2261,7 +2285,7 @@ export class GoogleDataService {
     // NEWEST-FIRST at limit 1000, then reversed to chronological — so a custom range longer than the cap
     // keeps the MOST-RECENT days (what spike/trend cares about), not the oldest. Country = top-N (250).
     const emptyResult: Ga4ReportResult = { dimensionHeaders: [], metricHeaders: [], rows: [] };
-    const [curTotal, priorTotal, byDate, byDevice, byNvR, byCountry, byChannelDate] = await Promise.all([
+    const [curTotal, priorTotal, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage, byDevicePerf, byGeoPerf, byFunnel] = await Promise.all([
       this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['date'], metrics: ['sessions'], orderBys: byDateDesc, limit: '1000' }),
@@ -2270,7 +2294,28 @@ export class GoogleDataService {
       this.runGa4Report({ property, startDate, endDate, dimensions: ['country'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '250' }),
       // Per-channel daily sessions for the multi-line chart (newest-first, then aligned to the date axis).
       this.runGa4Report({ property, startDate, endDate, dimensions: ['date', 'sessionDefaultChannelGroup'], metrics: ['sessions'], orderBys: byDateDesc, limit: '5000' }).catch(() => emptyResult),
+      // Per-channel PERFORMANCE: sessions + conversion rate + revenue + engagement (top channels by sessions).
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['sessionDefaultChannelGroup'], metrics: ['sessions', 'keyEvents', 'sessionKeyEventRate', 'totalRevenue', 'engagementRate'], orderBys: byMetricDesc, limit: '15' }).catch(() => emptyResult),
+      // Top LANDING PAGES: same metric set, keyed on `landingPage` (path only — GA4 strips the query
+      // string) so entry pages aggregate cleanly rather than fragmenting across ?utm= variants.
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['landingPage'], metrics: ['sessions', 'keyEvents', 'sessionKeyEventRate', 'totalRevenue', 'engagementRate'], orderBys: byMetricDesc, limit: '15' }).catch(() => emptyResult),
+      // Per-DEVICE performance (deviceCategory): how each device type converts and spends. Dedicated
+      // query — the byDevice query above stays session-only for the device-split bars/chart.
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['deviceCategory'], metrics: ['sessions', 'keyEvents', 'sessionKeyEventRate', 'totalRevenue', 'engagementRate'], orderBys: byMetricDesc, limit: '10' }).catch(() => emptyResult),
+      // Top MARKETS performance (country): which geographies convert and spend. Dedicated query — the
+      // byCountry query above stays session-only for the top-markets share line.
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['country'], metrics: ['sessions', 'keyEvents', 'sessionKeyEventRate', 'totalRevenue', 'engagementRate'], orderBys: byMetricDesc, limit: '15' }).catch(() => emptyResult),
+      // Ecommerce funnel step reach: distinct USERS who fired each funnel event. totalUsers (not
+      // eventCount, which inflates when a user adds several items). A server-side inListFilter returns
+      // EXACTLY the funnel events (never truncated by event-name cardinality — a low-traffic purchase on
+      // a 500+-event property still comes back); events with no reach are simply absent => 0 downstream.
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['eventName'], metrics: ['totalUsers'], dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: FUNNEL_EVENTS } } }, limit: '10' }).catch(() => emptyResult),
     ]);
+    // Build the per-step user counts. This is an event-COVERAGE funnel (distinct users who fired each
+    // event at all in the window), NOT a strict sequential path — GA4's true ordered funnel is
+    // UI/v1alpha-only. The report labels it as an approximation.
+    const funnelUsers = new Map<string, number>();
+    for (const r of byFunnel.rows) funnelUsers.set(r.dimensions[0] ?? '', n(r.metrics[0]));
 
     const sessions = oneMetric(curTotal, 0);
     const priorSessions = oneMetric(priorTotal, 0);
@@ -2334,6 +2379,39 @@ export class GoogleDataService {
       devices: merge(pairs(byDevice)).sort((a, b) => b.sessions - a.sessions),
       newVsReturning: merge(pairs(byNvR)),
       topCountries: merge(pairs(byCountry)).sort((a, b) => b.sessions - a.sessions).slice(0, 5),
+      channelPerformance: byChannelPerf.rows.map((r) => ({
+        channel: r.dimensions[0] || '(not set)',
+        sessions: n(r.metrics[0]),
+        keyEvents: n(r.metrics[1]),
+        convRate: Number(r.metrics[2]) || 0, // sessionKeyEventRate, 0-1
+        revenue: n(r.metrics[3]),
+        engagementRate: Number(r.metrics[4]) || 0, // 0-1
+      })),
+      landingPages: byLandingPage.rows.map((r) => ({
+        page: r.dimensions[0] || '(not set)',
+        sessions: n(r.metrics[0]),
+        keyEvents: n(r.metrics[1]),
+        convRate: Number(r.metrics[2]) || 0, // sessionKeyEventRate, 0-1
+        revenue: n(r.metrics[3]),
+        engagementRate: Number(r.metrics[4]) || 0, // 0-1
+      })),
+      devicePerformance: byDevicePerf.rows.map((r) => ({
+        device: r.dimensions[0] || '(not set)',
+        sessions: n(r.metrics[0]),
+        keyEvents: n(r.metrics[1]),
+        convRate: Number(r.metrics[2]) || 0, // sessionKeyEventRate, 0-1
+        revenue: n(r.metrics[3]),
+        engagementRate: Number(r.metrics[4]) || 0, // 0-1
+      })),
+      geoPerformance: byGeoPerf.rows.map((r) => ({
+        country: r.dimensions[0] || '(not set)',
+        sessions: n(r.metrics[0]),
+        keyEvents: n(r.metrics[1]),
+        convRate: Number(r.metrics[2]) || 0, // sessionKeyEventRate, 0-1
+        revenue: n(r.metrics[3]),
+        engagementRate: Number(r.metrics[4]) || 0, // 0-1
+      })),
+      funnelSteps: FUNNEL_EVENTS.map((event) => ({ event, users: funnelUsers.get(event) ?? 0 })),
     };
   }
 
@@ -2401,6 +2479,9 @@ export class GoogleDataService {
     limit?: string;
     /** GA4 orderBys passthrough — pair with a small limit to fetch the top-N by a metric. */
     orderBys?: Array<{ metric?: { metricName: string }; dimension?: { dimensionName: string }; desc?: boolean }>;
+    /** GA4 dimensionFilter passthrough — restrict rows server-side (e.g. an inListFilter on eventName)
+     *  so an EXACT target set comes back, never sampled from a truncated top-N. */
+    dimensionFilter?: { filter?: { fieldName?: string; inListFilter?: { values?: string[]; caseSensitive?: boolean }; stringFilter?: { value?: string } } };
   }): Promise<Ga4ReportResult> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
     const data = analyticsdata({ version: 'v1beta', auth });
@@ -2411,6 +2492,7 @@ export class GoogleDataService {
         dimensions: input.dimensions.map((name) => ({ name })),
         metrics: input.metrics.map((name) => ({ name })),
         ...(input.orderBys ? { orderBys: input.orderBys } : {}),
+        ...(input.dimensionFilter ? { dimensionFilter: input.dimensionFilter } : {}),
         limit: input.limit ?? '100',
       },
     });
