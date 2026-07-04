@@ -23,7 +23,7 @@ import type {
   SuggestedTagView,
   TagScanResult,
 } from '../../shared/ipc';
-import { suggestionToGroup, suggestionsToTemplateCsv, TEMPLATE_HEADERS } from '../../shared/tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, dedupeViewsByGtmName, TEMPLATE_HEADERS } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
@@ -1889,7 +1889,10 @@ function TagReviewPanel({
   }, [active?.hasGoogleToken, ctx?.accountId]);
   const containerLabel = (id: string): string => containerNames[id.toUpperCase()] ?? id;
 
-  function loadSuggestions(list: SuggestedTagView[]): void {
+  function loadSuggestions(rawList: SuggestedTagView[]): void {
+    // Guarantee "each GTM tag shown once": collapse any same-name duplicates before they reach the
+    // list, the selection map, the CSV, or the create flow (belt-and-suspenders over the pipeline dedup).
+    const list = dedupeViewsByGtmName(rawList);
     setSuggestions(list);
     // Default-select the real gaps; leave unticked what GA4 Enhanced Measurement already tracks AND
     // low-confidence guesses (e.g. generic "any prominent button" CTAs) so the user opts in deliberately
@@ -1912,8 +1915,10 @@ function TagReviewPanel({
   // list, straight to the tag results.
   // Suggestions stream in as each page is scanned, so the list fills one-by-one.
   const onScanProgress = (p: ScanProgressView): void => {
-    setSuggestions(p.suggestions);
-    setScanProgress({ scanned: p.scanned, found: p.suggestions.length });
+    // Same name-dedup on the LIVE streamed list, so a transient same-name pair never flashes mid-scan.
+    const streamed = dedupeViewsByGtmName(p.suggestions);
+    setSuggestions(streamed);
+    setScanProgress({ scanned: p.scanned, found: streamed.length });
   };
 
   async function doSinglePageScan(): Promise<void> {
