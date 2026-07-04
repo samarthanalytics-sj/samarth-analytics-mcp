@@ -32,11 +32,29 @@ function bestConv<T extends { sessions: number; convRate: number }>(rows: T[], m
 
 const FUNNEL_LABEL: Record<string, string> = { view_item: 'View item', add_to_cart: 'Add to cart', begin_checkout: 'Begin checkout', purchase: 'Purchase' };
 
-/** Zero or more one-line insight bullets, most-notable first. Empty when there's no baseline. */
-export function deriveGa4Insights(baseline: Ga4Baseline | null, currency: string): string[] {
+/** Zero or more one-line insight bullets, most-notable first. Empty when there's no baseline.
+ *  `trust` carries the Data Trust Matrix verdicts for conversion counts and revenue; a bullet whose
+ *  claim leans on an unverified metric is tagged "(provisional - … unverified)" so a superlative like
+ *  "converts best" isn't read as established fact. Omitting `trust` treats both as safe, so callers
+ *  that don't compute the matrix (and the engine's own unit tests) are unchanged. */
+export function deriveGa4Insights(
+  baseline: Ga4Baseline | null,
+  currency: string,
+  trust?: { convSafe: boolean; revSafe: boolean },
+): string[] {
   if (!baseline) return [];
   const b = baseline;
   const cur = currency || '';
+  const convSafe = trust?.convSafe ?? true;
+  const revSafe = trust?.revSafe ?? true;
+  const provisional = (dep: 'conv' | 'rev' | 'convrev'): string => {
+    const conv = (dep === 'conv' || dep === 'convrev') && !convSafe;
+    const rev = (dep === 'rev' || dep === 'convrev') && !revSafe;
+    if (conv && rev) return ' (provisional - conversion & revenue unverified)';
+    if (conv) return ' (provisional - conversion tracking unverified)';
+    if (rev) return ' (provisional - revenue unverified)';
+    return '';
+  };
   const out: string[] = [];
 
   // 1. Peak day (only when it's genuinely a spike vs the daily average).
@@ -62,11 +80,11 @@ export function deriveGa4Insights(baseline: Ga4Baseline | null, currency: string
     if (topRev && topRev.revenue > 0) {
       const bc = convUnreliable ? null : bestConv(ch, 0.05);
       if (bc && bc.channel === topRev.channel) {
-        out.push(`${topRev.channel} brings the most revenue (${money(topRev.revenue, cur)}) and converts best at ${pct(bc.convRate)}%.`);
+        out.push(`${topRev.channel} brings the most revenue (${money(topRev.revenue, cur)}) and converts best at ${pct(bc.convRate)}%.${provisional('convrev')}`);
       } else {
         let s = `${topRev.channel} brings the most revenue (${money(topRev.revenue, cur)}).`;
         if (bc) s += ` ${bc.channel} converts best at ${pct(bc.convRate)}%.`;
-        out.push(s);
+        out.push(s + provisional(bc ? 'convrev' : 'rev'));
       }
     }
   }
@@ -79,7 +97,7 @@ export function deriveGa4Insights(baseline: Ga4Baseline | null, currency: string
     // topVol is the highest-volume page by construction, but on a tiny property even the top page can be
     // negligible — require real traffic (>=100 sessions) before calling it a "CRO opportunity".
     if (topVol && bestP && bestP.page !== topVol.page && topVol.sessions >= 100 && topVol.convRate > 0 && topVol.convRate < bestP.convRate * 0.6) {
-      out.push(`${topVol.page} is your top entry page (${n(topVol.sessions)} sessions) but converts at only ${pct(topVol.convRate)}%, below ${bestP.page}'s ${pct(bestP.convRate)}% - the clearest CRO opportunity.`);
+      out.push(`${topVol.page} is your top entry page (${n(topVol.sessions)} sessions) but converts at only ${pct(topVol.convRate)}%, below ${bestP.page}'s ${pct(bestP.convRate)}% - the clearest CRO opportunity.${provisional('conv')}`);
     }
   }
 
@@ -89,7 +107,7 @@ export function deriveGa4Insights(baseline: Ga4Baseline | null, currency: string
     const topVol = topBy(dev, (d) => d.sessions);
     const bc = bestConv(dev, 0.1);
     if (topVol && bc && bc.device !== topVol.device && bc.convRate > topVol.convRate) {
-      out.push(`Most visits are on ${topVol.device} but ${bc.device} converts better (${pct(bc.convRate)}% vs ${pct(topVol.convRate)}%) - worth checking the ${topVol.device} experience.`);
+      out.push(`Most visits are on ${topVol.device} but ${bc.device} converts better (${pct(bc.convRate)}% vs ${pct(topVol.convRate)}%) - worth checking the ${topVol.device} experience.${provisional('conv')}`);
     }
   }
 
@@ -104,7 +122,7 @@ export function deriveGa4Insights(baseline: Ga4Baseline | null, currency: string
         if (drop > worst.drop) worst = { drop, from: FUNNEL_LABEL[fs[i - 1].event] ?? fs[i - 1].event, to: FUNNEL_LABEL[fs[i].event] ?? fs[i].event };
       }
     }
-    if (worst.drop >= 0.1) out.push(`Biggest funnel drop-off: ${worst.from} to ${worst.to}, where ${Math.round(worst.drop * 100)}% of users leave.`);
+    if (worst.drop >= 0.1) out.push(`Biggest funnel drop-off: ${worst.from} to ${worst.to}, where ${Math.round(worst.drop * 100)}% of users leave.${provisional('conv')}`);
   }
 
   // 7. AI-assistant channel materiality (emerging channel).

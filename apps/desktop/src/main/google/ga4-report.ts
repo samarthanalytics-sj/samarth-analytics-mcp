@@ -613,7 +613,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     footer: 'Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.',
   };
 
-  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), llmTraffic: llmTrafficView(baseline, s.currencyCode), funnel: funnelView(baseline), insights: deriveGa4Insights(baseline, s.currencyCode), decisions, notVerified: { gate, items: nv }, scope };
+  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), llmTraffic: llmTrafficView(baseline, s.currencyCode), funnel: funnelView(baseline), insights: deriveGa4Insights(baseline, s.currencyCode, { convSafe: keSafe, revSafe }), perfProvisional: !keSafe || !revSafe, decisions, notVerified: { gate, items: nv }, scope };
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
@@ -795,15 +795,32 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     if (engLine) L.push(`- **Engagement:** ${engLine}`);
     if (input.retentionSummary) L.push(`- **Retention (cohorts):** ${input.retentionSummary}`);
     L.push('');
-    const insights = deriveGa4Insights(baseline, s.currencyCode);
+    const convSafe = safeOf('Conversion counts');
+    const revSafe = safeOf('Revenue / AOV / ROAS');
+    const insights = deriveGa4Insights(baseline, s.currencyCode, { convSafe, revSafe });
     if (insights.length) {
       L.push('**Key insights**');
       L.push('');
       for (const ins of insights) L.push(`- ${ins}`);
       L.push('');
     }
+    // The performance tables below show conversion rate and revenue per row. When the Data Trust
+    // Matrix hasn't confirmed those metrics, flag the columns as provisional so a reader doesn't act
+    // on "converts best" style comparisons as if they were verified.
+    const perfNote =
+      !convSafe && !revSafe
+        ? '_Conversion-rate and revenue columns below are provisional - both are unverified (see the Data Trust Matrix)._'
+        : !convSafe
+          ? '_Conversion-rate columns below are provisional - conversion tracking is unverified (see the Data Trust Matrix)._'
+          : !revSafe
+            ? '_Revenue columns below are provisional - revenue is unverified (see the Data Trust Matrix)._'
+            : null;
     const cperf = channelPerfRows(baseline, s.currencyCode);
     if (cperf.length) {
+      if (perfNote) {
+        L.push(perfNote);
+        L.push('');
+      }
       L.push('**Channel performance** (which channels convert and earn, not just their traffic share)');
       L.push('');
       L.push('| Channel | Sessions | Conv. rate | Revenue | Engagement |');

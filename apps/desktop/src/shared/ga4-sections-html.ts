@@ -180,7 +180,16 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
     const items = x.insights.map((i) => `<li style="margin:4px 0">${esc(i)}</li>`).join('');
     s6 +=
       tableCaption('Key insights', '(the notable peaks, lows, and points from the breakdowns below)') +
-      card(`<ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.5;color:${TEXT}">${items}</ul>`, GREEN);
+      // A provisional insight set is amber (caution), not green — the "so what" leans on unverified figures.
+      card(`<ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.5;color:${TEXT}">${items}</ul>`, x.perfProvisional ? AMBER : GREEN);
+  }
+  // When conversion/revenue are unverified, flag the performance tables' conv-rate/revenue columns as
+  // provisional so a reader doesn't act on "converts best" comparisons as verified fact.
+  if (x.perfProvisional) {
+    s6 += card(
+      `<div style="font-size:12.5px;color:${TEXT};line-height:1.45"><span style="font-weight:700;color:${AMBER}">Provisional:</span> the conversion-rate and revenue columns in the tables below lean on metrics the Data Trust Matrix has not confirmed - treat "converts best" and revenue comparisons as directional until verified.</div>`,
+      AMBER,
+    );
   }
   // Channel performance table — which channels convert and earn, not just their traffic share.
   if (x.channelPerformance && x.channelPerformance.length) {

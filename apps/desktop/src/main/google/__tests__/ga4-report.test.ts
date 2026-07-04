@@ -311,6 +311,14 @@ test('section 6 renders a Key insights block derived from the breakdown data', (
   assert.ok(/- \/ is your top entry page \([\d,]+ sessions\) but converts at only/.test(md), 'landing-page leak insight');
 });
 
+test('section 6 flags perf tables + insights as provisional when revenue/conversion are unverified', () => {
+  // Default fixture: revenue is unverified, so the revenue columns get a provisional note and the
+  // revenue-derived Key insight is tagged, rather than reading as verified fact.
+  const md = buildGa4AuditReport(input());
+  assert.ok(/Revenue columns below are provisional - revenue is unverified/.test(md), 'perf-table provisional note');
+  assert.ok(/brings the most revenue.*\(provisional - revenue unverified\)/.test(md), 'revenue insight tagged provisional');
+});
+
 test('section 6 renders a channel-performance table with conversion rate + revenue per channel', () => {
   const md = buildGa4AuditReport(input());
   assert.ok(/\*\*Channel performance\*\*/.test(md), 'channel-performance sub-heading');

@@ -303,6 +303,9 @@ export interface Ga4SectionsView {
   llmTraffic: { rows: Array<{ source: string; sessions: string; convRate: string; revenue: string; engagement: string }>; share: string } | null;
   /** Section 6 — rule-based "Key insights" bullets (peaks/lows, top performers, the near-100%-conv flag). */
   insights: string[];
+  /** Section 6 — true when the conversion-rate/revenue columns of the performance tables lean on a
+   *  metric the Data Trust Matrix hasn't confirmed, so the renderer flags them as provisional. */
+  perfProvisional?: boolean;
   /** Section 6 — ecommerce funnel step reach (users per step + step conversion + depth). An event-
    *  coverage approximation, not a strict sequential funnel. null when the property has no view_item. */
   funnel: { steps: Array<{ label: string; users: string; pctEntry: string; stepConv: string }>; overall: string } | null;

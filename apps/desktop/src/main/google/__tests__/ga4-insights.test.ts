@@ -91,6 +91,27 @@ test('trustworthy conversion → channel best-converter, landing leak, and devic
   assert.ok(ins.some((i) => /Most visits are on mobile but desktop converts better \(6% vs 2%\)/.test(i)), 'device gap');
 });
 
+test('unverified conversion/revenue tag the dependent insights as provisional (trust matrix)', () => {
+  const b = base({
+    channelPerformance: [
+      { channel: 'Direct', sessions: 6000, keyEvents: 120, convRate: 0.02, revenue: 20000, engagementRate: 0.5 },
+      { channel: 'Paid Search', sessions: 3000, keyEvents: 240, convRate: 0.08, revenue: 90000, engagementRate: 0.6 },
+    ],
+    funnelSteps: [{ event: 'view_item', users: 10000 }, { event: 'add_to_cart', users: 3000 }],
+  });
+  // Both unverified → the revenue+conversion channel bullet gets the combined tag; the funnel bullet
+  // (conversion only) gets the conversion tag.
+  const both = deriveGa4Insights(b, 'USD', { convSafe: false, revSafe: false });
+  assert.ok(both.some((i) => /converts best at 8%\. \(provisional - conversion & revenue unverified\)/.test(i)), both.join(' | '));
+  assert.ok(both.some((i) => /drop-off:.*\(provisional - conversion tracking unverified\)/.test(i)), 'funnel tagged conversion-only');
+  // Revenue-only unverified → the channel bullet is tagged revenue-only; the funnel bullet stays clean.
+  const revOnly = deriveGa4Insights(b, 'USD', { convSafe: true, revSafe: false });
+  assert.ok(revOnly.some((i) => /converts best at 8%\. \(provisional - revenue unverified\)/.test(i)), revOnly.join(' | '));
+  assert.ok(revOnly.some((i) => /where 70% of users leave\.$/.test(i)), 'funnel untagged when conversion is safe');
+  // No trust matrix supplied → no tags at all (backward compatible).
+  assert.ok(!deriveGa4Insights(b, 'USD').some((i) => /provisional/.test(i)), 'no provisional tags without a trust matrix');
+});
+
 test('best-converter ignores tiny high-variance rows (volume guard)', () => {
   const ins = deriveGa4Insights(base({ channelPerformance: [
     { channel: 'Direct', sessions: 9000, keyEvents: 180, convRate: 0.02, revenue: 50000, engagementRate: 0.5 },
