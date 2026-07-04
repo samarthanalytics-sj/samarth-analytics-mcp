@@ -1,3 +1,9 @@
+## [1.185.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.184.0...v1.185.0) (2026-07-04)
+
+### Features
+
+* **desktop:** add StackAdapt, Reddit, and Amazon server-side tag types ([3a5b759](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3a5b759aded3ec67ab63e78c9462cb150494ba73))
+
 ## [1.184.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.183.0...v1.184.0) (2026-07-04)
 
 ### Features
