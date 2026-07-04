@@ -2422,8 +2422,12 @@ test('evaluateTrackingSetup: a complete web+server install passes every check', 
   assert.equal(r.failures, 0, JSON.stringify(r.checks.filter((c) => c.status === 'fail')));
   assert.equal(r.warnings, 0, JSON.stringify(r.checks.filter((c) => c.status === 'warn')));
   assert.equal(r.ok, true);
-  // 3 web-level + 7 web events + client + url + 7 server events
-  assert.equal(r.checks.length, 3 + 7 + 2 + 7);
+  // 3 web-level + 7 web events + 7 schema (one per funnel event) + client + url + 7 server events
+  assert.equal(r.checks.length, 3 + 7 + 7 + 2 + 7);
+  // Every funnel event forwards the ecommerce object → its schema check passes with a DebugView note.
+  const schema = r.checks.filter((c) => c.id.startsWith('schema_') && !c.id.endsWith('_name'));
+  assert.equal(schema.length, 7);
+  assert.ok(schema.every((c) => c.status === 'pass' && c.detail.includes('ecommerce object')), 'schema checks pass for sendEcommerceData funnel tags');
   const serverEvents = r.checks.filter((c) => c.id.startsWith('server_event_'));
   assert.ok(serverEvents.every((c) => c.status === 'pass' && c.detail.includes('base GA4 server tag')), 'base relay covers every event');
 });
@@ -2451,6 +2455,36 @@ test('evaluateTrackingSetup: paused / trigger-less / ecommerce-off tags warn, no
   assert.ok(r.checks.find((c) => c.id === 'web_event_add_to_cart')?.detail.includes('NO firing trigger'));
   assert.equal(r.checks.find((c) => c.id === 'web_event_view_item')?.status, 'warn', 'funnel event without Send Ecommerce data warns');
   assert.equal(r.checks.find((c) => c.id === 'web_event_generate_lead')?.status, 'pass', 'non-ecommerce event needs no ecommerce flag');
+});
+
+test('evaluateTrackingSetup: contract schema check — ecommerce-object note vs missing required param', () => {
+  const tags: Array<Record<string, unknown>> = [
+    { name: 'Google Tag', type: 'googtag', firingTriggerId: ['2147479553'], parameter: [{ type: 'template', key: 'tagId', value: 'G-1' }] },
+    // purchase forwards the whole ecommerce object → schema PASSES with a "site must push …" DebugView note.
+    { name: 'Purchase', type: 'gaawe', firingTriggerId: ['1'], parameter: [{ key: 'eventName', value: 'purchase' }, { key: 'sendEcommerceData', value: 'true' }] },
+    // search maps only page_path → missing the required search_term → schema WARNS.
+    { name: 'Search', type: 'gaawe', firingTriggerId: ['1'], parameter: [
+      { key: 'eventName', value: 'search' },
+      { type: 'list', key: 'eventSettingsTable', list: [{ type: 'map', map: [{ key: 'parameter', value: 'page_path' }, { key: 'parameterValue', value: '{{Page Path}}' }] }] },
+    ] },
+  ];
+  const r = evaluateTrackingSetup(tags, ['purchase', 'search']);
+  const sp = r.checks.find((c) => c.id === 'schema_purchase');
+  assert.equal(sp?.status, 'pass');
+  assert.ok(sp?.detail.includes('transaction_id') && sp?.detail.includes('DebugView'), 'purchase names the required dataLayer params for runtime verify');
+  const ss = r.checks.find((c) => c.id === 'schema_search');
+  assert.equal(ss?.status, 'warn');
+  assert.ok(ss?.detail.includes('search_term'), 'search flags the missing required parameter');
+});
+
+test('evaluateTrackingSetup: taxonomy flags a reserved event name (GA4 will reject it)', () => {
+  const tags: Array<Record<string, unknown>> = [
+    { name: 'Bad', type: 'gaawe', firingTriggerId: ['1'], parameter: [{ key: 'eventName', value: 'google_bad' }] },
+  ];
+  const r = evaluateTrackingSetup(tags, ['google_bad']);
+  const nameCheck = r.checks.find((c) => c.id === 'schema_google_bad_name');
+  assert.equal(nameCheck?.status, 'fail');
+  assert.ok(nameCheck?.detail.includes('reserved'));
 });
 
 test('evaluateTrackingSetup: server side — missing client/url/relay fail; web not pointed at server fails', () => {
