@@ -1,3 +1,9 @@
+## [1.177.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.176.0...v1.177.0) (2026-07-04)
+
+### Features
+
+* **desktop:** in-app guide for getting a Slack webhook URL in GA4 Monitoring ([41cd826](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/41cd826b0d3e2d861d311b462838775119b3308b))
+
 ## [1.176.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.175.1...v1.176.0) (2026-07-04)
 
 ### Features
