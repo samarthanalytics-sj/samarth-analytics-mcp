@@ -1,3 +1,9 @@
+## [1.187.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.186.0...v1.187.0) (2026-07-04)
+
+### Features
+
+* **web-audit:** add TagDrishti tag verification engine ([a41f0ce](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a41f0cec896be0343c225375cc2e5445491ca69f))
+
 ## [1.186.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.185.0...v1.186.0) (2026-07-04)
 
 ### Features
