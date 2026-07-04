@@ -66,6 +66,8 @@ import { buildScorecard, type ScorecardSection } from '../google/scorecard';
 import { buildReport } from '../google/report';
 import { consentReportToSection } from '../google/consent-section';
 import { extractConfiguredGa4Ids, crossCheckMeasurementIds } from '../google/gtm-ga4-check';
+import { runSyntheticTest } from '../suggestions/synthetic-driver';
+import { evaluateRuntimeCapture } from '../../shared/runtime-capture';
 
 // A change a write-tool wants to make, surfaced to the user for approval.
 export interface WriteProposal {
@@ -491,6 +493,51 @@ export function buildToolRegistry(
             ? { accountId: s(a.serverAccountId).trim(), containerId: s(a.serverContainerId).trim(), workspaceId: s(a.serverWorkspaceId).trim() }
             : undefined;
         return data.verifyTrackingSetup(s(a.accountId), s(a.containerId), s(a.workspaceId), { events, server });
+      },
+    },
+    {
+      name: 'runtime_synthetic_test',
+      description:
+        'RUNTIME synthetic test (READ-ONLY, SAFE): load a live URL in headless Chromium, push SYNTHETIC dataLayer funnel events (view_item…purchase, with obviously-fake values like transaction_id "SYNTHETIC_TEST_TXN"), and capture the analytics /collect hits each tag would send — to verify per-event that GA4 (and Meta/TikTok/your server) actually fire at RUNTIME with the right params. ' +
+        'CRITICAL SAFETY: every analytics collector request (GA4 google-analytics.com /g/collect, Meta facebook.com/tr, TikTok analytics.tiktok.com/api, and your optional serverUrl host) is ABORTED before it leaves the browser — NOTHING reaches GA4/Meta/TikTok, so this never pollutes your analytics with a fake purchase. It only reads: it fires synthetic events and aborts the resulting hits. ' +
+        'Needs a URL where the GTM container is actually installed (so the tags exist to fire), and requires a LOCAL Playwright install (`npm i playwright && npx playwright install chromium` in apps/desktop); if Playwright is missing it returns a clear error instead of running. Returns, per expected event: whether a GA4 hit fired, any missing GA4 required params, and which destinations fired — plus a note confirming no real hits were sent. Requires url; optional events (default: the 7-event ecommerce funnel) and serverUrl.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The live page URL to load (must have the GTM container installed).' },
+          events: { type: 'array', items: { type: 'string' }, description: 'Events to fire + verify. Omit for the standard 7-event ecommerce funnel.' },
+          serverUrl: { type: 'string', description: 'Optional first-party tagging server URL — its host is also aborted as a collector.' },
+        },
+        required: ['url'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const events = Array.isArray(a.events) && a.events.length > 0 ? a.events.map(String) : [...GA4_ECOMMERCE_FUNNEL_EVENTS];
+        const serverUrl = s(a.serverUrl).trim() || undefined;
+        let run: Awaited<ReturnType<typeof runSyntheticTest>>;
+        try {
+          run = await runSyntheticTest(s(a.url), { events, serverUrl });
+        } catch (e) {
+          // Playwright not installed (or another launch-time failure) → clean JSON, never throw.
+          const msg = e instanceof Error ? e.message : String(e);
+          return {
+            error: /Playwright is not installed/i.test(msg)
+              ? 'Playwright not installed. Run `npm i playwright && npx playwright install chromium` in apps/desktop to use the runtime synthetic test.'
+              : msg,
+            safety: 'No hits were sent. All analytics collector requests are aborted before delivery.',
+          };
+        }
+        const report = evaluateRuntimeCapture(run.capturedHits, events);
+        return {
+          url: s(a.url),
+          pagesOk: run.pagesOk,
+          ...(run.error ? { error: run.error } : {}),
+          report,
+          capturedHitCount: run.capturedHits.length,
+          collectorsAborted: run.capturedHits.map((h) => ({ collector: h.collector, url: h.url })),
+          safety:
+            'SAFE: this fired SYNTHETIC events only and ABORTED every analytics /collect hit before it left the browser — NO real hits were sent to GA4/Meta/TikTok or your tagging server. Nothing was written to your analytics.',
+        };
       },
     },
     {
