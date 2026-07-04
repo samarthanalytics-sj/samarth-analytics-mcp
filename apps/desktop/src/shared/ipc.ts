@@ -240,6 +240,9 @@ export interface Ga4FindingCardView {
   message: string;
   businessRisk: string;
   recommendation: string;
+  /** Verification state, orthogonal to severity: confirmed | unconfirmed | blocked. Drives the
+   *  Section-4 state chip so an inference-heavy read isn't shown as an established fact. */
+  state?: 'confirmed' | 'unconfirmed' | 'blocked';
 }
 /** Structured body sections (2-4 so far) for the designed card panel + styled export, mirroring the
  *  markdown report so the on-screen panel and the PDF render the same content as Section 1. */
@@ -282,6 +285,9 @@ export interface Ga4SectionsView {
   } | null;
   /** Section 4 — every finding, highest severity first. */
   findings: Ga4FindingCardView[];
+  /** Section 4 — "Blocked by verification": checks that could not run this window (unmeasured, not a
+   *  clean pass). Rendered as a distinct blocked-state group; kept out of the severity counts. */
+  blocked?: Array<{ area: string; message: string; recommendation: string }>;
   actionableCount: number;
   /** Section 5 — area coverage (status + confidence + evidence). */
   areas: Array<{ area: string; statusKey: string; confidence: string; evidence: string }>;
@@ -311,6 +317,9 @@ export interface Ga4SectionsView {
   llmTraffic: { rows: Array<{ source: string; sessions: string; convRate: string; revenue: string; engagement: string }>; share: string } | null;
   /** Section 6 — rule-based "Key insights" bullets (peaks/lows, top performers, the near-100%-conv flag). */
   insights: string[];
+  /** Section 6 — true when the conversion-rate/revenue columns of the performance tables lean on a
+   *  metric the Data Trust Matrix hasn't confirmed, so the renderer flags them as provisional. */
+  perfProvisional?: boolean;
   /** Section 6 — ecommerce funnel step reach (users per step + step conversion + depth). An event-
    *  coverage approximation, not a strict sequential funnel. null when the property has no view_item. */
   funnel: { steps: Array<{ label: string; users: string; pctEntry: string; stepConv: string }>; overall: string } | null;
