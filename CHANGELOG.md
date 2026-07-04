@@ -1,3 +1,9 @@
+## [1.159.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.158.0...v1.159.0) (2026-07-04)
+
+### Features
+
+* **desktop:** cap Main website + Landing-page CSV scans at 50 pages and surface it in the UI ([34fe684](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/34fe684ba611b32faf459ad11a99febb94064615))
+
 ## [1.158.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.157.1...v1.158.0) (2026-07-04)
 
 ### Features
