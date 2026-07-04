@@ -1,3 +1,9 @@
+## [1.179.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.178.0...v1.179.0) (2026-07-04)
+
+### Features
+
+* **desktop:** clearer, plain-English copy for GA4 monitor alerts + checks ([812ebe6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/812ebe61dd7b72110e816a6c26ca4c2c9975c3b5))
+
 ## [1.178.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.177.0...v1.178.0) (2026-07-04)
 
 ### Features
