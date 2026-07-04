@@ -34,6 +34,11 @@ import {
   buildPinterestTag,
   buildPinterestCapiServerTag,
   pinterestServerEvent,
+  buildStackAdaptServerTag,
+  buildRedditCapiServerTag,
+  redditServerEvent,
+  buildAmazonCapiServerTag,
+  amazonServerEvent,
   buildSnapPixelTag,
   pinterestEvent,
   snapEventType,
@@ -2729,6 +2734,109 @@ test('buildPinterestCapiServerTag: override rows are canonicalized to Pinterest 
   const blank = buildPinterestCapiServerTag('cvt_PINS', 'x', 'A', 'T', { override: { userData: [{ name: 'em', value: '' }] } });
   assert.equal(paramVal(blank, 'overrideMode'), 'false');
   assert.ok(!((blank.parameter as Array<{ key?: string }>) ?? []).some((p) => p.key === 'userDataList'));
+});
+
+test('buildStackAdaptServerTag: id-only pixel (pixelID/pixelType), action row, property tables; bad type → conv', () => {
+  const t = buildStackAdaptServerTag('cvt_SA01', 'StackAdapt - Purchase', '{{SA Pixel}}', 'conv', {
+    action: 'purchase',
+    commonProperties: [{ name: 'revenue', value: '{{Value}}' }, { name: 'blank', value: '   ' }],
+    customProperties: [{ name: 'campaign', value: '{{Campaign}}' }],
+    firingTriggerId: ['5'],
+  });
+  assert.equal(t.type, 'cvt_SA01');
+  assert.equal(paramVal(t, 'pixelID'), '{{SA Pixel}}');
+  assert.equal(paramVal(t, 'pixelType'), 'conv');
+  // action lands as a commonProperties row; the blank-value row is dropped.
+  assert.deepEqual(listRows(t, 'commonProperties'), [['revenue', '{{Value}}'], ['action', 'purchase']]);
+  assert.deepEqual(listRows(t, 'customProperties'), [['campaign', '{{Campaign}}']]);
+  assert.deepEqual(t.firingTriggerId, ['5']);
+  // This template has NO access token / event_id / eventName field — never emit one.
+  for (const k of ['accessToken', 'apiAccessToken', 'event_id', 'eventName', 'serverEventDataList']) {
+    assert.ok(!((t.parameter as Array<{ key?: string }>) ?? []).some((p) => p.key === k), `${k} must not be emitted`);
+  }
+  // an unknown pixelType falls back to 'conv'; an explicit action row is NOT duplicated by opts.action.
+  const t2 = buildStackAdaptServerTag('cvt_SA01', 'x', 'P', 'bogus', { action: 'lead', commonProperties: [{ name: 'action', value: 'signup' }] });
+  assert.equal(paramVal(t2, 'pixelType'), 'conv');
+  assert.deepEqual(listRows(t2, 'commonProperties'), [['action', 'signup']]);
+});
+
+test('redditServerEvent + buildRedditCapiServerTag: inherit default, standard/custom event, automap, eventId → conversion_id', () => {
+  assert.equal(redditServerEvent('purchase'), 'PURCHASE');
+  assert.equal(redditServerEvent('add_to_cart'), 'ADD_TO_CART');
+  assert.equal(redditServerEvent('PAGE_VISIT'), 'PAGE_VISIT'); // exact SELECT value passes
+  assert.equal(redditServerEvent('view_item'), 'VIEW_CONTENT'); // GA4 alias
+  assert.equal(redditServerEvent('totally_custom'), null);
+
+  const t = buildRedditCapiServerTag('cvt_RD01', 'Reddit CAPI', '{{Reddit Pixel}}', '{{Reddit Token}}', { eventId: '{{Event ID}}', firingTriggerId: ['7'] });
+  assert.equal(t.type, 'cvt_RD01');
+  assert.equal(paramVal(t, 'eventType'), 'inherit');
+  assert.equal(paramVal(t, 'accountId'), '{{Reddit Pixel}}'); // pixel id lives in the template's accountId field
+  assert.equal(paramVal(t, 'accessToken'), '{{Reddit Token}}');
+  assert.equal(paramVal(t, 'actionSource'), 'WEBSITE');
+  assert.equal(paramVal(t, 'autoMapCommonEventData'), 'true');
+  assert.equal(paramVal(t, 'autoMapServerEventData'), 'true');
+  assert.equal(paramVal(t, 'autoMapUserData'), 'true');
+  assert.equal(paramVal(t, 'useOptimisticScenario'), 'false');
+  assert.equal(paramVal(t, 'adStorageConsent'), 'optional');
+  assert.deepEqual(listRows(t, 'serverEventDataList'), [['conversion_id', '{{Event ID}}']]); // dedup row
+  assert.deepEqual(t.firingTriggerId, ['7']);
+
+  const t2 = buildRedditCapiServerTag('cvt_RD01', 'x', 'P', 'T', {
+    event: 'purchase', autoMap: false, requireConsent: true, optimistic: true,
+    testId: '{{Test}}', clickId: '{{rdt_cid}}',
+    serverEventData: [{ name: 'value', value: '{{V}}' }, { name: 'blank', value: '   ' }],
+    userData: [{ name: 'email', value: '{{Email}}' }],
+  });
+  assert.equal(paramVal(t2, 'eventType'), 'standard');
+  assert.equal(paramVal(t2, 'eventName'), 'PURCHASE');
+  assert.equal(paramVal(t2, 'autoMapServerEventData'), 'false');
+  assert.equal(paramVal(t2, 'useOptimisticScenario'), 'true');
+  assert.equal(paramVal(t2, 'adStorageConsent'), 'required');
+  assert.equal(paramVal(t2, 'testId'), '{{Test}}');
+  assert.equal(paramVal(t2, 'clickId'), '{{rdt_cid}}');
+  assert.deepEqual(listRows(t2, 'serverEventDataList'), [['value', '{{V}}']]); // blank dropped, no eventId passed
+  assert.deepEqual(listRows(t2, 'userDataList'), [['email', '{{Email}}']]);
+
+  const t3 = buildRedditCapiServerTag('cvt_RD01', 'x', 'P', 'T', { event: 'my_custom_event' });
+  assert.equal(paramVal(t3, 'eventType'), 'custom');
+  assert.equal(paramVal(t3, 'eventNameCustom'), 'my_custom_event');
+  assert.equal(paramVal(t3, 'eventName'), undefined);
+});
+
+test('amazonServerEvent + buildAmazonCapiServerTag: tagIdsList value column, region, event map, eventId → clientDedupeId', () => {
+  assert.equal(amazonServerEvent('purchase'), 'Off-AmazonPurchases');
+  assert.equal(amazonServerEvent('add_to_cart'), 'AddToShoppingCart');
+  assert.equal(amazonServerEvent('Off-AmazonPurchases'), 'Off-AmazonPurchases'); // exact value passes
+  assert.equal(amazonServerEvent('page_view'), 'PageView');
+  assert.equal(amazonServerEvent('nope'), null);
+
+  const t = buildAmazonCapiServerTag('cvt_AZ01', 'Amazon CAPI', ['2a2b1197-3668-0000', '   ', 'ffff-1111'], 'EU', {
+    eventId: '{{Event ID}}', matchId: '{{User}}', enableAdvancedMatching: true,
+    userData: [{ name: 'email', value: '{{Email}}' }],
+    defaultAttributes: [{ name: 'value', value: '{{V}}' }],
+    firingTriggerId: ['3'],
+  });
+  assert.equal(t.type, 'cvt_AZ01');
+  assert.equal(paramVal(t, 'tagRegion'), 'EU');
+  assert.equal(paramVal(t, 'eventType'), 'inherit');
+  // tagIdsList uses a SINGLE 'value' column (not name/value); the blank id is dropped.
+  const idRows = ((t.parameter as Array<{ key?: string; list?: Array<{ map: Array<{ key?: string; value?: string }> }> }>) ?? [])
+    .find((x) => x.key === 'tagIdsList')?.list?.map((r) => r.map.find((m) => m.key === 'value')?.value);
+  assert.deepEqual(idRows, ['2a2b1197-3668-0000', 'ffff-1111']);
+  assert.equal(paramVal(t, 'matchId'), '{{User}}');
+  assert.equal(paramVal(t, 'enableAdvancedMatching'), 'true');
+  assert.deepEqual(listRows(t, 'userDataAttributesList'), [['email', '{{Email}}']]);
+  // eventId → clientDedupeId row appended to defaultAttributesList (after the explicit value row).
+  assert.deepEqual(listRows(t, 'defaultAttributesList'), [['value', '{{V}}'], ['clientDedupeId', '{{Event ID}}']]);
+  assert.deepEqual(t.firingTriggerId, ['3']);
+
+  // advanced matching OFF → userDataAttributesList not emitted even if userData passed; unknown region → NA; custom event.
+  const t2 = buildAmazonCapiServerTag('cvt_AZ01', 'x', ['id1'], 'XX', { event: 'my_evt', userData: [{ name: 'email', value: '{{E}}' }] });
+  assert.equal(paramVal(t2, 'tagRegion'), 'NA');
+  assert.equal(paramVal(t2, 'eventType'), 'custom');
+  assert.equal(paramVal(t2, 'eventNameCustom'), 'my_evt');
+  assert.equal(paramVal(t2, 'enableAdvancedMatching'), 'false');
+  assert.ok(!((t2.parameter as Array<{ key?: string }>) ?? []).some((p) => p.key === 'userDataAttributesList'), 'no user data when advanced matching off');
 });
 
 test('snapEventType + buildSnapPixelTag: event mapping + flat advanced-matching fields; unknown → PAGE_VIEW', () => {

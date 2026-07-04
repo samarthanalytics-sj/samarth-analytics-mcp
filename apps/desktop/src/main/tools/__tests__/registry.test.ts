@@ -495,9 +495,13 @@ async function main(): Promise<void> {
     // user-identity pixel tools (create_hotjar_tag, create_pinterest_tag, create_snap_pixel_tag) = 97,
     // plus create_pinterest_capi_server_tag = 98, plus the read-only audit_install_drift = 99,
     // plus the read-only audit_tracking_status = 100, plus the read-only runtime_synthetic_test = 101,
-    // plus the read-only monitor_ga4_property = 102.
-    assert.equal(withWrites.list().length, 102 + 60, 'read + write registry has 102 GTM/GA4-read/context + 60 GA4-write tools');
+    // plus the read-only monitor_ga4_property = 102, plus the three new server tag types
+    // (create_stackadapt_server_tag, create_reddit_capi_server_tag, create_amazon_capi_server_tag) = 105.
+    assert.equal(withWrites.list().length, 105 + 60, 'read + write registry has 105 GTM/GA4-read/context + 60 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
+    assert.equal(withWrites.list().some((t) => t.name === 'create_reddit_capi_server_tag'), true, 'create_reddit_capi_server_tag present');
+    assert.equal(withWrites.list().some((t) => t.name === 'create_amazon_capi_server_tag'), true, 'create_amazon_capi_server_tag present');
+    assert.equal(withWrites.list().some((t) => t.name === 'create_stackadapt_server_tag'), true, 'create_stackadapt_server_tag present');
     // Every catalog resource + special contributes at least one tool (catches a fully-dropped entry
     // for a resource no other assertion names — google_ads_link, firebase_link, expanded_data_set,
     // dv360, sa360, adsense, subproperty, rollup, etc.).
@@ -2016,6 +2020,32 @@ async function main(): Promise<void> {
     assert.ok(pinapi.tagId, 'created a Pinterest CAPI tag');
     await assert.rejects(() => reg.execute('create_pinterest_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', advertiserId: '', apiAccessToken: 'T' }), /advertiserId is required/);
     await assert.rejects(() => reg.execute('create_pinterest_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', advertiserId: 'A', apiAccessToken: '  ' }), /apiAccessToken is required/);
+
+    // create_stackadapt_server_tag imports the StackAdapt server template + creates the id-only pixel tag.
+    const saapi = JSON.parse(
+      await reg.execute('create_stackadapt_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelID: '{{SA Pixel}}', pixelType: 'conv', action: 'purchase', firingTriggerId: ['5'] }),
+    );
+    assert.ok(fd.calls.includes('importTemplate:StackAdapt/stackadapt-gtm-server-side-pixel'), 'imported the StackAdapt server template');
+    assert.ok(saapi.tagId, 'created a StackAdapt pixel tag');
+    await assert.rejects(() => reg.execute('create_stackadapt_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelID: '', pixelType: 'conv' }), /pixelID is required/);
+    await assert.rejects(() => reg.execute('create_stackadapt_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelID: 'P', pixelType: '  ' }), /pixelType is required/);
+
+    // create_reddit_capi_server_tag imports the Stape Reddit template + creates the CAPI server tag.
+    const rdapi = JSON.parse(
+      await reg.execute('create_reddit_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '{{Reddit Pixel}}', accessToken: '{{Reddit Token}}', event: 'purchase', eventId: '{{Event ID}}', firingTriggerId: ['5'] }),
+    );
+    assert.ok(fd.calls.includes('importTemplate:stape-io/reddit-tag'), 'imported the Stape Reddit server template');
+    assert.ok(rdapi.tagId, 'created a Reddit CAPI tag');
+    await assert.rejects(() => reg.execute('create_reddit_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: '', accessToken: 'T' }), /pixelId is required/);
+    await assert.rejects(() => reg.execute('create_reddit_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', pixelId: 'P', accessToken: '  ' }), /accessToken is required/);
+
+    // create_amazon_capi_server_tag imports the Stape Amazon template + creates the CAPI server tag.
+    const azapi = JSON.parse(
+      await reg.execute('create_amazon_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', tagIds: ['2a2b1197-3668-0000'], tagRegion: 'NA', event: 'purchase', firingTriggerId: ['5'] }),
+    );
+    assert.ok(fd.calls.includes('importTemplate:stape-io/amazon-tag'), 'imported the Stape Amazon server template');
+    assert.ok(azapi.tagId, 'created an Amazon CAPI tag');
+    await assert.rejects(() => reg.execute('create_amazon_capi_server_tag', { accountId: '1', containerId: '2', workspaceId: '3', tagIds: [], tagRegion: 'NA' }), /tagIds is required/);
 
     // update_gtm_trigger fixes a Custom Event trigger's Event name IN PLACE (no delete+recreate).
     const upd = JSON.parse(

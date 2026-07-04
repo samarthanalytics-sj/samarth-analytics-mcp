@@ -45,6 +45,9 @@ import {
   buildHotjarTag,
   buildPinterestTag,
   buildPinterestCapiServerTag,
+  buildStackAdaptServerTag,
+  buildRedditCapiServerTag,
+  buildAmazonCapiServerTag,
   buildTikTokPixelTag,
   buildLinkedInInsightTag,
   buildRedditPixelTag,
@@ -2556,6 +2559,188 @@ export function buildToolRegistry(
           testMode: bln(a.testMode),
           log: bln(a.log),
           override: { serverEventData: rows(a.serverEventData), userData: rows(a.userData), customData: rows(a.customData) },
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_stackadapt_server_tag',
+      description:
+        'Create a StackAdapt SERVER pixel tag from the official StackAdapt server template (StackAdapt / stackadapt-gtm-server-side-pixel) in a server container. UNLIKE the CAPI tags, StackAdapt is ID-ONLY: pass pixelID (the StackAdapt pixel/audience/conversion id, usually a {{variable}}) + pixelType — "conv" (Conversion Event, sent as cid=), "rt" (Retargeting Audience, sid=), "lal" (Lookalike Audience, sid=), or "universal" (Universal Event, uid=). There is NO access token and NO event_id dedup field (identity is first-party-cookie based, handled by the template). For a conversion, pass `action` to name the event (lands as a commonProperties "action" row). Add standard fields via commonProperties (name ∈ email/first_name/last_name/phone/order_id/revenue/product_id/product_name/product_price/product_category/action) or arbitrary ones via customProperties; values usually {{variables}}. The tag needs a SERVER trigger (create_server_trigger). Optional firingTriggerId, name (default "StackAdapt Pixel"). Requires accountId, containerId (SERVER), workspaceId, pixelID, pixelType.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional — defaults to "StackAdapt Pixel".' },
+          pixelID: { type: 'string', description: 'StackAdapt pixel/audience/conversion id (usually a {{variable}}).' },
+          pixelType: { type: 'string', enum: ['conv', 'rt', 'lal', 'universal'], description: 'conv=Conversion Event, rt=Retargeting Audience, lal=Lookalike Audience, universal=Universal Event.' },
+          action: { type: 'string', description: 'Optional action/event name for a conversion (a commonProperties "action" row).' },
+          commonProperties: {
+            type: 'array', description: 'Standard property rows { name, value }; name ∈ email/first_name/last_name/phone/order_id/revenue/product_id/product_name/product_price/product_category/action.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          customProperties: {
+            type: 'array', description: 'Arbitrary custom property rows { name, value }.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'pixelID', 'pixelType'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create StackAdapt server pixel "${s(a.name).trim() || 'StackAdapt Pixel'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'StackAdapt Pixel', 'tag'),
+      handler: async (a) => {
+        if (!s(a.pixelID).trim()) throw new Error('pixelID is required (the StackAdapt pixel/audience/conversion id, usually a {{variable}}).');
+        if (!s(a.pixelType).trim()) throw new Error('pixelType is required (conv | rt | lal | universal).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'StackAdapt', 'stackadapt-gtm-server-side-pixel');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the StackAdapt server template's tag type (got "${tmpl.type}"). Import StackAdapt/stackadapt-gtm-server-side-pixel and check list_gtm_templates.`);
+        }
+        const name = s(a.name).trim() || 'StackAdapt Pixel';
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildStackAdaptServerTag(tmpl.type, name, s(a.pixelID), s(a.pixelType), {
+          action: a.action != null ? s(a.action) : undefined,
+          commonProperties: rows(a.commonProperties),
+          customProperties: rows(a.customProperties),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_reddit_capi_server_tag',
+      description:
+        'Create a Reddit Conversions API SERVER tag from the Stape "Reddit Conversion API" community template (stape-io / reddit-tag) in a server container — the server counterpart of the create_reddit_pixel_tag WEB pixel. Pass pixelId (the Reddit Pixel/Advertiser ID, t2_/a2_) + accessToken (the Conversion Access Token from Reddit Ads → Events Manager → Conversions API) — both usually {{variables}}. By default the event name is INHERITED from the incoming client event; pass `event` to force a Reddit standard event (PAGE_VISIT/VIEW_CONTENT/SEARCH/ADD_TO_CART/ADD_TO_WISHLIST/PURCHASE/LEAD/SIGN_UP, a GA4 name, or a custom name). autoMap (default true) derives conversion_id (from the incoming event_id || transaction_id), value, currency + user match keys with no explicit rows — the Reddit analog of Meta CAPI automap. Pass eventId for dedup with the Reddit Pixel (lands as the conversion_id override row). Optional override rows: serverEventData (name ∈ conversion_id/currency/item_count/products/value), userData (name ∈ email/phone_number/external_id/idfa/aaid/ip_address/user_agent/uuid). Optional testId (Reddit Event Testing tool), clickId (rdt_cid), eventSourceUrl, optimistic (useOptimisticScenario), requireConsent (adStorageConsent), firingTriggerId, name (default "Reddit CAPI Tag"). The tag needs a SERVER trigger (create_server_trigger). Requires accountId, containerId (SERVER), workspaceId, pixelId, accessToken.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional — defaults to "Reddit CAPI Tag".' },
+          pixelId: { type: 'string', description: 'Reddit Pixel / Advertiser ID (t2_/a2_; usually a {{variable}}).' },
+          accessToken: { type: 'string', description: 'Reddit Conversions API access token (usually a {{variable}}).' },
+          event: { type: 'string', description: 'Optional — force a Reddit event (PAGE_VISIT/VIEW_CONTENT/ADD_TO_CART/PURCHASE/…, a GA4 name, or a custom name). Omit to inherit.' },
+          eventId: { type: 'string', description: 'Event ID for dedup with the Reddit Pixel — a conversion_id override row (usually a {{variable}}).' },
+          testId: { type: 'string', description: 'Reddit Event Testing tool Test ID (optional).' },
+          clickId: { type: 'string', description: 'Reddit click id (rdt_cid) override (optional).' },
+          eventSourceUrl: { type: 'string', description: 'Event source URL override (optional).' },
+          serverEventData: {
+            type: 'array', description: 'Override rows { name, value }; name ∈ conversion_id/currency/item_count/products/value.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          userData: {
+            type: 'array', description: 'User-match rows { name, value }; name ∈ email/phone_number/external_id/idfa/aaid/ip_address/user_agent/uuid.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          autoMap: { type: 'boolean', description: 'Auto-derive conversion_id + event/user data from the incoming event — default true. false = only the rows you pass.' },
+          optimistic: { type: 'boolean', description: 'Optimistic scenario (gtmOnSuccess without waiting for Reddit) — default false.' },
+          requireConsent: { type: 'boolean', description: 'Gate on ad_storage consent — default false (optional).' },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'pixelId', 'accessToken'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Reddit CAPI server tag "${s(a.name).trim() || 'Reddit CAPI Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'Reddit CAPI Tag', 'tag'),
+      handler: async (a) => {
+        if (!s(a.pixelId).trim()) throw new Error('pixelId is required (the Reddit Pixel/Advertiser ID, t2_/a2_, usually a {{variable}}).');
+        if (!s(a.accessToken).trim()) throw new Error('accessToken is required (the Reddit Conversions API access token, usually a {{variable}}).');
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'reddit-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the Stape Reddit template's tag type (got "${tmpl.type}"). Import stape-io/reddit-tag and check list_gtm_templates.`);
+        }
+        const name = s(a.name).trim() || 'Reddit CAPI Tag';
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildRedditCapiServerTag(tmpl.type, name, s(a.pixelId), s(a.accessToken), {
+          event: a.event != null ? s(a.event) : undefined,
+          eventId: a.eventId != null ? s(a.eventId) : undefined,
+          testId: a.testId != null ? s(a.testId) : undefined,
+          clickId: a.clickId != null ? s(a.clickId) : undefined,
+          eventSourceUrl: a.eventSourceUrl != null ? s(a.eventSourceUrl) : undefined,
+          serverEventData: rows(a.serverEventData),
+          userData: rows(a.userData),
+          autoMap: bln(a.autoMap),
+          optimistic: bln(a.optimistic),
+          requireConsent: bln(a.requireConsent),
+          firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
+        });
+        return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
+      },
+    },
+    {
+      name: 'create_amazon_capi_server_tag',
+      description:
+        'Create an Amazon Ads Conversions API SERVER tag from the Stape "Amazon" community template (stape-io / amazon-tag) in a server container. Amazon has NO api key / OAuth here — the only "credential" is tagIds: one or more Amazon Ads Tag IDs (UUIDs from Amazon DSP → Events Manager → View Tag Code); the event is sent to every id. tagRegion is "NA" or "EU". By default the event name is INHERITED from the incoming event; pass `event` to force an Amazon standard event (PageView/AddToShoppingCart/Checkout/Search/Signup/Lead/Off-AmazonPurchases [=purchase]/…, a GA4 name, or a custom name). Pass eventId for dedup — it lands as the clientDedupeId row (Amazon otherwise auto-derives it from the incoming event_id || transaction_id). Optional matchId (default reads eventData.user_id), ipAddress, countryCode; enableAdvancedMatching + userData (name ∈ email/phonenumber, hashed by Amazon); override tables defaultAttributes (name ∈ clientDedupeId/value/brand/category/productId/attr1…attr10), purchaseAttributes (currencyCode/unitsSold), customAttributes (free-form). Values usually {{variables}}. The tag needs a SERVER trigger (create_server_trigger). Optional firingTriggerId, name (default "Amazon CAPI Tag"). Requires accountId, containerId (SERVER), workspaceId, tagIds, tagRegion.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+          name: { type: 'string', description: 'Optional — defaults to "Amazon CAPI Tag".' },
+          tagIds: { type: 'array', description: 'Amazon Ads Tag ID UUID(s) (from Events Manager → View Tag Code). Sent to every id.', items: { type: 'string' } },
+          tagRegion: { type: 'string', enum: ['NA', 'EU'], description: 'Amazon endpoint region — NA (Americas/Japan/Australia) or EU (Europe). Default NA.' },
+          event: { type: 'string', description: 'Optional — force an Amazon event (PageView/AddToShoppingCart/Checkout/Off-AmazonPurchases/…, a GA4 name, or a custom name). Omit to inherit.' },
+          eventId: { type: 'string', description: 'Event ID for dedup — a clientDedupeId attribute (usually a {{variable}}).' },
+          matchId: { type: 'string', description: 'User-unique match id (default reads eventData.user_id).' },
+          ipAddress: { type: 'string', description: 'User IP override (default reads eventData.ip_override).' },
+          countryCode: { type: 'string', description: 'ISO 3166-1 alpha-2 country code (required when consent fields are set).' },
+          enableAdvancedMatching: { type: 'boolean', description: 'Send hashed email/phone for match — default false.' },
+          userData: {
+            type: 'array', description: 'Advanced-matching rows { name, value }; name ∈ email/phonenumber (hashed by Amazon). Only sent when enableAdvancedMatching.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          defaultAttributes: {
+            type: 'array', description: 'Standard event attribute rows { name, value }; name ∈ clientDedupeId/value/brand/category/productId/attr1…attr10.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          purchaseAttributes: {
+            type: 'array', description: 'Off-AmazonPurchases attribute rows { name, value }; name ∈ currencyCode/unitsSold.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          customAttributes: {
+            type: 'array', description: 'Arbitrary custom event attribute rows { name, value }.',
+            items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
+          },
+          firingTriggerId: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accountId', 'containerId', 'workspaceId', 'tagIds', 'tagRegion'],
+        additionalProperties: false,
+      },
+      write: true,
+      summarize: (a) => `Create Amazon CAPI server tag "${s(a.name).trim() || 'Amazon CAPI Tag'}"`,
+      precheck: (a) => findExistingByName(data, a, s(a.name).trim() || 'Amazon CAPI Tag', 'tag'),
+      handler: async (a) => {
+        const tagIds = Array.isArray(a.tagIds) ? a.tagIds.map((v) => s(v).trim()).filter((v) => v !== '') : [];
+        if (!tagIds.length) throw new Error('tagIds is required (at least one Amazon Ads Tag ID UUID from Events Manager → View Tag Code).');
+        const region = s(a.tagRegion).trim().toUpperCase() === 'EU' ? 'EU' : 'NA';
+        const tmpl = await data.importGalleryTemplate(s(a.accountId), s(a.containerId), s(a.workspaceId), 'stape-io', 'amazon-tag');
+        if (!tmpl.type || !tmpl.type.startsWith('cvt_')) {
+          throw new Error(`Could not resolve the Stape Amazon template's tag type (got "${tmpl.type}"). Import stape-io/amazon-tag and check list_gtm_templates.`);
+        }
+        const name = s(a.name).trim() || 'Amazon CAPI Tag';
+        const rows = (v: unknown): Array<{ name: string; value: string }> | undefined =>
+          Array.isArray(v) ? v.map((p) => ({ name: s(obj(p).name), value: s(obj(p).value) })).filter((p) => p.name) : undefined;
+        const tag = buildAmazonCapiServerTag(tmpl.type, name, tagIds, region, {
+          event: a.event != null ? s(a.event) : undefined,
+          eventId: a.eventId != null ? s(a.eventId) : undefined,
+          matchId: a.matchId != null ? s(a.matchId) : undefined,
+          ipAddress: a.ipAddress != null ? s(a.ipAddress) : undefined,
+          countryCode: a.countryCode != null ? s(a.countryCode) : undefined,
+          enableAdvancedMatching: bln(a.enableAdvancedMatching),
+          userData: rows(a.userData),
+          defaultAttributes: rows(a.defaultAttributes),
+          purchaseAttributes: rows(a.purchaseAttributes),
+          customAttributes: rows(a.customAttributes),
           firingTriggerId: Array.isArray(a.firingTriggerId) && a.firingTriggerId.length ? a.firingTriggerId.map(String) : undefined,
         });
         return data.createGtmTag(s(a.accountId), s(a.containerId), s(a.workspaceId), tag as unknown as Record<string, unknown>);
