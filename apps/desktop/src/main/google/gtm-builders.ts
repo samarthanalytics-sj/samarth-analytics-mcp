@@ -2518,6 +2518,9 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
       severity: 'low',
       confidence: 'runtime-required',
       category: 'ga4',
+      // Stable id for the browser↔server dedup finding, so consumers (e.g. the unified tracking-status
+      // dedup dimension) match on this instead of the finding's prose, which is free to be reworded.
+      checkId: 'server_capi_no_event_id',
       resource: { kind: 'tag', id: t.tagId, name: t.name },
       message: `${platform} CAPI server tag "${t.name}" has auto-map (${toggle}) turned off and maps no explicit event_id, so it only sends one if the incoming event already carries it — which can't be confirmed from the server container. If the same conversion also fires the browser ${platform} Pixel without a shared event_id, the browser and server events can double-count.`,
       recommendation: `Map an explicit event_id on this tag (e.g. {{ed - event_id}}) and send the SAME id from the browser ${platform} Pixel, or re-enable auto-mapping (${toggle}) so the tag forwards the event's own event_id. If you run server-only (no Pixel), you can ignore this.`,
