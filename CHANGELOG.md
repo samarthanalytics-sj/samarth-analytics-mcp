@@ -1,3 +1,9 @@
+## [1.184.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.183.0...v1.184.0) (2026-07-04)
+
+### Features
+
+* **desktop:** blue bold tag-type label in GTM audit findings ([92446c1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/92446c1c2a5d48d92af2c8b2bbfaa54edc5265ae))
+
 ## [1.183.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.182.0...v1.183.0) (2026-07-04)
 
 ### Features
