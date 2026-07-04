@@ -61,6 +61,19 @@ test('addAccount → view: active, no token, no llm, no secret leakage', () => {
   assert.equal(JSON.stringify(v).includes('Ref'), false, 'view must not expose secret refs');
 });
 
+test('renameAccount: custom name wins, survives a Google re-sign-in, empty clears it', () => {
+  const { service } = makeService();
+  const v = service.addAccount({ email: 'a@example.com', displayName: 'Google Name' });
+  // Rename → the custom label shows.
+  assert.equal(service.renameAccount(v.id, '  My Client Account  ').displayName, 'My Client Account', 'trimmed rename shown');
+  // A Google re-sign-in refreshes the profile displayName — the rename must survive it.
+  const upserted = service.upsertGoogleAccount('a@example.com', 'Google Name 2', '{"tok":1}');
+  assert.equal(upserted.displayName, 'My Client Account', 'rename survives profile refresh');
+  // Clearing the rename falls back to the (refreshed) Google name.
+  assert.equal(service.renameAccount(v.id, '').displayName, 'Google Name 2', 'empty rename restores profile name');
+  assert.throws(() => service.renameAccount('nope', 'x'), /account not found/);
+});
+
 test('hasApiKey reflects the app-level provider key, not a per-account key', () => {
   const { service, providerKeys } = makeService();
   const a = service.addAccount({ email: 'b@example.com' });
