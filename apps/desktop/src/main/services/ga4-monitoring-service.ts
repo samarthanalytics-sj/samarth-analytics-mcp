@@ -12,7 +12,7 @@ import type { GoogleDataService } from '../google/data-service';
 import type { AccountView, Ga4MonitorConfig, Ga4MonitorRun, Ga4MonitorStatus } from '../../shared/ipc';
 
 const MIN_INTERVAL_MINUTES = 15; // GA4 realtime + report quota — never hammer the API
-const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, propertyId: null, propertyLabel: '', days: 28, slackEnabled: true, alertMinSeverity: 'medium' };
+const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, propertyId: null, propertyLabel: '', days: 28, slackEnabled: true };
 
 /** Per-account secret ref for the Slack webhook (the URL is stored encrypted in the OS keychain). */
 export const slackWebhookRef = (accountId: string): string => `ga4-slack-webhook:${accountId}`;
@@ -126,7 +126,6 @@ export class Ga4MonitoringService {
       propertyLabel: c?.propertyLabel ? String(c.propertyLabel) : '',
       days: Math.min(365, Math.max(1, Math.floor(Number(c?.days) || DEFAULT_CONFIG.days))),
       slackEnabled: c?.slackEnabled === undefined ? true : Boolean(c.slackEnabled),
-      alertMinSeverity: c?.alertMinSeverity === 'critical' || c?.alertMinSeverity === 'high' ? c.alertMinSeverity : 'medium',
     };
   }
 
@@ -209,7 +208,9 @@ export class Ga4MonitoringService {
     if (!active || !active.hasGoogleToken || !property) return null;
     try {
       const input = await gatherGa4MonitorInput(this.deps.data, property, this.config.days, () => this.now());
-      const result = monitorGa4(input, { minSeverity: this.config.alertMinSeverity });
+      // The desktop tab shows ALL alert types (no severity gate); the minSeverity knob stays on the
+      // monitor_ga4_property MCP tool for headless callers that want to filter.
+      const result = monitorGa4(input, { minSeverity: 'info' });
       const at = this.now();
       this.lastRunAt = at;
       this.lastError = null;

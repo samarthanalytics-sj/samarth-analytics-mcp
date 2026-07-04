@@ -123,14 +123,6 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
             {[7, 14, 28, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
           </select>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={label}>Alert level</span>
-          <select style={input} value={status?.alertMinSeverity ?? 'medium'} onChange={(e) => void configure({ alertMinSeverity: e.target.value as 'critical' | 'high' | 'medium' })}>
-            <option value="medium">Medium and up</option>
-            <option value="high">High and up</option>
-            <option value="critical">Critical only</option>
-          </select>
-        </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
           <input type="checkbox" checked={Boolean(status?.enabled)} disabled={busy || !status?.propertyId} onChange={(e) => void configure({ enabled: e.target.checked })} />
           Run in the background
