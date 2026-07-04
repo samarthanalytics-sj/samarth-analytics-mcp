@@ -242,7 +242,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 47 read tools', readOnlyNames.size === 47, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 48 read tools', readOnlyNames.size === 48, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval is DELETE-ONLY: a declining confirm blocks every destructive
