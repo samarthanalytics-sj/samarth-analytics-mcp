@@ -59,6 +59,7 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     newVsReturning: 'new 78%, returning 21%',
     topMarkets: 'India 96%, United States 1%',
     engagement: '1m 23s avg engagement time/session · 61.2% engaged-session rate · 1.4 engaged sessions/user',
+    retention: 'Week 1: 34% across 5 cohorts · Week 4: 11% across 3 cohorts (weighted, n>=100 each)',
   },
   channelPerformance: [
     { channel: 'Organic Search', sessions: '20,000', convRate: '3.0%', revenue: 'INR 250,000', engagement: '62%' },
@@ -148,6 +149,13 @@ test('section 6 baseline renders the engagement line, and omits it when null', (
   assert.ok(/Engagement/.test(h) && h.includes('1m 23s avg engagement time/session'), 'engagement metaRow shown');
   const h2 = ga4SectionsHtml(view({ baseline: { ...view().baseline!, engagement: null } }));
   assert.ok(!/Engagement:/.test(h2), 'no engagement row when the figure is null');
+});
+
+test('section 6 baseline renders the retention-cohort line, and omits it when null', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/Retention \(cohorts\)/.test(h) && h.includes('Week 1: 34% across 5 cohorts'), 'retention metaRow shown');
+  const h2 = ga4SectionsHtml(view({ baseline: { ...view().baseline!, retention: null } }));
+  assert.ok(!/Retention \(cohorts\)/.test(h2), 'no retention row when there is not enough data');
 });
 
 test('section 6 renders the channel-performance table (conversion rate + revenue per channel)', () => {

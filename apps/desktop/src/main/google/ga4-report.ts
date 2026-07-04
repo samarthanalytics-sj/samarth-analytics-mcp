@@ -26,6 +26,8 @@ export interface Ga4ReportInput {
   growth: Ga4GrowthResult | null; // null = no baseline → growth not assessed
   attribution: { reportingAttributionModel: string; acquisitionConversionEventLookbackWindow: string; otherConversionEventLookbackWindow: string } | null;
   audienceCount: number | null;
+  /** Weekly-retention cohort headline (Week 1 / Week 4), or null when there isn't enough reliable data. */
+  retentionSummary?: string | null;
 }
 
 interface AreaRow {
@@ -478,6 +480,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
         newVsReturning: shareLabel(baseline.newVsReturning),
         topMarkets: baseline.topCountries.length ? baseline.topCountries.map((c) => `${c.name || '(not set)'} ${pct(c.sessions, baseline.sessions)}%`).join(', ') : null,
         engagement: engagementLabel(baseline),
+        retention: input.retentionSummary ?? null,
       }
     : null;
 
@@ -700,6 +703,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     L.push(`- **Top markets:** ${baseline.topCountries.length ? baseline.topCountries.map((c) => `${c.name || '(not set)'} ${pct(c.sessions, baseline.sessions)}%`).join(', ') : 'Not Verified'}`);
     const engLine = engagementLabel(baseline);
     if (engLine) L.push(`- **Engagement:** ${engLine}`);
+    if (input.retentionSummary) L.push(`- **Retention (cohorts):** ${input.retentionSummary}`);
     L.push('');
     const cperf = channelPerfRows(baseline, s.currencyCode);
     if (cperf.length) {

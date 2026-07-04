@@ -12,6 +12,7 @@ import { auditGa4Growth } from './ga4-growth';
 import { auditGa4EventDeltas, auditGa4Transactions } from './ga4-integrity';
 import { auditGa4DeadDimensions } from './ga4-dead-dimensions';
 import { auditGa4EventCoverage, ECOMMERCE_RECOMMENDED_EVENTS } from './ga4-event-coverage';
+import { summarizeGa4Retention } from './ga4-retention';
 import { reportHtmlDocument } from './ga4-report-export';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { ga4VisualsHtml, stripDuplicateCharts } from '../../shared/ga4-visuals-html';
@@ -60,6 +61,9 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     const dimUsageP = registeredDims.length
       ? data.getGa4CustomDimensionUsage(p, registeredDims).catch(() => null)
       : Promise.resolve(null);
+    // Weekly retention cohorts (best-effort): its OWN backward window, independent of the audit window,
+    // so fire it here to overlap everything else. A headline is derived below.
+    const retentionP = data.getGa4RetentionCohorts(p).catch(() => null);
     let dataQuality = auditGa4DataQuality(dqCounts);
     // Data-integrity (reporting data): per-event regressions (a key event dropped to 0 = broken tag)
     // and — for ecommerce properties — duplicate / unlabelled transactions (double-counted revenue).
@@ -124,6 +128,10 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     // ecommerce property yields nothing. Seeded into the config audit alongside the dead-dim findings.
     const coverageFindings = presentRec ? auditGa4EventCoverage({ presentRecommended: presentRec }) : [];
     const config = auditGa4(snap, [...deadDimensionFindings, ...coverageFindings]);
+    // Resolve retention (overlapped above) into an honest one-line headline; null when there isn't
+    // enough reliable cohort data (small/immature cohorts are excluded, not shown as 0%).
+    const retentionCohorts = await retentionP;
+    const retentionSummary = retentionCohorts ? summarizeGa4Retention({ cohorts: retentionCohorts, minCohortSize: 100 }) : null;
     const reportInput = {
       property: p,
       displayName: snap.displayName,
@@ -136,6 +144,7 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
       growth,
       attribution,
       audienceCount,
+      retentionSummary,
     };
     const markdown = buildGa4AuditReport(reportInput);
     const exec = buildGa4ExecSummary(reportInput);
