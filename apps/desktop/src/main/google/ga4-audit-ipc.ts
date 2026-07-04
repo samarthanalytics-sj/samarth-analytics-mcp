@@ -13,12 +13,31 @@ import { auditGa4EventDeltas, auditGa4Transactions } from './ga4-integrity';
 import { auditGa4DeadDimensions } from './ga4-dead-dimensions';
 import { auditGa4EventCoverage, ECOMMERCE_RECOMMENDED_EVENTS } from './ga4-event-coverage';
 import { summarizeGa4Retention } from './ga4-retention';
-import { reportHtmlDocument } from './ga4-report-export';
+import { reportHtmlDocument, dedupedReportPath } from './ga4-report-export';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { ga4VisualsHtml, stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4ExecSummaryView, Ga4PropertyAuditResult, Ga4PropertyListItem, Ga4VisualsView, Ga4SectionsView } from '../../shared/ipc';
+
+// A prior download of the same report is often still open in a PDF/Word viewer, which locks the file so
+// overwriting it fails with EBUSY/EPERM/EACCES. Rather than error, fall back to a fresh name
+// ("report (1).pdf", "report (2).pdf", …) so a re-download always succeeds. Returns the path written.
+const LOCK_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
+async function writeReportFile(filePath: string, data: string | Uint8Array): Promise<string> {
+  for (let i = 0; i <= 50; i++) {
+    const target = dedupedReportPath(filePath, i);
+    try {
+      await writeFile(target, data);
+      return target;
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? '';
+      if (!LOCK_CODES.has(code) || i === 50) throw err;
+      // locked → try the next suffixed name
+    }
+  }
+  throw new Error('unreachable');
+}
 
 export function registerGa4AuditIpc(data: GoogleDataService): void {
   // Flat list of every GA4 property (id + name + parent account) the active user can
@@ -190,9 +209,9 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     if (canceled || !filePath) return null;
 
     if (fmt === 'md') {
-      await writeFile(filePath, md, 'utf8');
+      return await writeReportFile(filePath, md);
     } else if (fmt === 'doc') {
-      await writeFile(filePath, reportHtmlDocument(base, bodyMd, { word: true, execHtml: topHtml }), 'utf8');
+      return await writeReportFile(filePath, reportHtmlDocument(base, bodyMd, { word: true, execHtml: topHtml }));
     } else {
       // PDF — render the report HTML in a hidden, script-disabled window and print it to PDF.
       const pdfWin = new BrowserWindow({
@@ -202,11 +221,10 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
       try {
         await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(reportHtmlDocument(base, bodyMd, { execHtml: topHtml })));
         const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
-        await writeFile(filePath, pdf);
+        return await writeReportFile(filePath, pdf);
       } finally {
         if (!pdfWin.isDestroyed()) pdfWin.destroy();
       }
     }
-    return filePath;
   });
 }

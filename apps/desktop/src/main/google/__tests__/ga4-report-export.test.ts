@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { markdownToHtml, reportHtmlDocument } from '../ga4-report-export';
+import { markdownToHtml, reportHtmlDocument, dedupedReportPath } from '../ga4-report-export';
 
 let passed = 0;
 let failed = 0;
@@ -58,6 +58,22 @@ test('reportHtmlDocument is a full styled HTML page; word mode adds Office names
 
 test('title is HTML-escaped in the document', () => {
   assert.ok(reportHtmlDocument('A & B <x>', '# h').includes('<title>A &amp; B &lt;x&gt;</title>'));
+});
+
+test('dedupedReportPath: i=0 returns the path unchanged', () => {
+  assert.equal(dedupedReportPath('C:\\Users\\a\\report.pdf', 0), 'C:\\Users\\a\\report.pdf');
+  assert.equal(dedupedReportPath('/home/a/report.pdf', 0), '/home/a/report.pdf');
+});
+
+test('dedupedReportPath: inserts the counter before the extension (Windows + POSIX)', () => {
+  assert.equal(dedupedReportPath('C:\\Users\\a\\GA4 audit.pdf', 1), 'C:\\Users\\a\\GA4 audit (1).pdf');
+  assert.equal(dedupedReportPath('/home/a/GA4 audit.pdf', 2), '/home/a/GA4 audit (2).pdf');
+});
+
+test('dedupedReportPath: a dot in a DIRECTORY name is not mistaken for the extension', () => {
+  // No dot after the last separator → append the counter at the end, keep the dir dot intact.
+  assert.equal(dedupedReportPath('C:\\my.reports\\GA4 audit', 1), 'C:\\my.reports\\GA4 audit (1)');
+  assert.equal(dedupedReportPath('/var/v1.2/report', 3), '/var/v1.2/report (3)');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
