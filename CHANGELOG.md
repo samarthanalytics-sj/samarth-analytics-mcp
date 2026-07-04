@@ -1,3 +1,9 @@
+## [1.186.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.185.0...v1.186.0) (2026-07-04)
+
+### Features
+
+* **desktop:** GTM audit PDF mirrors the panel (severity cards, icons, type labels) ([7c71868](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7c71868156aa5570ca66d40c9a45edffcae9e86f))
+
 ## [1.185.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.184.0...v1.185.0) (2026-07-04)
 
 ### Features
