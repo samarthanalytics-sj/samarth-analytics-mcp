@@ -1,3 +1,9 @@
+## [1.164.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.164.0...v1.164.1) (2026-07-04)
+
+### Bug Fixes
+
+* **desktop:** harden server-side CAPI tag params (Meta content_type, TikTok event props, Pinterest overrides) ([b0d10fb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b0d10fb9cf29ecb5a1744a49d9f192961823c82b))
+
 ## [1.164.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.163.0...v1.164.0) (2026-07-04)
 
 ### Features
