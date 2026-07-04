@@ -1,3 +1,9 @@
+## [1.183.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.182.0...v1.183.0) (2026-07-04)
+
+### Features
+
+* **desktop:** brand icons per tag type in the GTM container audit ([6f67ae7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6f67ae753fda7316bf3b4de782559c6a193a157f))
+
 ## [1.182.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.181.0...v1.182.0) (2026-07-04)
 
 ### Features
