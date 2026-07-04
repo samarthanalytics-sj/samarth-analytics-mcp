@@ -1,3 +1,9 @@
+## [1.182.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.181.0...v1.182.0) (2026-07-04)
+
+### Features
+
+* **desktop:** rename accounts in the sidebar + PDF export for the GTM container audit ([aff0840](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/aff0840bbc2203fc7f3a94cc18b78faea705ed94))
+
 ## [1.181.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.180.0...v1.181.0) (2026-07-04)
 
 ### Features
