@@ -459,6 +459,7 @@ async function main(): Promise<void> {
       'monitor_ga4_property',
       'run_ga4_realtime_report',
       'run_ga4_report',
+      'runtime_synthetic_test',
       'score_ga4_property',
       'verify_server_endpoint',
       'verify_tracking_setup',
@@ -482,7 +483,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 50, 'read-only registry has 50 tools');
+    assert.equal(readOnly.list().length, 51, 'read-only registry has 51 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -493,8 +494,9 @@ async function main(): Promise<void> {
     // 92 base + add_ga4_server_parameters + create_linkedin_capi_server_tag = 94, plus the three
     // user-identity pixel tools (create_hotjar_tag, create_pinterest_tag, create_snap_pixel_tag) = 97,
     // plus create_pinterest_capi_server_tag = 98, plus the read-only audit_install_drift = 99,
-    // plus the read-only audit_tracking_status = 100.
-    assert.equal(withWrites.list().length, 101 + 60, 'read + write registry has 101 GTM/GA4-read/context + 60 GA4-write tools');
+    // plus the read-only audit_tracking_status = 100, plus the read-only runtime_synthetic_test = 101,
+    // plus the read-only monitor_ga4_property = 102.
+    assert.equal(withWrites.list().length, 102 + 60, 'read + write registry has 102 GTM/GA4-read/context + 60 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     // Every catalog resource + special contributes at least one tool (catches a fully-dropped entry
     // for a resource no other assertion names — google_ads_link, firebase_link, expanded_data_set,
