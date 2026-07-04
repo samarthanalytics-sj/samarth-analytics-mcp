@@ -1,8 +1,21 @@
 /**
- * Web-audit tool registry. All tools are read-only with respect to the
- * audited site's data — the only interaction the agent ever performs is
- * clicking consent-banner accept/reject controls inside an ephemeral,
- * cookie-isolated browser context. Forms are inventoried, never submitted.
+ * Web-audit tool registry.
+ *
+ * Two interaction surfaces with different guarantees:
+ *
+ * 1. The AUTONOMOUS AUDIT AGENT (site_crawl, forms_scan, consent_banner_detect,
+ *    consent_scenario_capture, gtm_tag_suggestions, consent_compliance_audit) is
+ *    read-only toward the audited site's data — the ONLY interaction it ever
+ *    performs is clicking consent-banner accept/reject controls inside an
+ *    ephemeral, cookie-isolated browser context. Forms are inventoried, never
+ *    submitted.
+ *
+ * 2. The `verify` TOOL (tag verification engine) is OPERATOR-DRIVEN: it performs
+ *    exactly the selectors/actions listed in the operator's spec, INCLUDING real
+ *    form submits, to prove trigger-fired events. Because that exceeds the
+ *    consent-click-only guarantee above, it is registered only when
+ *    WEB_AUDIT_ENABLE_VERIFY=true (default off) and is intended for sites the
+ *    operator is authorised to test.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -10,6 +23,7 @@ import { z } from 'zod';
 import { jsonResult, errorResult, errorText, type ToolResult } from '../utils/toolResponse.js';
 import { loadConfig, clampOpt } from '../utils/config.js';
 import { urlAllowed } from '../utils/urlGuard.js';
+import { registerVerifyTool } from '../verify/mcp-tool.js';
 
 const urlField = z
   .string()
@@ -277,4 +291,9 @@ export function registerAllTools(server: McpServer): void {
       }
     },
   );
+
+  // ── verify (tag verification engine) — operator-driven, off by default ──────
+  if (loadConfig().verifyEnabled) {
+    registerVerifyTool(server);
+  }
 }

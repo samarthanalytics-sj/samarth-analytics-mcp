@@ -20,6 +20,16 @@ export interface WebAuditConfig {
   /** When false, banner click-through is refused (detection still works). */
   interactionEnabled: boolean;
   headless: boolean;
+  /**
+   * Expose the `verify` MCP tool (tag verification engine). OFF by default:
+   * unlike the rest of the server, verify drives operator-supplied interactions
+   * (incl. real form submits) on the target page. WEB_AUDIT_ENABLE_VERIFY=true.
+   */
+  verifyEnabled: boolean;
+  /** verify: stop capturing after this many ms with no new GA4 collect. */
+  settleQuietMs: number;
+  /** verify: hard cap on capture time (ms). */
+  settleMaxMs: number;
 }
 
 function intEnv(name: string, dflt: number, cap: number): number {
@@ -43,6 +53,9 @@ export function loadConfig(): WebAuditConfig {
     settleMs: intEnv('WEB_AUDIT_SETTLE_MS', 3_000, 10_000),
     interactionEnabled: process.env.WEB_AUDIT_DISABLE_INTERACTION !== 'true',
     headless: process.env.WEB_AUDIT_HEADED !== 'true',
+    verifyEnabled: process.env.WEB_AUDIT_ENABLE_VERIFY === 'true',
+    settleQuietMs: intEnv('WEB_AUDIT_VERIFY_SETTLE_QUIET', 2_000, 10_000),
+    settleMaxMs: intEnv('WEB_AUDIT_VERIFY_SETTLE_MAX', 10_000, 30_000),
   };
 }
 

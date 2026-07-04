@@ -21,6 +21,7 @@ scored findings.
 | `consent_banner_detect` | Identify the CMP (OneTrust, Cookiebot, Usercentrics, Didomi, Quantcast/TCF, TrustArc, Complianz, CookieYes, Iubenda, Osano, Termly, consentmanager, Borlabs, Klaro, tarteaucitron + generic heuristic) and its accept/reject/settings controls — without clicking. |
 | `consent_scenario_capture` | Load one page under `ignore` / `accept` / `reject` and capture tracker hits (ms-timed vs. the banner click), Consent Mode v2 events, cookies before/after, console errors. |
 | `gtm_tag_suggestions` | **Measurement plan from a URL.** Crawl → per-page form + element scan → suggest the GA4 event tags worth creating: contact/signup/newsletter forms (with provider — HubSpot, Typeform, Mailchimp, Marketo, Pardot, Gravity Forms, CF7, WPForms) → `generate_lead`/`sign_up`/`newsletter_signup`; mailto → `email_click`, tel → `phone_click`, downloads, outbound, CTAs. Deduped + ranked; what GA4 Enhanced Measurement already auto-tracks is flagged, not pushed. Each suggestion is in the `create_gtm_tracking_tag` payload shape. Read-only — DOM is read, never clicked or submitted. |
+| `verify` | **Tag verification engine** (off by default — `WEB_AUDIT_ENABLE_VERIFY=true`). Loads a URL, drives a two-phase consent flow + journey steps, captures GA4 hits (GET + batched POST), dataLayer and cookies, and compares against a declarative spec → deterministic per-check report (Pass/Partial/Fail/Not Verified) with evidence. Client-side only. **Operator-driven interaction incl. real form submits** — see the safety note below. Also available as the `samarth-verify` CLI. Full docs: [`src/verify/README.md`](src/verify/README.md). |
 
 ### What the findings catch
 
@@ -61,10 +62,19 @@ configured Consent Mode default that never reaches the wire. A `summary`/
 
 ## Safety model
 
-- **Read-only toward the audited site.** Forms are inspected, never filled or
-  submitted. The *only* interaction the agent performs is clicking the consent
-  banner's accept/reject controls, inside an ephemeral browser context that is
-  discarded afterwards.
+The server has **two interaction surfaces** with different guarantees:
+
+- **The audit agent** (`consent_compliance_audit`, `site_crawl`, `forms_scan`,
+  `consent_banner_detect`, `consent_scenario_capture`, `gtm_tag_suggestions`) is
+  **read-only toward the audited site.** Forms are inspected, never filled or
+  submitted. The *only* interaction it performs is clicking the consent banner's
+  accept/reject controls, inside an ephemeral browser context discarded afterwards.
+- **The `verify` tool** is **operator-driven**: it performs exactly the
+  selectors/actions listed in the operator's spec, **including real form
+  submits**, to prove trigger-fired events. Because that exceeds the
+  consent-click-only guarantee, it is registered only when
+  `WEB_AUDIT_ENABLE_VERIFY=true` (default off) and is meant for sites you are
+  authorised to test. The CLI (`samarth-verify`) is an explicit local invocation.
 - **SSRF guard** (same rules as the runtime worker): loopback, RFC-1918,
   CGNAT, link-local/cloud-metadata and encoded-IP forms are always blocked —
   for the start URL, every redirect, and every subresource.

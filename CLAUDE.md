@@ -23,9 +23,19 @@ Layout:
   (CMP) interaction, Consent Mode v2 compliance findings, and optional GTM
   container reconciliation. Reuses the shared consent engine; SSRF guard mirrors
   the runtime worker. Ships a Dockerfile (Playwright base image, HTTP transport)
-  for hosted deploys — **not for Vercel** either. Its only permitted page
-  interaction is clicking consent-banner controls — never submit forms or click
-  anything else from this server.
+  for hosted deploys — **not for Vercel** either. The **autonomous audit agent's**
+  only permitted page interaction is clicking consent-banner controls — never
+  submit forms or click anything else from those tools.
+  - **Exception — the `verify` tool** (`apps/web-audit-mcp/src/verify/`, the
+    TagDrishti tag verification engine): operator-driven, it performs the
+    spec-supplied interactions **including real form submits** to prove
+    trigger-fired events (user-authorized 2026-07-04). OFF by default, gated
+    behind `WEB_AUDIT_ENABLE_VERIFY=true`; the `samarth-verify` CLI is an explicit
+    local invocation and needs no flag. Client-side only — server-side
+    verification (CAPI/sGTM/Measurement Protocol) is a documented non-goal with an
+    empty stub, never claimed in output. Do NOT widen the audit agent's
+    interaction surface, and do NOT flip the verify flag default, without an
+    explicit user request.
 
 ## Guardrails — do not violate
 
