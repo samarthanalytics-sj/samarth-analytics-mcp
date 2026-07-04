@@ -1,7 +1,7 @@
 // Pure tests for the "GTM Structure - GA4 Events" template mapping (the table view
 // + CSV download share this). Run: tsx src/shared/__tests__/tag-template.test.ts
 
-import { suggestionToGroup, suggestionsToTemplateCsv, triggerWhens, TEMPLATE_HEADERS } from '../tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS } from '../tag-template';
 import type { SuggestedTagView } from '../ipc';
 
 let passed = 0;
@@ -101,6 +101,27 @@ check('csv: a value containing a comma is quoted', crows[1].includes('"play, pau
 // ── multiple tags → multiple blocks, YouTube event name with {{}} preserved ──
 const multi = suggestionsToTemplateCsv([phone, yt]);
 check('csv: multiple suggestions produce multiple blocks', multi.includes('GA4 Event - Phone Click Tag') && multi.includes('GA4 Event - YouTube Video Tag') && multi.includes('video_{{Video Status}}'));
+
+// ── dedupeViewsByGtmName: two rows that would create the SAME GTM tag show once ───────────────
+// The exact user report: two "GA4 - Event - Free Audit Click Tag" rows (same event + trigger), plus a
+// distinct "Contact Us" tag between them. The duplicate collapses; the distinct tag stays; order + the
+// FIRST occurrence are preserved.
+const fa1 = base({ id: 'fa1', tagName: 'GA4 - Event - Free Audit Click Tag', eventName: 'free_audit_click', trigger: { name: 'Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Free Audit', clickTextOperator: 'equals' } });
+const contact = base({ id: 'cu', tagName: 'GA4 - Event - Contact Us Click Tag', eventName: 'contact_us_click', page: '/services/server-side-tracking', trigger: { name: 'Contact Us Click Trigger', kind: 'all_clicks', clickTextValue: 'Contact Us', clickTextOperator: 'equals' } });
+const fa2 = base({ id: 'fa2', tagName: 'GA4 - Event - Free Audit Click Tag', eventName: 'free_audit_click', trigger: { name: 'Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Free Audit', clickTextOperator: 'equals' } });
+const dd = dedupeViewsByGtmName([fa1, contact, fa2]);
+check('dedupe: identical-name Free Audit rows collapse to one, Contact Us kept', dd.length === 2 && dd[0].id === 'fa1' && dd[1].id === 'cu');
+check('dedupe: keeps the FIRST occurrence (fa1, not fa2)', dd.some((s) => s.id === 'fa1') && !dd.some((s) => s.id === 'fa2'));
+
+// Same NAME but a slightly different trigger (the AI-vision copy) and case/space differences still
+// collapse — GTM tag names are unique, so the second can never be created.
+const faVar = base({ id: 'fav', tagName: '  GA4 - Event - FREE AUDIT Click Tag ', eventName: 'free_audit_click', trigger: { name: 'Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Free Audit', clickTextOperator: 'equals', clickElementValue: 'a.cta', clickElementOperator: 'cssSelector' } });
+check('dedupe: same name up to case/whitespace + different trigger still collapses', dedupeViewsByGtmName([fa1, faVar]).length === 1);
+
+// A DIFFERENT platform with the same name is a genuinely different tag → both kept.
+const faMeta = base({ id: 'fam', platform: 'meta_pixel', tagName: 'GA4 - Event - Free Audit Click Tag' });
+check('dedupe: same name on a different platform is NOT collapsed', dedupeViewsByGtmName([fa1, faMeta]).length === 2);
+check('dedupe: idempotent (running twice is a no-op)', dedupeViewsByGtmName(dedupeViewsByGtmName([fa1, contact, fa2])).length === 2);
 
 console.log(`\ntag-template: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
