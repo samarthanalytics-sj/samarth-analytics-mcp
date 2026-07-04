@@ -5,6 +5,7 @@ import { SecretStore } from './storage/secret-store';
 import { SafeStorageCryptor } from './storage/safe-storage-cryptor';
 import { ProviderKeyStore } from './storage/provider-keys';
 import { AuditHistoryStore } from './storage/audit-history';
+import { ManifestStore } from './storage/manifest-store';
 import { RegistryService } from './services/registry-service';
 import { registerRegistryIpc } from './ipc/registry-ipc';
 import { registerProvidersIpc } from './ipc/providers-ipc';
@@ -133,6 +134,7 @@ app.whenReady().then(() => {
   );
   const dataService = new GoogleDataService(registry, clientManager);
   const auditHistory = new AuditHistoryStore(join(dataDir, 'audit-history.json'));
+  const manifests = new ManifestStore(join(dataDir, 'manifests.json'));
   // When a chat tool switches the active GTM workspace/container, tell every window to
   // re-fetch accounts so the GTM-bar dropdown reflects the new context.
   const broadcastAccountsChanged = (): void => {
@@ -140,7 +142,7 @@ app.whenReady().then(() => {
       if (!w.isDestroyed()) w.webContents.send('accounts:changed');
     }
   };
-  const chatService = new ChatService(registry, dataService, providerKeys, auditHistory, broadcastAccountsChanged);
+  const chatService = new ChatService(registry, dataService, providerKeys, auditHistory, broadcastAccountsChanged, manifests);
 
   // Startup diagnostic — proves THIS running process loaded the current build. If the
   // GA4-edit tools are missing here, the main process is stale (electron-vite did not

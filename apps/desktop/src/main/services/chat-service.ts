@@ -2,6 +2,7 @@ import type { RegistryService } from './registry-service';
 import type { GoogleDataService } from '../google/data-service';
 import type { ProviderKeyStore } from '../storage/provider-keys';
 import type { AuditHistoryStore } from '../storage/audit-history';
+import type { ManifestStore } from '../storage/manifest-store';
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
@@ -99,7 +100,9 @@ export class ChatService {
     private readonly providerKeys: ProviderKeyStore,
     private readonly history?: AuditHistoryStore,
     /** Called after a chat tool switches the active GTM context, so the UI refreshes. */
-    private readonly notifyContextChanged?: () => void
+    private readonly notifyContextChanged?: () => void,
+    /** Records what setup tools create, so re-runs are safe and drift is detectable. */
+    private readonly manifests?: ManifestStore
   ) {}
 
   /** Non-streaming: returns the final reply only. */
@@ -158,7 +161,7 @@ export class ChatService {
     // Both products get write tools (and the confirm flow) when a confirm fn is
     // provided. GTM writes land in a draft workspace; GA4 Admin writes apply to
     // the live property (deletes/archives are approval-gated).
-    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl);
+    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests);
 
     const productLabel = product === 'gtm' ? 'Google Tag Manager (GTM)' : 'Google Analytics 4 (GA4)';
     const system =

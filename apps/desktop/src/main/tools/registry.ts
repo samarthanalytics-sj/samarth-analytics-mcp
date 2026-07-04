@@ -2,6 +2,8 @@ import type { GoogleDataService } from '../google/data-service';
 import type { LlmToolDef, ToolExecutor } from '../llm/types';
 import type { GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { AuditHistoryStore } from '../storage/audit-history';
+import { ManifestStore } from '../storage/manifest-store';
+import { fingerprintResource, diffManifest, type ManifestResource } from '../../shared/install-manifest';
 import {
   buildGa4EventTag,
   buildGoogleTag,
@@ -215,12 +217,57 @@ const GTM_GA4_TAG_TOOLS = new Set([
 const productOf = (name: string): GoogleProduct =>
   name.includes('ga4') && !GTM_GA4_TAG_TOOLS.has(name) ? 'ga4' : 'gtm';
 
+/**
+ * Record the resources a WEB setup tool created into the per-container install
+ * manifest. The setup result carries only NAMES (created.variables/triggers/tags),
+ * so we re-fetch the live snapshot to resolve each created name to its id +
+ * config and fingerprint it. Best-effort by design; callers wrap in try/catch.
+ */
+async function recordSetupManifest(
+  data: GoogleDataService,
+  manifests: ManifestStore,
+  ids: { accountId: string; containerId: string; workspaceId: string },
+  created: { variables?: string[]; triggers?: string[]; tags?: string[] },
+  tool: string
+): Promise<void> {
+  const createdVars = new Set((created.variables ?? []).map((n) => n.trim().toLowerCase()));
+  const createdTrigs = new Set((created.triggers ?? []).map((n) => n.trim().toLowerCase()));
+  const createdTags = new Set((created.tags ?? []).map((n) => n.trim().toLowerCase()));
+  if (!createdVars.size && !createdTrigs.size && !createdTags.size) return;
+
+  const snap = await data.getGtmContainerSnapshot(ids.accountId, ids.containerId, ids.workspaceId);
+  const entries: ManifestResource[] = [];
+  const push = (
+    kind: ManifestResource['kind'],
+    id: string,
+    name: string,
+    type: string,
+    parameter: unknown
+  ): void => {
+    if (!id) return; // no id to track by → can't detect drift for it, skip.
+    entries.push({ kind, id, name, fingerprint: fingerprintResource({ name, type, parameter }), tool });
+  };
+  for (const t of snap.tags) {
+    if (createdTags.has((t.name ?? '').trim().toLowerCase())) push('tag', t.tagId, t.name, t.type, t.parameter);
+  }
+  for (const tr of snap.triggers) {
+    if (createdTrigs.has((tr.name ?? '').trim().toLowerCase())) push('trigger', tr.triggerId, tr.name, tr.type, tr.parameter);
+  }
+  for (const v of snap.variables) {
+    if (createdVars.has((v.name ?? '').trim().toLowerCase())) push('variable', v.variableId, v.name, v.type, v.parameter);
+  }
+  if (!entries.length) return;
+  const key = ManifestStore.key(ids.accountId, ids.containerId, ids.workspaceId);
+  manifests.record(key, { account: ids.accountId, container: ids.containerId, workspace: ids.workspaceId }, entries, new Date().toISOString());
+}
+
 export function buildToolRegistry(
   data: GoogleDataService,
   confirm?: ConfirmFn,
   product?: GoogleProduct,
   history?: AuditHistoryStore,
-  ctxControl?: GtmContextControl
+  ctxControl?: GtmContextControl,
+  manifests?: ManifestStore
 ): ToolExecutor {
   const readTools: Tool[] = [
     {
@@ -530,6 +577,45 @@ export function buildToolRegistry(
         // base = live, target = workspace → added/removed/modified are framed as
         // "what a publish of this workspace would change in the live container".
         return { publishedVersion: 'live', drift: diffSnapshots(live, workspace) };
+      },
+    },
+    {
+      name: 'audit_install_drift',
+      description:
+        'Report DRIFT against the install manifest — the record of the GTM resources our setup tools (e.g. setup_ecommerce_funnel) created in this workspace. Compares each managed tag/trigger/variable to the LIVE container: INTACT (unchanged), MODIFIED (renamed or reconfigured since setup), or DELETED (removed after setup); and lists UNMANAGED resources (added manually, outside our setup). Read-only. If no setup has been recorded yet, returns hasManifest:false — run a setup tool first. Requires accountId, containerId, workspaceId.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string' },
+          workspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const accountId = s(a.accountId);
+        const containerId = s(a.containerId);
+        const workspaceId = s(a.workspaceId);
+        if (!manifests) {
+          return { hasManifest: false, note: 'Install-manifest tracking is unavailable in this context.' };
+        }
+        const manifest = manifests.get(ManifestStore.key(accountId, containerId, workspaceId));
+        if (!manifest) {
+          return {
+            hasManifest: false,
+            note: 'No install manifest for this workspace yet — run a setup tool (e.g. setup_ecommerce_funnel) first, then re-run this to detect drift.',
+          };
+        }
+        const snap = await data.getGtmContainerSnapshot(accountId, containerId, workspaceId);
+        const report = diffManifest(manifest, snap);
+        return {
+          hasManifest: true,
+          updatedAt: manifest.updatedAt,
+          summary: report.summary,
+          managed: report.managed,
+          unmanaged: report.unmanaged,
+        };
       },
     },
     {
@@ -1755,11 +1841,32 @@ export function buildToolRegistry(
         const evs = Array.isArray(a.events) && a.events.length > 0 ? a.events.map(String) : [...GA4_ECOMMERCE_FUNNEL_EVENTS];
         return `Install the GA4 ecommerce funnel (${evs.length} events: ${evs.join(', ')} → ${s(a.measurementId)}) with triggers + ecommerce variables in workspace ${s(a.workspaceId)}`;
       },
-      handler: (a) => {
+      handler: async (a) => {
         const measurementId = s(a.measurementId).trim();
         if (!measurementId) throw new Error('measurementId (G-XXXXXXX) is required — derive it from the web Google tag or ask the user.');
         const events = Array.isArray(a.events) && a.events.length > 0 ? a.events.map(String) : [...GA4_ECOMMERCE_FUNNEL_EVENTS];
-        return data.setupEcommerceFunnel(s(a.accountId), s(a.containerId), s(a.workspaceId), measurementId, events);
+        const accountId = s(a.accountId);
+        const containerId = s(a.containerId);
+        const workspaceId = s(a.workspaceId);
+        const result = await data.setupEcommerceFunnel(accountId, containerId, workspaceId, measurementId, events);
+        // Record what we created into the per-container install manifest so re-runs
+        // are safe and later user edits/deletions are detectable as drift. Best-effort:
+        // a manifest failure must never fail the setup, and it's a no-op when no
+        // ManifestStore is injected (e.g. the diagnostic registry / most tests).
+        if (manifests) {
+          try {
+            await recordSetupManifest(
+              data,
+              manifests,
+              { accountId, containerId, workspaceId },
+              result.created,
+              'setup_ecommerce_funnel'
+            );
+          } catch (e) {
+            console.error('[install-manifest] recording setup_ecommerce_funnel failed (non-fatal):', e);
+          }
+        }
+        return result;
       },
     },
     {

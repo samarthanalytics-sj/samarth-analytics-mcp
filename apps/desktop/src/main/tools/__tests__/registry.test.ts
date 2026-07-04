@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { buildToolRegistry, type GtmContextControl } from '../registry';
 import { buildGa4WriteTools } from '../ga4-write-tools';
 import { AuditHistoryStore } from '../../storage/audit-history';
+import { ManifestStore } from '../../storage/manifest-store';
 import type { GoogleDataService } from '../../google/data-service';
 import type { GtmContext } from '../../../shared/ipc';
 
@@ -416,6 +417,7 @@ async function main(): Promise<void> {
       'audit_ga4_property',
       'audit_gtm_container',
       'audit_gtm_container_changes',
+      'audit_install_drift',
       'audit_server_container',
       'check_gtm_measurement_ids',
       'detect_meta_web_tags',
@@ -478,7 +480,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 47, 'read-only registry has 47 tools');
+    assert.equal(readOnly.list().length, 48, 'read-only registry has 48 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -488,8 +490,8 @@ async function main(): Promise<void> {
     assert.equal(ga4Writes.length, 60, 'GA4 write catalog produces 60 tools (19 resources + 6 lifecycle specials)');
     // 92 base + add_ga4_server_parameters + create_linkedin_capi_server_tag = 94, plus the three
     // user-identity pixel tools (create_hotjar_tag, create_pinterest_tag, create_snap_pixel_tag) = 97,
-    // plus create_pinterest_capi_server_tag = 98.
-    assert.equal(withWrites.list().length, 98 + 60, 'read + write registry has 98 GTM/GA4-read/context + 60 GA4-write tools');
+    // plus create_pinterest_capi_server_tag = 98, plus the read-only audit_install_drift = 99.
+    assert.equal(withWrites.list().length, 99 + 60, 'read + write registry has 99 GTM/GA4-read/context + 60 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     // Every catalog resource + special contributes at least one tool (catches a fully-dropped entry
     // for a resource no other assertion names — google_ads_link, firebase_link, expanded_data_set,
@@ -918,6 +920,55 @@ async function main(): Promise<void> {
     const reg = buildToolRegistry(fakeData().data); // no history store
     const out = JSON.parse(await reg.execute('audit_gtm_container_changes', { accountId: '1', containerId: '2', workspaceId: '3' }));
     assert.ok(String(out.error).includes('unavailable'));
+  });
+
+  await test('audit_install_drift without a ManifestStore → hasManifest:false', async () => {
+    const reg = buildToolRegistry(fakeData().data); // no manifests store injected
+    const out = JSON.parse(await reg.execute('audit_install_drift', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(out.hasManifest, false);
+  });
+
+  await test('audit_install_drift: no manifest yet → hasManifest:false; setup records it; drift detected', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'samarth-reg-manifest-'));
+    const manifests = new ManifestStore(join(dir, 'manifests.json'));
+    // A live snapshot the setup will "produce": one trigger + one tag matching the created names.
+    let snap: { tags: Array<Record<string, unknown>>; triggers: Array<Record<string, unknown>>; variables: Array<Record<string, unknown>> } = {
+      tags: [{ tagId: 'T100', name: 'GA4 - Event - Purchase Tag', type: 'gaawe', parameter: [{ type: 'template', key: 'eventName', value: 'purchase' }] }],
+      triggers: [{ triggerId: 'TR200', name: 'CE - purchase', type: 'customEvent', parameter: [] }],
+      variables: [],
+    };
+    const data = {
+      setupEcommerceFunnel: async () => ({ created: { variables: [], triggers: ['CE - purchase'], tags: ['GA4 - Event - Purchase Tag'] }, skipped: [] }),
+      getGtmContainerSnapshot: async () => snap,
+    } as unknown as GoogleDataService;
+    const reg = buildToolRegistry(data, approveAsIs, 'gtm', undefined, undefined, manifests);
+
+    // Before any setup: no manifest recorded.
+    const before = JSON.parse(await reg.execute('audit_install_drift', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(before.hasManifest, false, 'no manifest before setup');
+
+    // Run the setup — the handler records the created resources into the manifest.
+    await reg.execute('setup_ecommerce_funnel', { accountId: '1', containerId: '2', workspaceId: '3', measurementId: 'G-1', events: ['purchase'] });
+
+    // Immediately after: everything intact.
+    const intact = JSON.parse(await reg.execute('audit_install_drift', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(intact.hasManifest, true, 'manifest exists after setup');
+    assert.equal(intact.summary.intact, 2, 'both created resources intact');
+    assert.equal(intact.summary.modified + intact.summary.deleted + intact.summary.unmanaged, 0, 'no drift right after setup');
+
+    // Now DRIFT the live container: reconfigure the tag, delete the trigger, add a manual variable.
+    snap = {
+      tags: [{ tagId: 'T100', name: 'GA4 - Event - Purchase Tag', type: 'gaawe', parameter: [{ type: 'template', key: 'eventName', value: 'purchase' }, { type: 'boolean', key: 'sendEcommerceData', value: 'false' }] }],
+      triggers: [], // the managed trigger was deleted
+      variables: [{ variableId: 'V500', name: 'Manual Var', type: 'v', parameter: [] }], // manual addition
+    };
+    const drift = JSON.parse(await reg.execute('audit_install_drift', { accountId: '1', containerId: '2', workspaceId: '3' }));
+    assert.equal(drift.summary.modified, 1, 'reconfigured tag → modified');
+    assert.equal(drift.summary.deleted, 1, 'removed trigger → deleted');
+    assert.equal(drift.summary.unmanaged, 1, 'manual variable → unmanaged');
+    assert.ok(drift.managed.some((e: { status: string; kind: string }) => e.status === 'deleted' && e.kind === 'trigger'));
+    assert.ok(drift.unmanaged.some((u: { id: string }) => u.id === 'V500'));
+    rmSync(dir, { recursive: true, force: true });
   });
 
   await test('create_tracking_tag (ga4_event) builds correct tag + reuses trigger', async () => {
