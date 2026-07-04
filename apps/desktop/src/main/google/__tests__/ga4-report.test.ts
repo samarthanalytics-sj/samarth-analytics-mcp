@@ -260,6 +260,25 @@ test('a data-quality finding lands in the All-findings table with a business-ris
   assert.ok(/## 4 · All findings/.test(md));
   assert.ok(/Business risk/.test(md), 'findings table has a business-risk column');
   assert.ok(/Unassigned/.test(md));
+  // A deterministically-measured data-quality finding is Confirmed, not merely observed.
+  assert.ok(/Unassigned.*\| Confirmed \|/.test(md), 'data-quality finding carries the Confirmed state');
+});
+
+test('section 4 carries a verification state per finding and a "Blocked by verification" group', () => {
+  // A growth read is graded to its worst branch (carries an "if unconfirmed" branch), so it is
+  // OBSERVED, not confirmed.
+  const b = baseline({ sessions: 32165, priorSessions: 8819, keyEvents: 210, priorKeyEvents: 200, revenue: 1000, priorRevenue: 950 });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b, 'Organic Social') }));
+  assert.ok(/\| Severity \| Area \| Issue \| Business risk \| Fix \| State \|/.test(md), 'findings table has a State column');
+  assert.ok(/\| CRITICAL \| Growth \|.*\| Observed \|/.test(md), 'the growth read is Observed (unconfirmed)');
+  // Verification blockers are promoted into Section 4 as a first-class Blocked group.
+  assert.ok(/\*\*Blocked by verification\*\*/.test(md), 'blocked group heading');
+  assert.ok(/- \*\*Consent:\*\*/.test(md), 'consent is a blocked item');
+  assert.ok(/- \*\*Measurement:\*\*/.test(md), 'per-event parameter coverage is a blocked item');
+  // The ecommerce blocker only appears once purchase/item key events exist.
+  assert.ok(!/- \*\*Ecommerce:\*\*/.test(md), 'no ecommerce blocker without ecommerce events');
+  const ecomMd = buildGa4AuditReport(input({ snapshot: snap({ keyEvents: [{ eventName: 'purchase' }, { eventName: 'add_to_cart' }] }) }));
+  assert.ok(/- \*\*Ecommerce:\*\* Ecommerce item parameters and duplicate transactions/.test(ecomMd), 'ecommerce item-params/duplicate blocker surfaced');
 });
 
 test('a doubled-traffic spike conversions did not track → CRITICAL (worst unverified branch), "Do not trust yet"', () => {

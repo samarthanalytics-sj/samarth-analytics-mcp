@@ -40,9 +40,13 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     trendPattern: 'Upward trend. A sustained upward trend.',
   },
   findings: [
-    { severity: 'critical', area: 'Growth', message: 'Spike unconfirmed.', businessRisk: 'Revenue unreliable.', recommendation: 'Verify in DebugView.' },
-    { severity: 'low', area: 'Config', message: 'No custom dimensions.', businessRisk: 'Limited segmentation.', recommendation: 'Register dimensions.' },
-    { severity: 'info', area: 'Data quality', message: 'No major issues.', businessRisk: '—', recommendation: '—' },
+    { severity: 'critical', area: 'Growth', message: 'Spike unconfirmed.', businessRisk: 'Revenue unreliable.', recommendation: 'Verify in DebugView.', state: 'unconfirmed' },
+    { severity: 'low', area: 'Config', message: 'No custom dimensions.', businessRisk: 'Limited segmentation.', recommendation: 'Register dimensions.', state: 'confirmed' },
+    { severity: 'info', area: 'Data quality', message: 'No major issues.', businessRisk: '—', recommendation: '—', state: 'confirmed' },
+  ],
+  blocked: [
+    { area: 'Consent', message: 'Consent Mode v2 not assessed.', recommendation: 'Verify in DebugView.' },
+    { area: 'Measurement', message: 'Per-event parameter coverage not computed.', recommendation: 'Run a per-event pass.' },
   ],
   actionableCount: 2,
   areas: [
@@ -129,6 +133,16 @@ test('section 4 renders one colour-coded card per finding, highest severity firs
   assert.ok(h.includes('All findings'));
   assert.ok(h.includes('3 item(s) - 2 to act on, 1 advisory'), 'counts');
   assert.ok(h.includes('No custom dimensions') && h.includes('Spike unconfirmed'), 'finding messages');
+});
+
+test('section 4 shows the "Observed - unconfirmed" chip and the "Blocked by verification" group', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(h.includes('Observed - unconfirmed'), 'unconfirmed finding carries the state chip');
+  assert.ok(h.includes('Blocked by verification'), 'blocked group heading');
+  assert.ok(h.includes('Consent Mode v2 not assessed') && h.includes('Per-event parameter coverage not computed'), 'blocked items rendered');
+  // A confirmed finding gets no chip.
+  const clean = ga4SectionsHtml(view({ findings: [{ severity: 'low', area: 'Config', message: 'X.', businessRisk: '—', recommendation: '—', state: 'confirmed' }], blocked: [] }));
+  assert.ok(!clean.includes('Observed - unconfirmed') && !clean.includes('Blocked by verification'), 'no chip/group when nothing is unconfirmed or blocked');
 });
 
 test('no top finding → a green "no high-severity issue" card', () => {

@@ -240,6 +240,9 @@ export interface Ga4FindingCardView {
   message: string;
   businessRisk: string;
   recommendation: string;
+  /** Verification state, orthogonal to severity: confirmed | unconfirmed | blocked. Drives the
+   *  Section-4 state chip so an inference-heavy read isn't shown as an established fact. */
+  state?: 'confirmed' | 'unconfirmed' | 'blocked';
 }
 /** Structured body sections (2-4 so far) for the designed card panel + styled export, mirroring the
  *  markdown report so the on-screen panel and the PDF render the same content as Section 1. */
@@ -274,6 +277,9 @@ export interface Ga4SectionsView {
   } | null;
   /** Section 4 — every finding, highest severity first. */
   findings: Ga4FindingCardView[];
+  /** Section 4 — "Blocked by verification": checks that could not run this window (unmeasured, not a
+   *  clean pass). Rendered as a distinct blocked-state group; kept out of the severity counts. */
+  blocked?: Array<{ area: string; message: string; recommendation: string }>;
   actionableCount: number;
   /** Section 5 — area coverage (status + confidence + evidence). */
   areas: Array<{ area: string; statusKey: string; confidence: string; evidence: string }>;

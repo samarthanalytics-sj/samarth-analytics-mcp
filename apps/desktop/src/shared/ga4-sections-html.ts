@@ -131,8 +131,14 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
     s4 += x.findings
       .map((f) => {
         const sev = sevOf(f.severity);
+        // "Observed" state chip: the finding is graded to its worst branch but leans on a metric the
+        // audit could not verify, so it is flagged as not-yet-confirmed rather than shown as fact.
+        const stateChip =
+          f.state === 'unconfirmed'
+            ? `<span style="display:inline-block;font-size:10px;font-weight:700;padding:1px 7px;border-radius:999px;background:rgba(245,158,11,.14);color:${AMBER};white-space:nowrap">Observed - unconfirmed</span>`
+            : '';
         return card(
-          `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">${badge(sev)}<span style="font-weight:700;color:${MUTED};font-size:12px">${esc(f.area)}</span></div>` +
+          `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">${badge(sev)}<span style="font-weight:700;color:${MUTED};font-size:12px">${esc(f.area)}</span>${stateChip}</div>` +
             `<div style="font-size:13px;color:${TEXT};margin-bottom:4px;line-height:1.45">${esc(f.message)}</div>` +
             (f.businessRisk && f.businessRisk !== '—' ? `<div style="font-size:12px;color:${MUTED};line-height:1.4"><span style="font-weight:700">Business risk:</span> ${esc(f.businessRisk)}</div>` : '') +
             (f.recommendation && f.recommendation !== '—' ? `<div style="font-size:12px;color:${MUTED};line-height:1.4"><span style="font-weight:700">Fix:</span> ${esc(f.recommendation)}</div>` : ''),
@@ -140,6 +146,20 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
         );
       })
       .join('');
+  }
+  // "Blocked by verification": checks that could not run this window (unmeasured, not a clean pass).
+  // A distinct amber group after the findings so the reader sees the gaps that cap trust.
+  if (x.blocked && x.blocked.length) {
+    const items = x.blocked
+      .map(
+        (b) =>
+          `<li style="margin:5px 0"><span style="display:inline-block;font-size:10px;font-weight:700;padding:1px 7px;border-radius:999px;background:rgba(245,158,11,.14);color:${AMBER};margin-right:6px;white-space:nowrap">Blocked</span><span style="font-weight:600;color:${TEXT}">${esc(b.area)}:</span> <span style="color:${TEXT}">${esc(b.message)}</span> <span style="color:${MUTED}"><span style="font-weight:700">Fix:</span> ${esc(b.recommendation)}</span></li>`,
+      )
+      .join('');
+    s4 +=
+      `<div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:${AMBER};margin-top:12px">Blocked by verification</div>` +
+      `<div style="font-size:11.5px;color:${MUTED};margin:2px 0 4px">Checks that could not run this window, so any related conclusion is unconfirmed - not a clean pass.</div>` +
+      card(`<ul style="margin:0;padding-left:2px;list-style:none;font-size:12.5px;line-height:1.5">${items}</ul>`, AMBER);
   }
 
   // ── Section 5 · Area status ──
