@@ -1,3 +1,9 @@
+## [1.157.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.157.0...v1.157.1) (2026-07-04)
+
+### Bug Fixes
+
+* **desktop:** dedup Tag Suggestions by GTM tag name so identical tags show once ([89cb5d6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/89cb5d6b641cd67b1f26482cc5c3031db6e31b53))
+
 ## [1.157.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.156.1...v1.157.0) (2026-07-03)
 
 ### Features
