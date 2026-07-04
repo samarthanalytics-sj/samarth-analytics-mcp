@@ -1,3 +1,9 @@
+## [1.167.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.166.0...v1.167.0) (2026-07-04)
+
+### Features
+
+* **desktop:** auto-map client IP + user_agent into Meta/TikTok server CAPI tags; opt-in TikTok address matching ([21de30b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/21de30b663f56edefdf3a3918cdc533717fb8e4b))
+
 ## [1.166.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.165.0...v1.166.0) (2026-07-04)
 
 ### Features
