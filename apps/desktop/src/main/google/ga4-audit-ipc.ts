@@ -11,6 +11,7 @@ import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Visuals, buildGa4Sect
 import { auditGa4Growth } from './ga4-growth';
 import { auditGa4EventDeltas, auditGa4Transactions } from './ga4-integrity';
 import { auditGa4DeadDimensions } from './ga4-dead-dimensions';
+import { auditGa4EventCoverage, ECOMMERCE_RECOMMENDED_EVENTS } from './ga4-event-coverage';
 import { reportHtmlDocument } from './ga4-report-export';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { ga4VisualsHtml, stripDuplicateCharts } from '../../shared/ga4-visuals-html';
@@ -67,9 +68,13 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     const ecom = (snap.keyEvents ?? []).some((k) => /purchase|add_to_cart|begin_checkout|view_item|add_payment_info/i.test(k.eventName));
     const sd = dqCounts.startDate ?? '';
     const ed = dqCounts.endDate ?? '';
-    const [deltas, txn] = await Promise.all([
+    const [deltas, txn, presentRec] = await Promise.all([
       sd && ed ? withQuotaRetry(() => data.getGa4EventDeltas(p, sd, ed)).catch(() => null) : Promise.resolve(null),
       ecom && sd && ed ? withQuotaRetry(() => data.getGa4Transactions(p, sd, ed)).catch(() => null) : Promise.resolve(null),
+      // Which of GA4's recommended online-sales events are actually sent — for the coverage check. The
+      // engine gates on observed anchor events, so this is safe to run on every property (a non-
+      // ecommerce site simply returns none and gets no finding).
+      sd && ed ? data.getGa4PresentEvents(p, sd, ed, ECOMMERCE_RECOMMENDED_EVENTS).catch(() => null) : Promise.resolve(null),
     ]);
     const integrityFindings = [
       ...(deltas ? auditGa4EventDeltas({ events: deltas.events, keyEventNames: (snap.keyEvents ?? []).map((k) => k.eventName) }) : []),
@@ -114,7 +119,11 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     const deadDimensionFindings = dimUsage
       ? auditGa4DeadDimensions({ usage: dimUsage, activelyMeasuring: (dqCounts.totalSessions || 0) > 0, windowDays: 90 })
       : [];
-    const config = auditGa4(snap, deadDimensionFindings);
+    // Recommended-event coverage: which GA4 recommended online-sales events an ecommerce property does
+    // not emit (an 'info' opportunity). The engine self-gates on observed anchor events, so a non-
+    // ecommerce property yields nothing. Seeded into the config audit alongside the dead-dim findings.
+    const coverageFindings = presentRec ? auditGa4EventCoverage({ presentRecommended: presentRec }) : [];
+    const config = auditGa4(snap, [...deadDimensionFindings, ...coverageFindings]);
     const reportInput = {
       property: p,
       displayName: snap.displayName,

@@ -2566,6 +2566,28 @@ export class GoogleDataService {
     return [...out, ...overflow];
   }
 
+  /** Which of the given event names are actually being sent (present with a non-zero count) over the
+   *  window — one Data API report filtered to EXACTLY those names (inListFilter), so it is never
+   *  truncated by event-name cardinality. Used for the recommended-events coverage check. Read-only. */
+  async getGa4PresentEvents(property: string, startDate: string, endDate: string, eventNames: string[]): Promise<string[]> {
+    if (eventNames.length === 0) return [];
+    const res = await this.runGa4Report({
+      property,
+      startDate,
+      endDate,
+      dimensions: ['eventName'],
+      metrics: ['eventCount'],
+      dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: eventNames } } },
+      limit: '100',
+    });
+    const present = new Set<string>();
+    for (const r of res.rows) {
+      const name = (r.dimensions[0] ?? '').trim();
+      if (name && (Number(r.metrics[0]) || 0) > 0) present.add(name);
+    }
+    return [...present];
+  }
+
   /** Session counts by channel group and by source/medium over a window — either the last `days`
    *  (default 28) or an explicit { startDate, endDate } custom range — for the pure data-quality
    *  engine. Read-only (analytics.readonly via the Data API). */
