@@ -419,6 +419,7 @@ async function main(): Promise<void> {
       'audit_gtm_container_changes',
       'audit_install_drift',
       'audit_server_container',
+      'audit_tracking_status',
       'check_gtm_measurement_ids',
       'detect_meta_web_tags',
       'diff_gtm_versions',
@@ -480,7 +481,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 48, 'read-only registry has 48 tools');
+    assert.equal(readOnly.list().length, 49, 'read-only registry has 49 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -490,8 +491,9 @@ async function main(): Promise<void> {
     assert.equal(ga4Writes.length, 60, 'GA4 write catalog produces 60 tools (19 resources + 6 lifecycle specials)');
     // 92 base + add_ga4_server_parameters + create_linkedin_capi_server_tag = 94, plus the three
     // user-identity pixel tools (create_hotjar_tag, create_pinterest_tag, create_snap_pixel_tag) = 97,
-    // plus create_pinterest_capi_server_tag = 98, plus the read-only audit_install_drift = 99.
-    assert.equal(withWrites.list().length, 99 + 60, 'read + write registry has 99 GTM/GA4-read/context + 60 GA4-write tools');
+    // plus create_pinterest_capi_server_tag = 98, plus the read-only audit_install_drift = 99,
+    // plus the read-only audit_tracking_status = 100.
+    assert.equal(withWrites.list().length, 100 + 60, 'read + write registry has 100 GTM/GA4-read/context + 60 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     // Every catalog resource + special contributes at least one tool (catches a fully-dropped entry
     // for a resource no other assertion names — google_ads_link, firebase_link, expanded_data_set,
@@ -624,6 +626,34 @@ async function main(): Promise<void> {
     const out = JSON.parse(await reg.execute('audit_gtm_container', { accountId: '1', containerId: '2', workspaceId: '3' }));
     assert.equal(out.counts.tags, 1);
     assert.ok(out.findings.some((f: { message: string }) => f.message.includes('no firing trigger')));
+  });
+
+  await test('audit_tracking_status rolls the sub-audits into 6 dimensions + an overall', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(
+      await reg.execute('audit_tracking_status', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        serverAccountId: '1', serverContainerId: 'SC', serverWorkspaceId: 'w1',
+      })
+    );
+    // Exactly the six named dimensions, in order.
+    assert.deepEqual(
+      out.dimensions.map((d: { dimension: string }) => d.dimension),
+      ['setup', 'consent', 'schema', 'dedup', 'runtime', 'manifest']
+    );
+    // It reuses the SAME data-service calls as the underlying tools.
+    assert.ok(fd.calls.some((c) => c.startsWith('verifySetup:1:2:3:')), 'ran verify_tracking_setup');
+    assert.ok(fd.calls.includes('serverSnapshot:1:SC:w1'), 'ran the server container audit for dedup/consent');
+    // The fake server container has only a GA4 relay (no Meta/TikTok CAPI tag) → a server WAS
+    // audited with no missing-event_id finding, so dedup passes.
+    const dedup = out.dimensions.find((d: { dimension: string }) => d.dimension === 'dedup');
+    assert.equal(dedup.status, 'pass', 'server audited, no dedup finding → dedup pass');
+    // No install manifest in this registry → manifest not_run (never throws).
+    const manifest = out.dimensions.find((d: { dimension: string }) => d.dimension === 'manifest');
+    assert.equal(manifest.status, 'not_run');
+    // overall = the roll-up (dedup pass, rest not_run) → pass.
+    assert.equal(out.overall, 'pass');
   });
 
   await test('audit_ga4_property returns counts + severity findings (read-only)', async () => {

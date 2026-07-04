@@ -4,6 +4,7 @@ import type { GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { AuditHistoryStore } from '../storage/audit-history';
 import { ManifestStore } from '../storage/manifest-store';
 import { fingerprintResource, diffManifest, type ManifestResource } from '../../shared/install-manifest';
+import { buildTrackingStatus } from '../../shared/tracking-status';
 import {
   buildGa4EventTag,
   buildGoogleTag,
@@ -616,6 +617,82 @@ export function buildToolRegistry(
           managed: report.managed,
           unmanaged: report.unmanaged,
         };
+      },
+    },
+    {
+      name: 'audit_tracking_status',
+      description:
+        'UNIFIED tracking status: roll up the existing audits into ONE card of six named DIMENSIONS — setup, consent, schema, dedup, runtime, manifest — each with a single verdict (pass / partial / fail / not_run) plus its worst issues, and an overall roll-up. It does NOT re-audit; it AGGREGATES verify_tracking_setup (plumbing + consent-defaults + schema + the live /healthy runtime probe), the SERVER container audit (browser↔server dedup event_id + consent findings), and install-drift (manifest) so you can answer "is my tracking healthy?" at a glance. Each sub-audit is best-effort: if one is unavailable or errors, its dimension is reported not_run rather than failing the whole call. Requires accountId, containerId, workspaceId (the WEB container). Optional events (default: the 7-event ecommerce funnel), and serverAccountId/serverContainerId/serverWorkspaceId to also cover the server side (dedup + consent + runtime).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accountId: { type: 'string' },
+          containerId: { type: 'string', description: 'The WEB container id.' },
+          workspaceId: { type: 'string' },
+          events: { type: 'array', items: { type: 'string' }, description: 'Events to verify coverage for. Omit for the standard ecommerce funnel.' },
+          serverAccountId: { type: 'string', description: 'Set all three server ids to also cover the SERVER container (dedup + consent + live endpoint).' },
+          serverContainerId: { type: 'string' },
+          serverWorkspaceId: { type: 'string' },
+        },
+        required: ['accountId', 'containerId', 'workspaceId'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const accountId = s(a.accountId);
+        const containerId = s(a.containerId);
+        const workspaceId = s(a.workspaceId);
+        const events = Array.isArray(a.events) && a.events.length > 0 ? a.events.map(String) : undefined;
+        const server =
+          s(a.serverAccountId).trim() && s(a.serverContainerId).trim() && s(a.serverWorkspaceId).trim()
+            ? { accountId: s(a.serverAccountId).trim(), containerId: s(a.serverContainerId).trim(), workspaceId: s(a.serverWorkspaceId).trim() }
+            : undefined;
+
+        // Each sub-audit is best-effort: a failure leaves that input undefined so
+        // buildTrackingStatus reports the dimension not_run — never throw the whole tool.
+        let setup: Awaited<ReturnType<GoogleDataService['verifyTrackingSetup']>> | undefined;
+        try {
+          setup = await data.verifyTrackingSetup(accountId, containerId, workspaceId, { events, server });
+        } catch {
+          setup = undefined;
+        }
+
+        let serverFindings: Awaited<ReturnType<typeof auditServerWorkspace>>['findings'] | undefined;
+        if (server) {
+          try {
+            const report = await auditServerWorkspace(data, {
+              accountId: server.accountId,
+              containerId: server.containerId,
+              workspaceId: server.workspaceId,
+            });
+            serverFindings = report.findings;
+          } catch {
+            serverFindings = undefined;
+          }
+        }
+
+        let drift: { summary: { intact: number; modified: number; deleted: number; unmanaged: number } } | null = null;
+        if (manifests) {
+          const manifest = manifests.get(ManifestStore.key(accountId, containerId, workspaceId));
+          if (manifest) {
+            try {
+              const snap = await data.getGtmContainerSnapshot(accountId, containerId, workspaceId);
+              drift = { summary: diffManifest(manifest, snap).summary };
+            } catch {
+              drift = null;
+            }
+          }
+        }
+
+        return buildTrackingStatus({
+          setup: setup ? { checks: setup.checks } : null,
+          serverFindings,
+          drift,
+          // Only "audited a server container" when the server audit actually SUCCEEDED —
+          // serverFindings is set only inside `if (server)` and only on success. If server ids were
+          // given but the audit threw, this stays false so dedup reports not_run (unknown), never a
+          // false 'pass'.
+          hasServerContainer: serverFindings !== undefined,
+        });
       },
     },
     {
