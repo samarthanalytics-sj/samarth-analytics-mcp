@@ -600,6 +600,69 @@ export interface MonitorAlert {
   resolvedCount: number;
 }
 
+// ── GA4 Monitoring ───────────────────────────────────────────────────────────
+// A background health monitor for a chosen GA4 property: re-checks data flow, key
+// events, spikes/drops and revenue integrity on a timer and (optionally) Slacks new issues.
+
+/** Persisted config for the GA4 monitor (single active property, mirrors the GTM MonitorConfig). */
+export interface Ga4MonitorConfig {
+  enabled: boolean;
+  /** Minutes between automatic checks (clamped to a sane minimum in main). */
+  intervalMinutes: number;
+  /** Property to monitor, like "properties/123456"; null until one is chosen in the tab. */
+  propertyId: string | null;
+  /** Display name for the property (for Slack + the tab header). */
+  propertyLabel: string;
+  /** Lookback window (days) for trend + per-event regression detection. */
+  days: number;
+  /** Post new issues to the active account's Slack webhook (requires a stored webhook). */
+  slackEnabled: boolean;
+  /** Only surface/Slack alerts at this severity and worse — a noise knob (default 'medium'). */
+  alertMinSeverity: 'critical' | 'high' | 'medium';
+}
+
+export interface Ga4MonitorAlertView {
+  id: string;
+  kind: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  title: string;
+  detail: string;
+  recommendation?: string;
+}
+
+export interface Ga4MonitorCheckView {
+  id: string;
+  label: string;
+  status: 'pass' | 'warn' | 'fail' | 'skip';
+  detail: string;
+}
+
+/** The result of one monitor run — shown in the tab and (for new alerts) sent to Slack. */
+export interface Ga4MonitorRun {
+  at: number;
+  property: string;
+  propertyLabel: string;
+  health: 'healthy' | 'warning' | 'critical';
+  summary: string;
+  checks: Ga4MonitorCheckView[];
+  alerts: Ga4MonitorAlertView[];
+  /** ids of the alerts that are NEW vs the previous run (the set that triggered Slack). */
+  newAlertIds: string[];
+  /** How many Slack messages were sent this run, and any send error (null when fine/skipped). */
+  slackSent: number;
+  slackError: string | null;
+}
+
+export interface Ga4MonitorStatus extends Ga4MonitorConfig {
+  running: boolean;
+  lastRunAt: number | null;
+  lastError: string | null;
+  /** Whether a Slack webhook is stored for the active account (drives the settings UI state). */
+  hasWebhook: boolean;
+  /** The most recent run so the tab can render on mount even if it wasn't open when it ran. */
+  lastRun: Ga4MonitorRun | null;
+}
+
 export interface GoogleClientStatus {
   /** Whether a Google OAuth client (id + secret) is configured. */
   configured: boolean;

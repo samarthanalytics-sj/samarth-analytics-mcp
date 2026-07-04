@@ -8,6 +8,7 @@ import type {
   ChatTurn,
   CreateTagOutcome,
   DiscoverResult,
+  Ga4MonitorRun,
   Ga4PropertyAuditResult,
   Ga4PropertyListItem,
   GoogleClientStatus,
@@ -31,6 +32,7 @@ import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
 import { Ga4Charts } from './Ga4Charts';
+import { Ga4MonitoringPanel } from './Ga4MonitoringPanel';
 import { auditToCsv, auditToMarkdown } from './audit-export';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
@@ -65,7 +67,7 @@ const MODEL_OPTIONS: Record<LlmProvider, Array<{ id: string; label: string }>> =
   ],
 };
 
-type View = 'chat' | 'gtm' | 'ga4audit' | 'prompts' | 'settings';
+type View = 'chat' | 'gtm' | 'ga4audit' | 'ga4monitoring' | 'prompts' | 'settings';
 type GtmTab = 'suggestions' | 'audit' | 'server';
 
 /* Friendly labels for GTM type codes, so approvals read in plain English. */
@@ -637,6 +639,8 @@ export function App(): JSX.Element {
   const [chatSeed, setChatSeed] = useState<{ text: string; nonce: number; product?: 'gtm' | 'ga4' } | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState('');
+  // Cross-tab GA4 monitoring banner: a background run with NEW issues surfaces here on any tab.
+  const [monitorAlert, setMonitorAlert] = useState<Ga4MonitorRun | null>(null);
 
   const active = accounts.find((a) => a.isActive);
 
@@ -653,7 +657,12 @@ export function App(): JSX.Element {
     const off = window.desktop.accounts.onChanged(() => {
       refresh().catch((e) => setError(String(e)));
     });
-    return off;
+    // Background GA4 monitoring runs push here: raise the cross-tab banner only when a run has NEW
+    // issues (so an already-seen ongoing problem, or a clean run, doesn't nag).
+    const offRun = window.desktop.ga4monitoring.onRun((run) => {
+      if (run.newAlertIds.length > 0 && run.health !== 'healthy') setMonitorAlert(run);
+    });
+    return () => { off(); offRun(); };
   }, []);
 
   async function run(fn: () => Promise<unknown>): Promise<void> {
@@ -756,6 +765,12 @@ export function App(): JSX.Element {
             📊 GA4 Audit
           </button>
           <button
+            style={{ ...styles.navItem, ...(view === 'ga4monitoring' ? styles.navActive : {}) }}
+            onClick={() => setView('ga4monitoring')}
+          >
+            🔔 GA4 Monitor
+          </button>
+          <button
             style={{ ...styles.navItem, ...(view === 'prompts' ? styles.navActive : {}) }}
             onClick={() => setView('prompts')}
           >
@@ -781,6 +796,16 @@ export function App(): JSX.Element {
           </div>
         )}
 
+        {monitorAlert && (
+          <div style={monitorAlert.health === 'critical' ? styles.monitorBarCrit : styles.monitorBarWarn}>
+            <span style={{ flex: 1 }}>
+              {monitorAlert.health === 'critical' ? '🔴' : '🟠'} GA4 Monitor · <b>{monitorAlert.propertyLabel}</b>: {monitorAlert.newAlertIds.length} new issue{monitorAlert.newAlertIds.length === 1 ? '' : 's'} — {monitorAlert.alerts.find((a) => monitorAlert.newAlertIds.includes(a.id))?.title ?? monitorAlert.summary}
+            </span>
+            <button style={styles.monitorBarBtn} onClick={() => { setView('ga4monitoring'); setMonitorAlert(null); }}>View</button>
+            <button style={styles.errorClose} onClick={() => setMonitorAlert(null)}>✕</button>
+          </div>
+        )}
+
         {/* ChatView stays MOUNTED across tab switches (hidden, not unmounted) so an in-flight
             response keeps streaming and the conversation isn't lost when you pop into GTM Tools. */}
         <div style={{ display: view === 'chat' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -790,6 +815,8 @@ export function App(): JSX.Element {
           <GtmToolsView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
         ) : view === 'ga4audit' ? (
           <Ga4AuditPanel key={active?.id ?? 'none'} active={active} onError={setError} />
+        ) : view === 'ga4monitoring' ? (
+          <Ga4MonitoringPanel key={active?.id ?? 'none'} active={active} onError={setError} />
         ) : view === 'prompts' ? (
           <PromptsView
             onUse={(text, product) => {
@@ -4494,6 +4521,9 @@ const styles: Record<string, React.CSSProperties> = {
   promptCopy: { background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer' },
   errorBar: { background: 'var(--c-red-bg)', borderBottom: '1px solid var(--c-red-border)', color: 'var(--c-red)', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 },
   errorClose: { background: 'transparent', border: 'none', color: 'var(--c-red)', cursor: 'pointer' },
+  monitorBarCrit: { background: 'var(--c-red-bg)', borderBottom: '1px solid var(--c-red-border)', color: 'var(--c-red)', padding: '9px 16px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 },
+  monitorBarWarn: { background: 'var(--c-amber-bg)', borderBottom: '1px solid var(--c-amber-border)', color: 'var(--c-amber)', padding: '9px 16px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 },
+  monitorBarBtn: { background: 'transparent', border: '1px solid currentColor', color: 'inherit', borderRadius: 7, padding: '3px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' },
 
   chatWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   chatHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border)' },

@@ -62,6 +62,8 @@ import { auditWorkspace, auditServerWorkspace, auditChanges } from '../google/au
 import { diffSnapshots } from '../google/gtm-monitor';
 import { auditGa4 } from '../google/ga4-audit';
 import { auditGa4DataQuality } from '../google/ga4-data-quality';
+import { monitorGa4 } from '../google/ga4-monitor';
+import { gatherGa4MonitorInput } from '../services/ga4-monitoring-service';
 import { buildScorecard, type ScorecardSection } from '../google/scorecard';
 import { buildReport } from '../google/report';
 import { consentReportToSection } from '../google/consent-section';
@@ -857,6 +859,28 @@ export function buildToolRegistry(
         const n = Math.floor(Number(a.days));
         const days = a.days != null && Number.isFinite(n) ? Math.min(365, Math.max(1, n)) : 28;
         return auditGa4DataQuality(await data.getGa4DataQuality(s(a.property), days));
+      },
+    },
+    {
+      name: 'monitor_ga4_property',
+      description:
+        'Run a live HEALTH MONITOR on a GA4 property and return an alert list: is data still being received (realtime active users + last complete day), did a key event stop firing, a sudden traffic spike or drop, conversions not moving with traffic, attribution decay ("Unassigned"/"(not set)"), or duplicate/unlabelled ecommerce transactions. Read-only. Each alert has a stable id, severity, and a fix; overall health is healthy/warning/critical. Use this to catch live data issues (the desktop app can also run it on a schedule and Slack new issues). Requires property like "properties/123456"; optional days (trend window, default 28, max 365).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          property: { type: 'string' },
+          days: { type: 'number', description: 'Lookback window in days for trend/regression detection (default 28, max 365).' },
+          minSeverity: { type: 'string', enum: ['critical', 'high', 'medium'], description: 'Only return alerts at this severity and worse (default medium).' },
+        },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const n = Math.floor(Number(a.days));
+        const days = a.days != null && Number.isFinite(n) ? Math.min(365, Math.max(1, n)) : 28;
+        const minSeverity = a.minSeverity === 'critical' || a.minSeverity === 'high' ? a.minSeverity : 'medium';
+        const input = await gatherGa4MonitorInput(data, s(a.property), days);
+        return monitorGa4(input, { minSeverity });
       },
     },
     {

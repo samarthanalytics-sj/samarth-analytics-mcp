@@ -456,6 +456,7 @@ async function main(): Promise<void> {
       'list_gtm_workspaces',
       'list_unused_gtm_triggers',
       'list_unused_gtm_variables',
+      'monitor_ga4_property',
       'run_ga4_realtime_report',
       'run_ga4_report',
       'score_ga4_property',
@@ -481,7 +482,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 49, 'read-only registry has 49 tools');
+    assert.equal(readOnly.list().length, 50, 'read-only registry has 50 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -493,7 +494,7 @@ async function main(): Promise<void> {
     // user-identity pixel tools (create_hotjar_tag, create_pinterest_tag, create_snap_pixel_tag) = 97,
     // plus create_pinterest_capi_server_tag = 98, plus the read-only audit_install_drift = 99,
     // plus the read-only audit_tracking_status = 100.
-    assert.equal(withWrites.list().length, 100 + 60, 'read + write registry has 100 GTM/GA4-read/context + 60 GA4-write tools');
+    assert.equal(withWrites.list().length, 101 + 60, 'read + write registry has 101 GTM/GA4-read/context + 60 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     // Every catalog resource + special contributes at least one tool (catches a fully-dropped entry
     // for a resource no other assertion names — google_ads_link, firebase_link, expanded_data_set,
@@ -1422,6 +1423,7 @@ async function main(): Promise<void> {
       'list_ga4_key_events',
       'list_ga4_measurement_protocol_secrets',
       'list_ga4_properties',
+      'monitor_ga4_property',
       'run_ga4_realtime_report',
       'run_ga4_report',
       'score_ga4_property',

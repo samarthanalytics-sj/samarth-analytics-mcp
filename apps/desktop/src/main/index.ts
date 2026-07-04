@@ -22,7 +22,9 @@ import { registerMonitorIpc } from './ipc/monitor-ipc';
 import { registerSuggestionsIpc } from './suggestions/suggestion-ipc';
 import { registerGtmAuditIpc } from './suggestions/gtm-audit-ipc';
 import { registerGa4AuditIpc } from './google/ga4-audit-ipc';
-import type { MonitorAlert } from '../shared/ipc';
+import { Ga4MonitoringService } from './services/ga4-monitoring-service';
+import { registerGa4MonitoringIpc } from './ipc/ga4-monitoring-ipc';
+import type { MonitorAlert, Ga4MonitorRun } from '../shared/ipc';
 
 // Phase 0 scaffold: boot a window, wire a minimal, secure IPC bridge, and prove
 // renderer <-> main messaging works. Later phases add the account registry,
@@ -173,6 +175,21 @@ app.whenReady().then(() => {
     configPath: join(dataDir, 'monitor-config.json'),
   });
 
+  // GA4 Monitoring: background health checks of a chosen GA4 property; pushes each completed run to
+  // every open window and (for new issues) posts to the account's Slack webhook.
+  const broadcastGa4Run = (run: Ga4MonitorRun): void => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('ga4monitoring:run', run);
+    }
+  };
+  const ga4Monitoring = new Ga4MonitoringService({
+    registry,
+    data: dataService,
+    secrets,
+    emit: broadcastGa4Run,
+    configPath: join(dataDir, 'ga4-monitor-config.json'),
+  });
+
   registerIpcHandlers();
   registerRegistryIpc(registry);
   registerProvidersIpc(providerKeys);
@@ -183,6 +200,7 @@ app.whenReady().then(() => {
   registerSuggestionsIpc(dataService, providerKeys);
   registerGtmAuditIpc(dataService);
   registerGa4AuditIpc(dataService);
+  registerGa4MonitoringIpc(ga4Monitoring);
   createWindow();
 
   app.on('activate', () => {
