@@ -1,3 +1,9 @@
+## [1.181.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.180.0...v1.181.0) (2026-07-04)
+
+### Features
+
+* **desktop:** cleaner GA4 monitor results layout + single-channel Slack UI ([b4c288a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b4c288abf11863df73af1c58a27f33fb4d32422c))
+
 ## [1.180.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.179.0...v1.180.0) (2026-07-04)
 
 ### Features
