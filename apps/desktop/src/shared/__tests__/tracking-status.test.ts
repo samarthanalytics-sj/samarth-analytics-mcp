@@ -21,8 +21,11 @@ function check(name: string, cond: boolean, detail?: string): void {
 type Chk = { id: string; label: string; status: 'pass' | 'warn' | 'fail' | 'skip'; detail: string };
 const chk = (id: string, status: Chk['status'], detail = `${id} detail`): Chk => ({ id, label: id, status, detail });
 const setup = (checks: Chk[]): TrackingStatusInput['setup'] => ({ checks });
+// The stable checkId the server audit stamps on the browser↔server dedup finding.
+const DEDUP_CHECK_ID = 'server_capi_no_event_id';
+// A realistic current dedup finding message (kept only to exercise the backwards-compat fallback).
 const dedupMsg =
-  'Meta CAPI server tag "Meta - Purchase" sends no event_id — if the same conversion also fires the browser Meta Pixel (the usual hybrid setup), Meta can\'t deduplicate the browser and server events and counts the conversion twice.';
+  'Meta CAPI server tag "Meta - Purchase" has auto-map (autoMapServerEventData) turned off and maps no explicit event_id … the browser and server events can double-count.';
 
 const dim = (r: { dimensions: DimensionResult[] }, d: Dimension): DimensionResult =>
   r.dimensions.find((x) => x.dimension === d)!;
@@ -99,16 +102,19 @@ const statusOf = (r: { dimensions: DimensionResult[] }, d: Dimension): DimStatus
 
 // ── DEDUP dimension (missing-event_id finding) ─────────────────────────────────
 {
-  // isDedupFinding matches ONLY the exact missing-event_id message signature.
-  check('dedup: isDedupFinding matches the real message', isDedupFinding({ message: dedupMsg }) === true);
-  check('dedup: isDedupFinding rejects an unrelated ga4 finding', isDedupFinding({ message: 'GA4 tag missing a measurement ID' }) === false);
+  // PRIMARY: isDedupFinding matches the stable checkId regardless of message wording.
+  check('dedup: isDedupFinding matches the stable checkId', isDedupFinding({ checkId: DEDUP_CHECK_ID }) === true);
+  check('dedup: isDedupFinding matches the stable checkId even with an empty message', isDedupFinding({ checkId: DEDUP_CHECK_ID, message: '' }) === true);
+  // FALLBACK: still matches by message (older audit builds / a reword) but not unrelated findings.
+  check('dedup: isDedupFinding message fallback still matches', isDedupFinding({ message: dedupMsg }) === true);
+  check('dedup: isDedupFinding rejects an unrelated ga4 finding', isDedupFinding({ checkId: 'B6-ad-pixel-consent', message: 'GA4 tag missing a measurement ID' }) === false);
 
-  // A medium dedup finding → fail.
-  const failR = buildTrackingStatus({ serverFindings: [{ severity: 'medium', category: 'ga4', message: dedupMsg }], hasServerContainer: true });
+  // A medium dedup finding (matched by checkId) → fail.
+  const failR = buildTrackingStatus({ serverFindings: [{ severity: 'medium', category: 'ga4', checkId: DEDUP_CHECK_ID, message: dedupMsg }], hasServerContainer: true });
   check('dedup: a medium dedup finding → fail', statusOf(failR, 'dedup') === 'fail');
 
   // Only a low dedup finding → partial.
-  const partialR = buildTrackingStatus({ serverFindings: [{ severity: 'low', category: 'ga4', message: dedupMsg }], hasServerContainer: true });
+  const partialR = buildTrackingStatus({ serverFindings: [{ severity: 'low', category: 'ga4', checkId: DEDUP_CHECK_ID, message: dedupMsg }], hasServerContainer: true });
   check('dedup: only a low dedup finding → partial', statusOf(partialR, 'dedup') === 'partial');
 
   // Server audited, NO dedup finding → pass.

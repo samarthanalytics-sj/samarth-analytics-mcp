@@ -1690,6 +1690,7 @@ test('auditServerContainer (5): flags a Meta/TikTok CAPI tag ONLY when auto-map 
   assert.ok(noId.some((f) => /^TikTok CAPI server tag "TikTok off no id"/.test(f.message)), 'the TikTok tag is labeled TikTok');
   assert.ok(noId.every((f) => f.severity === 'low' && f.confidence === 'runtime-required'), 'advisory: low + runtime-required (the web side is invisible)');
   assert.ok(noId.every((f) => /can double-count/.test(f.message) && !/counts the conversion twice/.test(f.message)), 'phrased conditionally, never as a proven double-count');
+  assert.ok(noId.every((f) => f.checkId === 'server_capi_no_event_id'), 'carries the STABLE dedup checkId (consumed by the tracking-status dedup dimension)');
   // None of the auto-map-ON / explicit-id / builder tags are flagged.
   for (const nm of ['Meta off with id', 'Meta default no id', 'Meta on no id', 'Meta builder with id', 'TikTok off with id', 'TikTok default no id']) {
     assert.ok(!noId.some((f) => new RegExp(nm).test(f.message)), `${nm} must NOT be flagged`);
