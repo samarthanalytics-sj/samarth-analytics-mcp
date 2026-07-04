@@ -1,3 +1,9 @@
+## [1.170.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.169.0...v1.170.0) (2026-07-04)
+
+### Features
+
+* **desktop:** tracking contract registry (event schema + dedup model) wired into verify ([4d29c3a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4d29c3ab06c0d82abbb21afac13df1d25eebac85))
+
 ## [1.169.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.168.2...v1.169.0) (2026-07-04)
 
 ### Features
