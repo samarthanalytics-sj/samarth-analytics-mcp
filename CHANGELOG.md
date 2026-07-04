@@ -1,3 +1,13 @@
+## [1.162.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.161.0...v1.162.0) (2026-07-04)
+
+### Features
+
+* **desktop:** pick CTA trigger type by element (Just Links for anchors, All Elements for buttons) ([2749581](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/27495816d0522190327109f3c26a73d0b86f15f1))
+
+### Bug Fixes
+
+* **desktop:** guarantee same-name suggested tags show once in the review list ([5427179](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/54271798372e179bbcb359cc5cef0bd5ccf0a8b4))
+
 ## [1.161.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.160.0...v1.161.0) (2026-07-04)
 
 ### Features
