@@ -221,6 +221,21 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Market</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${gRows}</tbody></table></div>`;
   }
+  // Ecommerce funnel — distinct users per step + step conversion. An event-coverage approximation (not a
+  // strict sequential path), so a later step can exceed an earlier one; the caveat says so explicitly.
+  if (x.funnel && x.funnel.steps.length) {
+    const fRows = x.funnel.steps
+      .map(
+        (st) =>
+          `<tr><td ${TD}><span style="font-weight:600">${esc(st.label)}</span></td><td ${TDR}>${esc(st.users)}</td><td ${TDR}>${esc(st.pctEntry)}</td><td ${TDR}>${esc(st.stepConv)}</td></tr>`,
+      )
+      .join('');
+    s6 +=
+      `<div style="font-size:12px;font-weight:600;color:${MUTED};margin:10px 2px 4px">Ecommerce funnel <span style="font-weight:400;color:${FAINT}">(distinct users per step; overall view-to-purchase ${esc(x.funnel.overall)})</span></div>` +
+      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Step</th><th ${THR}>Users</th><th ${THR}>% of entry</th><th ${THR}>Step conversion</th></tr></thead><tbody>${fRows}</tbody></table></div>` +
+      `<div style="font-size:11px;color:${FAINT};margin:4px 2px 0;line-height:1.4">Event-coverage approximation, not a strict sequential path - a later step can exceed an earlier one (saved carts, express checkout, or a missing step tag).</div>`;
+  }
 
   // ── Section 7 · Decision readiness ──
   let s7 = eyebrow('Section 7') + h2('Decision readiness');

@@ -153,6 +153,30 @@ function geoPerfRows(baseline: Ga4Baseline | null, currency: string): Array<{ co
   }));
 }
 
+const FUNNEL_LABELS: Record<string, string> = { view_item: 'View item', add_to_cart: 'Add to cart', begin_checkout: 'Begin checkout', purchase: 'Purchase' };
+
+// Ecommerce funnel view — distinct users reaching each step, with step-to-step conversion and depth vs
+// the entry step. IMPORTANT: this is an event-COVERAGE approximation (GA4's true sequential funnel is
+// UI/v1alpha-only), so a later step can legitimately exceed an earlier one; we render the real ratio
+// (never clamp — a >100% step is itself a tracking-gap signal) and guard divide-by-zero. Returns null
+// (table omitted) when there is no view_item reach to anchor the funnel.
+function funnelView(baseline: Ga4Baseline | null): { steps: Array<{ label: string; users: string; pctEntry: string; stepConv: string }>; overall: string } | null {
+  const raw = baseline?.funnelSteps ?? [];
+  const entry = raw[0]?.users ?? 0;
+  if (raw.length < 2 || entry <= 0) return null;
+  const steps = raw.map((s, i) => {
+    const prev = i > 0 ? raw[i - 1].users : 0;
+    return {
+      label: FUNNEL_LABELS[s.event] ?? s.event,
+      users: num(s.users),
+      pctEntry: `${Math.round((s.users / entry) * 100)}%`,
+      stepConv: i === 0 ? '—' : prev > 0 ? `${Math.round((s.users / prev) * 100)}%` : '—',
+    };
+  });
+  const last = raw[raw.length - 1]?.users ?? 0;
+  return { steps, overall: `${((last / entry) * 100).toFixed(1)}%` };
+}
+
 function areaEvidence(area: string, s: Ga4PropertySnapshot, config: Ga4AuditReport): string {
   switch (area) {
     case 'Data collection':
@@ -480,7 +504,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     footer: 'Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.',
   };
 
-  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), decisions, notVerified: { gate, items: nv }, scope };
+  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), funnel: funnelView(baseline), decisions, notVerified: { gate, items: nv }, scope };
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
@@ -692,6 +716,17 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
       L.push('| Market | Sessions | Conv. rate | Revenue | Engagement |');
       L.push('|---|--:|--:|--:|--:|');
       for (const g of gpRows) L.push(`| ${cell(g.country)} | ${g.sessions} | ${g.convRate} | ${g.revenue} | ${g.engagement} |`);
+      L.push('');
+    }
+    const fun = funnelView(baseline);
+    if (fun) {
+      L.push(`**Ecommerce funnel** (distinct users per step; overall view-to-purchase ${fun.overall})`);
+      L.push('');
+      L.push('| Step | Users | % of entry | Step conversion |');
+      L.push('|---|--:|--:|--:|');
+      for (const st of fun.steps) L.push(`| ${cell(st.label)} | ${st.users} | ${st.pctEntry} | ${st.stepConv} |`);
+      L.push('');
+      L.push('_Event-coverage approximation, not a strict sequential path — a later step can exceed an earlier one (saved carts, express checkout, or a missing step tag)._');
       L.push('');
     }
     if (baseline.devices.length) {

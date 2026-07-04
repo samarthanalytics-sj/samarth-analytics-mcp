@@ -124,6 +124,12 @@ const baseline = (over: Partial<Ga4Baseline> = {}): Ga4Baseline => ({
     { country: 'United States', sessions: 4000, keyEvents: 320, convRate: 0.08, revenue: 250000, engagementRate: 0.72 },
     { country: '(not set)', sessions: 1200, keyEvents: 0, convRate: 0, revenue: 0, engagementRate: 0.2 },
   ],
+  funnelSteps: [
+    { event: 'view_item', users: 10000 },
+    { event: 'add_to_cart', users: 4000 },
+    { event: 'begin_checkout', users: 2000 },
+    { event: 'purchase', users: 1000 },
+  ],
   ...over,
 });
 
@@ -271,6 +277,34 @@ test('device + market tables are omitted when the baseline has no such data', ()
   const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
   assert.ok(!/\*\*Device performance\*\*/.test(md), 'no empty device table');
   assert.ok(!/\*\*Market performance\*\*/.test(md), 'no empty market table');
+});
+
+test('section 6 renders the ecommerce funnel with step conversion + depth + the approximation caveat', () => {
+  const md = buildGa4AuditReport(input());
+  assert.ok(/\*\*Ecommerce funnel\*\*/.test(md), 'funnel sub-heading');
+  assert.ok(/overall view-to-purchase 10\.0%/.test(md), 'overall view→purchase rate (1000/10000)');
+  assert.ok(/\| Step \| Users \| % of entry \| Step conversion \|/.test(md), 'funnel table header');
+  // begin_checkout: % of entry = 2000/10000 = 20%; step conversion (from add_to_cart) = 2000/4000 = 50% — distinct columns
+  assert.ok(/\| Begin checkout \| 2,000 \| 20% \| 50% \|/.test(md), 'depth vs step-conversion are different columns');
+  assert.ok(/\| View item \| 10,000 \| 100% \| - \|/.test(md), 'entry step has no step-conversion (em-dash stripped to hyphen on output)');
+  assert.ok(/not a strict sequential path/.test(md), 'honesty caveat present');
+});
+
+test('ecommerce funnel is omitted when there is no view_item reach (non-ecommerce property)', () => {
+  const noView = baseline({ funnelSteps: [{ event: 'view_item', users: 0 }, { event: 'add_to_cart', users: 0 }, { event: 'begin_checkout', users: 0 }, { event: 'purchase', users: 0 }] });
+  assert.ok(!/\*\*Ecommerce funnel\*\*/.test(buildGa4AuditReport(input({ baseline: noView, growth: growthOf(noView) }))), 'no funnel without an entry step');
+  const noData = baseline({ funnelSteps: [] });
+  assert.ok(!/\*\*Ecommerce funnel\*\*/.test(buildGa4AuditReport(input({ baseline: noData, growth: growthOf(noData) }))), 'no funnel when the query returned nothing');
+});
+
+test('ecommerce funnel guards divide-by-zero and never clamps a step above 100%', () => {
+  // begin_checkout not tracked (0 users) but purchase fires — a real tracking-gap shape.
+  const gap = baseline({ funnelSteps: [{ event: 'view_item', users: 5000 }, { event: 'add_to_cart', users: 2000 }, { event: 'begin_checkout', users: 0 }, { event: 'purchase', users: 300 }] });
+  const md = buildGa4AuditReport(input({ baseline: gap, growth: growthOf(gap) }));
+  assert.ok(/\| Purchase \| 300 \| 6% \| - \|/.test(md), 'purchase step-conversion is a dash when the prior step is 0 (no divide-by-zero)');
+  // A later step exceeding an earlier one shows the true ratio, not a clamp.
+  const anomaly = baseline({ funnelSteps: [{ event: 'view_item', users: 1000 }, { event: 'add_to_cart', users: 1200 }, { event: 'begin_checkout', users: 600 }, { event: 'purchase', users: 300 }] });
+  assert.ok(/\| Add to cart \| 1,200 \| 120% \| 120% \|/.test(buildGa4AuditReport(input({ baseline: anomaly, growth: growthOf(anomaly) }))), 'a >100% step is shown, not clamped');
 });
 
 test('untrusted outcome metrics are flagged "not safe to quote" in the report; sessions are not', () => {

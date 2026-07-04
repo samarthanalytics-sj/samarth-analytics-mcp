@@ -75,6 +75,15 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     { country: 'India', sessions: '70,000', convRate: '3.0%', revenue: 'INR 400,000', engagement: '55%' },
     { country: 'United States', sessions: '4,000', convRate: '8.0%', revenue: 'INR 250,000', engagement: '72%' },
   ],
+  funnel: {
+    steps: [
+      { label: 'View item', users: '10,000', pctEntry: '100%', stepConv: '—' },
+      { label: 'Add to cart', users: '4,000', pctEntry: '40%', stepConv: '40%' },
+      { label: 'Begin checkout', users: '2,000', pctEntry: '20%', stepConv: '50%' },
+      { label: 'Purchase', users: '1,000', pctEntry: '10%', stepConv: '50%' },
+    ],
+    overall: '10.0%',
+  },
   decisions: [
     { q: 'Which campaigns generate revenue?', status: 'Answerable', note: 'Google Ads linked' },
     { q: 'Lead quality', status: 'Not answerable', note: 'no lead key events' },
@@ -173,6 +182,20 @@ test('section 6 renders the device + market performance tables', () => {
 test('section 6 omits the device + market tables when no such data', () => {
   const h = ga4SectionsHtml(view({ devicePerformance: [], geoPerformance: [] }));
   assert.ok(!/Device performance/.test(h) && !/Market performance/.test(h), 'no empty tables');
+});
+
+test('section 6 renders the ecommerce funnel with steps, overall rate, and the approximation caveat', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/Ecommerce funnel/.test(h), 'funnel heading');
+  assert.ok(/view-to-purchase 10\.0%/.test(h), 'overall rate in the caption');
+  assert.ok(h.includes('Begin checkout') && h.includes('50%'), 'a funnel step with its step conversion');
+  assert.ok(/Step conversion/.test(h) && /% of entry/.test(h), 'both funnel columns');
+  assert.ok(/not a strict sequential path/.test(h), 'honesty caveat present');
+});
+
+test('section 6 omits the funnel when it is null (non-ecommerce property)', () => {
+  const h = ga4SectionsHtml(view({ funnel: null }));
+  assert.ok(!/Ecommerce funnel/.test(h), 'no funnel block');
 });
 
 test('section 6 device/market performance: zero-revenue rows render a dash placeholder', () => {
