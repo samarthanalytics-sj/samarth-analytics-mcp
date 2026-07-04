@@ -288,6 +288,8 @@ export interface Ga4SectionsView {
     topMarkets: string | null;
     /** Engagement one-liner: avg engagement time/session, engaged-session rate, engaged sessions/user. */
     engagement: string | null;
+    /** Weekly-retention cohort headline (Week 1 / Week 4), or null when there isn't enough data. */
+    retention: string | null;
   } | null;
   /** Section 6 — per-channel performance (conversion rate + revenue per channel, not just share). */
   channelPerformance: Array<{ channel: string; sessions: string; convRate: string; revenue: string; engagement: string }>;

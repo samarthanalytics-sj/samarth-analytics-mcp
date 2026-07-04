@@ -12,6 +12,7 @@ import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
 import type { Ga4EventDeltaInput, Ga4TransactionInput } from './ga4-integrity';
+import { planRetentionCohorts, parseRetentionRows, type RetentionCohort } from './ga4-retention';
 import { mergeParametersByKey, addEventParameters, addServerGa4Params, setTemplateParam, type GtmParam } from './tag-params';
 import { changeJournal, type EntityKind } from './change-journal';
 import type { Ga4AccountView, Ga4PropertyListItem, GtmAccountView } from '../../shared/ipc';
@@ -2427,6 +2428,41 @@ export class GoogleDataService {
       })),
       funnelSteps: FUNNEL_EVENTS.map((event) => ({ event, users: funnelUsers.get(event) ?? 0 })),
     };
+  }
+
+  /** Weekly user-RETENTION cohorts via the Data API cohortSpec: the last ~8 complete Sun-Sat acquisition
+   *  weeks, each followed for 4 forward weeks (cohortActiveUsers). Retention is forward-looking, so this
+   *  uses its OWN backward window (NOT the audit window) — cohortSpec also forbids report-level
+   *  dateRanges. Returns per-cohort week-0 size + weekly active counts + how many weeks are mature; the
+   *  pure engine turns that into an honest headline. Read-only. Returns null on failure (best-effort). */
+  async getGa4RetentionCohorts(property: string): Promise<RetentionCohort[] | null> {
+    try {
+      const plan = planRetentionCohorts(new Date().toISOString().slice(0, 10), 8, 4, 2);
+      if (plan.cohorts.length === 0) return null;
+      const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
+      const data = analyticsdata({ version: 'v1beta', auth });
+      const res = await data.properties.runReport({
+        property,
+        requestBody: {
+          dimensions: [{ name: 'cohort' }, { name: 'cohortNthWeek' }],
+          metrics: [{ name: 'cohortActiveUsers' }],
+          // No report-level dateRanges: each cohort carries its own firstSessionDate range (required by
+          // cohortSpec, and mixing the two is an API error). accumulate is omitted (unsupported in
+          // runReport, and we want period-by-period active users anyway).
+          cohortSpec: {
+            cohorts: plan.cohorts.map((c) => ({ name: c.name, dimension: 'firstSessionDate', dateRange: { startDate: c.startDate, endDate: c.endDate } })),
+            cohortsRange: { granularity: 'WEEKLY', startOffset: 0, endOffset: plan.forwardWeeks },
+          },
+        },
+      });
+      const rows = (res.data.rows ?? []).map((r) => ({
+        dimensions: (r.dimensionValues ?? []).map((v) => v.value ?? ''),
+        metrics: (r.metricValues ?? []).map((v) => v.value ?? ''),
+      }));
+      return parseRetentionRows(rows, plan);
+    } catch {
+      return null;
+    }
   }
 
   /** eventName x eventCount for the window AND the prior equal window — for the per-event regression

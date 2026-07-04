@@ -248,6 +248,13 @@ test('engagement line is omitted when the baseline has no sessions', () => {
   assert.ok(!/- \*\*Engagement:\*\*/.test(md), 'no engagement line without sessions to derive it from');
 });
 
+test('section 6 renders the retention-cohort headline when provided, and omits it otherwise', () => {
+  const withRet = buildGa4AuditReport(input({ retentionSummary: 'Week 1: 34% across 5 cohorts · Week 4: 11% across 3 cohorts (weighted, n>=100 each)' }));
+  assert.ok(/- \*\*Retention \(cohorts\):\*\* Week 1: 34% across 5 cohorts/.test(withRet), 'retention line rendered from the summary');
+  const without = buildGa4AuditReport(input());
+  assert.ok(!/- \*\*Retention \(cohorts\):\*\*/.test(without), 'no retention line when the summary is null/absent');
+});
+
 test('engagement line keeps time + rate but drops the per-user figure when it is zero', () => {
   const b = baseline({ sessions: 100, avgEngagementSec: 60, engagementRate: 0.5, engagedSessionsPerUser: 0 });
   const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));

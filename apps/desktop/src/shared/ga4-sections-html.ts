@@ -51,6 +51,10 @@ const TD = `style="padding:7px 10px;border-bottom:1px solid ${BORDER};font-size:
 const TDR = `style="padding:7px 10px;border-bottom:1px solid ${BORDER};font-size:12.5px;color:${TEXT};vertical-align:top;text-align:right;font-variant-numeric:tabular-nums"`;
 const metaRow = (lbl: string, val: string): string =>
   `<div style="font-size:12.5px;color:${TEXT};margin:3px 0;line-height:1.45"><span style="font-weight:700;color:${MUTED}">${esc(lbl)}:</span> ${esc(val)}</div>`;
+// Heading above each Section-6 breakdown table. `title` is escaped; `sub` is pre-built HTML (callers
+// only pass static parentheticals + already-escaped dynamic values), inserted raw.
+const tableCaption = (title: string, sub: string): string =>
+  `<div style="font-size:15px;font-weight:700;color:${TEXT};margin:16px 2px 6px">${esc(title)} <span style="font-size:12.5px;font-weight:400;color:${FAINT}">${sub}</span></div>`;
 
 const eyebrow = (t: string): string =>
   `<div style="font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:${BLUE};margin-top:20px">${esc(t)}</div>`;
@@ -163,7 +167,8 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
         metaRow('Peak day', b.peakDay ?? 'Not Verified') +
         metaRow('New vs returning', b.newVsReturning) +
         metaRow('Top markets', b.topMarkets ?? 'Not Verified') +
-        (b.engagement ? metaRow('Engagement', b.engagement) : ''),
+        (b.engagement ? metaRow('Engagement', b.engagement) : '') +
+        (b.retention ? metaRow('Retention (cohorts)', b.retention) : ''),
       BLUE,
     );
   } else {
@@ -178,7 +183,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       )
       .join('');
     s6 +=
-      `<div style="font-size:12px;font-weight:600;color:${MUTED};margin:10px 2px 4px">Channel performance <span style="font-weight:400;color:${FAINT}">(conversion rate and revenue per channel, not just traffic share)</span></div>` +
+      tableCaption('Channel performance', '(conversion rate and revenue per channel, not just traffic share)') +
       `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Channel</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cRows}</tbody></table></div>`;
   }
@@ -192,7 +197,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       )
       .join('');
     s6 +=
-      `<div style="font-size:12px;font-weight:600;color:${MUTED};margin:10px 2px 4px">Landing pages <span style="font-weight:400;color:${FAINT}">(top entry pages: which convert and which leak)</span></div>` +
+      tableCaption('Landing pages', '(top entry pages: which convert and which leak)') +
       `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:460px"><thead><tr><th ${TH}>Landing page</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${lRows}</tbody></table></div>`;
   }
@@ -205,7 +210,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       )
       .join('');
     s6 +=
-      `<div style="font-size:12px;font-weight:600;color:${MUTED};margin:10px 2px 4px">Device performance <span style="font-weight:400;color:${FAINT}">(how each device type converts and spends)</span></div>` +
+      tableCaption('Device performance', '(how each device type converts and spends)') +
       `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Device</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${dRows}</tbody></table></div>`;
   }
@@ -218,7 +223,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       )
       .join('');
     s6 +=
-      `<div style="font-size:12px;font-weight:600;color:${MUTED};margin:10px 2px 4px">Market performance <span style="font-weight:400;color:${FAINT}">(which geographies convert and spend)</span></div>` +
+      tableCaption('Market performance', '(which geographies convert and spend)') +
       `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Market</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${gRows}</tbody></table></div>`;
   }
@@ -232,7 +237,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       )
       .join('');
     s6 +=
-      `<div style="font-size:12px;font-weight:600;color:${MUTED};margin:10px 2px 4px">Ecommerce funnel <span style="font-weight:400;color:${FAINT}">(distinct users per step; overall view-to-purchase ${esc(x.funnel.overall)})</span></div>` +
+      tableCaption('Ecommerce funnel', `(distinct users per step; overall view-to-purchase ${esc(x.funnel.overall)})`) +
       `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Step</th><th ${THR}>Users</th><th ${THR}>% of entry</th><th ${THR}>Step conversion</th></tr></thead><tbody>${fRows}</tbody></table></div>` +
       `<div style="font-size:11px;color:${FAINT};margin:4px 2px 0;line-height:1.4">Event-coverage approximation, not a strict sequential path - a later step can exceed an earlier one (saved carts, express checkout, or a missing step tag).</div>`;
