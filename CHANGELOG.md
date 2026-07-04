@@ -1,3 +1,9 @@
+## [1.163.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.162.0...v1.163.0) (2026-07-04)
+
+### Features
+
+* **desktop:** engagement metrics in GA4 audit baseline ([dea6eb1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dea6eb1caa04a6b5d5b6bbf1b186b67439724167))
+
 ## [1.162.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.161.0...v1.162.0) (2026-07-04)
 
 ### Features
