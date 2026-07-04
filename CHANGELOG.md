@@ -1,3 +1,13 @@
+## [1.176.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.175.1...v1.176.0) (2026-07-04)
+
+### Features
+
+* **desktop:** runtime synthetic test (abort-first, never sends real hits) ([1143b61](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1143b616c7a204867954ce1f7130cd9207945fa1))
+
+### Bug Fixes
+
+* **desktop:** close first-party-proxy data-leak in runtime synthetic test ([e96f9c1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e96f9c1218fca897ad669049deb0ad6dc9dcd526))
+
 ## [1.175.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.175.0...v1.175.1) (2026-07-04)
 
 ### Bug Fixes
