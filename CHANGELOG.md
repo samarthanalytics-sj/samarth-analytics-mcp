@@ -1,3 +1,9 @@
+## [1.169.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.168.2...v1.169.0) (2026-07-04)
+
+### Features
+
+* **desktop:** audit CAPI tags for the browser↔server dedup event_id ([8b283ff](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8b283ffd644b5ae7e1edb0e641d543c6f88c4a4e)), closes [#5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/5)
+
 ## [1.168.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.168.1...v1.168.2) (2026-07-04)
 
 ### Bug Fixes
