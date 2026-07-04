@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildSlackPayload, sendSlackWebhook, isValidSlackWebhook } from '../slack-notify';
+import { buildSlackPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from '../slack-notify';
 import type { Ga4MonitorResult, Ga4MonitorAlert } from '../../google/ga4-monitor';
 
 let passed = 0;
@@ -47,11 +47,11 @@ wrap('buildSlackPayload caps at 10 alert sections and notes the remainder', () =
 });
 
 wrap('sendSlackWebhook posts JSON and reports ok on 200', async () => {
-  let seen: { url: string; body: string } | null = null;
-  const fetchImpl = async (url: string, init: { body: string }) => { seen = { url, body: init.body }; return { ok: true, status: 200, text: async () => 'ok' }; };
+  const captured: { body: string } = { body: '' };
+  const fetchImpl: FetchLike = async (_url, init) => { captured.body = init.body; return { ok: true, status: 200, text: async () => 'ok' }; };
   const r = await sendSlackWebhook('https://hooks.slack.com/services/T/B/x', buildSlackPayload('Acme', result(), result().alerts), { fetchImpl });
   assert.ok(r.ok && r.status === 200, JSON.stringify(r));
-  assert.ok(seen && JSON.parse(seen.body).blocks, 'posted a JSON body with blocks');
+  assert.ok(JSON.parse(captured.body).blocks, 'posted a JSON body with blocks');
 });
 
 wrap('sendSlackWebhook rejects a non-Slack URL without calling fetch', async () => {

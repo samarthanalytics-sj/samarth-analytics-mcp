@@ -30,6 +30,7 @@ import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
 import { Ga4Charts } from './Ga4Charts';
+import { Ga4MonitoringPanel } from './Ga4MonitoringPanel';
 import { auditToCsv, auditToMarkdown } from './audit-export';
 
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
@@ -38,7 +39,7 @@ const DEFAULT_MODEL: Record<LlmProvider, string> = {
   gemini: 'gemini-2.0-flash',
 };
 
-type View = 'chat' | 'gtm' | 'ga4audit' | 'prompts' | 'settings';
+type View = 'chat' | 'gtm' | 'ga4audit' | 'ga4monitoring' | 'prompts' | 'settings';
 type GtmTab = 'suggestions' | 'audit' | 'server';
 
 /* Friendly labels for GTM type codes, so approvals read in plain English. */
@@ -729,6 +730,12 @@ export function App(): JSX.Element {
             📊 GA4 Audit
           </button>
           <button
+            style={{ ...styles.navItem, ...(view === 'ga4monitoring' ? styles.navActive : {}) }}
+            onClick={() => setView('ga4monitoring')}
+          >
+            🔔 GA4 Monitor
+          </button>
+          <button
             style={{ ...styles.navItem, ...(view === 'prompts' ? styles.navActive : {}) }}
             onClick={() => setView('prompts')}
           >
@@ -763,6 +770,8 @@ export function App(): JSX.Element {
           <GtmToolsView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
         ) : view === 'ga4audit' ? (
           <Ga4AuditPanel key={active?.id ?? 'none'} active={active} onError={setError} />
+        ) : view === 'ga4monitoring' ? (
+          <Ga4MonitoringPanel key={active?.id ?? 'none'} active={active} onError={setError} />
         ) : view === 'prompts' ? (
           <PromptsView
             onUse={(text, product) => {

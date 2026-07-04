@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { Ga4MonitoringService } from '../ga4-monitoring-service';
 import type { GoogleDataService } from '../../google/data-service';
-import type { AccountView, Ga4MonitorRun } from '../../shared/ipc';
+import type { AccountView, Ga4MonitorRun } from '../../../shared/ipc';
 
 let passed = 0;
 let failed = 0;
