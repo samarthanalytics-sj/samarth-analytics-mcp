@@ -2294,24 +2294,30 @@ export class GoogleDataService {
     // Canonical GA4 recommended-ecommerce funnel, in order. Declared before the Promise.all so the
     // funnel query can filter to exactly these event names server-side.
     const FUNNEL_EVENTS = ['view_item', 'add_to_cart', 'begin_checkout', 'purchase'];
-    // Sessions + the outcomes that should move with real growth, current and prior, in one row each.
-    // 0=sessions 1=keyEvents 2=totalRevenue, then the engagement trio: 3=userEngagementDuration (sec,
-    // total), 4=engagementRate (0-1), 5=engagedSessionsPerUser. Appended, so the leading indices are
-    // unchanged. (Prior period queries them too and just ignores them — one shared metric list.)
-    const TREND_METRICS = ['sessions', 'keyEvents', 'totalRevenue', 'userEngagementDuration', 'engagementRate', 'engagedSessionsPerUser'];
+    // Sessions + the outcomes that should move with real growth (current and prior, one row each). Kept
+    // to the three RELIABLE core metrics — this totals query is unguarded (its failure legitimately means
+    // "baseline unavailable"), so no fragile metric may live here. Engagement is a SEPARATE guarded query
+    // below, so an engagement-metric error can never wipe out the whole baseline (and all its tables).
+    const TREND_METRICS = ['sessions', 'keyEvents', 'totalRevenue'];
 
     // Totals come from NO-dimension reports (one exact row each) — never the per-day report, which a
     // 100-row cap would truncate for windows > 100 days. The daily series is the per-day report ordered
     // NEWEST-FIRST at limit 1000, then reversed to chronological — so a custom range longer than the cap
     // keeps the MOST-RECENT days (what spike/trend cares about), not the oldest. Country = top-N (250).
     const emptyResult: Ga4ReportResult = { dimensionHeaders: [], metricHeaders: [], rows: [] };
-    const [curTotal, priorTotal, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage, byDevicePerf, byGeoPerf, byFunnel, byLlmSource] = await Promise.all([
+    const [curTotal, priorTotal, byEngagement, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage, byDevicePerf, byGeoPerf, byFunnel, byLlmSource] = await Promise.all([
       this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: TREND_METRICS }),
-      this.runGa4Report({ property, startDate, endDate, dimensions: ['date'], metrics: ['sessions'], orderBys: byDateDesc, limit: '1000' }),
-      this.runGa4Report({ property, startDate, endDate, dimensions: ['deviceCategory'], metrics: ['sessions'] }),
-      this.runGa4Report({ property, startDate, endDate, dimensions: ['newVsReturning'], metrics: ['sessions'] }),
-      this.runGa4Report({ property, startDate, endDate, dimensions: ['country'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '250' }),
+      // Engagement totals (0=userEngagementDuration sec, 1=engagementRate 0-1, 2=engagedSessionsPerUser).
+      // Its OWN query with a catch: if any engagement metric errors for a property it degrades to 0 —
+      // it must NEVER take the baseline (and every Section-6 table) down with it.
+      this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: ['userEngagementDuration', 'engagementRate', 'engagedSessionsPerUser'] }).catch(() => emptyResult),
+      // The dimensioned baseline slices are best-effort too — a single dimension failing (device, geo,
+      // etc.) degrades that one block to empty, never the whole baseline.
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['date'], metrics: ['sessions'], orderBys: byDateDesc, limit: '1000' }).catch(() => emptyResult),
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['deviceCategory'], metrics: ['sessions'] }).catch(() => emptyResult),
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['newVsReturning'], metrics: ['sessions'] }).catch(() => emptyResult),
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['country'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '250' }).catch(() => emptyResult),
       // Per-channel daily sessions for the multi-line chart (newest-first, then aligned to the date axis).
       this.runGa4Report({ property, startDate, endDate, dimensions: ['date', 'sessionDefaultChannelGroup'], metrics: ['sessions'], orderBys: byDateDesc, limit: '5000' }).catch(() => emptyResult),
       // Per-channel PERFORMANCE: sessions + conversion rate + revenue + engagement (top channels by sessions).
@@ -2397,10 +2403,10 @@ export class GoogleDataService {
       revenue: oneMetric(curTotal, 2),
       priorRevenue: oneMetric(priorTotal, 2),
       // "Average engagement time per session" has no direct GA4 metric — it is userEngagementDuration
-      // (total engaged seconds, idx 3) / sessions. Rate (idx 4) is 0-1; engaged sessions/user is idx 5.
-      avgEngagementSec: sessions > 0 ? oneMetric(curTotal, 3) / sessions : 0,
-      engagementRate: oneMetric(curTotal, 4),
-      engagedSessionsPerUser: oneMetric(curTotal, 5),
+      // (total engaged seconds, byEngagement idx 0) / sessions. Rate (idx 1) is 0-1; sessions/user is idx 2.
+      avgEngagementSec: sessions > 0 ? oneMetric(byEngagement, 0) / sessions : 0,
+      engagementRate: oneMetric(byEngagement, 1),
+      engagedSessionsPerUser: oneMetric(byEngagement, 2),
       trendPct: priorSessions > 0 ? Math.round(((sessions - priorSessions) / priorSessions) * 100) : null,
       peakDay,
       dailySessions,
