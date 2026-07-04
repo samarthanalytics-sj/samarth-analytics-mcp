@@ -77,6 +77,13 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     { country: 'India', sessions: '70,000', convRate: '3.0%', revenue: 'INR 400,000', engagement: '55%' },
     { country: 'United States', sessions: '4,000', convRate: '8.0%', revenue: 'INR 250,000', engagement: '72%' },
   ],
+  llmTraffic: {
+    rows: [
+      { source: 'claude.ai', sessions: '3,000', convRate: '6.0%', revenue: 'INR 90,000', engagement: '68%' },
+      { source: 'perplexity.ai', sessions: '1,500', convRate: '4.0%', revenue: 'INR 30,000', engagement: '55%' },
+    ],
+    share: '4,500 sessions, 5.8% of all',
+  },
   funnel: {
     steps: [
       { label: 'View item', users: '10,000', pctEntry: '100%', stepConv: '—' },
@@ -198,6 +205,19 @@ test('section 6 renders the device + market performance tables', () => {
 test('section 6 omits the device + market tables when no such data', () => {
   const h = ga4SectionsHtml(view({ devicePerformance: [], geoPerformance: [] }));
   assert.ok(!/Device performance/.test(h) && !/Market performance/.test(h), 'no empty tables');
+});
+
+test('section 6 renders the AI-assistant traffic table with its share + undercount caveat', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/AI assistant traffic/.test(h), 'table heading');
+  assert.ok(h.includes('4,500 sessions, 5.8% of all'), 'aggregate share in the caption');
+  assert.ok(h.includes('claude.ai') && h.includes('6.0%') && h.includes('INR 90,000'), 'an AI-source row');
+  assert.ok(/systematic undercount/.test(h), 'undercount caveat');
+});
+
+test('section 6 omits the AI-assistant table when there is no AI traffic (null)', () => {
+  const h = ga4SectionsHtml(view({ llmTraffic: null }));
+  assert.ok(!/AI assistant traffic/.test(h), 'no AI table');
 });
 
 test('section 6 renders the ecommerce funnel with steps, overall rate, and the approximation caveat', () => {

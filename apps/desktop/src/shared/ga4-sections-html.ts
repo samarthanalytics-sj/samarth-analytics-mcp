@@ -227,6 +227,21 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Market</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${gRows}</tbody></table></div>`;
   }
+  // AI/LLM assistant referral traffic — which AI sources convert and earn. A systematic undercount
+  // (referrer-stripped visits land in Direct), stated explicitly in the caveat below the table.
+  if (x.llmTraffic && x.llmTraffic.rows.length) {
+    const lRows = x.llmTraffic.rows
+      .map(
+        (c) =>
+          `<tr><td ${TD}><span style="font-weight:600">${esc(c.source)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDR}>${esc(c.convRate)}</td><td ${TDR}>${esc(c.revenue)}</td><td ${TDR}>${esc(c.engagement)}</td></tr>`,
+      )
+      .join('');
+    s6 +=
+      tableCaption('AI assistant traffic', `(which AI referrers convert and earn — ${esc(x.llmTraffic.share)})`) +
+      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>AI source</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${lRows}</tbody></table></div>` +
+      `<div style="font-size:11px;color:${FAINT};margin:4px 2px 0;line-height:1.4">AI-referral traffic is a systematic undercount - visits from AI mobile/in-app browsers and copied links arrive with no referrer and land in Direct.</div>`;
+  }
   // Ecommerce funnel — distinct users per step + step conversion. An event-coverage approximation (not a
   // strict sequential path), so a later step can exceed an earlier one; the caveat says so explicitly.
   if (x.funnel && x.funnel.steps.length) {

@@ -168,6 +168,11 @@ export interface Ga4Baseline {
   /** Top MARKETS performance (country): same shape — "which geographies convert and spend". Top by
    *  sessions. Empty if the query failed. */
   geoPerformance: Array<{ country: string; sessions: number; keyEvents: number; convRate: number; revenue: number; engagementRate: number }>;
+  /** Per-AI/LLM-source referral performance (sessions, key events, session conversion rate (0-1),
+   *  revenue, engagement rate (0-1)) — "which AI assistants send traffic that converts and earns".
+   *  Matched on exact sessionSource hosts. A systematic undercount (referrer-stripped visits land in
+   *  Direct). Empty if the query failed or the site has no AI referrals. */
+  llmTraffic: Array<{ source: string; sessions: number; keyEvents: number; convRate: number; revenue: number; engagementRate: number }>;
   /** Ecommerce funnel step reach — distinct USERS who fired each canonical funnel event (view_item →
    *  add_to_cart → begin_checkout → purchase), in order. Queried with a server-side inListFilter, so
    *  `users` is 0 only when that event genuinely has no reach (never a top-N truncation artifact). This
@@ -2280,6 +2285,11 @@ export class GoogleDataService {
     /** i-th metric of the single row of a no-dimension report (0=sessions, 1=keyEvents, 2=revenue). */
     const oneMetric = (r: Ga4ReportResult, i: number): number => (r.rows[0] ? n(r.rows[0].metrics[i] ?? '0') : 0);
     const byMetricDesc = [{ metric: { metricName: 'sessions' }, desc: true }];
+    // Curated exact sessionSource hosts for AI/LLM-assistant referrals. Exact-match (inListFilter), not
+    // "contains", to avoid false positives from brand/marketing domains (openai.com, anthropic.com) and
+    // general search (bing.com). GA4's native "AI Assistant" channel (May 2026) misses Perplexity/Claude,
+    // so this source list is the more complete read. Review quarterly — the set changes fast.
+    const LLM_TRAFFIC_SOURCES = ['chatgpt.com', 'chat.openai.com', 'perplexity.ai', 'gemini.google.com', 'bard.google.com', 'copilot.microsoft.com', 'claude.ai', 'grok.com', 'deepseek.com', 'meta.ai', 'you.com', 'poe.com', 'phind.com', 'mistral.ai'];
     const byDateDesc = [{ dimension: { dimensionName: 'date' }, desc: true }];
     // Canonical GA4 recommended-ecommerce funnel, in order. Declared before the Promise.all so the
     // funnel query can filter to exactly these event names server-side.
@@ -2295,7 +2305,7 @@ export class GoogleDataService {
     // NEWEST-FIRST at limit 1000, then reversed to chronological — so a custom range longer than the cap
     // keeps the MOST-RECENT days (what spike/trend cares about), not the oldest. Country = top-N (250).
     const emptyResult: Ga4ReportResult = { dimensionHeaders: [], metricHeaders: [], rows: [] };
-    const [curTotal, priorTotal, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage, byDevicePerf, byGeoPerf, byFunnel] = await Promise.all([
+    const [curTotal, priorTotal, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage, byDevicePerf, byGeoPerf, byFunnel, byLlmSource] = await Promise.all([
       this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate, endDate, dimensions: ['date'], metrics: ['sessions'], orderBys: byDateDesc, limit: '1000' }),
@@ -2320,6 +2330,11 @@ export class GoogleDataService {
       // EXACTLY the funnel events (never truncated by event-name cardinality — a low-traffic purchase on
       // a 500+-event property still comes back); events with no reach are simply absent => 0 downstream.
       this.runGa4Report({ property, startDate, endDate, dimensions: ['eventName'], metrics: ['totalUsers'], dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: FUNNEL_EVENTS } } }, limit: '10' }).catch(() => emptyResult),
+      // AI/LLM-assistant referral performance: same metric set keyed on sessionSource, filtered to the
+      // curated AI host list (exact inListFilter — never a broad contains). Empty on a site with no AI
+      // referrals. NOTE: this is a systematic UNDERCOUNT (app/in-app browsers + copied links land in
+      // Direct); the report says so.
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['sessionSource'], metrics: ['sessions', 'keyEvents', 'sessionKeyEventRate', 'totalRevenue', 'engagementRate'], dimensionFilter: { filter: { fieldName: 'sessionSource', inListFilter: { values: LLM_TRAFFIC_SOURCES } } }, orderBys: byMetricDesc, limit: '20' }).catch(() => emptyResult),
     ]);
     // Build the per-step user counts. This is an event-COVERAGE funnel (distinct users who fired each
     // event at all in the window), NOT a strict sequential path — GA4's true ordered funnel is
@@ -2420,6 +2435,14 @@ export class GoogleDataService {
       })),
       geoPerformance: byGeoPerf.rows.map((r) => ({
         country: r.dimensions[0] || '(not set)',
+        sessions: n(r.metrics[0]),
+        keyEvents: n(r.metrics[1]),
+        convRate: Number(r.metrics[2]) || 0, // sessionKeyEventRate, 0-1
+        revenue: n(r.metrics[3]),
+        engagementRate: Number(r.metrics[4]) || 0, // 0-1
+      })),
+      llmTraffic: byLlmSource.rows.map((r) => ({
+        source: r.dimensions[0] || '(not set)',
         sessions: n(r.metrics[0]),
         keyEvents: n(r.metrics[1]),
         convRate: Number(r.metrics[2]) || 0, // sessionKeyEventRate, 0-1
