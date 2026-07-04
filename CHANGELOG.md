@@ -1,3 +1,9 @@
+## [1.173.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.172.1...v1.173.0) (2026-07-04)
+
+### Features
+
+* **desktop:** rework the Settings tab (model pickers, monitoring, richer diagnostics) ([d4a0fbb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d4a0fbb2664370e251944de0f902e200b1cbaee7))
+
 ## [1.172.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.172.0...v1.172.1) (2026-07-04)
 
 ### Bug Fixes
