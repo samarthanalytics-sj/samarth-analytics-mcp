@@ -51,6 +51,7 @@ const input = (over: Partial<Ga4MonitorInput> = {}): Ga4MonitorInput => ({
   transactions: null,
   keyEventNames: ['purchase'],
   hasEcommerce: false,
+  priorNoSourceShare: null,
   ...over,
 });
 
@@ -111,6 +112,30 @@ test('a sudden one-day spike raises a medium spike alert', () => {
   assert.equal(a.severity, 'medium');
 });
 
+test('a rise in unattributed sessions vs the prior window flags consent-mode drift', () => {
+  const driftDq = dq({ totalSessions: 10000, channelGroups: [{ name: 'Organic Search', sessions: 6500 }, { name: 'Unassigned', sessions: 3500 }] });
+  const r = monitorGa4(input({ dqCounts: driftDq, priorNoSourceShare: 8 })); // 35% now vs 8% prior → +27 pts
+  const a = r.alerts.find((x) => x.kind === 'consent_drift');
+  assert.ok(a, 'consent_drift alert present: ' + JSON.stringify(r.alerts.map((z) => z.kind)));
+  assert.equal(a.id, 'consent_drift');
+  assert.equal(a.severity, 'high', 'a large drift (>= 2x threshold) is high');
+  // A stable share (no rise) does not flag drift.
+  const stable = monitorGa4(input({ dqCounts: dq({ totalSessions: 10000, channelGroups: [{ name: 'Organic Search', sessions: 9700 }, { name: 'Unassigned', sessions: 300 }] }), priorNoSourceShare: 3 }));
+  assert.ok(!stable.alerts.some((x) => x.kind === 'consent_drift'), 'no drift when the share is stable');
+});
+
+test('minSeverity filters which findings become alerts', () => {
+  const spikeBaseline = baseline({ dailySessions: [
+    { date: '20260610', sessions: 300 }, { date: '20260611', sessions: 310 }, { date: '20260612', sessions: 305 },
+    { date: '20260613', sessions: 315 }, { date: '20260614', sessions: 1600 }, { date: '20260615', sessions: 320 },
+    { date: '20260616', sessions: 308 },
+  ] });
+  const withDefault = monitorGa4(input({ baseline: spikeBaseline }));
+  assert.ok(withDefault.alerts.some((a) => a.kind === 'spike'), 'medium spike surfaces at the default threshold');
+  const highOnly = monitorGa4(input({ baseline: spikeBaseline }), { minSeverity: 'high' });
+  assert.ok(!highOnly.alerts.some((a) => a.kind === 'spike'), 'a medium spike is filtered out when minSeverity is high');
+});
+
 test('duplicate transactions raise a revenue-integrity alert only when ecommerce is on', () => {
   const withDup = monitorGa4(input({ hasEcommerce: true, transactions: { transactions: [{ id: 'T-1', purchases: 3 }], notSetShare: 0 } }));
   assert.ok(withDup.alerts.some((a) => a.kind === 'duplicate_tx'), 'dup alert when ecommerce on');
@@ -120,7 +145,7 @@ test('duplicate transactions raise a revenue-integrity alert only when ecommerce
 });
 
 test('missing inputs degrade to skipped checks, never false alarms', () => {
-  const r = monitorGa4({ property: 'properties/1', realtimeActiveUsers: null, baseline: null, dqCounts: null, eventDeltas: null, transactions: null, keyEventNames: [], hasEcommerce: false });
+  const r = monitorGa4({ property: 'properties/1', realtimeActiveUsers: null, baseline: null, dqCounts: null, eventDeltas: null, transactions: null, keyEventNames: [], hasEcommerce: false, priorNoSourceShare: null });
   assert.equal(r.alerts.length, 0, 'no alerts with no data');
   assert.equal(r.health, 'healthy');
   assert.ok(r.checks.every((c) => c.status === 'skip'), 'every check skipped');

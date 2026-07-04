@@ -608,6 +608,8 @@ export interface Ga4MonitorConfig {
   days: number;
   /** Post new issues to the active account's Slack webhook (requires a stored webhook). */
   slackEnabled: boolean;
+  /** Only surface/Slack alerts at this severity and worse — a noise knob (default 'medium'). */
+  alertMinSeverity: 'critical' | 'high' | 'medium';
 }
 
 export interface Ga4MonitorAlertView {

@@ -870,6 +870,7 @@ export function buildToolRegistry(
         properties: {
           property: { type: 'string' },
           days: { type: 'number', description: 'Lookback window in days for trend/regression detection (default 28, max 365).' },
+          minSeverity: { type: 'string', enum: ['critical', 'high', 'medium'], description: 'Only return alerts at this severity and worse (default medium).' },
         },
         required: ['property'],
         additionalProperties: false,
@@ -877,8 +878,9 @@ export function buildToolRegistry(
       handler: async (a) => {
         const n = Math.floor(Number(a.days));
         const days = a.days != null && Number.isFinite(n) ? Math.min(365, Math.max(1, n)) : 28;
+        const minSeverity = a.minSeverity === 'critical' || a.minSeverity === 'high' ? a.minSeverity : 'medium';
         const input = await gatherGa4MonitorInput(data, s(a.property), days);
-        return monitorGa4(input);
+        return monitorGa4(input, { minSeverity });
       },
     },
     {

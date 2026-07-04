@@ -30,6 +30,20 @@ export interface Ga4MonitorInput {
   /** The property's key-event names (a key event going silent is more serious than a generic one). */
   keyEventNames: string[];
   hasEcommerce: boolean;
+  /** Unattributed-session share (Unassigned / "(not set)", 0-100) for the PRIOR equal window, so a
+   *  RISE vs the current window can flag consent-mode / attribution drift. null = not fetched. */
+  priorNoSourceShare: number | null;
+}
+
+/** Tunable thresholds for a monitor run. Omitted fields use the defaults below. `minSeverity` filters
+ *  which findings become alerts (and get Slacked) — raise it to cut noise; lower it to catch more. */
+export interface Ga4MonitorOptions {
+  /** Alert on findings at this severity and worse (default 'medium'). */
+  minSeverity?: Severity;
+  /** Percentage-point rise in the unattributed share (vs prior window) that flags consent drift (default 12). */
+  consentDriftPp?: number;
+  /** The current unattributed share must be at least this % for a drift to matter (default 15). */
+  consentMinSharePct?: number;
 }
 
 export type MonitorCheckStatus = 'pass' | 'warn' | 'fail' | 'skip';
@@ -68,10 +82,19 @@ export interface Ga4MonitorResult {
 
 const SEV_RANK: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 const norm = (d?: string): string => (d ?? '').replace(/-/g, '');
-/** A finding is severe enough to alert (and to Slack) at medium and above; low/info stay as checks only. */
-const isAlertWorthy = (sev: Severity): boolean => SEV_RANK[sev] <= SEV_RANK.medium;
 /** A slug safe for a stable alert id (used to dedup ongoing issues across runs). */
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+
+/** Current unattributed-session share (%): the larger of the Unassigned channel share and the
+ *  "(not set)" source/medium share, over total sessions — the same signal the audit uses. Exported so
+ *  the data layer can compute the PRIOR-window share to feed consent-drift detection. */
+export function noSourceSharePct(dq: DataQualityCounts): number | null {
+  const total = dq.totalSessions || 0;
+  if (total <= 0) return null;
+  const unassigned = dq.channelGroups.filter((c) => /unassigned/i.test(c.name)).reduce((a, c) => a + c.sessions, 0);
+  const notSet = dq.sourceMediums.filter((c) => /\(not set\)/i.test(c.name)).reduce((a, c) => a + c.sessions, 0);
+  return Math.min(100, (Math.max(unassigned, notSet) / total) * 100);
+}
 
 /** The most recent COMPLETE day's sessions from the baseline series (the trailing in-progress day is
  *  excluded so a partial "today" isn't misread as a data outage). null when there is no usable series. */
@@ -92,11 +115,15 @@ export function firstMetric(res: Ga4ReportResult | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export function monitorGa4(input: Ga4MonitorInput): Ga4MonitorResult {
+export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {}): Ga4MonitorResult {
+  const minRank = SEV_RANK[opts.minSeverity ?? 'medium'];
+  const consentDriftPp = opts.consentDriftPp ?? 12;
+  const consentMinShare = opts.consentMinSharePct ?? 15;
   const checks: Ga4MonitorCheck[] = [];
   const alerts: Ga4MonitorAlert[] = [];
+  // A finding becomes an alert (and gets Slacked) only at/above the configured minimum severity.
   const pushAlert = (a: Ga4MonitorAlert): void => {
-    if (isAlertWorthy(a.severity)) alerts.push(a);
+    if (SEV_RANK[a.severity] <= minRank) alerts.push(a);
   };
   // Map a pure-engine finding to an alert with a stable id derived from its kind + a key.
   const fromFinding = (kind: string, key: string, f: ScorecardFinding, title: string): Ga4MonitorAlert => ({
@@ -239,6 +266,32 @@ export function monitorGa4(input: Ga4MonitorInput): Ga4MonitorResult {
     }
   } else {
     checks.push({ id: 'data_quality', label: 'Attribution quality', status: 'skip', detail: 'No data-quality counts available this run.' });
+  }
+
+  // ── 5b · Consent-mode / attribution drift ──
+  // A consent-mode regression (a banner change, a Consent Mode v2 mis-tag, gtag update) shows up as a
+  // sudden RISE in unattributed sessions — traffic that lost its source when consent was denied/missing.
+  // We can't read the consent config via the Admin API, so we watch its footprint: the unattributed
+  // share vs the prior equal window. A material rise is flagged (distinct from the static high-share
+  // check above, which fires even when nothing changed).
+  const curShare = dq ? noSourceSharePct(dq) : null;
+  if (curShare != null && input.priorNoSourceShare != null) {
+    const drift = curShare - input.priorNoSourceShare;
+    if (curShare >= consentMinShare && drift >= consentDriftPp) {
+      pushAlert({
+        id: 'consent_drift',
+        kind: 'consent_drift',
+        severity: drift >= consentDriftPp * 2 ? 'high' : 'medium',
+        title: 'Possible consent-mode / attribution drift',
+        detail: `Unattributed sessions rose from ${input.priorNoSourceShare.toFixed(1)}% to ${curShare.toFixed(1)}% vs the prior period (+${drift.toFixed(1)} pts). A consent-banner or Consent Mode v2 change often causes this: denied/absent consent strips the source, inflating "(not set)"/Unassigned.`,
+        recommendation: 'Check for a recent CMP/consent-mode or gtag change; verify default+update consent signals fire in DebugView before trusting channel attribution.',
+      });
+      checks.push({ id: 'consent_drift', label: 'Consent / attribution drift', status: 'warn', detail: `Unattributed share ${input.priorNoSourceShare.toFixed(1)}% → ${curShare.toFixed(1)}% (+${drift.toFixed(1)} pts).` });
+    } else {
+      checks.push({ id: 'consent_drift', label: 'Consent / attribution drift', status: 'pass', detail: `Unattributed share stable (${curShare.toFixed(1)}% vs ${input.priorNoSourceShare.toFixed(1)}% prior).` });
+    }
+  } else {
+    checks.push({ id: 'consent_drift', label: 'Consent / attribution drift', status: 'skip', detail: 'Need current + prior unattributed share to detect drift.' });
   }
 
   // ── 6 · Ecommerce revenue integrity (duplicate / unlabelled transactions) ──

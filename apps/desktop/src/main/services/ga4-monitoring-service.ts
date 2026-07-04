@@ -5,14 +5,14 @@
 // against GA4; the only outbound write is the Slack webhook POST.
 
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
-import { monitorGa4, firstMetric, type Ga4MonitorInput } from '../google/ga4-monitor';
+import { monitorGa4, firstMetric, noSourceSharePct, type Ga4MonitorInput } from '../google/ga4-monitor';
 import { buildSlackPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
 import { withQuotaRetry } from '../google/quota-retry';
 import type { GoogleDataService } from '../google/data-service';
 import type { AccountView, Ga4MonitorConfig, Ga4MonitorRun, Ga4MonitorStatus } from '../../shared/ipc';
 
 const MIN_INTERVAL_MINUTES = 15; // GA4 realtime + report quota — never hammer the API
-const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, propertyId: null, propertyLabel: '', days: 28, slackEnabled: true };
+const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, propertyId: null, propertyLabel: '', days: 28, slackEnabled: true, alertMinSeverity: 'medium' };
 
 /** Per-account secret ref for the Slack webhook (the URL is stored encrypted in the OS keychain). */
 export const slackWebhookRef = (accountId: string): string => `ga4-slack-webhook:${accountId}`;
@@ -49,9 +49,17 @@ export async function gatherGa4MonitorInput(
   // Event deltas + transactions use the resolved data-quality window when available (matches the audit).
   const sd = dqCounts?.startDate ?? startDate;
   const ed = dqCounts?.endDate ?? endDate;
-  const [eventDeltas, transactions] = await Promise.all([
+  // Prior-window data-quality (for consent/attribution DRIFT) — only when the baseline gave us prior
+  // bounds. A separate report over the prior equal window; best-effort like the rest.
+  const priorDqP =
+    baseline?.priorStartDate && baseline?.priorEndDate
+      ? withQuotaRetry(() => data.getGa4DataQuality(property, { startDate: baseline.priorStartDate, endDate: baseline.priorEndDate })).catch(() => null)
+      : Promise.resolve(null);
+
+  const [eventDeltas, transactions, priorDq] = await Promise.all([
     withQuotaRetry(() => data.getGa4EventDeltas(property, sd, ed)).catch(() => null),
     ecom ? withQuotaRetry(() => data.getGa4Transactions(property, sd, ed)).catch(() => null) : Promise.resolve(null),
+    priorDqP,
   ]);
 
   return {
@@ -63,6 +71,7 @@ export async function gatherGa4MonitorInput(
     transactions,
     keyEventNames,
     hasEcommerce: ecom,
+    priorNoSourceShare: priorDq ? noSourceSharePct(priorDq) : null,
   };
 }
 
@@ -117,6 +126,7 @@ export class Ga4MonitoringService {
       propertyLabel: c?.propertyLabel ? String(c.propertyLabel) : '',
       days: Math.min(365, Math.max(1, Math.floor(Number(c?.days) || DEFAULT_CONFIG.days))),
       slackEnabled: c?.slackEnabled === undefined ? true : Boolean(c.slackEnabled),
+      alertMinSeverity: c?.alertMinSeverity === 'critical' || c?.alertMinSeverity === 'high' ? c.alertMinSeverity : 'medium',
     };
   }
 
@@ -199,7 +209,7 @@ export class Ga4MonitoringService {
     if (!active || !active.hasGoogleToken || !property) return null;
     try {
       const input = await gatherGa4MonitorInput(this.deps.data, property, this.config.days, () => this.now());
-      const result = monitorGa4(input);
+      const result = monitorGa4(input, { minSeverity: this.config.alertMinSeverity });
       const at = this.now();
       this.lastRunAt = at;
       this.lastError = null;
