@@ -2486,7 +2486,6 @@ function TagReviewPanel({
                     Skip blog pages ({blogCount})
                   </label>
                 )}
-                <button style={styles.linkBtn} onClick={() => setAllPages(() => true)}>Select all</button>
                 <button style={styles.linkBtn} onClick={() => setAllPages(() => false)}>Select none</button>
                 <button style={styles.linkBtn} onClick={() => setAllPages((_u, i) => i < 25)}>First 25</button>
                 <button style={styles.linkBtn} onClick={() => setAllPages((_u, i) => i < 50)}>First 50</button>
