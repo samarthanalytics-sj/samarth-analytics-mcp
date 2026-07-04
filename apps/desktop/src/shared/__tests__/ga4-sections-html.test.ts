@@ -84,6 +84,10 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     ],
     share: '4,500 sessions, 5.8% of all',
   },
+  insights: [
+    'Traffic peaked on Jun 15 at 1,800 sessions - 40% above the daily average.',
+    'Conversion rates are near 100% on the channels that carry most of your traffic - mark only true conversions.',
+  ],
   funnel: {
     steps: [
       { label: 'View item', users: '10,000', pctEntry: '100%', stepConv: '—' },
@@ -205,6 +209,14 @@ test('section 6 renders the device + market performance tables', () => {
 test('section 6 omits the device + market tables when no such data', () => {
   const h = ga4SectionsHtml(view({ devicePerformance: [], geoPerformance: [] }));
   assert.ok(!/Device performance/.test(h) && !/Market performance/.test(h), 'no empty tables');
+});
+
+test('section 6 renders the Key insights card, escaped, and omits it when empty', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/Key insights/.test(h), 'insights heading');
+  assert.ok(h.includes('Traffic peaked on Jun 15') && h.includes('near 100% on the channels that carry most of your traffic'), 'insight bullets rendered');
+  const h2 = ga4SectionsHtml(view({ insights: [] }));
+  assert.ok(!/Key insights/.test(h2), 'no insights card when there are none');
 });
 
 test('section 6 renders the AI-assistant traffic table with its share + undercount caveat', () => {

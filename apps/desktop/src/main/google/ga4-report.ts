@@ -12,6 +12,7 @@ import type { Ga4GrowthResult, Ga4GrowthFinding } from './ga4-growth';
 import type { Ga4Baseline } from './data-service';
 import { buildGa4Scorecard } from './ga4-scorecard';
 import { analyzeGa4Trend } from './ga4-trend';
+import { deriveGa4Insights } from './ga4-insights';
 import type { Ga4ExecSummaryView, Ga4VisualsView, Ga4SectionsView } from '../../shared/ipc';
 
 export interface Ga4ReportInput {
@@ -554,7 +555,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     footer: 'Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.',
   };
 
-  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), llmTraffic: llmTrafficView(baseline, s.currencyCode), funnel: funnelView(baseline), decisions, notVerified: { gate, items: nv }, scope };
+  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), llmTraffic: llmTrafficView(baseline, s.currencyCode), funnel: funnelView(baseline), insights: deriveGa4Insights(baseline, s.currencyCode), decisions, notVerified: { gate, items: nv }, scope };
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
@@ -735,6 +736,13 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     if (engLine) L.push(`- **Engagement:** ${engLine}`);
     if (input.retentionSummary) L.push(`- **Retention (cohorts):** ${input.retentionSummary}`);
     L.push('');
+    const insights = deriveGa4Insights(baseline, s.currencyCode);
+    if (insights.length) {
+      L.push('**Key insights**');
+      L.push('');
+      for (const ins of insights) L.push(`- ${ins}`);
+      L.push('');
+    }
     const cperf = channelPerfRows(baseline, s.currencyCode);
     if (cperf.length) {
       L.push('**Channel performance** (which channels convert and earn, not just their traffic share)');
