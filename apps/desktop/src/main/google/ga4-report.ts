@@ -36,12 +36,20 @@ interface AreaRow {
   statusKey: 'pass' | 'partial' | 'fail' | 'not_verified';
   evidence: string;
 }
+/** Verification state, orthogonal to severity. `confirmed` = deterministically measured this run;
+ *  `unconfirmed` = observed, but the conclusion leans on a metric the audit could not verify (e.g. a
+ *  growth read graded to its worst branch pending DebugView); `blocked` = the check itself could not
+ *  run, so nothing was measured (consent, per-event parameters, duplicate transactions). */
+export type FindingState = 'confirmed' | 'unconfirmed' | 'blocked';
+
 interface FindingRow {
   severity: string;
   category: string;
   area: string;
   message: string;
   recommendation?: string;
+  /** confirmed (default) | unconfirmed | blocked — see FindingState. */
+  state?: FindingState;
   // Optional structured fields (populated by the growth engine) for the expanded "What is wrong" block.
   evidence?: string;
   whyItMatters?: string;
@@ -261,25 +269,86 @@ function areaEvidence(area: string, s: Ga4PropertySnapshot, config: Ga4AuditRepo
   }
 }
 
-function decisionReadiness(s: Ga4PropertySnapshot): Array<{ q: string; status: string; note: string }> {
+/** A decision can only be "Answerable" when the wiring exists AND the figures it leans on are safe
+ *  to quote. `trust` carries the Data Trust Matrix verdicts for conversion counts and revenue; when a
+ *  decision depends on an unverified/do-not-quote metric it is capped at "Partial" (feature present,
+ *  but blocked by a trust gate) rather than claimed as answerable. Omitting `trust` treats both as
+ *  safe, so callers that don't compute the matrix are unchanged. */
+function decisionReadiness(
+  s: Ga4PropertySnapshot,
+  trust?: { convSafe: boolean; revSafe: boolean },
+): Array<{ q: string; status: string; note: string }> {
   const ads = (s.googleAdsLinks ?? 0) > 0;
   const signals = s.googleSignals === 'GOOGLE_SIGNALS_ENABLED';
   const ecom = hasEcommerce(s);
   const lead = hasKeyEvent(s, /lead|sign_up|contact|submit/i);
   const refund = hasKeyEvent(s, /refund|return/i);
+  const convSafe = trust?.convSafe ?? true;
+  const revSafe = trust?.revSafe ?? true;
+  // Event-level export (BigQuery) is what makes a true LTV computable; Google Signals gives a
+  // cross-device approximation. Mirror the conditional grading of the other rows instead of a
+  // hardcoded "Not answerable" (which stayed red even when BigQuery export was on).
+  const bq = (s.bigQueryLinks ?? []).some((l) => l.dailyExportEnabled || l.streamingExportEnabled);
+  const clvStatus = bq ? 'Answerable' : signals ? 'Partial' : 'Not answerable';
+  const clvNote = bq
+    ? 'BigQuery export enabled - compute true LTV from event-level data'
+    : signals
+      ? 'Google Signals on for cross-device stitching; enable BigQuery export or User-ID for true LTV'
+      : 'needs User-ID and/or server-side/BigQuery data';
   return [
-    { q: 'Which campaigns generate revenue?', status: ads ? 'Answerable' : 'Partial', note: ads ? 'Google Ads linked + conversions' : 'link Google Ads to attribute revenue to campaigns' },
-    { q: 'Abandonment by product/page?', status: ecom ? 'Answerable' : 'Not answerable', note: ecom ? 'ecommerce events present' : 'no ecommerce/funnel events' },
-    { q: 'CAC by channel', status: ads ? 'Answerable' : 'Partial', note: ads ? 'sessions + cost via Google Ads link' : 'needs ad cost (Google Ads link)' },
+    {
+      q: 'Which campaigns generate revenue?',
+      status: ads ? (revSafe ? 'Answerable' : 'Partial') : 'Partial',
+      note: !ads
+        ? 'link Google Ads to attribute revenue to campaigns'
+        : revSafe
+          ? 'Google Ads linked + conversions'
+          : 'Google Ads linked, but revenue is unverified - confirm conversion/revenue tracking before quoting',
+    },
+    {
+      q: 'Abandonment by product/page?',
+      status: ecom ? (convSafe ? 'Answerable' : 'Partial') : 'Not answerable',
+      note: !ecom
+        ? 'no ecommerce/funnel events'
+        : convSafe
+          ? 'ecommerce events present'
+          : 'ecommerce events present, but item-parameter coverage and funnel integrity are unverified',
+    },
+    {
+      q: 'CAC by channel',
+      status: ads ? (convSafe ? 'Answerable' : 'Partial') : 'Partial',
+      note: !ads
+        ? 'needs ad cost (Google Ads link)'
+        : convSafe
+          ? 'sessions + cost via Google Ads link'
+          : 'Ads cost available, but CAC depends on trustworthy conversions - conversion tracking is unverified',
+    },
     { q: 'Lead quality', status: lead ? 'Partial' : 'Not answerable', note: lead ? 'lead events exist; CRM import needed for true quality' : 'no lead/sign-up key events; no CRM import' },
-    { q: 'Customer lifetime value', status: 'Not answerable', note: 'needs User-ID and/or server-side/BigQuery data' },
-    { q: 'Refund/return rate', status: refund ? 'Answerable' : 'Not answerable', note: refund ? 'refund events present' : 'no refund/return events' },
-    { q: 'Repeat/churn within 90 days', status: signals ? 'Answerable' : 'Partial', note: signals ? 'Google Signals → cross-device repeat rate' : 'enable Google Signals or User-ID for reliable repeat rate' },
+    { q: 'Customer lifetime value', status: clvStatus, note: clvNote },
+    {
+      q: 'Refund/return rate',
+      status: refund ? (convSafe ? 'Answerable' : 'Partial') : 'Not answerable',
+      note: !refund
+        ? 'no refund/return events'
+        : convSafe
+          ? 'refund events present'
+          : 'refund events present, but conversion tracking is unverified',
+    },
+    {
+      q: 'Repeat/churn within 90 days',
+      status: signals ? 'Partial' : 'Not answerable',
+      note: signals
+        ? 'Google Signals gives cross-device repeat rate; User-ID or BigQuery needed for robust retention/identity'
+        : 'enable Google Signals or User-ID for reliable repeat rate',
+    },
   ];
 }
 
 const confidenceFor = (k: AreaRow['statusKey']): string =>
   k === 'not_verified' ? 'Guessing' : k === 'partial' ? 'Likely' : 'Certain';
+/** Short label for a finding's verification state (Section-4 "State" column). */
+const stateLabel = (st: FindingState | undefined): string =>
+  st === 'unconfirmed' ? 'Observed' : st === 'blocked' ? 'Blocked' : 'Confirmed';
 const trendPctText = (p: number | null): string => (p === null ? 'n/a' : `${p >= 0 ? '+' : ''}${p}%`);
 const firstSentence = (t: string): string => {
   const m = /^(.*?[.!?])(\s|$)/.exec(t.trim());
@@ -331,20 +400,37 @@ const growthReadLine = (gf: { category: string; severity: string } | undefined):
 // Combined findings (config + data quality + growth) — the single source of truth for the report.
 function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, growth: Ga4GrowthResult | null): FindingRow[] {
   return [
-    ...config.findings.map((f) => ({ severity: f.severity, category: f.category, area: 'Config', message: f.message, recommendation: f.recommendation })),
-    ...dq.findings.map((f) => ({ severity: f.severity, category: f.category, area: 'Data quality', message: f.message, recommendation: f.recommendation })),
-    ...(growth?.findings ?? []).map((f: Ga4GrowthFinding) => ({
+    ...config.findings.map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Config', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
+    ...dq.findings.map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Data quality', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
+    ...(growth?.findings ?? []).map((f: Ga4GrowthFinding): FindingRow => ({
       severity: f.severity,
       category: f.category,
       area: 'Growth',
       message: f.message,
       recommendation: f.recommendation,
+      // Growth reads are graded to their worst branch pending DebugView, so they are OBSERVED but not
+      // yet confirmed; a finding that carries an "if unconfirmed" branch is inherently unconfirmed.
+      state: f.ifUnconfirmed ? 'unconfirmed' : 'confirmed',
       evidence: f.evidence,
       whyItMatters: f.whyItMatters,
       ifUnconfirmed: f.ifUnconfirmed,
       businessRisk: f.businessRisk,
     })),
   ].sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9));
+}
+
+/** First-class "Blocked by verification" items for Section 4 — checks the audit could not run this
+ *  window, so any related conclusion is unmeasured (not a clean pass). Kept SEPARATE from
+ *  buildAllFindings so they never perturb the severity counts or the rule-based scorecard; they are
+ *  the actionable half of the Section-8 honesty layer, surfaced up where a reader will see them. */
+function verificationBlocks(config: Ga4AuditReport, ecom: boolean): Array<{ area: string; message: string; recommendation: string }> {
+  const out = [
+    { area: 'Measurement', message: 'Per-event parameter coverage was not computed, so it is unknown whether events carry the parameters reports and funnels rely on.', recommendation: 'Run a per-event Data API pass (or DebugView) to confirm parameter coverage.' },
+    { area: 'Consent', message: 'Consent Mode v2 signals were not assessed, so consent-gated loss inflating "(not set)"/Unassigned cannot be ruled out.', recommendation: 'Verify Consent Mode in GA4 DebugView / tag setup.' },
+  ];
+  if (ecom) out.push({ area: 'Ecommerce', message: 'Ecommerce item parameters and duplicate transactions were not verified, so revenue and abandonment figures cannot be confirmed.', recommendation: 'Audit item-scoped parameters and check for duplicate transaction_ids.' });
+  for (const a of config.areas.filter((x) => x.status === 'not_verified')) out.push({ area: a.area, message: `${a.area} config sub-resource could not be read, so the ${a.area} checks did not run.`, recommendation: `Re-run with access to the ${a.area} configuration.` });
+  return out;
 }
 
 // Area-coverage rows = config areas + the report-level Attribution/Audiences/Ecommerce/Consent.
@@ -468,9 +554,9 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
   // "confirm before quoting" instead of asserting untrustworthiness (matches the trust matrix).
   const quoteNote =
     keV === 'do_not_quote' || revV === 'do_not_quote'
-      ? `* Not safe to quote until conversion tracking is confirmed${sesSafe ? '; sessions are safe to quote' : ''}.`
+      ? `* Directional only — the key-event/revenue movement is not safe to quote to stakeholders until conversion tracking is confirmed${sesSafe ? '; sessions are safe to quote' : ''}.`
       : keV === 'unverified' || revV === 'unverified'
-        ? '* Could not be fully verified — confirm before quoting (see the data trust matrix).'
+        ? '* Directional only — key events/revenue could not be fully verified; confirm before quoting to stakeholders (see the data trust matrix).'
         : null;
 
   const topFinding = top
@@ -509,7 +595,8 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
           keSafe, revSafe, sesSafe, quoteNote, read: 'Not enough prior traffic to assess growth for this window.', trendPattern,
         };
 
-  const findings = allFindings.map((f) => ({ severity: f.severity, area: f.area, message: f.message, businessRisk: riskFor(f), recommendation: f.recommendation ?? '—' }));
+  const findings = allFindings.map((f) => ({ severity: f.severity, area: f.area, message: f.message, businessRisk: riskFor(f), recommendation: f.recommendation ?? '—', state: f.state ?? 'confirmed' }));
+  const blocked = verificationBlocks(config, ecom);
 
   // ── Section 5 · Area status ──
   const areas = areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey, confidence: confidenceFor(a.statusKey), evidence: a.evidence }));
@@ -530,7 +617,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     : null;
 
   // ── Section 7 · Decision readiness ──
-  const decisions = decisionReadiness(s);
+  const decisions = decisionReadiness(s, { convSafe: keSafe, revSafe });
 
   // ── Section 8 · Not verified ──
   const nv: Array<{ item: string; blocks: string }> = [
@@ -569,7 +656,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     footer: 'Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.',
   };
 
-  return { topFinding, noIssueNote, outcomes, findings, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), llmTraffic: llmTrafficView(baseline, s.currencyCode), funnel: funnelView(baseline), insights: deriveGa4Insights(baseline, s.currencyCode), decisions, notVerified: { gate, items: nv }, scope };
+  return { topFinding, noIssueNote, outcomes, findings, blocked, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), llmTraffic: llmTrafficView(baseline, s.currencyCode), funnel: funnelView(baseline), insights: deriveGa4Insights(baseline, s.currencyCode, { convSafe: keSafe, revSafe }), perfProvisional: !keSafe || !revSafe, decisions, notVerified: { gate, items: nv }, scope };
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
@@ -630,6 +717,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push(`**Audit window:** ${auditWindowLabel(dq)}  `);
   L.push(`**Reliability score:** ${score.composite ?? '—'}/100 (Grade ${score.grade})  `);
   L.push(`**Reporting reliability:** ${score.reliabilityPct}% — ${score.reliabilityConfidence} (how much of this property’s data is safe to quote downstream today)  `);
+  L.push(`*These measure different things: the score rates how the property is configured, while reporting reliability rates how much of its data is safe to quote. A well-configured property can still have low reporting reliability when conversion, revenue, or consent checks are unverified.*  `);
   L.push(`**Overall verdict:** ${overallVerdict(allFindings, nNotVerified, score.reliabilityPct, Boolean(growth?.assessed))}  `);
   L.push(`**Biggest risk:** ${top ? firstSentence(top.whyItMatters ?? top.message) : 'No high-severity risk; the ceiling on trust is coverage.'}  `);
   L.push(`**Highest-impact fix:** ${top ? firstSentence(top.recommendation ?? 'Confirm the unverified areas.') : 'Confirm the unverified areas (consent, ecommerce parameters) before sign-off.'}  `);
@@ -719,9 +807,18 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     const actNow = actionable.length;
     L.push(`${allFindings.length} item(s) — ${actNow} to act on, ${allFindings.length - actNow} advisory. Highest severity first.`);
     L.push('');
-    L.push('| Severity | Area | Issue | Business risk | Fix |');
-    L.push('| --- | --- | --- | --- | --- |');
-    for (const f of allFindings) L.push(`| ${f.severity.toUpperCase()} | ${f.area} | ${cell(f.message)} | ${cell(riskFor(f))} | ${cell(f.recommendation ?? '—')} |`);
+    L.push('| Severity | Area | Issue | Business risk | Fix | State |');
+    L.push('| --- | --- | --- | --- | --- | --- |');
+    for (const f of allFindings) L.push(`| ${f.severity.toUpperCase()} | ${f.area} | ${cell(f.message)} | ${cell(riskFor(f))} | ${cell(f.recommendation ?? '—')} | ${stateLabel(f.state)} |`);
+  }
+  // "Blocked by verification": checks that could not run this window, promoted here as first-class
+  // items (they also appear in Section 8) so a reader sees the unmeasured gaps alongside the findings.
+  const blocked = verificationBlocks(config, ecom);
+  if (blocked.length) {
+    L.push('');
+    L.push('**Blocked by verification** (checks that could not run this window, so any related conclusion is unconfirmed - not a clean pass):');
+    L.push('');
+    for (const b of blocked) L.push(`- **${b.area}:** ${cell(b.message)} _Fix:_ ${cell(b.recommendation)}`);
   }
   L.push('');
 
@@ -750,15 +847,32 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     if (engLine) L.push(`- **Engagement:** ${engLine}`);
     if (input.retentionSummary) L.push(`- **Retention (cohorts):** ${input.retentionSummary}`);
     L.push('');
-    const insights = deriveGa4Insights(baseline, s.currencyCode);
+    const convSafe = safeOf('Conversion counts');
+    const revSafe = safeOf('Revenue / AOV / ROAS');
+    const insights = deriveGa4Insights(baseline, s.currencyCode, { convSafe, revSafe });
     if (insights.length) {
       L.push('**Key insights**');
       L.push('');
       for (const ins of insights) L.push(`- ${ins}`);
       L.push('');
     }
+    // The performance tables below show conversion rate and revenue per row. When the Data Trust
+    // Matrix hasn't confirmed those metrics, flag the columns as provisional so a reader doesn't act
+    // on "converts best" style comparisons as if they were verified.
+    const perfNote =
+      !convSafe && !revSafe
+        ? '_Conversion-rate and revenue columns below are provisional - both are unverified (see the Data Trust Matrix)._'
+        : !convSafe
+          ? '_Conversion-rate columns below are provisional - conversion tracking is unverified (see the Data Trust Matrix)._'
+          : !revSafe
+            ? '_Revenue columns below are provisional - revenue is unverified (see the Data Trust Matrix)._'
+            : null;
     const cperf = channelPerfRows(baseline, s.currencyCode);
     if (cperf.length) {
+      if (perfNote) {
+        L.push(perfNote);
+        L.push('');
+      }
       L.push('**Channel performance** (which channels convert and earn, not just their traffic share)');
       L.push('');
       L.push('| Channel | Sessions | Conv. rate | Revenue | Engagement |');
@@ -847,7 +961,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push('');
   L.push('| Business question | Status | Missing input |');
   L.push('| --- | --- | --- |');
-  for (const r of decisionReadiness(s)) L.push(`| ${cell(r.q)} | ${r.status} | ${cell(r.note)} |`);
+  for (const r of decisionReadiness(s, { convSafe: safeOf('Conversion counts'), revSafe: safeOf('Revenue / AOV / ROAS') })) L.push(`| ${cell(r.q)} | ${r.status} | ${cell(r.note)} |`);
   L.push('');
 
   // ── 8 · Not verified (honesty layer) ──
