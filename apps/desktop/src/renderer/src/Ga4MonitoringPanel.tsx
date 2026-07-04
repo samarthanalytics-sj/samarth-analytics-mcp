@@ -13,7 +13,13 @@ const HEALTH: Record<string, { color: string; label: string; icon: string }> = {
   warning: { color: 'var(--c-amber, #b8860b)', label: 'Warning', icon: '🟠' },
   healthy: { color: 'var(--c-green)', label: 'Healthy', icon: '🟢' },
 };
-const CHECK_ICON: Record<string, string> = { pass: '✅', warn: '🟠', fail: '🔴', skip: '⚪' };
+// Per-status pill for the checks table (a coloured chip reads better than an emoji list).
+const CHECK_PILL: Record<string, { label: string; color: string; bg: string }> = {
+  pass: { label: 'Pass', color: 'var(--c-green)', bg: 'var(--c-green-bg, rgba(34,197,94,.12))' },
+  warn: { label: 'Warning', color: 'var(--c-amber, #b8860b)', bg: 'var(--c-amber-bg, rgba(245,158,11,.14))' },
+  fail: { label: 'Issue', color: 'var(--c-red)', bg: 'var(--c-red-bg, rgba(239,68,68,.12))' },
+  skip: { label: 'Not run', color: 'var(--text-muted)', bg: 'var(--surface-3)' },
+};
 
 const box: React.CSSProperties = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
 const label: React.CSSProperties = { fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 };
@@ -159,7 +165,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
           <span style={{ fontWeight: 600 }}>
             Slack alerts{' '}
             {status?.hasWebhook
-              ? <span style={{ color: 'var(--c-green)', fontSize: 12 }}>· connected{status?.slackLabel ? ` to ${status.slackLabel}` : ''}</span>
+              ? <span style={{ color: 'var(--c-green)', fontSize: 12 }}>· connected</span>
               : <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>· not configured</span>}
           </span>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
@@ -167,28 +173,41 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
             Send new issues to Slack
           </label>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <input style={{ ...input, flex: 1, minWidth: 260 }} type="password" placeholder="https://hooks.slack.com/services/…" value={webhookInput} onChange={(e) => setWebhookInput(e.target.value)} />
-          <button style={btn} onClick={() => void saveWebhook()} disabled={busy || (!webhookInput.trim() && !labelDirty)}>Save webhook</button>
-          {status?.hasWebhook && <button style={btn} onClick={() => void sendTest()} disabled={busy} title="Post a confirmation message so you can see which channel receives alerts">Send test</button>}
-          {status?.hasWebhook && <button style={btn} onClick={() => void clearWebhook()} disabled={busy}>Remove</button>}
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 8 }}>
-          <span style={label}>Channel &amp; workspace (label)</span>
-          <input style={{ ...input, maxWidth: 420 }} type="text" placeholder="#ga4-alerts · Acme workspace" value={labelInput} onChange={(e) => { setLabelInput(e.target.value); setLabelDirty(true); }} />
-          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>Slack doesn’t expose the channel or workspace from a webhook URL, so note them here — it’s shown as the connection status. Use “Send test” to confirm where alerts actually land.</span>
-        </div>
-        <details style={{ marginTop: 8 }}>
-          <summary style={{ fontSize: 12, color: 'var(--c-blue)', cursor: 'pointer', userSelect: 'none' }}>How do I get a webhook URL? (choose the channel to alert)</summary>
-          <ol style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, margin: '8px 0 0', paddingLeft: 18 }}>
-            <li>Open <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer" style={{ color: 'var(--c-blue)' }}>api.slack.com/apps</a> → <b>Create New App</b> → <b>From scratch</b> (or pick an existing app), then choose your workspace.</li>
-            <li>In the app’s left menu open <b>Incoming Webhooks</b> and toggle <b>Activate Incoming Webhooks</b> to <b>On</b>.</li>
-            <li>Click <b>Add New Webhook to Workspace</b>, pick the <b>channel</b> the alerts should post to, then <b>Allow</b>. (The channel is baked into the URL — that’s how you pick where alerts land.)</li>
-            <li>Copy the generated <b>Webhook URL</b> — it starts with <code style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>https://hooks.slack.com/services/</code>.</li>
-            <li>Paste it in the box above and click <b>Save webhook</b>.</li>
-          </ol>
-        </details>
-        <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 6 }}>The URL is stored encrypted in your OS keychain (never synced or logged). To alert a different channel, create another webhook for that channel and paste it here. An ongoing issue is posted once, not on every check.</div>
+        {status?.hasWebhook ? (
+          /* Connected: one channel only — no add/replace form, just verify or disconnect. */
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 999, padding: '5px 14px', fontSize: 13 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--c-green)', display: 'inline-block' }} />
+              {status.slackLabel || 'Slack channel connected'}
+            </span>
+            <button style={btn} onClick={() => void sendTest()} disabled={busy} title="Post a confirmation message so you can see which channel receives alerts">Send test</button>
+            <button style={btn} onClick={() => void clearWebhook()} disabled={busy}>Remove</button>
+            <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Alerts go to this one channel. To switch, remove it and connect the new channel’s webhook.</span>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <input style={{ ...input, flex: 1, minWidth: 260 }} type="password" placeholder="https://hooks.slack.com/services/…" value={webhookInput} onChange={(e) => setWebhookInput(e.target.value)} />
+              <button style={btn} onClick={() => void saveWebhook()} disabled={busy || !webhookInput.trim()}>Save webhook</button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 8 }}>
+              <span style={label}>Channel &amp; workspace (label)</span>
+              <input style={{ ...input, maxWidth: 420 }} type="text" placeholder="#ga4-alerts · Acme workspace" value={labelInput} onChange={(e) => { setLabelInput(e.target.value); setLabelDirty(true); }} />
+              <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>Slack doesn’t expose the channel or workspace from a webhook URL, so note them here — it’s shown as the connection status.</span>
+            </div>
+            <details style={{ marginTop: 8 }}>
+              <summary style={{ fontSize: 12, color: 'var(--c-blue)', cursor: 'pointer', userSelect: 'none' }}>How do I get a webhook URL? (choose the channel to alert)</summary>
+              <ol style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, margin: '8px 0 0', paddingLeft: 18 }}>
+                <li>Open <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer" style={{ color: 'var(--c-blue)' }}>api.slack.com/apps</a> → <b>Create New App</b> → <b>From scratch</b> (or pick an existing app), then choose your workspace.</li>
+                <li>In the app’s left menu open <b>Incoming Webhooks</b> and toggle <b>Activate Incoming Webhooks</b> to <b>On</b>.</li>
+                <li>Click <b>Add New Webhook to Workspace</b>, pick the <b>channel</b> the alerts should post to, then <b>Allow</b>. (The channel is baked into the URL — that’s how you pick where alerts land.)</li>
+                <li>Copy the generated <b>Webhook URL</b> — it starts with <code style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>https://hooks.slack.com/services/</code>.</li>
+                <li>Paste it in the box above and click <b>Save webhook</b>.</li>
+              </ol>
+            </details>
+            <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 6 }}>The URL is stored encrypted in your OS keychain (never synced or logged). An ongoing issue is posted once, not on every check.</div>
+          </>
+        )}
       </div>
 
       {note && <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>{note}</div>}
@@ -200,45 +219,73 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
         {status?.lastError && <span style={{ color: 'var(--c-red)' }}>Last error: {status.lastError}</span>}
       </div>
 
-      {lastRun && health && (
-        <div style={box}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-            <span style={{ fontSize: 18 }}>{health.icon}</span>
-            <span style={{ fontWeight: 700, color: health.color, fontSize: 16 }}>{health.label}</span>
-            <span style={{ color: 'var(--text-dim)' }}>{lastRun.summary}</span>
-          </div>
+      {lastRun && health && (() => {
+        const counts = { pass: 0, warn: 0, fail: 0, skip: 0 } as Record<string, number>;
+        for (const c of lastRun.checks) counts[c.status] = (counts[c.status] ?? 0) + 1;
+        return (
+          <div style={{ ...box, padding: 0, overflow: 'hidden' }}>
+            {/* Header strip: health + summary on the left, per-status counts + meta on the right. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontWeight: 700, color: health.color, fontSize: 15 }}>
+                <span style={{ fontSize: 15 }}>{health.icon}</span>{health.label}
+              </span>
+              <span style={{ color: 'var(--text-dim)', fontSize: 13 }}>{lastRun.summary}</span>
+              <span style={{ flex: 1 }} />
+              <span style={{ display: 'inline-flex', gap: 6 }}>
+                {(['fail', 'warn', 'pass', 'skip'] as const).map((k) =>
+                  counts[k] > 0 ? (
+                    <span key={k} style={{ fontSize: 11, fontWeight: 600, color: CHECK_PILL[k].color, background: CHECK_PILL[k].bg, borderRadius: 999, padding: '2px 9px' }}>
+                      {counts[k]} {CHECK_PILL[k].label.toLowerCase()}
+                    </span>
+                  ) : null
+                )}
+              </span>
+              <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{lastRun.propertyLabel} · {fmtTime(lastRun.at)}</span>
+            </div>
 
-          {lastRun.alerts.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '10px 0' }}>
-              {lastRun.alerts.map((a) => (
-                <div key={a.id} style={{ borderLeft: `3px solid ${SEV_COLOR[a.severity] ?? 'var(--border)'}`, background: 'var(--surface)', borderRadius: 6, padding: '8px 12px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontWeight: 600, color: SEV_COLOR[a.severity] ?? 'var(--text)', fontSize: 11, textTransform: 'uppercase' }}>{a.severity}</span>
-                    <span style={{ fontWeight: 600 }}>{a.title}</span>
-                    {newIds.has(a.id) && <span style={{ fontSize: 10, background: 'var(--c-blue-bg, rgba(59,130,246,.15))', color: 'var(--c-blue)', borderRadius: 999, padding: '1px 7px', fontWeight: 700 }}>NEW</span>}
+            {lastRun.alerts.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 16px 4px' }}>
+                {lastRun.alerts.map((a) => (
+                  <div key={a.id} style={{ borderLeft: `3px solid ${SEV_COLOR[a.severity] ?? 'var(--border)'}`, background: 'var(--surface)', borderRadius: 6, padding: '8px 12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontWeight: 600, color: SEV_COLOR[a.severity] ?? 'var(--text)', fontSize: 11, textTransform: 'uppercase' }}>{a.severity}</span>
+                      <span style={{ fontWeight: 600 }}>{a.title}</span>
+                      {newIds.has(a.id) && <span style={{ fontSize: 10, background: 'var(--c-blue-bg, rgba(59,130,246,.15))', color: 'var(--c-blue)', borderRadius: 999, padding: '1px 7px', fontWeight: 700 }}>NEW</span>}
+                    </div>
+                    <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginTop: 3, lineHeight: 1.45 }}>{a.detail}</div>
+                    {a.recommendation && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}><b>Fix:</b> {a.recommendation}</div>}
                   </div>
-                  <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginTop: 3, lineHeight: 1.45 }}>{a.detail}</div>
-                  {a.recommendation && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}><b>Fix:</b> {a.recommendation}</div>}
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
 
-          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 4 }}>
-            <div style={{ ...label, marginBottom: 4 }}>Checks</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              {lastRun.checks.map((c) => (
-                <div key={c.id} style={{ display: 'flex', gap: 8, fontSize: 12.5, alignItems: 'baseline' }}>
-                  <span>{CHECK_ICON[c.status] ?? '•'}</span>
-                  <span style={{ fontWeight: 600, minWidth: 150 }}>{c.label}</span>
-                  <span style={{ color: 'var(--text-muted)' }}>{c.detail}</span>
-                </div>
-              ))}
-            </div>
+            {/* Checks table: status pill | check | what was found. */}
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, margin: '8px 0 0' }}>
+              <thead>
+                <tr>
+                  {['Status', 'Check', 'What we found'].map((h) => (
+                    <th key={h} style={{ textAlign: 'left', padding: '6px 16px', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', borderBottom: '1px solid var(--border)', fontWeight: 600 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {lastRun.checks.map((c, i) => {
+                  const p = CHECK_PILL[c.status] ?? CHECK_PILL.skip;
+                  return (
+                    <tr key={c.id}>
+                      <td style={{ padding: '7px 16px', borderBottom: i === lastRun.checks.length - 1 ? 'none' : '1px solid var(--border)', whiteSpace: 'nowrap', verticalAlign: 'top', width: 90 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: p.color, background: p.bg, borderRadius: 999, padding: '2px 10px' }}>{p.label}</span>
+                      </td>
+                      <td style={{ padding: '7px 16px', borderBottom: i === lastRun.checks.length - 1 ? 'none' : '1px solid var(--border)', fontWeight: 600, whiteSpace: 'nowrap', verticalAlign: 'top' }}>{c.label}</td>
+                      <td style={{ padding: '7px 16px', borderBottom: i === lastRun.checks.length - 1 ? 'none' : '1px solid var(--border)', color: 'var(--text-muted)', lineHeight: 1.5 }}>{c.detail}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-          <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 8 }}>{lastRun.propertyLabel} · checked {fmtTime(lastRun.at)}</div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
