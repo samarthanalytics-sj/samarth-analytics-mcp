@@ -152,7 +152,17 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
           <button style={btn} onClick={() => void saveWebhook()} disabled={busy || !webhookInput.trim()}>Save webhook</button>
           {status?.hasWebhook && <button style={btn} onClick={() => void clearWebhook()} disabled={busy}>Remove</button>}
         </div>
-        <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 6 }}>Create an Incoming Webhook in your Slack workspace; the URL is stored encrypted in your OS keychain. An ongoing issue is posted once, not on every check.</div>
+        <details style={{ marginTop: 8 }}>
+          <summary style={{ fontSize: 12, color: 'var(--c-blue)', cursor: 'pointer', userSelect: 'none' }}>How do I get a webhook URL? (choose the channel to alert)</summary>
+          <ol style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, margin: '8px 0 0', paddingLeft: 18 }}>
+            <li>Open <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer" style={{ color: 'var(--c-blue)' }}>api.slack.com/apps</a> → <b>Create New App</b> → <b>From scratch</b> (or pick an existing app), then choose your workspace.</li>
+            <li>In the app’s left menu open <b>Incoming Webhooks</b> and toggle <b>Activate Incoming Webhooks</b> to <b>On</b>.</li>
+            <li>Click <b>Add New Webhook to Workspace</b>, pick the <b>channel</b> the alerts should post to, then <b>Allow</b>. (The channel is baked into the URL — that’s how you pick where alerts land.)</li>
+            <li>Copy the generated <b>Webhook URL</b> — it starts with <code style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>https://hooks.slack.com/services/</code>.</li>
+            <li>Paste it in the box above and click <b>Save webhook</b>.</li>
+          </ol>
+        </details>
+        <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 6 }}>The URL is stored encrypted in your OS keychain (never synced or logged). To alert a different channel, create another webhook for that channel and paste it here. An ongoing issue is posted once, not on every check.</div>
       </div>
 
       {note && <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>{note}</div>}
