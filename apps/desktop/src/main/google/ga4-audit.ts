@@ -116,8 +116,12 @@ function retentionLabel(e: string): string {
 /** Lowercase a SCREAMING_SNAKE enum into readable words. */
 const prettyEnum = (e: string): string => (e || '').toLowerCase().replace(/_/g, ' ').trim();
 
-export function auditGa4(s: Ga4PropertySnapshot): Ga4AuditReport {
-  const findings: Ga4Finding[] = [];
+// `deadDimensionFindings` are the (window-dependent) dead-custom-dimension advisories computed by the
+// pure ga4-dead-dimensions engine from a live usage query in the IPC. They are seeded here so the
+// 'customdef' area status, the summary tallies, and the finding count all stay consistent — the config
+// audit remains a pure function of its inputs.
+export function auditGa4(s: Ga4PropertySnapshot, deadDimensionFindings: Ga4Finding[] = []): Ga4AuditReport {
+  const findings: Ga4Finding[] = [...deadDimensionFindings];
 
   if (s.dataStreams.length === 0) {
     findings.push({
