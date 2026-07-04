@@ -1,3 +1,9 @@
+## [1.168.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.168.0...v1.168.1) (2026-07-04)
+
+### Bug Fixes
+
+* **desktop:** don't fail GA4 report export when the file is open (EBUSY) ([60bf9b2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/60bf9b2931b7e151e2710e111423b384d3d66c99))
+
 ## [1.168.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.167.0...v1.168.0) (2026-07-04)
 
 ### Features
