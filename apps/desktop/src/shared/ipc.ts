@@ -263,6 +263,14 @@ export interface Ga4SectionsView {
     sessionsPct: number | null;
     keyEventsPct: number | null;
     revenuePct: number | null;
+    /** Formatted from→to counts for each bar's data-point label (prior period → this period); null when
+     *  growth wasn't assessed. */
+    sessionsFrom: string | null;
+    sessionsTo: string | null;
+    keyEventsFrom: string | null;
+    keyEventsTo: string | null;
+    revenueFrom: string | null;
+    revenueTo: string | null;
     keSafe: boolean;
     revSafe: boolean;
     sesSafe: boolean;

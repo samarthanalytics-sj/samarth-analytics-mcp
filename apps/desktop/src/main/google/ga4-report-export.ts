@@ -96,17 +96,21 @@ export function markdownToHtml(md: string): string {
 }
 
 const REPORT_CSS = `
-  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #1a1a1a; max-width: 860px; margin: 24px auto; padding: 0 24px; line-height: 1.5; font-size: 13px; }
-  h1 { font-size: 22px; border-bottom: 2px solid #2563eb; padding-bottom: 6px; }
-  h2 { font-size: 16px; margin-top: 22px; border-bottom: 1px solid #dddddd; padding-bottom: 3px; }
-  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 12px; }
-  th, td { border: 1px solid #cccccc; padding: 5px 8px; text-align: left; vertical-align: top; }
-  th { background: #f0f3f8; }
-  code { background: #f2f2f2; padding: 1px 4px; border-radius: 3px; font-family: Consolas, "Courier New", monospace; font-size: 12px; }
-  pre { background: #f6f8fa; padding: 10px; border-radius: 6px; overflow-x: auto; font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.35; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #1a1a1a; max-width: 880px; margin: 28px auto; padding: 0 28px; line-height: 1.55; font-size: 14px; }
+  h1 { font-size: 26px; font-weight: 700; border-bottom: 2px solid #2563eb; padding-bottom: 7px; margin-bottom: 12px; }
+  h2 { font-size: 20px; font-weight: 700; margin-top: 26px; border-bottom: 1px solid #dddddd; padding-bottom: 4px; }
+  h3 { font-size: 16px; font-weight: 700; margin-top: 18px; }
+  h1, h2, h3 { page-break-after: avoid; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13px; }
+  th, td { border: 1px solid #d0d5dd; padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef2f8; font-weight: 700; }
+  tr, li { page-break-inside: avoid; }
+  code { background: #f2f2f2; padding: 1px 4px; border-radius: 3px; font-family: Consolas, "Courier New", monospace; font-size: 12.5px; }
+  pre { background: #f6f8fa; padding: 10px; border-radius: 6px; overflow-x: auto; font-family: Consolas, "Courier New", monospace; font-size: 12.5px; line-height: 1.4; page-break-inside: avoid; }
   pre code { background: none; padding: 0; }
-  ul { margin: 6px 0; padding-left: 22px; }
-  p { margin: 6px 0; }
+  ul { margin: 7px 0; padding-left: 22px; }
+  li { margin: 3px 0; }
+  p { margin: 7px 0; }
 `;
 
 /** Wrap the report in a full styled HTML document. `execHtml` (the designed Executive Summary) is

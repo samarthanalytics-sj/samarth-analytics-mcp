@@ -32,6 +32,9 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     sessionsPct: 276,
     keyEventsPct: 112,
     revenuePct: 69,
+    sessionsFrom: '8,904', sessionsTo: '33,453',
+    keyEventsFrom: '500', keyEventsTo: '1,060',
+    revenueFrom: 'INR 100,000', revenueTo: 'INR 169,000',
     keSafe: false,
     revSafe: false,
     sesSafe: true,
@@ -115,11 +118,19 @@ test('section 2 renders the top finding as a severity-coloured card with its fie
   assert.ok(h.includes('Evidence:') && h.includes('Why it matters:') && h.includes('Fix:'), 'expanded fields');
 });
 
-test('section 3 renders growth bars, the Read line, and the not-safe-to-quote caveat', () => {
+test('section 2 drops the Evidence row when it merely repeats the message', () => {
+  const dup = 'Sessions fell -49% vs the prior period.';
+  const h = ga4SectionsHtml(view({ topFinding: { ...view().topFinding!, message: dup, evidence: dup } }));
+  assert.ok(!/Evidence:/.test(h), 'no duplicate Evidence row when evidence === message');
+  assert.ok(h.includes(dup), 'the message itself is still shown');
+});
+
+test('section 3 growth bars show the real from→to data points alongside the percentages', () => {
   const h = ga4SectionsHtml(view());
   assert.ok(h.includes('Outcomes vs traffic'));
   assert.ok(h.includes('Sessions') && h.includes('Key events') && h.includes('Revenue'), 'the three growth bars');
-  assert.ok(/\+276%/.test(h) && /\+112%/.test(h), 'growth values shown');
+  assert.ok(/\+276%/.test(h) && /\+112%/.test(h), 'growth percentages shown');
+  assert.ok(h.includes('8,904 → 33,453') && h.includes('INR 100,000 → INR 169,000'), 'from→to data points on the bars');
   assert.ok(/Read:/.test(h) && /Not safe to quote/i.test(h), 'read line + caveat (key events/revenue unsafe)');
   assert.ok(h.includes('Trend pattern:'), 'trend pattern line');
 });

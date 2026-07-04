@@ -45,34 +45,38 @@ const decisionPill = (status: string): string => {
   const bg = ok ? v('--c-green-bg', '#f0fdf4') : 'rgba(148,163,184,.14)';
   return `<span style="display:inline-block;white-space:nowrap;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:${bg};color:${c}">${esc(status)}</span>`;
 };
-const TH = `style="text-align:left;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:${FAINT};padding:6px 10px;border-bottom:2px solid ${BORDER}"`;
-const THR = `style="text-align:right;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:${FAINT};padding:6px 10px;border-bottom:2px solid ${BORDER}"`;
-const TD = `style="padding:7px 10px;border-bottom:1px solid ${BORDER};font-size:12.5px;color:${TEXT};vertical-align:top"`;
-const TDR = `style="padding:7px 10px;border-bottom:1px solid ${BORDER};font-size:12.5px;color:${TEXT};vertical-align:top;text-align:right;font-variant-numeric:tabular-nums"`;
+const THBG = 'rgba(148,163,184,.10)';
+const TH = `style="text-align:left;font-size:11.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:${FAINT};padding:8px 10px;background:${THBG};border-bottom:2px solid ${BORDER}"`;
+const THR = `style="text-align:right;font-size:11.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:${FAINT};padding:8px 10px;background:${THBG};border-bottom:2px solid ${BORDER}"`;
+const TD = `style="padding:8px 10px;border-bottom:1px solid ${BORDER};font-size:13px;color:${TEXT};vertical-align:top"`;
+const TDR = `style="padding:8px 10px;border-bottom:1px solid ${BORDER};font-size:13px;color:${TEXT};vertical-align:top;text-align:right;font-variant-numeric:tabular-nums"`;
 const metaRow = (lbl: string, val: string): string =>
-  `<div style="font-size:12.5px;color:${TEXT};margin:3px 0;line-height:1.45"><span style="font-weight:700;color:${MUTED}">${esc(lbl)}:</span> ${esc(val)}</div>`;
+  `<div style="font-size:13px;color:${TEXT};margin:4px 0;line-height:1.5"><span style="font-weight:700;color:${MUTED}">${esc(lbl)}:</span> ${esc(val)}</div>`;
 // Heading above each Section-6 breakdown table. `title` is escaped; `sub` is pre-built HTML (callers
 // only pass static parentheticals + already-escaped dynamic values), inserted raw.
 const tableCaption = (title: string, sub: string): string =>
   `<div style="font-size:15px;font-weight:700;color:${TEXT};margin:16px 2px 6px">${esc(title)} <span style="font-size:12.5px;font-weight:400;color:${FAINT}">${sub}</span></div>`;
 
 const eyebrow = (t: string): string =>
-  `<div style="font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:${BLUE};margin-top:20px">${esc(t)}</div>`;
-const h2 = (t: string): string => `<h2 style="font-size:18px;margin:2px 0 6px;color:${TEXT}">${esc(t)}</h2>`;
+  `<div style="font-size:11.5px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:${BLUE};margin-top:24px">${esc(t)}</div>`;
+const h2 = (t: string): string => `<h2 style="font-size:22px;font-weight:700;margin:2px 0 8px;color:${TEXT}">${esc(t)}</h2>`;
+// page-break-inside:avoid keeps a card from splitting across pages in the printed PDF.
 const card = (inner: string, accent: string): string =>
-  `<div style="border:1px solid ${BORDER};border-left:4px solid ${accent};border-radius:10px;padding:12px 14px;background:${SURFACE};margin:6px 0">${inner}</div>`;
+  `<div style="border:1px solid ${BORDER};border-left:4px solid ${accent};border-radius:10px;padding:13px 15px;background:${SURFACE};margin:7px 0;page-break-inside:avoid">${inner}</div>`;
 const row = (lbl: string, val: string): string =>
   `<div style="font-size:13px;color:${TEXT};margin:4px 0;line-height:1.45"><span style="font-weight:700;color:${MUTED}">${esc(lbl)}:</span> ${esc(val)}</div>`;
 
-// A labelled growth bar (the section-3 "graph"): bar width is |pct| relative to the row set's max.
-function growthBar(lbl: string, pct: number | null, maxAbs: number, color: string, unsafe: boolean): string {
+// A labelled growth bar (the section-3 "graph"): bar width is |pct| relative to the row set's max, with
+// the real from→to counts shown as the data point next to the percentage.
+function growthBar(lbl: string, pct: number | null, maxAbs: number, color: string, unsafe: boolean, from: string | null, to: string | null): string {
   const valTxt = pct === null ? 'n/a' : `${pct >= 0 ? '+' : ''}${pct}%${unsafe ? ' *' : ''}`;
   const w = pct === null ? 0 : Math.max(2, Math.round((Math.abs(pct) / maxAbs) * 100));
+  const dp = from && to ? `<div style="font-size:11px;color:${FAINT};font-variant-numeric:tabular-nums;white-space:nowrap">${esc(from)} → ${esc(to)}</div>` : '';
   return (
-    `<div style="display:flex;align-items:center;gap:8px;margin:5px 0;font-size:12.5px">` +
-    `<span style="width:92px;flex:0 0 92px;color:${TEXT}">${esc(lbl)}</span>` +
-    `<span style="flex:1;background:rgba(148,163,184,.18);border-radius:5px;height:14px;overflow:hidden"><span style="display:block;height:100%;width:${w}%;background:${color};border-radius:5px"></span></span>` +
-    `<span style="width:74px;flex:0 0 74px;text-align:right;color:${MUTED};font-weight:600">${esc(valTxt)}</span>` +
+    `<div style="display:flex;align-items:center;gap:10px;margin:8px 0;font-size:13px">` +
+    `<span style="width:84px;flex:0 0 84px;color:${TEXT};font-weight:600">${esc(lbl)}</span>` +
+    `<span style="flex:1;background:rgba(148,163,184,.18);border-radius:5px;height:16px;overflow:hidden"><span style="display:block;height:100%;width:${w}%;background:${color};border-radius:5px"></span></span>` +
+    `<span style="width:158px;flex:0 0 158px;text-align:right">${dp}<div style="color:${MUTED};font-weight:700;font-size:13px">${esc(valTxt)}</div></span>` +
     `</div>`
   );
 }
@@ -86,7 +90,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
     s2 += card(
       `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">${badge(sev)}<span style="font-weight:700;color:${TEXT};font-size:14px">${esc(tf.area)}</span></div>` +
         `<div style="font-size:14px;font-weight:600;color:${TEXT};margin-bottom:6px;line-height:1.4">${esc(tf.message)}</div>` +
-        (tf.evidence ? row('Evidence', tf.evidence) : '') +
+        (tf.evidence && tf.evidence !== tf.message ? row('Evidence', tf.evidence) : '') +
         (tf.whyItMatters ? row('Why it matters', tf.whyItMatters) : '') +
         (tf.ifUnconfirmed ? row('If unconfirmed', tf.ifUnconfirmed) : '') +
         (tf.recommendation ? row('Fix', tf.recommendation) : '') +
@@ -107,9 +111,9 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       // UNVERIFIED one reads "confirm before quoting" — never claiming more than the trust matrix.
       const caveat = o.quoteNote ? `<div style="font-size:11.5px;color:${AMBER};margin-top:6px">${esc(o.quoteNote.replace(/—/g, '-'))}</div>` : '';
       s3 += card(
-        growthBar('Sessions', o.sessionsPct, maxAbs, BLUE, false) +
-          growthBar('Key events', o.keyEventsPct, maxAbs, o.keSafe ? GREEN : AMBER, !o.keSafe) +
-          growthBar('Revenue', o.revenuePct, maxAbs, o.revSafe ? GREEN : AMBER, !o.revSafe) +
+        growthBar('Sessions', o.sessionsPct, maxAbs, BLUE, false, o.sessionsFrom, o.sessionsTo) +
+          growthBar('Key events', o.keyEventsPct, maxAbs, o.keSafe ? GREEN : AMBER, !o.keSafe, o.keyEventsFrom, o.keyEventsTo) +
+          growthBar('Revenue', o.revenuePct, maxAbs, o.revSafe ? GREEN : AMBER, !o.revSafe, o.revenueFrom, o.revenueTo) +
           `<div style="font-size:13px;color:${TEXT};margin-top:8px;line-height:1.45"><span style="font-weight:700">Read:</span> ${esc(o.read)}</div>` +
           caveat,
         BLUE,

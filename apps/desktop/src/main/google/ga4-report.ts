@@ -490,10 +490,22 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     const trend = analyzeGa4Trend({ dailySessions: baseline.dailySessions, peakDayChannels: baseline.peakDayChannels, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
     trendPattern = `${trend.patternLabel}. ${trend.summary}`;
   }
+  const oCur = s.currencyCode ? `${s.currencyCode} ` : '';
+  const oMoney = (x: number): string => `${oCur}${num(Math.round(x))}`;
   const outcomes =
-    growth && growth.assessed
-      ? { assessed: true, sessionsPct: growth.sessionsTrendPct, keyEventsPct: growth.keyEventsTrendPct, revenuePct: growth.revenueTrendPct, keSafe, revSafe, sesSafe, quoteNote, read: growthReadLine(growth.findings[0]), trendPattern }
-      : { assessed: false, sessionsPct: null, keyEventsPct: null, revenuePct: null, keSafe, revSafe, sesSafe, quoteNote, read: 'Not enough prior traffic to assess growth for this window.', trendPattern };
+    growth && growth.assessed && baseline
+      ? {
+          assessed: true, sessionsPct: growth.sessionsTrendPct, keyEventsPct: growth.keyEventsTrendPct, revenuePct: growth.revenueTrendPct,
+          sessionsFrom: num(baseline.priorSessions), sessionsTo: num(baseline.sessions),
+          keyEventsFrom: num(baseline.priorKeyEvents), keyEventsTo: num(baseline.keyEvents),
+          revenueFrom: oMoney(baseline.priorRevenue), revenueTo: oMoney(baseline.revenue),
+          keSafe, revSafe, sesSafe, quoteNote, read: growthReadLine(growth.findings[0]), trendPattern,
+        }
+      : {
+          assessed: false, sessionsPct: null, keyEventsPct: null, revenuePct: null,
+          sessionsFrom: null, sessionsTo: null, keyEventsFrom: null, keyEventsTo: null, revenueFrom: null, revenueTo: null,
+          keSafe, revSafe, sesSafe, quoteNote, read: 'Not enough prior traffic to assess growth for this window.', trendPattern,
+        };
 
   const findings = allFindings.map((f) => ({ severity: f.severity, area: f.area, message: f.message, businessRisk: riskFor(f), recommendation: f.recommendation ?? '—' }));
 
