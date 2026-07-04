@@ -19,7 +19,8 @@ export class RegistryService {
     return {
       id: a.id,
       email: a.email,
-      displayName: a.displayName,
+      // A user rename (customName) wins over the Google profile name, and survives re-sign-in.
+      displayName: a.customName || a.displayName,
       createdAt: a.createdAt,
       isActive: this.repo.activeId() === a.id,
       hasGoogleToken: Boolean(a.googleTokenRef && this.secrets.has(a.googleTokenRef)),
@@ -61,6 +62,15 @@ export class RegistryService {
 
   setActive(id: string): void {
     this.repo.setActive(id);
+  }
+
+  /** Rename the account (a user-chosen label for the sidebar). An empty name clears the override,
+   *  falling back to the Google profile name / email. */
+  renameAccount(id: string, name: string): AccountView {
+    const a = this.repo.get(id);
+    if (!a) throw new Error(`account not found: ${id}`);
+    const trimmed = String(name ?? '').trim().slice(0, 80);
+    return this.toView(this.repo.update(id, { customName: trimmed || undefined }));
   }
 
   /** Remember the GTM account/container/workspace the user is working in. */

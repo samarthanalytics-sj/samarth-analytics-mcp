@@ -55,6 +55,8 @@ const api = {
     add: (input: AddAccountInput): Promise<AccountView> => ipcRenderer.invoke('accounts:add', input),
     remove: (id: string): Promise<void> => ipcRenderer.invoke('accounts:remove', id),
     setActive: (id: string): Promise<void> => ipcRenderer.invoke('accounts:setActive', id),
+    // Rename the account's sidebar label; an empty name restores the Google profile name/email.
+    rename: (id: string, name: string): Promise<AccountView> => ipcRenderer.invoke('accounts:rename', id, name),
     setLlmConfig: (id: string, provider: LlmProvider, model: string): Promise<AccountView> =>
       ipcRenderer.invoke('accounts:setLlmConfig', id, provider, model),
     setGtmContext: (id: string, ctx: GtmContext): Promise<AccountView> =>
@@ -226,6 +228,9 @@ const api = {
       ipcRenderer.invoke('gtm:applyFix', fix),
     exportAudit: (defaultName: string, content: string): Promise<string | null> =>
       ipcRenderer.invoke('gtm:exportAudit', defaultName, content),
+    // Save the audit as a styled PDF (Markdown rendered through the same pipeline as the GA4 report).
+    exportAuditPdf: (defaultName: string, markdown: string): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportAuditPdf', defaultName, markdown),
     ensureGa4Config: (ctx: {
       accountId: string;
       containerId: string;

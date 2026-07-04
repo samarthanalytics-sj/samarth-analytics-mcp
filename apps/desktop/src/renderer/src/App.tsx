@@ -641,6 +641,8 @@ export function App(): JSX.Element {
   const [error, setError] = useState('');
   // Cross-tab GA4 monitoring banner: a background run with NEW issues surfaces here on any tab.
   const [monitorAlert, setMonitorAlert] = useState<Ga4MonitorRun | null>(null);
+  // Inline rename of an account's sidebar label (pencil → input; Enter saves, Escape cancels).
+  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
 
   const active = accounts.find((a) => a.isActive);
 
@@ -715,15 +717,43 @@ export function App(): JSX.Element {
         <div style={styles.accountList}>
           {accounts.length === 0 && <div style={styles.sideMuted}>No accounts yet</div>}
           {accounts.map((a) => (
-            <button
+            <div
               key={a.id}
               style={{ ...styles.acctBtn, ...(a.isActive ? styles.acctBtnActive : {}) }}
-              onClick={() => run(() => window.desktop.accounts.setActive(a.id))}
+              onClick={() => { if (renaming?.id !== a.id) void run(() => window.desktop.accounts.setActive(a.id)); }}
               title={a.email}
             >
               <span style={{ ...styles.dot, background: a.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
-              <span style={styles.acctEmail}>{a.displayName || a.email}</span>
-            </button>
+              {renaming?.id === a.id ? (
+                <input
+                  autoFocus
+                  style={styles.acctRenameInput}
+                  value={renaming.value}
+                  placeholder={a.email}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => setRenaming({ id: a.id, value: e.target.value })}
+                  onKeyDown={(e) => {
+                    // Enter saves; Escape cancels; an empty name restores the Google name/email.
+                    if (e.key === 'Enter') { const v = renaming.value; setRenaming(null); void run(() => window.desktop.accounts.rename(a.id, v)); }
+                    else if (e.key === 'Escape') setRenaming(null);
+                  }}
+                  onBlur={() => { const v = renaming.value; setRenaming(null); void run(() => window.desktop.accounts.rename(a.id, v)); }}
+                />
+              ) : (
+                <>
+                  <span style={styles.acctEmail}>{a.displayName || a.email}</span>
+                  <span
+                    role="button"
+                    aria-label="Rename account"
+                    title="Rename this account"
+                    style={styles.acctEditBtn}
+                    onClick={(e) => { e.stopPropagation(); setRenaming({ id: a.id, value: a.displayName ?? '' }); }}
+                  >
+                    ✏
+                  </span>
+                </>
+              )}
+            </div>
           ))}
         </div>
 
@@ -3062,23 +3092,25 @@ function ContainerAuditPanel({
   }
 
   // Download the FULL audit (all findings, worst-first) to a file the user picks — CSV
-  // (a findings spreadsheet) or Markdown (a shareable report). Read-only; no GTM access.
-  async function downloadAudit(format: 'csv' | 'md'): Promise<void> {
+  // (a findings spreadsheet), Markdown (a shareable report), or a styled PDF (the Markdown
+  // rendered through the same print pipeline as the GA4 report). Read-only; no GTM access.
+  async function downloadAudit(format: 'csv' | 'md' | 'pdf'): Promise<void> {
     if (!report || exporting) return;
     setExporting(true);
     setExportNote('');
     try {
-      const content =
-        format === 'csv'
-          ? auditToCsv(report)
-          : auditToMarkdown(report, {
-              account: ctx?.accountName,
-              container: ctx?.containerName,
-              workspace: ctx?.workspaceName ?? undefined,
-              generatedAt: new Date().toLocaleString(),
-            });
+      const md = (): string =>
+        auditToMarkdown(report, {
+          account: ctx?.accountName,
+          container: ctx?.containerName,
+          workspace: ctx?.workspaceName ?? undefined,
+          generatedAt: new Date().toLocaleString(),
+        });
       const label = (ctx?.containerName ?? 'container').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'container';
-      const saved = await window.desktop.gtm.exportAudit(`GTM audit - ${label}.${format}`, content);
+      const saved =
+        format === 'pdf'
+          ? await window.desktop.gtm.exportAuditPdf(`GTM audit - ${label}`, md())
+          : await window.desktop.gtm.exportAudit(`GTM audit - ${label}.${format}`, format === 'csv' ? auditToCsv(report) : md());
       setExportNote(saved ? `✓ Saved to ${saved}` : 'Export cancelled');
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -3346,6 +3378,9 @@ function ContainerAuditPanel({
                 </button>
                 <button style={{ ...styles.downloadBtn, ...disabledStyle(exporting) }} onClick={() => void downloadAudit('md')} disabled={exporting} title="Download the audit as a shareable Markdown report">
                   ⬇ Markdown
+                </button>
+                <button style={{ ...styles.downloadBtn, ...disabledStyle(exporting) }} onClick={() => void downloadAudit('pdf')} disabled={exporting} title="Download the audit as a styled PDF report">
+                  ⬇ PDF
                 </button>
                 {exporting && <span style={styles.muted}>Saving…</span>}
                 {exportNote && <span style={styles.muted}>{exportNote}</span>}
@@ -4488,7 +4523,9 @@ const styles: Record<string, React.CSSProperties> = {
   sideMuted: { color: 'var(--text-faint)', fontSize: 13, padding: '6px 4px' },
   acctBtn: { display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: '1px solid transparent', borderRadius: 8, padding: '8px 10px', color: 'var(--text-dim)', cursor: 'pointer', textAlign: 'left', fontSize: 13 },
   acctBtnActive: { background: 'var(--surface-3)', border: '1px solid var(--border-2)', color: 'var(--text)' },
-  acctEmail: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  acctEmail: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 },
+  acctEditBtn: { flexShrink: 0, fontSize: 12, color: 'var(--text-faint)', padding: '0 2px', cursor: 'pointer', lineHeight: 1 },
+  acctRenameInput: { flex: 1, minWidth: 0, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '3px 7px', fontSize: 13, fontFamily: 'inherit' },
   connectBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer', marginTop: 8 },
   connectRow: { display: 'flex', gap: 6, marginTop: 8, alignItems: 'stretch' },
   cancelBtn: { background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer' },

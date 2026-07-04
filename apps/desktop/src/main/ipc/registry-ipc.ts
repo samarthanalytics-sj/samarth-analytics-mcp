@@ -28,6 +28,10 @@ export function registerRegistryIpc(service: RegistryService): void {
     service.setActive(id);
   });
 
+  ipcMain.handle('accounts:rename', (_event, id: string, name: unknown) =>
+    service.renameAccount(id, String(name ?? ''))
+  );
+
   ipcMain.handle(
     'accounts:setLlmConfig',
     (_event, id: string, provider: LlmProvider, model: string) => {

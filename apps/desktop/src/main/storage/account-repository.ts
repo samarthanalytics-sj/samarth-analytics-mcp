@@ -9,6 +9,9 @@ export interface StoredAccount {
   id: string;
   email: string;
   displayName?: string;
+  /** User-chosen name override. Kept SEPARATE from displayName so a Google re-sign-in (which
+   *  refreshes displayName from the profile) never silently undoes a rename. */
+  customName?: string;
   createdAt: number;
   /** Opaque ref into SecretStore for the vaulted Google OAuth token (Phase 2). */
   googleTokenRef?: string;

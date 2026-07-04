@@ -18,6 +18,24 @@ import { auditWorkspace } from '../google/audit-runner';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-builders';
 import { withQuotaRetry } from '../google/quota-retry';
+import { reportHtmlDocument, dedupedReportPath } from '../google/ga4-report-export';
+
+// A prior download of the same report may still be open in a PDF viewer, which locks the file
+// (EBUSY/EPERM/EACCES on Windows). Fall back to a suffixed name so a re-download always succeeds.
+const LOCK_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
+async function writeReportFile(filePath: string, data: string | Uint8Array): Promise<string> {
+  for (let i = 0; i <= 50; i++) {
+    const target = dedupedReportPath(filePath, i);
+    try {
+      await writeFile(target, data);
+      return target;
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? '';
+      if (!LOCK_CODES.has(code) || i === 50) throw err;
+    }
+  }
+  throw new Error('unreachable');
+}
 
 export function registerGtmAuditIpc(data: GoogleDataService): void {
   ipcMain.handle('gtm:audit', (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
@@ -48,6 +66,30 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     if (canceled || !filePath) return null;
     await writeFile(filePath, String(content ?? ''), 'utf8');
     return filePath;
+  });
+
+  // Save the container-audit as a styled PDF: the renderer sends the Markdown report; it is rendered
+  // in a hidden, script-disabled window and printed to PDF — the same pipeline as the GA4 report.
+  ipcMain.handle('gtm:exportAuditPdf', async (e, defaultName: unknown, markdown: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const base = String(defaultName ?? 'GTM container audit')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\.pdf$/i, '')
+      .trim() || 'GTM container audit';
+    const opts = { title: 'Export container audit', defaultPath: `${base}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    const pdfWin = new BrowserWindow({
+      show: false,
+      webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    try {
+      await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(reportHtmlDocument(base, String(markdown ?? ''))));
+      const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+      return await writeReportFile(filePath, pdf);
+    } finally {
+      if (!pdfWin.isDestroyed()) pdfWin.destroy();
+    }
   });
 
   ipcMain.handle('gtm:applyFix', async (_e, fix: unknown) => {
