@@ -1633,6 +1633,37 @@ test('buildMetaEmqVariables: email/phone get a NESTED user_data.* fallback (GA4 
   }
 });
 
+test('buildMetaEmqVariables: creates ip_override + user_agent (erase-safe raw match), user_agent falls back to the request header', () => {
+  const vars = buildMetaEmqVariables();
+  const byName = new Map(vars.map((v) => [v.name, v]));
+  // ip_override: event_data reading keyPath 'ip_override', falling back to the X-Forwarded-For header.
+  const ip = byName.get('ed - ip_override');
+  assert.ok(ip, 'ed - ip_override exists');
+  assert.equal(ip!.type, 'ed');
+  const ipKp = (ip!.parameter ?? []).find((p) => (p as { key?: string }).key === 'keyPath') as { value?: string };
+  assert.equal(ipKp?.value, 'ip_override');
+  const ipDv = (ip!.parameter ?? []).find((p) => (p as { key?: string }).key === 'defaultValue') as { value?: string };
+  assert.equal(ipDv?.value, '{{rh - x-forwarded-for}}', 'ed - ip_override falls back to the X-Forwarded-For header');
+  const rhXff = byName.get('rh - x-forwarded-for');
+  assert.ok(rhXff && rhXff.type === 'rh', 'rh - x-forwarded-for request_header variable exists');
+  const xffHn = (rhXff!.parameter ?? []).find((p) => (p as { key?: string }).key === 'headerName') as { value?: string };
+  assert.equal(xffHn?.value, 'x-forwarded-for');
+  // user_agent: event_data reading 'user_agent' with a defaultValue that falls back to the request header.
+  const ua = byName.get('ed - user_agent');
+  assert.ok(ua, 'ed - user_agent exists');
+  assert.equal(ua!.type, 'ed');
+  const uaKp = (ua!.parameter ?? []).find((p) => (p as { key?: string }).key === 'keyPath') as { value?: string };
+  assert.equal(uaKp?.value, 'user_agent');
+  const uaDv = (ua!.parameter ?? []).find((p) => (p as { key?: string }).key === 'defaultValue') as { value?: string };
+  assert.equal(uaDv?.value, '{{rh - user-agent}}', 'ed - user_agent falls back to the request User-Agent header');
+  // rh - user-agent: a request_header variable reading the 'user-agent' header.
+  const rh = byName.get('rh - user-agent');
+  assert.ok(rh, 'rh - user-agent exists');
+  assert.equal(rh!.type, 'rh');
+  const hn = (rh!.parameter ?? []).find((p) => (p as { key?: string }).key === 'headerName') as { value?: string };
+  assert.equal(hn?.value, 'user-agent');
+});
+
 test('buildMetaCapiServerTag maps EMQ user_data (em/ph ONLY) + EVENT-AWARE ecommerce custom_data + event_id', () => {
   const t = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - AddToCart Tag', 'P', 'T', 'AddToCart');
   const listOf = (tag: typeof t, key: string): Array<{ map: Array<{ key?: string; value?: string }> }> =>
@@ -1642,8 +1673,16 @@ test('buildMetaCapiServerTag maps EMQ user_data (em/ph ONLY) + EVENT-AWARE ecomm
   const rows = (key: string): Array<[string, string]> => rowsOf(t, key);
   // user_data: em/ph/external_id — the template extracts fn/ln/ct/zp/country itself (explicit rows for
   // those would ERASE template-extracted values when the ed variable resolves undefined); external_id is
-  // NOT template-extracted, so adding it only ADDS matching (Meta's user-id field).
-  assert.deepEqual(rows('userDataList'), [['em', '{{ed - email_address}}'], ['ph', '{{ed - phone_number}}'], ['external_id', '{{ed - external_id}}']]);
+  // NOT template-extracted, so adding it only ADDS matching (Meta's user-id field). client_ip_address /
+  // client_user_agent are erase-safe (they read the same source the template extracts from, UA also
+  // falling back to the request header) and are sent RAW (not hashed) — see META_USER_DATA_MAP.
+  assert.deepEqual(rows('userDataList'), [
+    ['em', '{{ed - email_address}}'],
+    ['ph', '{{ed - phone_number}}'],
+    ['external_id', '{{ed - external_id}}'],
+    ['client_ip_address', '{{ed - ip_override}}'],
+    ['client_user_agent', '{{ed - user_agent}}'],
+  ]);
   // ed - external_id falls back to the GA4 user_id so it resolves whether the event has external_id or user_id.
   const emq = buildMetaEmqVariables();
   const extVar = emq.find((v) => v.name === 'ed - external_id');
@@ -1693,6 +1732,8 @@ test('buildTikTokCapiServerTag: mapEventData (default) auto-fills user_data + ev
     ['email', '{{ed - email_address}}'],
     ['phone', '{{ed - phone_number}}'],
     ['external_id', '{{ed - external_id}}'],
+    ['ip', '{{ed - ip_override}}'],
+    ['user_agent', '{{ed - user_agent}}'],
   ]);
   const cd = new Map(listRows(t, 'customDataList'));
   assert.equal(cd.get('value'), '{{ed - value}}');
@@ -1715,19 +1756,67 @@ test('buildTikTokCapiServerTag: mapEventData=false leaves the lists empty; expli
 });
 
 test('buildTikTokEmqVariables: creates ed- variables for every auto-filled reference; email/phone get a nested fallback', () => {
-  const names = new Set(buildTikTokEmqVariables().map((v) => v.name));
-  for (const k of ['email_address', 'phone_number', 'external_id', 'event_id', 'value', 'currency', 'contents', 'content_ids', 'content_type', 'num_items', 'transaction_id', 'search_string', 'description']) {
+  const vars = buildTikTokEmqVariables();
+  const names = new Set(vars.map((v) => v.name));
+  for (const k of ['email_address', 'phone_number', 'external_id', 'event_id', 'value', 'currency', 'contents', 'content_ids', 'content_type', 'num_items', 'transaction_id', 'search_string', 'description', 'ip_override', 'user_agent']) {
     assert.ok(names.has(`ed - ${k}`), `has ed - ${k}`);
   }
   assert.ok(names.has('ed - user_data.email_address'), 'nested email fallback exists');
-  // Every {{ed - …}} the auto-filled TikTok tag references is actually created.
-  const t = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase');
+  // ip/user_agent fall back to request headers, and the rh variables are created for them.
+  assert.ok(names.has('rh - user-agent') && names.has('rh - x-forwarded-for'), 'rh - user-agent + rh - x-forwarded-for created');
+  const uaVar = vars.find((v) => v.name === 'ed - user_agent');
+  const uaDv = (uaVar?.parameter ?? []).find((p) => (p as { key?: string }).key === 'defaultValue') as { value?: string } | undefined;
+  assert.equal(uaDv?.value, '{{rh - user-agent}}', 'ed - user_agent falls back to the request header');
+  const ipVar = vars.find((v) => v.name === 'ed - ip_override');
+  const ipDv = (ipVar?.parameter ?? []).find((p) => (p as { key?: string }).key === 'defaultValue') as { value?: string } | undefined;
+  assert.equal(ipDv?.value, '{{rh - x-forwarded-for}}', 'ed - ip_override falls back to the X-Forwarded-For header');
+  // The six OPT-IN address advanced-matching variables always exist (available whether or not a tag uses them).
+  for (const suffix of ['address.first_name', 'address.last_name', 'address.city', 'address.region', 'address.country', 'address.postal_code']) {
+    assert.ok(names.has(`ed - ${suffix}`), `has ed - ${suffix}`);
+  }
+  // Every {{ed - …}} the auto-filled TikTok tag references is actually created — including the opt-in
+  // address rows (matchAddress) so their `ed - address.*` references are validated too.
+  const t = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase', { matchAddress: true });
   const refs = [
     ...listRows(t, 'userDataList').map(([, v]) => v),
     ...listRows(t, 'customDataList').map(([, v]) => v),
     paramVal(t, 'eventId') ?? '',
   ].filter((v) => v.startsWith('{{ed'));
   for (const r of refs) assert.ok(names.has(r.replace(/[{}]/g, '')), `${r} is created by buildTikTokEmqVariables`);
+});
+
+test('buildTikTokCapiServerTag: matchAddress appends the six address rows; absent without matchAddress, mapEventData=false, or explicit userData', () => {
+  const addressRows: Array<[string, string]> = [
+    ['first_name', '{{ed - address.first_name}}'],
+    ['last_name', '{{ed - address.last_name}}'],
+    ['city', '{{ed - address.city}}'],
+    ['state', '{{ed - address.region}}'],
+    ['country', '{{ed - address.country}}'],
+    ['zip_code', '{{ed - address.postal_code}}'],
+  ];
+  const addressKeys = new Set(addressRows.map(([n]) => n));
+  // matchAddress=true → the six address rows APPEND after email/phone/external_id/ip/user_agent.
+  const on = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase', { matchAddress: true });
+  assert.deepEqual(listRows(on, 'userDataList'), [
+    ['email', '{{ed - email_address}}'],
+    ['phone', '{{ed - phone_number}}'],
+    ['external_id', '{{ed - external_id}}'],
+    ['ip', '{{ed - ip_override}}'],
+    ['user_agent', '{{ed - user_agent}}'],
+    ...addressRows,
+  ]);
+  // default (no matchAddress) → address rows absent.
+  const off = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase');
+  assert.ok(!listRows(off, 'userDataList').some(([n]) => addressKeys.has(n)), 'no address rows without matchAddress');
+  // mapEventData=false → no auto user_data at all, so no address rows even with matchAddress.
+  const noMap = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase', { matchAddress: true, mapEventData: false });
+  assert.ok(!((noMap.parameter as Array<{ key?: string }>) ?? []).some((p) => p.key === 'userDataList'), 'no userDataList when mapEventData=false');
+  // explicit userData → respected verbatim; matchAddress must NOT inject address rows.
+  const explicit = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase', {
+    matchAddress: true,
+    userData: [{ name: 'email', value: '{{My Email}}' }],
+  });
+  assert.deepEqual(listRows(explicit, 'userDataList'), [['email', '{{My Email}}']]);
 });
 
 test('buildMetaPixelTag: auto-fills Object Properties from dlv variables when omitted; explicit [] → none; explicit array → used', () => {

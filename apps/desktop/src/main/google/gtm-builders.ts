@@ -2456,6 +2456,8 @@ export const META_EMQ_EVENT_DATA_KEYS: string[] = [
   'country',
   'city',
   'postal_code',
+  'ip_override',
+  'user_agent',
 ];
 
 /** The tag `type` code for a custom template. A GALLERY-imported template is referenced by
@@ -2649,11 +2651,20 @@ export function buildMetaPixelTag(
  *  fall back to the nested user_data.* path). external_id (a stable user id — Meta's user_id field) is
  *  NOT auto-extracted by the template, so adding it can only ADD matching, never erase; its ed variable
  *  falls back to the GA4 user_id (see buildMetaEmqVariables). fbp/fbc are omitted — the template
- *  generates _fbp and reads _fbc from the cookie itself. */
+ *  generates _fbp and reads _fbc from the cookie itself.
+ *
+ *  client_ip_address/client_user_agent are ERASE-SAFE additions: their `ed - <key>` variables read the
+ *  SAME source the template extracts from (event.ip_override / event.user_agent) AND fall back to a
+ *  request header the tagging host forwards (`rh - x-forwarded-for` for IP, `rh - user-agent` for UA) —
+ *  so the auto-mapped row is a SUPERSET of what the template would find and can only ADD match signal,
+ *  never blank a value the template already had (it resolves empty only when there is no IP/UA anywhere).
+ *  Both are sent RAW (Meta does not hash IP/UA — they are do-not-hash context fields). */
 const META_USER_DATA_MAP: Array<[fbKey: string, emqKey: string]> = [
   ['em', 'email_address'],
   ['ph', 'phone_number'],
   ['external_id', 'external_id'],
+  ['client_ip_address', 'ip_override'],
+  ['client_user_agent', 'user_agent'],
 ];
 const edRefRow = ([fbKey, emqKey]: [string, string]): Param => ({ type: 'map', map: [tpl('name', fbKey), tpl('value', `{{ed - ${emqKey}}}`)] });
 
@@ -2790,6 +2801,14 @@ export function buildMetaEmqVariables(): GtmVariableResource[] {
   // external_id (Meta's stable-user-id field) falls back to the GA4 user_id, so it resolves whether the
   // event carries `external_id` or `user_id`. (A missing referenced variable is a harmless empty string.)
   const SIBLING_FALLBACK: Record<string, string> = { external_id: 'user_id' };
+  // Keys whose ed variable falls back to a REQUEST HEADER when the event omits them: `ed - user_agent`
+  // defaults to `{{rh - user-agent}}` (the request User-Agent) and `ed - ip_override` to
+  // `{{rh - x-forwarded-for}}` (the client IP the tagging host forwards). We also emit each `rh - <header>`
+  // request_header variable so the reference isn't dangling. This gives the auto-mapped client_ip_address
+  // / client_user_agent rows a real server-side source even when the incoming event carries neither, and
+  // means the row only ever resolves empty when there is genuinely no IP/UA anywhere (so it can never
+  // downgrade a value the template would otherwise have had).
+  const HEADER_FALLBACK: Record<string, string> = { user_agent: 'user-agent', ip_override: 'x-forwarded-for' };
   const out: GtmVariableResource[] = [];
   for (const k of META_EMQ_EVENT_DATA_KEYS) {
     if (NESTED_FALLBACK.has(k)) {
@@ -2797,6 +2816,10 @@ export function buildMetaEmqVariables(): GtmVariableResource[] {
       out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }));
     } else if (SIBLING_FALLBACK[k]) {
       out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - ${SIBLING_FALLBACK[k]}}}` }));
+    } else if (HEADER_FALLBACK[k]) {
+      const header = HEADER_FALLBACK[k];
+      out.push(buildVariable({ name: `rh - ${header}`, kind: 'request_header', headerName: header }));
+      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{rh - ${header}}}` }));
     } else {
       out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
     }
@@ -2900,17 +2923,47 @@ export const TIKTOK_EMQ_EVENT_DATA_KEYS: string[] = [
   'email_address', 'phone_number', 'external_id', 'event_id',
   'value', 'currency', 'contents', 'content_ids', 'content_type',
   'num_items', 'transaction_id', 'search_string', 'description',
+  'ip_override', 'user_agent',
+];
+/** OPT-IN address advanced-matching: TikTok user_data key → the nested GA4 event path it reads. Wired
+ *  only when buildTikTokCapiServerTag is called with matchAddress=true. The `ed - address.<field>`
+ *  variables are ALWAYS created by buildTikTokEmqVariables so they exist whether or not a tag uses them;
+ *  the TikTok template DROPS blank user_data rows at runtime, so a row whose address field is absent from
+ *  the event simply isn't sent (no blank overwrite). country reads user_data.address.country (the GA4
+ *  region → TikTok state, postal_code → zip_code). */
+const TIKTOK_ADDRESS_MATCH: Array<[tiktokKey: string, edSuffix: string, keyPath: string]> = [
+  ['first_name', 'address.first_name', 'user_data.address.first_name'],
+  ['last_name', 'address.last_name', 'user_data.address.last_name'],
+  ['city', 'address.city', 'user_data.address.city'],
+  ['state', 'address.region', 'user_data.address.region'],
+  ['country', 'address.country', 'user_data.address.country'],
+  ['zip_code', 'address.postal_code', 'user_data.address.postal_code'],
 ];
 export function buildTikTokEmqVariables(): GtmVariableResource[] {
   const NESTED_FALLBACK = new Set(['email_address', 'phone_number']);
+  // user_agent + ip_override fall back to request headers (same erase-safe superset pattern as Meta):
+  // `ed - user_agent` defaults to `{{rh - user-agent}}` and `ed - ip_override` to `{{rh - x-forwarded-for}}`,
+  // and we emit each `rh - <header>` variable so the reference resolves — so ip/user_agent are populated
+  // from the request even when the incoming event omits them. These variable names are IDENTICAL to Meta's
+  // (created idempotently and shared) — intentional.
+  const HEADER_FALLBACK: Record<string, string> = { user_agent: 'user-agent', ip_override: 'x-forwarded-for' };
   const out: GtmVariableResource[] = [];
   for (const k of TIKTOK_EMQ_EVENT_DATA_KEYS) {
     if (NESTED_FALLBACK.has(k)) {
       out.push(buildVariable({ name: `ed - user_data.${k}`, kind: 'event_data', keyPath: `user_data.${k}` }));
       out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{ed - user_data.${k}}}` }));
+    } else if (HEADER_FALLBACK[k]) {
+      const header = HEADER_FALLBACK[k];
+      out.push(buildVariable({ name: `rh - ${header}`, kind: 'request_header', headerName: header }));
+      out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k, defaultValue: `{{rh - ${header}}}` }));
     } else {
       out.push(buildVariable({ name: `ed - ${k}`, kind: 'event_data', keyPath: k }));
     }
+  }
+  // OPT-IN address advanced-matching variables — always created so they're available; the tag only
+  // references them when matchAddress=true.
+  for (const [, edSuffix, keyPath] of TIKTOK_ADDRESS_MATCH) {
+    out.push(buildVariable({ name: `ed - ${edSuffix}`, kind: 'event_data', keyPath }));
   }
   return out;
 }
@@ -2922,6 +2975,8 @@ const TIKTOK_USER_DATA_AUTO: Array<[tiktokKey: string, emqKey: string]> = [
   ['email', 'email_address'],
   ['phone', 'phone_number'],
   ['external_id', 'external_id'],
+  ['ip', 'ip_override'],
+  ['user_agent', 'user_agent'],
 ];
 /** TikTok event-property → `ed - <key>` binding, used to auto-fill the recommended properties for an
  *  event (TIKTOK_EVENT_PROPERTIES) when the caller passes none. content_type has no clean event key,
@@ -2958,6 +3013,12 @@ export function buildTikTokCapiServerTag(
      *  caller passes no explicit rows (default true), so the tag SENDS data instead of shipping empty
      *  lists. Pair with create_tiktok_emq_variables. false = leave the lists to whatever was passed. */
     mapEventData?: boolean;
+    /** OPT-IN address advanced-matching (default false): when true AND the auto-map is active AND the
+     *  caller passed no explicit userData, APPEND first_name/last_name/city/state/country/zip_code rows
+     *  (reading the nested GA4 user_data.address.* via `ed - address.*`) after the identity rows. The
+     *  TikTok template drops blank user_data rows at runtime, so an absent address field is simply not
+     *  sent (never a blank overwrite). Ignored when userData is explicit (override) or mapEventData=false. */
+    matchAddress?: boolean;
     firingTriggerId?: string[];
   }
 ): GtmTagResource {
@@ -2968,9 +3029,17 @@ export function buildTikTokCapiServerTag(
   };
   // Auto-fill from the incoming event when nothing explicit was passed (default on).
   const autoMap = opts?.mapEventData !== false;
+  const hasExplicitUserData = !!(opts?.userData && opts.userData.length);
   let userData = opts?.userData;
-  if (autoMap && !(userData && userData.length)) {
+  if (autoMap && !hasExplicitUserData) {
     userData = TIKTOK_USER_DATA_AUTO.map(([k, emq]) => ({ name: k, value: `{{ed - ${emq}}}` }));
+    // OPT-IN address advanced-matching: append the six address rows AFTER identity/ip/user_agent. Only
+    // done for the auto-map path with no explicit userData (explicit rows win — see matchAddress doc).
+    if (opts?.matchAddress) {
+      for (const [tiktokKey, edSuffix] of TIKTOK_ADDRESS_MATCH) {
+        userData.push({ name: tiktokKey, value: `{{ed - ${edSuffix}}}` });
+      }
+    }
   }
   let eventProperties = opts?.eventProperties;
   if (autoMap && !(eventProperties && eventProperties.length)) {
