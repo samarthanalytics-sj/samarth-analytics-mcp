@@ -1,3 +1,9 @@
+## [1.178.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.177.0...v1.178.0) (2026-07-04)
+
+### Features
+
+* **desktop:** GA4 Monitor shows all alert types (remove Alert level filter) ([e99fd36](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e99fd364ddd4798741e81a2c8f1dc0c9788f95f0))
+
 ## [1.177.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.176.0...v1.177.0) (2026-07-04)
 
 ### Features
