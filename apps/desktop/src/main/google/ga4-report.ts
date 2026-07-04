@@ -112,7 +112,9 @@ function fmtSeconds(s: number): string {
 // honest attention figure — excludes idle time, unlike session duration), the engaged-session rate, and
 // engaged sessions per active user. null when there is no session data to derive it from.
 function engagementLabel(baseline: Ga4Baseline): string | null {
-  if (baseline.sessions <= 0) return null;
+  // No sessions, or no engagement signal at all (the engagement query is best-effort and degrades to 0
+  // on failure) → omit the line rather than show a misleading "0s · 0.0%".
+  if (baseline.sessions <= 0 || (baseline.avgEngagementSec <= 0 && baseline.engagementRate <= 0)) return null;
   const parts = [`${fmtSeconds(baseline.avgEngagementSec)} avg engagement time/session`, `${(baseline.engagementRate * 100).toFixed(1)}% engaged-session rate`];
   if (baseline.engagedSessionsPerUser > 0) parts.push(`${baseline.engagedSessionsPerUser.toFixed(1)} engaged sessions/user`);
   return parts.join(' · ');
