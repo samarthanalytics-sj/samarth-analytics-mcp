@@ -1,3 +1,9 @@
+## [1.171.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.170.0...v1.171.0) (2026-07-04)
+
+### Features
+
+* **desktop:** versioned install manifest + drift audit ([8e79019](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8e7901950bcaa5ef51d40e576b4ae106d048382b))
+
 ## [1.170.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.169.0...v1.170.0) (2026-07-04)
 
 ### Features
