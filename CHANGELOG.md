@@ -1,3 +1,9 @@
+## [1.166.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.165.0...v1.166.0) (2026-07-04)
+
+### Features
+
+* **desktop:** rule-based Key insights in GA4 audit report ([376a9c5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/376a9c5b0b80b742c1693e5d38350cc17ce734c7))
+
 ## [1.165.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.164.1...v1.165.0) (2026-07-04)
 
 ### Features
