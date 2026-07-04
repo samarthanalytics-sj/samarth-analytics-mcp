@@ -1,3 +1,9 @@
+## [1.164.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.163.0...v1.164.0) (2026-07-04)
+
+### Features
+
+* **desktop:** weekly retention cohorts in GA4 audit baseline ([7a2bb79](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7a2bb79c9d620272b753ba5cb2767f5ffa043b47))
+
 ## [1.163.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.162.0...v1.163.0) (2026-07-04)
 
 ### Features
