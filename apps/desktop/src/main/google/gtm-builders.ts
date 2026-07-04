@@ -2677,7 +2677,11 @@ const canonMetaUserDataKey = (name: string): string => {
 const META_CUSTOM_DATA_BINDING: Record<string, { ed: string } | { literal: string }> = {
   content_ids: { ed: 'content_ids' },
   contents: { ed: 'contents' },
-  content_type: { literal: 'product' },
+  // content_type is intentionally NOT bound: the Stape template's addEcommerceData auto-detects it
+  // ('product' for a single item, 'product_group' for a view_item_list / collection), and it runs
+  // BEFORE the tag's customDataList override — so a hard-coded literal 'product' here would OVERWRITE
+  // the template's correctly-detected 'product_group' for catalog product-set advertisers. Leaving it
+  // unbound lets the template's detection stand.
   value: { ed: 'value' },
   currency: { ed: 'currency' },
   num_items: { ed: 'num_items' },
@@ -2830,10 +2834,13 @@ const GA4_TO_TIKTOK: Record<string, string> = {
  *  TIKTOK_CUSTOM_DATA_KEYS go to `customDataList`; the rest (form_name, registration_method, …) the
  *  builder routes to `additionalEventPropertiesList`. order_id is usually mapped from the GA4
  *  transaction_id. Mirrors META_EVENT_OBJECT_PROPERTIES — the caller wires values from variables. */
+// NOTE: page_url / referrer are intentionally NOT listed. TikTok EAPI 2.0 carries page context in a
+// separate `page` object (page.url / page.referrer), which the Stape template auto-populates via
+// autoMapPageData (default on) — they are not `properties`, and this builder has no binding for them, so
+// listing them here only advertised a field the auto-fill could never emit.
 export const TIKTOK_EVENT_PROPERTIES: Record<string, string[]> = {
-  Pageview: ['page_url', 'referrer'],
   ViewContent: ['content_type', 'contents', 'value', 'currency', 'description'],
-  Search: ['query', 'content_type'],
+  Search: ['query'],
   AddToCart: ['contents', 'content_type', 'value', 'currency'],
   AddToWishlist: ['contents', 'content_type', 'value', 'currency'],
   InitiateCheckout: ['contents', 'content_type', 'value', 'currency', 'num_items'],
@@ -2845,7 +2852,7 @@ export const TIKTOK_EVENT_PROPERTIES: Record<string, string[]> = {
   Contact: ['contact_method'],
   Subscribe: ['value', 'currency', 'subscription_type'],
   Download: ['file_name', 'file_type'],
-  ClickButton: ['button_name', 'page_url'],
+  ClickButton: ['button_name'],
   Login: ['login_method'],
 };
 
@@ -3278,6 +3285,35 @@ export function pinterestServerEvent(event: string): string | null {
   return GA4_TO_PINTEREST_SERVER[norm] ?? null;
 }
 
+/** The name-column SELECT sets the Pinterest ss-gtm-template accepts for each override table (verified
+ *  against template.tpl). An override row whose name is off these lists is emitted verbatim and then
+ *  SILENTLY IGNORED by Pinterest, so we canonicalize common GA4 / plain-language aliases (email→em,
+ *  transaction_id→order_id, …) to the real key first. */
+export const PINTEREST_USER_DATA_KEYS: string[] = [
+  'em', 'ph', 'ge', 'db', 'ln', 'fn', 'ct', 'st', 'zp', 'country',
+  'hashed_maids', 'client_ip_address', 'client_user_agent', 'external_id', 'click_id',
+];
+export const PINTEREST_CUSTOM_DATA_KEYS: string[] = [
+  'value', 'currency', 'content_ids', 'contents', 'content_name', 'content_category', 'content_brand',
+  'num_items', 'order_id', 'search_string', 'opt_out', 'np',
+];
+export const PINTEREST_SERVER_EVENT_DATA_KEYS: string[] = ['event_id', 'event_source_url', 'action_source', 'opt_out', 'partner_name'];
+/** Common GA4 / plain-name aliases → the canonical Pinterest key. Applied only when the alias resolves
+ *  to a key in the target table's SELECT set, so it can never turn a valid key into an invalid one. */
+const PINTEREST_KEY_ALIAS: Record<string, string> = {
+  email: 'em', email_address: 'em', phone: 'ph', phone_number: 'ph', gender: 'ge', date_of_birth: 'db',
+  first_name: 'fn', last_name: 'ln', city: 'ct', state: 'st', region: 'st', province: 'st',
+  zip: 'zp', zip_code: 'zp', postal_code: 'zp', postalcode: 'zp',
+  transaction_id: 'order_id', epik: 'click_id',
+};
+/** Canonicalize an override row's name to the template's accepted key: lowercase, apply a known alias,
+ *  keep it only if it lands in `keys`; otherwise return the trimmed original (unchanged behaviour). */
+const canonPinterestKey = (name: string, keys: string[]): string => {
+  const low = name.trim().toLowerCase();
+  const aliased = PINTEREST_KEY_ALIAS[low] ?? low;
+  return keys.includes(aliased) ? aliased : name.trim();
+};
+
 /** Build a Pinterest Conversions API SERVER tag (gallery template pinterest/ss-gtm-template; `type` =
  *  its cvt_ code). Needs `advertiserId` (starts 549…) + `apiAccessToken` (both usually {{variables}}).
  *  By default eventName='inherit' + overrideMode=false, so the tag maps the event name AND reads all
@@ -3316,19 +3352,24 @@ export function buildPinterestCapiServerTag(
   }
   // Override tables — only when explicit rows are passed (else overrideMode off → auto getAllEventData).
   const ov = opts?.override;
+  // Drop rows with a blank name OR a blank value. Under overrideMode the template applies each override
+  // row UNCONDITIONALLY over what getAllEventData already extracted, so a row whose value resolves empty
+  // would BLANK a template-extracted field (erase-safety). Only forward rows that carry a value.
   const rows = (arr?: Array<{ name: string; value: string }>): Array<{ name: string; value: string }> =>
-    (arr ?? []).filter((r) => r.name && r.name.trim() !== '');
+    (arr ?? []).filter((r) => r.name && r.name.trim() !== '' && r.value != null && String(r.value).trim() !== '');
   const sed = rows(ov?.serverEventData);
   const ud = rows(ov?.userData);
   const cd = rows(ov?.customData);
   const hasOverride = sed.length > 0 || ud.length > 0 || cd.length > 0;
   parameter.push(boolean('overrideMode', hasOverride));
-  const table = (key: string, r: Array<{ name: string; value: string }>): void => {
-    if (r.length) parameter.push({ type: 'list', key, list: r.map((x) => ({ type: 'map', map: [tpl('name', x.name.trim()), tpl('value', x.value)] })) });
+  // Canonicalize each row's name to the template's accepted key (email→em, transaction_id→order_id, …)
+  // so a mis-keyed override lands instead of being silently ignored by Pinterest.
+  const table = (key: string, r: Array<{ name: string; value: string }>, keys: string[]): void => {
+    if (r.length) parameter.push({ type: 'list', key, list: r.map((x) => ({ type: 'map', map: [tpl('name', canonPinterestKey(x.name, keys)), tpl('value', x.value)] })) });
   };
-  table('serverEventDataList', sed);
-  table('userDataList', ud);
-  table('customDataList', cd);
+  table('serverEventDataList', sed, PINTEREST_SERVER_EVENT_DATA_KEYS);
+  table('userDataList', ud, PINTEREST_USER_DATA_KEYS);
+  table('customDataList', cd, PINTEREST_CUSTOM_DATA_KEYS);
   parameter.push(boolean('testMode', opts?.testMode ?? false));
   parameter.push(tpl('logMode', opts?.log ? 'log' : 'donotlog'));
   return {
