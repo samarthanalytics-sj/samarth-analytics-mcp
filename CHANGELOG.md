@@ -1,3 +1,9 @@
+## [1.165.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.164.1...v1.165.0) (2026-07-04)
+
+### Features
+
+* **desktop:** AI/LLM referral-traffic table in GA4 audit ([428c682](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/428c682003ea57c14163514106693893d1bff22a))
+
 ## [1.164.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.164.0...v1.164.1) (2026-07-04)
 
 ### Bug Fixes
