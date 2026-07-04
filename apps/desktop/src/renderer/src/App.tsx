@@ -2400,7 +2400,7 @@ function TagReviewPanel({
               </div>
               <div style={{ ...styles.muted, marginTop: 8 }}>
                 Scans each listed landing page directly (no crawl), merging Electron’s browser <i>and</i> a static parse
-                (Cheerio). Read-only; nothing is created until you approve.
+                (Cheerio) — up to {CSV_URL_CAP} pages per scan. Read-only; nothing is created until you approve.
               </div>
             </>
           ) : (
@@ -2442,7 +2442,7 @@ function TagReviewPanel({
                   ? 'Screenshots this page and asks OpenAI vision which tags to create, wired to the page’s real elements (the screenshot is sent to OpenAI). Experimental.'
                   : discoverMode === 'single'
                     ? 'Scans ONLY this page (no crawl, no sitemap) and shows its tags directly'
-                    : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan'}
+                    : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan (up to 50 pages per scan)'}
                 {' '}— merging Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
                 approve.{' '}
                 <button style={styles.linkBtn} onClick={doQuickScan} disabled={!url.trim() || scanning || discovering}>
@@ -2533,7 +2533,9 @@ function TagReviewPanel({
               <button style={styles.primaryBtn} onClick={doScanSelected} disabled={selectedPageCount === 0 || scanning}>
                 {scanning ? 'Scanning…' : `Scan selected (${selectedPageCount})`}
               </button>
-              {selectedPageCount > 60 && <span style={{ color: 'var(--c-amber)', fontSize: 13 }}>Up to 60 pages are scanned per run.</span>}
+              <span style={{ color: selectedPageCount > CSV_URL_CAP ? 'var(--c-amber)' : 'var(--text-muted)', fontSize: 13 }}>
+                {selectedPageCount > CSV_URL_CAP ? `Up to ${CSV_URL_CAP} pages are scanned per run — the first ${CSV_URL_CAP} of your ${selectedPageCount} selected.` : `Up to ${CSV_URL_CAP} pages per scan.`}
+              </span>
             </div>
           </div>
         )}
