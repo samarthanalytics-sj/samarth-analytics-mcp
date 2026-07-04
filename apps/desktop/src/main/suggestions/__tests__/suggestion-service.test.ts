@@ -5,7 +5,7 @@
 //   • createSuggestedTags() — the approved-create loop (outcome mapping).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/suggestion-service.test.ts
 
-import { crawlAndSuggest, scanUrls, assembleResult, detectInstalled, type PageDriver, type DrivenPage, type ScanProgress } from '../scan-core';
+import { crawlAndSuggest, scanUrls, assembleResult, dedupSuggestions, detectInstalled, type PageDriver, type DrivenPage, type ScanProgress } from '../scan-core';
 import type { SuggestedTag } from '../../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import { mergeDriven } from '../multi-driver';
 import { parseSitemapLocs, extractCrawlLinks } from '../discover';
@@ -420,6 +420,28 @@ async function main(): Promise<void> {
     const both = assembleResult('https://x.com', 'x.com', [], [], [], 0, [ga4Extra], ['ga4', 'meta']).suggestions;
     check('assembleResult: both keeps the GA4 AI extra AND its Meta counterpart',
       both.some((s) => s.id === 'ai1' && s.platform === 'ga4_event') && both.some((s) => s.id === 'meta-ai1' && s.platform === 'meta_pixel'));
+  }
+
+  // ── dedupSuggestions: two suggestions with the SAME tag name collapse to one ──
+  {
+    // Same tag name but a slightly different trigger (an engine tag + the AI vision pass's copy of the
+    // same button) — GTM tag names must be unique, so the second could never be created. Identity is
+    // platform + name only, so these collapse; a differently-named tag survives.
+    const mk = (over: Partial<SuggestedTag>): SuggestedTag => ({
+      id: 'x', page: 'site-wide', label: '', evidence: '', confidence: 'high', enhancedMeasurementOverlap: false,
+      platform: 'ga4_event', tagName: 'GA4 - Event - Free Audit Click Tag', measurementId: '{{GA4 Measurement ID}}',
+      eventName: 'free_audit_click',
+      trigger: { name: 'Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Free Audit', clickTextOperator: 'equals' },
+      ...over,
+    } as unknown as SuggestedTag);
+    const engine = mk({ id: 'engine' });
+    // AI copy: same name, but clickTextValue differs (so its suggestionKey/trigger differs — the case the
+    // OLD trigger-inclusive key let slip past).
+    const aiCopy = mk({ id: 'ai', trigger: { name: 'Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'FREE AUDIT', clickTextOperator: 'equals' } as SuggestedTag['trigger'] });
+    const distinct = mk({ id: 'contact', tagName: 'GA4 - Event - Contact Us Click Tag', eventName: 'contact_us_click' });
+    const out = dedupSuggestions([engine, aiCopy, distinct]);
+    check('dedup: two same-named tags (differing trigger) collapse to ONE; the first is kept',
+      out.length === 2 && out.filter((s) => s.tagName.includes('Free Audit')).length === 1 && out.some((s) => s.id === 'engine') && out.some((s) => s.tagName.includes('Contact Us')));
   }
 
   // ── createSuggestedTags: GTM quota / rate-limit retry-with-backoff ─────────
