@@ -1,3 +1,9 @@
+## [1.172.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.171.0...v1.172.0) (2026-07-04)
+
+### Features
+
+* **desktop:** unified tracking status (6-dimension roll-up) ([4c2a793](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4c2a793d5071c317b6e7c18f3e6f7785084f128c))
+
 ## [1.171.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.170.0...v1.171.0) (2026-07-04)
 
 ### Features
