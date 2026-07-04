@@ -1,3 +1,15 @@
+## [1.174.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.173.0...v1.174.0) (2026-07-04)
+
+### Features
+
+* **desktop:** add a verification state to GA4 findings (confirmed/observed/blocked) ([f7c1e65](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f7c1e6518566fcb8937b5d6c04f898b02719a0ce))
+
+### Bug Fixes
+
+* **desktop:** flag GA4 Section 6 insights + perf tables as provisional when unverified ([9fdd514](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9fdd514789f8ca2f31b95c1acaa2309fb3410551))
+* **desktop:** gate GA4 decision readiness + outcomes on the data trust matrix ([2983a37](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2983a3729eb0500151f1fa9690fd245019187b68))
+* **desktop:** grade GA4 CLV decision readiness by BigQuery export/Signals ([61a0321](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/61a0321bd8b564ed6fdda305f77518435aa3dfbb))
+
 ## [1.173.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.172.1...v1.173.0) (2026-07-04)
 
 ### Features
