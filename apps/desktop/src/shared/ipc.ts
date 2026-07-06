@@ -549,6 +549,9 @@ export interface VerifyTagInput {
   tagName: string;
   eventName: string;
   platform: string;
+  /** The tag's Measurement ID (or {{variable}}). When a literal G-/GT-/AW-XXXX, the GA4 hit's tid= is
+   *  matched too, so two GA4 tags firing the same event on different properties are attributed right. */
+  measurementId?: string;
   /** The page the tag's trigger lives on ("/contact", "site-wide") — drives per-page verification. */
   page?: string;
   trigger: SuggestedTagView['trigger'];
@@ -573,7 +576,7 @@ export interface VerifyTagVerdict {
   /** Why it did not fire (always set when fired=false). */
   reason?: string;
   /** What the driver did to exercise the trigger. */
-  interaction?: { kind: 'click' | 'submit' | 'navigate' | 'none'; targetFound: boolean; performed: boolean; note?: string };
+  interaction?: { kind: 'click' | 'submit' | 'navigate' | 'custom_event' | 'none'; targetFound: boolean; performed: boolean; note?: string };
   /** A sample captured hit as evidence. */
   evidence?: CapturedHitView;
   /** A corrected trigger to apply when the tag did not fire (the "fix the trigger" step). */

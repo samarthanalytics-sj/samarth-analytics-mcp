@@ -12,7 +12,7 @@
 // Playwright is OPTIONAL (loaded lazily); if absent the caller gets a clear error.
 
 import { requestAllowed } from './ssrf';
-import { classifyCollector, type Collector } from '../../shared/runtime-capture';
+import { classifyCollector, syntheticDataLayerEvent, type Collector } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
 import type { PerTagCapture } from './verify-tags';
 
@@ -65,6 +65,8 @@ export interface DriverTrigger {
   formIdOperator?: string;
   formClassesValue?: string;
   formClassesOperator?: string;
+  /** For custom_event triggers: the dataLayer event name to push. */
+  eventName?: string;
 }
 export interface VerifyDriverTag {
   id: string;
@@ -162,6 +164,52 @@ function installGuardsInPage(): void {
     true,
   );
   document.addEventListener('submit', (e) => e.preventDefault(), true); // stop the real POST
+}
+
+/**
+ * Grant Consent Mode v2 in-page so consent-gated tags (GA4/Ads/Meta) actually fire during
+ * verification. Synthetic override — the question we answer is "does the tag fire when consent is
+ * granted", not "what does the site's CMP do". Mirrors gtag('consent','update',{...granted}).
+ */
+function grantConsentInPage(): void {
+  const w = window as unknown as { dataLayer?: unknown[] };
+  const dl = (w.dataLayer = w.dataLayer || []);
+  const gtag = function (this: unknown): void {
+    // eslint-disable-next-line prefer-rest-params
+    dl.push(arguments);
+  };
+  (gtag as unknown as (...a: unknown[]) => void)('consent', 'update', {
+    ad_storage: 'granted',
+    analytics_storage: 'granted',
+    ad_user_data: 'granted',
+    ad_personalization: 'granted',
+  });
+}
+
+/** Push a (synthetic) dataLayer event so a custom_event trigger fires. */
+function pushDataLayerInPage(payload: Record<string, unknown>): void {
+  const w = window as unknown as { dataLayer?: unknown[] };
+  w.dataLayer = w.dataLayer || [];
+  w.dataLayer.push(payload);
+}
+
+/** Wait until the captured-hit count stops growing for quietMs, or maxMs elapses — robust for
+ *  delayed/timer/debounced triggers (better than a single fixed sleep). */
+async function waitForHitsSettle(getCount: () => number, page: PwPage, quietMs: number, maxMs: number): Promise<void> {
+  const start = Date.now();
+  let last = getCount();
+  let lastChange = Date.now();
+  for (;;) {
+    if (Date.now() - start >= maxMs) return;
+    await page.waitForTimeout(120);
+    const cur = getCount();
+    if (cur !== last) {
+      last = cur;
+      lastChange = Date.now();
+    } else if (Date.now() - lastChange >= quietMs) {
+      return;
+    }
+  }
 }
 
 interface DriveSpec {
@@ -334,23 +382,52 @@ export async function runVerifyDriver(
       }
 
       await page.evaluate(installGuardsInPage);
+      await page.evaluate(grantConsentInPage); // grant Consent Mode so gated tags fire
       armed = true; // from here every cross-site beacon is a tag firing → capture+abort it
       const loadHits = captured.slice(loadStart);
+      const settleQuiet = 400;
+      const settleMax = Math.min(Math.max(settleMs, 900) * 3, 5000);
 
       for (const tag of groupTags) {
         const kind = tag.trigger.kind;
-        // Fire-on-load triggers (pageview / base Google tag): attribute this page's load hits.
-        if (kind === 'pageview' || kind === 'custom_event') {
+
+        // Fire-on-load trigger (pageview / base Google tag): attribute this page's load hits.
+        if (kind === 'pageview') {
           perTag.push({
             tagId: tag.id,
             kind: 'navigate',
-            targetFound: kind === 'pageview',
-            performed: kind === 'pageview',
-            ...(kind === 'custom_event' ? { note: 'custom-event (dataLayer) trigger — not exercised by interaction' } : {}),
+            targetFound: true,
+            performed: true,
             hits: loadHits.map((h) => ({ url: h.url, body: h.body, collector: h.collector })),
           });
           continue;
         }
+
+        // Custom-event (dataLayer) trigger: no DOM element — push the event synthetically.
+        if (kind === 'custom_event') {
+          const evName = tag.trigger.eventName ?? '';
+          if (!evName) {
+            perTag.push({ tagId: tag.id, kind: 'custom_event', targetFound: false, performed: false, note: 'the trigger has no dataLayer event name', hits: [] });
+            continue;
+          }
+          const before = captured.length;
+          try {
+            await page.evaluate(pushDataLayerInPage, syntheticDataLayerEvent(evName) as Record<string, unknown>);
+          } catch {
+            /* ignore push failure — reported as no-hit below */
+          }
+          await waitForHitsSettle(() => captured.length, page, settleQuiet, settleMax);
+          perTag.push({
+            tagId: tag.id,
+            kind: 'custom_event',
+            targetFound: true,
+            performed: true,
+            hits: captured.slice(before).map((h) => ({ url: h.url, body: h.body, collector: h.collector })),
+          });
+          continue;
+        }
+
+        // Click / form-submit trigger: locate + drive the element.
         const before = captured.length;
         let outcome: DriveOutcome;
         try {
@@ -358,7 +435,7 @@ export async function runVerifyDriver(
         } catch (e) {
           outcome = { targetFound: false, performed: false, note: (e instanceof Error ? e.message : String(e)).slice(0, 150) };
         }
-        if (outcome.performed) await page.waitForTimeout(settleMs);
+        if (outcome.performed) await waitForHitsSettle(() => captured.length, page, settleQuiet, settleMax);
         const hits = captured.slice(before).map((h) => ({ url: h.url, body: h.body, collector: h.collector }));
         perTag.push({
           tagId: tag.id,
