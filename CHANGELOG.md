@@ -1,3 +1,9 @@
+## [1.193.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.192.0...v1.193.0) (2026-07-06)
+
+### Features
+
+* **desktop:** verify tag firing (inject preview container, drive triggers, propose fixes) ([523df4a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/523df4a9c02262fa1fa2214fdd6e4cd6881f4b97))
+
 ## [1.192.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.191.1...v1.192.0) (2026-07-06)
 
 ### Features
