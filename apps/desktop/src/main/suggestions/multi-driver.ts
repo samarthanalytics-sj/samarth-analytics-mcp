@@ -7,6 +7,7 @@
 // It is itself a PageDriver, so crawlAndSuggest (driver-injected) is unchanged.
 
 import type { PageDriver, DrivenPage } from './scan-core';
+import type { ScanDebug } from '../../shared/ipc';
 import type { RawElement } from '../../../../web-audit-mcp/src/agent/tag-suggest/collect.js';
 import type { RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 
@@ -81,6 +82,17 @@ export function createMultiDriver(drivers: PageDriver[]): PageDriver {
         ),
       );
       return mergeDriven(results);
+    },
+    diagnostics(): ScanDebug | undefined {
+      const parts = drivers.map((d) => d.diagnostics?.()).filter((x): x is ScanDebug => Boolean(x));
+      if (parts.length === 0) return undefined;
+      return {
+        driver: parts.map((p) => p.driver).join('+'),
+        settleMode: parts[0].settleMode,
+        pages: parts.flatMap((p) => p.pages),
+        consoleErrors: parts.flatMap((p) => p.consoleErrors),
+        pageErrors: parts.flatMap((p) => p.pageErrors),
+      };
     },
     async close(): Promise<void> {
       await Promise.all(drivers.map((d) => d.close().catch(() => undefined)));
