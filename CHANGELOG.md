@@ -1,3 +1,9 @@
+## [1.201.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.200.0...v1.201.0) (2026-07-06)
+
+### Features
+
+* **desktop:** reliability discipline + two anti-lie checks (concentration, gateway leakage) ([a2af3a8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a2af3a8b2aca781aed8cf403d1857db1f941cc8b))
+
 ## [1.200.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.199.1...v1.200.0) (2026-07-06)
 
 ### Features
