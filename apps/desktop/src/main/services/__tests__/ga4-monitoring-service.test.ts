@@ -55,7 +55,7 @@ test('a new issue Slacks once; the same ongoing issue does not re-Slack on the n
     slackFetch: async (_url, init) => { posts.push(init.body); return { ok: true, status: 200, text: async () => 'ok' }; },
   });
   svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], slackEnabled: true, enabled: false });
-  svc.setWebhook('https://hooks.slack.com/services/T/B/x');
+  svc.setWebhook('https://hooks.slack.com/services/T/B/x', 'properties/1');
 
   const [run1] = await svc.runOnce();
   assert.ok(run1, 'run produced');
@@ -97,7 +97,8 @@ test('multi-property: a sweep runs every enabled target with INDEPENDENT alert d
     ],
     slackEnabled: true, enabled: false,
   });
-  svc.setWebhook('https://hooks.slack.com/services/T/B/x');
+  svc.setWebhook('https://hooks.slack.com/services/T/B/x', 'properties/1');
+  svc.setWebhook('https://hooks.slack.com/services/T/B/x', 'properties/2');
 
   const sweep1 = await svc.runOnce();
   assert.equal(sweep1.length, 2, 'both targets checked');
@@ -137,7 +138,7 @@ test('multi-property: runOnce(propertyId) runs ONLY that target; a paused target
   assert.equal(one.length, 1, 'single-target run checks exactly one');
 });
 
-test('one property, one channel: a property with its OWN webhook posts there; others fall back to the default', async () => {
+test('one property, one channel: own webhooks route per property; a legacy DEFAULT webhook migrates onto channel-less properties and is deleted', async () => {
   const secrets = makeSecrets();
   const sentTo: string[] = [];
   const svc = new Ga4MonitoringService({
@@ -153,31 +154,36 @@ test('one property, one channel: a property with its OWN webhook posts there; ot
       { propertyId: 'properties/1', propertyLabel: 'Acme Store', enabled: true },
       { propertyId: 'properties/2', propertyLabel: 'Beta Store', enabled: true },
     ],
-    slackEnabled: true, enabled: false,
+    slackEnabled: true, slackLabel: '#old-default', enabled: false,
   });
-  svc.setWebhook('https://hooks.slack.com/services/T/B/default'); // account default
-  svc.setWebhook('https://hooks.slack.com/services/T/B/acme-own', 'properties/1'); // Acme's own channel
+  // Legacy layout: an account-level default + one property with its own channel.
+  svc.setWebhook('https://hooks.slack.com/services/T/B/default'); // legacy account-level
+  svc.setWebhook('https://hooks.slack.com/services/T/B/acme-own', 'properties/1'); // Acme's own
 
+  // status() triggers the migration: the default URL becomes Beta's OWN channel (with the old global
+  // label), Acme keeps its own, and the legacy account-level secret is deleted.
   const st = svc.status();
-  assert.equal(secrets.get('ga4-slack-webhook:acct1:properties/1'), 'https://hooks.slack.com/services/T/B/acme-own', 'own channel stored per account+property');
-  assert.equal(st.targetStatuses.find((t) => t.propertyId === 'properties/1')!.hasWebhook, true, 'Acme shows its own channel');
-  assert.equal(st.targetStatuses.find((t) => t.propertyId === 'properties/2')!.hasWebhook, false, 'Beta shows fallback');
+  assert.equal(secrets.get('ga4-slack-webhook:acct1:properties/1'), 'https://hooks.slack.com/services/T/B/acme-own', 'own channel untouched');
+  assert.equal(secrets.get('ga4-slack-webhook:acct1:properties/2'), 'https://hooks.slack.com/services/T/B/default', 'default migrated to the channel-less property');
+  assert.ok(!secrets.has('ga4-slack-webhook:acct1'), 'legacy account-level secret deleted');
+  assert.ok(st.targetStatuses.every((t) => t.hasWebhook), 'both properties now show their own channel');
+  assert.equal(st.targets.find((t) => t.propertyId === 'properties/2')!.slackLabel, '#old-default', 'migrated channel inherits the old global label');
+  assert.equal(st.hasWebhook, false, 'no account-level webhook remains');
 
+  // A sweep posts each property to ITS channel.
   await svc.runOnce();
-  assert.deepEqual(sentTo, ['https://hooks.slack.com/services/T/B/acme-own', 'https://hooks.slack.com/services/T/B/default'], 'Acme posts to its own channel, Beta to the default');
+  assert.deepEqual(sentTo, ['https://hooks.slack.com/services/T/B/acme-own', 'https://hooks.slack.com/services/T/B/default'], 'each property posts to its own channel');
 
-  // sendTest(propertyId) exercises the same routing.
-  sentTo.length = 0;
-  await svc.sendTest('properties/1');
-  await svc.sendTest('properties/2');
-  assert.deepEqual(sentTo, ['https://hooks.slack.com/services/T/B/acme-own', 'https://hooks.slack.com/services/T/B/default'], 'per-property test posts to the effective channel');
-
-  // Removing the property's channel falls back to the default (and a re-test proves it).
+  // Removing a property's channel means NO alerts for it (there is no fallback any more).
   svc.clearWebhook('properties/1');
   assert.equal(svc.status().targetStatuses[0].hasWebhook, false, 'own channel removed');
   sentTo.length = 0;
-  await svc.sendTest('properties/1');
-  assert.deepEqual(sentTo, ['https://hooks.slack.com/services/T/B/default'], 'falls back to the default channel');
+  const t1 = await svc.sendTest('properties/1');
+  assert.ok(!t1.ok && /No Slack channel is connected for this property/.test(t1.error ?? ''), JSON.stringify(t1));
+  assert.deepEqual(sentTo, [], 'nothing posted without an own channel');
+  // A propertyId-less test is no longer meaningful.
+  const t0 = await svc.sendTest();
+  assert.ok(!t0.ok && /Pick a property/.test(t0.error ?? ''), JSON.stringify(t0));
 });
 
 test('removing a monitored property also deletes its per-property webhook secret', async () => {
@@ -245,7 +251,7 @@ test('setWebhook rejects a non-Slack URL and stores a valid one', async () => {
   assert.equal(svc.status().hasWebhook, false, 'clearWebhook removes it');
 });
 
-test('sendTest posts a confirmation to the webhook, and fails cleanly when none is stored', async () => {
+test('sendTest posts a confirmation to the property channel, and fails cleanly when none is stored', async () => {
   const secrets = makeSecrets();
   const posts: string[] = [];
   const svc = new Ga4MonitoringService({
@@ -253,13 +259,13 @@ test('sendTest posts a confirmation to the webhook, and fails cleanly when none 
     slackFetch: async (_url, init) => { posts.push(init.body); return { ok: true, status: 200, text: async () => 'ok' }; },
   });
   svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], enabled: false });
-  // No webhook yet → clean failure, no POST.
-  const noHook = await svc.sendTest();
-  assert.ok(!noHook.ok && /No Slack webhook/.test(noHook.error ?? ''), JSON.stringify(noHook));
-  assert.equal(posts.length, 0, 'no POST without a webhook');
-  // With a webhook → posts a test message naming the property.
-  svc.setWebhook('https://hooks.slack.com/services/T/B/x');
-  const ok = await svc.sendTest();
+  // No channel yet -> clean failure, no POST.
+  const noHook = await svc.sendTest('properties/1');
+  assert.ok(!noHook.ok && /No Slack channel is connected/.test(noHook.error ?? ''), JSON.stringify(noHook));
+  assert.equal(posts.length, 0, 'no POST without a channel');
+  // With the property's own channel -> posts a test message naming the property.
+  svc.setWebhook('https://hooks.slack.com/services/T/B/x', 'properties/1');
+  const ok = await svc.sendTest('properties/1');
   assert.ok(ok.ok, JSON.stringify(ok));
   assert.equal(posts.length, 1, 'one test POST');
   assert.ok(posts[0].includes('Acme'), 'the test message names the property');

@@ -97,10 +97,8 @@ function RunDetail({ run }: { run: Ga4MonitorRun }): JSX.Element {
 
 /** The open property's full panel: header (name, health, timings, controls), its Slack channel
  *  section (channel name + edit link + test + remove), then its latest run. */
-function PropertyPanel({ t, defaultChannel, runningId, busy, onRun, onTogglePause, onRemove, onSaveChannel, onTestChannel, onRemoveChannel }: {
+function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onSaveChannel, onTestChannel, onRemoveChannel }: {
   t: Ga4MonitorTargetStatus;
-  /** Whether the account default channel exists (wording for the fallback state). */
-  defaultChannel: boolean;
   runningId: string | null;
   busy: boolean;
   onRun: () => void;
@@ -158,7 +156,7 @@ function PropertyPanel({ t, defaultChannel, runningId, busy, onRun, onTogglePaus
             </span>
           ) : (
             <span style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>
-              {defaultChannel ? 'no own channel — alerts go to the default channel' : 'no channel — connect one (or set a default channel below)'}
+              no channel connected — this property will not alert Slack until you connect one
             </span>
           )}
           <span style={{ flex: 1 }} />
@@ -202,7 +200,7 @@ function PropertyPanel({ t, defaultChannel, runningId, busy, onRun, onTogglePaus
               )}
             </div>
             <span style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.4 }}>
-              One property, one channel: this property's alerts post here; without an own channel it uses the default. The URL is stored encrypted in your OS keychain.
+              One property, one channel: this property's alerts post here. The URL is stored encrypted in your OS keychain. (How to get a webhook URL — see the Slack alerts card below.)
             </span>
           </div>
         )}
@@ -249,19 +247,11 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addId, setAddId] = useState('');
   const [runningId, setRunningId] = useState<string | null>(null); // propertyId, or '*' for a full sweep
-  const [webhookInput, setWebhookInput] = useState('');
-  const [labelInput, setLabelInput] = useState('');
-  const [labelDirty, setLabelDirty] = useState(false);
   // Optional Slack channel captured WHILE adding a property (link + name in the same step).
   const [addChanUrl, setAddChanUrl] = useState('');
   const [addChanLabel, setAddChanLabel] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
-
-  // Seed the label field from saved config until the user starts editing (then keep their draft).
-  useEffect(() => {
-    if (!labelDirty) setLabelInput(status?.slackLabel ?? '');
-  }, [status?.slackLabel, labelDirty]);
 
   async function refreshStatus(): Promise<void> {
     try { setStatus(await window.desktop.ga4monitoring.status()); } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
@@ -333,31 +323,6 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
     } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setRunningId(null); }
   }
 
-  // ── Default (account-level) Slack channel ──
-  async function saveWebhook(): Promise<void> {
-    const url = webhookInput.trim();
-    if (!url && !labelDirty) return;
-    setBusy(true); onError(''); setNote('');
-    try {
-      if (url) { await window.desktop.ga4monitoring.setWebhook(url); setWebhookInput(''); }
-      setStatus(await window.desktop.ga4monitoring.configure({ slackLabel: labelInput.trim() }));
-      setLabelDirty(false);
-      setNote(url ? 'Default Slack webhook saved (encrypted).' : 'Default channel label saved.');
-    } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
-  }
-  async function clearWebhook(): Promise<void> {
-    setBusy(true); onError('');
-    try { setStatus(await window.desktop.ga4monitoring.clearWebhook()); setNote('Default Slack webhook removed.'); }
-    catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
-  }
-  async function sendTest(): Promise<void> {
-    setBusy(true); onError(''); setNote('');
-    try {
-      const r = await window.desktop.ga4monitoring.sendTest();
-      setNote(r.ok ? 'Test message sent — check your Slack channel to confirm where alerts land.' : `Test failed: ${r.error ?? 'unknown error'}`);
-    } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
-  }
-
   // ── Per-property channel handlers (used by the open property's panel) ──
   async function savePropertyChannel(propertyId: string, url: string, lbl: string): Promise<boolean> {
     if (!status) return false;
@@ -367,7 +332,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       setStatus(await window.desktop.ga4monitoring.configure({
         targets: status.targets.map((t) => (t.propertyId === propertyId ? { ...t, slackLabel: lbl || undefined } : t)),
       }));
-      setNote(url ? 'Property channel saved (encrypted) — its alerts now post there instead of the default.' : 'Channel name saved.');
+      setNote(url ? 'Property channel saved (encrypted) — new issues for this property will post there.' : 'Channel name saved.');
       return true;
     } catch (e) { onError(e instanceof Error ? e.message : String(e)); return false; } finally { setBusy(false); }
   }
@@ -421,7 +386,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
           </div>
           {addId && (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
-              <input style={{ ...input, flex: 2, minWidth: 220, fontSize: 12 }} type="password" placeholder="Slack webhook for this property (optional — default channel if empty)" value={addChanUrl} onChange={(e) => setAddChanUrl(e.target.value)} />
+              <input style={{ ...input, flex: 2, minWidth: 220, fontSize: 12 }} type="password" placeholder="Slack webhook for this property (optional — connect later from its tab)" value={addChanUrl} onChange={(e) => setAddChanUrl(e.target.value)} />
               <input style={{ ...input, flex: 1, minWidth: 130, fontSize: 12 }} type="text" placeholder="#channel name" value={addChanLabel} onChange={(e) => setAddChanLabel(e.target.value)} />
             </div>
           )}
@@ -496,7 +461,6 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
             <PropertyPanel
               key={selected.propertyId}
               t={selected}
-              defaultChannel={Boolean(status?.hasWebhook)}
               runningId={runningId}
               busy={busy}
               onRun={() => void runNow(selected.propertyId)}
@@ -510,54 +474,26 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
         </div>
       )}
 
-      {/* ── Default Slack channel (account-level fallback) ── */}
+      {/* ── Slack alerts: the global on/off switch + the webhook how-to guide. Each property has its
+             OWN channel (connect it from the property's tab) — there is no shared default channel. ── */}
       <div style={box}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <span style={{ fontWeight: 600 }}>
-            Default Slack channel{' '}
-            {status?.hasWebhook
-              ? <span style={{ color: 'var(--c-green)', fontSize: 12 }}>· connected</span>
-              : <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>· not configured</span>}
-          </span>
+          <span style={{ fontWeight: 600 }}>Slack alerts</span>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
             <input type="checkbox" checked={Boolean(status?.slackEnabled)} disabled={busy} onChange={(e) => void configure({ slackEnabled: e.target.checked })} />
             Send new issues to Slack
           </label>
         </div>
-        {status?.hasWebhook ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 999, padding: '5px 14px', fontSize: 13 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--c-green)', display: 'inline-block' }} />
-              {status.slackLabel || 'Slack channel connected'}
-            </span>
-            <button style={btn} onClick={() => void sendTest()} disabled={busy} title="Post a confirmation message so you can see which channel receives alerts">Send test</button>
-            <button style={btn} onClick={() => void clearWebhook()} disabled={busy}>Remove</button>
-            <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Any property without its own channel posts here. Give a property its own channel from its tab.</span>
-          </div>
-        ) : (
-          <>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <input style={{ ...input, flex: 1, minWidth: 260 }} type="password" placeholder="https://hooks.slack.com/services/…" value={webhookInput} onChange={(e) => setWebhookInput(e.target.value)} />
-              <button style={btn} onClick={() => void saveWebhook()} disabled={busy || !webhookInput.trim()}>Save webhook</button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 8 }}>
-              <span style={label}>Channel &amp; workspace (label)</span>
-              <input style={{ ...input, maxWidth: 420 }} type="text" placeholder="#ga4-alerts · Acme workspace" value={labelInput} onChange={(e) => { setLabelInput(e.target.value); setLabelDirty(true); }} />
-              <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>Slack doesn’t expose the channel or workspace from a webhook URL, so note them here — it’s shown as the connection status.</span>
-            </div>
-            <details style={{ marginTop: 8 }}>
-              <summary style={{ fontSize: 12, color: 'var(--c-blue)', cursor: 'pointer', userSelect: 'none' }}>How do I get a webhook URL? (choose the channel to alert)</summary>
-              <ol style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, margin: '8px 0 0', paddingLeft: 18 }}>
-                <li>Open <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer" style={{ color: 'var(--c-blue)' }}>api.slack.com/apps</a> → <b>Create New App</b> → <b>From scratch</b> (or pick an existing app), then choose your workspace.</li>
-                <li>In the app’s left menu open <b>Incoming Webhooks</b> and toggle <b>Activate Incoming Webhooks</b> to <b>On</b>.</li>
-                <li>Click <b>Add New Webhook to Workspace</b>, pick the <b>channel</b> the alerts should post to, then <b>Allow</b>. (The channel is baked into the URL — that’s how you pick where alerts land.)</li>
-                <li>Copy the generated <b>Webhook URL</b> — it starts with <code style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>https://hooks.slack.com/services/</code>.</li>
-                <li>Paste it in the box above and click <b>Save webhook</b>.</li>
-              </ol>
-            </details>
-            <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 6 }}>The URL is stored encrypted in your OS keychain (never synced or logged). An ongoing issue is posted once per property, not on every check.</div>
-          </>
-        )}
+        <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 8 }}>
+          One property, one channel: connect each property's Slack channel from its tab above (<b>＋ Connect channel</b>). How to get a webhook URL for a channel:
+        </div>
+        <ol style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, margin: 0, paddingLeft: 18 }}>
+          <li>Open <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer" style={{ color: 'var(--c-blue)' }}>api.slack.com/apps</a> → <b>Create New App</b> → <b>From scratch</b> (or pick an existing app), then choose your workspace.</li>
+          <li>In the app’s left menu open <b>Incoming Webhooks</b> and toggle <b>Activate Incoming Webhooks</b> to <b>On</b>.</li>
+          <li>Click <b>Add New Webhook to Workspace</b>, pick the <b>channel</b> the alerts should post to, then <b>Allow</b>. (The channel is baked into the URL — that’s how you pick where alerts land.)</li>
+          <li>Copy the generated <b>Webhook URL</b> — it starts with <code style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>https://hooks.slack.com/services/</code>.</li>
+        </ol>
+        <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 8 }}>The URL is stored encrypted in your OS keychain (never synced or logged). An ongoing issue is posted once per property, not on every check.</div>
       </div>
 
       {/* ── Footer status line ── */}
