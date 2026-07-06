@@ -1,3 +1,15 @@
+## [1.210.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.209.0...v1.210.0) (2026-07-06)
+
+### Features
+
+* **desktop:** "Align event name" apply-fix in the Tag verification tab ([c236ca4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c236ca46cc2b08377449c07da64772b2d6ab019a))
+* **desktop:** "Auto-verify & heal" loop in Tag suggestions ([c253aa0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c253aa005e5709c65d52c27c2ba313654ade2be4))
+* **desktop:** GA4 Monitoring dashboard UI - fleet rollup + property cards grid ([22a0990](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/22a09904b6baff7becdffb734c7f3108740c1782))
+
+### Bug Fixes
+
+* **desktop:** auto-heal loop convergence + stuck-busy + stale-state (review of [#348](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/348)) ([e7540b1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e7540b1778ea048496beeeea64a83b59297b00f7))
+
 ## [1.209.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.208.0...v1.209.0) (2026-07-06)
 
 ### Features
