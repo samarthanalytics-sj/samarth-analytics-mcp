@@ -55,6 +55,11 @@ import {
   triggerUsageBreakdown,
   findUnusedVariables,
   collectReferencedVariableNames,
+  findDanglingVariableReferences,
+  inspectVariableConfig,
+  findVariableNamingIssues,
+  varParam,
+  BUILTIN_VARIABLE_NAMES,
   detectMetaTags,
   customTemplateType,
   buildAdsConversionServerTag,
@@ -2316,6 +2321,161 @@ test('findUnusedVariables: variables referenced by no tag/trigger/other-variable
     ['11', '12'],
     'Page Path + the unused Wrapper; GA4 ID is referenced so it is kept',
   );
+});
+
+test('findDanglingVariableReferences: only truly-undefined {{refs}} flagged; built-ins / _internal / defined vars kept', () => {
+  const snap = {
+    tags: [
+      {
+        tagId: 't1', name: 'GA4', type: 'gaawe', firingTriggerId: ['T1'], paused: false,
+        parameter: [
+          { type: 'template', key: 'p1', value: '{{Page URL}}' },        // built-in → NOT dangling
+          { type: 'template', key: 'p2', value: '{{Defined Var}}' },     // defined → NOT dangling
+          { type: 'template', key: 'p3', value: '{{Ghost Var}}' },       // undefined → DANGLING
+        ],
+      },
+    ],
+    triggers: [
+      {
+        triggerId: 'T1', name: 'CE', type: 'customEvent',
+        customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'x' }] }],
+        filter: [{ type: 'contains', parameter: [{ type: 'template', key: 'arg0', value: '{{Also Missing}}' }] }], // undefined → DANGLING
+      },
+    ],
+    variables: [
+      { variableId: 'V1', name: 'Defined Var', type: 'c', parameter: [] },
+      // A variable that references ITSELF plus a real missing var — self-ref must NOT be flagged.
+      { variableId: 'V2', name: 'Self Ref', type: 'jsm', parameter: [{ type: 'template', key: 'javascript', value: 'return {{Self Ref}} + {{Nope}};' }] },
+    ],
+  };
+  const dangling = findDanglingVariableReferences(snap);
+  const byId = new Map(dangling.map((d) => [d.resource.id, d.missing.sort()]));
+  assert.deepEqual(byId.get('t1'), ['Ghost Var'], 'tag: only Ghost Var (not Page URL / Defined Var)');
+  assert.deepEqual(byId.get('T1'), ['Also Missing'], 'trigger: only Also Missing (not {{_event}} internal)');
+  assert.deepEqual(byId.get('V2'), ['Nope'], 'variable: only Nope (self-reference {{Self Ref}} not flagged)');
+  assert.equal(dangling.length, 3, 'exactly three resources have dangling refs');
+});
+
+test('BUILTIN_VARIABLE_NAMES covers the common enabled built-ins', () => {
+  for (const n of ['Page URL', 'Click Text', 'Form Element', 'Error Message', 'Scroll Depth Threshold', 'Video Provider', 'New History Fragment', 'Percent Visible', 'Event']) {
+    assert.ok(BUILTIN_VARIABLE_NAMES.has(n), `${n} is a recognised built-in`);
+  }
+  assert.ok(!BUILTIN_VARIABLE_NAMES.has('Not A Builtin'));
+});
+
+test('varParam reads a scalar param value; missing → empty string', () => {
+  const v = { variableId: 'V', name: 'x', type: 'v', parameter: [{ type: 'template', key: 'name', value: 'ecommerce.value' }, { type: 'integer', key: 'dataLayerVersion', value: '2' }] };
+  assert.equal(varParam(v, 'name'), 'ecommerce.value');
+  assert.equal(varParam(v, 'dataLayerVersion'), '2');
+  assert.equal(varParam(v, 'absent'), '');
+});
+
+test('inspectVariableConfig: broken DLV / URL-query / cookie / lookup flagged; well-formed ones are NOT', () => {
+  const bad = {
+    tags: [], triggers: [],
+    variables: [
+      { variableId: 'D1', name: 'DLV empty', type: 'v', parameter: [{ type: 'integer', key: 'dataLayerVersion', value: '2' }] }, // no 'name' key
+      { variableId: 'U1', name: 'URL no key', type: 'u', parameter: [{ type: 'template', key: 'component', value: 'QUERY' }] },     // QUERY, no queryKey
+      { variableId: 'K1', name: 'Cookie no name', type: 'k', parameter: [] },                                                       // no cookie name
+      { variableId: 'L1', name: 'Empty lookup', type: 'smm', parameter: [{ type: 'list', key: 'map', list: [] }] },                 // no rows
+      { variableId: 'R1', name: 'Empty regex', type: 'remm', parameter: [] },                                                       // no map at all
+    ],
+  };
+  const badChecks = new Map(inspectVariableConfig(bad).map((c) => [c.variable.variableId, c.checkId]));
+  assert.equal(badChecks.get('D1'), 'variable-config-dlv');
+  assert.equal(badChecks.get('U1'), 'variable-config-url');
+  assert.equal(badChecks.get('K1'), 'variable-config-cookie');
+  assert.equal(badChecks.get('L1'), 'variable-config-lookup');
+  assert.equal(badChecks.get('R1'), 'variable-config-lookup');
+  assert.equal(badChecks.size, 5, 'all five broken variables flagged');
+
+  const good = {
+    tags: [], triggers: [],
+    variables: [
+      buildVariable({ name: 'DLV ok', kind: 'data_layer', dataLayerName: 'ecommerce.value' }),
+      buildUrlQueryVariable('URL ok', 'q'),
+      { variableId: 'K2', name: 'Cookie ok', type: 'k', parameter: [{ type: 'template', key: 'name', value: 'gclid' }] },
+      buildLookupTableVariable('Lookup ok', '{{Page Path}}', [{ key: '/a', value: 'A' }]),
+    ].map((v, i) => ({ variableId: `G${i}`, name: v.name, type: v.type, parameter: v.parameter ?? [] })),
+  };
+  assert.deepEqual(inspectVariableConfig(good), [], 'no well-formed variable is flagged');
+
+  // A URL variable that is NOT a QUERY component (e.g. HOST) with no queryKey must NOT be flagged.
+  const nonQuery = { tags: [], triggers: [], variables: [{ variableId: 'U2', name: 'URL host', type: 'u', parameter: [{ type: 'template', key: 'component', value: 'HOST' }] }] };
+  assert.deepEqual(inspectVariableConfig(nonQuery), [], 'non-QUERY URL variable without queryKey is fine');
+});
+
+test('findVariableNamingIssues: placeholder + whitespace names flagged; clean names are NOT', () => {
+  const snap = {
+    tags: [
+      { tagId: 'T1', name: 'Untitled Variable', type: 'html', firingTriggerId: [], paused: false, parameter: [] }, // placeholder
+      { tagId: 'T2', name: 'GA4 - purchase', type: 'gaawe', firingTriggerId: [], paused: false, parameter: [] },   // clean
+    ],
+    triggers: [
+      { triggerId: 'TR1', name: 'Copy of Click', type: 'linkClick' }, // placeholder
+    ],
+    variables: [
+      { variableId: 'V1', name: 'Trailing space ', type: 'c', parameter: [] }, // whitespace
+      { variableId: 'V2', name: 'Double  space', type: 'c', parameter: [] },   // whitespace (≥2 run)
+      { variableId: 'V3', name: '', type: 'c', parameter: [] },                // empty → placeholder
+      { variableId: 'V4', name: 'Clean Name', type: 'c', parameter: [] },      // clean
+    ],
+  };
+  const issues = findVariableNamingIssues(snap);
+  const byId = new Map(issues.map((i) => [i.resource.id, i.checkId]));
+  assert.equal(byId.get('T1'), 'placeholder-name');
+  assert.equal(byId.get('TR1'), 'placeholder-name');
+  assert.equal(byId.get('V1'), 'name-whitespace');
+  assert.equal(byId.get('V2'), 'name-whitespace');
+  assert.equal(byId.get('V3'), 'placeholder-name');
+  assert.equal(byId.has('T2'), false, 'clean tag name not flagged');
+  assert.equal(byId.has('V4'), false, 'clean variable name not flagged');
+  assert.equal(issues.length, 5);
+});
+
+test('auditContainer surfaces dangling-variable-ref + variable-config-* + placeholder-name findings', () => {
+  const r = auditContainer({
+    tags: [
+      {
+        tagId: 'TG', name: 'Untitled Tag', type: 'gaawe', firingTriggerId: ['T1'], paused: false,
+        // valid mid + event so no ga4 findings; references a variable that does not exist
+        parameter: [
+          { type: 'template', key: 'measurementIdOverride', value: 'G-1' },
+          { type: 'template', key: 'eventName', value: 'purchase' },
+          { type: 'template', key: 'x', value: '{{Missing Thing}}' },
+        ],
+        consentSettings: { consentStatus: 'needed' },
+      },
+    ],
+    triggers: [{ triggerId: 'T1', name: 'Used', type: 'pageview' }],
+    variables: [
+      // A broken Data Layer variable (no key) that IS referenced (so not flagged unused) — via the tag? No.
+      // Reference it from another variable so it isn't reported unused, keeping the test focused.
+      { variableId: 'V1', name: 'Broken DLV', type: 'v', parameter: [{ type: 'integer', key: 'dataLayerVersion', value: '2' }] },
+      { variableId: 'V2', name: 'Refs DLV', type: 'jsm', parameter: [{ type: 'template', key: 'javascript', value: 'return {{Broken DLV}} + {{Missing Thing}};' }] },
+    ],
+  });
+  const byCheck = (id: string) => r.findings.filter((f) => f.checkId === id);
+
+  const dangling = byCheck('dangling-variable-ref');
+  assert.ok(dangling.length >= 1, 'at least one dangling-variable-ref finding');
+  assert.ok(dangling.every((f) => f.severity === 'medium' && f.confidence === 'likely' && f.category === 'variable' && f.autoFixable === false));
+  assert.ok(dangling.some((f) => f.message.includes('{{Missing Thing}}')), 'names the missing variable');
+
+  const dlv = byCheck('variable-config-dlv');
+  assert.equal(dlv.length, 1, 'the empty-key Data Layer variable is flagged');
+  assert.equal(dlv[0].severity, 'medium');
+  assert.equal(dlv[0].confidence, 'certain');
+  assert.equal(dlv[0].category, 'variable');
+  assert.equal(dlv[0].resource?.id, 'V1');
+  assert.equal(dlv[0].autoFixable, false);
+
+  const placeholder = byCheck('placeholder-name');
+  assert.ok(placeholder.some((f) => f.resource?.id === 'TG'), 'the "Untitled Tag" is flagged placeholder-name');
+  assert.ok(placeholder.every((f) => f.severity === 'low' && f.category === 'naming'));
+
+  // The confidence/type enrichment still runs: resource.type is present on the DLV finding.
+  assert.equal(dlv[0].resource?.type, 'v');
 });
 
 test('triggerUsageBreakdown: orphaned count + how blocking / paused-firing would change it', () => {
