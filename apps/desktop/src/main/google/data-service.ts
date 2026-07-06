@@ -2233,6 +2233,30 @@ export class GoogleDataService {
     return { tagName: plan.tagName, triggerId: plan.triggerId, mode: 'rewrite', triggerName: res.data.name ?? plan.tagName };
   }
 
+  /**
+   * Align a GA4 Event tag's Event Name to a value observed during verification (the "align event
+   * name" fix — when the trigger fires a hit but under a different event name). Finds the gaawe tag
+   * by name and updates its `eventName` template parameter via the RMW updateGtmTag merge, which
+   * keeps every other setting. Draft-only; never publishes.
+   */
+  async setGa4TagEventName(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    tagName: string,
+    eventName: string
+  ): Promise<{ tagName: string; eventName: string }> {
+    const ev = eventName.trim();
+    if (!ev) throw new Error('Provide an event name to set.');
+    const snap = await this.getGtmContainerSnapshot(accountId, containerId, workspaceId);
+    const want = tagName.trim();
+    const tag = snap.tags.find((t) => (t.name ?? '').trim() === want);
+    if (!tag) throw new Error(`No tag named "${tagName}" in this workspace.`);
+    if (tag.type !== 'gaawe') throw new Error(`"${tagName}" is not a GA4 Event tag (type "${tag.type}"), so it has no Event Name to align.`);
+    await this.updateGtmTag(accountId, containerId, workspaceId, tag.tagId, { parameter: [{ type: 'template', key: 'eventName', value: ev }] });
+    return { tagName: tag.name, eventName: ev };
+  }
+
   async createGtmVariable(
     accountId: string,
     containerId: string,

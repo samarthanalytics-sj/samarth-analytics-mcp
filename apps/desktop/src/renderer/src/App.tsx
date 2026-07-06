@@ -3451,6 +3451,9 @@ function VerifyPanel({
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
   const [vShowSkipped, setVShowSkipped] = useState(false);
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
+  // Event-name aligns applied this session (tagId → new event name), so the row shows "✓ aligned".
+  const [aligned, setAligned] = useState<Record<string, string>>({});
+  const [aligning, setAligning] = useState<string | null>(null);
 
   function verifyErrorText(e: unknown): string {
     const m = e instanceof Error ? e.message : String(e);
@@ -3507,6 +3510,23 @@ function VerifyPanel({
       setVNote({ kind: 'error', text: verifyErrorText(e) });
     } finally {
       setVMinting(false);
+    }
+  }
+
+  // Apply the "align event name" fix: set the GA4 tag's Event Name to the value that actually
+  // fired (draft-only write), then prompt a re-verify to confirm.
+  async function alignEventName(v: VerifyTagsResult['verdicts'][number], eventName: string): Promise<void> {
+    if (!ready || !ctx || aligning) return;
+    setAligning(v.tagId);
+    setVNote(null);
+    try {
+      await window.desktop.gtm.setTagEventName({ accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!, tagName: v.tagName, eventName });
+      setAligned((a) => ({ ...a, [v.tagId]: eventName }));
+      setVNote({ kind: 'info', text: `Set “${v.tagName}” Event Name → ${eventName}. Re-verify to confirm it fires.` });
+    } catch (e) {
+      setVNote({ kind: 'error', text: verifyErrorText(e) });
+    } finally {
+      setAligning(null);
     }
   }
 
@@ -3632,6 +3652,25 @@ function VerifyPanel({
                         </div>
                         {v.reason ? <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2 }}>Why: {v.reason}</div> : null}
                         <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>Fix: {verdictHowToFix(v)}</div>
+                        {v.observedEvents && v.observedEvents.length > 0 && (
+                          <div style={{ marginLeft: 8, marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                            {aligned[v.tagId] ? (
+                              <span style={{ color: 'var(--c-green)', fontSize: 12.5 }}>✓ Event Name set to {aligned[v.tagId]} — re-verify to confirm.</span>
+                            ) : (
+                              v.observedEvents.map((ev) => (
+                                <button
+                                  key={ev}
+                                  style={{ ...styles.toggleOff, fontSize: 12.5, padding: '3px 8px' }}
+                                  disabled={aligning === v.tagId}
+                                  onClick={() => void alignEventName(v, ev)}
+                                  title={`Set this GA4 tag's Event Name to "${ev}" (draft-only; never publishes)`}
+                                >
+                                  {aligning === v.tagId ? 'Aligning…' : `Align Event Name → ${ev}`}
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
                       </li>
                     );
                   })}
