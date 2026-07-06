@@ -1,3 +1,9 @@
+## [1.196.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.195.0...v1.196.0) (2026-07-06)
+
+### Features
+
+* **desktop:** GA4 report restyled to the lab-report template ([ec2ba38](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ec2ba38c91d56042ed98adcba4ef68cd90ed2179))
+
 ## [1.195.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.194.1...v1.195.0) (2026-07-06)
 
 ### Features
