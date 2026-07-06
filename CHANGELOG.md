@@ -1,3 +1,13 @@
+## [1.205.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.204.4...v1.205.0) (2026-07-06)
+
+### Features
+
+* **desktop:** graceful expired-token (invalid_grant) handling app-wide ([ec83b99](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ec83b992413cea2bfa10fc9542c00f3487a03cf1))
+
+### Bug Fixes
+
+* **desktop:** reconnect banner handles multiple expired accounts (review) ([f1c6f1e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f1c6f1e449274e0bc640bbe0b8b01fe0b11fc127))
+
 ## [1.204.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.204.3...v1.204.4) (2026-07-06)
 
 ### Bug Fixes
