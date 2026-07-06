@@ -10,7 +10,10 @@ export function registerGa4MonitoringIpc(service: Ga4MonitoringService): void {
   ipcMain.handle('ga4monitoring:configure', (_e, patch: Partial<Ga4MonitorConfig>) =>
     service.configure(patch && typeof patch === 'object' ? patch : {})
   );
-  ipcMain.handle('ga4monitoring:runNow', () => service.runOnce());
+  // Optional propertyId: run one target on demand (even a paused one); omitted -> sweep all enabled.
+  ipcMain.handle('ga4monitoring:runNow', (_e, propertyId?: unknown) =>
+    service.runOnce(typeof propertyId === 'string' && propertyId ? propertyId : undefined)
+  );
   ipcMain.handle('ga4monitoring:setWebhook', (_e, url: unknown) => service.setWebhook(String(url ?? '')));
   ipcMain.handle('ga4monitoring:clearWebhook', () => service.clearWebhook());
   ipcMain.handle('ga4monitoring:sendTest', () => service.sendTest());

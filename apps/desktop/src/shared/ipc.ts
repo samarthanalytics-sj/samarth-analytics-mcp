@@ -700,19 +700,29 @@ export interface MonitorAlert {
 }
 
 // ── GA4 Monitoring ───────────────────────────────────────────────────────────
-// A background health monitor for a chosen GA4 property: re-checks data flow, key
-// events, spikes/drops and revenue integrity on a timer and (optionally) Slacks new issues.
+// A background health monitor for a LIST of GA4 properties: each check sweeps the enabled
+// properties sequentially, re-checking data flow, key events, spikes/drops and revenue
+// integrity, and (optionally) Slacks new issues per property.
 
-/** Persisted config for the GA4 monitor (single active property, mirrors the GTM MonitorConfig). */
-export interface Ga4MonitorConfig {
-  enabled: boolean;
-  /** Minutes between automatic checks (clamped to a sane minimum in main). */
-  intervalMinutes: number;
-  /** Property to monitor, like "properties/123456"; null until one is chosen in the tab. */
-  propertyId: string | null;
-  /** Display name for the property (for Slack + the tab header). */
+/** One monitored GA4 property. */
+export interface Ga4MonitorTarget {
+  /** Like "properties/123456". */
+  propertyId: string;
+  /** Display name (for Slack, the tab list and the alert banner). */
   propertyLabel: string;
-  /** Lookback window (days) for trend + per-event regression detection. */
+  /** Pause/resume this property without removing it from the list. */
+  enabled: boolean;
+}
+
+/** Persisted config for the GA4 monitor (multi-property; mirrors the GTM MonitorConfig in shape). */
+export interface Ga4MonitorConfig {
+  /** Master background switch — the timer only runs when this is on AND >=1 target is enabled. */
+  enabled: boolean;
+  /** Minutes between automatic sweeps (clamped to a sane minimum in main). */
+  intervalMinutes: number;
+  /** The properties being monitored. Capped in main to keep API quota sane. */
+  targets: Ga4MonitorTarget[];
+  /** Lookback window (days) for trend + per-event regression detection (shared by all targets). */
   days: number;
   /** Post new issues to the active account's Slack webhook (requires a stored webhook). */
   slackEnabled: boolean;
@@ -753,14 +763,24 @@ export interface Ga4MonitorRun {
   slackError: string | null;
 }
 
+/** Live per-property status: the configured target plus its latest run/error. */
+export interface Ga4MonitorTargetStatus extends Ga4MonitorTarget {
+  lastRunAt: number | null;
+  lastError: string | null;
+  /** That property's most recent run so the tab can render on mount even if it wasn't open. */
+  lastRun: Ga4MonitorRun | null;
+}
+
 export interface Ga4MonitorStatus extends Ga4MonitorConfig {
   running: boolean;
+  /** Most recent check time across all targets. */
   lastRunAt: number | null;
+  /** Most recent error across all targets (null when the last sweep was clean). */
   lastError: string | null;
   /** Whether a Slack webhook is stored for the active account (drives the settings UI state). */
   hasWebhook: boolean;
-  /** The most recent run so the tab can render on mount even if it wasn't open when it ran. */
-  lastRun: Ga4MonitorRun | null;
+  /** One entry per configured target, in config order. */
+  targetStatuses: Ga4MonitorTargetStatus[];
 }
 
 export interface GoogleClientStatus {

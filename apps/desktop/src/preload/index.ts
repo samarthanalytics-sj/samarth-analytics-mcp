@@ -322,14 +322,15 @@ const api = {
     },
   },
 
-  // GA4 Monitoring: schedule background health checks of a chosen GA4 property (data flow, key
-  // events, spikes/drops, revenue integrity) and receive a run whenever it completes; new issues can
-  // be posted to a per-account Slack webhook.
+  // GA4 Monitoring: schedule background health checks of a LIST of GA4 properties (data flow, key
+  // events, spikes/drops, revenue integrity) and receive a run per property whenever a sweep
+  // completes; new issues can be posted to a per-account Slack webhook.
   ga4monitoring: {
     status: (): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:status'),
     configure: (patch: Partial<Ga4MonitorConfig>): Promise<Ga4MonitorStatus> =>
       ipcRenderer.invoke('ga4monitoring:configure', patch),
-    runNow: (): Promise<Ga4MonitorRun | null> => ipcRenderer.invoke('ga4monitoring:runNow'),
+    /** Run one property on demand, or (no arg) sweep all enabled properties. */
+    runNow: (propertyId?: string): Promise<Ga4MonitorRun[]> => ipcRenderer.invoke('ga4monitoring:runNow', propertyId),
     setWebhook: (url: string): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:setWebhook', url),
     clearWebhook: (): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:clearWebhook'),
     sendTest: (): Promise<{ ok: boolean; error: string | null }> => ipcRenderer.invoke('ga4monitoring:sendTest'),

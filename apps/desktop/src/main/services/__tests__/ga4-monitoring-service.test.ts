@@ -54,10 +54,10 @@ test('a new issue Slacks once; the same ongoing issue does not re-Slack on the n
     now: () => Date.parse('2026-07-02T09:00:00Z'),
     slackFetch: async (_url, init) => { posts.push(init.body); return { ok: true, status: 200, text: async () => 'ok' }; },
   });
-  svc.configure({ propertyId: 'properties/1', propertyLabel: 'Acme', slackEnabled: true, enabled: false });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], slackEnabled: true, enabled: false });
   svc.setWebhook('https://hooks.slack.com/services/T/B/x');
 
-  const run1 = await svc.runOnce();
+  const [run1] = await svc.runOnce();
   assert.ok(run1, 'run produced');
   assert.equal(run1.health, 'critical');
   assert.ok(run1.alerts.some((a) => a.kind === 'no_data'), 'no_data alert: ' + JSON.stringify(run1.alerts.map((a) => a.kind)));
@@ -66,12 +66,81 @@ test('a new issue Slacks once; the same ongoing issue does not re-Slack on the n
   assert.equal(run1.slackSent, 1, 'Slacked once');
   assert.equal(posts.length, 1, 'a single Slack POST carries all the new alerts');
 
-  const run2 = await svc.runOnce();
+  const [run2] = await svc.runOnce();
   assert.ok(run2 && run2.alerts.some((a) => a.kind === 'no_data'), 'still failing');
   assert.deepEqual(run2.newAlertIds, [], 'no NEW alerts on run 2');
   assert.equal(run2.slackSent, 0, 'no repeat Slack for the ongoing issue');
   assert.equal(posts.length, 1, 'still just one POST total');
   assert.equal(emitted.length, 2, 'both runs broadcast to the renderer');
+});
+
+test('multi-property: a sweep runs every enabled target with INDEPENDENT alert dedup + one Slack per property', async () => {
+  const secrets = makeSecrets();
+  const posts: string[] = [];
+  const emitted: Ga4MonitorRun[] = [];
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account },
+    data: fakeData(),
+    secrets,
+    emit: (r) => emitted.push(r),
+    now: () => Date.parse('2026-07-02T09:00:00Z'),
+    slackFetch: async (_url, init) => { posts.push(init.body); return { ok: true, status: 200, text: async () => 'ok' }; },
+  });
+  svc.configure({
+    targets: [
+      { propertyId: 'properties/1', propertyLabel: 'Acme Store', enabled: true },
+      { propertyId: 'properties/2', propertyLabel: 'Beta Store', enabled: true },
+    ],
+    slackEnabled: true, enabled: false,
+  });
+  svc.setWebhook('https://hooks.slack.com/services/T/B/x');
+
+  const sweep1 = await svc.runOnce();
+  assert.equal(sweep1.length, 2, 'both targets checked');
+  assert.deepEqual(sweep1.map((r) => r.property), ['properties/1', 'properties/2'], 'sequential, in config order');
+  assert.ok(sweep1.every((r) => r.newAlertIds.length > 0), 'each property gets its OWN first-run new alerts');
+  assert.equal(posts.length, 2, 'one Slack POST per property');
+  assert.ok(posts[0].includes('Acme Store') && posts[1].includes('Beta Store'), 'each POST names its property');
+
+  const sweep2 = await svc.runOnce();
+  assert.ok(sweep2.every((r) => r.newAlertIds.length === 0), 'ongoing issues are not NEW on either property');
+  assert.equal(posts.length, 2, 'no repeat Slack for ongoing issues');
+  assert.equal(emitted.length, 4, 'every run of every sweep is broadcast');
+
+  const st = svc.status();
+  assert.equal(st.targetStatuses.length, 2, 'status carries per-target statuses');
+  assert.ok(st.targetStatuses.every((t) => t.lastRun !== null && t.lastRunAt !== null), 'each target keeps its own lastRun');
+});
+
+test('multi-property: runOnce(propertyId) runs ONLY that target; a paused target is skipped by sweeps but runnable on demand', async () => {
+  const secrets = makeSecrets();
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account }, data: fakeData(), secrets, emit: () => {},
+    now: () => Date.parse('2026-07-02T09:00:00Z'),
+  });
+  svc.configure({
+    targets: [
+      { propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true },
+      { propertyId: 'properties/2', propertyLabel: 'Beta', enabled: false }, // paused
+    ],
+    enabled: false,
+  });
+  const sweep = await svc.runOnce();
+  assert.deepEqual(sweep.map((r) => r.property), ['properties/1'], 'a sweep skips the paused target');
+  const manual = await svc.runOnce('properties/2');
+  assert.deepEqual(manual.map((r) => r.property), ['properties/2'], 'a manual run still checks the paused target');
+  const one = await svc.runOnce('properties/1');
+  assert.equal(one.length, 1, 'single-target run checks exactly one');
+});
+
+test('legacy single-property config ({propertyId}) migrates to a one-entry targets list', async () => {
+  const svc = new Ga4MonitoringService({ registry: { getActiveView: () => account }, data: fakeData(), secrets: makeSecrets(), emit: () => {} });
+  // Old persisted shape arrives as a patch over an empty-targets config (same merge path as load).
+  const st = svc.configure({ propertyId: 'properties/9', propertyLabel: 'Legacy Store' } as never);
+  assert.equal(st.targets.length, 1, 'migrated to one target');
+  assert.equal(st.targets[0].propertyId, 'properties/9');
+  assert.equal(st.targets[0].propertyLabel, 'Legacy Store');
+  assert.equal(st.targets[0].enabled, true, 'migrated target is enabled');
 });
 
 test('with no webhook stored, runs still complete and broadcast but send no Slack', async () => {
@@ -85,8 +154,8 @@ test('with no webhook stored, runs still complete and broadcast but send no Slac
     now: () => Date.parse('2026-07-02T09:00:00Z'),
     slackFetch: async () => { posted = true; return { ok: true, status: 200, text: async () => 'ok' }; },
   });
-  svc.configure({ propertyId: 'properties/1', slackEnabled: true, enabled: false });
-  const run = await svc.runOnce();
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: '', enabled: true }], slackEnabled: true, enabled: false });
+  const [run] = await svc.runOnce();
   assert.ok(run && run.alerts.length, 'issue found');
   assert.equal(run.slackSent, 0, 'nothing sent without a webhook');
   assert.equal(posted, false, 'fetch never called');
@@ -111,7 +180,7 @@ test('sendTest posts a confirmation to the webhook, and fails cleanly when none 
     registry: { getActiveView: () => account }, data: fakeData(), secrets, emit: () => {},
     slackFetch: async (_url, init) => { posts.push(init.body); return { ok: true, status: 200, text: async () => 'ok' }; },
   });
-  svc.configure({ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: false });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], enabled: false });
   // No webhook yet → clean failure, no POST.
   const noHook = await svc.sendTest();
   assert.ok(!noHook.ok && /No Slack webhook/.test(noHook.error ?? ''), JSON.stringify(noHook));
@@ -130,11 +199,11 @@ test('slackLabel round-trips through configure and status', async () => {
   assert.equal(st.slackLabel, '#ga4-alerts · Acme', 'label persists in status');
 });
 
-test('runOnce is a no-op without an active signed-in account or a chosen property', async () => {
+test('runOnce is a no-op without an active signed-in account or any monitored property', async () => {
   const secrets = makeSecrets();
   const noProp = new Ga4MonitoringService({ registry: { getActiveView: () => account }, data: fakeData(), secrets, emit: () => {} });
-  assert.equal(await noProp.runOnce(), null, 'no property set → null');
+  assert.deepEqual(await noProp.runOnce(), [], 'no properties → empty sweep');
   const noAcct = new Ga4MonitoringService({ registry: { getActiveView: () => null }, data: fakeData(), secrets, emit: () => {} });
-  noAcct.configure({ propertyId: 'properties/1', enabled: false });
-  assert.equal(await noAcct.runOnce(), null, 'no active account → null');
+  noAcct.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: '', enabled: true }], enabled: false });
+  assert.deepEqual(await noAcct.runOnce(), [], 'no active account → empty sweep');
 });
