@@ -715,6 +715,9 @@ export interface Ga4MonitorTarget {
   propertyLabel: string;
   /** Pause/resume this property without removing it from the list. */
   enabled: boolean;
+  /** Human label for this property's OWN Slack channel (e.g. "#acme-alerts"), when one is connected.
+   *  The webhook URL itself lives encrypted in the OS keychain, keyed per account + property. */
+  slackLabel?: string;
 }
 
 /** Persisted config for the GA4 monitor (multi-property; mirrors the GTM MonitorConfig in shape). */
@@ -727,9 +730,10 @@ export interface Ga4MonitorConfig {
   targets: Ga4MonitorTarget[];
   /** Lookback window (days) for trend + per-event regression detection (shared by all targets). */
   days: number;
-  /** Post new issues to the active account's Slack webhook (requires a stored webhook). */
+  /** Post new issues to Slack. Each property posts to its OWN channel when one is connected,
+   *  falling back to the account's default channel otherwise. */
   slackEnabled: boolean;
-  /** Human label for the connected Slack channel + workspace (e.g. "#ga4-alerts · Acme"). Slack does
+  /** Human label for the DEFAULT Slack channel + workspace (e.g. "#ga4-alerts · Acme"). Slack does
    *  not expose these from a webhook URL, so the user records them; shown as the connection status. */
   slackLabel: string;
 }
@@ -772,6 +776,8 @@ export interface Ga4MonitorTargetStatus extends Ga4MonitorTarget {
   lastError: string | null;
   /** That property's most recent run so the tab can render on mount even if it wasn't open. */
   lastRun: Ga4MonitorRun | null;
+  /** Whether this property has its OWN Slack channel connected (else it uses the default). */
+  hasWebhook: boolean;
 }
 
 export interface Ga4MonitorStatus extends Ga4MonitorConfig {
@@ -780,7 +786,7 @@ export interface Ga4MonitorStatus extends Ga4MonitorConfig {
   lastRunAt: number | null;
   /** Most recent error across all targets (null when the last sweep was clean). */
   lastError: string | null;
-  /** Whether a Slack webhook is stored for the active account (drives the settings UI state). */
+  /** Whether the account's DEFAULT Slack webhook is stored (per-property channels override it). */
   hasWebhook: boolean;
   /** One entry per configured target, in config order. */
   targetStatuses: Ga4MonitorTargetStatus[];

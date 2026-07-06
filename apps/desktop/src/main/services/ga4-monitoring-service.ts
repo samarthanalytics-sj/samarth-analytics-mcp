@@ -18,8 +18,11 @@ const MIN_INTERVAL_MINUTES = 15; // GA4 realtime + report quota — never hammer
 const MAX_TARGETS = 10;
 const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, targets: [], days: 28, slackEnabled: true, slackLabel: '' };
 
-/** Per-account secret ref for the Slack webhook (the URL is stored encrypted in the OS keychain). */
+/** Per-account secret ref for the DEFAULT Slack webhook (encrypted in the OS keychain). Properties
+ *  without their own channel post here. */
 export const slackWebhookRef = (accountId: string): string => `ga4-slack-webhook:${accountId}`;
+/** Per-account+property secret ref for a property's OWN Slack channel (one property, one channel). */
+export const slackWebhookRefForProperty = (accountId: string, propertyId: string): string => `ga4-slack-webhook:${accountId}:${propertyId}`;
 
 const YMD = (offsetDays: number, base: Date): string => {
   const d = new Date(base.getTime() - offsetDays * 86_400_000);
@@ -144,6 +147,7 @@ export class Ga4MonitoringService {
         propertyId: id,
         propertyLabel: (t as Ga4MonitorTarget).propertyLabel ? String((t as Ga4MonitorTarget).propertyLabel).slice(0, 200) : '',
         enabled: (t as Ga4MonitorTarget).enabled === undefined ? true : Boolean((t as Ga4MonitorTarget).enabled),
+        slackLabel: (t as Ga4MonitorTarget).slackLabel ? String((t as Ga4MonitorTarget).slackLabel).slice(0, 120) : undefined,
       });
       if (targets.length >= MAX_TARGETS) break;
     }
@@ -172,6 +176,20 @@ export class Ga4MonitoringService {
     return active ? slackWebhookRef(active.id) : null;
   }
 
+  private propertyWebhookRefForActive(propertyId: string): string | null {
+    const active = this.deps.registry.getActiveView();
+    return active ? slackWebhookRefForProperty(active.id, propertyId) : null;
+  }
+
+  /** The webhook a property's alerts POST to: its OWN channel when connected, else the account's
+   *  default channel, else null (no Slack for this property). */
+  private webhookForTarget(accountId: string, propertyId: string): string | null {
+    const own = slackWebhookRefForProperty(accountId, propertyId);
+    if (this.deps.secrets.has(own)) return this.deps.secrets.get(own);
+    const def = slackWebhookRef(accountId);
+    return this.deps.secrets.has(def) ? this.deps.secrets.get(def) : null;
+  }
+
   private stateFor(propertyId: string): TargetState {
     let s = this.state.get(propertyId);
     if (!s) {
@@ -185,7 +203,8 @@ export class Ga4MonitoringService {
     const ref = this.webhookRefForActive();
     const targetStatuses: Ga4MonitorTargetStatus[] = this.config.targets.map((t) => {
       const s = this.state.get(t.propertyId);
-      return { ...t, lastRunAt: s?.lastRunAt ?? null, lastError: s?.lastError ?? null, lastRun: s?.lastRun ?? null };
+      const ownRef = this.propertyWebhookRefForActive(t.propertyId);
+      return { ...t, lastRunAt: s?.lastRunAt ?? null, lastError: s?.lastError ?? null, lastRun: s?.lastRun ?? null, hasWebhook: ownRef ? this.deps.secrets.has(ownRef) : false };
     });
     const lastRunAt = targetStatuses.reduce<number | null>((m, t) => (t.lastRunAt !== null && (m === null || t.lastRunAt > m) ? t.lastRunAt : m), null);
     return {
@@ -206,9 +225,15 @@ export class Ga4MonitoringService {
     const prevIds = new Set(this.config.targets.map((t) => t.propertyId));
     this.config = this.normalize({ ...this.config, ...patch });
     if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
-    // Drop runtime state for removed targets so a re-add starts with a clean alert-dedup slate.
+    // Drop runtime state AND the per-property Slack webhook for removed targets, so a re-add starts
+    // with a clean alert-dedup slate and no orphaned channel secret lingers in the keychain.
     const ids = new Set(this.config.targets.map((t) => t.propertyId));
-    for (const id of [...this.state.keys()]) if (!ids.has(id)) this.state.delete(id);
+    for (const id of prevIds) {
+      if (ids.has(id)) continue;
+      this.state.delete(id);
+      const ref = this.propertyWebhookRefForActive(id);
+      if (ref) this.deps.secrets.delete(ref);
+    }
     this.stop();
     if (this.isActive()) {
       this.start(!wasActive);
@@ -222,10 +247,11 @@ export class Ga4MonitoringService {
     return this.status();
   }
 
-  /** Store (or replace) the Slack webhook URL for the active account. Validates it's a Slack
-   *  Incoming Webhook before persisting. */
-  setWebhook(url: string): Ga4MonitorStatus {
-    const ref = this.webhookRefForActive();
+  /** Store (or replace) a Slack webhook URL for the active account — the DEFAULT channel when no
+   *  propertyId is given, or a property's OWN channel (one property, one channel) when it is.
+   *  Validates it's a Slack Incoming Webhook before persisting. */
+  setWebhook(url: string, propertyId?: string): Ga4MonitorStatus {
+    const ref = propertyId ? this.propertyWebhookRefForActive(propertyId) : this.webhookRefForActive();
     if (!ref) throw new Error('No active account to attach a Slack webhook to.');
     const trimmed = (url ?? '').trim();
     if (!isValidSlackWebhook(trimmed)) throw new Error('That is not a valid Slack Incoming Webhook URL (expected https://hooks.slack.com/services/...).');
@@ -234,22 +260,40 @@ export class Ga4MonitoringService {
     return this.status();
   }
 
-  clearWebhook(): Ga4MonitorStatus {
-    const ref = this.webhookRefForActive();
+  /** Remove the default channel (no propertyId) or a property's own channel (its alerts then fall
+   *  back to the default). Also clears the property's channel label so no stale name lingers. */
+  clearWebhook(propertyId?: string): Ga4MonitorStatus {
+    const ref = propertyId ? this.propertyWebhookRefForActive(propertyId) : this.webhookRefForActive();
     if (ref) this.deps.secrets.delete(ref);
+    if (propertyId) {
+      this.config = this.normalize({ ...this.config, targets: this.config.targets.map((t) => (t.propertyId === propertyId ? { ...t, slackLabel: undefined } : t)) });
+      if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
+    }
     return this.status();
   }
 
-  /** Post a confirmation message to the stored webhook so the user can SEE which channel/workspace it
-   *  lands in (Slack does not expose that from the URL). Returns a structured result, never throws. */
-  async sendTest(): Promise<{ ok: boolean; error: string | null }> {
-    const ref = this.webhookRefForActive();
-    const webhook = ref ? this.deps.secrets.get(ref) : null;
-    if (!webhook) return { ok: false, error: 'No Slack webhook is saved for this account.' };
-    const first = this.config.targets[0];
-    const label = this.config.targets.length > 1
-      ? `${this.config.targets.length} GA4 properties (${this.config.targets.map((t) => t.propertyLabel || t.propertyId).slice(0, 3).join(', ')}${this.config.targets.length > 3 ? ', …' : ''})`
-      : first?.propertyLabel || first?.propertyId || 'your GA4 property';
+  /** Post a confirmation message so the user can SEE which channel/workspace it lands in (Slack does
+   *  not expose that from the URL). With a propertyId, tests THAT property's effective channel (its
+   *  own, or the default it falls back to). Returns a structured result, never throws. */
+  async sendTest(propertyId?: string): Promise<{ ok: boolean; error: string | null }> {
+    const active = this.deps.registry.getActiveView();
+    if (!active) return { ok: false, error: 'No active account.' };
+    let webhook: string | null;
+    let label: string;
+    if (propertyId) {
+      webhook = this.webhookForTarget(active.id, propertyId);
+      const t = this.config.targets.find((x) => x.propertyId === propertyId);
+      label = t?.propertyLabel || propertyId;
+      if (!webhook) return { ok: false, error: 'No Slack channel is connected for this property (and no default channel is set).' };
+    } else {
+      const ref = this.webhookRefForActive();
+      webhook = ref ? this.deps.secrets.get(ref) : null;
+      if (!webhook) return { ok: false, error: 'No Slack webhook is saved for this account.' };
+      const first = this.config.targets[0];
+      label = this.config.targets.length > 1
+        ? `${this.config.targets.length} GA4 properties (${this.config.targets.map((t) => t.propertyLabel || t.propertyId).slice(0, 3).join(', ')}${this.config.targets.length > 3 ? ', …' : ''})`
+        : first?.propertyLabel || first?.propertyId || 'your GA4 property';
+    }
     const res = await sendSlackWebhook(webhook, buildSlackTestPayload(label), { fetchImpl: this.deps.slackFetch });
     return { ok: res.ok, error: res.ok ? null : res.error ?? 'Slack send failed.' };
   }
@@ -309,9 +353,10 @@ export class Ga4MonitoringService {
 
         let slackSent = 0;
         let slackError: string | null = null;
-        const ref = slackWebhookRef(active.id);
-        if (this.config.slackEnabled && newAlerts.length && this.deps.secrets.has(ref)) {
-          const webhook = this.deps.secrets.get(ref);
+        if (this.config.slackEnabled && newAlerts.length) {
+          // One property, one channel: the property's OWN webhook wins; the account default is the
+          // fallback for properties that never connected their own.
+          const webhook = this.webhookForTarget(active.id, target.propertyId);
           if (webhook) {
             const label = target.propertyLabel || target.propertyId;
             const send = await sendSlackWebhook(webhook, buildSlackPayload(label, result, newAlerts), { fetchImpl: this.deps.slackFetch });

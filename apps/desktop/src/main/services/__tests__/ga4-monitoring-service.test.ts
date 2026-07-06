@@ -133,6 +133,74 @@ test('multi-property: runOnce(propertyId) runs ONLY that target; a paused target
   assert.equal(one.length, 1, 'single-target run checks exactly one');
 });
 
+test('one property, one channel: a property with its OWN webhook posts there; others fall back to the default', async () => {
+  const secrets = makeSecrets();
+  const sentTo: string[] = [];
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account },
+    data: fakeData(),
+    secrets,
+    emit: () => {},
+    now: () => Date.parse('2026-07-02T09:00:00Z'),
+    slackFetch: async (url) => { sentTo.push(String(url)); return { ok: true, status: 200, text: async () => 'ok' }; },
+  });
+  svc.configure({
+    targets: [
+      { propertyId: 'properties/1', propertyLabel: 'Acme Store', enabled: true },
+      { propertyId: 'properties/2', propertyLabel: 'Beta Store', enabled: true },
+    ],
+    slackEnabled: true, enabled: false,
+  });
+  svc.setWebhook('https://hooks.slack.com/services/T/B/default'); // account default
+  svc.setWebhook('https://hooks.slack.com/services/T/B/acme-own', 'properties/1'); // Acme's own channel
+
+  const st = svc.status();
+  assert.equal(secrets.get('ga4-slack-webhook:acct1:properties/1'), 'https://hooks.slack.com/services/T/B/acme-own', 'own channel stored per account+property');
+  assert.equal(st.targetStatuses.find((t) => t.propertyId === 'properties/1')!.hasWebhook, true, 'Acme shows its own channel');
+  assert.equal(st.targetStatuses.find((t) => t.propertyId === 'properties/2')!.hasWebhook, false, 'Beta shows fallback');
+
+  await svc.runOnce();
+  assert.deepEqual(sentTo, ['https://hooks.slack.com/services/T/B/acme-own', 'https://hooks.slack.com/services/T/B/default'], 'Acme posts to its own channel, Beta to the default');
+
+  // sendTest(propertyId) exercises the same routing.
+  sentTo.length = 0;
+  await svc.sendTest('properties/1');
+  await svc.sendTest('properties/2');
+  assert.deepEqual(sentTo, ['https://hooks.slack.com/services/T/B/acme-own', 'https://hooks.slack.com/services/T/B/default'], 'per-property test posts to the effective channel');
+
+  // Removing the property's channel falls back to the default (and a re-test proves it).
+  svc.clearWebhook('properties/1');
+  assert.equal(svc.status().targetStatuses[0].hasWebhook, false, 'own channel removed');
+  sentTo.length = 0;
+  await svc.sendTest('properties/1');
+  assert.deepEqual(sentTo, ['https://hooks.slack.com/services/T/B/default'], 'falls back to the default channel');
+});
+
+test('removing a monitored property also deletes its per-property webhook secret', async () => {
+  const secrets = makeSecrets();
+  const svc = new Ga4MonitoringService({ registry: { getActiveView: () => account }, data: fakeData(), secrets, emit: () => {} });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], enabled: false });
+  svc.setWebhook('https://hooks.slack.com/services/T/B/own', 'properties/1');
+  assert.ok(secrets.has('ga4-slack-webhook:acct1:properties/1'), 'secret stored');
+  svc.configure({ targets: [] });
+  assert.ok(!secrets.has('ga4-slack-webhook:acct1:properties/1'), 'secret deleted with the target');
+});
+
+test('no channels at all: a property-level sendTest fails cleanly and a sweep sends nothing', async () => {
+  const secrets = makeSecrets();
+  let posted = false;
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account }, data: fakeData(), secrets, emit: () => {},
+    now: () => Date.parse('2026-07-02T09:00:00Z'),
+    slackFetch: async () => { posted = true; return { ok: true, status: 200, text: async () => 'ok' }; },
+  });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], slackEnabled: true, enabled: false });
+  const t = await svc.sendTest('properties/1');
+  assert.ok(!t.ok && /No Slack channel is connected for this property/.test(t.error ?? ''), JSON.stringify(t));
+  await svc.runOnce();
+  assert.equal(posted, false, 'nothing posted with no channels');
+});
+
 test('legacy single-property config ({propertyId}) migrates to a one-entry targets list', async () => {
   const svc = new Ga4MonitoringService({ registry: { getActiveView: () => account }, data: fakeData(), secrets: makeSecrets(), emit: () => {} });
   // Old persisted shape arrives as a patch over an empty-targets config (same merge path as load).
