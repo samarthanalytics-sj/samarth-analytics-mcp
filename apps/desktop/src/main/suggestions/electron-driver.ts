@@ -81,27 +81,52 @@ function probeFormsDom(): { forms: number; inputs: number; textareas: number; se
   return { forms: n('form'), inputs: n('input'), textareas: n('textarea'), selects: n('select'), submitish };
 }
 
-function autoScrollPage(): Promise<void> {
-  return new Promise<void>((resolve) => {
+// Scroll top→bottom and UNION the forms found at EVERY scroll position (plus a final read back at the
+// top). Reads window.__sxForms — the injected extractFormsInPage. Two lazy-mount failure modes both
+// evade a single end-of-scroll read, and this beats both:
+//   1) RE-MEASURE the height each step: a lazy page GROWS its scrollHeight as IntersectionObserver
+//      sections mount, so a height captured ONCE stops short of the true bottom and never reveals the
+//      footer forms. Re-reading follows the growing page to its real bottom.
+//   2) GRAB AT EACH POSITION: some sections UNMOUNT once scrolled out of view, so a form only exists in
+//      the DOM while it is near the viewport. Reading only at the end would miss it; unioning per-step
+//      reads captures each form while it is mounted, regardless of when it mounts/unmounts.
+// Capped at 40000px so an infinite-scroll page still terminates. Self-contained for serialization.
+function scrollAndCollectForms(): Promise<RawForm[]> {
+  return new Promise<RawForm[]>((resolve) => {
+    const collected = new Map<string, RawForm>();
+    const keyOf = (f: RawForm): string =>
+      `${f.action || ''}|${f.method || ''}|${(f.fields || []).map((x) => x.name || x.id || x.type).join(',')}`.toLowerCase();
+    const grab = (): void => {
+      try {
+        const ex = (window as unknown as { __sxForms?: () => RawForm[] }).__sxForms;
+        const forms = typeof ex === 'function' ? ex() : [];
+        for (const f of forms) {
+          const k = keyOf(f);
+          if (!collected.has(k)) collected.set(k, f);
+        }
+      } catch {
+        /* a mid-scroll extractor error on one frame must not abort the whole pass */
+      }
+    };
     const step = Math.max(300, Math.floor(window.innerHeight * 0.8));
     let y = 0;
     const tick = (): void => {
       window.scrollTo(0, y);
-      y += step;
-      // RE-MEASURE the height every step. A lazy page GROWS its scrollHeight as IntersectionObserver
-      // sections mount on scroll, so a height captured ONCE (before that growth) stops the scroll short
-      // of the true bottom — footer forms (contact/newsletter) then never enter the viewport, never
-      // mount, and read as 0 forms. Re-reading each step follows the growing page to its real bottom.
-      // Capped at 40000px so an infinite-scroll page still terminates.
-      const maxY = Math.min(document.documentElement.scrollHeight, 40000);
-      if (y <= maxY) {
-        setTimeout(tick, 150);
-      } else {
-        // Return to the top (harmless — revealed sections stay mounted) and let the final section's
-        // mount/animation settle before the DOM read.
-        window.scrollTo(0, 0);
-        setTimeout(resolve, 400);
-      }
+      // Dwell BEFORE grabbing so the IntersectionObserver + render for the just-revealed section fires.
+      setTimeout(() => {
+        grab();
+        y += step;
+        const maxY = Math.min(document.documentElement.scrollHeight, 40000);
+        if (y <= maxY) {
+          tick();
+        } else {
+          window.scrollTo(0, 0);
+          setTimeout(() => {
+            grab();
+            resolve([...collected.values()].map((f, i) => ({ ...f, index: i })));
+          }, 400);
+        }
+      }, 150);
     };
     tick();
   });
@@ -246,14 +271,23 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
       else await delay(fixedSettleMs);
       if (!win || win.isDestroyed()) return { ok: false, httpStatus: lastStatus, finalUrl: null, error: 'driver closed' };
       // Scroll top→bottom so scroll-mounted below-fold content (contact/newsletter forms, FAQ)
-      // renders, then briefly re-settle for any lazy fetch/animation. Best-effort — if it times
-      // out we read whatever rendered (above-fold content is already there).
+      // renders — collecting forms at every scroll position and unioning them (handles lazy sections
+      // that mount late OR unmount when scrolled away), then briefly re-settle. Best-effort — if it
+      // times out, `scrolledForms` stays null and the form read below falls back to a single pass.
+      let scrolledForms: RawForm[] | null = null;
       try {
-        await withTimeout(wc.executeJavaScript(inPage(autoScrollPage), true), 14_000, 'scroll');
+        // Inject extractFormsInPage as a page global so the scroll pass can read forms per position.
+        // (Same serialization inPage() already relies on, so it is safe in the built app.)
+        await wc.executeJavaScript(`window.__sxForms = ${extractFormsInPage.toString()};`, true);
+        scrolledForms = (await withTimeout(
+          wc.executeJavaScript(inPage(scrollAndCollectForms), true),
+          15_000,
+          'scroll+forms',
+        )) as RawForm[];
         if (autoSettle) await waitNetworkIdle(0, 500, 4_000);
         else await delay(Math.min(fixedSettleMs, 800));
       } catch {
-        /* scrolling failed/timed out — proceed with whatever rendered */
+        /* scroll/collect failed or timed out — the form read below does a single fallback pass */
       }
       if (!win || win.isDestroyed()) return { ok: false, httpStatus: lastStatus, finalUrl: null, error: 'driver closed' };
       try {
@@ -262,11 +296,14 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
           evalTimeoutMs,
           'element scan',
         )) as PageScanRaw;
-        const rawForms = (await withTimeout(
-          wc.executeJavaScript(inPage(extractFormsInPage), true),
-          evalTimeoutMs,
-          'form scan',
-        )) as RawForm[];
+        // Prefer the per-position union from the scroll pass (a superset of a single read). Only when
+        // that pass threw/timed out (scrolledForms === null) do a single fallback read of what rendered.
+        const rawForms: RawForm[] =
+          scrolledForms !== null
+            ? scrolledForms
+            : ((await withTimeout(wc.executeJavaScript(inPage(extractFormsInPage), true), evalTimeoutMs, 'form scan').catch(
+                () => [],
+              )) as RawForm[]);
         const extracted = Array.isArray(rawForms) ? rawForms.length : 0;
         let probe: { forms: number; inputs: number; textareas: number; selects: number; submitish: number } | undefined;
         try {
