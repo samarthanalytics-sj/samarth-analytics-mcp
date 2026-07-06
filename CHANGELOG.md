@@ -1,3 +1,9 @@
+## [1.196.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.196.0...v1.196.1) (2026-07-06)
+
+### Bug Fixes
+
+* **desktop:** collect forms at every scroll position (union) for lazy SPAs ([be5906d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/be5906d882e17783800f7beae829ba0a9ae33691))
+
 ## [1.196.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.195.0...v1.196.0) (2026-07-06)
 
 ### Features
