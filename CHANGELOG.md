@@ -1,3 +1,9 @@
+## [1.209.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.208.0...v1.209.0) (2026-07-06)
+
+### Features
+
+* **desktop:** GA4 Monitoring watches MULTIPLE properties (list + per-property runs, alerts, Slack) ([1584fca](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1584fca493fcd0c500ec8651b772cb60e268ac08))
+
 ## [1.208.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.207.0...v1.208.0) (2026-07-06)
 
 ### Features
