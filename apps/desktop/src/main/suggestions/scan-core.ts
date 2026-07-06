@@ -243,7 +243,7 @@ export function dedupSuggestions(list: SuggestedTag[]): SuggestedTag[] {
  *  'i' flag — gtm.js evaluates web matchRegex via JS RegExp, with case-insensitivity carried by the
  *  condition-level ignore_case parameter, not an inline (?i) flag) / contains / equals, so we can
  *  tell whether an engine tag ALREADY covers an AI-suggested button. PURE. */
-function ctaTriggerFiresOn(trigger: SuggestedTag['trigger'], text: string): boolean {
+export function ctaTriggerFiresOn(trigger: SuggestedTag['trigger'], text: string): boolean {
   // A lookup-table trigger fires on its exact text rows (compared case-insensitively here, since the
   // AI's scraped casing may differ from the engine's).
   if (trigger.lookupTable?.texts?.length) {

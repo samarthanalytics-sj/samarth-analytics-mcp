@@ -36,6 +36,10 @@ import type {
   SuggestedTagView,
   TagScanOptions,
   TagScanResult,
+  VerifyTagInput,
+  VerifyTagsOptions,
+  VerifyTagsResult,
+  DetectedElementView,
 } from '../shared/ipc';
 
 // Tracks the in-flight streaming chat so llm.stop() can abort the right one.
@@ -201,6 +205,14 @@ const api = {
     // suggestions that already exist (so they aren't re-created).
     existing: (accountId: string, containerId: string, workspaceId: string): Promise<{ names: string[]; hasGa4Base: boolean }> =>
       ipcRenderer.invoke('suggestions:existing', accountId, containerId, workspaceId),
+    // Verify FIRING: inject the pasted (preview) container, drive each tag's trigger,
+    // and report fired/not-fired + a corrected trigger. Never delivers a real hit.
+    verify: (
+      url: string,
+      tags: VerifyTagInput[],
+      elements: DetectedElementView[],
+      opts?: VerifyTagsOptions,
+    ): Promise<VerifyTagsResult> => ipcRenderer.invoke('suggestions:verifyTags', url, tags, elements, opts),
     createTags: (
       accountId: string,
       containerId: string,
