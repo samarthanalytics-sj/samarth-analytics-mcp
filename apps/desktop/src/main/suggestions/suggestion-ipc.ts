@@ -127,6 +127,15 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     return scanUrls(driver, list, siteHost, undefined, { platforms: o.platforms ?? ['ga4'] });
   });
 
+  // Auto-mint a workspace-PREVIEW snippet so Verify firing can load DRAFT tags with
+  // no manual paste: snapshots the workspace into a version + binds a reusable preview
+  // environment, returns its snippet. Draft-level writes; never published.
+  ipcMain.handle('suggestions:mintPreview', async (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
+    const a = String(accountId ?? ''), c = String(containerId ?? ''), w = String(workspaceId ?? '');
+    if (!a || !c || !w) throw new Error('Pick a GTM account, container and draft workspace first.');
+    return data.mintWorkspacePreview(a, c, w);
+  });
+
   // Verify FIRING: inject the pasted (preview) container onto the page, drive each
   // tag's trigger (click/submit), and report whether it fired — with a corrected
   // trigger when it didn't. Never delivers a real hit (abort-first capture).

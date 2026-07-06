@@ -1944,6 +1944,7 @@ function TagReviewPanel({
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyTagsResult | null>(null);
   const [verifyFixed, setVerifyFixed] = useState<Record<string, boolean>>({});
+  const [minting, setMinting] = useState(false);
   const verifyCardRef = useRef<HTMLDivElement>(null);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
@@ -2019,7 +2020,7 @@ function TagReviewPanel({
 
   // Verify FIRING: inject the pasted (preview) container, drive each selected tag's
   // trigger on the entered URL, and report what fired. Never sends a real hit.
-  async function runVerify(): Promise<void> {
+  async function runVerify(snippetOverride?: string): Promise<void> {
     if (verifying) return;
     const target = url.trim();
     if (!target) { onError('Enter the site URL to verify against.'); return; }
@@ -2031,13 +2032,35 @@ function TagReviewPanel({
     setVerifying(true);
     onError('');
     try {
-      const snippet = verifySnippet.trim();
+      const snippet = (snippetOverride ?? verifySnippet).trim();
       const res = await window.desktop.tags.verify(target, tags, elements, snippet ? { containerSnippet: snippet } : {});
       setVerifyResult(res);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setVerifying(false);
+    }
+  }
+
+  // Auto-mint: create a version from the workspace + a preview environment via the
+  // GTM API, then verify with that snippet — no manual paste. Writes a draft-level
+  // version + environment to the container (never published).
+  async function autoMintAndVerify(): Promise<void> {
+    if (minting || verifying) return;
+    if (!ctx?.accountId || !ctx?.containerId || !ctx?.workspaceId) {
+      onError('Pick a GTM account, container and draft workspace first (top of the app) — auto preview needs a workspace to snapshot.');
+      return;
+    }
+    setMinting(true);
+    onError('');
+    try {
+      const { snippet } = await window.desktop.tags.mintPreview(ctx.accountId, ctx.containerId, ctx.workspaceId);
+      setVerifySnippet(snippet);
+      await runVerify(snippet);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMinting(false);
     }
   }
 
@@ -2965,15 +2988,25 @@ function TagReviewPanel({
               <div style={{ flex: '1 1 320px' }}>
                 <div style={{ fontWeight: 600 }}>Verify firing</div>
                 <div style={styles.muted}>
-                  Proves the tags actually fire. First <b>Create</b> the selected tags (so they exist in a workspace), then in
-                  GTM click <b>Preview</b> (or Admin → Environments → Get snippet) and paste that <b>Preview snippet</b> below —
-                  it carries <code>gtm_auth</code>/<code>gtm_preview</code> so your DRAFT tags load. Each tag is driven on its own
-                  page; nothing real is sent (hits are captured and aborted).
+                  Proves the tags actually fire — create them first, then verify. <b>Auto</b> snapshots your workspace to a
+                  version + preview environment (draft-level, never published) and verifies with no paste. Or paste your own GTM
+                  <b> Preview / Environment</b> snippet (carries <code>gtm_auth</code>/<code>gtm_preview</code> so DRAFT tags load).
+                  Each tag is driven on its own page; nothing real is sent (hits are captured and aborted).
                 </div>
               </div>
-              <button style={styles.primaryBtn} onClick={() => void runVerify()} disabled={verifying || !url.trim()}>
-                {verifying ? 'Verifying…' : 'Verify firing'}
-              </button>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button
+                  style={styles.primaryBtn}
+                  onClick={() => void autoMintAndVerify()}
+                  disabled={minting || verifying || !url.trim() || !targetReady}
+                  title={targetReady ? 'Snapshot the workspace to a version + preview environment (draft-level, not published), then verify — no paste needed' : 'Pick a GTM account, container and draft workspace first'}
+                >
+                  {minting ? 'Preparing preview…' : 'Auto: create preview & verify'}
+                </button>
+                <button style={styles.toggleOff} onClick={() => void runVerify()} disabled={verifying || minting || !url.trim()}>
+                  {verifying && !minting ? 'Verifying…' : 'Verify pasted snippet'}
+                </button>
+              </div>
             </div>
             <textarea
               value={verifySnippet}
