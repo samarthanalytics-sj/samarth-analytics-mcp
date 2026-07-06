@@ -1,3 +1,9 @@
+## [1.220.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.220.1...v1.220.2) (2026-07-06)
+
+### Bug Fixes
+
+* **verify:** stop reporting untestable tags as "not firing" (false negatives) ([dd84ed4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dd84ed445936be04a2de60a19520855cff90838c))
+
 ## [1.220.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.220.0...v1.220.1) (2026-07-06)
 
 ### Bug Fixes
