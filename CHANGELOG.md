@@ -1,3 +1,9 @@
+## [1.190.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.189.0...v1.190.0) (2026-07-06)
+
+### Features
+
+* **desktop:** broken-variable & variable-type inspector in GTM audit ([0a0a426](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0a0a42641f9bb776410345f2104484fa795c5d71))
+
 ## [1.189.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.188.0...v1.189.0) (2026-07-06)
 
 ### Features
