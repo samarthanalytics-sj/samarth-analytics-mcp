@@ -60,6 +60,7 @@ import {
   type GtmTagResource,
 } from '../google/gtm-builders';
 import { buildGa4WriteTools } from './ga4-write-tools';
+import { formTrackingRecipe, AJAX_FORM_PROVIDERS_LIST } from './form-recipes';
 import { withQuotaRetry } from '../google/quota-retry';
 import { auditWorkspace, auditServerWorkspace, auditChanges } from '../google/audit-runner';
 import { diffSnapshots } from '../google/gtm-monitor';
@@ -408,8 +409,31 @@ export function buildToolRegistry(
           count: suggestions.length,
           ...(all.length > CAP ? { truncated: `showing the top ${CAP} of ${all.length} — scan a more specific page for the rest` } : {}),
           suggestions,
-          next: "Pass a suggestion's `trigger` (and its event/tagName) to create_gtm_tracking_tag to create it as a draft.",
+          next: "Pass a suggestion's `trigger` (and its event/tagName) to create_gtm_tracking_tag to create it as a draft. If a suggestion's note says it's an AJAX form plugin (Contact Form 7 / Gravity Forms / Ninja Forms / WPForms / Elementor), call get_form_tracking_recipe(provider) instead — it returns the listener + GA4 tag to create so the Custom Event trigger actually fires.",
         };
+      },
+    },
+    {
+      name: 'get_form_tracking_recipe',
+      description:
+        "Get the COMPLETE, ready-to-create GTM recipe to track an AJAX WordPress form plugin (Contact Form 7, Gravity Forms, Ninja Forms, WPForms, Elementor) end-to-end. These plugins submit via AJAX, so GTM's NATIVE Form Submission trigger never fires — you must add a Custom HTML LISTENER that dataLayer.pushes a Custom Event, then a GA4 tag firing on that event. Returns a step-by-step `guide` plus a `listenerTag` (Custom HTML on All Pages, with the exact <script>) and a `ga4Tag` (GA4 event on the Custom Event trigger) — pass EACH straight to create_gtm_tracking_tag, creating the listener FIRST. Use this whenever suggest_tags_from_url or the user names one of these form plugins. Requires provider; optional eventName (GA4 event, default form_submission) and measurementId (G-XXXX).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          provider: { type: 'string', enum: ['contactform7', 'gravityforms', 'ninjaforms', 'wpforms', 'elementor'] },
+          eventName: { type: 'string', description: 'GA4 event name to send (default form_submission).' },
+          measurementId: { type: 'string', description: 'GA4 Measurement ID G-XXXX (or a {{variable}}) for the GA4 tag.' },
+        },
+        required: ['provider'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const recipe = formTrackingRecipe(s(a.provider), {
+          eventName: a.eventName != null ? s(a.eventName) : undefined,
+          measurementId: a.measurementId != null ? s(a.measurementId) : undefined,
+        });
+        if (!recipe) throw new Error(`No AJAX form recipe for "${s(a.provider)}". Supported: ${AJAX_FORM_PROVIDERS_LIST.join(', ')}.`);
+        return recipe;
       },
     },
     {
