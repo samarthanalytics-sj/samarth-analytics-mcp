@@ -83,6 +83,18 @@ check('form: an untitled "other" form yields NO generic tag (Form Submission cat
 const titledOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/x', purpose: 'other', action: '', title: 'Request a Callback', provider: { vendor: 'unknown', confidence: 'low', evidence: '' } }], elements: [] });
 check('form: a TITLED "other" form still gets its own tag (title-derived, not "Form Submission")', titledOther.length === 1 && titledOther[0].eventName !== 'form_submission' && /request a callback/i.test(titledOther[0].tagName));
 
+// FIX C: an untitled "other" form with NO heading, on a NAMED page, with >=2 fields → a PAGE-PATH-derived
+// title so a real quote/booking/feedback form on a named page still gets a meaningful tag (not dropped).
+const pathTitledOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/get-a-quote', purpose: 'other', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' }, method: 'post', fields: [{ type: 'text', name: 'name', required: true }, { type: 'email', name: 'email', required: true }, { type: 'text', name: 'company', required: false }] }], elements: [] });
+check('form: untitled "other" with 3 fields on /get-a-quote → "Get A Quote Form" tag + get_a_quote_form event',
+  pathTitledOther.length === 1 && pathTitledOther[0].tagName === 'GA4 - Event - Get A Quote Form Tag' && pathTitledOther[0].eventName === 'get_a_quote_form');
+// The home page ('/') has no meaningful segment → still dropped (preserves the anti-noise intent).
+const homeOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'other', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' }, method: 'post', fields: [{ type: 'text', name: 'name', required: true }, { type: 'email', name: 'email', required: true }] }], elements: [] });
+check('form: untitled "other" on / (home) → still NO tag (no page-path signal)', homeOther.length === 0);
+// A stray single-input untitled "other" form (only 1 field) is not worth a tag even on a named page.
+const oneFieldOther = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/booking', purpose: 'other', action: '', provider: { vendor: 'unknown', confidence: 'low', evidence: '' }, method: 'post', fields: [{ type: 'text', name: 'x', required: false }] }], elements: [] });
+check('form: untitled "other" with 1 field on /booking → still NO tag (<2 fields)', oneFieldOther.length === 0);
+
 // ── field/provider-aware form tracking ───────────────────────────────────────
 const prov0 = { vendor: 'unknown' as const, confidence: 'low' as const, evidence: '' };
 const formWithId = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/contact', purpose: 'contact', action: 'https://a.com/x', provider: prov0, method: 'post', formId: 'contact-form', formClasses: 'contact-form', fields: [{ type: 'email', name: 'email', required: true }, { type: 'textarea', name: 'message', required: false }] }], elements: [] });
@@ -182,6 +194,34 @@ const twoForms = buildSuggestions({ siteHost: 'a.com', forms: [
 const tf = twoForms.filter((s) => s.eventName === 'contact_form');
 check('form: two same-name contact forms with distinct unique ids → ONE tag scoped by {{Form ID}} matchRegex over both ids',
   tf.length === 1 && tf[0].trigger.formIdOperator === 'matchRegex' && /contact-main/.test(tf[0].trigger.formIdValue ?? '') && /footer-contact/.test(tf[0].trigger.formIdValue ?? ''));
+
+// FIX A: two UNTITLED same-purpose forms with STRUCTURALLY-DIFFERENT fields on ONE page must NOT collapse
+// to one tag. The field-signature disambiguator gives the second a "Contact Form 2" title (distinct
+// label + event + tagName), so BOTH survive every dedup.
+const twoUntitledDiff = buildSuggestions({ siteHost: 'a.com', forms: [
+  { page: '/', purpose: 'contact', action: '', provider: prov0, method: 'post', fields: [{ type: 'email', name: 'email', required: true }, { type: 'text', name: 'name', required: false }] },
+  { page: '/', purpose: 'contact', action: '', provider: prov0, method: 'post', fields: [{ type: 'email', name: 'work_email', required: true }, { type: 'tel', name: 'phone', required: false }, { type: 'text', name: 'company', required: false }] },
+], elements: [] });
+const tud = twoUntitledDiff.filter((s) => s.trigger.kind === 'form_submit');
+check('form (Fix A): two field-different untitled contact forms on one page → TWO tags ("Contact Form" + "Contact Form 2")',
+  tud.length === 2 &&
+  tud.some((s) => s.tagName === 'GA4 - Event - Contact Form Tag' && s.eventName === 'contact_form') &&
+  tud.some((s) => s.tagName === 'GA4 - Event - Contact Form 2 Tag' && s.eventName === 'contact_form_2'));
+// The SAME untitled contact form (identical field signature) on TWO pages STILL collapses to ONE
+// site-wide tag — the same-form-across-pages dedup that Fix A must not break.
+const sameUntitledMultiPage = buildSuggestions({ siteHost: 'a.com', forms: [
+  { page: '/a', purpose: 'contact', action: '', provider: prov0, method: 'post', fields: [{ type: 'email', name: 'email', required: true }, { type: 'text', name: 'name', required: false }] },
+  { page: '/b', purpose: 'contact', action: '', provider: prov0, method: 'post', fields: [{ type: 'email', name: 'email', required: true }, { type: 'text', name: 'name', required: false }] },
+], elements: [] });
+const sump = sameUntitledMultiPage.filter((s) => s.trigger.kind === 'form_submit');
+check('form (Fix A): the SAME untitled form on /a and /b → ONE tag (index shared → still collapses multi-page)',
+  sump.length === 1 && sump[0].eventName === 'contact_form' && sump[0].tagName === 'GA4 - Event - Contact Form Tag' && sump[0].trigger.pagePathOperator === 'matchRegex');
+// A SINGLE untitled form is unchanged — no "1" suffix on the name or event (zero change for the common case).
+const singleUntitled = buildSuggestions({ siteHost: 'a.com', forms: [
+  { page: '/contact', purpose: 'contact', action: '', provider: prov0, method: 'post', fields: [{ type: 'email', name: 'email', required: true }, { type: 'text', name: 'name', required: false }] },
+], elements: [] }).filter((s) => s.trigger.kind === 'form_submit');
+check('form (Fix A): a single untitled form is unchanged — "Contact Form" / contact_form, no "1" suffix',
+  singleUntitled.length === 1 && singleUntitled[0].tagName === 'GA4 - Event - Contact Form Tag' && singleUntitled[0].eventName === 'contact_form');
 
 // A NON-UNIQUE id (same id on two DIFFERENT forms) can't scope by id. When the forms are also
 // SITE-WIDE (each signature spans several pages) they can't be page-scoped either → collision note.

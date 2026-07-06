@@ -154,8 +154,40 @@ check('forms: pii without notice flagged', contactAnalysis.issues.some((i) => i.
 // A single EMAIL input (newsletter signup) must NOT be misread as a search box, even if named "s"/"q".
 const loneEmailMkt = form({ index: 9, fields: [field({ type: 'email', name: 's' })], fieldCount: 1, text: 'subscribe to our newsletter for product updates' });
 check('forms: lone email signup → newsletter, not search', analyzeForms([loneEmailMkt], 'https://example.com')[0].purpose === 'newsletter');
+// A LONE email input (even named "q", no marketing copy) is the canonical newsletter shape — a box that
+// captures nothing but an address. It must be classified 'newsletter' (broadened Fix B rule), and above
+// all must NOT be misrouted to 'search' by its name. (Was 'contact' before Fix B; a bare email capture
+// is a subscription, not a contact form.)
 const loneEmailPlain = form({ index: 10, fields: [field({ type: 'email', name: 'q' })], fieldCount: 1, text: '' });
-check('forms: lone email (no marketing copy) → contact, not search', analyzeForms([loneEmailPlain], 'https://example.com')[0].purpose === 'contact');
+const loneEmailPlainPurpose = analyzeForms([loneEmailPlain], 'https://example.com')[0].purpose;
+check('forms: lone email (no marketing copy) → newsletter, not search', loneEmailPlainPurpose === 'newsletter');
+
+// Fix B: an email+name box whose visible text lacks a MARKETING_RE keyword but carries a sign-up VERB
+// ("Sign up") is a newsletter subscription, not a contact form (2 text inputs, no message).
+const emailNameSignup = form({ index: 11, fields: [field({ type: 'email', name: 'email' }), field({ name: 'first_name', label: 'First name' })], text: 'sign up for the latest' });
+check('forms: email+name with a "Sign up" verb → newsletter (no marketing keyword needed)', analyzeForms([emailNameSignup], 'https://example.com')[0].purpose === 'newsletter');
+// A REAL contact form (email+name+message textarea) is NEVER pulled into newsletter — the !hasMessage guard.
+const emailNameMessage = form({ index: 12, fields: [field({ type: 'email', name: 'email' }), field({ name: 'name', label: 'Name' }), field({ tag: 'textarea', type: 'textarea', name: 'message' })], text: 'sign up and subscribe to our newsletter' });
+check('forms: email+name+message (a message field) → still contact even with marketing/sign-up copy', analyzeForms([emailNameMessage], 'https://example.com')[0].purpose === 'contact');
+// >=3 text inputs (a fuller lead form) is not a newsletter box → contact, even with a sign-up verb.
+const emailThreeFields = form({ index: 13, fields: [field({ type: 'email', name: 'email' }), field({ name: 'name', label: 'Name' }), field({ type: 'tel', name: 'phone' })], text: 'sign up now' });
+check('forms: email + 3 text fields → still contact (too many inputs for a newsletter box)', analyzeForms([emailThreeFields], 'https://example.com')[0].purpose === 'contact');
+// The earlier lone-text-search branch is unchanged: a lone text input named "s" is still a search box.
+const searchBox = form({ index: 14, fields: [field({ type: 'text', name: 's' })], fieldCount: 1, action: 'https://example.com/?s=', text: '' });
+check('forms: a lone text search box (name "s") → still search (unchanged, that branch is earlier)', analyzeForms([searchBox], 'https://example.com')[0].purpose === 'search');
+
+// Fix B refinement (adversarial review): "join" is scoped to a list — a careers/RSVP/waitlist lead
+// capture (email+name, "Join our team" / "Join the waitlist") is NOT a newsletter.
+const joinTeam = form({ index: 15, fields: [field({ type: 'email', name: 'email' }), field({ name: 'name', label: 'Name' })], text: 'join our team — apply now' });
+check('forms: email+name "Join our team" (careers) → contact, not newsletter', analyzeForms([joinTeam], 'https://example.com')[0].purpose === 'contact');
+const joinWaitlist = form({ index: 16, fields: [field({ type: 'email', name: 'email' }), field({ name: 'name', label: 'Name' })], text: 'join the waitlist' });
+check('forms: email+name "Join the waitlist" (lead) → contact, not newsletter', analyzeForms([joinWaitlist], 'https://example.com')[0].purpose === 'contact');
+// A subscription "join" still classifies as newsletter.
+const joinNews = form({ index: 17, fields: [field({ type: 'email', name: 'email' }), field({ name: 'name', label: 'Name' })], text: 'join our newsletter for weekly tips' });
+check('forms: email+name "Join our newsletter" → newsletter (subscription join still matches)', analyzeForms([joinNews], 'https://example.com')[0].purpose === 'newsletter');
+// A passwordless / magic-link login (lone email, "log in" copy, no password) → login, NOT newsletter.
+const magicLink = form({ index: 18, fields: [field({ type: 'email', name: 'email' })], fieldCount: 1, text: 'log in — email me a login link' });
+check('forms: lone email magic-link login ("log in") → login, not newsletter', analyzeForms([magicLink], 'https://example.com')[0].purpose === 'login');
 
 const noticedForm = form({ index: 1, fields: contactForm.fields, hasPrivacyLink: true });
 check(
