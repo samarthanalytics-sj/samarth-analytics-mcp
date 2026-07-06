@@ -1,3 +1,9 @@
+## [1.220.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.219.0...v1.220.0) (2026-07-06)
+
+### Features
+
+* **verify:** read GTM's on-page debug signal (Phase B groundwork, best-effort) ([3709d03](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3709d03e343b8e133cc2b31f3193d9bf87a2ee38)), closes [#1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/1)
+
 ## [1.219.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.218.1...v1.219.0) (2026-07-06)
 
 ### Features
