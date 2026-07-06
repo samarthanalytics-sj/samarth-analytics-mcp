@@ -617,15 +617,34 @@ export function buildAdsRemarketingServerTag(name: string, conversionId: string,
 
 /* ───────────── Triggers ───────────── */
 
-const FILTER_OPS = new Set(['equals', 'contains', 'startsWith', 'endsWith', 'matchRegex', 'cssSelector', 'greater', 'less']);
+const FILTER_OPS = new Set(['equals', 'contains', 'startsWith', 'endsWith', 'matchRegex', 'cssSelector', 'greater', 'greaterOrEquals', 'less', 'lessOrEquals']);
+// Our operator TOKEN → the GTM Condition `type` + whether it is a NEGATED ("does not …") condition.
+// GTM stores negation as the base type PLUS a `negate` boolean parameter (verified against the corpus:
+// {type: BOOLEAN, key: 'negate', value: 'true'} alongside arg0/arg1), NOT a distinct condition type.
+const OP_TO_CONDITION: Record<string, { type: string; negate?: boolean }> = {
+  equals: { type: 'equals' }, notEquals: { type: 'equals', negate: true },
+  contains: { type: 'contains' }, notContains: { type: 'contains', negate: true },
+  startsWith: { type: 'startsWith' }, notStartsWith: { type: 'startsWith', negate: true },
+  endsWith: { type: 'endsWith' }, notEndsWith: { type: 'endsWith', negate: true },
+  cssSelector: { type: 'cssSelector' }, notCssSelector: { type: 'cssSelector', negate: true },
+  matchRegex: { type: 'matchRegex' }, notMatchRegex: { type: 'matchRegex', negate: true },
+  less: { type: 'less' }, lessOrEquals: { type: 'lessOrEquals' },
+  greater: { type: 'greater' }, greaterOrEquals: { type: 'greaterOrEquals' },
+};
 // ignoreCase emits GTM's condition-level ignore_case parameter ("matches RegEx (ignore case)") — the
 // mechanism real containers use (corpus: 812 conditions across 168/562 files). gtm.js evaluates web
 // matchRegex with the browser's JS RegExp, which CANNOT parse an inline (?i) flag (SyntaxError →
 // silent no-match), so an inline flag must never be baked into arg1.
 function condition(variable: string, op: string, value: string, ignoreCase?: boolean): Param {
+  const m = OP_TO_CONDITION[op] ?? { type: FILTER_OPS.has(op) ? op : 'contains' };
   return {
-    type: FILTER_OPS.has(op) ? op : 'contains',
-    parameter: [tpl('arg0', variable), tpl('arg1', value), ...(ignoreCase ? [boolean('ignore_case', true)] : [])],
+    type: m.type,
+    parameter: [
+      tpl('arg0', variable),
+      tpl('arg1', value),
+      ...(m.negate ? [boolean('negate', true)] : []),
+      ...(ignoreCase ? [boolean('ignore_case', true)] : []),
+    ],
   };
 }
 
