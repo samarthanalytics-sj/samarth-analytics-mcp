@@ -62,6 +62,25 @@ export interface TagSuggestionReport {
   /** Discovered but not scanned: over budget, crawler-skipped, or nav failure. */
   notScanned: NotScanned[];
   notes: string[];
+  /** Present only when the caller passed debug:true — see SuggestDebug. */
+  debug?: SuggestDebug;
+}
+
+/**
+ * Diagnostics for troubleshooting a scan (opt-in via debug:true). Surfaces the
+ * browser console/page errors captured across the scanned pages (which the
+ * normal report drops) plus the effective run mode. Purely additive — the scan
+ * stays read-only and never interacts with the page.
+ */
+export interface SuggestDebug {
+  /** Chromium launch mode (set WEB_AUDIT_HEADED=true to watch a run). */
+  headless: boolean;
+  navTimeoutMs: number;
+  settleMs: number;
+  /** Console errors observed across all scanned pages. */
+  consoleErrors: string[];
+  /** Uncaught page errors observed across all scanned pages. */
+  pageErrors: string[];
 }
 
 /* ── PURE report building (unit-tested, no browser) ── */
@@ -100,6 +119,7 @@ export interface AssembleArgs {
   pageScans: PageScan[];
   notScanned: NotScanned[];
   notes: string[];
+  debug?: SuggestDebug;
 }
 
 /** Combine per-page scans → SuggestInput → ranked suggestions → the report. Pure. */
@@ -132,6 +152,7 @@ export function assembleTagReport(args: AssembleArgs): TagSuggestionReport {
     pages: args.pageScans.map((p) => ({ page: p.page, forms: p.forms.length, elements: p.elements.length })),
     notScanned: args.notScanned,
     notes: args.notes,
+    ...(args.debug ? { debug: args.debug } : {}),
   };
 }
 
@@ -172,6 +193,8 @@ export interface TagSuggestOptions {
   maxDepth?: number;
   /** Crawled pages to deep-scan for tags (default = pages crawled, cap 25). */
   scanPages?: number;
+  /** Include a SuggestDebug block (browser console/page errors + run mode) for troubleshooting. */
+  debug?: boolean;
 }
 
 /**
@@ -234,6 +257,7 @@ export async function scanSiteForTagSuggestions(
     }
 
     const pageScans: PageScan[] = [];
+    let debugData: SuggestDebug | undefined;
     const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
     try {
       const inst = await openInstrumentedPage(context);
@@ -255,6 +279,15 @@ export async function scanSiteForTagSuggestions(
           });
         }
       }
+      if (options.debug) {
+        debugData = {
+          headless: config.headless,
+          navTimeoutMs: config.navTimeoutMs,
+          settleMs,
+          consoleErrors: inst.consoleErrors,
+          pageErrors: inst.pageErrors,
+        };
+      }
     } finally {
       await context.close();
     }
@@ -270,6 +303,7 @@ export async function scanSiteForTagSuggestions(
       pageScans,
       notScanned,
       notes: [CREATE_NOTE],
+      ...(debugData ? { debug: debugData } : {}),
     });
   } finally {
     await browser.close();

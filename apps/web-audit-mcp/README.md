@@ -23,6 +23,17 @@ scored findings.
 | `gtm_tag_suggestions` | **Measurement plan from a URL.** Crawl → per-page form + element scan → suggest the GA4 event tags worth creating: contact/signup/newsletter forms (with provider — HubSpot, Typeform, Mailchimp, Marketo, Pardot, Gravity Forms, CF7, WPForms) → `generate_lead`/`sign_up`/`newsletter_signup`; mailto → `email_click`, tel → `phone_click`, downloads, outbound, CTAs. Deduped + ranked; what GA4 Enhanced Measurement already auto-tracks is flagged, not pushed. Each suggestion is in the `create_gtm_tracking_tag` payload shape. Read-only — DOM is read, never clicked or submitted. |
 | `verify` | **Tag verification engine** (off by default — `WEB_AUDIT_ENABLE_VERIFY=true`). Loads a URL, drives a two-phase consent flow + journey steps, captures GA4 hits (GET + batched POST), dataLayer and cookies, and compares against a declarative spec → deterministic per-check report (Pass/Partial/Fail/Not Verified) with evidence. Client-side only. **Operator-driven interaction incl. real form submits** — see the safety note below. Also available as the `samarth-verify` CLI. Full docs: [`src/verify/README.md`](src/verify/README.md). |
 
+### Debugging a run
+
+`gtm_tag_suggestions` and `consent_compliance_audit` accept an optional
+**`debug: true`**. It adds a `debug` block to the response with the browser
+**console errors** and **uncaught page errors** captured during the run (which
+the normal report drops), plus the effective run mode (`headless`,
+`navTimeoutMs`, `settleMs`). Use it when an audit/scan comes back empty or
+surprising — the page's JS errors usually explain why tags never fired. Purely
+additive: it changes nothing the tools *do* (still read-only, consent-click
+only). To watch a run in a visible browser, set `WEB_AUDIT_HEADED=true`.
+
 ### What the findings catch
 
 - **Tags firing before any consent choice** (critical) — with GA4 "advanced

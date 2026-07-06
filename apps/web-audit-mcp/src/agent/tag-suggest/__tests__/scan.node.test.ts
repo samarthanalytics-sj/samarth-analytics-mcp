@@ -112,5 +112,13 @@ check('report: notScanned + notes carried through', report.notScanned.length ===
 const empty = assembleTagReport({ site: 's', siteHost: 'h', scannedAt: 't', pagesCrawled: 0, pageScans: [], notScanned: [], notes: [] });
 check('report: empty scan → zero suggestions, no throw', empty.summary.suggestions === 0 && empty.suggestions.length === 0 && empty.pages.length === 0);
 
+// ── debug passthrough (opt-in) ────────────────────────────────────────────────
+check('report: debug omitted by default', report.debug === undefined);
+const dbg = assembleTagReport({
+  site: 's', siteHost: 'h', scannedAt: 't', pagesCrawled: 1, pageScans: [], notScanned: [], notes: [],
+  debug: { headless: true, navTimeoutMs: 30000, settleMs: 3000, consoleErrors: ['Uncaught TypeError: x'], pageErrors: [] },
+});
+check('report: debug surfaced when passed', dbg.debug?.consoleErrors[0] === 'Uncaught TypeError: x' && dbg.debug?.headless === true);
+
 console.log(`\nTag-scan: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

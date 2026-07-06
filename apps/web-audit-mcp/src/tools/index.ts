@@ -230,14 +230,16 @@ export function registerAllTools(server: McpServer): void {
           .describe('Crawl depth from the start URL (default 2, hard cap 4).'),
         scanPages: z.number().int().positive().optional()
           .describe('How many crawled pages to deep-scan for tags (default = pages crawled, cap 25). Entry page + most form-heavy first.'),
+        debug: z.boolean().optional()
+          .describe('Include a `debug` block (browser console/page errors across scanned pages + run mode) for troubleshooting a scan that finds nothing.'),
       }),
     },
-    async ({ url, maxPages, maxDepth, scanPages }) => {
+    async ({ url, maxPages, maxDepth, scanPages, debug }) => {
       const rejected = admit(url);
       if (rejected) return rejected;
       try {
         const { scanSiteForTagSuggestions } = await import('../agent/tag-suggest/scan.js');
-        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages });
+        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages, debug });
         return jsonResult(report);
       } catch (err) {
         return errorResult('gtm_tag_suggestions', err);
@@ -277,14 +279,16 @@ export function registerAllTools(server: McpServer): void {
             'capture — upgrading coverage from runtime-only to "reconciled". A "summary"/"names_only" ' +
             'export is rejected with a note (parameters are stripped there).',
           ),
+        debug: z.boolean().optional()
+          .describe('Include a `debug` block (per-scenario browser console/page errors + run mode) for troubleshooting an audit that saw no hits.'),
       }),
     },
-    async ({ url, maxPages, maxDepth, capturePages, scenarios, gtmContainer }) => {
+    async ({ url, maxPages, maxDepth, capturePages, scenarios, gtmContainer, debug }) => {
       const rejected = admit(url);
       if (rejected) return rejected;
       try {
         const { runComplianceAudit } = await import('../agent/compliance.js');
-        const report = await runComplianceAudit(url, { maxPages, maxDepth, capturePages, scenarios, gtmContainer });
+        const report = await runComplianceAudit(url, { maxPages, maxDepth, capturePages, scenarios, gtmContainer, debug });
         return jsonResult(report);
       } catch (err) {
         return errorResult('consent_compliance_audit', err);
