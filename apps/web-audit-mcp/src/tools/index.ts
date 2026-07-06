@@ -221,7 +221,8 @@ export function registerAllTools(server: McpServer): void {
         'Enhanced Measurement ALREADY auto-tracks (file ' +
         'downloads, outbound clicks) is flagged enhancedMeasurementOverlap:true rather than pushed, so you do not ' +
         'double-track. Read-only and bounded by maxPages/scanPages and a private-network guard; forms are ' +
-        'inventoried, never filled or submitted, and no element other than the page itself is ever interacted with.',
+        'inventoried, never filled or submitted, and no element other than the page itself is ever interacted with. ' +
+        'Pass debug:true to add a `debug` block (browser console/page errors + run mode) when a scan comes back empty.',
       inputSchema: z.object({
         url: urlField,
         maxPages: z.number().int().positive().optional()
@@ -230,14 +231,16 @@ export function registerAllTools(server: McpServer): void {
           .describe('Crawl depth from the start URL (default 2, hard cap 4).'),
         scanPages: z.number().int().positive().optional()
           .describe('How many crawled pages to deep-scan for tags (default = pages crawled, cap 25). Entry page + most form-heavy first.'),
+        debug: z.boolean().optional()
+          .describe('Include a `debug` block (browser console/page errors across scanned pages + run mode) for troubleshooting a scan that finds nothing.'),
       }),
     },
-    async ({ url, maxPages, maxDepth, scanPages }) => {
+    async ({ url, maxPages, maxDepth, scanPages, debug }) => {
       const rejected = admit(url);
       if (rejected) return rejected;
       try {
         const { scanSiteForTagSuggestions } = await import('../agent/tag-suggest/scan.js');
-        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages });
+        const report = await scanSiteForTagSuggestions(url, { maxPages, maxDepth, scanPages, debug });
         return jsonResult(report);
       } catch (err) {
         return errorResult('gtm_tag_suggestions', err);
@@ -258,7 +261,8 @@ export function registerAllTools(server: McpServer): void {
         'engine. Pass gtmContainer to reconcile the configured GTM container against observed runtime ' +
         'behaviour ("reconciled" coverage) AND get tag-presence reconciliation — configured-but-never-fired, ' +
         'fired-but-not-configured, and GA4 measurement-id mismatches — in report.reconciliation + findings. ' +
-        'This is the recommended one-call entry point; use the focused tools to drill in.',
+        'This is the recommended one-call entry point; use the focused tools to drill in. ' +
+        'Pass debug:true to add a `debug` block (per-scenario browser console/page errors + run mode) when an audit sees no hits.',
       inputSchema: z.object({
         url: urlField,
         maxPages: z.number().int().positive().optional()
@@ -277,14 +281,16 @@ export function registerAllTools(server: McpServer): void {
             'capture — upgrading coverage from runtime-only to "reconciled". A "summary"/"names_only" ' +
             'export is rejected with a note (parameters are stripped there).',
           ),
+        debug: z.boolean().optional()
+          .describe('Include a `debug` block (per-scenario browser console/page errors + run mode) for troubleshooting an audit that saw no hits.'),
       }),
     },
-    async ({ url, maxPages, maxDepth, capturePages, scenarios, gtmContainer }) => {
+    async ({ url, maxPages, maxDepth, capturePages, scenarios, gtmContainer, debug }) => {
       const rejected = admit(url);
       if (rejected) return rejected;
       try {
         const { runComplianceAudit } = await import('../agent/compliance.js');
-        const report = await runComplianceAudit(url, { maxPages, maxDepth, capturePages, scenarios, gtmContainer });
+        const report = await runComplianceAudit(url, { maxPages, maxDepth, capturePages, scenarios, gtmContainer, debug });
         return jsonResult(report);
       } catch (err) {
         return errorResult('consent_compliance_audit', err);

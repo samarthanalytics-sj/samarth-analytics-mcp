@@ -446,6 +446,28 @@ export interface ComplianceReport {
     notes: string[];
   }[];
   findings: AuditFinding[];
+  /** Present only when the caller passed debug:true — see AuditDebug. */
+  debug?: AuditDebug;
+}
+
+/**
+ * Diagnostics for troubleshooting a run (opt-in via debug:true). Surfaces the
+ * browser console/page errors each scenario capture already records but the
+ * normal report drops, plus the effective run mode. Purely additive — it does
+ * not change what the audit does (still read-only, consent-click only).
+ */
+export interface AuditDebug {
+  /** Chromium launch mode (set WEB_AUDIT_HEADED=true to watch a run). */
+  headless: boolean;
+  navTimeoutMs: number;
+  settleMs: number;
+  interactionEnabled: boolean;
+  captures: {
+    scenario: Scenario;
+    url: string;
+    consoleErrors: string[];
+    pageErrors: string[];
+  }[];
 }
 
 export function scoreFindings(findings: AuditFinding[]): { score: number; verdict: ComplianceReport['verdict'] } {
@@ -483,6 +505,8 @@ export interface ComplianceAuditOptions {
    * ("reconciled" coverage) instead of running runtime-only rules.
    */
   gtmContainer?: unknown;
+  /** Include an AuditDebug block (browser console/page errors + run mode) for troubleshooting. */
+  debug?: boolean;
 }
 
 /** Full audit: crawl the site, scan forms, exercise the banner, run all rules. */
@@ -592,6 +616,22 @@ export async function runComplianceAudit(
         notes: c.notes,
       })),
       findings,
+      ...(options.debug
+        ? {
+            debug: {
+              headless: config.headless,
+              navTimeoutMs: config.navTimeoutMs,
+              settleMs: config.settleMs,
+              interactionEnabled: config.interactionEnabled,
+              captures: captures.map((c) => ({
+                scenario: c.scenario,
+                url: c.requestedUrl,
+                consoleErrors: c.consoleErrors,
+                pageErrors: c.pageErrors,
+              })),
+            } satisfies AuditDebug,
+          }
+        : {}),
     };
   } finally {
     await browser.close();
