@@ -108,17 +108,23 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
     const o = x.outcomes;
     if (o.assessed) {
       const maxAbs = Math.max(1, Math.abs(o.sessionsPct ?? 0), Math.abs(o.keyEventsPct ?? 0), Math.abs(o.revenuePct ?? 0));
-      // Verdict-aware caveat from the builder: a FAILED gate reads "not safe to quote"; an
-      // UNVERIFIED one reads "confirm before quoting" — never claiming more than the trust matrix.
-      const caveat = o.quoteNote ? `<div style="font-size:11.5px;color:${AMBER};margin-top:6px">${esc(o.quoteNote.replace(/—/g, '-'))}</div>` : '';
-      s3 += card(
-        growthBar('Sessions', o.sessionsPct, maxAbs, BLUE, false, o.sessionsFrom, o.sessionsTo) +
-          growthBar('Key events', o.keyEventsPct, maxAbs, o.keSafe ? GREEN : AMBER, !o.keSafe, o.keyEventsFrom, o.keyEventsTo) +
-          growthBar('Revenue', o.revenuePct, maxAbs, o.revSafe ? GREEN : AMBER, !o.revSafe, o.revenueFrom, o.revenueTo) +
-          `<div style="font-size:13px;color:${TEXT};margin-top:8px;line-height:1.45"><span style="font-weight:700">Read:</span> ${esc(o.read)}</div>` +
-          caveat,
-        BLUE,
-      );
+      // Lab-template bar voice: trusted bars in slate; a metric that is not fully trusted gets the
+      // SOFT slate + an asterisk, so the eye reads "provisional" before the number does.
+      const SLATE = '#26344E';
+      const SLATE_SOFT = '#8793A6';
+      // Verdict-aware caveat from the builder — rendered as the template's mono fine-print caption. A
+      // FAILED gate reads "not safe to quote"; an UNVERIFIED one "confirm before quoting".
+      const caveat = o.quoteNote
+        ? `<div style="font-family:${MONO};font-size:11px;color:${FAINT};line-height:1.55;margin-top:10px">${esc(o.quoteNote.replace(/—/g, '-'))}</div>`
+        : '';
+      s3 += `<div style="border:1px solid ${BORDER};border-radius:4px;padding:18px 20px 14px;background:${SURFACE};margin:8px 0;page-break-inside:avoid">` +
+        growthBar('Sessions', o.sessionsPct, maxAbs, SLATE, false, o.sessionsFrom, o.sessionsTo) +
+        growthBar('Key events', o.keyEventsPct, maxAbs, o.keSafe ? SLATE : SLATE_SOFT, !o.keSafe, o.keyEventsFrom, o.keyEventsTo) +
+        growthBar('Revenue', o.revenuePct, maxAbs, o.revSafe ? SLATE : SLATE_SOFT, !o.revSafe, o.revenueFrom, o.revenueTo) +
+        // The "Read" is the template's callout: a left-accented interpretation box under the chart.
+        `<div style="margin:14px 0 0;padding:11px 14px;border-left:3px solid ${AMBER};background:${v('--c-amber-bg', '#FCF8EF')};font-size:13px;color:${TEXT};border-radius:0 3px 3px 0;line-height:1.5"><b style="font-weight:600">Read:</b> ${esc(o.read)}</div>` +
+        caveat +
+        `</div>`;
     } else {
       s3 += card(`<div style="font-size:13px;color:${MUTED}">${esc(o.read)}</div>`, BORDER);
     }
@@ -216,18 +222,24 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       AMBER,
     );
   }
+  // Lab-template provisional voice: when conv/revenue are unverified their VALUES render in the faint
+  // ink (the template's .prov), and each table carries a mono footnote — the reader can't miss it.
+  const TDP = x.perfProvisional ? TDR.replace(`color:${TEXT}`, `color:${FAINT}`) : TDR;
+  const provNote = x.perfProvisional
+    ? `<div style="font-family:${MONO};font-size:11px;color:${FAINT};margin:4px 2px 8px;line-height:1.55">*Conversion-rate and revenue values are provisional - not verified (see the Data Trust Matrix).</div>`
+    : '';
   // Channel performance table — which channels convert and earn, not just their traffic share.
   if (x.channelPerformance && x.channelPerformance.length) {
     const cRows = x.channelPerformance
       .map(
         (c) =>
-          `<tr><td ${TD}><span style="font-weight:600">${esc(c.channel)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDR}>${esc(c.convRate)}</td><td ${TDR}>${esc(c.revenue)}</td><td ${TDR}>${esc(c.engagement)}</td></tr>`,
+          `<tr><td ${TD}><span style="font-weight:600">${esc(c.channel)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDP}>${esc(c.convRate)}</td><td ${TDP}>${esc(c.revenue)}</td><td ${TDR}>${esc(c.engagement)}</td></tr>`,
       )
       .join('');
     s6 +=
       tableCaption('Channel performance', '(conversion rate and revenue per channel, not just traffic share)') +
       `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
-      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Channel</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cRows}</tbody></table></div>`;
+      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Channel</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cRows}</tbody></table></div>` + provNote;
   }
   // Landing-page table — top entry pages: which convert and which leak. Paths can be long, so the page
   // cell wraps (break-all) and the table scrolls horizontally on narrow screens.
@@ -235,39 +247,39 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
     const lRows = x.landingPages
       .map(
         (p) =>
-          `<tr><td ${TD}><span style="font-weight:600;word-break:break-all">${esc(p.page)}</span></td><td ${TDR}>${esc(p.sessions)}</td><td ${TDR}>${esc(p.convRate)}</td><td ${TDR}>${esc(p.revenue)}</td><td ${TDR}>${esc(p.engagement)}</td></tr>`,
+          `<tr><td ${TD}><span style="font-weight:600;word-break:break-all">${esc(p.page)}</span></td><td ${TDR}>${esc(p.sessions)}</td><td ${TDP}>${esc(p.convRate)}</td><td ${TDP}>${esc(p.revenue)}</td><td ${TDR}>${esc(p.engagement)}</td></tr>`,
       )
       .join('');
     s6 +=
       tableCaption('Landing pages', '(top entry pages: which convert and which leak)') +
       `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
-      `<table style="border-collapse:collapse;width:100%;min-width:460px"><thead><tr><th ${TH}>Landing page</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${lRows}</tbody></table></div>`;
+      `<table style="border-collapse:collapse;width:100%;min-width:460px"><thead><tr><th ${TH}>Landing page</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${lRows}</tbody></table></div>` + provNote;
   }
   // Device performance table — how each device type converts and spends.
   if (x.devicePerformance && x.devicePerformance.length) {
     const dRows = x.devicePerformance
       .map(
         (d) =>
-          `<tr><td ${TD}><span style="font-weight:600;text-transform:capitalize">${esc(d.device)}</span></td><td ${TDR}>${esc(d.sessions)}</td><td ${TDR}>${esc(d.convRate)}</td><td ${TDR}>${esc(d.revenue)}</td><td ${TDR}>${esc(d.engagement)}</td></tr>`,
+          `<tr><td ${TD}><span style="font-weight:600;text-transform:capitalize">${esc(d.device)}</span></td><td ${TDR}>${esc(d.sessions)}</td><td ${TDP}>${esc(d.convRate)}</td><td ${TDP}>${esc(d.revenue)}</td><td ${TDR}>${esc(d.engagement)}</td></tr>`,
       )
       .join('');
     s6 +=
       tableCaption('Device performance', '(how each device type converts and spends)') +
       `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
-      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Device</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${dRows}</tbody></table></div>`;
+      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Device</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${dRows}</tbody></table></div>` + provNote;
   }
   // Market performance table — which geographies convert and spend (top markets by sessions).
   if (x.geoPerformance && x.geoPerformance.length) {
     const gRows = x.geoPerformance
       .map(
         (g) =>
-          `<tr><td ${TD}><span style="font-weight:600">${esc(g.country)}</span></td><td ${TDR}>${esc(g.sessions)}</td><td ${TDR}>${esc(g.convRate)}</td><td ${TDR}>${esc(g.revenue)}</td><td ${TDR}>${esc(g.engagement)}</td></tr>`,
+          `<tr><td ${TD}><span style="font-weight:600">${esc(g.country)}</span></td><td ${TDR}>${esc(g.sessions)}</td><td ${TDP}>${esc(g.convRate)}</td><td ${TDP}>${esc(g.revenue)}</td><td ${TDR}>${esc(g.engagement)}</td></tr>`,
       )
       .join('');
     s6 +=
       tableCaption('Market performance', '(which geographies convert and spend)') +
       `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
-      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Market</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${gRows}</tbody></table></div>`;
+      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Market</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${gRows}</tbody></table></div>` + provNote;
   }
   // Campaign performance table — which marketing (utm_campaign-tagged) campaigns convert and earn, with
   // the top campaign + untagged-traffic share in the caption. When there is no tagged campaign traffic
@@ -291,7 +303,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
     const lRows = x.llmTraffic.rows
       .map(
         (c) =>
-          `<tr><td ${TD}><span style="font-weight:600">${esc(c.source)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDR}>${esc(c.convRate)}</td><td ${TDR}>${esc(c.revenue)}</td><td ${TDR}>${esc(c.engagement)}</td></tr>`,
+          `<tr><td ${TD}><span style="font-weight:600">${esc(c.source)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDP}>${esc(c.convRate)}</td><td ${TDP}>${esc(c.revenue)}</td><td ${TDR}>${esc(c.engagement)}</td></tr>`,
       )
       .join('');
     s6 +=

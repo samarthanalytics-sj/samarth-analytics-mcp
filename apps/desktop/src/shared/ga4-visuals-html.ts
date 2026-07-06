@@ -16,25 +16,32 @@ export function stripDuplicateCharts(md: string): string {
     .replace(/\*\*Channel mix \(sessions\)\*\*\s*```[\s\S]*?```\s*/g, '');
 }
 
-const TEXT = 'var(--text, #1a1a1a)';
-const MUTED = 'var(--text-muted, #5b6472)';
-const FAINT = 'var(--text-faint, #8a93a0)';
-const BORDER = 'var(--border, #e3e6ea)';
-const SURFACE = 'var(--surface, #ffffff)';
+// Lab-report palette (fallbacks apply in the PDF; on-screen the app theme wins).
+const TEXT = 'var(--text, #17191D)';
+const MUTED = 'var(--text-muted, #5B6069)';
+const FAINT = 'var(--text-faint, #8A8F98)';
+const BORDER = 'var(--border, #E3E3DC)';
+const SURFACE = 'var(--surface, #FFFFFF)';
+const MONO = `ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace`;
 
-// Bright, theme-agnostic palette (reads on light and dark backgrounds).
-const PALETTE = ['#3b82f6', '#06b6d4', '#22c55e', '#f59e0b', '#a855f7', '#ef4444', '#14b8a6', '#ec4899'];
-const LINE = '#3b82f6';
-const PEAK = '#ef4444';
-const AXIS = '#94a3b8';
+// Channel colours from the lab template — matched to source, lightly muted.
+const PALETTE = ['#4F7BD1', '#1FA5B8', '#2E9E5E', '#D98A38', '#8E63C4', '#A63527', '#9A6206', '#6A6F78'];
+const LINE = '#4F7BD1';
+const PEAK = '#A63527';
+const AXIS = '#8A8F98';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const fmtDay = (ymd: string): string => {
   const m = /^(\d{4})(\d{2})(\d{2})$/.exec(ymd);
   return m ? `${MONTHS[Number(m[2]) - 1] ?? '?'} ${Number(m[3])}` : ymd || '?';
 };
+/** Viz-card heading: a declarative title + a muted one-line explainer (the template's h4 + vsub). */
+const vizHead = (title: string, sub: string): string =>
+  `<div style="font-size:15px;font-weight:600;color:${TEXT};margin:0 0 3px">${esc(title)}</div>` +
+  (sub ? `<div style="font-size:13px;color:${MUTED};margin:0 0 12px;max-width:70ch">${esc(sub)}</div>` : '');
+/** Mono uppercase eyebrow label for the smaller cards. */
 const label = (t: string): string =>
-  `<div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:${FAINT};margin-bottom:4px">${esc(t)}</div>`;
+  `<div style="font-family:${MONO};font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:${FAINT};margin-bottom:6px">${esc(t)}</div>`;
 
 // Adaptive grouping: keep the chart readable (and meaningful) as the window grows. Up to ~6 weeks is
 // shown per day; up to ~7 months per week; longer windows roll up to months. Daily values are summed
@@ -131,13 +138,13 @@ function lineChartSvg(points: GPoint[], peakLabel: string): string {
   const poly = points.map((p, i) => `${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ');
   const area = `M ${x(0).toFixed(1)} ${(t + ih).toFixed(1)} L ` + points.map((p, i) => `${x(i).toFixed(1)} ${y(p.value).toFixed(1)}`).join(' L ') + ` L ${x(n - 1).toFixed(1)} ${(t + ih).toFixed(1)} Z`;
   const xlab = (i: number, anchor: string): string =>
-    points[i] ? `<text x="${x(i).toFixed(1)}" y="${H - 9}" text-anchor="${anchor}" style="font-size:10px;fill:${AXIS}">${esc(points[i].label)}</text>` : '';
-  const peakMark = `<text x="${x(peakIdx).toFixed(1)}" y="${(y(points[peakIdx].value) - 8).toFixed(1)}" text-anchor="middle" style="font-size:10px;font-weight:700;fill:${PEAK}">${esc(peakLabel)}</text>`;
+    points[i] ? `<text x="${x(i).toFixed(1)}" y="${H - 9}" text-anchor="${anchor}" style="font-family:${MONO};font-size:10px;fill:${AXIS}">${esc(points[i].label)}</text>` : '';
+  const peakMark = `<text x="${x(peakIdx).toFixed(1)}" y="${(y(points[peakIdx].value) - 8).toFixed(1)}" text-anchor="middle" style="font-family:${MONO};font-size:10px;font-weight:700;fill:${PEAK}">${esc(peakLabel)}</text>`;
   return (
     `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:720px;display:block;margin:8px 0" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sessions trend">` +
     `<defs><linearGradient id="ga4area" x1="0" x2="0" y1="0" y2="1"><stop offset="0" style="stop-color:${LINE};stop-opacity:.28"/><stop offset="1" style="stop-color:${LINE};stop-opacity:.02"/></linearGradient></defs>` +
     `<line x1="${l}" y1="${(t + ih).toFixed(1)}" x2="${W - r}" y2="${(t + ih).toFixed(1)}" style="stroke:rgba(148,163,184,.35);stroke-width:1"/>` +
-    `<text x="${l - 7}" y="${(t + 4).toFixed(1)}" text-anchor="end" style="font-size:10px;fill:${AXIS}">${maxV.toLocaleString('en-US')}</text>` +
+    `<text x="${l - 7}" y="${(t + 4).toFixed(1)}" text-anchor="end" style="font-family:${MONO};font-size:10px;fill:${AXIS}">${maxV.toLocaleString('en-US')}</text>` +
     `<path d="${area}" style="fill:url(#ga4area);stroke:none"/>` +
     `<polyline points="${poly}" style="fill:none;stroke:${LINE};stroke-width:2;stroke-linejoin:round;stroke-linecap:round"/>` +
     dots(points, x, y, LINE, '', peakIdx, hoverRadius(n, iw)) +
@@ -179,11 +186,11 @@ function multiLineChartSvg(grouped: ChannelPoints[]): string {
     .join('');
   const first = series[0].points;
   const xlab = (i: number, anchor: string): string =>
-    first[i] ? `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="${anchor}" style="font-size:10px;fill:${AXIS}">${esc(first[i].label)}</text>` : '';
+    first[i] ? `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="${anchor}" style="font-family:${MONO};font-size:10px;fill:${AXIS}">${esc(first[i].label)}</text>` : '';
   return (
     `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:720px;display:block;margin:8px 0" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sessions by channel">` +
     `<line x1="${l}" y1="${(t + ih).toFixed(1)}" x2="${W - r}" y2="${(t + ih).toFixed(1)}" style="stroke:rgba(148,163,184,.35);stroke-width:1"/>` +
-    `<text x="${l - 7}" y="${(t + 4).toFixed(1)}" text-anchor="end" style="font-size:10px;fill:${AXIS}">${maxV.toLocaleString('en-US')}</text>` +
+    `<text x="${l - 7}" y="${(t + 4).toFixed(1)}" text-anchor="end" style="font-family:${MONO};font-size:10px;fill:${AXIS}">${maxV.toLocaleString('en-US')}</text>` +
     body +
     xlab(0, 'start') +
     xlab(n - 1, 'end') +
@@ -196,9 +203,9 @@ function legendHtml(grouped: ChannelPoints[]): string {
   const series = grouped.filter((c) => c.points && c.points.length >= 2);
   if (!series.length) return '';
   return (
-    `<div style="display:flex;flex-wrap:wrap;gap:10px 16px;margin-top:2px">` +
+    `<div style="display:flex;flex-wrap:wrap;gap:8px 16px;margin:0 0 6px;font-family:${MONO};font-size:11px;color:${MUTED}">` +
     series
-      .map((c, i) => `<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:${MUTED}"><span style="width:11px;height:3px;border-radius:2px;background:${PALETTE[i % PALETTE.length]};display:inline-block"></span>${esc(c.channel || '(not set)')}</span>`)
+      .map((c, i) => `<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:16px;height:3px;border-radius:2px;background:${PALETTE[i % PALETTE.length]};display:inline-block"></span>${esc(c.channel || '(not set)')}</span>`)
       .join('') +
     `</div>`
   );
@@ -216,7 +223,7 @@ function barList(rows: Ga4VisualsView['devices']): string {
       return (
         `<div style="display:flex;align-items:center;gap:8px;margin:5px 0;font-size:12px">` +
         `<span style="width:120px;flex:0 0 120px;color:${TEXT};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(row.name || '(not set)')}</span>` +
-        `<span style="flex:1;background:rgba(148,163,184,.18);border-radius:5px;height:13px;overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:${color};border-radius:5px"></span></span>` +
+        `<span style="flex:1;background:var(--surface-2, #EDEDE6);border-radius:5px;height:13px;overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:${color};border-radius:5px"></span></span>` +
         `<span style="width:36px;flex:0 0 36px;text-align:right;color:${MUTED}">${pct}%</span>` +
         `</div>`
       );
@@ -225,7 +232,7 @@ function barList(rows: Ga4VisualsView['devices']): string {
 }
 
 const pillColor = (lbl: string): string =>
-  /spike|volatile/i.test(lbl) ? '#f59e0b' : /upward/i.test(lbl) ? '#22c55e' : /downward/i.test(lbl) ? '#ef4444' : '#64748b';
+  /spike|volatile/i.test(lbl) ? '#9A6206' : /upward/i.test(lbl) ? '#1E7A48' : /downward/i.test(lbl) ? '#A63527' : '#6A6F78';
 
 // ── Deep insights read directly off the chart data ──────────────────────────────────────────────
 // Deterministic, pure: what the peak was, which channel drove the rise, how concentrated the traffic
@@ -317,31 +324,32 @@ export function buildTrendInsights(v: Ga4VisualsView): TrendInsight[] {
 }
 
 const INSIGHT_TONE: Record<TrendInsight['tone'], { bar: string; bg: string }> = {
-  good: { bar: 'var(--c-green, #16a34a)', bg: 'var(--c-green-bg, #f0fdf4)' },
-  watch: { bar: 'var(--c-amber, #d97706)', bg: 'var(--c-amber-bg, #fffbeb)' },
-  info: { bar: 'var(--c-blue, #2563eb)', bg: 'var(--c-blue-bg, #eff6ff)' },
+  good: { bar: 'var(--c-green, #1E7A48)', bg: 'var(--c-green-bg, #F4FAF6)' },
+  watch: { bar: 'var(--c-amber, #9A6206)', bg: 'var(--c-amber-bg, #FCF8EF)' },
+  info: { bar: 'var(--c-blue, #26344E)', bg: 'var(--c-blue-bg, #F1F3F6)' },
 };
 
 function insightsPanelHtml(v: Ga4VisualsView): string {
   const items = buildTrendInsights(v);
   if (!items.length) return '';
+  // Template "callout" voice: a left-accented read per insight, mono eyebrow title.
   const rows = items
     .map((it) => {
       const tone = INSIGHT_TONE[it.tone];
       return (
-        `<div style="border-left:3px solid ${tone.bar};background:${tone.bg};border-radius:0 6px 6px 0;padding:7px 10px;margin:0 0 8px">` +
-        `<div style="font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:${tone.bar};margin-bottom:2px">${esc(it.title)}</div>` +
-        `<div style="font-size:12.5px;color:${TEXT};line-height:1.45">${esc(it.body)}</div></div>`
+        `<div style="border-left:3px solid ${tone.bar};background:${tone.bg};border-radius:0 3px 3px 0;padding:9px 12px;margin:0 0 8px">` +
+        `<div style="font-family:${MONO};font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:${tone.bar};margin-bottom:2px">${esc(it.title)}</div>` +
+        `<div style="font-size:12.5px;color:${TEXT};line-height:1.5">${esc(it.body)}</div></div>`
       );
     })
     .join('');
-  return `<div style="border:1px solid ${BORDER};border-radius:10px;padding:12px 14px;background:${SURFACE};box-sizing:border-box">${label('What the data shows')}${rows}</div>`;
+  return `<div style="border:1px solid ${BORDER};border-radius:4px;padding:14px 16px;background:${SURFACE};box-sizing:border-box">${label('What the data shows')}${rows}</div>`;
 }
 
 export function ga4VisualsHtml(v: Ga4VisualsView): string {
   if (!v || (!v.daily?.length && !v.devices?.length && !v.channels?.length)) return '';
   const cardTd = (inner: string): string =>
-    `<td style="width:50%;vertical-align:top;padding:6px"><div style="border:1px solid ${BORDER};border-radius:10px;padding:12px 14px;background:${SURFACE}">${inner}</div></td>`;
+    `<td style="width:50%;vertical-align:top;padding:6px"><div style="border:1px solid ${BORDER};border-radius:4px;padding:16px 18px;background:${SURFACE}">${inner}</div></td>`;
   // Adaptive grouping: as the window grows the daily series rolls up to weekly, then monthly, so the
   // chart stays readable and each point carries a hover tooltip with its value for that date/period.
   const gran = granularityFor(v.daily?.length ?? 0);
@@ -353,10 +361,14 @@ export function ga4VisualsHtml(v: Ga4VisualsView): string {
   // Only show the trend pill/summary/line chart when there are enough days to characterise it (>=5),
   // matching the markdown report's section-3 guard so the two surfaces never disagree.
   const trend = (v.daily?.length ?? 0) >= 5
-    ? `<div style="margin-top:6px;font-size:13px;color:${TEXT};line-height:1.5">` +
-      `<span style="display:inline-block;font-size:11px;font-weight:700;letter-spacing:.3px;padding:2px 9px;border-radius:999px;color:#fff;background:${pillColor(v.trendLabel)};margin-right:8px">${esc(v.trendLabel)}</span>` +
-      `${esc(v.trendSummary)} <span style="color:${FAINT}">(${granLabel(gran)}; hover a point for its value)</span></div>` +
-      lineChartSvg(trendPoints, peakLabel)
+    ? `<div style="border:1px solid ${BORDER};border-radius:4px;padding:16px 18px 12px;background:${SURFACE};margin:0 0 10px">` +
+      vizHead(`Sessions over the window (${granLabel(gran)})`, '') +
+      `<div style="font-size:13px;color:${TEXT};line-height:1.5;margin:0 0 4px">` +
+      `<span style="display:inline-block;font-family:${MONO};font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:3px;color:#fff;background:${pillColor(v.trendLabel)};margin-right:8px">${esc(v.trendLabel)}</span>` +
+      `${esc(v.trendSummary)}</div>` +
+      lineChartSvg(trendPoints, peakLabel) +
+      `<div style="font-family:${MONO};font-size:11px;color:${FAINT};line-height:1.55;margin-top:4px">Hover a point for its exact value. Peak is marked in red.</div>` +
+      `</div>`
     : '';
   // Channel attribution is not safe to quote → grey the channel charts and show a caveat, so only the
   // fully-trusted data (sessions trend, device split) is foregrounded.
@@ -368,7 +380,15 @@ export function ga4VisualsHtml(v: Ga4VisualsView): string {
     : '';
   const channelGrouped: ChannelPoints[] = (v.channelDaily ?? []).map((c) => ({ channel: c.channel, points: groupSeries(c.series, gran, anchor) }));
   const byChannelChart = multiLineChartSvg(channelGrouped);
-  const byChannel = byChannelChart ? greyOpen + label(`Sessions by channel (${granLabel(gran)})`) + byChannelChart + legendHtml(channelGrouped) + greyClose : '';
+  const byChannel = byChannelChart
+    ? greyOpen +
+      `<div style="border:1px solid ${BORDER};border-radius:4px;padding:16px 18px 12px;background:${SURFACE};margin:0 0 10px">` +
+      vizHead(`Sessions by channel (${granLabel(gran)})`, 'One line per channel on a shared axis - a spike that belongs to a single channel shows up here.') +
+      legendHtml(channelGrouped) +
+      byChannelChart +
+      `</div>` +
+      greyClose
+    : '';
   const chartsBlock = trend + caveat + byChannel;
   // Charts on the left, the deep-insights panel on the right (matching the on-screen layout). When
   // there is nothing to say, the charts take the full width instead of leaving an empty column.
@@ -380,9 +400,9 @@ export function ga4VisualsHtml(v: Ga4VisualsView): string {
       `</tr></tbody></table>`
     : chartsBlock;
   return (
-    `<section style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${TEXT};line-height:1.5">` +
-    `<div style="font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#2563eb">Traffic trend</div>` +
-    `<h2 style="font-size:18px;margin:2px 0 2px;color:${TEXT}">Traffic trend &amp; visualisations</h2>` +
+    `<section style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${TEXT};line-height:1.5">` +
+    `<div style="font-family:${MONO};font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:${FAINT};margin:0 0 2px">The evidence</div>` +
+    `<h2 style="font-size:21px;font-weight:600;letter-spacing:-.01em;margin:2px 0 10px;color:${TEXT}">Traffic trend &amp; visualisations</h2>` +
     chartsAndInsights +
     `<table role="presentation" style="border-collapse:separate;border-spacing:0;width:100%;margin-top:8px;table-layout:fixed"><tbody><tr>` +
     cardTd(label('Device split') + barList(v.devices ?? [])) +
