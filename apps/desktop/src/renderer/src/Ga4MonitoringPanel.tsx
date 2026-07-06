@@ -182,7 +182,14 @@ function PropertyCard({ t, selected, runningId, busy, onSelect, onRun, onToggleP
         <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.propertyLabel || t.propertyId}>
           {t.propertyLabel || t.propertyId}
         </div>
-        <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>{t.propertyId.replace('properties/', '')}</div>
+        <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint)', marginTop: 2, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span>{t.propertyId.replace('properties/', '')}</span>
+          {t.hasWebhook && (
+            <span title="This property alerts its own Slack channel" style={{ fontFamily: 'inherit', color: 'var(--c-green)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              → {t.slackLabel || 'own Slack channel'}
+            </span>
+          )}
+        </div>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
@@ -225,6 +232,10 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
   const [webhookInput, setWebhookInput] = useState('');
   const [labelInput, setLabelInput] = useState('');
   const [labelDirty, setLabelDirty] = useState(false);
+  // Per-property channel editor: which property's inline form is open + its draft url/label.
+  const [channelEdit, setChannelEdit] = useState<string | null>(null);
+  const [chanUrl, setChanUrl] = useState('');
+  const [chanLabel, setChanLabel] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
 
@@ -309,6 +320,34 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
     setBusy(true); onError('');
     try { setStatus(await window.desktop.ga4monitoring.clearWebhook()); setNote('Slack webhook removed.'); }
     catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  }
+
+  // ── Per-property channels (one property, one channel; default channel is the fallback) ──
+  async function savePropertyChannel(propertyId: string): Promise<void> {
+    const url = chanUrl.trim();
+    if (!url || !status) return;
+    setBusy(true); onError(''); setNote('');
+    try {
+      await window.desktop.ga4monitoring.setWebhook(url, propertyId);
+      const lbl = chanLabel.trim();
+      setStatus(await window.desktop.ga4monitoring.configure({
+        targets: status.targets.map((t) => (t.propertyId === propertyId ? { ...t, slackLabel: lbl || undefined } : t)),
+      }));
+      setChannelEdit(null); setChanUrl(''); setChanLabel('');
+      setNote('Property channel saved (encrypted) — its alerts now post there instead of the default.');
+    } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  }
+  async function removePropertyChannel(propertyId: string): Promise<void> {
+    setBusy(true); onError(''); setNote('');
+    try { setStatus(await window.desktop.ga4monitoring.clearWebhook(propertyId)); setNote('Property channel removed — its alerts fall back to the default channel.'); }
+    catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  }
+  async function testPropertyChannel(propertyId: string): Promise<void> {
+    setBusy(true); onError(''); setNote('');
+    try {
+      const r = await window.desktop.ga4monitoring.sendTest(propertyId);
+      setNote(r.ok ? 'Test sent — check Slack to confirm which channel this property alerts.' : `Test failed: ${r.error ?? 'unknown error'}`);
+    } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
   async function sendTest(): Promise<void> {
     setBusy(true); onError(''); setNote('');
@@ -456,15 +495,16 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
           </label>
         </div>
         {status?.hasWebhook ? (
-          /* Connected: one channel only — no add/replace form, just verify or disconnect. */
+          /* Connected default channel: verify or disconnect (per-property channels override it below). */
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>Default channel</span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 999, padding: '5px 14px', fontSize: 13 }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--c-green)', display: 'inline-block' }} />
               {status.slackLabel || 'Slack channel connected'}
             </span>
             <button style={btn} onClick={() => void sendTest()} disabled={busy} title="Post a confirmation message so you can see which channel receives alerts">Send test</button>
             <button style={btn} onClick={() => void clearWebhook()} disabled={busy}>Remove</button>
-            <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Alerts for every monitored property go to this one channel (each message names its property). To switch, remove it and connect the new channel’s webhook.</span>
+            <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Any property without its own channel posts here. Give a property its own channel below — one property, one channel.</span>
           </div>
         ) : (
           <>
@@ -489,6 +529,50 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
             </details>
             <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 6 }}>The URL is stored encrypted in your OS keychain (never synced or logged). An ongoing issue is posted once per property, not on every check.</div>
           </>
+        )}
+
+        {/* ── Per-property channels: one property, one channel (default = fallback) ── */}
+        {targets.length > 0 && (
+          <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)', marginBottom: 8 }}>
+              Per-property channels
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {targets.map((t) => (
+                <div key={t.propertyId} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 600, fontSize: 13, minWidth: 120 }}>{t.propertyLabel || t.propertyId}</span>
+                    {t.hasWebhook ? (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, background: 'var(--c-green-bg, rgba(34,197,94,.12))', color: 'var(--c-green)', borderRadius: 999, padding: '3px 11px', fontWeight: 600 }}>
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--c-green)', display: 'inline-block' }} />
+                        {t.slackLabel || 'own channel'}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>{status?.hasWebhook ? 'uses the default channel' : 'no channel (default not set)'}</span>
+                    )}
+                    <span style={{ flex: 1 }} />
+                    {t.hasWebhook ? (
+                      <>
+                        <button style={ghostBtn} disabled={busy} onClick={() => void testPropertyChannel(t.propertyId)}>Send test</button>
+                        <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} onClick={() => void removePropertyChannel(t.propertyId)}>Remove channel</button>
+                      </>
+                    ) : channelEdit === t.propertyId ? (
+                      <button style={ghostBtn} disabled={busy} onClick={() => { setChannelEdit(null); setChanUrl(''); setChanLabel(''); }}>Cancel</button>
+                    ) : (
+                      <button style={{ ...ghostBtn, color: 'var(--c-blue)' }} disabled={busy} onClick={() => { setChannelEdit(t.propertyId); setChanUrl(''); setChanLabel(''); }}>Set channel…</button>
+                    )}
+                  </div>
+                  {channelEdit === t.propertyId && !t.hasWebhook && (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                      <input style={{ ...input, flex: 2, minWidth: 240 }} type="password" placeholder="https://hooks.slack.com/services/… (this property's channel)" value={chanUrl} onChange={(e) => setChanUrl(e.target.value)} />
+                      <input style={{ ...input, flex: 1, minWidth: 140 }} type="text" placeholder="#acme-alerts (label)" value={chanLabel} onChange={(e) => setChanLabel(e.target.value)} />
+                      <button style={primaryBtn} disabled={busy || !chanUrl.trim()} onClick={() => void savePropertyChannel(t.propertyId)}>Save</button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
         )}
       </div>
 

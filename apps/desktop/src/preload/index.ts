@@ -340,9 +340,11 @@ const api = {
       ipcRenderer.invoke('ga4monitoring:configure', patch),
     /** Run one property on demand, or (no arg) sweep all enabled properties. */
     runNow: (propertyId?: string): Promise<Ga4MonitorRun[]> => ipcRenderer.invoke('ga4monitoring:runNow', propertyId),
-    setWebhook: (url: string): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:setWebhook', url),
-    clearWebhook: (): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:clearWebhook'),
-    sendTest: (): Promise<{ ok: boolean; error: string | null }> => ipcRenderer.invoke('ga4monitoring:sendTest'),
+    /** Connect a webhook: the account DEFAULT channel (no propertyId) or a property's OWN channel. */
+    setWebhook: (url: string, propertyId?: string): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:setWebhook', url, propertyId),
+    clearWebhook: (propertyId?: string): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:clearWebhook', propertyId),
+    /** Test the default channel, or (with propertyId) that property's effective channel. */
+    sendTest: (propertyId?: string): Promise<{ ok: boolean; error: string | null }> => ipcRenderer.invoke('ga4monitoring:sendTest', propertyId),
     // Subscribe to pushed runs (background + on-demand); returns an unsubscribe function.
     onRun: (cb: (run: Ga4MonitorRun) => void): (() => void) => {
       const listener = (_e: unknown, run: Ga4MonitorRun): void => cb(run);

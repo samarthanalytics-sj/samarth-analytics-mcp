@@ -14,7 +14,14 @@ export function registerGa4MonitoringIpc(service: Ga4MonitoringService): void {
   ipcMain.handle('ga4monitoring:runNow', (_e, propertyId?: unknown) =>
     service.runOnce(typeof propertyId === 'string' && propertyId ? propertyId : undefined)
   );
-  ipcMain.handle('ga4monitoring:setWebhook', (_e, url: unknown) => service.setWebhook(String(url ?? '')));
-  ipcMain.handle('ga4monitoring:clearWebhook', () => service.clearWebhook());
-  ipcMain.handle('ga4monitoring:sendTest', () => service.sendTest());
+  // Optional propertyId on all three: a property's OWN channel vs the account default.
+  ipcMain.handle('ga4monitoring:setWebhook', (_e, url: unknown, propertyId?: unknown) =>
+    service.setWebhook(String(url ?? ''), typeof propertyId === 'string' && propertyId ? propertyId : undefined)
+  );
+  ipcMain.handle('ga4monitoring:clearWebhook', (_e, propertyId?: unknown) =>
+    service.clearWebhook(typeof propertyId === 'string' && propertyId ? propertyId : undefined)
+  );
+  ipcMain.handle('ga4monitoring:sendTest', (_e, propertyId?: unknown) =>
+    service.sendTest(typeof propertyId === 'string' && propertyId ? propertyId : undefined)
+  );
 }
