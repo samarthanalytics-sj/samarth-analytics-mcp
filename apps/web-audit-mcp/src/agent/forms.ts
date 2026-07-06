@@ -305,6 +305,17 @@ const PII_RULES: { category: PiiCategory; re: RegExp; types?: string[]; autocomp
 ];
 
 const MARKETING_RE = /newsletter|marketing|promotions?|offers|subscribe|mailing list|updates from|product news|werbung|newslettera/i;
+// Newsletter-INTENT verbs on the visible text/button — catches a bare email box whose surrounding copy
+// lacks a MARKETING_RE keyword (e.g. a footer "Sign up" / "Get updates" capture) but is still a
+// subscription, not a contact form. "join" is scoped to a list/newsletter so "Join our team" /
+// "Join the waitlist" (careers/lead) do NOT match.
+const NEWSLETTER_VERB_RE =
+  /\b(sign\s?up|subscribe|newsletter|join (our |the )?(newsletter|mailing list|email list)|notify me|get updates|stay (updated|informed)|keep me posted|email updates)\b/i;
+// Copy that signals a passwordless / magic-link LOGIN (no password field) — a lone email box with this
+// copy is authentication, not a subscription.
+const MAGIC_LINK_RE = /\b(sign\s?in|log\s?in|login|magic link|login link|passwordless|password-less)\b/i;
+// A lone-email capture is NOT a newsletter when the copy is careers / RSVP / waitlist (a lead form).
+const NOT_NEWSLETTER_RE = /\b(career|careers|job|apply|application|vacan|recruit|rsvp|wait\s?list)\b/i;
 const CONSENT_RE = /privacy|terms|consent|agree|policy|gdpr|datenschutz|i accept|einwilligung|acepto|j'accepte/i;
 const SEARCH_RE = /^(q|s|query|search|keyword|term)$/i;
 const MESSAGE_RE = /message|comment|enquiry|inquiry|nachricht|consulta/i;
@@ -373,7 +384,24 @@ function guessPurpose(form: RawForm, pii: PiiField[]): FormPurpose {
   const hasEmail = pii.some((p) => p.category === 'email');
   const hasMessage = form.fields.some((f) => f.tag === 'textarea' || MESSAGE_RE.test(`${f.name} ${f.label}`));
   if (hasEmail && hasMessage) return 'contact';
-  if (hasEmail && form.fieldCount <= 3 && MARKETING_RE.test(form.text)) return 'newsletter';
+  // Passwordless / magic-link LOGIN: a lone-ish email box (no password) whose copy says sign in / log in /
+  // magic link is authentication — classify as login BEFORE newsletter so the lone-email rule below can't
+  // brand it a subscription.
+  if (hasEmail && !hasMessage && textInputs.length <= 2 && MAGIC_LINK_RE.test(form.text)) return 'login';
+  // A bare email capture (or email+name) is a newsletter subscription when its copy/button carries a
+  // marketing or sign-up cue — OR when it is a lone email field (nothing else to collect but an address,
+  // the canonical newsletter shape). The !hasMessage guard + textInputs.length <= 2 keep a real CONTACT
+  // form (a message/textarea, or >=3 text fields) out; NOT_NEWSLETTER_RE keeps careers/RSVP/waitlist lead
+  // captures out even when they are a lone email field.
+  if (
+    hasEmail &&
+    !hasMessage &&
+    textInputs.length <= 2 &&
+    !NOT_NEWSLETTER_RE.test(form.text) &&
+    (MARKETING_RE.test(form.text) || NEWSLETTER_VERB_RE.test(form.text) || textInputs.length === 1)
+  ) {
+    return 'newsletter';
+  }
   if (hasEmail || pii.length > 0) return 'contact';
   return 'other';
 }

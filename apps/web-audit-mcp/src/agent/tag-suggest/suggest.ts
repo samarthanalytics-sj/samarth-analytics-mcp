@@ -89,7 +89,10 @@ const titleCase = (s: string): string =>
 // when the label already ends in it (e.g. "Newsletter Form", "Email Click"). tagNameOf + trigNameOf
 // share this so a tag and its trigger always carry the SAME kind word.
 const kindWord = (d: string, kind: TriggerKind): string => {
-  if (kind === 'form_submit') return /\bform(s)?$/i.test(d) || /submission/i.test(d) ? d : `${d} Form`;
+  // Skip the "Form" suffix when the label already CONTAINS a form-word — either at the end ("Newsletter
+  // Form") or before a trailing qualifier/index ("Contact Form 2", the Fix-A disambiguator) — so it is
+  // never doubled into "Contact Form 2 Form".
+  if (kind === 'form_submit') return /\bform(s)?\b/i.test(d) || /submission/i.test(d) ? d : `${d} Form`;
   if (kind === 'link_click' || kind === 'all_clicks') return /\bclick$/i.test(d) ? d : `${d} Click`;
   return d; // youtube_video / pageview / custom_event — neither click nor form
 };
@@ -224,14 +227,78 @@ interface FormScopeCtx {
   formIdsByLabel: Map<string, string[] | null>;
   /** lowercased label → the {{Form Classes}} value, same group-uniform rule as formIdByLabel. */
   formClassByLabel: Map<string, string | null>;
+  /** For UNTITLED forms only: `${purpose}|${fieldSig}` → a 1-based, first-seen index disambiguating
+   *  STRUCTURALLY-DIFFERENT untitled forms that share a purpose (so two field-different "contact" forms
+   *  on a page become "Contact Form" + "Contact Form 2" instead of collapsing to one). The SAME form
+   *  across pages shares one signature → one index → still collapses site-wide. Index 1 is the common
+   *  single-form case and gets NO suffix (behaves exactly as before). */
+  untitledFormIndex: Map<string, number>;
+}
+
+/** Stable field signature of a form STRUCTURE (never values): the sorted list of each field's name (or,
+ *  when unnamed, its type), lowercased. Identical for the same form across pages; different for
+ *  structurally-different forms. Drives the untitled same-purpose disambiguator. */
+function fieldSignature(f: DetectedForm): string {
+  return (f.fields ?? [])
+    .map((x) => (x.name || x.type || '').toLowerCase())
+    .sort()
+    .join(',');
+}
+
+/** True when a form has no usable heading/title (empty or whitespace) — the only forms the untitled
+ *  disambiguator applies to. */
+function isUntitledForm(f: DetectedForm): boolean {
+  return !(f.title ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/** Title-Case the last meaningful segment of a page path into a form title (Fix C): '/get-a-quote' →
+ *  'Get A Quote'. Returns '' for the home page or a path with no usable segment, so a signal-less
+ *  untitled "other" form on '/' still yields no tag. PURE. */
+function pagePathTitle(page: string): string {
+  const seg = (page || '')
+    .split('/')
+    .filter(Boolean)
+    .pop();
+  if (!seg) return '';
+  return seg
+    .replace(/[-_]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(' ');
+}
+
+/** The EFFECTIVE title a form is named/scoped by — the single source of truth shared by the pre-pass
+ *  (grouping) and formSuggestion (emission) so they never diverge:
+ *   - a real heading/title is used verbatim;
+ *   - an UNTITLED same-purpose form whose disambiguator index is >1 gets a synthesized
+ *     `${FORM_LABEL[purpose]} ${index}` title ("Contact Form 2") so it runs the titled path (distinct
+ *     label + event + tagName), while index 1 keeps NO title (the common single-form case, unchanged);
+ *   - an untitled "other" form with no heading falls back to a page-path-derived title (Fix C), but only
+ *     on a NAMED page and only when it has >=2 fields — else '' (still dropped).
+ *  Returns '' when there is no usable title. */
+function effectiveTitle(f: DetectedForm, ctx: Pick<FormScopeCtx, 'untitledFormIndex'>): string {
+  const titleText = (f.title ?? '').replace(/\s+/g, ' ').trim();
+  if (titleText) return titleText;
+  if (isUntitledForm(f) && f.purpose !== 'other') {
+    const idx = ctx.untitledFormIndex.get(`${f.purpose}|${fieldSignature(f)}`);
+    if (idx && idx > 1) return `${FORM_LABEL[f.purpose] ?? 'Form'} ${idx}`;
+  }
+  // Fix C: an untitled "other" form on a NAMED page with >=2 fields → a page-path-derived title.
+  if (f.purpose === 'other' && (f.fields?.length ?? 0) >= 2) {
+    return pagePathTitle(f.page);
+  }
+  return '';
 }
 
 /** The tag-identifying display label for a form — drives its tagName + event, and is the SAME across
  *  every page the same form appears on (so it groups multi-page instances into one tag). Returns '' for
- *  an untitled "other" form, which yields no tag. Mirrors the inline logic in formSuggestion. */
-function formDisplayLabel(f: DetectedForm): string {
+ *  an untitled "other" form with no derivable title, which yields no tag. Mirrors the logic in
+ *  formSuggestion (both go through effectiveTitle). */
+function formDisplayLabel(f: DetectedForm, ctx: Pick<FormScopeCtx, 'untitledFormIndex'>): string {
   if (f.purpose === 'search' || f.purpose === 'checkout') return '';
-  const titleText = (f.title ?? '').replace(/\s+/g, ' ').trim();
+  const titleText = effectiveTitle(f, ctx);
   if (f.purpose === 'other' && !titleText) return '';
   return titleText ? (/\bforms?\b/i.test(titleText) ? titleText : `${titleText} Form`) : (FORM_LABEL[f.purpose] ?? 'Form Submission');
 }
@@ -307,10 +374,13 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // Name the tag for the form's actual heading when we captured one — e.g.
   // "Get a Free Consultation" → "Get a Free Consultation Form Tag" — falling back
   // to the purpose label. (Don't double up "Form" if the title already says it.)
-  const titleText = (f.title ?? '').replace(/\s+/g, ' ').trim();
-  // An unrecognized form with no heading has no meaningful event or scope — do NOT emit a generic
-  // "Form Submission" tag (that catch-all was removed by design). A TITLED "other" form still gets its
-  // title-derived tag.
+  // effectiveTitle also supplies the SYNTHESIZED title for a disambiguated untitled same-purpose form
+  // ("Contact Form 2" — Fix A) and the page-path-derived title for an untitled "other" form on a named
+  // page (Fix C); both then run this SAME titled path (distinct label + event + tagName).
+  const titleText = effectiveTitle(f, ctx);
+  // An unrecognized form with no heading AND no page-path signal has no meaningful event or scope — do
+  // NOT emit a generic "Form Submission" tag (that catch-all was removed by design). A TITLED "other"
+  // form (real heading or page-path-derived) still gets its title-derived tag.
   if (f.purpose === 'other' && !titleText) return null;
   const rawLabel = titleText ? (/\bforms?\b/i.test(titleText) ? titleText : `${titleText} Form`) : formLabel;
   // Use the GROUP's canonical (first-seen) casing so case variants of the same form share ONE tag.
@@ -463,13 +533,29 @@ function nonUniqueFormScopes(forms: DetectedForm[]): FormScopeCtx {
   const idSigs = new Map<string, Set<string>>();
   const classSigs = new Map<string, Set<string>>();
   const sigPages = new Map<string, Set<string>>();
+  // PRE-PASS (Fix A): disambiguate STRUCTURALLY-DIFFERENT untitled forms of the SAME purpose. Group
+  // untitled forms by purpose, and give each DISTINCT field-signature within a purpose a 1-based index
+  // in first-seen order (iterate in input order). The SAME form across pages shares one signature → one
+  // index → still collapses site-wide; two field-different untitled "contact" forms get indexes 1 and 2,
+  // so #2 is later named/scoped as "Contact Form 2" (distinct label+event+tagName → both survive dedup).
+  const untitledFormIndex = new Map<string, number>();
+  const untitledSeenPerPurpose = new Map<string, number>(); // purpose → count of distinct signatures seen
+  for (const f of forms) {
+    if (!isUntitledForm(f) || f.purpose === 'other' || f.purpose === 'search' || f.purpose === 'checkout') continue;
+    const key = `${f.purpose}|${fieldSignature(f)}`;
+    if (untitledFormIndex.has(key)) continue;
+    const next = (untitledSeenPerPurpose.get(f.purpose) ?? 0) + 1;
+    untitledSeenPerPurpose.set(f.purpose, next);
+    untitledFormIndex.set(key, next);
+  }
+  const idxCtx = { untitledFormIndex };
   // Grouping is CASE-INSENSITIVE on the display label ("Get a Free Audit" and "GET A FREE AUDIT" are
   // the same form) — key on the lowercased label, keep the first-seen casing as canonical.
   const labelPages = new Map<string, Set<string>>();
   const canonicalLabel = new Map<string, string>();
   const labelForms = new Map<string, DetectedForm[]>();
   for (const f of forms) {
-    const label = formDisplayLabel(f);
+    const label = formDisplayLabel(f, idxCtx);
     if (label) {
       const key = label.toLowerCase();
       if (!canonicalLabel.has(key)) canonicalLabel.set(key, label);
@@ -519,6 +605,7 @@ function nonUniqueFormScopes(forms: DetectedForm[]): FormScopeCtx {
     canonicalLabel,
     formIdsByLabel,
     formClassByLabel,
+    untitledFormIndex,
   };
 }
 
