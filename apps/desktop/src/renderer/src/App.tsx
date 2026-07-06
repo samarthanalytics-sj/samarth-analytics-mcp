@@ -1992,6 +1992,10 @@ function TagReviewPanel({
   // Corrected triggers already applied to the draft, keyed by tag id — fed into the NEXT round's
   // verify input so re-verify drives the FIXED interaction (not the stale original) and can converge.
   const [appliedTriggers, setAppliedTriggers] = useState<Record<string, VerifyTagInput['trigger']>>({});
+  // The CURRENT editable workspace for the heal loop. Minting a preview SUBMITS the workspace (it goes
+  // read-only) and GTM auto-creates a fresh one — we switch to it so later fixes/mints don't fail
+  // "already submitted". A ref (not state) so the value is current synchronously inside a round.
+  const healWsRef = useRef<string>('');
   const [settleMs, setSettleMs] = useState('2500');
   const [settleAuto, setSettleAuto] = useState(true);
   const effSettleMs = (): number | undefined => (settleAuto ? undefined : Number(settleMs) || undefined);
@@ -2524,6 +2528,15 @@ function TagReviewPanel({
   // inventory so a non-firing tag gets a CONCRETE corrected trigger. `overrides` supplies the
   // corrected triggers already applied to the draft (keyed by tag id) so re-verify drives the
   // FIXED interaction, not the stale original. Guards leave a recoverable phase (never stuck 'busy').
+  // After a mint submits the workspace, follow GTM to the fresh editable one it hands back: point the
+  // loop's ref at it AND switch the app's active workspace so later fixes/chat/panels use it too.
+  async function followMintedWorkspace(newWorkspaceId: string): Promise<void> {
+    if (!active || !ctx || !newWorkspaceId || newWorkspaceId === healWsRef.current) return;
+    healWsRef.current = newWorkspaceId;
+    try {
+      await window.desktop.accounts.setGtmContext(active.id, { ...ctx, workspaceId: newWorkspaceId, workspaceName: 'Workspace (auto)' });
+    } catch { /* best-effort — the loop still uses healWsRef */ }
+  }
   async function runHealRound(roundNo: number, skipped: Record<string, boolean>, overrides: Record<string, VerifyTagInput['trigger']>): Promise<void> {
     if (!targetReady || !ctx) { setHealPhase('idle'); setHealNote('Pick a GTM account, container and draft workspace first.'); return; }
     const target = url.trim();
@@ -2533,7 +2546,9 @@ function TagReviewPanel({
     setHealPhase('busy');
     setHealNote(`Round ${roundNo}: minting a preview & verifying ${created.length} tag(s)…`);
     try {
-      const { snippet } = await window.desktop.tags.mintPreview(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
+      const ws = healWsRef.current || ctx.workspaceId!;
+      const { snippet, newWorkspaceId } = await window.desktop.tags.mintPreview(ctx.accountId!, ctx.containerId!, ws);
+      await followMintedWorkspace(newWorkspaceId); // the minted ws is now read-only; continue in the new one
       const tags: VerifyTagInput[] = created.map((s) => ({ id: s.id, tagName: s.tagName, eventName: s.eventName, platform: s.platform, measurementId: s.measurementId, page: s.page, trigger: overrides[s.id] ?? s.trigger }));
       const elements = scanLog?.inventory.elements ?? [];
       const res = await window.desktop.tags.verify(target, tags, elements, { containerSnippet: snippet });
@@ -2551,6 +2566,7 @@ function TagReviewPanel({
     setHealVerdicts([]);
     setHealNote('');
     setAppliedTriggers({});
+    healWsRef.current = ctx?.workspaceId ?? '';
     await runHealRound(1, {}, {});
   }
   // Approve-per-round: apply every confident trigger fix (not skipped) via the retarget primitive,
@@ -2563,9 +2579,10 @@ function TagReviewPanel({
     setHealNote(`Applying ${fixable.length} trigger fix(es) to the draft…`);
     const applied: Record<string, VerifyTagInput['trigger']> = { ...appliedTriggers };
     try {
+      const ws = healWsRef.current || ctx.workspaceId!; // the current EDITABLE workspace (post-mint)
       for (const v of fixable) {
         await window.desktop.gtm.retargetTrigger({
-          accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!,
+          accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ws,
           tagName: v.tagName, trigger: v.suggestedTrigger!,
         });
         applied[v.tagId] = v.suggestedTrigger!; // re-verify must drive the FIXED interaction
@@ -3504,7 +3521,12 @@ function VerifyPanel({
     setVNote(null);
     onError('');
     try {
-      const { snippet } = await window.desktop.tags.mintPreview(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
+      const { snippet, newWorkspaceId } = await window.desktop.tags.mintPreview(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
+      // Minting SUBMITTED the workspace (now read-only) — follow GTM to the fresh editable one it
+      // created, so the user's next edit (chat/panel) doesn't fail "already submitted".
+      if (active && newWorkspaceId && newWorkspaceId !== ctx.workspaceId) {
+        try { await window.desktop.accounts.setGtmContext(active.id, { ...ctx, workspaceId: newWorkspaceId, workspaceName: 'Workspace (auto)' }); } catch { /* best-effort */ }
+      }
       await runVerify(snippet);
     } catch (e) {
       setVNote({ kind: 'error', text: verifyErrorText(e) });

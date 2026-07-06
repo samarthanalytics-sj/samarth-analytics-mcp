@@ -442,7 +442,7 @@ export class GoogleDataService {
     accountId: string,
     containerId: string,
     workspaceId: string
-  ): Promise<{ snippet: string; versionId: string; environmentName: string }> {
+  ): Promise<{ snippet: string; versionId: string; environmentName: string; newWorkspaceId: string }> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const containerParent = `accounts/${accountId}/containers/${containerId}`;
@@ -494,10 +494,15 @@ export class GoogleDataService {
         'Created a preview version, but the built-in "Latest" preview environment has no readable auth token (minting one would need the publish scope, which this app never requests). Paste a GTM Preview / Environment snippet instead.'
       );
     }
+    // create_version SUBMITS the workspace (it becomes read-only) and GTM auto-creates a fresh
+    // editable workspace based on the new version — its path is returned here. Surface its id so the
+    // caller can switch the active workspace to it; otherwise the next write fails "already submitted".
+    const newWorkspaceId = (cv.data.newWorkspacePath ?? '').split('/').pop() ?? '';
     return {
       snippet: buildEnvironmentSnippet(publicId, latest.authorizationCode, latest.environmentId).head,
       versionId,
       environmentName: latest.name ?? 'Latest',
+      newWorkspaceId,
     };
   }
 
