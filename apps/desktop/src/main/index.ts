@@ -33,6 +33,13 @@ import type { MonitorAlert, Ga4MonitorRun } from '../shared/ipc';
 
 const isDev = !app.isPackaged;
 
+// Quiet Electron's dev-only "Insecure Content-Security-Policy" console warning.
+// It fires in unpackaged builds (electron-vite preview) for the renderer and for
+// each hidden tag-scan window, which is intentionally CSP-free so a scanned
+// page's own scripts render for form detection. Packaged builds never emit it, so
+// this is scoped to dev and changes nothing in production.
+if (isDev) process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';
+
 /**
  * Where local data lives (registry.json, secrets.json, oauth-client.json).
  *   - SAMARTH_DESKTOP_DATA_DIR env overrides everything (explicit path).
