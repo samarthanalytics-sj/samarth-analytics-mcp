@@ -85,11 +85,12 @@ test('threshold boundaries: 5% → low, 10% → medium, 25% → high', () => {
   assert.equal(at(49), undefined); // 4.9% → not flagged
 });
 
-test('windowDates returns exactly `days` INCLUSIVE days ending today (DST-immune, cross-month/year)', () => {
-  assert.deepEqual(windowDates('2026-01-28', 28), { startDate: '2026-01-01', endDate: '2026-01-28' });
-  assert.deepEqual(windowDates('2026-03-01', 7), { startDate: '2026-02-23', endDate: '2026-03-01' }); // crosses Feb (28d)
-  assert.deepEqual(windowDates('2026-01-03', 7), { startDate: '2025-12-28', endDate: '2026-01-03' }); // crosses year
-  assert.deepEqual(windowDates('2026-01-15', 1), { startDate: '2026-01-15', endDate: '2026-01-15' }); // single day
+test('windowDates returns exactly `days` INCLUSIVE full days ending YESTERDAY (DST-immune, cross-month/year)', () => {
+  // Ends at today-1: today is a partial day and GA4 processing lags, so only full days are compared.
+  assert.deepEqual(windowDates('2026-01-29', 28), { startDate: '2026-01-01', endDate: '2026-01-28' });
+  assert.deepEqual(windowDates('2026-03-01', 7), { startDate: '2026-02-22', endDate: '2026-02-28' }); // crosses Feb (28d)
+  assert.deepEqual(windowDates('2026-01-03', 7), { startDate: '2025-12-27', endDate: '2026-01-02' }); // crosses year
+  assert.deepEqual(windowDates('2026-01-15', 1), { startDate: '2026-01-14', endDate: '2026-01-14' }); // single day
 });
 
 test('formatDateRange renders a clean span and tolerates missing/cross-year bounds', () => {
