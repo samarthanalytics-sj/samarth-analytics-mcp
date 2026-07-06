@@ -3342,6 +3342,9 @@ function ContainerAuditPanel({
   const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
   const [vShowSkipped, setVShowSkipped] = useState(false);
+  // Inline notice for the Verify-firing card (empty-result / auth / network) — shown IN the card,
+  // not the global error header, so a verify message doesn't hijack the whole panel.
+  const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
 
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -3368,18 +3371,39 @@ function ContainerAuditPanel({
   // Verify firing for the tags ALREADY in the container: snapshot → translate each
   // GA4/base tag's native trigger into the verify engine's shape → inject a preview
   // build → drive each trigger → report fired/not-fired. Never delivers a real hit.
+  // Humanize the opaque Google errors that surface here so the card shows a next step,
+  // not a raw Gaxios/undici stack. Expired refresh token (common when the OAuth consent
+  // screen is in "Testing" — tokens expire after 7 days) and network timeouts both look
+  // like inscrutable 400s otherwise.
+  function verifyErrorText(e: unknown): string {
+    const m = e instanceof Error ? e.message : String(e);
+    if (/invalid_grant|expired or revoked|token has been expired/i.test(m)) {
+      return 'Your Google connection has expired or was revoked. Go to Settings → Disconnect Google, then re-connect (approve the permissions) and try again.';
+    }
+    if (/ETIMEDOUT|fetch failed|ENOTFOUND|ECONNREFUSED|network|getaddrinfo/i.test(m)) {
+      return 'Could not reach Google (network timeout). Check your internet / VPN / proxy and try again.';
+    }
+    return m;
+  }
+
   async function runContainerVerify(snippetOverride?: string): Promise<void> {
     if (!ready || !ctx || vVerifying) return;
     const target = vUrl.trim();
-    if (!target) { onError('Enter the site URL to verify against.'); return; }
+    if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against.' }); return; }
     setVVerifying(true);
-    onError('');
+    setVNote(null);
     try {
       const { tags, skipped } = await window.desktop.gtm.verifiableTags(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
       setVSkipped(skipped);
       if (tags.length === 0) {
         setVResult(null);
-        onError('No GA4/base tag in this container maps to a drivable trigger (click/form/custom-event/pageview) to verify.');
+        setVNote({
+          kind: 'info',
+          text:
+            skipped.length > 0
+              ? `None of this container's ${skipped.length} tag(s) map to a drivable trigger (click / form / custom-event / pageview) — see the reasons below.`
+              : "This container has no readable tags to verify. Run the audit first, and if it's also empty your Google connection has likely expired — re-connect in Settings.",
+        });
         return;
       }
       const snippet = (snippetOverride ?? vSnippet).trim();
@@ -3388,7 +3412,7 @@ function ContainerAuditPanel({
       const res = await window.desktop.tags.verify(target, tags, [], snippet ? { containerSnippet: snippet } : {});
       setVResult(res);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      setVNote({ kind: 'error', text: verifyErrorText(e) });
     } finally {
       setVVerifying(false);
     }
@@ -3398,14 +3422,14 @@ function ContainerAuditPanel({
   // container's DRAFT tags load, then verify with that snippet — no manual paste.
   async function autoMintAndVerifyContainer(): Promise<void> {
     if (!ready || !ctx || vMinting || vVerifying) return;
-    if (!vUrl.trim()) { onError('Enter the site URL to verify against.'); return; }
+    if (!vUrl.trim()) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against.' }); return; }
     setVMinting(true);
-    onError('');
+    setVNote(null);
     try {
       const { snippet } = await window.desktop.tags.mintPreview(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
       await runContainerVerify(snippet);
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
+      setVNote({ kind: 'error', text: verifyErrorText(e) });
     } finally {
       setVMinting(false);
     }
@@ -3724,6 +3748,22 @@ function ContainerAuditPanel({
               placeholder="Optional: paste a GTM PREVIEW / Environment snippet (with gtm_auth &amp; gtm_preview) so DRAFT tags load. Leave blank + use Auto, or if the tags are already published leave blank to test the live site."
               style={{ ...styles.input, width: '100%', minHeight: 58, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
             />
+            {vNote && (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  fontSize: 13,
+                  lineHeight: 1.45,
+                  border: `1px solid ${vNote.kind === 'error' ? 'var(--c-red)' : 'var(--c-amber)'}`,
+                  background: vNote.kind === 'error' ? 'rgba(220,60,60,0.08)' : 'rgba(230,160,30,0.08)',
+                  color: 'var(--text)',
+                }}
+              >
+                {vNote.text}
+              </div>
+            )}
             {vResult && (
               <div style={{ marginTop: 10 }}>
                 {vResult.injected && !vResult.previewAuth && (
