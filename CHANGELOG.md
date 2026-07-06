@@ -1,3 +1,9 @@
+## [1.204.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.203.0...v1.204.0) (2026-07-06)
+
+### Features
+
+* **desktop:** restyle the on-screen Traffic Trend panel to the lab-report template ([d01232f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d01232ff87c0770155cf0b452cff378c84054e4d)), closes [#4F7BD1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/4F7BD1) [#A63527](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/A63527)
+
 ## [1.203.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.202.0...v1.203.0) (2026-07-06)
 
 ### Features
