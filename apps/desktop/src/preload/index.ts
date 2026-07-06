@@ -244,6 +244,14 @@ const api = {
   gtm: {
     audit: (accountId: string, containerId: string, workspaceId: string): Promise<AuditReportView> =>
       ipcRenderer.invoke('gtm:audit', accountId, containerId, workspaceId),
+    // The container's EXISTING GA4/base tags translated into verify-engine inputs, so
+    // "Verify firing" can prove the already-created tags fire (+ which were skipped).
+    verifiableTags: (
+      accountId: string,
+      containerId: string,
+      workspaceId: string,
+    ): Promise<{ tags: VerifyTagInput[]; skipped: Array<{ tagId: string; name: string; reason: string }> }> =>
+      ipcRenderer.invoke('gtm:verifiableTags', accountId, containerId, workspaceId),
     applyFix: (fix: { tool: string; args: Record<string, unknown> }): Promise<unknown> =>
       ipcRenderer.invoke('gtm:applyFix', fix),
     exportAudit: (defaultName: string, content: string): Promise<string | null> =>

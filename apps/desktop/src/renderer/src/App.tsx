@@ -3333,6 +3333,15 @@ function ContainerAuditPanel({
   // "show debug": run context (scope + counts), the config-audit boundary +
   // runtime-required checks, and a preview of the exact tool+args each fix calls.
   const [showDebug, setShowDebug] = useState(false);
+  // Verify firing (existing tags): prove the container's GA4/base tags actually fire
+  // when their trigger runs, by injecting a preview build and driving each trigger.
+  const [vUrl, setVUrl] = useState('');
+  const [vSnippet, setVSnippet] = useState('');
+  const [vVerifying, setVVerifying] = useState(false);
+  const [vMinting, setVMinting] = useState(false);
+  const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
+  const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
+  const [vShowSkipped, setVShowSkipped] = useState(false);
 
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -3353,6 +3362,52 @@ function ContainerAuditPanel({
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setRunning(false);
+    }
+  }
+
+  // Verify firing for the tags ALREADY in the container: snapshot → translate each
+  // GA4/base tag's native trigger into the verify engine's shape → inject a preview
+  // build → drive each trigger → report fired/not-fired. Never delivers a real hit.
+  async function runContainerVerify(snippetOverride?: string): Promise<void> {
+    if (!ready || !ctx || vVerifying) return;
+    const target = vUrl.trim();
+    if (!target) { onError('Enter the site URL to verify against.'); return; }
+    setVVerifying(true);
+    onError('');
+    try {
+      const { tags, skipped } = await window.desktop.gtm.verifiableTags(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
+      setVSkipped(skipped);
+      if (tags.length === 0) {
+        setVResult(null);
+        onError('No GA4/base tag in this container maps to a drivable trigger (click/form/custom-event/pageview) to verify.');
+        return;
+      }
+      const snippet = (snippetOverride ?? vSnippet).trim();
+      // No scanned element inventory here (these are existing tags) — pass []; the driver
+      // locates each trigger's target on the live page itself.
+      const res = await window.desktop.tags.verify(target, tags, [], snippet ? { containerSnippet: snippet } : {});
+      setVResult(res);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVVerifying(false);
+    }
+  }
+
+  // Auto-mint a workspace preview (version + preview environment, never published) so the
+  // container's DRAFT tags load, then verify with that snippet — no manual paste.
+  async function autoMintAndVerifyContainer(): Promise<void> {
+    if (!ready || !ctx || vMinting || vVerifying) return;
+    if (!vUrl.trim()) { onError('Enter the site URL to verify against.'); return; }
+    setVMinting(true);
+    onError('');
+    try {
+      const { snippet } = await window.desktop.tags.mintPreview(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
+      await runContainerVerify(snippet);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVMinting(false);
     }
   }
 
@@ -3629,6 +3684,92 @@ function ContainerAuditPanel({
             </button>
           </div>
         </div>
+
+        {/* Verify firing: prove the tags ALREADY in this container fire when their trigger runs. */}
+        {ready && (
+          <div style={styles.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 320px' }}>
+                <div style={{ fontWeight: 600 }}>Verify firing (existing tags)</div>
+                <div style={styles.muted}>
+                  Proves the container&apos;s GA4/base tags actually fire when their trigger runs. <b>Auto</b> snapshots the
+                  workspace to a version and previews it from the container (needs the account re-connected with the &ldquo;edit
+                  container versions&rdquo; permission; never publishes). Or paste a GTM <b>Preview / Environment</b> snippet.
+                  Each tag is driven on its own page; nothing real is sent (hits captured + aborted).
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button
+                  style={styles.primaryBtn}
+                  onClick={() => void autoMintAndVerifyContainer()}
+                  disabled={vMinting || vVerifying || !vUrl.trim()}
+                  title="Snapshot the workspace to a version + preview it (never publishes), then verify each tag"
+                >
+                  {vMinting ? 'Preparing preview…' : 'Auto: create preview & verify'}
+                </button>
+                <button style={styles.toggleOff} onClick={() => void runContainerVerify()} disabled={vVerifying || vMinting || !vUrl.trim()}>
+                  {vVerifying && !vMinting ? 'Verifying…' : 'Verify pasted snippet'}
+                </button>
+              </div>
+            </div>
+            <input
+              value={vUrl}
+              onChange={(e) => setVUrl(e.target.value)}
+              placeholder="https://www.example.com — the live site whose pages carry this container"
+              style={{ ...styles.input, width: '100%', marginTop: 8 }}
+            />
+            <textarea
+              value={vSnippet}
+              onChange={(e) => setVSnippet(e.target.value)}
+              placeholder="Optional: paste a GTM PREVIEW / Environment snippet (with gtm_auth &amp; gtm_preview) so DRAFT tags load. Leave blank + use Auto, or if the tags are already published leave blank to test the live site."
+              style={{ ...styles.input, width: '100%', minHeight: 58, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
+            />
+            {vResult && (
+              <div style={{ marginTop: 10 }}>
+                {vResult.injected && !vResult.previewAuth && (
+                  <div style={{ ...styles.muted, color: 'var(--c-amber)', marginBottom: 4 }}>
+                    ⚠ That snippet has no preview auth (gtm_auth/gtm_preview) — it loaded the PUBLISHED container, so any DRAFT tag
+                    won&apos;t fire. Use Auto, or paste the GTM Preview / Environment snippet.
+                  </div>
+                )}
+                <div style={styles.muted}>
+                  {vResult.injected ? (vResult.previewAuth ? 'Preview (workspace) container injected. ' : 'Published container injected. ') : 'Tested the page as-is (no snippet). '}
+                  {vResult.error
+                    ? `Error: ${vResult.error}`
+                    : `${vResult.verdicts.filter((v) => v.fired).length}/${vResult.verdicts.length} tag(s) fired.`}
+                </div>
+                <ul style={styles.resultList}>
+                  {vResult.verdicts.map((v) => (
+                    <li key={v.tagId} style={styles.resultRow}>
+                      <span style={{ fontWeight: 600, color: v.fired ? 'var(--c-green)' : 'var(--c-red)' }}>
+                        {v.fired ? 'FIRED' : 'NOT FIRED'}
+                      </span>{' '}
+                      {v.tagName}
+                      {v.fired && v.event ? ` — ${v.event}` : ''}
+                      {!v.fired && v.reason ? <div style={{ ...styles.muted, marginLeft: 8 }}>{v.reason}</div> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {vSkipped.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <button style={styles.linkBtn} onClick={() => setVShowSkipped((o) => !o)}>
+                  {vShowSkipped ? 'hide' : 'show'} {vSkipped.length} tag(s) not verifiable here
+                </button>
+                {vShowSkipped && (
+                  <ul style={styles.resultList}>
+                    {vSkipped.map((s) => (
+                      <li key={s.tagId} style={styles.resultRow}>
+                        <b style={{ color: 'var(--text)' }}>{s.name}</b> <span style={styles.muted}>— {s.reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {report && (
           <div style={styles.card}>

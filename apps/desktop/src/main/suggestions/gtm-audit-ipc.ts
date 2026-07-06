@@ -100,6 +100,16 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     }
   });
 
+  // Verifiable tags for the Container-audit "Verify firing" flow: snapshot the
+  // container + map each GA4/base tag's native trigger to the verify engine's shape.
+  ipcMain.handle('gtm:verifiableTags', async (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
+    const a = String(accountId ?? ''), c = String(containerId ?? ''), w = String(workspaceId ?? '');
+    if (!a || !c || !w) throw new Error('Pick a GTM account, container and workspace first.');
+    const snap = await withQuotaRetry(() => data.getGtmContainerSnapshot(a, c, w));
+    const { snapshotToVerifyInputs } = await import('./container-verify');
+    return snapshotToVerifyInputs(snap);
+  });
+
   ipcMain.handle('gtm:applyFix', async (_e, fix: unknown) => {
     const f = (fix && typeof fix === 'object' ? fix : {}) as { tool?: string; args?: Record<string, unknown> };
     if (!f.tool || !f.args || typeof f.args !== 'object') throw new Error('Invalid fix.');
