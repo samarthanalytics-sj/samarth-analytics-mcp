@@ -117,8 +117,10 @@ function RunDetail({ run }: { run: Ga4MonitorRun }): JSX.Element {
   );
 }
 
-/** One property card in the fleet grid: health accent + label, alert chip, meta, per-card actions. */
-function PropertyCard({ t, selected, runningId, busy, onSelect, onRun, onTogglePause, onRemove }: {
+/** One property card in the fleet grid: health accent + label, alert chip, meta, per-card actions,
+ *  and this property's own inline Slack-channel editor (link + channel name) — the channel is
+ *  configured right on the property, not in a separate settings list. */
+function PropertyCard({ t, selected, runningId, busy, onSelect, onRun, onTogglePause, onRemove, onSaveChannel, onTestChannel, onRemoveChannel }: {
   t: Ga4MonitorTargetStatus;
   selected: boolean;
   runningId: string | null;
@@ -127,7 +129,14 @@ function PropertyCard({ t, selected, runningId, busy, onSelect, onRun, onToggleP
   onRun: () => void;
   onTogglePause: () => void;
   onRemove: () => void;
+  /** Save this property's channel (url may be '' for a label-only update). Resolves true on success. */
+  onSaveChannel: (url: string, label: string) => Promise<boolean>;
+  onTestChannel: () => void;
+  onRemoveChannel: () => void;
 }): JSX.Element {
+  const [editingChan, setEditingChan] = useState(false);
+  const [chanUrl, setChanUrl] = useState('');
+  const [chanLbl, setChanLbl] = useState('');
   const h = t.lastRun ? HEALTH[t.lastRun.health] : null;
   const accent = !t.enabled ? 'var(--text-faint)' : h ? h.color : 'var(--border)';
   const alertCount = t.lastRun?.alerts.length ?? 0;
@@ -220,11 +229,61 @@ function PropertyCard({ t, selected, runningId, busy, onSelect, onRun, onToggleP
         <button style={ghostBtn} disabled={busy} title={t.enabled ? 'Pause background checks for this property' : 'Resume background checks'} onClick={(e) => { e.stopPropagation(); onTogglePause(); }}>
           {t.enabled ? '⏸ Pause' : '⏵ Resume'}
         </button>
+        <button
+          style={{ ...ghostBtn, color: t.hasWebhook ? 'var(--c-green)' : 'var(--text-muted)' }}
+          disabled={busy}
+          title={t.hasWebhook ? 'Edit this property’s Slack channel' : 'Give this property its own Slack channel (link + name)'}
+          onClick={(e) => { e.stopPropagation(); setEditingChan((v) => !v); setChanUrl(''); setChanLbl(t.slackLabel ?? ''); }}
+        >
+          {t.hasWebhook ? '✎ Channel' : '＋ Channel'}
+        </button>
         <span style={{ flex: 1 }} />
         <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} title="Stop monitoring this property" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
           Remove
         </button>
       </div>
+
+      {/* Inline Slack-channel editor: connect/replace the property's own webhook + channel name. */}
+      {editingChan && (
+        <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px dashed var(--border)', paddingTop: 8, cursor: 'default' }}>
+          <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>
+            {t.hasWebhook ? 'Edit Slack channel' : 'Connect this property’s Slack channel'}
+          </span>
+          <input
+            style={{ ...input, fontSize: 12 }}
+            type="password"
+            placeholder={t.hasWebhook ? 'New webhook URL (leave empty to keep the current one)' : 'https://hooks.slack.com/services/…'}
+            value={chanUrl}
+            onChange={(e) => setChanUrl(e.target.value)}
+          />
+          <input
+            style={{ ...input, fontSize: 12 }}
+            type="text"
+            placeholder="#acme-alerts (channel name)"
+            value={chanLbl}
+            onChange={(e) => setChanLbl(e.target.value)}
+          />
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button
+              style={{ ...ghostBtn, color: '#fff', background: 'var(--c-blue)', borderColor: 'transparent' }}
+              disabled={busy || (!chanUrl.trim() && !t.hasWebhook)}
+              onClick={() => { void onSaveChannel(chanUrl.trim(), chanLbl.trim()).then((ok) => { if (ok) { setEditingChan(false); setChanUrl(''); } }); }}
+            >
+              Save
+            </button>
+            {t.hasWebhook && <button style={ghostBtn} disabled={busy} onClick={onTestChannel}>Send test</button>}
+            {t.hasWebhook && (
+              <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} onClick={() => { onRemoveChannel(); setEditingChan(false); setChanUrl(''); setChanLbl(''); }}>
+                Remove channel
+              </button>
+            )}
+            <button style={ghostBtn} disabled={busy} onClick={() => { setEditingChan(false); setChanUrl(''); }}>Cancel</button>
+          </div>
+          <span style={{ fontSize: 10.5, color: 'var(--text-faint)', lineHeight: 1.4 }}>
+            {t.hasWebhook ? 'This property alerts its own channel.' : 'Without its own channel, this property posts to the default channel (see Slack alerts below).'}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -239,10 +298,9 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
   const [webhookInput, setWebhookInput] = useState('');
   const [labelInput, setLabelInput] = useState('');
   const [labelDirty, setLabelDirty] = useState(false);
-  // Per-property channel editor: which property's inline form is open + its draft url/label.
-  const [channelEdit, setChannelEdit] = useState<string | null>(null);
-  const [chanUrl, setChanUrl] = useState('');
-  const [chanLabel, setChanLabel] = useState('');
+  // Optional Slack channel captured WHILE adding a property (link + name in the same step).
+  const [addChanUrl, setAddChanUrl] = useState('');
+  const [addChanLabel, setAddChanLabel] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
 
@@ -277,13 +335,24 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
     try { setStatus(await window.desktop.ga4monitoring.configure(patch)); } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
 
-  function addProperty(): void {
+  /** Add a property — and, when the optional Slack fields were filled in the same step, connect its
+   *  own channel first (setWebhook validates the URL, so a bad link aborts BEFORE the property is
+   *  added and nothing half-configured is left behind). */
+  async function addProperty(): Promise<void> {
     const prop = properties?.find((p) => p.property === addId);
     if (!prop || !status) return;
-    const next = [...status.targets, { propertyId: prop.property, propertyLabel: prop.displayName, enabled: true }];
-    setAddId('');
-    setSelectedId(prop.property);
-    void configure({ targets: next });
+    setBusy(true); onError(''); setNote('');
+    try {
+      const url = addChanUrl.trim();
+      const lbl = addChanLabel.trim();
+      if (url) await window.desktop.ga4monitoring.setWebhook(url, prop.property);
+      setStatus(await window.desktop.ga4monitoring.configure({
+        targets: [...status.targets, { propertyId: prop.property, propertyLabel: prop.displayName, enabled: true, slackLabel: lbl || undefined }],
+      }));
+      setAddId(''); setAddChanUrl(''); setAddChanLabel('');
+      setSelectedId(prop.property);
+      if (url) setNote(`Added ${prop.displayName} with its own Slack channel${lbl ? ` (${lbl})` : ''}.`);
+    } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
   function removeProperty(propertyId: string): void {
     if (!status) return;
@@ -330,19 +399,19 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
   }
 
   // ── Per-property channels (one property, one channel; default channel is the fallback) ──
-  async function savePropertyChannel(propertyId: string): Promise<void> {
-    const url = chanUrl.trim();
-    if (!url || !status) return;
+  /** Save a property's channel from its card. `url` may be '' for a label-only update on an already
+   *  connected channel. Returns true on success so the card can close its editor. */
+  async function savePropertyChannel(propertyId: string, url: string, lbl: string): Promise<boolean> {
+    if (!status) return false;
     setBusy(true); onError(''); setNote('');
     try {
-      await window.desktop.ga4monitoring.setWebhook(url, propertyId);
-      const lbl = chanLabel.trim();
+      if (url) await window.desktop.ga4monitoring.setWebhook(url, propertyId);
       setStatus(await window.desktop.ga4monitoring.configure({
         targets: status.targets.map((t) => (t.propertyId === propertyId ? { ...t, slackLabel: lbl || undefined } : t)),
       }));
-      setChannelEdit(null); setChanUrl(''); setChanLabel('');
-      setNote('Property channel saved (encrypted) — its alerts now post there instead of the default.');
-    } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+      setNote(url ? 'Property channel saved (encrypted) — its alerts now post there instead of the default.' : 'Channel name saved.');
+      return true;
+    } catch (e) { onError(e instanceof Error ? e.message : String(e)); return false; } finally { setBusy(false); }
   }
   async function removePropertyChannel(propertyId: string): Promise<void> {
     setBusy(true); onError(''); setNote('');
@@ -411,14 +480,34 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 260, flex: 1 }}>
           <span style={label}>Add a property to monitor</span>
           <div style={{ display: 'flex', gap: 8 }}>
-            <select style={{ ...input, flex: 1 }} value={addId} onChange={(e) => setAddId(e.target.value)}>
+            <select style={{ ...input, flex: 1 }} value={addId} onChange={(e) => { setAddId(e.target.value); setAddChanUrl(''); setAddChanLabel(''); }}>
               <option value="">{properties === null ? 'Loading…' : addable.length ? 'Select a property…' : targets.length ? 'All accessible properties are being monitored' : 'No properties found'}</option>
               {addable.map((p) => (
                 <option key={p.property} value={p.property}>{p.displayName} ({p.property.replace('properties/', '')})</option>
               ))}
             </select>
-            <button style={primaryBtn} onClick={addProperty} disabled={busy || !addId}>+ Add</button>
+            <button style={primaryBtn} onClick={() => void addProperty()} disabled={busy || !addId}>+ Add</button>
           </div>
+          {/* The property's OWN Slack channel, captured in the SAME step (optional — the default
+              channel is the fallback). Appears only once a property is selected. */}
+          {addId && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+              <input
+                style={{ ...input, flex: 2, minWidth: 220, fontSize: 12 }}
+                type="password"
+                placeholder="Slack webhook for this property (optional — default channel if empty)"
+                value={addChanUrl}
+                onChange={(e) => setAddChanUrl(e.target.value)}
+              />
+              <input
+                style={{ ...input, flex: 1, minWidth: 130, fontSize: 12 }}
+                type="text"
+                placeholder="#channel name"
+                value={addChanLabel}
+                onChange={(e) => setAddChanLabel(e.target.value)}
+              />
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={label}>Check every</span>
@@ -466,6 +555,9 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
               onRun={() => void runNow(t.propertyId)}
               onTogglePause={() => togglePaused(t.propertyId)}
               onRemove={() => removeProperty(t.propertyId)}
+              onSaveChannel={(url, lbl) => savePropertyChannel(t.propertyId, url, lbl)}
+              onTestChannel={() => void testPropertyChannel(t.propertyId)}
+              onRemoveChannel={() => void removePropertyChannel(t.propertyId)}
             />
           ))}
         </div>
@@ -511,7 +603,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
             </span>
             <button style={btn} onClick={() => void sendTest()} disabled={busy} title="Post a confirmation message so you can see which channel receives alerts">Send test</button>
             <button style={btn} onClick={() => void clearWebhook()} disabled={busy}>Remove</button>
-            <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Any property without its own channel posts here. Give a property its own channel below — one property, one channel.</span>
+            <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Any property without its own channel posts here. To give a property its own channel, use <b>＋ Channel</b> on its card (or fill the Slack fields when adding it).</span>
           </div>
         ) : (
           <>
@@ -538,52 +630,6 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
           </>
         )}
 
-        {/* ── Per-property channels: one property, one channel (default = fallback) ── */}
-        {targets.length > 0 && (
-          <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)', marginBottom: 8 }}>
-              Per-property channels
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {targets.map((t) => (
-                <div key={t.propertyId} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 600, fontSize: 13, minWidth: 120 }}>{t.propertyLabel || t.propertyId}</span>
-                    {t.hasWebhook ? (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, background: 'var(--c-green-bg, rgba(34,197,94,.12))', color: 'var(--c-green)', borderRadius: 999, padding: '3px 11px', fontWeight: 600 }}>
-                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--c-green)', display: 'inline-block' }} />
-                        {t.slackLabel || 'own channel'}
-                      </span>
-                    ) : (
-                      <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>{status?.hasWebhook ? 'uses the default channel' : 'no channel (default not set)'}</span>
-                    )}
-                    <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }} title={t.lastSlackAt ? `Last alert posted: ${fmtTime(t.lastSlackAt)}` : 'No alert has been posted to Slack for this property yet'}>
-                      {t.lastSlackAt ? `last alert ${fmtAgo(t.lastSlackAt)}` : 'no alert sent yet'}
-                    </span>
-                    <span style={{ flex: 1 }} />
-                    {t.hasWebhook ? (
-                      <>
-                        <button style={ghostBtn} disabled={busy} onClick={() => void testPropertyChannel(t.propertyId)}>Send test</button>
-                        <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} onClick={() => void removePropertyChannel(t.propertyId)}>Remove channel</button>
-                      </>
-                    ) : channelEdit === t.propertyId ? (
-                      <button style={ghostBtn} disabled={busy} onClick={() => { setChannelEdit(null); setChanUrl(''); setChanLabel(''); }}>Cancel</button>
-                    ) : (
-                      <button style={{ ...ghostBtn, color: 'var(--c-blue)' }} disabled={busy} onClick={() => { setChannelEdit(t.propertyId); setChanUrl(''); setChanLabel(''); }}>Set channel…</button>
-                    )}
-                  </div>
-                  {channelEdit === t.propertyId && !t.hasWebhook && (
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-                      <input style={{ ...input, flex: 2, minWidth: 240 }} type="password" placeholder="https://hooks.slack.com/services/… (this property's channel)" value={chanUrl} onChange={(e) => setChanUrl(e.target.value)} />
-                      <input style={{ ...input, flex: 1, minWidth: 140 }} type="text" placeholder="#acme-alerts (label)" value={chanLabel} onChange={(e) => setChanLabel(e.target.value)} />
-                      <button style={primaryBtn} disabled={busy || !chanUrl.trim()} onClick={() => void savePropertyChannel(t.propertyId)}>Save</button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* ── Footer status line ── */}
