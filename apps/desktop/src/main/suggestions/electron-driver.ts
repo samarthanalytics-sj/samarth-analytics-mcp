@@ -83,17 +83,24 @@ function probeFormsDom(): { forms: number; inputs: number; textareas: number; se
 
 function autoScrollPage(): Promise<void> {
   return new Promise<void>((resolve) => {
-    const step = Math.max(300, Math.floor(window.innerHeight * 0.85));
-    const maxY = Math.min(document.documentElement.scrollHeight, 40000);
+    const step = Math.max(300, Math.floor(window.innerHeight * 0.8));
     let y = 0;
     const tick = (): void => {
       window.scrollTo(0, y);
       y += step;
+      // RE-MEASURE the height every step. A lazy page GROWS its scrollHeight as IntersectionObserver
+      // sections mount on scroll, so a height captured ONCE (before that growth) stops the scroll short
+      // of the true bottom — footer forms (contact/newsletter) then never enter the viewport, never
+      // mount, and read as 0 forms. Re-reading each step follows the growing page to its real bottom.
+      // Capped at 40000px so an infinite-scroll page still terminates.
+      const maxY = Math.min(document.documentElement.scrollHeight, 40000);
       if (y <= maxY) {
-        setTimeout(tick, 120);
+        setTimeout(tick, 150);
       } else {
+        // Return to the top (harmless — revealed sections stay mounted) and let the final section's
+        // mount/animation settle before the DOM read.
         window.scrollTo(0, 0);
-        setTimeout(resolve, 200);
+        setTimeout(resolve, 400);
       }
     };
     tick();
@@ -242,7 +249,7 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
       // renders, then briefly re-settle for any lazy fetch/animation. Best-effort — if it times
       // out we read whatever rendered (above-fold content is already there).
       try {
-        await withTimeout(wc.executeJavaScript(inPage(autoScrollPage), true), 8_000, 'scroll');
+        await withTimeout(wc.executeJavaScript(inPage(autoScrollPage), true), 14_000, 'scroll');
         if (autoSettle) await waitNetworkIdle(0, 500, 4_000);
         else await delay(Math.min(fixedSettleMs, 800));
       } catch {
