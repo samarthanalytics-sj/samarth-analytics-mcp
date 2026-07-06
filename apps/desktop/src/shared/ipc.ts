@@ -538,6 +538,63 @@ export interface ScanDebug {
   pageErrors: string[];
 }
 
+/* ── Verify tag firing ("Verify firing" — does the tag fire; if not, fix the trigger) ── */
+
+/** A tag to verify: identity + the trigger the driver drives and the core evaluates. */
+export interface VerifyTagInput {
+  id: string;
+  tagName: string;
+  eventName: string;
+  platform: string;
+  trigger: SuggestedTagView['trigger'];
+}
+
+/** One analytics /collect hit captured (and aborted, never delivered) during verification. */
+export interface CapturedHitView {
+  url: string;
+  body: string | null;
+  /** ga4 | meta | tiktok | server | ad */
+  collector: string;
+}
+
+/** Per-tag verdict from the firing verification. */
+export interface VerifyTagVerdict {
+  tagId: string;
+  tagName: string;
+  /** true = a matching /collect hit fired after the tag's trigger interaction. */
+  fired: boolean;
+  /** The event name observed on the firing hit (GA4). */
+  event?: string;
+  /** Why it did not fire (always set when fired=false). */
+  reason?: string;
+  /** What the driver did to exercise the trigger. */
+  interaction?: { kind: 'click' | 'submit' | 'navigate' | 'none'; targetFound: boolean; performed: boolean; note?: string };
+  /** A sample captured hit as evidence. */
+  evidence?: CapturedHitView;
+  /** A corrected trigger to apply when the tag did not fire (the "fix the trigger" step). */
+  suggestedTrigger?: SuggestedTagView['trigger'];
+  /** Human-readable description of the proposed fix. */
+  fixNote?: string;
+}
+
+/** Result of verifying tag firing (suggestions:verifyTags). */
+export interface VerifyTagsResult {
+  url: string;
+  /** The container/preview snippet was injected onto the page. */
+  injected: boolean;
+  pagesOk: boolean;
+  error?: string;
+  verdicts: VerifyTagVerdict[];
+}
+
+/** Options for verifying tag firing. */
+export interface VerifyTagsOptions {
+  /** The GTM Preview snippet / URL / GTM-XXXX id the user pasted, so DRAFT tags load. */
+  containerSnippet?: string;
+  settleMs?: number;
+  navTimeoutMs?: number;
+}
+
 /* ── Container audit (the "Container audit" panel) ── */
 export interface AuditFindingView {
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';

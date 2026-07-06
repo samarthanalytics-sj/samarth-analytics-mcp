@@ -24,6 +24,8 @@ import type {
   SuggestPlatform,
   SuggestedTagView,
   TagScanResult,
+  VerifyTagInput,
+  VerifyTagsResult,
 } from '../../shared/ipc';
 import { suggestionToGroup, suggestionsToTemplateCsv, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
@@ -1937,6 +1939,11 @@ function TagReviewPanel({
   // DOM counts + console/page errors — why a scan found nothing.
   const [scanDebug, setScanDebug] = useState<TagScanResult['debug'] | null>(null);
   const [showDebug, setShowDebug] = useState(false);
+  // Verify firing: paste the GTM Preview snippet, drive each tag's trigger, see what fires.
+  const [verifySnippet, setVerifySnippet] = useState('');
+  const [verifying, setVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<VerifyTagsResult | null>(null);
+  const [verifyFixed, setVerifyFixed] = useState<Record<string, boolean>>({});
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
   const [discoverMode, setDiscoverMode] = useState<'site' | 'single' | 'ai' | 'csv'>('site');
@@ -2004,7 +2011,42 @@ function TagReviewPanel({
     setWarnings(res.warnings);
     setScanLog({ pages: res.pages, notScanned: res.notScanned, inventory: res.inventory, installed: res.installed });
     setScanDebug(res.debug ?? null);
+    setVerifyResult(null);
+    setVerifyFixed({});
     loadSuggestions(res.suggestions);
+  }
+
+  // Verify FIRING: inject the pasted (preview) container, drive each selected tag's
+  // trigger on the entered URL, and report what fired. Never sends a real hit.
+  async function runVerify(): Promise<void> {
+    if (verifying) return;
+    const target = url.trim();
+    if (!target) { onError('Enter the site URL to verify against.'); return; }
+    const chosen = suggestions.filter((s) => selected[s.id]);
+    const list = chosen.length ? chosen : suggestions;
+    if (list.length === 0) { onError('Scan a site first — there are no tags to verify.'); return; }
+    const tags: VerifyTagInput[] = list.map((s) => ({ id: s.id, tagName: s.tagName, eventName: s.eventName, platform: s.platform, trigger: s.trigger }));
+    const elements = scanLog?.inventory.elements ?? [];
+    setVerifying(true);
+    onError('');
+    try {
+      const snippet = verifySnippet.trim();
+      const res = await window.desktop.tags.verify(target, tags, elements, snippet ? { containerSnippet: snippet } : {});
+      setVerifyResult(res);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVerifying(false);
+    }
+  }
+
+  // Apply a corrected trigger from a NOT-FIRED verdict to the suggestion, so it's
+  // created with the fixed trigger.
+  function applyVerifyFix(v: VerifyTagsResult['verdicts'][number]): void {
+    const fixed = v.suggestedTrigger;
+    if (!fixed) return;
+    setSuggestions((prev) => prev.map((s) => (s.id === v.tagId ? { ...s, trigger: fixed } : s)));
+    setVerifyFixed((prev) => ({ ...prev, [v.tagId]: true }));
   }
 
   // "Single page" mode: scan ONLY the entered URL directly — no discovery, no page
@@ -2883,6 +2925,66 @@ function TagReviewPanel({
                     elements likely aren&apos;t standard DOM (custom widgets) or the page needs more settle time.
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Verify firing: inject a preview container, drive each tag's trigger, see what fires. */}
+        {suggestions.length > 0 && (
+          <div style={styles.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 320px' }}>
+                <div style={{ fontWeight: 600 }}>Verify firing</div>
+                <div style={styles.muted}>
+                  Inject your GTM Preview snippet, drive each selected tag&apos;s trigger (click / form submit) on the URL above,
+                  and see what actually fires. Nothing real is ever sent — hits are captured and aborted.
+                </div>
+              </div>
+              <button style={styles.primaryBtn} onClick={() => void runVerify()} disabled={verifying || !url.trim()}>
+                {verifying ? 'Verifying…' : 'Verify firing'}
+              </button>
+            </div>
+            <textarea
+              value={verifySnippet}
+              onChange={(e) => setVerifySnippet(e.target.value)}
+              placeholder="Paste your GTM Preview snippet / gtm.js URL / GTM-XXXXXXX so DRAFT tags load. Leave blank to test the container already published on the site."
+              style={{ ...styles.input, width: '100%', minHeight: 58, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
+            />
+            {verifyResult && (
+              <div style={{ marginTop: 10 }}>
+                <div style={styles.muted}>
+                  {verifyResult.injected ? 'Preview container injected. ' : 'Tested the page as-is (no snippet). '}
+                  {verifyResult.error
+                    ? `Error: ${verifyResult.error}`
+                    : `${verifyResult.verdicts.filter((v) => v.fired).length}/${verifyResult.verdicts.length} tag(s) fired.`}
+                </div>
+                <ul style={styles.resultList}>
+                  {verifyResult.verdicts.map((v) => (
+                    <li key={v.tagId} style={styles.resultRow}>
+                      <span style={{ fontWeight: 600, color: v.fired ? 'var(--c-green)' : 'var(--c-red)' }}>
+                        {v.fired ? 'FIRED' : 'NOT FIRED'}
+                      </span>{' '}
+                      {v.tagName}
+                      {v.fired && v.event ? ` — ${v.event}` : ''}
+                      {!v.fired && v.reason ? <div style={{ ...styles.muted, marginLeft: 8 }}>{v.reason}</div> : null}
+                      {!v.fired && v.fixNote ? (
+                        <div style={{ marginLeft: 8, marginTop: 2 }}>
+                          Fix: {v.fixNote}
+                          {v.suggestedTrigger ? (
+                            verifyFixed[v.tagId] ? (
+                              <span style={{ color: 'var(--c-green)', marginLeft: 6 }}>✓ applied</span>
+                            ) : (
+                              <button style={{ ...styles.linkBtn, marginLeft: 6 }} onClick={() => applyVerifyFix(v)}>
+                                apply fix
+                              </button>
+                            )
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
           </div>

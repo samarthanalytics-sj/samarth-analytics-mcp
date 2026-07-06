@@ -16,8 +16,10 @@ import type { GoogleDataService } from '../google/data-service';
 import type { ProviderKeyStore } from '../storage/provider-keys';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
-import type { CreateTagOutcome, SuggestedTagView, TagScanOptions } from '../../shared/ipc';
+import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView } from '../../shared/ipc';
 import { crawlAndSuggest, scanUrls, type PageDriver, type ScanProgress } from './scan-core';
+import { runVerifyDriver } from './verify-driver';
+import { evaluateVerify } from './verify-tags';
 import { discoverSite } from './discover';
 // Electron is the always-on, zero-install engine. Cheerio is added when present
 // (lazy-imported so a missing optional package never crashes startup). The two
@@ -124,6 +126,29 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     }
     return scanUrls(driver, list, siteHost, undefined, { platforms: o.platforms ?? ['ga4'] });
   });
+
+  // Verify FIRING: inject the pasted (preview) container onto the page, drive each
+  // tag's trigger (click/submit), and report whether it fired — with a corrected
+  // trigger when it didn't. Never delivers a real hit (abort-first capture).
+  ipcMain.handle(
+    'suggestions:verifyTags',
+    async (_e, url: unknown, tags: unknown, elements: unknown, opts?: VerifyTagsOptions): Promise<VerifyTagsResult> => {
+      const target = String(url ?? '').trim();
+      const verdict = urlAllowed(target, []);
+      if (!verdict.ok) throw new Error(`Cannot verify that URL: ${verdict.reason}`);
+      const tagList = (Array.isArray(tags) ? tags : []) as VerifyTagInput[];
+      const els = (Array.isArray(elements) ? elements : []) as DetectedElementView[];
+      if (tagList.length === 0) return { url: target, injected: false, pagesOk: false, error: 'No tags selected to verify.', verdicts: [] };
+      const o = opts ?? {};
+      const driven = await runVerifyDriver(
+        target,
+        tagList.map((t) => ({ id: t.id, trigger: t.trigger })),
+        { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}), settleMs: clampSettle(o.settleMs), navTimeoutMs: o.navTimeoutMs },
+      );
+      const verdicts = evaluateVerify(tagList, driven.perTag, els);
+      return { url: target, injected: driven.injected, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts };
+    },
+  );
 
   // Streaming variants — push 'suggestions:scan:event' (the RUNNING suggestion list +
   // crawl progress, tagged by requestId) after every page, so the review panel fills
