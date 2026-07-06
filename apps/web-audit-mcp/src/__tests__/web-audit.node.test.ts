@@ -117,6 +117,10 @@ check('crawl: asset skipped', normalizeUrl('/logo.png', 'https://example.com') =
 check('crawl: mailto skipped', normalizeUrl('mailto:x@y.z', 'https://example.com') === null);
 check('crawl: hash stripped', normalizeUrl('https://example.com/a#frag', 'https://example.com') === 'https://example.com/a');
 check('crawl: contact prioritised', urlPriority('https://x.com/contact-us') > urlPriority('https://x.com/blog/post'));
+// Broadened FORMY_RE tokens (kept in sync with scan-core.ts) are all prioritised.
+check('crawl: broadened form tokens prioritised',
+  ['https://x.com/free-audit', 'https://x.com/consultation', 'https://x.com/get-started', 'https://x.com/pricing', 'https://x.com/schedule-a-demo', 'https://x.com/services']
+    .every((u) => urlPriority(u) === 1) && urlPriority('https://x.com/about') === 0);
 
 // ── form analysis ───────────────────────────────────────────────────────────
 

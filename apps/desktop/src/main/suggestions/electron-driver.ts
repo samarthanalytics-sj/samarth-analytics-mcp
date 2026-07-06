@@ -273,7 +273,8 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
       // Scroll top→bottom so scroll-mounted below-fold content (contact/newsletter forms, FAQ)
       // renders — collecting forms at every scroll position and unioning them (handles lazy sections
       // that mount late OR unmount when scrolled away), then briefly re-settle. Best-effort — if it
-      // times out, `scrolledForms` stays null and the form read below falls back to a single pass.
+      // times out, `scrolledForms` stays null and the always-union final read below still recovers
+      // whatever is mounted at the settled position.
       let scrolledForms: RawForm[] | null = null;
       try {
         // Inject extractFormsInPage as a page global so the scroll pass can read forms per position.
@@ -296,14 +297,27 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
           evalTimeoutMs,
           'element scan',
         )) as PageScanRaw;
-        // Prefer the per-position union from the scroll pass (a superset of a single read). Only when
-        // that pass threw/timed out (scrolledForms === null) do a single fallback read of what rendered.
-        const rawForms: RawForm[] =
-          scrolledForms !== null
-            ? scrolledForms
-            : ((await withTimeout(wc.executeJavaScript(inPage(extractFormsInPage), true), evalTimeoutMs, 'form scan').catch(
-                () => [],
-              )) as RawForm[]);
+        // ALWAYS do one final full read at the settled position and UNION it with the scroll-pass union
+        // (treat null as []). The per-position scroll grabs can miss a form on a busy frame — producing a
+        // NON-NULL but partial union — and the old ternary then skipped the single-read fallback (it only
+        // ran when scrolledForms === null), so a genuinely-mounted form was lost with no recovery. Unioning
+        // a final full read makes it a superset guarantee. Best-effort: the final read degrades to [] on
+        // timeout/error so a wedged frame never aborts the scan.
+        const finalForms = (await withTimeout(
+          wc.executeJavaScript(inPage(extractFormsInPage), true),
+          evalTimeoutMs,
+          'form scan',
+        ).catch(() => [])) as RawForm[];
+        // Union deduped by the SAME form-key the multi-driver uses, then reindexed so the merged list is
+        // contiguous.
+        const formKey = (f: RawForm): string =>
+          `${f.action || ''}|${f.method || ''}|${(f.fields || []).map((x) => x.name || x.id || x.type).join(',')}`.toLowerCase();
+        const byForm = new Map<string, RawForm>();
+        for (const f of [...(Array.isArray(scrolledForms) ? scrolledForms : []), ...(Array.isArray(finalForms) ? finalForms : [])]) {
+          const k = formKey(f);
+          if (!byForm.has(k)) byForm.set(k, f);
+        }
+        const rawForms: RawForm[] = [...byForm.values()].map((f, i) => ({ ...f, index: i }));
         const extracted = Array.isArray(rawForms) ? rawForms.length : 0;
         let probe: { forms: number; inputs: number; textareas: number; selects: number; submitish: number } | undefined;
         try {
