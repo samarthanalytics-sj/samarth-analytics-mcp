@@ -1,3 +1,9 @@
+## [1.192.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.191.1...v1.192.0) (2026-07-06)
+
+### Features
+
+* **desktop:** offer GTM's full trigger-condition operator list in the review table ([9a8949f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9a8949fce65b4c19d94832713d62a25cba7f5796))
+
 ## [1.191.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.191.0...v1.191.1) (2026-07-06)
 
 ### Bug Fixes
