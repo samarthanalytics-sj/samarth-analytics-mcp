@@ -24,6 +24,7 @@ import type {
   SuggestPlatform,
   SuggestedTagView,
   TagScanResult,
+  VerifyTagInput,
   VerifyTagsResult,
 } from '../../shared/ipc';
 import { suggestionToGroup, suggestionsToTemplateCsv, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen } from '../../shared/tag-template';
@@ -1980,6 +1981,14 @@ function TagReviewPanel({
   const [done, setDone] = useState<{ created: number; existing: number; failed: number; total: number } | null>(null);
   // Live create progress (attempted / total) so a big batch shows "7/40" while it runs.
   const [createProgress, setCreateProgress] = useState<{ done: number; total: number } | null>(null);
+  // "Auto-verify & heal" loop: after creating tags, verify they fire; auto-apply confident
+  // trigger fixes (approve-per-round) and re-verify; pause on tags with no confident fix.
+  const [healPhase, setHealPhase] = useState<'idle' | 'busy' | 'review' | 'paused' | 'done'>('idle');
+  const [healRound, setHealRound] = useState(0);
+  const [healVerdicts, setHealVerdicts] = useState<VerifyTagsResult['verdicts']>([]);
+  const [healMeta, setHealMeta] = useState<{ injected: boolean; previewAuth: boolean }>({ injected: false, previewAuth: false });
+  const [healSkipped, setHealSkipped] = useState<Record<string, boolean>>({});
+  const [healNote, setHealNote] = useState('');
   const [settleMs, setSettleMs] = useState('2500');
   const [settleAuto, setSettleAuto] = useState(true);
   const effSettleMs = (): number | undefined => (settleAuto ? undefined : Number(settleMs) || undefined);
@@ -2473,6 +2482,92 @@ function TagReviewPanel({
       setConfirming(false);
       setCreateProgress(null);
     }
+  }
+
+  // ── Auto-verify & heal loop ───────────────────────────────────────────────
+  const HEAL_MAX_ROUNDS = 5;
+  function healErrorText(e: unknown): string {
+    const m = e instanceof Error ? e.message : String(e);
+    if (/invalid_grant|expired or revoked|AUTH_EXPIRED/i.test(m)) return 'Your Google connection expired — re-connect (the banner up top) and retry.';
+    if (/ETIMEDOUT|fetch failed|network|getaddrinfo/i.test(m)) return 'Could not reach Google (network). Check your connection and retry.';
+    return m;
+  }
+  // Tags from this scan that are now IN the container (created this session or already existed).
+  function healableTags(): SuggestedTagView[] {
+    return suggestions.filter((s) => statuses[s.id]?.state === 'ok' || statuses[s.id]?.state === 'exists');
+  }
+  function classifyAndSetPhase(verdicts: VerifyTagsResult['verdicts'], skipped: Record<string, boolean>, round: number): void {
+    const activeV = verdicts.filter((v) => !skipped[v.tagId]);
+    const notFired = activeV.filter((v) => !v.fired);
+    const fixable = notFired.filter((v) => v.suggestedTrigger);
+    const firing = activeV.length - notFired.length;
+    if (notFired.length === 0) { setHealPhase('done'); setHealNote(`✅ All ${activeV.length} tag(s) fire.`); }
+    else if (fixable.length > 0) { setHealPhase('review'); setHealNote(`Round ${round}: ${firing}/${activeV.length} firing · ${fixable.length} auto-fixable.`); }
+    else { setHealPhase('paused'); setHealNote(`Round ${round}: ${firing}/${activeV.length} firing · ${notFired.length} need your call (no confident auto-fix).`); }
+  }
+  // Mint a fresh preview (the draft changed) and verify the created tags, carrying the scan
+  // inventory so a non-firing tag gets a CONCRETE corrected trigger.
+  async function runHealRound(roundNo: number, skipped: Record<string, boolean>): Promise<void> {
+    if (!targetReady || !ctx) { setHealNote('Pick a GTM account, container and draft workspace first.'); return; }
+    const target = url.trim();
+    if (!target) { setHealNote('Enter the site URL to verify against (the Main website / Single page field).'); return; }
+    const created = healableTags();
+    if (created.length === 0) { setHealNote('Create some tags first — there are none in the container to verify.'); return; }
+    setHealPhase('busy');
+    setHealNote(`Round ${roundNo}: minting a preview & verifying ${created.length} tag(s)…`);
+    try {
+      const { snippet } = await window.desktop.tags.mintPreview(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
+      const tags: VerifyTagInput[] = created.map((s) => ({ id: s.id, tagName: s.tagName, eventName: s.eventName, platform: s.platform, measurementId: s.measurementId, page: s.page, trigger: s.trigger }));
+      const elements = scanLog?.inventory.elements ?? [];
+      const res = await window.desktop.tags.verify(target, tags, elements, { containerSnippet: snippet });
+      setHealVerdicts(res.verdicts);
+      setHealMeta({ injected: res.injected, previewAuth: res.previewAuth });
+      setHealRound(roundNo);
+      classifyAndSetPhase(res.verdicts, skipped, roundNo);
+    } catch (e) {
+      setHealPhase('paused');
+      setHealNote(healErrorText(e));
+    }
+  }
+  async function startHeal(): Promise<void> {
+    setHealSkipped({});
+    setHealVerdicts([]);
+    setHealNote('');
+    await runHealRound(1, {});
+  }
+  // Approve-per-round: apply every confident trigger fix (not skipped) via the retarget primitive,
+  // then re-verify. Stops at the round cap.
+  async function applyFixesAndReverify(): Promise<void> {
+    if (!ctx) return;
+    const fixable = healVerdicts.filter((v) => !v.fired && v.suggestedTrigger && !healSkipped[v.tagId]);
+    if (fixable.length === 0) return;
+    setHealPhase('busy');
+    setHealNote(`Applying ${fixable.length} trigger fix(es) to the draft…`);
+    try {
+      for (const v of fixable) {
+        await window.desktop.gtm.retargetTrigger({
+          accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!,
+          tagName: v.tagName, trigger: v.suggestedTrigger!,
+        });
+      }
+    } catch (e) {
+      setHealNote(healErrorText(e));
+      setHealPhase('review');
+      return;
+    }
+    const next = healRound + 1;
+    if (next > HEAL_MAX_ROUNDS) {
+      await runHealRound(healRound, healSkipped);
+      setHealPhase('done');
+      setHealNote(`Stopped after ${HEAL_MAX_ROUNDS} rounds — re-verified; see what remains.`);
+      return;
+    }
+    await runHealRound(next, healSkipped);
+  }
+  function skipHealTag(tagId: string): void {
+    const next = { ...healSkipped, [tagId]: true };
+    setHealSkipped(next);
+    classifyAndSetPhase(healVerdicts, next, healRound);
   }
 
   // "Skip blog pages" filter → the discovered pages actually shown + scannable (blog pages hidden when
@@ -3160,11 +3255,113 @@ function TagReviewPanel({
                     {done.failed ? ` · ${done.failed} failed` : ''} — open GTM to review &amp; publish.
                     {done.created > 0 && (
                       <span style={{ color: 'var(--text-muted)' }}>
-                        Confirm they fire in the <b>✅ Tag verification</b> tab.
+                        Verify &amp; auto-fix them below, or in the <b>✅ Tag verification</b> tab.
                       </span>
                     )}
                   </span>
                 )}
+              </div>
+            )}
+
+            {/* Auto-verify & heal: verify the created tags fire, auto-apply confident trigger fixes
+                (approve per round), re-verify, loop; pause on tags with no confident fix. */}
+            {done && done.created + done.existing > 0 && (
+              <div style={styles.card}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+                  <div style={{ flex: '1 1 340px' }}>
+                    <div style={{ fontWeight: 600 }}>Auto-verify &amp; heal <span style={styles.betaBadge}>Beta</span></div>
+                    <div style={styles.muted}>
+                      Proves the tags you just created fire, auto-applies confident trigger fixes (you approve each round),
+                      re-verifies, and loops until they fire or nothing more is auto-fixable. Uses the scanned page inventory
+                      for concrete fixes. Draft-only writes; nothing is sent and nothing is published.
+                    </div>
+                  </div>
+                  <button
+                    style={styles.primaryBtn}
+                    onClick={() => void startHeal()}
+                    disabled={!targetReady || healPhase === 'busy' || !url.trim()}
+                    title={targetReady ? 'Mint a preview, verify each created tag, and heal the fixable ones' : 'Pick a GTM account, container and draft workspace first'}
+                  >
+                    {healPhase === 'busy' ? 'Working…' : healPhase === 'idle' ? 'Start auto-verify & heal' : 'Restart'}
+                  </button>
+                </div>
+                {healNote && (
+                  <div style={{ ...styles.muted, marginTop: 8, color: healPhase === 'done' ? 'var(--c-green)' : healPhase === 'paused' ? 'var(--c-amber)' : 'var(--text)' }}>
+                    {healNote}
+                  </div>
+                )}
+                {healMeta.injected && !healMeta.previewAuth && (
+                  <div style={{ ...styles.muted, color: 'var(--c-amber)', marginTop: 4 }}>
+                    ⚠ The preview had no draft auth (gtm_auth/gtm_preview) — the published container loaded, so draft tags won&apos;t fire. Re-connect with the &ldquo;edit container versions&rdquo; permission.
+                  </div>
+                )}
+                {healVerdicts.length > 0 && (() => {
+                  const activeV = healVerdicts.filter((v) => !healSkipped[v.tagId]);
+                  const fired = activeV.filter((v) => v.fired);
+                  const notFired = activeV.filter((v) => !v.fired);
+                  const fixable = notFired.filter((v) => v.suggestedTrigger);
+                  const needsYou = notFired.filter((v) => !v.suggestedTrigger);
+                  const skippedCount = healVerdicts.length - activeV.length;
+                  return (
+                    <div style={{ marginTop: 10 }}>
+                      {fired.length > 0 && (
+                        <>
+                          <div style={{ ...styles.h2, color: 'var(--c-green)' }}>✅ Firing ({fired.length})</div>
+                          <ul style={styles.resultList}>
+                            {fired.map((v) => (
+                              <li key={v.tagId} style={styles.resultRow}>
+                                <span style={{ fontWeight: 600, color: 'var(--c-green)' }}>FIRED</span> {v.tagName}
+                                {v.event ? <span style={styles.muted}> — {v.event}</span> : null}
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                      {fixable.length > 0 && (
+                        <>
+                          <div style={{ ...styles.h2, color: 'var(--c-blue)', marginTop: 10 }}>🔧 Auto-fixable ({fixable.length})</div>
+                          <ul style={styles.resultList}>
+                            {fixable.map((v) => (
+                              <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
+                                <div><span style={{ fontWeight: 600 }}>{v.tagName}</span></div>
+                                {v.fixNote ? <div style={{ ...styles.muted, marginLeft: 8 }}>Fix: {v.fixNote}</div> : null}
+                                <button style={{ ...styles.linkBtn, marginLeft: 8 }} onClick={() => skipHealTag(v.tagId)}>skip this one</button>
+                              </li>
+                            ))}
+                          </ul>
+                          {healPhase === 'review' && (
+                            <button style={styles.primaryBtn} onClick={() => void applyFixesAndReverify()}>
+                              Apply {fixable.length} fix(es) &amp; re-verify (round {healRound + 1})
+                            </button>
+                          )}
+                        </>
+                      )}
+                      {needsYou.length > 0 && (
+                        <>
+                          <div style={{ ...styles.h2, color: 'var(--c-amber)', marginTop: 10 }}>⏸ Needs your call ({needsYou.length})</div>
+                          <ul style={styles.resultList}>
+                            {needsYou.map((v) => (
+                              <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
+                                <div><span style={{ fontWeight: 600, color: 'var(--c-red)' }}>NOT FIRED</span> {v.tagName}</div>
+                                {v.reason ? <div style={{ ...styles.muted, marginLeft: 8 }}>Why: {v.reason}</div> : null}
+                                <div style={{ marginLeft: 8, marginTop: 2 }}>
+                                  <button style={styles.linkBtn} onClick={() => skipHealTag(v.tagId)}>skip</button>
+                                  <span style={{ ...styles.muted, marginLeft: 8 }}>— or fix it in GTM, then Restart.</span>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                      {skippedCount > 0 && <div style={{ ...styles.muted, marginTop: 6 }}>{skippedCount} skipped.</div>}
+                      {(healPhase === 'paused' || healPhase === 'review') && (
+                        <div style={{ marginTop: 8 }}>
+                          <button style={styles.toggleOff} onClick={() => { setHealPhase('done'); setHealNote('Stopped.'); }}>Stop</button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </>
