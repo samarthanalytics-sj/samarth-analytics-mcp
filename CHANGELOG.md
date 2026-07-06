@@ -1,3 +1,9 @@
+## [1.206.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.205.0...v1.206.0) (2026-07-06)
+
+### Features
+
+* **desktop:** dedicated "Tag verification" tab (fired vs not-firing + fixes + forms) ([47006ab](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/47006ab908e34d551458773e629df1f93031418f))
+
 ## [1.205.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.204.4...v1.205.0) (2026-07-06)
 
 ### Features
