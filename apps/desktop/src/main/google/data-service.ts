@@ -448,9 +448,10 @@ export class GoogleDataService {
     const containerParent = `accounts/${accountId}/containers/${containerId}`;
 
     // 1. Snapshot the workspace into a version (not published). This needs the
-    //    tagmanager.edit.containerversions scope, which this app does NOT request
-    //    (it is built to never publish) — so translate the 403 into an actionable
-    //    message instead of a raw Gaxios stack.
+    //    tagmanager.edit.containerversions scope — which the app DOES request, but a
+    //    Google connection saved BEFORE that scope was added carries a token without
+    //    it and 403s. Translate that into an actionable "re-connect Google" message
+    //    instead of a raw Gaxios stack.
     let cv;
     try {
       cv = await gtm.accounts.containers.workspaces.create_version({
@@ -461,7 +462,7 @@ export class GoogleDataService {
       const code = (err as { code?: number; status?: number }).code ?? (err as { status?: number }).status;
       if (code === 403) {
         throw new Error(
-          'Auto preview needs the GTM "edit container versions" permission, which this app does not request (it is built to never publish). Paste a GTM Preview / Environment snippet instead, or re-connect Google after enabling that scope.'
+          'Auto preview needs the GTM "edit container versions" permission. The app requests it, but this Google connection was saved before that scope was added, so its token lacks it. Fix: Settings → Disconnect Google, then re-connect and approve the new permission on Google\'s consent screen, then retry. Or paste a GTM Preview / Environment snippet instead (no re-connect needed). If it still fails, your Google account may lack edit rights on this container.'
         );
       }
       throw err;
