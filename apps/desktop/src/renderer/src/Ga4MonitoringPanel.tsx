@@ -1,19 +1,20 @@
 import { useEffect, useState } from 'react';
 import type { AccountView, Ga4MonitorStatus, Ga4MonitorRun, Ga4MonitorTargetStatus, Ga4PropertyListItem } from '../../shared/ipc';
 
-// GA4 Monitoring tab — MULTI-property. Maintains a list of monitored GA4 properties, configures the
-// shared background schedule + Slack webhook, runs on-demand checks (per property or all), and shows
-// each property's latest run (health, alerts, checks). The heavy lifting is in main
-// (Ga4MonitoringService sweeps the list sequentially + the pure monitorGa4 engine); this is a thin
-// control panel over status()/configure()/runNow().
+// GA4 Monitoring tab — MULTI-property dashboard. Layout: page header with a fleet-health rollup,
+// one toolbar (add property + shared schedule + run-all), a responsive grid of property cards
+// (health accent, alert chip, per-card actions), the selected property's full run detail, then the
+// Slack settings as a secondary card. The heavy lifting is in main (Ga4MonitoringService sweeps the
+// list sequentially + the pure monitorGa4 engine); this is a thin control panel over
+// status()/configure()/runNow().
 
 const SEV_COLOR: Record<string, string> = {
   critical: 'var(--c-red)', high: 'var(--c-red)', medium: 'var(--c-amber, #b8860b)', low: 'var(--c-amber, #b8860b)', info: 'var(--text-muted)',
 };
-const HEALTH: Record<string, { color: string; label: string; icon: string }> = {
-  critical: { color: 'var(--c-red)', label: 'Critical', icon: '🔴' },
-  warning: { color: 'var(--c-amber, #b8860b)', label: 'Warning', icon: '🟠' },
-  healthy: { color: 'var(--c-green)', label: 'Healthy', icon: '🟢' },
+const HEALTH: Record<string, { color: string; bg: string; label: string; icon: string }> = {
+  critical: { color: 'var(--c-red)', bg: 'var(--c-red-bg, rgba(239,68,68,.12))', label: 'Critical', icon: '🔴' },
+  warning: { color: 'var(--c-amber, #b8860b)', bg: 'var(--c-amber-bg, rgba(245,158,11,.14))', label: 'Warning', icon: '🟠' },
+  healthy: { color: 'var(--c-green)', bg: 'var(--c-green-bg, rgba(34,197,94,.12))', label: 'Healthy', icon: '🟢' },
 };
 // Per-status pill for the checks table (a coloured chip reads better than an emoji list).
 const CHECK_PILL: Record<string, { label: string; color: string; bg: string }> = {
@@ -26,13 +27,25 @@ const CHECK_PILL: Record<string, { label: string; color: string; bg: string }> =
 const box: React.CSSProperties = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
 const label: React.CSSProperties = { fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 };
 const btn: React.CSSProperties = { background: 'var(--surface-3)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '7px 14px', cursor: 'pointer', fontSize: 13 };
-const smallBtn: React.CSSProperties = { ...btn, padding: '4px 10px', fontSize: 12 };
+const ghostBtn: React.CSSProperties = { background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 7, padding: '4px 11px', cursor: 'pointer', fontSize: 12, fontWeight: 600 };
 const primaryBtn: React.CSSProperties = { ...btn, background: 'var(--c-blue)', color: '#fff', borderColor: 'transparent', fontWeight: 600 };
 const input: React.CSSProperties = { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 9px', fontSize: 13, fontFamily: 'inherit' };
+const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
 function fmtTime(ms: number | null): string {
   if (!ms) return 'never';
   try { return new Date(ms).toLocaleString(); } catch { return '—'; }
+}
+/** Compact relative time for the cards ("just now", "12 min ago", "3 hr ago", then a date). */
+function fmtAgo(ms: number | null): string {
+  if (!ms) return 'not checked yet';
+  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} hr ago`;
+  try { return new Date(ms).toLocaleDateString(); } catch { return '—'; }
 }
 
 /** One property's full run detail: header strip (health + summary + counts), alerts, checks table. */
@@ -100,6 +113,104 @@ function RunDetail({ run }: { run: Ga4MonitorRun }): JSX.Element {
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** One property card in the fleet grid: health accent + label, alert chip, meta, per-card actions. */
+function PropertyCard({ t, selected, runningId, busy, onSelect, onRun, onTogglePause, onRemove }: {
+  t: Ga4MonitorTargetStatus;
+  selected: boolean;
+  runningId: string | null;
+  busy: boolean;
+  onSelect: () => void;
+  onRun: () => void;
+  onTogglePause: () => void;
+  onRemove: () => void;
+}): JSX.Element {
+  const h = t.lastRun ? HEALTH[t.lastRun.health] : null;
+  const accent = !t.enabled ? 'var(--text-faint)' : h ? h.color : 'var(--border)';
+  const alertCount = t.lastRun?.alerts.length ?? 0;
+  const counts = { pass: 0, warn: 0, fail: 0, skip: 0 } as Record<string, number>;
+  for (const c of t.lastRun?.checks ?? []) counts[c.status] = (counts[c.status] ?? 0) + 1;
+  const isRunning = runningId === t.propertyId || runningId === '*';
+  return (
+    <div
+      onClick={onSelect}
+      role="button"
+      aria-pressed={selected}
+      style={{
+        position: 'relative',
+        background: 'var(--surface-2)',
+        border: `1px solid ${selected ? 'var(--c-blue)' : 'var(--border)'}`,
+        boxShadow: selected ? '0 0 0 1px var(--c-blue)' : 'none',
+        borderRadius: 12,
+        padding: '14px 14px 10px',
+        cursor: 'pointer',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        opacity: t.enabled ? 1 : 0.6,
+        overflow: 'hidden',
+      }}
+    >
+      {/* Health accent bar across the top of the card. */}
+      <span style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: accent }} />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {h ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: h.color, background: h.bg, borderRadius: 999, padding: '2px 10px' }}>
+            {h.icon} {h.label}
+          </span>
+        ) : (
+          <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 10px' }}>
+            ⚪ No check yet
+          </span>
+        )}
+        {!t.enabled && (
+          <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 8px' }}>PAUSED</span>
+        )}
+        <span style={{ flex: 1 }} />
+        {alertCount > 0 && (
+          <span style={{ fontSize: 11, fontWeight: 700, color: h?.color ?? 'var(--text)', background: h?.bg ?? 'var(--surface-3)', borderRadius: 999, padding: '2px 9px' }}>
+            {alertCount} alert{alertCount === 1 ? '' : 's'}
+          </span>
+        )}
+      </div>
+
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.propertyLabel || t.propertyId}>
+          {t.propertyLabel || t.propertyId}
+        </div>
+        <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>{t.propertyId.replace('properties/', '')}</div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+        {t.lastRun ? (
+          <span>
+            <b style={{ color: 'var(--c-green)' }}>{counts.pass}</b> pass
+            {counts.warn > 0 && <> · <b style={{ color: 'var(--c-amber, #b8860b)' }}>{counts.warn}</b> warn</>}
+            {counts.fail > 0 && <> · <b style={{ color: 'var(--c-red)' }}>{counts.fail}</b> issue{counts.fail === 1 ? '' : 's'}</>}
+          </span>
+        ) : (
+          <span>Run a first check to see its health.</span>
+        )}
+        <span style={{ flex: 1 }} />
+        <span style={{ color: 'var(--text-faint)' }}>{t.lastError ? <span style={{ color: 'var(--c-red)' }} title={t.lastError}>check failed</span> : fmtAgo(t.lastRunAt)}</span>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 2 }}>
+        <button style={{ ...ghostBtn, color: 'var(--c-blue)', borderColor: 'var(--c-blue-bg, var(--border))' }} disabled={runningId !== null} onClick={(e) => { e.stopPropagation(); onRun(); }}>
+          {isRunning ? 'Checking…' : '▶ Run'}
+        </button>
+        <button style={ghostBtn} disabled={busy} title={t.enabled ? 'Pause background checks for this property' : 'Resume background checks'} onClick={(e) => { e.stopPropagation(); onTogglePause(); }}>
+          {t.enabled ? '⏸ Pause' : '⏵ Resume'}
+        </button>
+        <span style={{ flex: 1 }} />
+        <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} title="Stop monitoring this property" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
+          Remove
+        </button>
+      </div>
     </div>
   );
 }
@@ -209,6 +320,13 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
 
   const addable = (properties ?? []).filter((p) => !targets.some((t) => t.propertyId === p.property));
   const selected = targets.find((t) => t.propertyId === selectedId) ?? null;
+  const enabledCount = targets.filter((t) => t.enabled).length;
+  // Fleet rollup for the header: worst-first chips, only the non-zero ones.
+  const fleet = { critical: 0, warning: 0, healthy: 0, none: 0 };
+  for (const t of targets) {
+    if (!t.lastRun) fleet.none++;
+    else fleet[t.lastRun.health]++;
+  }
 
   if (!signedIn) {
     return <div style={{ padding: 24, color: 'var(--text-muted)' }}>Sign in to Google on this account to monitor GA4 properties.</div>;
@@ -216,12 +334,33 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
 
   return (
     <div style={{ padding: 20, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div>
-        <h2 style={{ margin: '0 0 4px', fontSize: 20 }}>🔔 GA4 Monitoring</h2>
-        <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Background health checks for your GA4 properties: data flow, key events firing, sudden spikes/drops, conversion tracking, and revenue integrity. Each check sweeps every monitored property; new issues can be posted to Slack.</div>
+      {/* ── Page header + fleet rollup ── */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 260 }}>
+          <h2 style={{ margin: '0 0 4px', fontSize: 20 }}>🔔 GA4 Monitoring</h2>
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Background health checks for your GA4 properties: data flow, key events firing, sudden spikes/drops, conversion tracking, and revenue integrity. New issues can be posted to Slack.</div>
+        </div>
+        {targets.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingTop: 4 }}>
+            {(['critical', 'warning', 'healthy'] as const).map((k) =>
+              fleet[k] > 0 ? (
+                <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: HEALTH[k].color, background: HEALTH[k].bg, borderRadius: 999, padding: '4px 12px' }}>
+                  {HEALTH[k].icon} {fleet[k]} {HEALTH[k].label.toLowerCase()}
+                </span>
+              ) : null
+            )}
+            {fleet.none > 0 && (
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '4px 12px' }}>⚪ {fleet.none} not checked</span>
+            )}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: status?.running ? 'var(--c-green)' : 'var(--text-faint)', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 12px' }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: status?.running ? 'var(--c-green)' : 'var(--text-faint)', display: 'inline-block' }} />
+              {status?.running ? `background · every ${status.intervalMinutes >= 60 ? `${status.intervalMinutes / 60} hr` : `${status.intervalMinutes} min`}` : 'background off'}
+            </span>
+          </div>
+        )}
       </div>
 
-      {/* ── Schedule + add property ── */}
+      {/* ── Toolbar: add property + shared schedule + run all ── */}
       <div style={{ ...box, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 260, flex: 1 }}>
           <span style={label}>Add a property to monitor</span>
@@ -247,65 +386,62 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
             {[7, 14, 28, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
           </select>
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', paddingBottom: 7 }}>
           <input type="checkbox" checked={Boolean(status?.enabled)} disabled={busy || !targets.length} onChange={(e) => void configure({ enabled: e.target.checked })} />
           Run in the background
         </label>
-        <button style={primaryBtn} onClick={() => void runNow()} disabled={runningId !== null || !targets.some((t) => t.enabled)}>
-          {runningId === '*' ? 'Checking all…' : `Run all now${targets.filter((t) => t.enabled).length > 1 ? ` (${targets.filter((t) => t.enabled).length})` : ''}`}
+        <button style={primaryBtn} onClick={() => void runNow()} disabled={runningId !== null || enabledCount === 0}>
+          {runningId === '*' ? 'Checking all…' : enabledCount > 1 ? `▶ Run all (${enabledCount})` : '▶ Run now'}
         </button>
       </div>
 
-      {/* ── Monitored properties ── */}
-      {targets.length > 0 && (
-        <div style={{ ...box, padding: 0, overflow: 'hidden' }}>
-          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
-            Monitored properties <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}>· {targets.length}{targets.length >= 2 ? ' — click a row to see its checks' : ''}</span>
+      {note && <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>{note}</div>}
+      {status?.lastError && <div style={{ fontSize: 12.5, color: 'var(--c-red)' }}>Last sweep error — {status.lastError}</div>}
+
+      {/* ── Property cards ── */}
+      {targets.length === 0 ? (
+        <div style={{ ...box, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '40px 20px', color: 'var(--text-muted)' }}>
+          <span style={{ fontSize: 30 }}>📡</span>
+          <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text)' }}>No properties monitored yet</div>
+          <div style={{ fontSize: 13, textAlign: 'center', maxWidth: 460, lineHeight: 1.5 }}>
+            Pick a GA4 property above and click <b>+ Add</b>. Each check verifies data flow, key events, spikes/drops, conversion tracking and revenue integrity — and can alert your Slack channel when something breaks.
           </div>
-          {targets.map((t, i) => {
-            const h = t.lastRun ? HEALTH[t.lastRun.health] : null;
-            const isSelected = t.propertyId === selectedId;
-            const alertCount = t.lastRun?.alerts.length ?? 0;
-            return (
-              <div
-                key={t.propertyId}
-                onClick={() => setSelectedId(t.propertyId)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 16px', cursor: 'pointer',
-                  borderBottom: i === targets.length - 1 ? 'none' : '1px solid var(--border)',
-                  background: isSelected ? 'var(--surface)' : 'transparent',
-                  borderLeft: isSelected ? '3px solid var(--c-blue)' : '3px solid transparent',
-                  opacity: t.enabled ? 1 : 0.55,
-                }}
-              >
-                <span style={{ fontSize: 14, width: 18, textAlign: 'center' }} title={h ? h.label : 'No check yet'}>{h ? h.icon : '⚪'}</span>
-                <span style={{ fontWeight: 600, fontSize: 13 }}>{t.propertyLabel || t.propertyId}</span>
-                <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{t.propertyId.replace('properties/', '')}</span>
-                {!t.enabled && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '1px 8px' }}>PAUSED</span>}
-                {alertCount > 0 && t.lastRun && (
-                  <span style={{ fontSize: 11, fontWeight: 600, color: SEV_COLOR[t.lastRun.health === 'critical' ? 'critical' : 'medium'], background: t.lastRun.health === 'critical' ? 'var(--c-red-bg, rgba(239,68,68,.12))' : 'var(--c-amber-bg, rgba(245,158,11,.14))', borderRadius: 999, padding: '1px 9px' }}>
-                    {alertCount} alert{alertCount === 1 ? '' : 's'}
-                  </span>
-                )}
-                {t.lastError && <span style={{ fontSize: 11.5, color: 'var(--c-red)' }} title={t.lastError}>check failed</span>}
-                <span style={{ flex: 1 }} />
-                <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{fmtTime(t.lastRunAt)}</span>
-                <button style={smallBtn} disabled={runningId !== null} onClick={(e) => { e.stopPropagation(); void runNow(t.propertyId); }}>
-                  {runningId === t.propertyId ? 'Checking…' : 'Run'}
-                </button>
-                <button style={smallBtn} disabled={busy} title={t.enabled ? 'Pause background checks for this property' : 'Resume background checks'} onClick={(e) => { e.stopPropagation(); togglePaused(t.propertyId); }}>
-                  {t.enabled ? 'Pause' : 'Resume'}
-                </button>
-                <button style={{ ...smallBtn, color: 'var(--c-red)' }} disabled={busy} title="Stop monitoring this property" onClick={(e) => { e.stopPropagation(); removeProperty(t.propertyId); }}>
-                  ✕
-                </button>
-              </div>
-            );
-          })}
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+          {targets.map((t) => (
+            <PropertyCard
+              key={t.propertyId}
+              t={t}
+              selected={t.propertyId === selectedId}
+              runningId={runningId}
+              busy={busy}
+              onSelect={() => setSelectedId(t.propertyId)}
+              onRun={() => void runNow(t.propertyId)}
+              onTogglePause={() => togglePaused(t.propertyId)}
+              onRemove={() => removeProperty(t.propertyId)}
+            />
+          ))}
         </div>
       )}
 
-      {/* ── Slack ── */}
+      {/* ── Selected property's latest run ── */}
+      {selected && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)' }}>
+            Latest check — {selected.propertyLabel || selected.propertyId}
+          </div>
+          {selected.lastRun ? (
+            <RunDetail run={selected.lastRun} />
+          ) : (
+            <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+              No check has run for <b>{selected.propertyLabel || selected.propertyId}</b> yet — click <b>▶ Run</b> on its card (or Run all).
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Slack (secondary settings) ── */}
       <div style={box}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
           <span style={{ fontWeight: 600 }}>
@@ -356,22 +492,11 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
         )}
       </div>
 
-      {note && <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>{note}</div>}
-
-      {/* ── Status line ── */}
+      {/* ── Footer status line ── */}
       <div style={{ display: 'flex', gap: 16, fontSize: 12.5, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
         <span>Background: <b style={{ color: status?.running ? 'var(--c-green)' : 'var(--text-faint)' }}>{status?.running ? 'on' : 'off'}</b></span>
         <span>Last check: {fmtTime(status?.lastRunAt ?? null)}</span>
-        {status?.lastError && <span style={{ color: 'var(--c-red)' }}>Last error: {status.lastError}</span>}
       </div>
-
-      {/* ── Selected property's latest run ── */}
-      {selected?.lastRun && <RunDetail run={selected.lastRun} />}
-      {selected && !selected.lastRun && (
-        <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-          No check has run for <b>{selected.propertyLabel || selected.propertyId}</b> yet — click <b>Run</b> on its row (or Run all now).
-        </div>
-      )}
     </div>
   );
 }
