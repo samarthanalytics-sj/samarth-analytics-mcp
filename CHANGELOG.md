@@ -1,3 +1,9 @@
+## [1.216.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.215.1...v1.216.0) (2026-07-06)
+
+### Features
+
+* **suggest:** recommend Custom Event triggers for AJAX form plugins (CF7/Gravity/Ninja/WPForms/Elementor) ([6ec6413](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6ec6413b37e74d1c845783a3f275663fee5f3698))
+
 ## [1.215.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.215.0...v1.215.1) (2026-07-06)
 
 ### Bug Fixes
