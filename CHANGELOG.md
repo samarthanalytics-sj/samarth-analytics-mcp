@@ -1,3 +1,9 @@
+## [1.219.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.218.1...v1.219.0) (2026-07-06)
+
+### Features
+
+* **verify:** broaden network observation to verify more tag types (Phase A of "verify all types") ([7cabe11](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7cabe119af5c10f46ec5f5984ef68abcac057066))
+
 ## [1.218.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.218.0...v1.218.1) (2026-07-06)
 
 ### Bug Fixes
