@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { ga4VisualsHtml, stripDuplicateCharts, buildTrendInsights } from '../ga4-visuals-html';
+import { ga4VisualsHtml, stripDuplicateCharts, buildTrendInsights, findChannelSpike } from '../ga4-visuals-html';
 import type { Ga4VisualsView } from '../ipc';
 
 let passed = 0;
@@ -151,6 +151,22 @@ test('stripDuplicateCharts removes the baseline Unicode device + channel blocks,
   assert.ok(!out.includes('Device split') && !out.includes('Channel mix'), 'unicode chart blocks removed');
   assert.ok(!out.includes('████') && !out.includes('░░░░'), 'bar glyphs removed');
   assert.ok(out.includes('**Sessions:** 32,822') && out.includes('## 7 · Decision readiness'), 'surrounding content kept');
+});
+
+
+test('findChannelSpike flags a one-bucket channel spike, null when traffic is steady', () => {
+  const spike = findChannelSpike([
+    { channel: 'Direct', points: [{ label: 'Wk Apr 8', value: 300 }, { label: 'Wk Apr 15', value: 22362 }, { label: 'Wk Apr 22', value: 310 }, { label: 'Wk Apr 29', value: 305 }] },
+    { channel: 'Organic Shopping', points: [{ label: 'Wk Apr 8', value: 2000 }, { label: 'Wk Apr 15', value: 2100 }, { label: 'Wk Apr 22', value: 1900 }, { label: 'Wk Apr 29', value: 2050 }] },
+  ]);
+  assert.ok(spike, 'spike detected');
+  assert.equal(spike.channel, 'Direct');
+  assert.equal(spike.peakLabel, 'Wk Apr 15');
+  assert.ok(spike.peakSharePct >= 90, 'one week holds nearly all of the channel');
+  assert.equal(findChannelSpike([
+    { channel: 'A', points: [{ label: 'w1', value: 100 }, { label: 'w2', value: 110 }, { label: 'w3', value: 105 }, { label: 'w4', value: 95 }] },
+    { channel: 'B', points: [{ label: 'w1', value: 200 }, { label: 'w2', value: 210 }, { label: 'w3', value: 190 }, { label: 'w4', value: 205 }] },
+  ]), null, 'steady channels produce no decomposition');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

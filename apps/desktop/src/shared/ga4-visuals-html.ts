@@ -211,6 +211,59 @@ function legendHtml(grouped: ChannelPoints[]): string {
   );
 }
 
+/** Detect a single-period channel spike worth decomposing (the template's "where your traffic actually
+ *  came from" chart): a channel that carries a meaningful share of ALL traffic (>= 10%) where one
+ *  bucket holds most of the channel's total (>= 60%). Deterministic; null when no channel qualifies.
+ *  Exported for tests. */
+export function findChannelSpike(grouped: ChannelPoints[]): { channel: string; peakLabel: string; peakValue: number; restValue: number; channelSharePct: number; peakSharePct: number } | null {
+  const totals = grouped.map((c) => c.points.reduce((s, p) => s + p.value, 0));
+  const grand = totals.reduce((s, t) => s + t, 0);
+  if (grand <= 0) return null;
+  let best: { channel: string; peakLabel: string; peakValue: number; restValue: number; channelSharePct: number; peakSharePct: number } | null = null;
+  grouped.forEach((c, i) => {
+    if (c.points.length < 4 || totals[i] <= 0) return;
+    const peak = c.points.reduce((b, p) => (p.value > b.value ? p : b), c.points[0]);
+    const peakShare = peak.value / totals[i];
+    const channelShare = totals[i] / grand;
+    if (channelShare >= 0.1 && peakShare >= 0.6 && (!best || peakShare * 100 > best.peakSharePct)) {
+      best = {
+        channel: c.channel || '(not set)',
+        peakLabel: peak.label,
+        peakValue: Math.round(peak.value),
+        restValue: Math.round(totals[i] - peak.value),
+        channelSharePct: Math.round(channelShare * 100),
+        peakSharePct: Math.round(peakShare * 100),
+      };
+    }
+  });
+  return best;
+}
+
+/** The spike-decomposition card: the spiking channel's peak bucket vs every other bucket combined. */
+function spikeDecompositionHtml(grouped: ChannelPoints[], gran: Gran): string {
+  const spike = findChannelSpike(grouped);
+  if (!spike) return '';
+  const fmtN = (n: number): string => n.toLocaleString('en-US');
+  const period = gran === 'day' ? 'day' : gran === 'week' ? 'week' : 'month';
+  const maxV = Math.max(spike.peakValue, spike.restValue, 1);
+  const bar = (lbl: string, val: number, color: string, mutedVal = false): string =>
+    `<div style="display:flex;align-items:center;gap:10px;margin:7px 0;font-size:12.5px">` +
+    `<span style="width:170px;flex:0 0 170px;color:${TEXT};font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(lbl)}</span>` +
+    `<span style="flex:1;background:var(--surface-2, #EDEDE6);border-radius:3px;height:16px;overflow:hidden"><span style="display:block;height:100%;width:${Math.max(1, Math.round((val / maxV) * 100))}%;background:${color};border-radius:3px"></span></span>` +
+    `<span style="width:130px;flex:0 0 130px;text-align:right;font-family:${MONO};font-size:11.5px;color:${mutedVal ? MUTED : '#A63527'};white-space:nowrap">${fmtN(val)} · ${mutedVal ? 100 - spike.peakSharePct : spike.peakSharePct}%</span>` +
+    `</div>`;
+  return (
+    `<div style="border:1px solid ${BORDER};border-radius:4px;padding:16px 18px 12px;background:${SURFACE};margin:0 0 10px">` +
+    `<div style="font-size:15px;font-weight:600;color:${TEXT};margin:0 0 3px">Where the ${esc(spike.channel)} traffic actually came from</div>` +
+    `<div style="font-size:13px;color:${MUTED};margin:0 0 12px;max-width:70ch">The channel's total for the window, split by its busiest ${period} against every other ${period} combined.</div>` +
+    bar(`Busiest ${period} (${spike.peakLabel})`, spike.peakValue, '#A63527') +
+    bar(`All other ${period}s`, spike.restValue, '#26344E', true) +
+    `<div style="margin:12px 0 0;padding:11px 14px;border-left:3px solid #A63527;background:var(--c-red-bg, #FBF1EF);font-size:13px;color:${TEXT};border-radius:0 3px 3px 0;line-height:1.5"><b style="font-weight:600">One ${period} is ${spike.peakSharePct}% of ${esc(spike.channel)}</b> (${spike.channelSharePct}% of all sessions in the window). That is an event, not a channel baseline - identify that ${period}'s source before quoting ${esc(spike.channel)} numbers or the total session count.</div>` +
+    `<div style="font-family:${MONO};font-size:11px;color:${FAINT};line-height:1.55;margin-top:10px">${esc(spike.peakLabel)}: ${fmtN(spike.peakValue)} sessions · all other ${period}s combined: ${fmtN(spike.restValue)}. Computed from the same series as the chart above.</div>` +
+    `</div>`
+  );
+}
+
 function barList(rows: Ga4VisualsView['devices']): string {
   const total = rows.reduce((s, r) => s + r.sessions, 0) || 1;
   const top = [...rows].sort((a, b) => b.sessions - a.sessions).slice(0, 8);
@@ -389,7 +442,10 @@ export function ga4VisualsHtml(v: Ga4VisualsView): string {
       `</div>` +
       greyClose
     : '';
-  const chartsBlock = trend + caveat + byChannel;
+  // Spike decomposition (only when a channel genuinely spiked in one bucket) — greyed with the other
+  // channel-derived charts when attribution is not trusted.
+  const spikeCard = spikeDecompositionHtml(channelGrouped, gran);
+  const chartsBlock = trend + caveat + byChannel + (spikeCard ? greyOpen + spikeCard + greyClose : '');
   // Charts on the left, the deep-insights panel on the right (matching the on-screen layout). When
   // there is nothing to say, the charts take the full width instead of leaving an empty column.
   const insights = insightsPanelHtml(v);
