@@ -1,16 +1,19 @@
 // Interactive on-screen GA4 charts: the daily/weekly/monthly trend line + the per-channel multi-line
 // chart, rendered as React SVG with a custom hover tooltip (a styled card that follows the cursor and
 // shows each series' value for the pointed date/period). The PDF export keeps the static SVG string
-// (shared/ga4-visuals-html.ts) — both share the grouping logic so they can't diverge.
+// (shared/ga4-visuals-html.ts) — both share the grouping logic AND the lab-report template language
+// (mono eyebrows, 4px cards, muted palette, callout-voice insights) so the two surfaces read the same.
 
 import { useRef, useState, type CSSProperties } from 'react';
 import type { Ga4VisualsView } from '../../shared/ipc';
-import { granularityFor, granLabel, groupSeries, buildTrendInsights, type GPoint, type TrendInsight } from '../../shared/ga4-visuals-html';
+import { granularityFor, granLabel, groupSeries, buildTrendInsights, findChannelSpike, type Gran, type GPoint, type TrendInsight } from '../../shared/ga4-visuals-html';
 
-const PALETTE = ['#3b82f6', '#06b6d4', '#22c55e', '#f59e0b', '#a855f7', '#ef4444', '#14b8a6', '#ec4899'];
-const LINE = '#3b82f6';
-const PEAK = '#ef4444';
-const AXIS = '#94a3b8';
+// Lab-report palette — identical to shared/ga4-visuals-html.ts so on-screen and PDF colours never diverge.
+const PALETTE = ['#4F7BD1', '#1FA5B8', '#2E9E5E', '#D98A38', '#8E63C4', '#A63527', '#9A6206', '#6A6F78'];
+const LINE = '#4F7BD1';
+const PEAK = '#A63527';
+const AXIS = '#8A8F98';
+const MONO = `ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace`;
 const fmt = (n: number): string => Math.round(n).toLocaleString('en-US');
 
 interface Series {
@@ -51,10 +54,10 @@ function InteractiveChart({ series, area, peakLabel }: { series: Series[]; area?
     left: `${(x(hover ?? 0) / W) * 100}%`,
     transform: hover !== null && x(hover) > W / 2 ? 'translateX(-100%)' : 'none',
     marginLeft: hover !== null && x(hover) > W / 2 ? -10 : 10,
-    background: 'var(--surface, #fff)',
-    border: '1px solid var(--border, #e3e6ea)',
-    borderRadius: 8,
-    boxShadow: '0 6px 18px rgba(0,0,0,.16)',
+    background: 'var(--surface, #FFFFFF)',
+    border: '1px solid var(--border, #E3E3DC)',
+    borderRadius: 4,
+    boxShadow: '0 4px 14px rgba(0,0,0,.12)',
     padding: '7px 10px',
     fontSize: 12,
     pointerEvents: 'none',
@@ -72,37 +75,37 @@ function InteractiveChart({ series, area, peakLabel }: { series: Series[]; area?
           </linearGradient>
         </defs>
         <line x1={l} y1={t + ih} x2={W - r} y2={t + ih} stroke="rgba(148,163,184,.35)" />
-        <text x={l - 7} y={t + 4} textAnchor="end" fontSize="10" fill={AXIS}>
+        <text x={l - 7} y={t + 4} textAnchor="end" fontSize="10" fontFamily={MONO} fill={AXIS}>
           {fmt(maxV)}
         </text>
         {area && series[0] && <path d={`M ${x(0)} ${t + ih} L ${series[0].points.map((p, i) => `${x(i)} ${y(p.value)}`).join(' L ')} L ${x(n - 1)} ${t + ih} Z`} fill="url(#ga4ReactArea)" />}
         {series.map((s, si) => (
           <polyline key={si} points={s.points.map((p, i) => `${x(i)},${y(p.value)}`).join(' ')} fill="none" stroke={s.color} strokeWidth={area ? 2 : 1.8} strokeLinejoin="round" strokeLinecap="round" />
         ))}
-        {series.map((s, si) => s.points.map((p, i) => <circle key={`${si}-${i}`} cx={x(i)} cy={y(p.value)} r={i === peakIdx && si === 0 ? 3.6 : 2.3} fill={i === peakIdx && si === 0 ? PEAK : s.color} stroke="var(--surface,#fff)" strokeWidth={1} />))}
+        {series.map((s, si) => s.points.map((p, i) => <circle key={`${si}-${i}`} cx={x(i)} cy={y(p.value)} r={i === peakIdx && si === 0 ? 3.6 : 2.3} fill={i === peakIdx && si === 0 ? PEAK : s.color} stroke="var(--surface,#FFFFFF)" strokeWidth={1} />))}
         {peakIdx >= 0 && series[0]?.points[peakIdx] && (
-          <text x={x(peakIdx)} y={y(series[0].points[peakIdx].value) - 8} textAnchor="middle" fontSize="10" fontWeight="700" fill={PEAK}>
+          <text x={x(peakIdx)} y={y(series[0].points[peakIdx].value) - 8} textAnchor="middle" fontSize="10" fontWeight="700" fontFamily={MONO} fill={PEAK}>
             {peakLabel}
           </text>
         )}
         {hover !== null && <line x1={x(hover)} y1={t} x2={x(hover)} y2={t + ih} stroke="rgba(148,163,184,.5)" strokeDasharray="3 3" />}
-        {hover !== null && series.map((s, si) => (s.points[hover] ? <circle key={`h-${si}`} cx={x(hover)} cy={y(s.points[hover].value)} r={3.5} fill={s.color} stroke="var(--surface,#fff)" strokeWidth={1.5} /> : null))}
-        <text x={x(0)} y={H - 9} textAnchor="start" fontSize="10" fill={AXIS}>
+        {hover !== null && series.map((s, si) => (s.points[hover] ? <circle key={`h-${si}`} cx={x(hover)} cy={y(s.points[hover].value)} r={3.5} fill={s.color} stroke="var(--surface,#FFFFFF)" strokeWidth={1.5} /> : null))}
+        <text x={x(0)} y={H - 9} textAnchor="start" fontSize="10" fontFamily={MONO} fill={AXIS}>
           {labels[0]?.label}
         </text>
-        <text x={x(n - 1)} y={H - 9} textAnchor="end" fontSize="10" fill={AXIS}>
+        <text x={x(n - 1)} y={H - 9} textAnchor="end" fontSize="10" fontFamily={MONO} fill={AXIS}>
           {labels[n - 1]?.label}
         </text>
       </svg>
       {hover !== null && labels[hover] && (
         <div style={tip}>
-          <div style={{ fontWeight: 700, color: 'var(--text)', marginBottom: 3 }}>{labels[hover].label}</div>
+          <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, color: 'var(--text)', marginBottom: 3 }}>{labels[hover].label}</div>
           {series.map((s, si) =>
             s.points[hover] ? (
               <div key={si} style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)' }}>
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color, display: 'inline-block', flex: '0 0 auto' }} />
                 {series.length > 1 && <span>{s.name}</span>}
-                <span style={{ marginLeft: 'auto', paddingLeft: 12, fontWeight: 600, color: 'var(--text)' }}>{fmt(s.points[hover].value)}</span>
+                <span style={{ marginLeft: 'auto', paddingLeft: 12, fontFamily: MONO, fontWeight: 600, color: 'var(--text)' }}>{fmt(s.points[hover].value)}</span>
               </div>
             ) : null,
           )}
@@ -112,27 +115,33 @@ function InteractiveChart({ series, area, peakLabel }: { series: Series[]; area?
   );
 }
 
-const eyebrow: CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase', color: '#2563eb' };
-const lbl: CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4 };
+// Template primitives — the same voice ga4-visuals-html.ts / ga4-sections-html.ts use.
+const eyebrow: CSSProperties = { fontFamily: MONO, fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--text-faint, #8A8F98)' };
+const lbl: CSSProperties = { fontFamily: MONO, fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--text-faint, #8A8F98)', marginBottom: 6 };
+const card: CSSProperties = { border: '1px solid var(--border, #E3E3DC)', borderRadius: 4, padding: '16px 18px 12px', background: 'var(--surface, #FFFFFF)', boxSizing: 'border-box' };
+const vizTitle: CSSProperties = { fontSize: 15, fontWeight: 600, color: 'var(--text)', margin: '0 0 3px' };
+const vizSub: CSSProperties = { fontSize: 13, color: 'var(--text-muted, #5B6069)', margin: '0 0 12px', maxWidth: '70ch' };
+const vcap: CSSProperties = { fontFamily: MONO, fontSize: 11, color: 'var(--text-faint, #8A8F98)', lineHeight: 1.55, marginTop: 4 };
 
 const INSIGHT_TONE: Record<TrendInsight['tone'], { bar: string; bg: string }> = {
-  good: { bar: 'var(--c-green, #16a34a)', bg: 'var(--c-green-bg, #f0fdf4)' },
-  watch: { bar: 'var(--c-amber, #d97706)', bg: 'var(--c-amber-bg, #fffbeb)' },
-  info: { bar: 'var(--c-blue, #2563eb)', bg: 'var(--c-blue-bg, #eff6ff)' },
+  good: { bar: 'var(--c-green, #1E7A48)', bg: 'var(--c-green-bg, #F4FAF6)' },
+  watch: { bar: 'var(--c-amber, #9A6206)', bg: 'var(--c-amber-bg, #FCF8EF)' },
+  info: { bar: 'var(--c-blue, #26344E)', bg: 'var(--c-blue-bg, #F1F3F6)' },
 };
 
 // The deep-insights panel that sits beside the charts: peak, what drove it, concentration, device skew.
+// Each insight is a template callout — left accent bar, mono eyebrow title, square-ish corners.
 function InsightsPanel({ items }: { items: TrendInsight[] }): JSX.Element | null {
   if (!items.length) return null;
   return (
-    <div style={{ border: '1px solid var(--border, #e3e6ea)', borderRadius: 10, padding: '12px 14px', background: 'var(--surface, #fff)', boxSizing: 'border-box' }}>
+    <div style={{ ...card, padding: '14px 16px' }}>
       <div style={lbl}>What the data shows</div>
       {items.map((it, i) => {
         const tone = INSIGHT_TONE[it.tone];
         return (
-          <div key={i} style={{ borderLeft: `3px solid ${tone.bar}`, background: tone.bg, borderRadius: '0 6px 6px 0', padding: '7px 10px', margin: '0 0 8px' }}>
-            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: tone.bar, marginBottom: 2 }}>{it.title}</div>
-            <div style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.45 }}>{it.body}</div>
+          <div key={i} style={{ borderLeft: `3px solid ${tone.bar}`, background: tone.bg, borderRadius: '0 3px 3px 0', padding: '9px 12px', margin: '0 0 8px' }}>
+            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '.07em', textTransform: 'uppercase', color: tone.bar, marginBottom: 2 }}>{it.title}</div>
+            <div style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.5 }}>{it.body}</div>
           </div>
         );
       })}
@@ -151,14 +160,49 @@ function Bars({ rows }: { rows: Array<{ name: string; sessions: number }> }): JS
         return (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '5px 0', fontSize: 12 }}>
             <span style={{ width: 120, flex: '0 0 120px', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name || '(not set)'}</span>
-            <span style={{ flex: 1, background: 'rgba(148,163,184,.18)', borderRadius: 5, height: 13, overflow: 'hidden' }}>
-              <span style={{ display: 'block', height: '100%', width: `${pct}%`, background: PALETTE[i % PALETTE.length], borderRadius: 5 }} />
+            <span style={{ flex: 1, background: 'var(--surface-2, #EDEDE6)', borderRadius: 3, height: 13, overflow: 'hidden' }}>
+              <span style={{ display: 'block', height: '100%', width: `${pct}%`, background: PALETTE[i % PALETTE.length], borderRadius: 3 }} />
             </span>
-            <span style={{ width: 36, flex: '0 0 36px', textAlign: 'right', color: 'var(--text-muted)' }}>{pct}%</span>
+            <span style={{ width: 40, flex: '0 0 40px', textAlign: 'right', fontFamily: MONO, fontSize: 11, color: 'var(--text-muted)' }}>{pct}%</span>
           </div>
         );
       })}
     </>
+  );
+}
+
+// The spike-decomposition evidence card the PDF already renders (spikeDecompositionHtml): the spiking
+// channel's busiest bucket vs every other bucket combined, with the red "event, not a baseline" read.
+// Driven by the SAME findChannelSpike detector as the concentration finding, so they can never disagree.
+function SpikeCard({ grouped, gran }: { grouped: Array<{ channel: string; points: GPoint[] }>; gran: Gran }): JSX.Element | null {
+  const spike = findChannelSpike(grouped);
+  if (!spike) return null;
+  const period = gran === 'day' ? 'day' : gran === 'week' ? 'week' : 'month';
+  const maxV = Math.max(spike.peakValue, spike.restValue, 1);
+  const bar = (label: string, val: number, color: string, pct: number, mutedVal: boolean): JSX.Element => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '7px 0', fontSize: 12.5 }}>
+      <span style={{ width: 170, flex: '0 0 170px', color: 'var(--text)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      <span style={{ flex: 1, background: 'var(--surface-2, #EDEDE6)', borderRadius: 3, height: 16, overflow: 'hidden' }}>
+        <span style={{ display: 'block', height: '100%', width: `${Math.max(1, Math.round((val / maxV) * 100))}%`, background: color, borderRadius: 3 }} />
+      </span>
+      <span style={{ width: 130, flex: '0 0 130px', textAlign: 'right', fontFamily: MONO, fontSize: 11.5, color: mutedVal ? 'var(--text-muted)' : PEAK, whiteSpace: 'nowrap' }}>
+        {fmt(val)} · {pct}%
+      </span>
+    </div>
+  );
+  return (
+    <div style={{ ...card, marginTop: 10 }}>
+      <div style={vizTitle}>Where the {spike.channel} traffic actually came from</div>
+      <div style={vizSub}>The channel's total for the window, split by its busiest {period} against every other {period} combined.</div>
+      {bar(`Busiest ${period} (${spike.peakLabel})`, spike.peakValue, PEAK, spike.peakSharePct, false)}
+      {bar(`All other ${period}s`, spike.restValue, '#26344E', 100 - spike.peakSharePct, true)}
+      <div style={{ margin: '12px 0 0', padding: '11px 14px', borderLeft: `3px solid ${PEAK}`, background: 'var(--c-red-bg, #FBF1EF)', fontSize: 13, color: 'var(--text)', borderRadius: '0 3px 3px 0', lineHeight: 1.5 }}>
+        <b style={{ fontWeight: 600 }}>One {period} is {spike.peakSharePct}% of {spike.channel}</b> ({spike.channelSharePct}% of all sessions in the window). That is an event, not a channel baseline - identify that {period}'s source before quoting {spike.channel} numbers or the total session count.
+      </div>
+      <div style={{ ...vcap, marginTop: 10 }}>
+        {spike.peakLabel}: {fmt(spike.peakValue)} sessions · all other {period}s combined: {fmt(spike.restValue)}. Computed from the same series as the chart above.
+      </div>
+    </div>
   );
 }
 
@@ -168,49 +212,55 @@ export function Ga4Charts({ visuals: v }: { visuals: Ga4VisualsView }): JSX.Elem
   const anchor = v.daily?.[0]?.date ?? '';
   const trendPoints = groupSeries(v.daily ?? [], gran, anchor);
   const peakLabel = gran === 'day' ? 'peak' : 'busiest';
+  const channelGrouped = (v.channelDaily ?? []).map((c) => ({ channel: c.channel || '(not set)', points: groupSeries(c.series, gran, anchor) }));
   // Filter first, THEN assign palette colours by filtered index — matches the PDF (multiLineChartSvg /
   // legendHtml colour after the >=2-points filter) so the on-screen and downloaded colours never diverge.
-  const channelSeries: Series[] = (v.channelDaily ?? [])
-    .map((c) => ({ name: c.channel || '(not set)', points: groupSeries(c.series, gran, anchor) }))
+  const channelSeries: Series[] = channelGrouped
     .filter((s) => s.points.length >= 2)
-    .map((s, i) => ({ ...s, color: PALETTE[i % PALETTE.length] }));
+    .map((s, i) => ({ name: s.channel, points: s.points, color: PALETTE[i % PALETTE.length] }));
   const untrusted = v.channelTrusted === false;
-  const pillColor = /spike|volatile/i.test(v.trendLabel) ? '#f59e0b' : /upward/i.test(v.trendLabel) ? '#22c55e' : /downward/i.test(v.trendLabel) ? '#ef4444' : '#64748b';
-  const cardStyle: CSSProperties = { border: '1px solid var(--border, #e3e6ea)', borderRadius: 10, padding: '12px 14px', background: 'var(--surface, #fff)', flex: 1, minWidth: 0 };
+  // Trend-pattern chip in the lab voice: mono uppercase, square corners, muted status colours.
+  const pillColor = /spike|volatile/i.test(v.trendLabel) ? '#9A6206' : /upward/i.test(v.trendLabel) ? '#1E7A48' : /downward/i.test(v.trendLabel) ? '#A63527' : '#6A6F78';
   const insights = buildTrendInsights(v);
 
   return (
     <div style={{ color: 'var(--text)', lineHeight: 1.5 }}>
-      <div style={eyebrow}>Traffic trend</div>
-      <h2 style={{ fontSize: 18, margin: '2px 0', color: 'var(--text)' }}>Traffic trend &amp; visualisations</h2>
+      <div style={eyebrow}>The evidence</div>
+      <h2 style={{ fontSize: 21, fontWeight: 600, letterSpacing: '-.01em', margin: '2px 0 10px', color: 'var(--text)' }}>Traffic trend &amp; visualisations</h2>
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 380px', minWidth: 300 }}>
           {(v.daily?.length ?? 0) >= 5 && (
-            <>
-              <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text)' }}>
-                <span style={{ display: 'inline-block', fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, color: '#fff', background: pillColor, marginRight: 8 }}>{v.trendLabel}</span>
-                {v.trendSummary} <span style={{ color: 'var(--text-faint)' }}>({granLabel(gran)}; hover a point for its value)</span>
+            <div style={card}>
+              <div style={vizTitle}>Sessions over the window ({granLabel(gran)})</div>
+              <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.5, margin: '0 0 4px' }}>
+                <span style={{ display: 'inline-block', fontFamily: MONO, fontSize: 10.5, letterSpacing: '.06em', textTransform: 'uppercase', padding: '3px 9px', borderRadius: 3, color: '#fff', background: pillColor, marginRight: 8 }}>{v.trendLabel}</span>
+                {v.trendSummary}
               </div>
               <InteractiveChart series={[{ name: 'Sessions', color: LINE, points: trendPoints }]} area peakLabel={peakLabel} />
-            </>
+              <div style={vcap}>Hover a point for its exact value. Peak is marked in red.</div>
+            </div>
           )}
           {untrusted && (
-            <div style={{ fontSize: 11.5, color: 'var(--c-amber, #b45309)', background: 'var(--c-amber-bg, #fef3c7)', border: '1px solid var(--c-amber-border, #fde68a)', borderRadius: 6, padding: '6px 10px', margin: '8px 0' }}>
+            <div style={{ fontSize: 11.5, color: 'var(--c-amber, #9A6206)', background: 'var(--c-amber-bg, #FCF8EF)', border: '1px solid var(--c-amber-border, #EAD9AE)', borderRadius: 4, padding: '6px 10px', margin: '8px 0' }}>
               ⚠ {(v.channelCaveat ?? 'The channel split is not safe to quote yet (see the Data Trust Matrix).').replace(/—/g, '-')} The channel charts below are greyed for that reason.
             </div>
           )}
           {channelSeries.length >= 2 && (
             <div style={{ opacity: untrusted ? 0.5 : 1 }}>
-              <div style={lbl}>Sessions by channel ({granLabel(gran)})</div>
-              <InteractiveChart series={channelSeries} />
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 16px', marginTop: 2 }}>
-                {channelSeries.map((s, i) => (
-                  <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)' }}>
-                    <span style={{ width: 11, height: 3, borderRadius: 2, background: s.color, display: 'inline-block' }} />
-                    {s.name}
-                  </span>
-                ))}
+              <div style={{ ...card, marginTop: 10 }}>
+                <div style={vizTitle}>Sessions by channel ({granLabel(gran)})</div>
+                <div style={vizSub}>One line per channel on a shared axis - a spike that belongs to a single channel shows up here.</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px', margin: '0 0 6px' }}>
+                  {channelSeries.map((s, i) => (
+                    <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted)' }}>
+                      <span style={{ width: 16, height: 3, borderRadius: 2, background: s.color, display: 'inline-block' }} />
+                      {s.name}
+                    </span>
+                  ))}
+                </div>
+                <InteractiveChart series={channelSeries} />
               </div>
+              <SpikeCard grouped={channelGrouped} gran={gran} />
             </div>
           )}
         </div>
@@ -221,11 +271,11 @@ export function Ga4Charts({ visuals: v }: { visuals: Ga4VisualsView }): JSX.Elem
         )}
       </div>
       <div style={{ display: 'flex', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
-        <div style={cardStyle}>
+        <div style={{ ...card, flex: 1, minWidth: 0 }}>
           <div style={lbl}>Device split</div>
           <Bars rows={v.devices ?? []} />
         </div>
-        <div style={{ ...cardStyle, opacity: untrusted ? 0.5 : 1 }}>
+        <div style={{ ...card, flex: 1, minWidth: 0, opacity: untrusted ? 0.5 : 1 }}>
           <div style={lbl}>Channel mix (sessions)</div>
           <Bars rows={v.channels ?? []} />
         </div>
