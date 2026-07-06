@@ -1,3 +1,13 @@
+## [1.203.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.202.0...v1.203.0) (2026-07-06)
+
+### Features
+
+* **desktop:** verify firing for existing container tags in the audit panel ([22ed838](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/22ed838e6d49e0930cf2423c8ed94f6f392cedab))
+
+### Bug Fixes
+
+* **desktop:** correct container verify-tag mapping (adversarial review of [#336](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/336)) ([a8d895c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a8d895c9f3db8dc380431cd94f6b2927228f5cf1))
+
 ## [1.202.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.201.1...v1.202.0) (2026-07-06)
 
 ### Features
