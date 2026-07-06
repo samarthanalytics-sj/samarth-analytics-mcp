@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import type { AccountView, Ga4MonitorStatus, Ga4MonitorRun, Ga4MonitorTargetStatus, Ga4PropertyListItem } from '../../shared/ipc';
 
-// GA4 Monitoring tab — MULTI-property dashboard. Layout: page header with a fleet-health rollup,
-// one toolbar (add property + shared schedule + run-all), a responsive grid of property cards
-// (health accent, alert chip, per-card actions), the selected property's full run detail, then the
-// Slack settings as a secondary card. The heavy lifting is in main (Ga4MonitoringService sweeps the
-// list sequentially + the pure monitorGa4 engine); this is a thin control panel over
-// status()/configure()/runNow().
+// GA4 Monitoring tab — SIMPLE, tab-per-property layout. Reading order:
+//   1. header + shared schedule toolbar (add property, interval, window, background, run all)
+//   2. one TAB per monitored property (health dot + name + alert badge)
+//   3. the open property's panel: its controls (run/pause/remove), its Slack channel
+//      (name, edit link, test, remove), and its latest run (alerts + checks)
+//   4. the account's DEFAULT Slack channel card + footer
+// The heavy lifting is in main (Ga4MonitoringService + monitorGa4); this is a thin control panel.
 
 const SEV_COLOR: Record<string, string> = {
   critical: 'var(--c-red)', high: 'var(--c-red)', medium: 'var(--c-amber, #b8860b)', low: 'var(--c-amber, #b8860b)', info: 'var(--text-muted)',
@@ -16,7 +17,6 @@ const HEALTH: Record<string, { color: string; bg: string; label: string; icon: s
   warning: { color: 'var(--c-amber, #b8860b)', bg: 'var(--c-amber-bg, rgba(245,158,11,.14))', label: 'Warning', icon: '🟠' },
   healthy: { color: 'var(--c-green)', bg: 'var(--c-green-bg, rgba(34,197,94,.12))', label: 'Healthy', icon: '🟢' },
 };
-// Per-status pill for the checks table (a coloured chip reads better than an emoji list).
 const CHECK_PILL: Record<string, { label: string; color: string; bg: string }> = {
   pass: { label: 'Pass', color: 'var(--c-green)', bg: 'var(--c-green-bg, rgba(34,197,94,.12))' },
   warn: { label: 'Warning', color: 'var(--c-amber, #b8860b)', bg: 'var(--c-amber-bg, rgba(245,158,11,.14))' },
@@ -27,7 +27,7 @@ const CHECK_PILL: Record<string, { label: string; color: string; bg: string }> =
 const box: React.CSSProperties = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
 const label: React.CSSProperties = { fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 };
 const btn: React.CSSProperties = { background: 'var(--surface-3)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '7px 14px', cursor: 'pointer', fontSize: 13 };
-const ghostBtn: React.CSSProperties = { background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 7, padding: '4px 11px', cursor: 'pointer', fontSize: 12, fontWeight: 600 };
+const ghostBtn: React.CSSProperties = { background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 7, padding: '5px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600 };
 const primaryBtn: React.CSSProperties = { ...btn, background: 'var(--c-blue)', color: '#fff', borderColor: 'transparent', fontWeight: 600 };
 const input: React.CSSProperties = { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 9px', fontSize: 13, fontFamily: 'inherit' };
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
@@ -36,9 +36,9 @@ function fmtTime(ms: number | null): string {
   if (!ms) return 'never';
   try { return new Date(ms).toLocaleString(); } catch { return '—'; }
 }
-/** Compact relative time for the cards ("just now", "12 min ago", "3 hr ago", then a date). */
+/** Compact relative time ("just now", "12 min ago", "3 hr ago", then a date). */
 function fmtAgo(ms: number | null): string {
-  if (!ms) return 'not checked yet';
+  if (!ms) return 'never';
   const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
   if (s < 60) return 'just now';
   const m = Math.floor(s / 60);
@@ -48,32 +48,11 @@ function fmtAgo(ms: number | null): string {
   try { return new Date(ms).toLocaleDateString(); } catch { return '—'; }
 }
 
-/** One property's full run detail: header strip (health + summary + counts), alerts, checks table. */
+/** One property's latest-run body: alerts then the checks table. */
 function RunDetail({ run }: { run: Ga4MonitorRun }): JSX.Element {
-  const health = HEALTH[run.health] ?? HEALTH.healthy;
   const newIds = new Set(run.newAlertIds);
-  const counts = { pass: 0, warn: 0, fail: 0, skip: 0 } as Record<string, number>;
-  for (const c of run.checks) counts[c.status] = (counts[c.status] ?? 0) + 1;
   return (
-    <div style={{ ...box, padding: 0, overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontWeight: 700, color: health.color, fontSize: 15 }}>
-          <span style={{ fontSize: 15 }}>{health.icon}</span>{health.label}
-        </span>
-        <span style={{ color: 'var(--text-dim)', fontSize: 13 }}>{run.summary}</span>
-        <span style={{ flex: 1 }} />
-        <span style={{ display: 'inline-flex', gap: 6 }}>
-          {(['fail', 'warn', 'pass', 'skip'] as const).map((k) =>
-            counts[k] > 0 ? (
-              <span key={k} style={{ fontSize: 11, fontWeight: 600, color: CHECK_PILL[k].color, background: CHECK_PILL[k].bg, borderRadius: 999, padding: '2px 9px' }}>
-                {counts[k]} {CHECK_PILL[k].label.toLowerCase()}
-              </span>
-            ) : null
-          )}
-        </span>
-        <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{run.propertyLabel} · {fmtTime(run.at)}</span>
-      </div>
-
+    <>
       {run.alerts.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 16px 4px' }}>
           {run.alerts.map((a) => (
@@ -89,7 +68,6 @@ function RunDetail({ run }: { run: Ga4MonitorRun }): JSX.Element {
           ))}
         </div>
       )}
-
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, margin: '8px 0 0' }}>
         <thead>
           <tr>
@@ -113,23 +91,21 @@ function RunDetail({ run }: { run: Ga4MonitorRun }): JSX.Element {
           })}
         </tbody>
       </table>
-    </div>
+    </>
   );
 }
 
-/** One property card in the fleet grid: health accent + label, alert chip, meta, per-card actions,
- *  and this property's own inline Slack-channel editor (link + channel name) — the channel is
- *  configured right on the property, not in a separate settings list. */
-function PropertyCard({ t, selected, runningId, busy, onSelect, onRun, onTogglePause, onRemove, onSaveChannel, onTestChannel, onRemoveChannel }: {
+/** The open property's full panel: header (name, health, timings, controls), its Slack channel
+ *  section (channel name + edit link + test + remove), then its latest run. */
+function PropertyPanel({ t, defaultChannel, runningId, busy, onRun, onTogglePause, onRemove, onSaveChannel, onTestChannel, onRemoveChannel }: {
   t: Ga4MonitorTargetStatus;
-  selected: boolean;
+  /** Whether the account default channel exists (wording for the fallback state). */
+  defaultChannel: boolean;
   runningId: string | null;
   busy: boolean;
-  onSelect: () => void;
   onRun: () => void;
   onTogglePause: () => void;
   onRemove: () => void;
-  /** Save this property's channel (url may be '' for a label-only update). Resolves true on success. */
   onSaveChannel: (url: string, label: string) => Promise<boolean>;
   onTestChannel: () => void;
   onRemoveChannel: () => void;
@@ -138,150 +114,128 @@ function PropertyCard({ t, selected, runningId, busy, onSelect, onRun, onToggleP
   const [chanUrl, setChanUrl] = useState('');
   const [chanLbl, setChanLbl] = useState('');
   const h = t.lastRun ? HEALTH[t.lastRun.health] : null;
-  const accent = !t.enabled ? 'var(--text-faint)' : h ? h.color : 'var(--border)';
-  const alertCount = t.lastRun?.alerts.length ?? 0;
-  const counts = { pass: 0, warn: 0, fail: 0, skip: 0 } as Record<string, number>;
-  for (const c of t.lastRun?.checks ?? []) counts[c.status] = (counts[c.status] ?? 0) + 1;
   const isRunning = runningId === t.propertyId || runningId === '*';
-  return (
-    <div
-      onClick={onSelect}
-      role="button"
-      aria-pressed={selected}
-      style={{
-        position: 'relative',
-        background: 'var(--surface-2)',
-        border: `1px solid ${selected ? 'var(--c-blue)' : 'var(--border)'}`,
-        boxShadow: selected ? '0 0 0 1px var(--c-blue)' : 'none',
-        borderRadius: 12,
-        padding: '14px 14px 10px',
-        cursor: 'pointer',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-        opacity: t.enabled ? 1 : 0.6,
-        overflow: 'hidden',
-      }}
-    >
-      {/* Health accent bar across the top of the card. */}
-      <span style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: accent }} />
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {h ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: h.color, background: h.bg, borderRadius: 999, padding: '2px 10px' }}>
-            {h.icon} {h.label}
-          </span>
-        ) : (
-          <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 10px' }}>
-            ⚪ No check yet
-          </span>
-        )}
-        {!t.enabled && (
-          <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 8px' }}>PAUSED</span>
-        )}
+  return (
+    <div style={{ ...box, padding: 0, overflow: 'hidden' }}>
+      {/* ── Property header: identity + health + timings + controls ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '14px 16px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 700, fontSize: 16 }}>{t.propertyLabel || t.propertyId}</span>
+            {h ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: h.color, background: h.bg, borderRadius: 999, padding: '2px 10px' }}>
+                {h.icon} {h.label}
+              </span>
+            ) : (
+              <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 10px' }}>⚪ No check yet</span>
+            )}
+            {!t.enabled && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 8px' }}>PAUSED</span>}
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint)', marginTop: 3, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <span>{t.propertyId.replace('properties/', '')}</span>
+            <span title={t.lastRunAt ? `Last check: ${fmtTime(t.lastRunAt)}` : undefined}>checked: {fmtAgo(t.lastRunAt)}</span>
+            <span title={t.lastSlackAt ? `Last Slack alert: ${fmtTime(t.lastSlackAt)}` : 'No alert has been posted for this property yet'}>📣 last alert: {t.lastSlackAt ? fmtAgo(t.lastSlackAt) : 'none yet'}</span>
+            {t.lastError && <span style={{ color: 'var(--c-red)', fontFamily: 'inherit' }} title={t.lastError}>last check failed</span>}
+          </div>
+        </div>
         <span style={{ flex: 1 }} />
-        {alertCount > 0 && (
-          <span style={{ fontSize: 11, fontWeight: 700, color: h?.color ?? 'var(--text)', background: h?.bg ?? 'var(--surface-3)', borderRadius: 999, padding: '2px 9px' }}>
-            {alertCount} alert{alertCount === 1 ? '' : 's'}
-          </span>
-        )}
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button style={{ ...ghostBtn, color: 'var(--c-blue)' }} disabled={runningId !== null} onClick={onRun}>{isRunning ? 'Checking…' : '▶ Run check'}</button>
+          <button style={ghostBtn} disabled={busy} title={t.enabled ? 'Pause background checks for this property' : 'Resume background checks'} onClick={onTogglePause}>{t.enabled ? '⏸ Pause' : '⏵ Resume'}</button>
+          <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} title="Stop monitoring this property" onClick={onRemove}>Remove</button>
+        </div>
       </div>
 
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.propertyLabel || t.propertyId}>
-          {t.propertyLabel || t.propertyId}
-        </div>
-        <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint)', marginTop: 2, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span>{t.propertyId.replace('properties/', '')}</span>
-          {t.hasWebhook && (
-            <span title="This property alerts its own Slack channel" style={{ fontFamily: 'inherit', color: 'var(--c-green)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              → {t.slackLabel || 'own Slack channel'}
+      {/* ── This property's Slack channel ── */}
+      <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>Slack channel</span>
+          {t.hasWebhook ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, background: 'var(--c-green-bg, rgba(34,197,94,.12))', color: 'var(--c-green)', borderRadius: 999, padding: '3px 12px', fontWeight: 600 }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--c-green)', display: 'inline-block' }} />
+              {t.slackLabel || 'own channel connected'}
+            </span>
+          ) : (
+            <span style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>
+              {defaultChannel ? 'no own channel — alerts go to the default channel' : 'no channel — connect one (or set a default channel below)'}
             </span>
           )}
+          <span style={{ flex: 1 }} />
+          {t.hasWebhook && <button style={ghostBtn} disabled={busy} onClick={onTestChannel}>Send test</button>}
+          <button
+            style={{ ...ghostBtn, color: 'var(--c-blue)' }}
+            disabled={busy}
+            onClick={() => { setEditingChan((v) => !v); setChanUrl(''); setChanLbl(t.slackLabel ?? ''); }}
+          >
+            {editingChan ? 'Close' : t.hasWebhook ? '✎ Edit channel' : '＋ Connect channel'}
+          </button>
         </div>
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-        {t.lastRun ? (
-          <span>
-            <b style={{ color: 'var(--c-green)' }}>{counts.pass}</b> pass
-            {counts.warn > 0 && <> · <b style={{ color: 'var(--c-amber, #b8860b)' }}>{counts.warn}</b> warn</>}
-            {counts.fail > 0 && <> · <b style={{ color: 'var(--c-red)' }}>{counts.fail}</b> issue{counts.fail === 1 ? '' : 's'}</>}
-          </span>
-        ) : (
-          <span>Run a first check to see its health.</span>
-        )}
-        <span style={{ flex: 1 }} />
-        <span style={{ color: 'var(--text-faint)', textAlign: 'right' }}>
-          {t.lastError
-            ? <span style={{ color: 'var(--c-red)' }} title={t.lastError}>check failed</span>
-            : <span title={t.lastRunAt ? `Last check: ${fmtTime(t.lastRunAt)}` : undefined}>{t.lastRunAt ? `checked ${fmtAgo(t.lastRunAt)}` : 'not checked yet'}</span>}
-          {t.lastSlackAt !== null && (
-            <span title={`Last Slack alert: ${fmtTime(t.lastSlackAt)}`}> · 📣 {fmtAgo(t.lastSlackAt)}</span>
-          )}
-        </span>
-      </div>
-
-      <div style={{ display: 'flex', gap: 6, borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 2 }}>
-        <button style={{ ...ghostBtn, color: 'var(--c-blue)', borderColor: 'var(--c-blue-bg, var(--border))' }} disabled={runningId !== null} onClick={(e) => { e.stopPropagation(); onRun(); }}>
-          {isRunning ? 'Checking…' : '▶ Run'}
-        </button>
-        <button style={ghostBtn} disabled={busy} title={t.enabled ? 'Pause background checks for this property' : 'Resume background checks'} onClick={(e) => { e.stopPropagation(); onTogglePause(); }}>
-          {t.enabled ? '⏸ Pause' : '⏵ Resume'}
-        </button>
-        <button
-          style={{ ...ghostBtn, color: t.hasWebhook ? 'var(--c-green)' : 'var(--text-muted)' }}
-          disabled={busy}
-          title={t.hasWebhook ? 'Edit this property’s Slack channel' : 'Give this property its own Slack channel (link + name)'}
-          onClick={(e) => { e.stopPropagation(); setEditingChan((v) => !v); setChanUrl(''); setChanLbl(t.slackLabel ?? ''); }}
-        >
-          {t.hasWebhook ? '✎ Channel' : '＋ Channel'}
-        </button>
-        <span style={{ flex: 1 }} />
-        <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} title="Stop monitoring this property" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
-          Remove
-        </button>
-      </div>
-
-      {/* Inline Slack-channel editor: connect/replace the property's own webhook + channel name. */}
-      {editingChan && (
-        <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px dashed var(--border)', paddingTop: 8, cursor: 'default' }}>
-          <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>
-            {t.hasWebhook ? 'Edit Slack channel' : 'Connect this property’s Slack channel'}
-          </span>
-          <input
-            style={{ ...input, fontSize: 12 }}
-            type="password"
-            placeholder={t.hasWebhook ? 'New webhook URL (leave empty to keep the current one)' : 'https://hooks.slack.com/services/…'}
-            value={chanUrl}
-            onChange={(e) => setChanUrl(e.target.value)}
-          />
-          <input
-            style={{ ...input, fontSize: 12 }}
-            type="text"
-            placeholder="#acme-alerts (channel name)"
-            value={chanLbl}
-            onChange={(e) => setChanLbl(e.target.value)}
-          />
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <button
-              style={{ ...ghostBtn, color: '#fff', background: 'var(--c-blue)', borderColor: 'transparent' }}
-              disabled={busy || (!chanUrl.trim() && !t.hasWebhook)}
-              onClick={() => { void onSaveChannel(chanUrl.trim(), chanLbl.trim()).then((ok) => { if (ok) { setEditingChan(false); setChanUrl(''); } }); }}
-            >
-              Save
-            </button>
-            {t.hasWebhook && <button style={ghostBtn} disabled={busy} onClick={onTestChannel}>Send test</button>}
-            {t.hasWebhook && (
-              <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} onClick={() => { onRemoveChannel(); setEditingChan(false); setChanUrl(''); setChanLbl(''); }}>
-                Remove channel
+        {editingChan && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--surface)', border: '1px dashed var(--border)', borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <input
+                style={{ ...input, flex: 2, minWidth: 240, fontSize: 12.5 }}
+                type="password"
+                placeholder={t.hasWebhook ? 'New webhook URL (leave empty to keep the current one)' : 'https://hooks.slack.com/services/…'}
+                value={chanUrl}
+                onChange={(e) => setChanUrl(e.target.value)}
+              />
+              <input
+                style={{ ...input, flex: 1, minWidth: 150, fontSize: 12.5 }}
+                type="text"
+                placeholder="#acme-alerts (channel name)"
+                value={chanLbl}
+                onChange={(e) => setChanLbl(e.target.value)}
+              />
+              <button
+                style={primaryBtn}
+                disabled={busy || (!chanUrl.trim() && !t.hasWebhook)}
+                onClick={() => { void onSaveChannel(chanUrl.trim(), chanLbl.trim()).then((ok) => { if (ok) { setEditingChan(false); setChanUrl(''); } }); }}
+              >
+                Save
               </button>
-            )}
-            <button style={ghostBtn} disabled={busy} onClick={() => { setEditingChan(false); setChanUrl(''); }}>Cancel</button>
+              {t.hasWebhook && (
+                <button style={{ ...ghostBtn, color: 'var(--c-red)', alignSelf: 'center' }} disabled={busy} onClick={() => { onRemoveChannel(); setEditingChan(false); setChanUrl(''); setChanLbl(''); }}>
+                  Remove channel
+                </button>
+              )}
+            </div>
+            <span style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.4 }}>
+              One property, one channel: this property's alerts post here; without an own channel it uses the default. The URL is stored encrypted in your OS keychain.
+            </span>
           </div>
-          <span style={{ fontSize: 10.5, color: 'var(--text-faint)', lineHeight: 1.4 }}>
-            {t.hasWebhook ? 'This property alerts its own channel.' : 'Without its own channel, this property posts to the default channel (see Slack alerts below).'}
-          </span>
+        )}
+      </div>
+
+      {/* ── Latest run: summary strip + alerts + checks ── */}
+      {t.lastRun ? (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+            <span style={{ color: 'var(--text-dim)', fontSize: 13 }}>{t.lastRun.summary}</span>
+            <span style={{ flex: 1 }} />
+            {(() => {
+              const counts = { pass: 0, warn: 0, fail: 0, skip: 0 } as Record<string, number>;
+              for (const c of t.lastRun.checks) counts[c.status] = (counts[c.status] ?? 0) + 1;
+              return (
+                <span style={{ display: 'inline-flex', gap: 6 }}>
+                  {(['fail', 'warn', 'pass', 'skip'] as const).map((k) =>
+                    counts[k] > 0 ? (
+                      <span key={k} style={{ fontSize: 11, fontWeight: 600, color: CHECK_PILL[k].color, background: CHECK_PILL[k].bg, borderRadius: 999, padding: '2px 9px' }}>
+                        {counts[k]} {CHECK_PILL[k].label.toLowerCase()}
+                      </span>
+                    ) : null
+                  )}
+                </span>
+              );
+            })()}
+            <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{fmtTime(t.lastRun.at)}</span>
+          </div>
+          <RunDetail run={t.lastRun} />
+        </>
+      ) : (
+        <div style={{ padding: '20px 16px', fontSize: 13, color: 'var(--text-muted)' }}>
+          No check has run for this property yet — click <b>▶ Run check</b> above.
         </div>
       )}
     </div>
@@ -379,8 +333,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
     } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setRunningId(null); }
   }
 
-  // Save the webhook URL (if one was entered) and/or the channel label. Lets the user update just the
-  // label (leave the URL box empty) or connect a new webhook + label together.
+  // ── Default (account-level) Slack channel ──
   async function saveWebhook(): Promise<void> {
     const url = webhookInput.trim();
     if (!url && !labelDirty) return;
@@ -389,18 +342,23 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       if (url) { await window.desktop.ga4monitoring.setWebhook(url); setWebhookInput(''); }
       setStatus(await window.desktop.ga4monitoring.configure({ slackLabel: labelInput.trim() }));
       setLabelDirty(false);
-      setNote(url ? 'Slack webhook saved (encrypted).' : 'Slack channel label saved.');
+      setNote(url ? 'Default Slack webhook saved (encrypted).' : 'Default channel label saved.');
     } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
   async function clearWebhook(): Promise<void> {
     setBusy(true); onError('');
-    try { setStatus(await window.desktop.ga4monitoring.clearWebhook()); setNote('Slack webhook removed.'); }
+    try { setStatus(await window.desktop.ga4monitoring.clearWebhook()); setNote('Default Slack webhook removed.'); }
     catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
+  async function sendTest(): Promise<void> {
+    setBusy(true); onError(''); setNote('');
+    try {
+      const r = await window.desktop.ga4monitoring.sendTest();
+      setNote(r.ok ? 'Test message sent — check your Slack channel to confirm where alerts land.' : `Test failed: ${r.error ?? 'unknown error'}`);
+    } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  }
 
-  // ── Per-property channels (one property, one channel; default channel is the fallback) ──
-  /** Save a property's channel from its card. `url` may be '' for a label-only update on an already
-   *  connected channel. Returns true on success so the card can close its editor. */
+  // ── Per-property channel handlers (used by the open property's panel) ──
   async function savePropertyChannel(propertyId: string, url: string, lbl: string): Promise<boolean> {
     if (!status) return false;
     setBusy(true); onError(''); setNote('');
@@ -425,23 +383,10 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       setNote(r.ok ? 'Test sent — check Slack to confirm which channel this property alerts.' : `Test failed: ${r.error ?? 'unknown error'}`);
     } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
-  async function sendTest(): Promise<void> {
-    setBusy(true); onError(''); setNote('');
-    try {
-      const r = await window.desktop.ga4monitoring.sendTest();
-      setNote(r.ok ? 'Test message sent — check your Slack channel to confirm where alerts land.' : `Test failed: ${r.error ?? 'unknown error'}`);
-    } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
-  }
 
   const addable = (properties ?? []).filter((p) => !targets.some((t) => t.propertyId === p.property));
   const selected = targets.find((t) => t.propertyId === selectedId) ?? null;
   const enabledCount = targets.filter((t) => t.enabled).length;
-  // Fleet rollup for the header: worst-first chips, only the non-zero ones.
-  const fleet = { critical: 0, warning: 0, healthy: 0, none: 0 };
-  for (const t of targets) {
-    if (!t.lastRun) fleet.none++;
-    else fleet[t.lastRun.health]++;
-  }
 
   if (!signedIn) {
     return <div style={{ padding: 24, color: 'var(--text-muted)' }}>Sign in to Google on this account to monitor GA4 properties.</div>;
@@ -449,33 +394,19 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
 
   return (
     <div style={{ padding: 20, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* ── Page header + fleet rollup ── */}
+      {/* ── Header ── */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 260 }}>
           <h2 style={{ margin: '0 0 4px', fontSize: 20 }}>🔔 GA4 Monitoring</h2>
-          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Background health checks for your GA4 properties: data flow, key events firing, sudden spikes/drops, conversion tracking, and revenue integrity. New issues can be posted to Slack.</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Background health checks for your GA4 properties. Open a property tab to see its alerts, checks and Slack channel.</div>
         </div>
-        {targets.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingTop: 4 }}>
-            {(['critical', 'warning', 'healthy'] as const).map((k) =>
-              fleet[k] > 0 ? (
-                <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: HEALTH[k].color, background: HEALTH[k].bg, borderRadius: 999, padding: '4px 12px' }}>
-                  {HEALTH[k].icon} {fleet[k]} {HEALTH[k].label.toLowerCase()}
-                </span>
-              ) : null
-            )}
-            {fleet.none > 0 && (
-              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', background: 'var(--surface-3)', borderRadius: 999, padding: '4px 12px' }}>⚪ {fleet.none} not checked</span>
-            )}
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: status?.running ? 'var(--c-green)' : 'var(--text-faint)', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 12px' }}>
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: status?.running ? 'var(--c-green)' : 'var(--text-faint)', display: 'inline-block' }} />
-              {status?.running ? `background · every ${status.intervalMinutes >= 60 ? `${status.intervalMinutes / 60} hr` : `${status.intervalMinutes} min`}` : 'background off'}
-            </span>
-          </div>
-        )}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: status?.running ? 'var(--c-green)' : 'var(--text-faint)', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 12px', marginTop: 4 }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: status?.running ? 'var(--c-green)' : 'var(--text-faint)', display: 'inline-block' }} />
+          {status?.running ? `background on · every ${status.intervalMinutes >= 60 ? `${status.intervalMinutes / 60} hr` : `${status.intervalMinutes} min`}` : 'background off'}
+        </span>
       </div>
 
-      {/* ── Toolbar: add property + shared schedule + run all ── */}
+      {/* ── Toolbar: add property (+ its optional Slack channel) + shared schedule ── */}
       <div style={{ ...box, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 260, flex: 1 }}>
           <span style={label}>Add a property to monitor</span>
@@ -488,24 +419,10 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
             </select>
             <button style={primaryBtn} onClick={() => void addProperty()} disabled={busy || !addId}>+ Add</button>
           </div>
-          {/* The property's OWN Slack channel, captured in the SAME step (optional — the default
-              channel is the fallback). Appears only once a property is selected. */}
           {addId && (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
-              <input
-                style={{ ...input, flex: 2, minWidth: 220, fontSize: 12 }}
-                type="password"
-                placeholder="Slack webhook for this property (optional — default channel if empty)"
-                value={addChanUrl}
-                onChange={(e) => setAddChanUrl(e.target.value)}
-              />
-              <input
-                style={{ ...input, flex: 1, minWidth: 130, fontSize: 12 }}
-                type="text"
-                placeholder="#channel name"
-                value={addChanLabel}
-                onChange={(e) => setAddChanLabel(e.target.value)}
-              />
+              <input style={{ ...input, flex: 2, minWidth: 220, fontSize: 12 }} type="password" placeholder="Slack webhook for this property (optional — default channel if empty)" value={addChanUrl} onChange={(e) => setAddChanUrl(e.target.value)} />
+              <input style={{ ...input, flex: 1, minWidth: 130, fontSize: 12 }} type="text" placeholder="#channel name" value={addChanLabel} onChange={(e) => setAddChanLabel(e.target.value)} />
             </div>
           )}
         </div>
@@ -533,7 +450,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       {note && <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>{note}</div>}
       {status?.lastError && <div style={{ fontSize: 12.5, color: 'var(--c-red)' }}>Last sweep error — {status.lastError}</div>}
 
-      {/* ── Property cards ── */}
+      {/* ── Property tabs + the open property's panel ── */}
       {targets.length === 0 ? (
         <div style={{ ...box, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '40px 20px', color: 'var(--text-muted)' }}>
           <span style={{ fontSize: 30 }}>📡</span>
@@ -543,47 +460,61 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
           </div>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
-          {targets.map((t) => (
-            <PropertyCard
-              key={t.propertyId}
-              t={t}
-              selected={t.propertyId === selectedId}
+        <div>
+          <div role="tablist" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+            {targets.map((t) => {
+              const h = t.lastRun ? HEALTH[t.lastRun.health] : null;
+              const on = t.propertyId === selectedId;
+              const alertCount = t.lastRun?.alerts.length ?? 0;
+              return (
+                <button
+                  key={t.propertyId}
+                  role="tab"
+                  aria-selected={on}
+                  onClick={() => setSelectedId(t.propertyId)}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 7,
+                    background: on ? 'var(--c-blue-bg, rgba(59,130,246,.12))' : 'var(--surface-2)',
+                    color: 'var(--text)',
+                    border: `1px solid ${on ? 'var(--c-blue)' : 'var(--border)'}`,
+                    borderRadius: 9, padding: '7px 14px', cursor: 'pointer', fontSize: 13,
+                    fontWeight: on ? 700 : 500,
+                    opacity: t.enabled ? 1 : 0.55,
+                  }}
+                  title={`${t.propertyLabel || t.propertyId} (${t.propertyId.replace('properties/', '')})${t.enabled ? '' : ' — paused'}`}
+                >
+                  <span style={{ fontSize: 12 }}>{h ? h.icon : '⚪'}</span>
+                  <span style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.propertyLabel || t.propertyId.replace('properties/', '')}</span>
+                  {alertCount > 0 && (
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: h?.color ?? 'var(--text)', background: h?.bg ?? 'var(--surface-3)', borderRadius: 999, padding: '1px 7px' }}>{alertCount}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          {selected && (
+            <PropertyPanel
+              key={selected.propertyId}
+              t={selected}
+              defaultChannel={Boolean(status?.hasWebhook)}
               runningId={runningId}
               busy={busy}
-              onSelect={() => setSelectedId(t.propertyId)}
-              onRun={() => void runNow(t.propertyId)}
-              onTogglePause={() => togglePaused(t.propertyId)}
-              onRemove={() => removeProperty(t.propertyId)}
-              onSaveChannel={(url, lbl) => savePropertyChannel(t.propertyId, url, lbl)}
-              onTestChannel={() => void testPropertyChannel(t.propertyId)}
-              onRemoveChannel={() => void removePropertyChannel(t.propertyId)}
+              onRun={() => void runNow(selected.propertyId)}
+              onTogglePause={() => togglePaused(selected.propertyId)}
+              onRemove={() => removeProperty(selected.propertyId)}
+              onSaveChannel={(url, lbl) => savePropertyChannel(selected.propertyId, url, lbl)}
+              onTestChannel={() => void testPropertyChannel(selected.propertyId)}
+              onRemoveChannel={() => void removePropertyChannel(selected.propertyId)}
             />
-          ))}
-        </div>
-      )}
-
-      {/* ── Selected property's latest run ── */}
-      {selected && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)' }}>
-            Latest check — {selected.propertyLabel || selected.propertyId}
-          </div>
-          {selected.lastRun ? (
-            <RunDetail run={selected.lastRun} />
-          ) : (
-            <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-              No check has run for <b>{selected.propertyLabel || selected.propertyId}</b> yet — click <b>▶ Run</b> on its card (or Run all).
-            </div>
           )}
         </div>
       )}
 
-      {/* ── Slack (secondary settings) ── */}
+      {/* ── Default Slack channel (account-level fallback) ── */}
       <div style={box}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
           <span style={{ fontWeight: 600 }}>
-            Slack alerts{' '}
+            Default Slack channel{' '}
             {status?.hasWebhook
               ? <span style={{ color: 'var(--c-green)', fontSize: 12 }}>· connected</span>
               : <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>· not configured</span>}
@@ -594,16 +525,14 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
           </label>
         </div>
         {status?.hasWebhook ? (
-          /* Connected default channel: verify or disconnect (per-property channels override it below). */
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>Default channel</span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 999, padding: '5px 14px', fontSize: 13 }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--c-green)', display: 'inline-block' }} />
               {status.slackLabel || 'Slack channel connected'}
             </span>
             <button style={btn} onClick={() => void sendTest()} disabled={busy} title="Post a confirmation message so you can see which channel receives alerts">Send test</button>
             <button style={btn} onClick={() => void clearWebhook()} disabled={busy}>Remove</button>
-            <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Any property without its own channel posts here. To give a property its own channel, use <b>＋ Channel</b> on its card (or fill the Slack fields when adding it).</span>
+            <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Any property without its own channel posts here. Give a property its own channel from its tab.</span>
           </div>
         ) : (
           <>
@@ -629,7 +558,6 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
             <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 6 }}>The URL is stored encrypted in your OS keychain (never synced or logged). An ongoing issue is posted once per property, not on every check.</div>
           </>
         )}
-
       </div>
 
       {/* ── Footer status line ── */}
