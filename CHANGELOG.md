@@ -1,3 +1,9 @@
+## [1.208.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.207.0...v1.208.0) (2026-07-06)
+
+### Features
+
+* **desktop:** retarget a created tag's firing trigger (verify auto-heal foundation) ([f4fa259](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f4fa2591c0e210f2edebe168d49d19bcd695cd36))
+
 ## [1.207.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.206.0...v1.207.0) (2026-07-06)
 
 ### Features
