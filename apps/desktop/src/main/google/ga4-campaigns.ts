@@ -10,9 +10,14 @@ import { formatDateRange } from './ga4-data-quality';
 export interface CampaignRow {
   campaign: string;
   sessions: number;
+  /** ALL configured key events (product views, add-to-carts, sign-ups, ...) — NOT purchases. Every
+   *  surface that renders this must label it "key events" so it is never read as sales. */
   keyEvents: number;
   revenue: number;
   engagementRate: number;
+  /** Real purchase transactions (GA4 `transactions` metric). Optional so older callers/fixtures that
+   *  never fetched it keep working; renderers show a dash rather than 0 when absent. */
+  purchases?: number;
 }
 
 export interface Ga4CampaignInput {
@@ -113,10 +118,13 @@ export function rankGa4Campaigns(input: Ga4CampaignInput): Ga4CampaignReport {
         'Add utm_campaign/utm_source/utm_medium to your marketing links (ads, email, social, paid partners) so campaign performance and ROI are measurable in GA4.',
     });
   } else {
+    // "Key events" is spelled out (never "conversions") so 23,933 product views can't be read as
+    // 23,933 sales; when the purchase count was fetched it rides along as the honest sales number.
+    const bcPurch = typeof bestCampaign!.purchases === 'number' ? `, ${bestCampaign!.purchases} purchases` : '';
     findings.push({
       severity: 'info',
       category: ATTR,
-      message: `Top campaign by ${primaryMetric}: "${bestCampaign!.campaign}" (${bestCampaign!.keyEvents} conversions, ${money(bestCampaign!.revenue, input.currencyCode)}, ${bestCampaign!.sessions} sessions).`,
+      message: `Top campaign by ${primaryMetric === 'conversions' ? 'key events' : primaryMetric}: "${bestCampaign!.campaign}" (${bestCampaign!.keyEvents} key events - not purchases${bcPurch}, ${money(bestCampaign!.revenue, input.currencyCode)}, ${bestCampaign!.sessions} sessions).`,
     });
     if (untaggedSharePct >= 40) {
       findings.push({
@@ -132,7 +140,7 @@ export function rankGa4Campaigns(input: Ga4CampaignInput): Ga4CampaignReport {
   const summary =
     taggedCampaigns.length === 0
       ? `No tagged marketing campaigns over the last ${input.windowDays} days; ${untaggedSharePct.toFixed(1)}% of ${input.totalSessions} sessions is untagged.`
-      : `Ranked ${taggedCampaigns.length} campaign(s) by ${primaryMetric} over the last ${input.windowDays} days; top is "${bestCampaign!.campaign}". ${untaggedSharePct.toFixed(1)}% of ${input.totalSessions} sessions is untagged.`;
+      : `Ranked ${taggedCampaigns.length} campaign(s) by ${primaryMetric === 'conversions' ? 'key events' : primaryMetric} over the last ${input.windowDays} days; top is "${bestCampaign!.campaign}". ${untaggedSharePct.toFixed(1)}% of ${input.totalSessions} sessions is untagged.`;
 
   return {
     windowDays: input.windowDays,

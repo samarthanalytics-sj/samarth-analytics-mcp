@@ -583,17 +583,78 @@ test('campaign performance: two tagged campaigns render rows, name the best, and
   assert.ok(sections.campaignPerformance, 'campaignPerformance present when campaigns are tagged');
   assert.equal(sections.campaignPerformance!.rows.length, 2, 'both tagged campaigns become rows');
   assert.equal(sections.campaignPerformance!.rows[0].campaign, 'summer_sale', 'top campaign first');
-  assert.equal(sections.campaignPerformance!.rows[0].conversions, '400', 'conversions formatted from keyEvents');
+  assert.equal(sections.campaignPerformance!.rows[0].conversions, '400', 'key-event count formatted from keyEvents');
+  assert.equal(sections.campaignPerformance!.rows[0].purchases, '—', 'purchases show a dash (not 0) when never fetched');
   assert.equal(sections.campaignPerformance!.rows[0].revenue, 'INR 250,000', 'revenue prefixed with the property currency');
   assert.equal(sections.campaignPerformance!.rows[0].engagement, '62%', 'engagement as a whole percent');
   assert.ok(sections.campaignPerformance!.best?.startsWith('summer_sale'), 'best names the top campaign');
-  assert.ok(/400 conversions/.test(sections.campaignPerformance!.best!), 'best includes conversions');
+  assert.ok(/400 key events/.test(sections.campaignPerformance!.best!), 'best says key events, never conversions');
   assert.equal(sections.campaignPerformance!.untaggedShare, '60.0%', 'untagged share formatted to one decimal');
+  assert.ok(/NOT sales/.test(sections.campaignPerformance!.caveat) && /channel table/.test(sections.campaignPerformance!.caveat), 'guardrail caveat travels with the view');
   // The markdown report prints the campaign table + the campaign finding lands in section 4.
   const md = buildGa4AuditReport(input({ campaigns: camp }));
   assert.ok(md.includes('**Campaign performance**'), 'markdown has the campaign table heading');
-  assert.ok(/\| summer_sale \| 5,000 \| 400 \| INR 250,000 \|/.test(md), 'markdown renders the top campaign row');
+  assert.ok(md.includes('| Campaign | Sessions | Key events | Purchases | Revenue | Engagement |'), 'markdown header says Key events + Purchases, never Conversions');
+  assert.ok(/\| summer_sale \| 5,000 \| 400 \| - \| INR 250,000 \|/.test(md), 'markdown renders the top campaign row (unfetched purchases = dash)');
+  assert.ok(md.includes('NOT sales'), 'the guardrail caveat renders under the markdown table');
   assert.ok(md.includes('| Campaigns |'), 'the campaign finding lands in the All-findings table');
+});
+
+test('campaign performance: purchase counts render when fetched, and "best" carries them', () => {
+  const camp = campaignReport({
+    taggedCampaigns: [
+      { campaign: 'summer_sale', sessions: 5000, keyEvents: 23933, revenue: 532085, engagementRate: 0.62, purchases: 214 },
+      { campaign: 'spring_promo', sessions: 3000, keyEvents: 150, revenue: 90000, engagementRate: 0.51, purchases: 9 },
+    ],
+  });
+  camp.bestCampaign = camp.taggedCampaigns[0];
+  const sections = buildGa4Sections(input({ campaigns: camp }));
+  assert.equal(sections.campaignPerformance!.rows[0].purchases, '214', 'real transaction count in its own column');
+  assert.ok(/23,933 key events, 214 purchases/.test(sections.campaignPerformance!.best!), 'best separates key events from purchases');
+});
+
+test('anti-lie finding: paid-campaign revenue that no paid channel shows → attribution-mismatch HIGH', () => {
+  // The demo-killer shape: two ad-platform campaigns claim ~760K, paid channels show ~43K, and the
+  // biggest revenue "channel" is organic — the paid traffic is almost certainly mislabeled there.
+  const b = baseline({
+    channelPerformance: [
+      { channel: 'Organic Shopping', sessions: 30000, keyEvents: 2000, convRate: 0.04, revenue: 845315, engagementRate: 0.6 },
+      { channel: 'Paid Shopping', sessions: 900, keyEvents: 40, convRate: 0.03, revenue: 13200, engagementRate: 0.5 },
+      { channel: 'Paid Social', sessions: 1200, keyEvents: 50, convRate: 0.03, revenue: 29380, engagementRate: 0.5 },
+    ],
+  });
+  const camp = campaignReport({
+    taggedCampaigns: [
+      { campaign: 'Adv+ Shopping - All products', sessions: 8000, keyEvents: 23933, revenue: 532085, engagementRate: 0.6 },
+      { campaign: '20574896341', sessions: 4000, keyEvents: 9000, revenue: 227350, engagementRate: 0.55 },
+    ],
+  });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b), campaigns: camp }));
+  assert.ok(md.includes('Campaign and channel revenue do not reconcile'), 'reconciliation finding fires');
+  assert.ok(md.includes('INR 759,435') && md.includes('INR 42,580'), 'both revenue pictures quantified');
+  assert.ok(md.includes('Organic Shopping'), 'names the non-paid channel the revenue is likely landing in');
+  assert.ok(/utm_medium=cpc/.test(md), 'fix names the paid-tagging remediation');
+
+  // Reconciled paid revenue (paid channels cover the campaign claim) → no finding.
+  const okB = baseline(); // default: Paid Search 180,000
+  const okCamp = campaignReport({
+    taggedCampaigns: [{ campaign: 'brand_search_always_on', sessions: 5000, keyEvents: 400, revenue: 200000, engagementRate: 0.6 }],
+  });
+  const okMd = buildGa4AuditReport(input({ baseline: okB, growth: growthOf(okB), campaigns: okCamp }));
+  assert.ok(!okMd.includes('Campaign and channel revenue do not reconcile'), 'no finding when the pictures reconcile');
+
+  // Non-paid campaign names (email/newsletter UTMs) never trip the check even with zero paid-channel revenue.
+  const emailCamp = campaignReport({
+    taggedCampaigns: [{ campaign: 'july_newsletter', sessions: 5000, keyEvents: 400, revenue: 300000, engagementRate: 0.6 }],
+  });
+  const noPaidB = baseline({
+    channelPerformance: [
+      { channel: 'Email', sessions: 9000, keyEvents: 700, convRate: 0.05, revenue: 310000, engagementRate: 0.65 },
+      { channel: 'Organic Search', sessions: 40000, keyEvents: 1200, convRate: 0.03, revenue: 250000, engagementRate: 0.62 },
+    ],
+  });
+  const emailMd = buildGa4AuditReport(input({ baseline: noPaidB, growth: growthOf(noPaidB), campaigns: emailCamp }));
+  assert.ok(!emailMd.includes('Campaign and channel revenue do not reconcile'), 'email campaigns in non-paid channels are legitimate');
 });
 
 test('campaign performance: no tagged campaigns → campaignPerformance is null and markdown shows the advisory', () => {
@@ -602,7 +663,7 @@ test('campaign performance: no tagged campaigns → campaignPerformance is null 
   assert.equal(sections.campaignPerformance, null, 'null when there are no tagged campaigns');
   const md = buildGa4AuditReport(input({ campaigns: empty }));
   assert.ok(/No utm_campaign-tagged traffic/.test(md), 'markdown prints the no-campaign advisory');
-  assert.ok(!/\| Campaign \| Sessions \| Conversions \|/.test(md), 'no empty campaign table when untagged');
+  assert.ok(!/\| Campaign \| Sessions \| Key events \|/.test(md), 'no empty campaign table when untagged');
   // A null campaigns input (query failed) leaves the section out entirely and adds no finding.
   const nullSections = buildGa4Sections(input({ campaigns: null }));
   assert.equal(nullSections.campaignPerformance, null, 'null campaigns → null view');
