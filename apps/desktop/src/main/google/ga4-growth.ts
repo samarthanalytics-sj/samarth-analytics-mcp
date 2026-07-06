@@ -171,12 +171,33 @@ export function auditGa4Growth(input: Ga4GrowthInput): Ga4GrowthResult {
         });
       }
     } else if (st <= DROP_PCT) {
-      findings.push({
-        severity: 'medium',
-        category: GROWTH,
-        message: `Sessions fell ${sign(st)} vs the prior period (${fnum(input.priorSessions)} → ${fnum(input.sessions)}) — a sharp drop can indicate broken or blocked tagging, a tracking regression, or seasonality.`,
-        recommendation: 'Confirm the GA4 tag still fires (Realtime), review recent site/tag releases and consent changes, and rule out seasonality before treating this as a real decline.',
-      });
+      // Decompose the drop against the OUTCOMES, exactly as the spike branch does. Broken or blocked
+      // tagging cannot be selective: if the tag stopped firing, revenue falls with the sessions. So a
+      // sharp session drop where revenue held (fell less than half as fast, or grew) is the business
+      // KEEPING its buyers while low-value traffic washes out — often the flip side of an earlier
+      // one-off spike leaving the comparison window — and must not be reported as a possible tracking
+      // break. Only a drop the outcomes CONFIRM (revenue falling with it) keeps the tagging warning.
+      const movement = `Sessions fell ${sign(st)} vs the prior period (${fnum(input.priorSessions)} → ${fnum(input.sessions)})`;
+      const revHeld = input.priorRevenue > 0 && rt !== null && rt >= st * SCALE_RATIO;
+      const convHeld = input.priorKeyEvents > 0 && kt !== null && kt >= st * SCALE_RATIO;
+      if (revHeld) {
+        findings.push({
+          severity: 'low',
+          category: GROWTH,
+          message: `${movement} but revenue held at ${sign(rt as number)}${convHeld ? ` (key events ${sign(kt as number)})` : ''} — broken or blocked tagging would drag revenue down with the sessions, so this reads as low-value traffic washing out of the window (often an earlier one-off spike leaving the comparison), not a tracking break or a real business decline.`,
+          evidence: `Sessions ${sign(st)} (${fnum(input.priorSessions)} → ${fnum(input.sessions)}); revenue ${sign(rt as number)} (${fnum(input.priorRevenue)} → ${fnum(input.revenue)}); key events ${kt === null ? 'n/a' : sign(kt)}. Revenue holding while sessions fall is incompatible with a tag that stopped firing.`,
+          whyItMatters: `The buyers stayed; what left was traffic that never converted. Treating this as "traffic down 45%" (or as broken tagging) would misread a data-quality improvement as a business problem.`,
+          businessRisk: `Low — the revenue-bearing traffic is intact; the risk is only overreacting to the headline session decline.`,
+          recommendation: `Compare the channel mix vs the prior period to confirm the lost sessions came from the low-value segment (Direct/untagged/one-off spike traffic); if so, quote revenue as the health metric for this window, not sessions.`,
+        });
+      } else {
+        findings.push({
+          severity: 'medium',
+          category: GROWTH,
+          message: `${movement}${rt !== null && input.priorRevenue > 0 ? ` and revenue fell with it (${sign(rt)})` : ''} — a sharp drop the outcomes confirm can indicate broken or blocked tagging, a tracking regression, or seasonality.`,
+          recommendation: 'Confirm the GA4 tag still fires (Realtime), review recent site/tag releases and consent changes, and rule out seasonality before treating this as a real decline.',
+        });
+      }
     }
   }
 

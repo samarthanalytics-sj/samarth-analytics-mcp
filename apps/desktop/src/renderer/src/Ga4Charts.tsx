@@ -194,10 +194,10 @@ function SpikeCard({ grouped, gran }: { grouped: Array<{ channel: string; points
     <div style={{ ...card, marginTop: 10 }}>
       <div style={vizTitle}>Where the {spike.channel} traffic actually came from</div>
       <div style={vizSub}>The channel's total for the window, split by its busiest {period} against every other {period} combined.</div>
-      {bar(`Busiest ${period} (${spike.peakLabel})`, spike.peakValue, PEAK, spike.peakSharePct, false)}
+      {bar(`${spike.periods === 2 ? `Busiest ${period}s` : `Busiest ${period}`} (${spike.peakLabel})`, spike.peakValue, PEAK, spike.peakSharePct, false)}
       {bar(`All other ${period}s`, spike.restValue, '#26344E', 100 - spike.peakSharePct, true)}
       <div style={{ margin: '12px 0 0', padding: '11px 14px', borderLeft: `3px solid ${PEAK}`, background: 'var(--c-red-bg, #FBF1EF)', fontSize: 13, color: 'var(--text)', borderRadius: '0 3px 3px 0', lineHeight: 1.5 }}>
-        <b style={{ fontWeight: 600 }}>One {period} is {spike.peakSharePct}% of {spike.channel}</b> ({spike.channelSharePct}% of all sessions in the window). That is an event, not a channel baseline - identify that {period}'s source before quoting {spike.channel} numbers or the total session count.
+        <b style={{ fontWeight: 600 }}>{spike.periods === 2 ? `Two adjacent ${period}s are` : `One ${period} is`} {spike.peakSharePct}% of {spike.channel}</b> ({spike.channelSharePct}% of all sessions in the window). That is an event, not a channel baseline - identify that traffic's source before quoting {spike.channel} numbers or the total session count.
       </div>
       <div style={{ ...vcap, marginTop: 10 }}>
         {spike.peakLabel}: {fmt(spike.peakValue)} sessions · all other {period}s combined: {fmt(spike.restValue)}. Computed from the same series as the chart above.

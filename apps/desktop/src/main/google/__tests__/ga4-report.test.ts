@@ -697,5 +697,45 @@ test('anti-lie findings: single-bucket channel concentration + payment-gateway r
   assert.ok(!/arrived in a single day/.test(clean) && !/Payment-gateway referral leakage/.test(clean), 'no anti-lie findings on clean data');
 });
 
+test('REGRESSION: the concentration spike and the revenue mismatch fire TOGETHER, cross-linked, with an auditable numerator', () => {
+  // The reviewer-reported shape: the Direct single-bucket spike AND the paid-campaign revenue mismatch
+  // exist in the same window. Both HIGHs must appear (a property can have two HIGH problems), the
+  // reconciliation must name the spike as the same root cause, and the claimed total must count ONLY
+  // revenue-bearing paid-format campaigns - the zero-revenue "PT | Traffic |..." campaign is excluded.
+  const b = baseline({
+    channelDaily: [
+      { channel: 'Direct', series: [
+        { date: '20260610', sessions: 300 }, { date: '20260611', sessions: 22362 }, { date: '20260612', sessions: 310 },
+        { date: '20260613', sessions: 305 }, { date: '20260614', sessions: 300 },
+      ] },
+      { channel: 'Organic Search', series: [
+        { date: '20260610', sessions: 700 }, { date: '20260611', sessions: 750 }, { date: '20260612', sessions: 720 },
+        { date: '20260613', sessions: 730 }, { date: '20260614', sessions: 705 },
+      ] },
+    ],
+    channelPerformance: [
+      { channel: 'Organic Shopping', sessions: 30000, keyEvents: 2000, convRate: 0.04, revenue: 845315, engagementRate: 0.6 },
+      { channel: 'Paid Shopping', sessions: 900, keyEvents: 40, convRate: 0.03, revenue: 13200, engagementRate: 0.5 },
+      { channel: 'Paid Social', sessions: 1200, keyEvents: 50, convRate: 0.03, revenue: 29380, engagementRate: 0.5 },
+    ],
+  });
+  const camp = campaignReport({
+    taggedCampaigns: [
+      { campaign: 'Adv+ Shopping - All products', sessions: 8000, keyEvents: 23933, revenue: 532085, engagementRate: 0.6 },
+      { campaign: 'PT | Traffic | Website | March24', sessions: 27914, keyEvents: 500, revenue: 0, engagementRate: 0.4 },
+      { campaign: '20574896341', sessions: 4000, keyEvents: 9000, revenue: 227350, engagementRate: 0.55 },
+      { campaign: 'Adv+ Shopping - Bestsellers', sessions: 2000, keyEvents: 4000, revenue: 128460, engagementRate: 0.5 },
+    ],
+  });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b), campaigns: camp }));
+  assert.ok(/arrived in a single day/.test(md), 'concentration HIGH still present alongside the mismatch');
+  assert.ok(/Campaign and channel revenue do not reconcile/.test(md), 'reconciliation HIGH present in the same report');
+  assert.ok(/same root cause as the Direct single-day concentration/.test(md), 'the two findings are cross-linked, not presented as unrelated');
+  assert.ok(md.includes('INR 887,895'), 'numerator = 532,085 + 227,350 + 128,460 (revenue-bearing paid-format campaigns only)');
+  assert.ok(/3 paid-format campaign\(s\) with recorded revenue/.test(md), 'the counted-campaign total is stated for auditability');
+  const reconLine = md.split('\n').find((l) => l.includes('do not reconcile')) ?? '';
+  assert.ok(!reconLine.includes('PT '), 'the zero-revenue traffic campaign is never counted or named in the mismatch');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

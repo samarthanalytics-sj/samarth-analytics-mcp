@@ -163,10 +163,39 @@ test('findChannelSpike flags a one-bucket channel spike, null when traffic is st
   assert.equal(spike.channel, 'Direct');
   assert.equal(spike.peakLabel, 'Wk Apr 15');
   assert.ok(spike.peakSharePct >= 90, 'one week holds nearly all of the channel');
+  assert.equal(spike.periods, 1, 'single-bucket burst reported as one period');
   assert.equal(findChannelSpike([
     { channel: 'A', points: [{ label: 'w1', value: 100 }, { label: 'w2', value: 110 }, { label: 'w3', value: 105 }, { label: 'w4', value: 95 }] },
     { channel: 'B', points: [{ label: 'w1', value: 200 }, { label: 'w2', value: 210 }, { label: 'w3', value: 190 }, { label: 'w4', value: 205 }] },
   ]), null, 'steady channels produce no decomposition');
+});
+
+test('findChannelSpike catches a burst STRADDLING a bucket boundary (each half < 60%, the adjacent pair >= 60%)', () => {
+  // The disappearing-finding bug: the same real-world burst lands in one weekly bucket when the
+  // window starts on one date and splits across two buckets when the window shifts. The finding must
+  // not silently vanish on the split run.
+  const spike = findChannelSpike([
+    { channel: 'Direct', points: [
+      { label: 'Wk Apr 8', value: 500 }, { label: 'Wk Apr 15', value: 11000 }, { label: 'Wk Apr 22', value: 11362 },
+      { label: 'Wk Apr 29', value: 480 }, { label: 'Wk May 6', value: 505 }, { label: 'Wk May 13', value: 490 },
+    ] },
+    { channel: 'Organic Shopping', points: [
+      { label: 'Wk Apr 8', value: 2000 }, { label: 'Wk Apr 15', value: 2100 }, { label: 'Wk Apr 22', value: 1900 },
+      { label: 'Wk Apr 29', value: 2050 }, { label: 'Wk May 6', value: 1980 }, { label: 'Wk May 13', value: 2020 },
+    ] },
+  ]);
+  assert.ok(spike, 'straddled burst still detected');
+  assert.equal(spike.channel, 'Direct');
+  assert.equal(spike.periods, 2, 'reported as two adjacent periods');
+  assert.equal(spike.peakLabel, 'Wk Apr 15 + Wk Apr 22', 'labels both buckets');
+  assert.ok(spike.peakSharePct >= 90, 'the pair holds nearly all of the channel');
+  // A genuinely spread channel (every pair below 60%) still produces nothing.
+  assert.equal(findChannelSpike([
+    { channel: 'Direct', points: [
+      { label: 'w1', value: 4000 }, { label: 'w2', value: 4100 }, { label: 'w3', value: 3900 },
+      { label: 'w4', value: 4050 }, { label: 'w5', value: 3980 }, { label: 'w6', value: 4020 },
+    ] },
+  ]), null, 'no pair qualifies on steady traffic');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

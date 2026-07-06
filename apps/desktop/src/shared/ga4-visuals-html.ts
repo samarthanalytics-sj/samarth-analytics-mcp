@@ -211,28 +211,66 @@ function legendHtml(grouped: ChannelPoints[]): string {
   );
 }
 
-/** Detect a single-period channel spike worth decomposing (the template's "where your traffic actually
+export interface ChannelSpike {
+  channel: string;
+  peakLabel: string;
+  peakValue: number;
+  restValue: number;
+  channelSharePct: number;
+  peakSharePct: number;
+  /** 1 = the burst sits in one bucket; 2 = it straddles two ADJACENT buckets (a bucket-boundary
+   *  artifact of where the window starts) — the renderers word "single {period}" vs "two adjacent
+   *  {period}s" from this. */
+  periods: 1 | 2;
+}
+
+/** Detect a concentrated channel burst worth decomposing (the template's "where your traffic actually
  *  came from" chart): a channel that carries a meaningful share of ALL traffic (>= 10%) where one
- *  bucket holds most of the channel's total (>= 60%). Deterministic; null when no channel qualifies.
- *  Exported for tests. */
-export function findChannelSpike(grouped: ChannelPoints[]): { channel: string; peakLabel: string; peakValue: number; restValue: number; channelSharePct: number; peakSharePct: number } | null {
+ *  bucket — or, failing that, two ADJACENT buckets — holds most of the channel's total (>= 60%).
+ *  The adjacent-pair fallback matters for correctness: weekly buckets are anchored to the window's
+ *  first day, so the same real-world burst can land in one bucket on one run and straddle a bucket
+ *  boundary on the next (each half then reads ~50% and a single-bucket test goes silent). A finding
+ *  must not appear and disappear with the window's start date while the burst itself is unchanged.
+ *  Deterministic; null when no channel qualifies. Exported for tests. */
+export function findChannelSpike(grouped: ChannelPoints[]): ChannelSpike | null {
   const totals = grouped.map((c) => c.points.reduce((s, p) => s + p.value, 0));
   const grand = totals.reduce((s, t) => s + t, 0);
   if (grand <= 0) return null;
-  let best: { channel: string; peakLabel: string; peakValue: number; restValue: number; channelSharePct: number; peakSharePct: number } | null = null;
+  let best: ChannelSpike | null = null;
   grouped.forEach((c, i) => {
     if (c.points.length < 4 || totals[i] <= 0) return;
+    const channelShare = totals[i] / grand;
+    if (channelShare < 0.1) return;
     const peak = c.points.reduce((b, p) => (p.value > b.value ? p : b), c.points[0]);
     const peakShare = peak.value / totals[i];
-    const channelShare = totals[i] / grand;
-    if (channelShare >= 0.1 && peakShare >= 0.6 && (!best || peakShare * 100 > best.peakSharePct)) {
+    let cand: { label: string; value: number; share: number; periods: 1 | 2 } | null = null;
+    if (peakShare >= 0.6) {
+      cand = { label: peak.label, value: peak.value, share: peakShare, periods: 1 };
+    } else if (c.points.length >= 6) {
+      // Boundary-straddle fallback: the best pair of adjacent buckets. Only meaningful when the pair
+      // is still a small minority of the series (>= 6 buckets → the pair is at most a third of them).
+      let bi = -1;
+      let bv = 0;
+      for (let k = 0; k + 1 < c.points.length; k++) {
+        const s = c.points[k].value + c.points[k + 1].value;
+        if (s > bv) {
+          bv = s;
+          bi = k;
+        }
+      }
+      if (bi >= 0 && bv / totals[i] >= 0.6) {
+        cand = { label: `${c.points[bi].label} + ${c.points[bi + 1].label}`, value: bv, share: bv / totals[i], periods: 2 };
+      }
+    }
+    if (cand && (!best || cand.share * 100 > best.peakSharePct)) {
       best = {
         channel: c.channel || '(not set)',
-        peakLabel: peak.label,
-        peakValue: Math.round(peak.value),
-        restValue: Math.round(totals[i] - peak.value),
+        peakLabel: cand.label,
+        peakValue: Math.round(cand.value),
+        restValue: Math.round(totals[i] - cand.value),
         channelSharePct: Math.round(channelShare * 100),
-        peakSharePct: Math.round(peakShare * 100),
+        peakSharePct: Math.round(cand.share * 100),
+        periods: cand.periods,
       };
     }
   });
@@ -245,6 +283,8 @@ function spikeDecompositionHtml(grouped: ChannelPoints[], gran: Gran): string {
   if (!spike) return '';
   const fmtN = (n: number): string => n.toLocaleString('en-US');
   const period = gran === 'day' ? 'day' : gran === 'week' ? 'week' : 'month';
+  const span = spike.periods === 2 ? `Two adjacent ${period}s are` : `One ${period} is`;
+  const busiest = spike.periods === 2 ? `Busiest ${period}s` : `Busiest ${period}`;
   const maxV = Math.max(spike.peakValue, spike.restValue, 1);
   const bar = (lbl: string, val: number, color: string, mutedVal = false): string =>
     `<div style="display:flex;align-items:center;gap:10px;margin:7px 0;font-size:12.5px">` +
@@ -256,9 +296,9 @@ function spikeDecompositionHtml(grouped: ChannelPoints[], gran: Gran): string {
     `<div style="border:1px solid ${BORDER};border-radius:4px;padding:16px 18px 12px;background:${SURFACE};margin:0 0 10px">` +
     `<div style="font-size:15px;font-weight:600;color:${TEXT};margin:0 0 3px">Where the ${esc(spike.channel)} traffic actually came from</div>` +
     `<div style="font-size:13px;color:${MUTED};margin:0 0 12px;max-width:70ch">The channel's total for the window, split by its busiest ${period} against every other ${period} combined.</div>` +
-    bar(`Busiest ${period} (${spike.peakLabel})`, spike.peakValue, '#A63527') +
+    bar(`${busiest} (${spike.peakLabel})`, spike.peakValue, '#A63527') +
     bar(`All other ${period}s`, spike.restValue, '#26344E', true) +
-    `<div style="margin:12px 0 0;padding:11px 14px;border-left:3px solid #A63527;background:var(--c-red-bg, #FBF1EF);font-size:13px;color:${TEXT};border-radius:0 3px 3px 0;line-height:1.5"><b style="font-weight:600">One ${period} is ${spike.peakSharePct}% of ${esc(spike.channel)}</b> (${spike.channelSharePct}% of all sessions in the window). That is an event, not a channel baseline - identify that ${period}'s source before quoting ${esc(spike.channel)} numbers or the total session count.</div>` +
+    `<div style="margin:12px 0 0;padding:11px 14px;border-left:3px solid #A63527;background:var(--c-red-bg, #FBF1EF);font-size:13px;color:${TEXT};border-radius:0 3px 3px 0;line-height:1.5"><b style="font-weight:600">${span} ${spike.peakSharePct}% of ${esc(spike.channel)}</b> (${spike.channelSharePct}% of all sessions in the window). That is an event, not a channel baseline - identify that traffic's source before quoting ${esc(spike.channel)} numbers or the total session count.</div>` +
     `<div style="font-family:${MONO};font-size:11px;color:${FAINT};line-height:1.55;margin-top:10px">${esc(spike.peakLabel)}: ${fmtN(spike.peakValue)} sessions · all other ${period}s combined: ${fmtN(spike.restValue)}. Computed from the same series as the chart above.</div>` +
     `</div>`
   );
