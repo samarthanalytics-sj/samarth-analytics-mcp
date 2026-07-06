@@ -452,7 +452,7 @@ export class GoogleDataService {
     //    Google connection saved BEFORE that scope was added carries a token without
     //    it and 403s. Translate that into an actionable "re-connect Google" message
     //    instead of a raw Gaxios stack.
-    let cv;
+    let cv: { data: { containerVersion?: { containerVersionId?: string | null } | null; compilerError?: unknown; newWorkspacePath?: string | null } } | null = null;
     try {
       cv = await gtm.accounts.containers.workspaces.create_version({
         path: `${containerParent}/workspaces/${workspaceId}`,
@@ -465,15 +465,28 @@ export class GoogleDataService {
           'Auto preview needs the GTM "edit container versions" permission. The app requests it, but this Google connection was saved before that scope was added, so its token lacks it. Fix: Settings → Disconnect Google, then re-connect and approve the new permission on Google\'s consent screen, then retry. Or paste a GTM Preview / Environment snippet instead (no re-connect needed). If it still fails, your Google account may lack edit rights on this container.'
         );
       }
-      throw err;
+      const emsg =
+        (err as { response?: { data?: { error?: { message?: string } } } }).response?.data?.error?.message ??
+        (err as { message?: string }).message ?? String(err);
+      // A workspace that has ALREADY been submitted (a version was created from it) can't be versioned
+      // again — but its tags are already in the latest version, so we skip create_version and preview
+      // that existing version (via the built-in "Latest" environment) instead of hard-failing.
+      if (/already submitted/i.test(emsg)) {
+        cv = null;
+      } else {
+        throw err;
+      }
     }
-    const versionId = cv.data.containerVersion?.containerVersionId ?? '';
-    if (!versionId) {
-      throw new Error(
-        cv.data.compilerError
-          ? 'The workspace has a compiler error, so a preview version could not be created. Fix the container in GTM, then retry.'
-          : 'Could not create a container version from the workspace (nothing to version, or a GTM error).'
-      );
+    let versionId = '';
+    if (cv) {
+      versionId = cv.data.containerVersion?.containerVersionId ?? '';
+      if (!versionId) {
+        throw new Error(
+          cv.data.compilerError
+            ? 'The workspace has a compiler error, so a preview version could not be created. Fix the container in GTM, then retry.'
+            : 'Could not create a container version from the workspace (nothing to version, or a GTM error).'
+        );
+      }
     }
 
     // 2. Read the built-in "Latest" preview environment — it auto-tracks the newest
@@ -491,13 +504,14 @@ export class GoogleDataService {
     const latest = environments.find((e) => e.type === 'latest' && e.authorizationCode && e.environmentId);
     if (!latest?.authorizationCode || !latest.environmentId) {
       throw new Error(
-        'Created a preview version, but the built-in "Latest" preview environment has no readable auth token (minting one would need the publish scope, which this app never requests). Paste a GTM Preview / Environment snippet instead.'
+        'The built-in "Latest" preview environment has no readable auth token (minting one would need the publish scope, which this app never requests). Paste a GTM Preview / Environment snippet instead.'
       );
     }
-    // create_version SUBMITS the workspace (it becomes read-only) and GTM auto-creates a fresh
-    // editable workspace based on the new version — its path is returned here. Surface its id so the
-    // caller can switch the active workspace to it; otherwise the next write fails "already submitted".
-    const newWorkspaceId = (cv.data.newWorkspacePath ?? '').split('/').pop() ?? '';
+    // create_version SUBMITS the workspace (it becomes read-only) and GTM auto-creates a fresh editable
+    // workspace based on the new version — its path is returned here. Surface its id so the caller can
+    // switch the active workspace to it; otherwise the next write fails "already submitted". (Empty in
+    // the already-submitted recovery path, where we didn't create a version.)
+    const newWorkspaceId = cv ? (cv.data.newWorkspacePath ?? '').split('/').pop() ?? '' : '';
     return {
       snippet: buildEnvironmentSnippet(publicId, latest.authorizationCode, latest.environmentId).head,
       versionId,
