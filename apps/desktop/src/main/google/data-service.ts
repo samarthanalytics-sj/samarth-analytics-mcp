@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
@@ -2186,6 +2186,51 @@ export class GoogleDataService {
       type: res.data.type ?? '',
       customEventName: customEventNameOf(res.data as unknown as Record<string, unknown>),
     };
+  }
+
+  /**
+   * Repair a CREATED tag's firing trigger to a corrected shape (the "Verify firing" fix). Snapshots
+   * the container, finds the tag by name + its first firing trigger, then either rewrites that
+   * trigger's conditions in place (it fires only this tag) or — if the trigger is shared by other
+   * tags — creates a corrected trigger and re-binds ONLY this tag to it, leaving siblings alone.
+   * Draft-only write; never publishes. `corrected` is a SuggestedTag-style trigger input.
+   */
+  async retargetTagTrigger(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    tagName: string,
+    corrected: TriggerInput
+  ): Promise<{ tagName: string; triggerId: string; mode: 'rewrite' | 'rebind'; triggerName: string }> {
+    const snap = await this.getGtmContainerSnapshot(accountId, containerId, workspaceId);
+    const plan = planTriggerRetarget(snap, tagName, corrected);
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const base = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const built = plan.built as unknown as Record<string, unknown>;
+
+    if (plan.mode === 'rebind') {
+      // The trigger fires other tags too — don't mutate it. Create a corrected one + rebind this tag.
+      const newName = `${String(built.name ?? plan.tagName)} (verified fix)`;
+      const nt = await this.createGtmTrigger(accountId, containerId, workspaceId, { ...built, name: newName });
+      const tag = snap.tags.find((t) => t.tagId === plan.tagId);
+      const newFiring = (tag?.firingTriggerId ?? []).map((id) => (id === plan.triggerId ? nt.triggerId : id));
+      await this.updateGtmTag(accountId, containerId, workspaceId, plan.tagId, { firingTriggerId: newFiring });
+      return { tagName: plan.tagName, triggerId: nt.triggerId, mode: 'rebind', triggerName: newName };
+    }
+
+    // Rewrite the trigger's scope conditions IN PLACE (read-modify-write) — keep its name/id so the
+    // tag keeps firing on the same trigger; only the corrected condition arrays change.
+    const path = `${base}/triggers/${plan.triggerId}`;
+    const current = (await gtm.accounts.containers.workspaces.triggers.get({ path })).data as Record<string, unknown>;
+    const body: Record<string, unknown> = { ...current };
+    if (built.type) body.type = built.type;
+    body.filter = built.filter ?? [];
+    if (built.autoEventFilter !== undefined) body.autoEventFilter = built.autoEventFilter;
+    if (built.customEventFilter !== undefined) body.customEventFilter = built.customEventFilter;
+    const res = await gtm.accounts.containers.workspaces.triggers.update({ path, requestBody: applyTriggerWaitDefaults(body) });
+    this.journal('trigger', accountId, containerId, workspaceId, plan.triggerId, `${res.data.name ?? plan.tagName} (#${plan.triggerId})`);
+    return { tagName: plan.tagName, triggerId: plan.triggerId, mode: 'rewrite', triggerName: res.data.name ?? plan.tagName };
   }
 
   async createGtmVariable(

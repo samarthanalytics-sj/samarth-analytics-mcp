@@ -110,6 +110,23 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     return snapshotToVerifyInputs(snap);
   });
 
+  // Repair a created tag's firing trigger to a corrected shape (the "Verify firing → auto-heal" fix):
+  // rewrite the trigger's conditions in place, or rebind this tag to a corrected trigger if shared.
+  // Draft-only write; the renderer confirms before invoking. Retries the per-minute quota.
+  ipcMain.handle('gtm:retargetTrigger', async (_e, ctx: unknown) => {
+    const o = (ctx && typeof ctx === 'object' ? ctx : {}) as Record<string, unknown>;
+    const accountId = String(o.accountId ?? ''), containerId = String(o.containerId ?? ''), workspaceId = String(o.workspaceId ?? '');
+    const tagName = String(o.tagName ?? '').trim();
+    const corrected = o.trigger;
+    if (!accountId || !containerId || !workspaceId) throw new Error('Pick a GTM account, container and draft workspace first.');
+    if (!tagName) throw new Error('Which tag to repair?');
+    if (!corrected || typeof corrected !== 'object') throw new Error('No corrected trigger provided.');
+    return withQuotaRetry(
+      () => data.retargetTagTrigger(accountId, containerId, workspaceId, tagName, corrected as Parameters<typeof data.retargetTagTrigger>[4]),
+      { maxRetries: 3 }
+    );
+  });
+
   ipcMain.handle('gtm:applyFix', async (_e, fix: unknown) => {
     const f = (fix && typeof fix === 'object' ? fix : {}) as { tool?: string; args?: Record<string, unknown> };
     if (!f.tool || !f.args || typeof f.args !== 'object') throw new Error('Invalid fix.');
