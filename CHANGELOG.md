@@ -1,3 +1,9 @@
+## [1.191.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.190.0...v1.191.0) (2026-07-06)
+
+### Features
+
+* **desktop:** add debug toggles to container audit + tag suggestions ([6687dc8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6687dc8117e7d55b309c4900ea95ae5967c4cfd3))
+
 ## [1.190.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.189.0...v1.190.0) (2026-07-06)
 
 ### Features
