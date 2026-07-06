@@ -138,15 +138,15 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
       if (!verdict.ok) throw new Error(`Cannot verify that URL: ${verdict.reason}`);
       const tagList = (Array.isArray(tags) ? tags : []) as VerifyTagInput[];
       const els = (Array.isArray(elements) ? elements : []) as DetectedElementView[];
-      if (tagList.length === 0) return { url: target, injected: false, pagesOk: false, error: 'No tags selected to verify.', verdicts: [] };
+      if (tagList.length === 0) return { url: target, injected: false, previewAuth: false, pagesOk: false, error: 'No tags selected to verify.', verdicts: [] };
       const o = opts ?? {};
       const driven = await runVerifyDriver(
         target,
-        tagList.map((t) => ({ id: t.id, trigger: t.trigger })),
+        tagList.map((t) => ({ id: t.id, ...(t.page ? { page: t.page } : {}), trigger: t.trigger })),
         { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}), settleMs: clampSettle(o.settleMs), navTimeoutMs: o.navTimeoutMs },
       );
       const verdicts = evaluateVerify(tagList, driven.perTag, els);
-      return { url: target, injected: driven.injected, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts };
+      return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts };
     },
   );
 

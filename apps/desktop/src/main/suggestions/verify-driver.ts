@@ -68,7 +68,33 @@ export interface DriverTrigger {
 }
 export interface VerifyDriverTag {
   id: string;
+  /** The page the tag's trigger lives on ("/contact", "site-wide", "/"). Drives per-page navigation. */
+  page?: string;
   trigger: DriverTrigger;
+}
+
+const MAX_VERIFY_PAGES = 25;
+
+/** Resolve a tag's page ("/contact" | "site-wide" | undefined) to a full URL against the base. */
+function resolvePageUrl(baseUrl: string, page: string | undefined): string {
+  if (!page || page === 'site-wide' || page === '/') return baseUrl;
+  try {
+    return new URL(page, baseUrl).href;
+  } catch {
+    return baseUrl;
+  }
+}
+
+/** Group tags by the page their trigger lives on, so each is driven on the RIGHT page. */
+function groupByPage(baseUrl: string, tags: VerifyDriverTag[]): Map<string, VerifyDriverTag[]> {
+  const map = new Map<string, VerifyDriverTag[]>();
+  for (const t of tags) {
+    const pageUrl = resolvePageUrl(baseUrl, t.page);
+    const arr = map.get(pageUrl);
+    if (arr) arr.push(t);
+    else if (map.size < MAX_VERIFY_PAGES) map.set(pageUrl, [t]);
+  }
+  return map;
 }
 export interface VerifyDriverOptions {
   /** GTM Preview snippet / URL / GTM-XXXX id the user pasted, so DRAFT tags load. */
@@ -80,21 +106,43 @@ export interface VerifyDriverOptions {
 export interface VerifyDriverResult {
   pagesOk: boolean;
   injected: boolean;
+  /** The injected snippet carried workspace-preview auth (so DRAFT tags load). */
+  previewAuth: boolean;
   error?: string;
   perTag: PerTagCapture[];
 }
 
-/** Derive a gtm.js loader src from a pasted snippet / URL / GTM-XXXX id, or null. */
+/**
+ * Derive a gtm.js loader src from a pasted snippet / URL / GTM-XXXX id, or null.
+ *
+ * Crucially, it PRESERVES the preview/environment params (gtm_auth / gtm_preview /
+ * gtm_cookies_win) so a GTM "Preview" or Environment snippet loads the WORKSPACE
+ * (with your just-created draft tags) — not the published container. A bare id, or
+ * a snippet without those params, loads the published container.
+ */
 export function buildLoaderSrc(snippet: string | undefined): string | null {
   if (!snippet) return null;
   const s = snippet.trim();
-  // A full gtm.js URL (possibly with gtm_auth/gtm_preview) anywhere in the paste.
+  // A full gtm.js URL with a literal GTM id (already carries any params) — use as-is.
   const urlMatch = s.match(/https?:\/\/[^"'\s]*\/gtm\.js\?[^"'\s]*id=GTM-[^"'\s&]+[^"'\s]*/i);
   if (urlMatch) return urlMatch[0];
-  // Otherwise a bare public id → the standard loader.
+  // Otherwise a snippet where the id is concatenated (`id='+i+...`); pull the id +
+  // the preview params out of the text and rebuild the URL.
   const idMatch = s.match(/GTM-[A-Z0-9]+/i);
-  if (idMatch) return `https://www.googletagmanager.com/gtm.js?id=${idMatch[0].toUpperCase()}`;
-  return null;
+  if (!idMatch) return null;
+  let src = `https://www.googletagmanager.com/gtm.js?id=${idMatch[0].toUpperCase()}`;
+  const auth = s.match(/gtm_auth=([^&'"\s]+)/i);
+  const preview = s.match(/gtm_preview=([^&'"\s]+)/i);
+  const cookiesWin = s.match(/gtm_cookies_win=([^&'"\s]+)/i);
+  if (auth && preview) {
+    src += `&gtm_auth=${auth[1]}&gtm_preview=${preview[1]}&gtm_cookies_win=${cookiesWin ? cookiesWin[1] : 'x'}`;
+  }
+  return src;
+}
+
+/** True when the loader carries workspace-preview auth (vs. the published container). */
+export function isPreviewLoader(src: string | null): boolean {
+  return Boolean(src && /gtm_auth=/.test(src) && /gtm_preview=/.test(src));
 }
 
 // ── In-page helpers (serialized to page.evaluate — DOM globals only) ──────────
@@ -219,10 +267,11 @@ export async function runVerifyDriver(
   const navTimeoutMs = opts.navTimeoutMs ?? 20_000;
   const settleMs = opts.settleMs ?? 900;
   const loaderSrc = buildLoaderSrc(opts.containerSnippet);
+  const previewAuth = isPreviewLoader(loaderSrc);
   const perTag: PerTagCapture[] = [];
 
   if (!(await requestAllowed(url))) {
-    return { pagesOk: false, injected: false, perTag, error: `Refusing to load ${url}: blocked by the SSRF guard (private/loopback/invalid host).` };
+    return { pagesOk: false, injected: false, previewAuth, perTag, error: `Refusing to load ${url}: blocked by the SSRF guard (private/loopback/invalid host).` };
   }
   const pw = await loadPlaywright();
   if (!pw) throw new PlaywrightUnavailableError();
@@ -256,65 +305,75 @@ export async function runVerifyDriver(
     });
 
     const page = await context.newPage();
-    await page.goto(url, { waitUntil: 'networkidle', timeout: navTimeoutMs });
-
-    // Inject the (preview) container so DRAFT tags load, then let it initialise.
     let injected = false;
-    if (loaderSrc) {
-      await page.evaluate((src: string) => {
-        const w = window as unknown as { dataLayer?: unknown[] };
-        w.dataLayer = w.dataLayer || [];
-        w.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
-        const s = document.createElement('script');
-        s.async = true;
-        s.src = src;
-        (document.head || document.documentElement).appendChild(s);
-      }, loaderSrc);
-      injected = true;
-      await page.waitForTimeout(Math.max(settleMs, 1200)); // container + tags load
-    }
 
-    await page.evaluate(installGuardsInPage);
-    // From here every cross-site beacon is a tag firing → capture+abort it all.
-    armed = true;
-    const loadHits = captured.slice();
-
-    for (const tag of tags) {
-      const kind = tag.trigger.kind;
-      // Fire-on-load triggers (pageview / base Google tag): attribute the load hits.
-      if (kind === 'pageview' || kind === 'custom_event') {
-        perTag.push({
-          tagId: tag.id,
-          kind: 'navigate',
-          targetFound: kind === 'pageview',
-          performed: kind === 'pageview',
-          ...(kind === 'custom_event' ? { note: 'custom-event (dataLayer) trigger — not exercised by interaction' } : {}),
-          hits: loadHits.map((h) => ({ url: h.url, body: h.body, collector: h.collector })),
-        });
+    // Drive each tag on ITS page: group by page, navigate to each, inject the
+    // (preview) container so DRAFT tags load, then drive the group's triggers.
+    for (const [pageUrl, groupTags] of groupByPage(url, tags)) {
+      const loadStart = captured.length;
+      try {
+        await page.goto(pageUrl, { waitUntil: 'networkidle', timeout: navTimeoutMs });
+      } catch (e) {
+        const note = `could not load ${pageUrl}: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`;
+        for (const t of groupTags) perTag.push({ tagId: t.id, kind: 'navigate', targetFound: false, performed: false, note, hits: [] });
         continue;
       }
-      const before = captured.length;
-      let outcome: DriveOutcome;
-      try {
-        outcome = await page.evaluate<DriveOutcome>(driveInPage, specFor(tag.trigger));
-      } catch (e) {
-        outcome = { targetFound: false, performed: false, note: (e instanceof Error ? e.message : String(e)).slice(0, 150) };
+
+      if (loaderSrc) {
+        await page.evaluate((src: string) => {
+          const w = window as unknown as { dataLayer?: unknown[] };
+          w.dataLayer = w.dataLayer || [];
+          w.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
+          const s = document.createElement('script');
+          s.async = true;
+          s.src = src;
+          (document.head || document.documentElement).appendChild(s);
+        }, loaderSrc);
+        injected = true;
+        await page.waitForTimeout(Math.max(settleMs, 1200)); // container + tags load
       }
-      if (outcome.performed) await page.waitForTimeout(settleMs);
-      const hits = captured.slice(before).map((h) => ({ url: h.url, body: h.body, collector: h.collector }));
-      perTag.push({
-        tagId: tag.id,
-        kind: kind === 'form_submit' ? 'submit' : 'click',
-        targetFound: outcome.targetFound,
-        performed: outcome.performed,
-        ...(outcome.note ? { note: outcome.note } : {}),
-        hits,
-      });
+
+      await page.evaluate(installGuardsInPage);
+      armed = true; // from here every cross-site beacon is a tag firing → capture+abort it
+      const loadHits = captured.slice(loadStart);
+
+      for (const tag of groupTags) {
+        const kind = tag.trigger.kind;
+        // Fire-on-load triggers (pageview / base Google tag): attribute this page's load hits.
+        if (kind === 'pageview' || kind === 'custom_event') {
+          perTag.push({
+            tagId: tag.id,
+            kind: 'navigate',
+            targetFound: kind === 'pageview',
+            performed: kind === 'pageview',
+            ...(kind === 'custom_event' ? { note: 'custom-event (dataLayer) trigger — not exercised by interaction' } : {}),
+            hits: loadHits.map((h) => ({ url: h.url, body: h.body, collector: h.collector })),
+          });
+          continue;
+        }
+        const before = captured.length;
+        let outcome: DriveOutcome;
+        try {
+          outcome = await page.evaluate<DriveOutcome>(driveInPage, specFor(tag.trigger));
+        } catch (e) {
+          outcome = { targetFound: false, performed: false, note: (e instanceof Error ? e.message : String(e)).slice(0, 150) };
+        }
+        if (outcome.performed) await page.waitForTimeout(settleMs);
+        const hits = captured.slice(before).map((h) => ({ url: h.url, body: h.body, collector: h.collector }));
+        perTag.push({
+          tagId: tag.id,
+          kind: kind === 'form_submit' ? 'submit' : 'click',
+          targetFound: outcome.targetFound,
+          performed: outcome.performed,
+          ...(outcome.note ? { note: outcome.note } : {}),
+          hits,
+        });
+      }
     }
 
-    return { pagesOk: true, injected, perTag };
+    return { pagesOk: true, injected, previewAuth, perTag };
   } catch (e) {
-    return { pagesOk: false, injected: Boolean(loaderSrc), perTag, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
+    return { pagesOk: false, injected: Boolean(loaderSrc), previewAuth, perTag, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
   } finally {
     if (browser) {
       try {

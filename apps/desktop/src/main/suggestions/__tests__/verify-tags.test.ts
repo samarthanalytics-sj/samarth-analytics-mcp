@@ -64,6 +64,15 @@ const els: DetectedElementView[] = [{ page: '/', kind: 'cta', text: 'Get a Free 
   check('no-candidate → fixNote present', Boolean(v[0].fixNote));
 }
 
+// ── identical text present on ANOTHER page → no no-op fix, points at the page ───
+{
+  const t = tag({ trigger: { name: 'X', kind: 'link_click', clickTextValue: 'Book a Strategy Call', clickTextOperator: 'equals' } });
+  const contactEls: DetectedElementView[] = [{ page: '/contact', kind: 'cta', text: 'Book a Strategy Call' }];
+  const v = evaluateVerify([t], [cap({ targetFound: false, performed: false, hits: [] })], contactEls);
+  check('identical-text → no no-op suggestedTrigger', v[0].suggestedTrigger === undefined);
+  check('identical-text → fixNote points at the page', /\/contact/.test(v[0].fixNote ?? ''));
+}
+
 // ── non-GA4 (meta) fired via collector ──────────────────────────────────────────
 {
   const t = tag({ id: 'm1', platform: 'meta_pixel', eventName: 'Lead' });
