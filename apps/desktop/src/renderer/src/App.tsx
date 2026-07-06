@@ -618,9 +618,10 @@ export function App(): JSX.Element {
   const [error, setError] = useState('');
   // Cross-tab GA4 monitoring banner: a background run with NEW issues surfaces here on any tab.
   const [monitorAlert, setMonitorAlert] = useState<Ga4MonitorRun | null>(null);
-  // An account whose Google token just expired/was revoked (backend cleared it) — raises a
-  // dismissible "Re-connect" banner so a dead session is obvious instead of silent failures.
-  const [reauthId, setReauthId] = useState<string | null>(null);
+  // Accounts whose Google token expired/was revoked this session (backend cleared them) — one
+  // dismissible "Re-connect" banner each. Rendering filters to accounts still disconnected, so a
+  // successful reconnect auto-hides its banner and a cancelled one keeps it (no premature clear).
+  const [reauthIds, setReauthIds] = useState<string[]>([]);
   // Inline rename of an account's sidebar label (pencil → input; Enter saves, Escape cancels).
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
 
@@ -646,7 +647,7 @@ export function App(): JSX.Element {
     });
     // A dead Google token (invalid_grant) was just cleared by the backend — surface a
     // reconnect prompt for that account (refresh() already ran via accounts:changed).
-    const offReauth = window.desktop.accounts.onAuthExpired(({ id }) => setReauthId(id));
+    const offReauth = window.desktop.accounts.onAuthExpired(({ id }) => setReauthIds((prev) => (prev.includes(id) ? prev : [...prev, id])));
     return () => { off(); offRun(); offReauth(); };
   }, []);
 
@@ -819,21 +820,24 @@ export function App(): JSX.Element {
           </div>
         )}
 
-        {reauthId && (
-          <div style={styles.monitorBarCrit}>
-            <span style={{ flex: 1 }}>
-              🔑 Google session expired for <b>{accounts.find((a) => a.id === reauthId)?.email ?? 'this account'}</b> — reads/writes will fail until you re-connect. Testing-mode consent screens expire tokens every 7 days.
-            </span>
-            <button
-              style={styles.monitorBarBtn}
-              disabled={connecting}
-              onClick={async () => { if (reauthId) await run(() => window.desktop.accounts.setActive(reauthId)); setReauthId(null); await connect(); }}
-            >
-              {connecting ? 'Connecting…' : 'Re-connect'}
-            </button>
-            <button style={styles.errorClose} onClick={() => setReauthId(null)}>✕</button>
-          </div>
-        )}
+        {reauthIds
+          .map((id) => accounts.find((a) => a.id === id && !a.hasGoogleToken))
+          .filter((a): a is AccountView => Boolean(a))
+          .map((a) => (
+            <div key={a.id} style={styles.monitorBarCrit}>
+              <span style={{ flex: 1 }}>
+                🔑 Google session expired for <b>{a.email}</b> — reads/writes will fail until you re-connect. Testing-mode consent screens expire tokens every 7 days.
+              </span>
+              <button
+                style={styles.monitorBarBtn}
+                disabled={connecting}
+                onClick={async () => { await run(() => window.desktop.accounts.setActive(a.id)); await connect(); }}
+              >
+                {connecting ? 'Connecting…' : 'Re-connect'}
+              </button>
+              <button style={styles.errorClose} onClick={() => setReauthIds((prev) => prev.filter((x) => x !== a.id))}>✕</button>
+            </div>
+          ))}
 
         {/* ChatView stays MOUNTED across tab switches (hidden, not unmounted) so an in-flight
             response keeps streaming and the conversation isn't lost when you pop into GTM Tools. */}
