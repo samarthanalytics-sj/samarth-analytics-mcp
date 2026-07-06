@@ -549,6 +549,8 @@ export interface VerifyTagInput {
   tagName: string;
   eventName: string;
   platform: string;
+  /** The page the tag's trigger lives on ("/contact", "site-wide") — drives per-page verification. */
+  page?: string;
   trigger: SuggestedTagView['trigger'];
 }
 
@@ -585,6 +587,9 @@ export interface VerifyTagsResult {
   url: string;
   /** The container/preview snippet was injected onto the page. */
   injected: boolean;
+  /** The injected snippet carried workspace-preview auth (gtm_auth/gtm_preview) so DRAFT tags load.
+   *  When false with injected=true, a PUBLISHED snippet was pasted — draft tags will not fire. */
+  previewAuth: boolean;
   pagesOk: boolean;
   error?: string;
   verdicts: VerifyTagVerdict[];
