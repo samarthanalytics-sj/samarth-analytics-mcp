@@ -70,8 +70,9 @@ const MODEL_OPTIONS: Record<LlmProvider, Array<{ id: string; label: string }>> =
   ],
 };
 
-type View = 'chat' | 'gtm' | 'ga4audit' | 'ga4monitoring' | 'prompts' | 'settings';
+type View = 'chat' | 'gtm' | 'ga4' | 'prompts' | 'settings';
 type GtmTab = 'suggestions' | 'audit' | 'verify' | 'server';
+type Ga4Tab = 'audit' | 'monitoring';
 
 // GTM type labels + gtmTypeLabel now live in shared/tag-brand.ts (imported above) so the PDF export
 // and this panel can't drift.
@@ -612,6 +613,9 @@ export function App(): JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [selfTest, setSelfTest] = useState<SecretSelfTest | null>(null);
   const [view, setView] = useState<View>('chat');
+  // GA4 Tools sub-tab is lifted to App (unlike GTM Tools' local state) so the cross-tab monitor
+  // alert banner can deep-link straight to the Monitoring sub-tab.
+  const [ga4Tab, setGa4Tab] = useState<Ga4Tab>('audit');
   // A prompt picked from the Prompts tab to drop into the chat input (nonce so re-picks fire).
   const [chatSeed, setChatSeed] = useState<{ text: string; nonce: number; product?: 'gtm' | 'ga4' } | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -773,16 +777,10 @@ export function App(): JSX.Element {
             🗂 GTM Tools
           </button>
           <button
-            style={{ ...styles.navItem, ...(view === 'ga4audit' ? styles.navActive : {}) }}
-            onClick={() => setView('ga4audit')}
+            style={{ ...styles.navItem, ...(view === 'ga4' ? styles.navActive : {}) }}
+            onClick={() => setView('ga4')}
           >
-            📊 GA4 Audit
-          </button>
-          <button
-            style={{ ...styles.navItem, ...(view === 'ga4monitoring' ? styles.navActive : {}) }}
-            onClick={() => setView('ga4monitoring')}
-          >
-            🔔 GA4 Monitor
+            📊 GA4 Tools
           </button>
           <button
             style={{ ...styles.navItem, ...(view === 'prompts' ? styles.navActive : {}) }}
@@ -815,7 +813,7 @@ export function App(): JSX.Element {
             <span style={{ flex: 1 }}>
               {monitorAlert.health === 'critical' ? '🔴' : '🟠'} GA4 Monitor · <b>{monitorAlert.propertyLabel}</b>: {monitorAlert.newAlertIds.length} new issue{monitorAlert.newAlertIds.length === 1 ? '' : 's'} — {monitorAlert.alerts.find((a) => monitorAlert.newAlertIds.includes(a.id))?.title ?? monitorAlert.summary}
             </span>
-            <button style={styles.monitorBarBtn} onClick={() => { setView('ga4monitoring'); setMonitorAlert(null); }}>View</button>
+            <button style={styles.monitorBarBtn} onClick={() => { setView('ga4'); setGa4Tab('monitoring'); setMonitorAlert(null); }}>View</button>
             <button style={styles.errorClose} onClick={() => setMonitorAlert(null)}>✕</button>
           </div>
         )}
@@ -846,10 +844,8 @@ export function App(): JSX.Element {
         </div>
         {view === 'gtm' ? (
           <GtmToolsView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
-        ) : view === 'ga4audit' ? (
-          <Ga4AuditPanel key={active?.id ?? 'none'} active={active} onError={setError} />
-        ) : view === 'ga4monitoring' ? (
-          <Ga4MonitoringPanel key={active?.id ?? 'none'} active={active} onError={setError} />
+        ) : view === 'ga4' ? (
+          <Ga4ToolsView key={active?.id ?? 'none'} active={active} onError={setError} tab={ga4Tab} setTab={setGa4Tab} />
         ) : view === 'prompts' ? (
           <PromptsView
             onUse={(text, product) => {
@@ -1582,6 +1578,39 @@ function kindCountsLabel(elements: Array<{ kind: string }>): string {
 // The grouped "GTM" workspace: one shared account/container/workspace picker
 // (GtmContextBar) over two sub-tabs — Tag suggestions and Container audit — so both
 // GTM-container tools share the same target instead of each finding it on its own.
+// GA4 tools — the two GA4 surfaces (Audit + Monitoring) under one sidebar entry, mirroring GTM Tools'
+// sub-tab pattern. The active tab is owned by App (passed in) so the cross-tab monitor alert banner
+// can deep-link straight to the Monitoring sub-tab.
+function Ga4ToolsView({
+  active,
+  onError,
+  tab,
+  setTab,
+}: {
+  active: AccountView | undefined;
+  onError: (m: string) => void;
+  tab: Ga4Tab;
+  setTab: (t: Ga4Tab) => void;
+}): JSX.Element {
+  return (
+    <div style={styles.gtmWorkspace}>
+      <div style={styles.subTabs} role="tablist">
+        <button style={tab === 'audit' ? styles.subTabOn : styles.subTabOff} onClick={() => setTab('audit')} role="tab" aria-selected={tab === 'audit'}>
+          📊 GA4 Audit
+        </button>
+        <button style={tab === 'monitoring' ? styles.subTabOn : styles.subTabOff} onClick={() => setTab('monitoring')} role="tab" aria-selected={tab === 'monitoring'}>
+          🔔 GA4 Monitoring
+        </button>
+      </div>
+      {tab === 'audit' ? (
+        <Ga4AuditPanel key={(active?.id ?? 'none') + ':ga4aud'} active={active} onError={onError} />
+      ) : (
+        <Ga4MonitoringPanel key={(active?.id ?? 'none') + ':ga4mon'} active={active} onError={onError} />
+      )}
+    </div>
+  );
+}
+
 function GtmToolsView({
   active,
   onError,
