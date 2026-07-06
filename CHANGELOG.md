@@ -1,3 +1,9 @@
+## [1.215.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.214.0...v1.215.0) (2026-07-06)
+
+### Features
+
+* **desktop:** GA4 Monitoring simplified to a tab-per-property layout ([dde58a4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dde58a406d5b15a35ace0efe6fe9f138c15abc66))
+
 ## [1.214.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.213.0...v1.214.0) (2026-07-06)
 
 ### Features
