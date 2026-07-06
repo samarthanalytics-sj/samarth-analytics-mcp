@@ -1,3 +1,9 @@
+## [1.220.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.220.0...v1.220.1) (2026-07-06)
+
+### Bug Fixes
+
+* **desktop:** Auto-preview recovers when the workspace is already submitted ([2675df1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2675df1ba6e9b90902763aa58cdda3ffb6fce165)), closes [#362](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/362) [#361](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/361) [#362](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/362)
+
 ## [1.220.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.219.0...v1.220.0) (2026-07-06)
 
 ### Features
