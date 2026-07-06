@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { ga4SectionsHtml } from '../ga4-sections-html';
+import { ga4SectionsHtml, engagementClusters } from '../ga4-sections-html';
 import type { Ga4SectionsView } from '../ipc';
 
 let passed = 0;
@@ -327,6 +327,48 @@ test('section 9 scope shows the metadata + findings-count badges + footer', () =
 test('output uses no em dashes (house style)', () => {
   const h = ga4SectionsHtml(view({ topFinding: { severity: 'high', area: 'Growth', message: 'A — B problem.', recommendation: 'Fix — now.' }, noIssueNote: null }));
   assert.ok(!h.includes('—'), 'em dashes stripped');
+});
+
+
+test('engagementClusters splits two populations at a wide gap, null on a smooth spread', () => {
+  const split = engagementClusters([
+    { name: 'Vietnam', pct: 4 }, { name: 'Turkiye', pct: 23 }, { name: 'Brazil', pct: 32 },
+    { name: 'Indonesia', pct: 78 }, { name: 'US', pct: 88 }, { name: 'India', pct: 96 },
+  ]);
+  assert.ok(split, 'clear 46-point gap detected');
+  assert.deepEqual(split.low.map((r) => r.name), ['Vietnam', 'Turkiye', 'Brazil']);
+  assert.equal(split.high[0].name, 'Indonesia');
+  assert.equal(engagementClusters([{ name: 'a', pct: 60 }, { name: 'b', pct: 70 }, { name: 'c', pct: 80 }, { name: 'd', pct: 90 }]), null, 'smooth spread has no break');
+  assert.equal(engagementClusters([{ name: 'a', pct: 65 }, { name: 'b', pct: 66 }, { name: 'c', pct: 95 }, { name: 'd', pct: 96 }]), null, 'a not-actually-low cluster does not split');
+});
+
+test('evidence charts render: device share-vs-revenue, market bimodality, funnel bars, flagged rows', () => {
+  const h = ga4SectionsHtml(view({
+    devicePerformance: [
+      { device: 'mobile', sessions: '64,015', convRate: '56%', revenue: 'INR 1,145,819', engagement: '97%' },
+      { device: 'desktop', sessions: '24,384', convRate: '30%', revenue: 'INR 37,010', engagement: '39%' },
+    ],
+    geoPerformance: [
+      { country: 'India', sessions: '63,992', convRate: '56.7%', revenue: 'INR 1,149,789', engagement: '96%' },
+      { country: 'Vietnam', sessions: '7,772', convRate: '2.7%', revenue: '-', engagement: '4%' },
+      { country: 'Singapore', sessions: '3,123', convRate: '88.2%', revenue: '-', engagement: '91%' },
+      { country: 'Brazil', sessions: '1,020', convRate: '29.6%', revenue: '-', engagement: '32%' },
+      { country: 'Germany', sessions: '584', convRate: '89.4%', revenue: '-', engagement: '95%' },
+    ],
+    funnel: { steps: [
+      { label: 'View item', users: '34,722', pctEntry: '100%', stepConv: '-' },
+      { label: 'Add to cart', users: '1,610', pctEntry: '5%', stepConv: '5%' },
+      { label: 'Begin checkout', users: '701', pctEntry: '2%', stepConv: '44%' },
+      { label: 'Purchase', users: '369', pctEntry: '1%', stepConv: '53%' },
+    ], overall: '1.1%' },
+  }));
+  assert.ok(h.includes('Share of visits vs share of revenue, by device'), 'device viz card');
+  assert.ok(h.includes('% of visits but only') && h.includes('desktop'), 'device mismatch callout computed');
+  assert.ok(h.includes('Engagement rate by market: two separate populations'), 'bimodality card renders');
+  assert.ok(h.includes('two populations, no overlap'), 'divider note');
+  assert.ok(h.includes('Purchase funnel: users per step'), 'funnel viz card');
+  assert.ok(h.includes('95 of every 100') && h.includes('leave before Add to cart'), 'biggest-drop callout computed');
+  assert.ok(h.includes('traffic is suspect'), 'market flag note present');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

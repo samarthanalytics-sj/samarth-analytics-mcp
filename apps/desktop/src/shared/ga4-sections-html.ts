@@ -82,6 +82,64 @@ function growthBar(lbl: string, pct: number | null, maxAbs: number, color: strin
   );
 }
 
+/** Parse a number back out of one of OUR formatted table cells ("50,000", "INR 2,00,000", "97%", "-").
+ *  Only ever applied to values this module's builders formatted, so the round-trip is deterministic. */
+const pnum = (s: string): number => {
+  const d = String(s ?? '').replace(/[^0-9.]/g, '');
+  return d ? Number(d) : 0;
+};
+const FLAG = '#A63527';
+const FLAG_BG = v('--c-red-bg', '#FBF1EF');
+const SLATE = '#26344E';
+const TRACK = 'var(--surface-2, #EDEDE6)';
+/** The template's left-accented interpretation box under a chart. `inner` is pre-escaped HTML. */
+const callout = (inner: string, accent = FLAG, bg = FLAG_BG): string =>
+  `<div style="margin:12px 0 0;padding:11px 14px;border-left:3px solid ${accent};background:${bg};font-size:13px;color:${TEXT};border-radius:0 3px 3px 0;line-height:1.5">${inner}</div>`;
+/** Mono fine-print caption under a chart (the template's .vcap). */
+const vcap = (t: string): string => `<div style="font-family:${MONO};font-size:11px;color:${FAINT};line-height:1.55;margin-top:10px">${esc(t)}</div>`;
+/** Viz card: declarative title + one-line explainer + chart body (the template's .viz). */
+const vizCard = (title: string, sub: string, body: string): string =>
+  `<div style="border:1px solid ${BORDER};border-radius:4px;padding:18px 20px 16px;background:${SURFACE};margin:14px 0 8px;page-break-inside:avoid">` +
+  `<div style="font-size:15px;font-weight:600;color:${TEXT};margin:0 0 3px">${esc(title)}</div>` +
+  (sub ? `<div style="font-size:13px;color:${MUTED};margin:0 0 12px;max-width:70ch">${esc(sub)}</div>` : '') +
+  body +
+  `</div>`;
+/** One horizontal chart bar on a full-width track. `pct` is 0-100 of the track; a flagged row gets the
+ *  flag red for both the label and the bar (the template's bar-flag). */
+const chartBar = (lbl: string, pct: number, valueText: string, color: string, flagged = false): string => {
+  const w = Math.max(0.5, Math.min(100, pct));
+  return (
+    `<div style="display:flex;align-items:center;gap:10px;margin:7px 0;font-size:12.5px">` +
+    `<span style="width:130px;flex:0 0 130px;color:${flagged ? FLAG : TEXT};font-weight:${flagged ? 700 : 600};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(lbl)}</span>` +
+    `<span style="flex:1;background:${TRACK};border-radius:3px;height:14px;overflow:hidden"><span style="display:block;height:100%;width:${w}%;background:${flagged ? FLAG : color};border-radius:3px"></span></span>` +
+    `<span style="width:120px;flex:0 0 120px;text-align:right;font-family:${MONO};font-size:11.5px;color:${flagged ? FLAG : MUTED};white-space:nowrap">${esc(valueText)}</span>` +
+    `</div>`
+  );
+};
+
+/** Split rows into low/high engagement clusters at the LARGEST gap between consecutive sorted values,
+ *  when that gap is wide enough (>= 25 points) to indicate two populations rather than a spread.
+ *  Deterministic; null when there is no clear split. Exported for tests. */
+export function engagementClusters(rows: Array<{ name: string; pct: number }>): { low: Array<{ name: string; pct: number }>; high: Array<{ name: string; pct: number }>; gap: number } | null {
+  if (rows.length < 4) return null;
+  const sorted = [...rows].sort((a, b) => a.pct - b.pct);
+  let cut = -1;
+  let gap = 0;
+  for (let i = 1; i < sorted.length; i++) {
+    const g = sorted[i].pct - sorted[i - 1].pct;
+    if (g > gap) {
+      gap = g;
+      cut = i;
+    }
+  }
+  if (cut < 1 || gap < 25) return null;
+  const low = sorted.slice(0, cut);
+  const high = sorted.slice(cut);
+  // Two populations need a meaningful high cluster and a genuinely low low cluster.
+  if (high.length < 2 || low[low.length - 1].pct > 60) return null;
+  return { low, high, gap };
+}
+
 export function ga4SectionsHtml(x: Ga4SectionsView): string {
   // ── Section 2 · What is wrong ──
   let s2 = eyebrow('Section 2') + h2('What is wrong');
@@ -228,18 +286,30 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
   const provNote = x.perfProvisional
     ? `<div style="font-family:${MONO};font-size:11px;color:${FAINT};margin:4px 2px 8px;line-height:1.55">*Conversion-rate and revenue values are provisional - not verified (see the Data Trust Matrix).</div>`
     : '';
+  // Rows whose ENGAGEMENT sits far below the table's norm are flagged (the template's rowbad): the
+  // low-engagement outliers are where non-human / consent-lost traffic concentrates. Deterministic:
+  // flagged when engagement < 60% of the table's median engagement.
+  const engFlags = (rows: Array<{ engagement: string }>): boolean[] => {
+    const vals = rows.map((r) => pnum(r.engagement)).sort((a, b) => a - b);
+    const median = vals.length ? vals[Math.floor(vals.length / 2)] : 0;
+    return rows.map((r) => median > 0 && pnum(r.engagement) < median * 0.6);
+  };
   // Channel performance table — which channels convert and earn, not just their traffic share.
   if (x.channelPerformance && x.channelPerformance.length) {
+    const flags = engFlags(x.channelPerformance);
     const cRows = x.channelPerformance
       .map(
-        (c) =>
-          `<tr><td ${TD}><span style="font-weight:600">${esc(c.channel)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDP}>${esc(c.convRate)}</td><td ${TDP}>${esc(c.revenue)}</td><td ${TDR}>${esc(c.engagement)}</td></tr>`,
+        (c, i) =>
+          `<tr${flags[i] ? ` style="background:${FLAG_BG}"` : ''}><td ${TD}><span style="font-weight:600;${flags[i] ? `color:${FLAG}` : ''}">${esc(c.channel)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDP}>${esc(c.convRate)}</td><td ${TDP}>${esc(c.revenue)}</td><td ${TDR}>${esc(c.engagement)}</td></tr>`,
       )
       .join('');
+    const flagNote = flags.some(Boolean)
+      ? `<div style="font-family:${MONO};font-size:11px;color:${FAINT};margin:4px 2px 0;line-height:1.55">Flagged rows sit far below the table's engagement norm - where bot, proxy, or consent-lost traffic concentrates.</div>`
+      : '';
     s6 +=
       tableCaption('Channel performance', '(conversion rate and revenue per channel, not just traffic share)') +
       `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
-      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Channel</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cRows}</tbody></table></div>` + provNote;
+      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Channel</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cRows}</tbody></table></div>` + flagNote + provNote;
   }
   // Landing-page table — top entry pages: which convert and which leak. Paths can be long, so the page
   // cell wraps (break-all) and the table scrolls horizontally on narrow screens.
@@ -257,6 +327,40 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
   }
   // Device performance table — how each device type converts and spends.
   if (x.devicePerformance && x.devicePerformance.length) {
+    // Sessions-share vs revenue-share chart (the template's device viz): a device that carries a large
+    // share of visits but a tiny share of revenue is flagged - broken tagging/consent on that device,
+    // or traffic that was never real. Computed from the SAME rows the table shows.
+    const dev = x.devicePerformance.map((d) => ({ name: d.device, sessions: pnum(d.sessions), revenue: pnum(d.revenue) }));
+    const sessTotal = dev.reduce((s, d) => s + d.sessions, 0);
+    const revTotal = dev.reduce((s, d) => s + d.revenue, 0);
+    if (sessTotal > 0 && revTotal > 0 && dev.length >= 2) {
+      const rows = dev
+        .map((d) => {
+          const sPct = Math.round((d.sessions / sessTotal) * 100);
+          const rPct = Math.round((d.revenue / revTotal) * 100);
+          const flagged = sPct >= 15 && rPct <= sPct / 3;
+          return (
+            chartBar(d.name, sPct, `${sPct}% of visits`, SLATE, flagged) +
+            chartBar('', rPct, `${rPct}% of revenue${x.perfProvisional ? '*' : ''}`, v('--c-green', '#1E7A48'), flagged)
+          );
+        })
+        .join('');
+      const flaggedDev = dev.find((d) => {
+        const sPct = (d.sessions / sessTotal) * 100;
+        const rPct = (d.revenue / revTotal) * 100;
+        return sPct >= 15 && rPct <= sPct / 3;
+      });
+      const read = flaggedDev
+        ? callout(
+            `<b style="font-weight:600">${esc(flaggedDev.name)}</b> carries ${Math.round((flaggedDev.sessions / sessTotal) * 100)}% of visits but only ${Math.round((flaggedDev.revenue / revTotal) * 100)}% of revenue. Either its tagging/consent is broken, or the traffic was never real - verify in DebugView on that device before quoting device figures.`,
+          )
+        : '';
+      s6 += vizCard(
+        'Share of visits vs share of revenue, by device',
+        'The two bars per device should roughly match; a wide gap is a tagging, consent, or traffic-quality problem.',
+        rows + read + (x.perfProvisional ? vcap('*Revenue is provisional - not verified (see the Data Trust Matrix).') : ''),
+      );
+    }
     const dRows = x.devicePerformance
       .map(
         (d) =>
@@ -270,16 +374,42 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
   }
   // Market performance table — which geographies convert and spend (top markets by sessions).
   if (x.geoPerformance && x.geoPerformance.length) {
+    const gFlags = engFlags(x.geoPerformance);
     const gRows = x.geoPerformance
       .map(
-        (g) =>
-          `<tr><td ${TD}><span style="font-weight:600">${esc(g.country)}</span></td><td ${TDR}>${esc(g.sessions)}</td><td ${TDP}>${esc(g.convRate)}</td><td ${TDP}>${esc(g.revenue)}</td><td ${TDR}>${esc(g.engagement)}</td></tr>`,
+        (g, i) =>
+          `<tr${gFlags[i] ? ` style="background:${FLAG_BG}"` : ''}><td ${TD}><span style="font-weight:600;${gFlags[i] ? `color:${FLAG}` : ''}">${esc(g.country)}</span></td><td ${TDR}>${esc(g.sessions)}</td><td ${TDP}>${esc(g.convRate)}</td><td ${TDP}>${esc(g.revenue)}</td><td ${TDR}>${esc(g.engagement)}</td></tr>`,
       )
       .join('');
+    const gFlagNote = gFlags.some(Boolean)
+      ? `<div style="font-family:${MONO};font-size:11px;color:${FAINT};margin:4px 2px 0;line-height:1.55">Flagged rows have engagement far below the property norm - the traffic is suspect.</div>`
+      : '';
     s6 +=
       tableCaption('Market performance', '(which geographies convert and spend)') +
       `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
-      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Market</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${gRows}</tbody></table></div>` + provNote;
+      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Market</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${gRows}</tbody></table></div>` + gFlagNote + provNote;
+
+    // Engagement bimodality (the template's two-populations chart): only rendered when the sorted
+    // engagement rates split at a wide gap (>= 25 points) into a low and a high cluster — a pattern
+    // that usually means real users mixed with bot, proxy, or consent-lost traffic. Flagged as a
+    // pattern to VERIFY, never asserted as fact.
+    const clusters = engagementClusters(x.geoPerformance.map((g) => ({ name: g.country, pct: pnum(g.engagement) })));
+    if (clusters) {
+      const bars =
+        clusters.low.map((r) => chartBar(r.name, r.pct, `${r.pct}%`, FLAG, true)).join('') +
+        `<div style="border-top:1px dashed ${v('--border-2', '#CFCFC6')};margin:8px 0 6px;text-align:right"><span style="font-family:${MONO};font-size:10.5px;color:${FAINT}">two populations, no overlap</span></div>` +
+        clusters.high.map((r) => chartBar(r.name, r.pct, `${r.pct}%`, SLATE, false)).join('');
+      s6 += vizCard(
+        'Engagement rate by market: two separate populations',
+        `Sorted low to high. The ${clusters.gap}-point gap between ${clusters.low[clusters.low.length - 1].name} and ${clusters.high[0].name} is the break; nothing lands in the middle.`,
+        bars +
+          callout(
+            `A split this clean usually means real users mixed with bot, proxy, or consent-lost traffic. The low cluster (${clusters.low.map((r) => esc(r.name)).join(', ')}) is where the fake-traffic risk concentrates. <b style="font-weight:600">Verify the sources of these markets before treating their sessions as real.</b>`,
+            AMBER,
+            v('--c-amber-bg', '#FCF8EF'),
+          ),
+      );
+    }
   }
   // Campaign performance table — which marketing (utm_campaign-tagged) campaigns convert and earn, with
   // the top campaign + untagged-traffic share in the caption. When there is no tagged campaign traffic
@@ -315,6 +445,36 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
   // Ecommerce funnel — distinct users per step + step conversion. An event-coverage approximation (not a
   // strict sequential path), so a later step can exceed an earlier one; the caveat says so explicitly.
   if (x.funnel && x.funnel.steps.length) {
+    // The template's funnel bars: each step as a share of the entry step, with the step holding the
+    // biggest drop flagged in red and named in the callout. Computed from the SAME rows the table shows.
+    if (x.funnel.steps.length >= 2) {
+      const users = x.funnel.steps.map((st) => pnum(st.users));
+      let worst = -1;
+      let worstDrop = 0;
+      for (let i = 1; i < users.length; i++) {
+        if (users[i - 1] > 0) {
+          const drop = 1 - users[i] / users[i - 1];
+          if (drop > worstDrop) {
+            worstDrop = drop;
+            worst = i;
+          }
+        }
+      }
+      const bars = x.funnel.steps
+        .map((st, i) => chartBar(st.label, pnum(st.pctEntry), `${st.users} · ${st.pctEntry}`, SLATE, i === worst && worstDrop >= 0.5))
+        .join('');
+      const read =
+        worst > 0 && worstDrop >= 0.5
+          ? callout(
+              `<b style="font-weight:600">${Math.round(worstDrop * 100)} of every 100</b> who reach ${esc(x.funnel.steps[worst - 1].label)} leave before ${esc(x.funnel.steps[worst].label)} - that single step is where the most is lost.`,
+            )
+          : '';
+      s6 += vizCard(
+        'Purchase funnel: users per step',
+        `Each step as a share of the entry step; overall view-to-purchase is ${x.funnel.overall}.`,
+        bars + read + vcap('Event-coverage approximation, not a strict sequential path. Treat the counts as directional.'),
+      );
+    }
     const fRows = x.funnel.steps
       .map(
         (st) =>
