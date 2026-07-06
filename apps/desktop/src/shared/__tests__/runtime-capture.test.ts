@@ -4,6 +4,9 @@
 import {
   parseGa4CollectHit,
   classifyCollector,
+  beaconPlatform,
+  beaconHost,
+  isKnownAdPlatform,
   evaluateRuntimeCapture,
   syntheticDataLayerEvent,
 } from '../runtime-capture';
@@ -142,6 +145,24 @@ check('classify: cross-site non-tracking asset → null', classifyCollector('htt
   // deterministic: two calls are identical.
   check('synthetic: deterministic', JSON.stringify(syntheticDataLayerEvent('purchase')) === JSON.stringify(syntheticDataLayerEvent('purchase')));
 }
+
+// ── beaconPlatform: NAMES the specific ad/pixel destination (Phase A) ───────────
+check('beacon: GA4 → ga4', beaconPlatform('https://www.google-analytics.com/g/collect?en=x') === 'ga4');
+check('beacon: meta → meta', beaconPlatform('https://www.facebook.com/tr?id=1') === 'meta');
+check('beacon: LinkedIn → linkedin', beaconPlatform('https://px.ads.linkedin.com/collect?pid=1') === 'linkedin');
+check('beacon: Pinterest → pinterest', beaconPlatform('https://ct.pinterest.com/v3/?tid=1') === 'pinterest');
+check('beacon: Reddit → reddit', beaconPlatform('https://alb.reddit.com/rp.gif?id=1') === 'reddit');
+check('beacon: Snap → snapchat', beaconPlatform('https://tr.snapchat.com/p?pid=1') === 'snapchat');
+check('beacon: Bing → bing', beaconPlatform('https://bat.bing.com/action/0?ti=1') === 'bing');
+check('beacon: DoubleClick → google_ads', beaconPlatform('https://ad.doubleclick.net/ddm/activity/src=1') === 'google_ads');
+check('beacon: google.com/pagead → google_ads', beaconPlatform('https://www.google.com/pagead/1p-conversion/123') === 'google_ads');
+check('beacon: Hotjar → hotjar', beaconPlatform('https://in.hotjar.com/api/v2/x') === 'hotjar');
+check('beacon: unknown host → other:<host>', beaconPlatform('https://track.acme-pixel.io/e?id=1') === 'other:track.acme-pixel.io');
+check('beacon: garbage url → other', beaconPlatform('not a url') === 'other');
+check('beaconHost: extracts the host', beaconHost('https://ct.pinterest.com/v3/?x=1') === 'ct.pinterest.com');
+check('isKnownAdPlatform: linkedin yes, ga4/other no', isKnownAdPlatform('linkedin') && !isKnownAdPlatform('ga4') && !isKnownAdPlatform('other:x'));
+// Distinct platforms → distinct labels: two ad tags on one interaction are attributable, not both "ad".
+check('beacon: LinkedIn ≠ Reddit (per-platform attribution)', beaconPlatform('https://px.ads.linkedin.com/collect') !== beaconPlatform('https://alb.reddit.com/rp.gif'));
 
 console.log(`\nruntime-capture: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

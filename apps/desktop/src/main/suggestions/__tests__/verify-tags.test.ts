@@ -112,6 +112,31 @@ const els: DetectedElementView[] = [{ page: '/', kind: 'cta', text: 'Get a Free 
   check('no capture → fired false + interaction none', v[0].fired === false && v[0].interaction?.kind === 'none');
 }
 
+// ── Phase A: precise per-platform attribution + observed beacons ─────────────────
+const linkedinHit = (): CapturedHitView => ({ url: 'https://px.ads.linkedin.com/collect?pid=1', body: null, collector: 'ad' });
+const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?id=1', body: null, collector: 'ad' });
+{
+  const li = tag({ id: 'li', platform: 'linkedin_insight', eventName: 'Lead' });
+  // Fires on its OWN platform's beacon…
+  check('linkedin tag fires on a LinkedIn beacon', evaluateVerify([li], [cap({ tagId: 'li', hits: [linkedinHit()] })], els)[0].fired === true);
+  // …but NOT on a different ad platform's beacon (no cross-attribution — the old 'ad'-lumping bug).
+  const wrong = evaluateVerify([li], [cap({ tagId: 'li', hits: [redditHit()] })], els)[0];
+  check('linkedin tag does NOT fire on a Reddit-only beacon', wrong.fired === false);
+  check('not-fired verdict lists the beacon it DID see', (wrong.observedBeacons ?? []).includes('alb.reddit.com'));
+}
+{
+  // A fired verdict surfaces the beacon host + names the platform in `event`.
+  const li = tag({ id: 'li2', platform: 'linkedin_insight', eventName: 'Lead' });
+  const v = evaluateVerify([li], [cap({ tagId: 'li2', hits: [linkedinHit()] })], els)[0];
+  check('fired verdict surfaces observedBeacons host', (v.observedBeacons ?? []).includes('px.ads.linkedin.com'));
+  check('fired verdict names the platform (linkedin)', v.event === 'linkedin');
+}
+{
+  // Unknown platform type ('custom_html' etc.) → any recognised ad/pixel beacon counts as fired.
+  const unknown = tag({ id: 'u1', platform: 'meta_pixel', eventName: 'x' }); // meta_pixel maps to 'meta' specifically
+  check('meta tag does NOT fire on a linkedin beacon (specific match)', evaluateVerify([unknown], [cap({ tagId: 'u1', hits: [linkedinHit()] })], els)[0].fired === false);
+}
+
 console.log(`\nverify-tags: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
 if (passed < 12) { console.error(`expected >= 12 checks, got ${passed}`); process.exit(1); }

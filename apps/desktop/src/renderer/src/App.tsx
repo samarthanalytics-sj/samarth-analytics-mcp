@@ -3649,10 +3649,13 @@ function VerifyPanel({
                   {fired.map((v) => {
                     const k = verdictKindLabel(v);
                     return (
-                      <li key={v.tagId} style={styles.resultRow}>
+                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
                         <span style={{ fontWeight: 600, color: 'var(--c-green)' }}>FIRED</span>{' '}
                         <span title={k.label}>{k.icon}</span> {v.tagName}
                         {v.event ? <span style={styles.muted}> — {v.event}</span> : null}
+                        {v.observedBeacons && v.observedBeacons.length > 0 && (
+                          <span style={{ ...styles.muted, marginLeft: 6, fontSize: 12 }}>→ {v.observedBeacons.join(', ')}</span>
+                        )}
                       </li>
                     );
                   })}
@@ -3673,6 +3676,9 @@ function VerifyPanel({
                           <span title={k.label}>{k.icon}</span> {v.tagName}
                         </div>
                         {v.reason ? <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2 }}>Why: {v.reason}</div> : null}
+                        {v.observedBeacons && v.observedBeacons.length > 0 && (
+                          <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2, fontSize: 12 }}>Beacons seen: {v.observedBeacons.join(', ')}</div>
+                        )}
                         <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>Fix: {verdictHowToFix(v)}</div>
                         {v.observedEvents && v.observedEvents.length > 0 && (
                           <div style={{ marginLeft: 8, marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
