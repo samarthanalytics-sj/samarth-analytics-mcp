@@ -84,6 +84,14 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     { country: 'India', sessions: '70,000', convRate: '3.0%', revenue: 'INR 400,000', engagement: '55%' },
     { country: 'United States', sessions: '4,000', convRate: '8.0%', revenue: 'INR 250,000', engagement: '72%' },
   ],
+  campaignPerformance: {
+    rows: [
+      { campaign: 'summer_sale', sessions: '5,000', conversions: '400', revenue: 'INR 250,000', engagement: '62%' },
+      { campaign: 'spring_promo', sessions: '3,000', conversions: '150', revenue: 'INR 90,000', engagement: '51%' },
+    ],
+    best: 'summer_sale (400 conversions, INR 250,000)',
+    untaggedShare: '60.0%',
+  },
   llmTraffic: {
     rows: [
       { source: 'claude.ai', sessions: '3,000', convRate: '6.0%', revenue: 'INR 90,000', engagement: '68%' },
@@ -255,6 +263,19 @@ test('section 6 renders the AI-assistant traffic table with its share + undercou
 test('section 6 omits the AI-assistant table when there is no AI traffic (null)', () => {
   const h = ga4SectionsHtml(view({ llmTraffic: null }));
   assert.ok(!/AI assistant traffic/.test(h), 'no AI table');
+});
+
+test('section 6 renders the campaign-performance table with the campaign name, best campaign, and untagged share', () => {
+  const h = ga4SectionsHtml(view());
+  assert.ok(/Campaign performance/.test(h), 'campaign table heading');
+  assert.ok(h.includes('summer_sale') && h.includes('400') && h.includes('INR 250,000'), 'a tagged-campaign row');
+  assert.ok(/top: summer_sale/.test(h), 'best campaign in the caption');
+  assert.ok(/untagged traffic 60\.0%/.test(h), 'untagged share in the caption');
+});
+
+test('section 6 omits the campaign table when there are no tagged campaigns (null)', () => {
+  const h = ga4SectionsHtml(view({ campaignPerformance: null }));
+  assert.ok(!/Campaign performance/.test(h), 'no campaign table when null');
 });
 
 test('section 6 renders the ecommerce funnel with steps, overall rate, and the approximation caveat', () => {

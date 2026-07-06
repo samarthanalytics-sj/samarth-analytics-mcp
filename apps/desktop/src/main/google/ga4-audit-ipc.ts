@@ -9,6 +9,7 @@ import { auditGa4 } from './ga4-audit';
 import { auditGa4DataQuality } from './ga4-data-quality';
 import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Visuals, buildGa4Sections } from './ga4-report';
 import { auditGa4Growth } from './ga4-growth';
+import { rankGa4Campaigns } from './ga4-campaigns';
 import { auditGa4EventDeltas, auditGa4Transactions } from './ga4-integrity';
 import { auditGa4DeadDimensions } from './ga4-dead-dimensions';
 import { auditGa4EventCoverage, ECOMMERCE_RECOMMENDED_EVENTS } from './ga4-event-coverage';
@@ -112,6 +113,9 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     const baseline = await withQuotaRetry(() => data.getGa4Baseline(p, dqCounts.startDate ?? '', dqCounts.endDate ?? '')).catch(() => null);
     const attribution = await data.getGa4AttributionSettings(p).catch(() => null);
     const audienceCount = await data.listGa4Audiences(p).then((a) => a.length).catch(() => null);
+    // Marketing-campaign performance (best-effort): rank the tagged utm_campaign traffic and surface the
+    // untagged share. A failed query just leaves the section out (null), never fails the audit.
+    const campaigns = await withQuotaRetry(() => data.getGa4CampaignPerformance(p, win)).then(rankGa4Campaigns).catch(() => null);
     // Growth/anomaly: correlate the session change with the outcomes that should move with real
     // growth (key events, revenue). Only when we have a baseline; the largest channel names the driver,
     // returning-user share weighs bot-vs-real, and the no-source share links the spike to attribution loss.
@@ -163,6 +167,7 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
       growth,
       attribution,
       audienceCount,
+      campaigns,
       retentionSummary,
     };
     const markdown = buildGa4AuditReport(reportInput);

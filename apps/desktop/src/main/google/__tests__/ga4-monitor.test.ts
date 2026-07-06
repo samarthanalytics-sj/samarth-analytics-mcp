@@ -181,6 +181,30 @@ test('alerts are ordered worst-severity first', () => {
   assert.deepEqual(ranks, [...ranks].sort((x, y) => x - y), 'sorted worst-first');
 });
 
+test('internal-traffic data_quality alert id is STABLE across runs as the non-prod share drifts (dedup)', () => {
+  // Non-production hostnames fire the internal-traffic finding through monitorGa4 → a data_quality alert.
+  // The alert id is derived from the finding's message.slice(0,24); the message now leads with a fixed
+  // prefix ("Non-production or preview…") so the id must NOT churn when only the flagged share changes.
+  const run = (nonProdSessions: number) =>
+    monitorGa4(
+      input({
+        dqCounts: dq({
+          totalSessions: 10000,
+          hostnames: [
+            { name: 'www.example.com', sessions: 10000 - nonProdSessions },
+            { name: 'staging.example.com', sessions: nonProdSessions },
+          ],
+        }),
+      })
+    );
+  const a1 = run(3000).alerts.find((x) => x.kind === 'data_quality' && /Non-production or preview/.test(x.detail));
+  const a2 = run(2600).alerts.find((x) => x.kind === 'data_quality' && /Non-production or preview/.test(x.detail));
+  assert.ok(a1, 'internal-traffic alert fires at 30% non-prod: ' + JSON.stringify(run(3000).alerts.map((z) => z.kind)));
+  assert.ok(a2, 'internal-traffic alert fires at 26% non-prod');
+  assert.notEqual(a1.detail, a2.detail, 'the detail text DID change (share drifted) — proving the id stability is non-trivial');
+  assert.equal(a1.id, a2.id, 'the dedup id is identical across runs despite the drifting share');
+});
+
 test('firstMetric reads a scalar realtime metric, null when absent', () => {
   assert.equal(firstMetric({ dimensionHeaders: [], metricHeaders: ['activeUsers'], rows: [{ dimensions: [], metrics: ['42'] }] }), 42);
   assert.equal(firstMetric({ dimensionHeaders: [], metricHeaders: ['activeUsers'], rows: [] }), null);
