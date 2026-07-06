@@ -1,3 +1,9 @@
+## [1.211.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.210.0...v1.211.0) (2026-07-06)
+
+### Features
+
+* **desktop:** one property, one Slack channel (per-property webhooks with default fallback) ([948c409](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/948c4091c41e115b88c499c3e15365f35ae47b58))
+
 ## [1.210.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.209.0...v1.210.0) (2026-07-06)
 
 ### Features
