@@ -270,6 +270,15 @@ const api = {
       trigger: SuggestedTagView['trigger'];
     }): Promise<{ tagName: string; triggerId: string; mode: 'rewrite' | 'rebind'; triggerName: string }> =>
       ipcRenderer.invoke('gtm:retargetTrigger', ctx),
+    // Align a GA4 Event tag's Event Name to an observed value (verify "align event name" fix). Draft-only.
+    setTagEventName: (ctx: {
+      accountId: string;
+      containerId: string;
+      workspaceId: string;
+      tagName: string;
+      eventName: string;
+    }): Promise<{ tagName: string; eventName: string }> =>
+      ipcRenderer.invoke('gtm:setTagEventName', ctx),
     exportAudit: (defaultName: string, content: string): Promise<string | null> =>
       ipcRenderer.invoke('gtm:exportAudit', defaultName, content),
     // Save the audit as a styled PDF that mirrors the panel (severity cards, icons, type labels).

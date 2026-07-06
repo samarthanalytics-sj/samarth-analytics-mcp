@@ -177,8 +177,11 @@ export function evaluateVerify(
         return { ...base, fired: true, event: hit.ev.event, interaction, evidence: hit.hit };
       }
       if (events.length > 0) {
-        const seen = [...new Set(events.map(({ ev }) => ev.event).filter(Boolean))].join(', ') || '(page-level)';
-        return { ...base, reason: `the interaction fired GA4 hit(s) [${seen}] but none for "${tag.eventName}" — the tag or its event name may differ`, interaction, evidence: events[0].hit };
+        const observedEvents = [...new Set(events.map(({ ev }) => ev.event).filter((e): e is string => Boolean(e)))];
+        const seen = observedEvents.join(', ') || '(page-level)';
+        // The trigger fired a GA4 hit, just not under this tag's event name — surface the observed
+        // event name(s) so the UI can offer "align the tag's Event Name to <observed>".
+        return { ...base, reason: `the interaction fired GA4 hit(s) [${seen}] but none for "${tag.eventName}" — the tag or its event name may differ`, interaction, evidence: events[0].hit, ...(observedEvents.length ? { observedEvents } : {}) };
       }
       return { ...base, reason: 'the interaction ran but no GA4 hit fired — the tag/trigger may not be in the loaded container, or its condition does not match', interaction };
     }

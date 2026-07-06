@@ -579,6 +579,9 @@ export interface VerifyTagVerdict {
   event?: string;
   /** Why it did not fire (always set when fired=false). */
   reason?: string;
+  /** For a "fired but wrong event name" verdict: the GA4 event name(s) actually observed on the
+   *  interaction, so the UI can offer to align the tag's Event Name to one of them. */
+  observedEvents?: string[];
   /** What the driver did to exercise the trigger. */
   interaction?: { kind: 'click' | 'submit' | 'navigate' | 'custom_event' | 'none'; targetFound: boolean; performed: boolean; note?: string };
   /** A sample captured hit as evidence. */

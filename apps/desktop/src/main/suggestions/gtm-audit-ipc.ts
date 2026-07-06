@@ -127,6 +127,19 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     );
   });
 
+  // Align a GA4 Event tag's Event Name to an observed value (the "align event name" verify fix).
+  // Draft-only write; the renderer confirms before invoking. Retries the per-minute quota.
+  ipcMain.handle('gtm:setTagEventName', async (_e, ctx: unknown) => {
+    const o = (ctx && typeof ctx === 'object' ? ctx : {}) as Record<string, unknown>;
+    const accountId = String(o.accountId ?? ''), containerId = String(o.containerId ?? ''), workspaceId = String(o.workspaceId ?? '');
+    const tagName = String(o.tagName ?? '').trim();
+    const eventName = String(o.eventName ?? '').trim();
+    if (!accountId || !containerId || !workspaceId) throw new Error('Pick a GTM account, container and draft workspace first.');
+    if (!tagName) throw new Error('Which tag to align?');
+    if (!eventName) throw new Error('Provide the event name to set.');
+    return withQuotaRetry(() => data.setGa4TagEventName(accountId, containerId, workspaceId, tagName, eventName), { maxRetries: 3 });
+  });
+
   ipcMain.handle('gtm:applyFix', async (_e, fix: unknown) => {
     const f = (fix && typeof fix === 'object' ? fix : {}) as { tool?: string; args?: Record<string, unknown> };
     if (!f.tool || !f.args || typeof f.args !== 'object') throw new Error('Invalid fix.');
