@@ -52,6 +52,9 @@ export interface Ga4Scorecard {
   grade: string; // A–F, or 'N/A'
   reliabilityPct: number; // 0-100 data-trust
   reliabilityConfidence: string; // 'High confidence' | 'Medium confidence' | 'Low confidence'
+  /** When a decision-critical metric (conversions, revenue) is unverified/failed the headline is
+   *  capped below the High band; these are the metrics that capped it (empty = uncapped). */
+  reliabilityCappedBy: string[];
   categories: ScorecardCategory[];
   trust: TrustRow[];
   notVerifiedAreas: number;
@@ -197,21 +200,40 @@ export function buildGa4Scorecard(input: Ga4ScorecardInput): Ga4Scorecard {
     }
     return { metric, verdict, safe: verdict === 'safe', reason, requires: gates.map(([n]) => n) };
   });
-  // Reliability: full weight for SAFE, half for CAUTION, nothing for UNVERIFIED / DO NOT QUOTE —
-  // an unverified metric cannot raise the number.
-  const reliabilityPct = Math.round(
-    trust.reduce((s, t) => s + (TRUST_WEIGHT[t.metric] ?? 0) * (t.verdict === 'safe' ? 1 : t.verdict === 'caution' ? 0.5 : 0), 0),
+  // Reliability = Σ(quote_weight × share_of_this_metric's_gates_passed) / Σ(quote_weight).
+  // Per-gate credit: pass = 1, partial = 0.5, fail / unrun = 0 — an unrun check cannot make a metric
+  // safe (never scored 0.5 for being blocked). A metric whose verdict is UNVERIFIED or DO NOT QUOTE
+  // contributes NOTHING regardless of individual gates: partially-checked-but-unquotable must not
+  // raise the headline. So only SAFE/CAUTION metrics earn credit, and a caution metric earns the
+  // FRACTION of its own gates that actually passed (not a flat one-half).
+  const gateCredit = (s: GateStatus): number => (s === 'pass' ? 1 : s === 'partial' ? 0.5 : 0);
+  const metricShare = (metric: string): number => {
+    const spec = TRUST_SPEC.find((t) => t.metric === metric);
+    if (!spec || !spec.gates.length) return 0;
+    return spec.gates.reduce((s, [, g]) => s + gateCredit(g), 0) / spec.gates.length;
+  };
+  const rawReliability = Math.round(
+    trust.reduce((s, t) => s + (TRUST_WEIGHT[t.metric] ?? 0) * (t.verdict === 'safe' || t.verdict === 'caution' ? metricShare(t.metric) : 0), 0),
   );
+  // Critical-metric cap: a weighted average must not let clean traffic hide unquotable revenue. When
+  // a decision-critical metric (conversions, revenue) is unverified or failed, the headline is capped
+  // BELOW the High band and the capping metrics are named — the report says WHY the number stops there.
+  const CRITICAL_METRICS = ['Conversion counts', 'Revenue / AOV / ROAS'];
+  const reliabilityCappedBy = trust
+    .filter((t) => CRITICAL_METRICS.includes(t.metric) && (t.verdict === 'unverified' || t.verdict === 'do_not_quote'))
+    .map((t) => `${t.metric} (${t.verdict === 'do_not_quote' ? 'failed' : 'unverified'})`);
+  const reliabilityPct = reliabilityCappedBy.length ? Math.min(rawReliability, 44) : rawReliability;
   // Confidence bands are calibrated to the pass-gated scale's REACHABLE range: the Admin API caps
   // Data collection at Partial and cannot read consent mode, so a genuinely clean production property
-  // tops out near ~45 (all-caution rows + one unverified) — that IS the high band on this scale.
-  const reliabilityConfidence = reliabilityPct >= 45 ? 'High confidence' : reliabilityPct >= 20 ? 'Medium confidence' : 'Low confidence';
+  // tops out near ~60 under gate-fraction credit — that IS the high band on this scale, and the critical-metric cap (44) always lands below it.
+  const reliabilityConfidence = reliabilityPct >= 55 ? 'High confidence' : reliabilityPct >= 20 ? 'Medium confidence' : 'Low confidence';
 
   return {
     composite,
     grade,
     reliabilityPct,
     reliabilityConfidence,
+    reliabilityCappedBy,
     categories,
     trust,
     notVerifiedAreas: areas.filter((a) => a.statusKey === 'not_verified').length,

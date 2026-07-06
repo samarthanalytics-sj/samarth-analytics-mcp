@@ -53,6 +53,11 @@ export function execSummaryHtml(x: Ga4ExecSummaryView): string {
     eyebrow('Can you quote this data today') +
       `<div style="font-family:${MONO};color:${relColor};font-size:72px;line-height:.95;font-weight:600;letter-spacing:-.03em;margin:2px 0 0">${x.reliabilityPct}%</div>` +
       `<div style="font-size:16px;color:${TEXT};margin:12px 0 0;max-width:52ch"><b style="font-weight:600">${esc(x.reliabilityConfidence)}.</b> This share of the property's data is verified safe to quote downstream today; the rest is unconfirmed.</div>` +
+      // The critical-metric cap, named: a headline must not read "mostly reliable" while revenue or
+      // conversions are unquotable — the reader sees exactly which metric stopped the number.
+      ((x.reliabilityCappedBy ?? []).length
+        ? `<div style="font-family:${MONO};font-size:11.5px;color:${AMBER};margin:10px 0 0">Capped by ${esc(x.reliabilityCappedBy.join(', '))} - a decision-critical metric is unquotable, so the headline cannot read higher.</div>`
+        : '') +
       `<div style="font-size:14px;color:${MUTED};margin:12px 0 0;max-width:64ch"><b style="color:${TEXT};font-weight:600">Overall verdict:</b> ${esc(x.verdict)}</div>` +
       `<div style="font-size:12.5px;color:${MUTED};margin:10px 0 0"><b style="color:${TEXT};font-weight:600">Audit window:</b> ${esc(x.dateRange)}</div>`,
     '26px 26px',

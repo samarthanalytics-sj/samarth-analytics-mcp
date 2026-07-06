@@ -206,6 +206,8 @@ export interface Ga4ExecSummaryView {
   grade: string;
   reliabilityPct: number;
   reliabilityConfidence: string;
+  /** Critical metrics (conversions/revenue) that capped the reliability headline; empty = uncapped. */
+  reliabilityCappedBy: string[];
   verdict: string;
   biggestRisk: string;
   highestImpactFix: string;
