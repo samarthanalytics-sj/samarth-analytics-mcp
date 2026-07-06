@@ -1944,6 +1944,7 @@ function TagReviewPanel({
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyTagsResult | null>(null);
   const [verifyFixed, setVerifyFixed] = useState<Record<string, boolean>>({});
+  const verifyCardRef = useRef<HTMLDivElement>(null);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
   const [discoverMode, setDiscoverMode] = useState<'site' | 'single' | 'ai' | 'csv'>('site');
@@ -2025,7 +2026,7 @@ function TagReviewPanel({
     const chosen = suggestions.filter((s) => selected[s.id]);
     const list = chosen.length ? chosen : suggestions;
     if (list.length === 0) { onError('Scan a site first — there are no tags to verify.'); return; }
-    const tags: VerifyTagInput[] = list.map((s) => ({ id: s.id, tagName: s.tagName, eventName: s.eventName, platform: s.platform, trigger: s.trigger }));
+    const tags: VerifyTagInput[] = list.map((s) => ({ id: s.id, tagName: s.tagName, eventName: s.eventName, platform: s.platform, page: s.page, trigger: s.trigger }));
     const elements = scanLog?.inventory.elements ?? [];
     setVerifying(true);
     onError('');
@@ -2047,6 +2048,33 @@ function TagReviewPanel({
     if (!fixed) return;
     setSuggestions((prev) => prev.map((s) => (s.id === v.tagId ? { ...s, trigger: fixed } : s)));
     setVerifyFixed((prev) => ({ ...prev, [v.tagId]: true }));
+  }
+
+  // Clear the whole review state so switching source mode starts a fresh, clean
+  // tab instead of showing the previous scan's stale suggestions/results.
+  function resetScanState(): void {
+    setSuggestions([]);
+    setMeta(null);
+    setWarnings([]);
+    setScanLog(null);
+    setScanDebug(null);
+    setVerifyResult(null);
+    setVerifyFixed({});
+    setDiscovered(null);
+    setSelected({});
+    setSelectedPages({});
+    setEdits({});
+    setStatuses({});
+    setDone(null);
+    setScanProgress(null);
+    setExportNote('');
+  }
+
+  // Switch the source mode (Main website / Single page / AI / CSV) → clean slate.
+  function changeMode(m: 'site' | 'single' | 'ai' | 'csv'): void {
+    if (m === discoverMode) return;
+    resetScanState();
+    setDiscoverMode(m);
   }
 
   // "Single page" mode: scan ONLY the entered URL directly — no discovery, no page
@@ -2460,7 +2488,7 @@ function TagReviewPanel({
               <button
                 key={m}
                 style={discoverMode === m ? styles.toggleOn : styles.toggleOff}
-                onClick={() => setDiscoverMode(m)}
+                onClick={() => changeMode(m)}
                 disabled={scanning || discovering || (m === 'ai' && !hasOpenAi)}
                 title={m === 'ai' && !hasOpenAi ? 'Add an OpenAI API key in Settings → Providers to use this' : undefined}
               >
@@ -2932,13 +2960,15 @@ function TagReviewPanel({
 
         {/* Verify firing: inject a preview container, drive each tag's trigger, see what fires. */}
         {suggestions.length > 0 && (
-          <div style={styles.card}>
+          <div style={styles.card} ref={verifyCardRef}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
               <div style={{ flex: '1 1 320px' }}>
                 <div style={{ fontWeight: 600 }}>Verify firing</div>
                 <div style={styles.muted}>
-                  Inject your GTM Preview snippet, drive each selected tag&apos;s trigger (click / form submit) on the URL above,
-                  and see what actually fires. Nothing real is ever sent — hits are captured and aborted.
+                  Proves the tags actually fire. First <b>Create</b> the selected tags (so they exist in a workspace), then in
+                  GTM click <b>Preview</b> (or Admin → Environments → Get snippet) and paste that <b>Preview snippet</b> below —
+                  it carries <code>gtm_auth</code>/<code>gtm_preview</code> so your DRAFT tags load. Each tag is driven on its own
+                  page; nothing real is sent (hits are captured and aborted).
                 </div>
               </div>
               <button style={styles.primaryBtn} onClick={() => void runVerify()} disabled={verifying || !url.trim()}>
@@ -2948,13 +2978,19 @@ function TagReviewPanel({
             <textarea
               value={verifySnippet}
               onChange={(e) => setVerifySnippet(e.target.value)}
-              placeholder="Paste your GTM Preview snippet / gtm.js URL / GTM-XXXXXXX so DRAFT tags load. Leave blank to test the container already published on the site."
+              placeholder="Paste the GTM PREVIEW / Environment snippet (with gtm_auth &amp; gtm_preview) so your DRAFT tags load. A plain published snippet (id only) loads the LIVE container and won't show uncreated tags."
               style={{ ...styles.input, width: '100%', minHeight: 58, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
             />
             {verifyResult && (
               <div style={{ marginTop: 10 }}>
+                {verifyResult.injected && !verifyResult.previewAuth && (
+                  <div style={{ ...styles.muted, color: 'var(--c-amber)', marginBottom: 4 }}>
+                    ⚠ That snippet has no preview auth (gtm_auth/gtm_preview) — it loaded the PUBLISHED container, so any tag you
+                    haven&apos;t created + published won&apos;t fire. Paste the GTM Preview / Environment snippet instead.
+                  </div>
+                )}
                 <div style={styles.muted}>
-                  {verifyResult.injected ? 'Preview container injected. ' : 'Tested the page as-is (no snippet). '}
+                  {verifyResult.injected ? (verifyResult.previewAuth ? 'Preview (workspace) container injected. ' : 'Published container injected. ') : 'Tested the page as-is (no snippet). '}
                   {verifyResult.error
                     ? `Error: ${verifyResult.error}`
                     : `${verifyResult.verdicts.filter((v) => v.fired).length}/${verifyResult.verdicts.length} tag(s) fired.`}
@@ -3168,10 +3204,19 @@ function TagReviewPanel({
                   </span>
                 )}
                 {!creating && done && (
-                  <span style={{ color: done.failed ? 'var(--c-amber)' : 'var(--c-green)', fontSize: 13 }}>
+                  <span style={{ color: done.failed ? 'var(--c-amber)' : 'var(--c-green)', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     {done.created} of {done.total} created
                     {done.existing ? ` · ${done.existing} already existed` : ''}
                     {done.failed ? ` · ${done.failed} failed` : ''} — open GTM to review &amp; publish.
+                    {done.created > 0 && (
+                      <button
+                        style={styles.linkBtn}
+                        onClick={() => verifyCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                        title="Confirm these tags actually fire, using a GTM Preview snippet"
+                      >
+                        Verify they fire →
+                      </button>
+                    )}
                   </span>
                 )}
               </div>

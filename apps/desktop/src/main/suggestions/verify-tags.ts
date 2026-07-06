@@ -60,7 +60,8 @@ function proposeTrigger(
     const target = norm(t.clickTextValue);
     const match = elements.find((e) => {
       const et = norm(e.text);
-      return et.length > 0 && (et === target || et.includes(target) || target.includes(et));
+      // A genuinely DIFFERENT text (not identical to the trigger) that overlaps it.
+      return et.length > 0 && et !== target && (et.includes(target) || target.includes(et));
     });
     if (match) {
       const trigger = { ...t, clickTextValue: match.text.trim(), clickTextOperator: 'equals' };
@@ -68,6 +69,12 @@ function proposeTrigger(
         trigger,
         note: `No control matched "${t.clickTextValue}". The closest on-page control is "${match.text.trim()}" — match its exact text.`,
       };
+    }
+    // The exact text exists somewhere in the scan inventory but not on the page we drove:
+    // it lives on another page, so verify that tag against its own page.
+    const elsewhere = elements.find((e) => norm(e.text) === target);
+    if (elsewhere) {
+      return { note: `A control with the text "${t.clickTextValue}" exists on the site but not on the page verified — verify this tag against its own page (${elsewhere.page}).` };
     }
     if (t.clickTextOperator === 'equals') {
       return {
