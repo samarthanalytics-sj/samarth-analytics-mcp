@@ -3505,7 +3505,7 @@ function VerifyPanel({
         return;
       }
       const snippet = (snippetOverride ?? vSnippet).trim();
-      const res = await window.desktop.tags.verify(target, tags, [], snippet ? { containerSnippet: snippet } : {});
+      const res = await window.desktop.tags.verify(target, tags, [], { gtmDebug: true, ...(snippet ? { containerSnippet: snippet } : {}) });
       setVResult(res);
     } catch (e) {
       setVNote({ kind: 'error', text: verifyErrorText(e) });
@@ -3638,9 +3638,20 @@ function VerifyPanel({
                 ⚠ Tested the page as-is (no container injected) — a tag can only fire if its container is already published on this URL. Use “Auto” or a Preview snippet to load DRAFT tags.
               </div>
             )}
+            {/* GTM debug signal (Phase B): the #1 cause of "0 fired" is the container never loading. */}
+            {vResult.gtmDebug && !vResult.gtmDebug.containerLoaded && vResult.injected && (
+              <div style={{ ...styles.muted, color: 'var(--c-red)', marginBottom: 6 }}>
+                ⚠ GTM debug: no GTM-XXXX container was detected on the page — the container didn’t load, so nothing could fire. Check the preview snippet / auth, or that the site isn’t blocking googletagmanager.com.
+              </div>
+            )}
             <div style={{ fontWeight: 600 }}>
               {vResult.error ? `Error: ${vResult.error}` : `${fired.length} of ${vResult.verdicts.length} tag(s) fired`}
             </div>
+            {vResult.gtmDebug && vResult.gtmDebug.containerLoaded && (
+              <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
+                GTM debug: container {vResult.gtmDebug.containerIds.join(', ') || 'loaded'} · events seen: {vResult.gtmDebug.dataLayerEvents.slice(0, 12).join(', ') || '—'}
+              </div>
+            )}
 
             {fired.length > 0 && (
               <div style={{ marginTop: 10 }}>

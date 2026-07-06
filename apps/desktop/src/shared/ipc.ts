@@ -606,6 +606,9 @@ export interface VerifyTagsResult {
   pagesOk: boolean;
   error?: string;
   verdicts: VerifyTagVerdict[];
+  /** Phase B (best-effort): GTM's on-page debug signal — whether the container actually loaded +
+   *  the dataLayer event stream. Present only when gtmDebug was requested. */
+  gtmDebug?: { containerLoaded: boolean; containerIds: string[]; dataLayerEvents: string[] };
 }
 
 /** Options for verifying tag firing. */
@@ -614,6 +617,9 @@ export interface VerifyTagsOptions {
   containerSnippet?: string;
   settleMs?: number;
   navTimeoutMs?: number;
+  /** Phase B: also read GTM's on-page debug signal (container loaded? + dataLayer events) so a
+   *  "0 fired" result can tell "container didn't load" from "loaded but didn't match". */
+  gtmDebug?: boolean;
 }
 
 /* ── Container audit (the "Container audit" panel) ── */

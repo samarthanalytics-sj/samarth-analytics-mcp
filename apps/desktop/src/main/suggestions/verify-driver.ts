@@ -104,6 +104,19 @@ export interface VerifyDriverOptions {
   navTimeoutMs?: number;
   /** Wait after each interaction so the tag fires and its (aborted) hit is captured. */
   settleMs?: number;
+  /** Phase B (best-effort): also read GTM's own debug signal from the page (which container ids
+   *  actually loaded + the dataLayer event stream) so a "0 fired" result can distinguish
+   *  "container didn't load" from "loaded but the tag/condition didn't match". Off by default. */
+  gtmDebug?: boolean;
+}
+/** GTM's on-page debug signal (Phase B). Best-effort + observable — NOT the full Tag-Assistant
+ *  per-tag protocol (that is undocumented and needs live-GTM validation). */
+export interface GtmDebugCapture {
+  /** A GTM-XXXX container was actually present on the page (google_tag_manager global). */
+  containerLoaded: boolean;
+  containerIds: string[];
+  /** Distinct dataLayer `event` names the container processed (gtm.js/gtm.dom/gtm.load + your events). */
+  dataLayerEvents: string[];
 }
 export interface VerifyDriverResult {
   pagesOk: boolean;
@@ -112,6 +125,18 @@ export interface VerifyDriverResult {
   previewAuth: boolean;
   error?: string;
   perTag: PerTagCapture[];
+  /** Present only when opts.gtmDebug — the on-page GTM debug signal (Phase B groundwork). */
+  gtmDebug?: GtmDebugCapture;
+}
+
+/** Read GTM's on-page debug signal (serialized to page.evaluate — DOM globals only). */
+function readGtmDebugInPage(): { containerIds: string[]; dataLayerEvents: string[] } {
+  const w = window as unknown as { google_tag_manager?: Record<string, unknown>; dataLayer?: Array<Record<string, unknown>> };
+  const containerIds = w.google_tag_manager ? Object.keys(w.google_tag_manager).filter((k) => /^GTM-/i.test(k)) : [];
+  const dataLayerEvents = Array.isArray(w.dataLayer)
+    ? [...new Set(w.dataLayer.map((e) => (e && typeof e === 'object' ? String((e as { event?: unknown }).event ?? '') : '')).filter(Boolean))]
+    : [];
+  return { containerIds, dataLayerEvents };
 }
 
 /**
@@ -354,6 +379,8 @@ export async function runVerifyDriver(
 
     const page = await context.newPage();
     let injected = false;
+    const debugContainerIds = new Set<string>();
+    const debugEvents = new Set<string>();
 
     // Drive each tag on ITS page: group by page, navigate to each, inject the
     // (preview) container so DRAFT tags load, then drive the group's triggers.
@@ -446,9 +473,23 @@ export async function runVerifyDriver(
           hits,
         });
       }
+
+      // Phase B (best-effort): after driving this page, read GTM's on-page debug signal.
+      if (opts.gtmDebug) {
+        try {
+          const d = (await page.evaluate(readGtmDebugInPage)) as { containerIds: string[]; dataLayerEvents: string[] };
+          d.containerIds.forEach((c) => debugContainerIds.add(c));
+          d.dataLayerEvents.forEach((e) => debugEvents.add(e));
+        } catch {
+          /* best-effort — never fail verification over the debug read */
+        }
+      }
     }
 
-    return { pagesOk: true, injected, previewAuth, perTag };
+    const gtmDebug: GtmDebugCapture | undefined = opts.gtmDebug
+      ? { containerLoaded: debugContainerIds.size > 0, containerIds: [...debugContainerIds], dataLayerEvents: [...debugEvents] }
+      : undefined;
+    return { pagesOk: true, injected, previewAuth, perTag, ...(gtmDebug ? { gtmDebug } : {}) };
   } catch (e) {
     return { pagesOk: false, injected: Boolean(loaderSrc), previewAuth, perTag, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
   } finally {
