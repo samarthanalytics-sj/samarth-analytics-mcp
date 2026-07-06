@@ -1,3 +1,9 @@
+## [1.201.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.201.0...v1.201.1) (2026-07-06)
+
+### Bug Fixes
+
+* **web-audit:** sharper form classification (untitled disambig, newsletter, other-form titles) ([93207ca](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/93207cadf14818d5190747cff810df1509345927))
+
 ## [1.201.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.200.0...v1.201.0) (2026-07-06)
 
 ### Features
