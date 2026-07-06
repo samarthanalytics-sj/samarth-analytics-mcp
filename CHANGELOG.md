@@ -1,3 +1,9 @@
+## [1.202.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.201.1...v1.202.0) (2026-07-06)
+
+### Features
+
+* **desktop:** guard the GA4 campaign table (key events vs purchases) + campaign/channel revenue reconciliation check ([cbfaca1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cbfaca12d8120fa2cca411cf17c7aa098dd7a9ee))
+
 ## [1.201.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.201.0...v1.201.1) (2026-07-06)
 
 ### Bug Fixes
