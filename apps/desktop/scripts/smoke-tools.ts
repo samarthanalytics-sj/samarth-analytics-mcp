@@ -143,6 +143,7 @@ function makeFakeData(): { data: GoogleDataService; calls: string[]; mutations: 
     listGa4MeasurementProtocolSecrets: () => r('listGa4MeasurementProtocolSecrets', []),
     listGa4BigQueryLinks: () => r('listGa4BigQueryLinks', []),
     listGa4FirebaseLinks: () => r('listGa4FirebaseLinks', []),
+    getGa4CampaignPerformance: () => r('getGa4CampaignPerformance', { rows: [{ campaign: 'summer_sale', sessions: 100, keyEvents: 10, revenue: 500, engagementRate: 0.5 }], totalSessions: 200, windowDays: 28, startDate: '2026-06-01', endDate: '2026-06-28', currencyCode: 'USD' }),
     getGtmLiveVersionSnapshot: () => r('getGtmLiveVersionSnapshot', structuredClone(SNAPSHOT)),
     listGtmVersions: () => r('listGtmVersions', []),
     getGtmVersionSnapshot: () => r('getGtmVersionSnapshot', structuredClone(SNAPSHOT)),
@@ -242,7 +243,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 51 read tools', readOnlyNames.size === 51, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 52 read tools', readOnlyNames.size === 52, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval is DELETE-ONLY: a declining confirm blocks every destructive
