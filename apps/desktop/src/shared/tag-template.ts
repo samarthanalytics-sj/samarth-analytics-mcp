@@ -108,6 +108,114 @@ export function suggestionToGroup(s: SuggestedTagView): TemplateGroup {
   };
 }
 
+/* ─────────────── Inline editing (the review table writes edits through here) ─────────────── */
+
+/** An inline edit overlaid on a suggestion. Every field the review table can edit lives here; a missing
+ *  field means "unchanged". `params` / `whens` are FULL overrides of their projected rows (so a single
+ *  edited cell stores the whole array). applyTagEdit merges this back into a real SuggestedTagView. */
+export interface TagEdit {
+  tagName?: string;
+  eventName?: string;
+  measurementId?: string;
+  page?: string;
+  platform?: SuggestedTagView['platform'];
+  triggerName?: string;
+  triggerKind?: string;
+  /** Full override of the Parameters/Parameter-Variable rows ({name, variable}). */
+  params?: Array<{ name: string; variable: string }>;
+  /** Full override of the projected trigger "when" rows. Only for STANDARD-variable triggers — a
+   *  lookup-table trigger can't be reversed losslessly, so the review table leaves its whens read-only. */
+  whens?: TriggerWhen[];
+}
+
+/** The trigger variables the review table can reverse-map a "when" row onto (lookup tables excluded). */
+export const STANDARD_TRIGGER_VARIABLES = [
+  '{{Click URL}}', '{{Click Text}}', '{{Click Element}}', '{{Form ID}}', '{{Form Classes}}', '{{Page Path}}', '{{Page URL}}',
+] as const;
+/** The condition labels offered in the review table (the display side of the operator map). */
+export const CONDITION_LABELS = Object.values(CONDITION);
+/** {value, label} options for the editable Tag Type / Trigger Type selects. */
+export const TAG_TYPE_OPTIONS = Object.entries(TAG_TYPE).map(([value, label]) => ({ value, label }));
+export const TRIGGER_TYPE_OPTIONS = Object.entries(TRIGGER_TYPE).map(([value, label]) => ({ value, label }));
+
+/** A projected condition label → our filter operator + whether it carried the "(ignore case)" suffix.
+ *  The inverse of triggerWhens' CONDITION map; unknown labels fall back to 'equals' (never crashes). */
+export function conditionToOperator(label: string): { op: string; ignoreCase: boolean } {
+  const ignoreCase = /\(ignore case\)/i.test(label ?? '');
+  const base = (label ?? '').replace(/\s*\(ignore case\)\s*/i, '').trim().toLowerCase();
+  const map: Record<string, string> = {
+    'equals to': 'equals', contains: 'contains', 'starts with': 'startsWith',
+    'ends with': 'endsWith', 'matches regex': 'matchRegex', 'matches css selector': 'cssSelector',
+  };
+  return { op: map[base] ?? 'equals', ignoreCase };
+}
+
+/** Rebuild a trigger's STANDARD filter fields from edited "when" rows (the inverse of triggerWhens). All
+ *  standard value/operator fields are cleared first, then each row is written to the field its variable
+ *  names, so reordering / re-pointing a row moves its value with it. lookupTable is left untouched (the
+ *  table never produces `whens` edits for a lookup-based trigger). PURE. */
+export function applyWhensToTrigger(trigger: SuggestedTagView['trigger'], whens: TriggerWhen[]): SuggestedTagView['trigger'] {
+  const t: SuggestedTagView['trigger'] = { ...trigger };
+  t.clickUrlValue = undefined; t.clickUrlOperator = undefined; t.clickUrlIgnoreCase = undefined;
+  t.clickTextValue = undefined; t.clickTextOperator = undefined; t.clickTextIgnoreCase = undefined;
+  t.clickElementValue = undefined; t.clickElementOperator = undefined;
+  t.formIdValue = undefined; t.formIdOperator = undefined;
+  t.formClassesValue = undefined; t.formClassesOperator = undefined;
+  t.pagePathValue = undefined; t.pagePathOperator = undefined;
+  t.pageUrlValue = undefined; t.pageUrlOperator = undefined;
+  for (const w of whens) {
+    if (!w || w.value == null || String(w.value).trim() === '') continue; // a blank value drops the row
+    const { op, ignoreCase } = conditionToOperator(w.condition);
+    switch ((w.variable ?? '').trim()) {
+      case '{{Click URL}}': t.clickUrlValue = w.value; t.clickUrlOperator = op; t.clickUrlIgnoreCase = ignoreCase; break;
+      case '{{Click Text}}': t.clickTextValue = w.value; t.clickTextOperator = op; t.clickTextIgnoreCase = ignoreCase; break;
+      case '{{Click Element}}': t.clickElementValue = w.value; t.clickElementOperator = op; break;
+      case '{{Form ID}}': t.formIdValue = w.value; t.formIdOperator = op; break;
+      case '{{Form Classes}}': t.formClassesValue = w.value; t.formClassesOperator = op; break;
+      case '{{Page Path}}': t.pagePathValue = w.value; t.pagePathOperator = op; break;
+      case '{{Page URL}}': t.pageUrlValue = w.value; t.pageUrlOperator = op; break;
+      default: break; // unknown/lookup variable — ignore (lookup triggers aren't edited through here)
+    }
+  }
+  return t;
+}
+
+/** Merge an inline edit back into a real SuggestedTagView (the effective tag the table shows + the create
+ *  flow sends). Missing edit fields fall through to the original. PURE + used by the renderer's
+ *  `effective()`. */
+export function applyTagEdit(s: SuggestedTagView, e: TagEdit | undefined): SuggestedTagView {
+  if (!e) return s;
+  const platform = e.platform ?? s.platform;
+  const platformChanged = e.platform !== undefined && e.platform !== s.platform;
+  const next: SuggestedTagView = {
+    ...s,
+    tagName: e.tagName ?? s.tagName,
+    eventName: e.eventName ?? s.eventName,
+    measurementId: e.measurementId ?? s.measurementId,
+    page: e.page ?? s.page,
+    platform,
+  };
+  const t: SuggestedTagView['trigger'] = { ...s.trigger };
+  if (e.triggerName !== undefined) t.name = e.triggerName;
+  // A trigger KIND change strands the old kind's filter fields (a click trigger's builder ignores a
+  // formId, etc.), which would silently create a fires-on-everything trigger — so clear the standard
+  // filter fields when the kind changes and no explicit whens were given.
+  const kindChanged = e.triggerKind !== undefined && e.triggerKind !== s.trigger.kind;
+  if (e.triggerKind !== undefined) t.kind = e.triggerKind;
+  next.trigger = e.whens !== undefined ? applyWhensToTrigger(t, e.whens) : kindChanged ? applyWhensToTrigger(t, []) : t;
+  // Params follow the platform: an explicit edit wins; otherwise, on a platform switch, the existing rows
+  // migrate to the NEW platform's field so they aren't orphaned. Blank-name rows are dropped HERE (create
+  // correctness) — the editable table reads the raw overlay, so a mid-edit blank name never collapses its row.
+  if (e.params !== undefined || platformChanged) {
+    const src: Array<{ name: string; variable: string }> = e.params
+      ?? (s.platform === 'google_tag' ? (s.configSettings ?? []) : (s.eventParameters ?? [])).map((r) => ({ name: r.name, variable: r.value }));
+    const rows = src.filter((p) => p.name && p.name.trim() !== '').map((p) => ({ name: p.name, value: p.variable }));
+    if (platform === 'google_tag') { next.configSettings = rows; next.eventParameters = []; }
+    else { next.eventParameters = rows; next.configSettings = []; }
+  }
+  return next;
+}
+
 /** Collapse suggestions that would create the SAME GTM tag, keeping the FIRST. Identity is
  *  platform + tag NAME (trimmed, case-insensitive): GTM tag names must be unique, so two rows sharing
  *  a name can never both be created — showing the second is always noise, even if a trigger detail

@@ -1,7 +1,7 @@
 // Pure tests for the "GTM Structure - GA4 Events" template mapping (the table view
 // + CSV download share this). Run: tsx src/shared/__tests__/tag-template.test.ts
 
-import { suggestionToGroup, suggestionsToTemplateCsv, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS } from '../tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator } from '../tag-template';
 import type { SuggestedTagView } from '../ipc';
 
 let passed = 0;
@@ -122,6 +122,62 @@ check('dedupe: same name up to case/whitespace + different trigger still collaps
 const faMeta = base({ id: 'fam', platform: 'meta_pixel', tagName: 'GA4 - Event - Free Audit Click Tag' });
 check('dedupe: same name on a different platform is NOT collapsed', dedupeViewsByGtmName([fa1, faMeta]).length === 2);
 check('dedupe: idempotent (running twice is a no-op)', dedupeViewsByGtmName(dedupeViewsByGtmName([fa1, contact, fa2])).length === 2);
+
+// ── inline editing: applyTagEdit / applyWhensToTrigger / conditionToOperator ──────────────────
+check('edit: no edit is identity', applyTagEdit(phone, undefined) === phone);
+
+// Simple field overrides (tag name / event / measurement id / page / trigger name) fall through.
+const e1 = applyTagEdit(phone, { tagName: 'Renamed Tag', eventName: 'phone_tap', measurementId: '{{G2}}', page: '/contact', triggerName: 'Tap Trigger' });
+check('edit: overrides tagName/eventName/measurementId/page/triggerName', e1.tagName === 'Renamed Tag' && e1.eventName === 'phone_tap' && e1.measurementId === '{{G2}}' && e1.page === '/contact' && e1.trigger.name === 'Tap Trigger');
+check('edit: untouched fields are preserved', e1.trigger.clickUrlValue === 'tel:' && e1.eventParameters?.length === 3);
+
+// params override → eventParameters (ga4) with {name,value}; a blank-name row is dropped.
+const e2 = applyTagEdit(phone, { params: [{ name: 'click_text', variable: '{{Click Text}}' }, { name: '', variable: 'x' }, { name: 'extra', variable: '{{Page URL}}' }] });
+check('edit: params override maps to eventParameters {name,value}, drops blank-name rows',
+  JSON.stringify(e2.eventParameters) === JSON.stringify([{ name: 'click_text', value: '{{Click Text}}' }, { name: 'extra', value: '{{Page URL}}' }]));
+// params for a google_tag land in configSettings, not eventParameters.
+const e2g = applyTagEdit(gtag, { params: [{ name: 'send_page_view', variable: 'false' }] });
+check('edit: params for google_tag go to configSettings', JSON.stringify(e2g.configSettings) === JSON.stringify([{ name: 'send_page_view', value: 'false' }]) && (e2g.eventParameters ?? []).length === 0);
+
+// whens override → reverse-maps each row to the trigger field its variable names (value + operator move).
+const e3 = applyTagEdit(phone, { whens: [{ variable: '{{Click Text}}', condition: 'Contains', value: 'Call us' }] });
+check('edit: whens override re-points the value to a different variable + clears the old field',
+  e3.trigger.clickTextValue === 'Call us' && e3.trigger.clickTextOperator === 'contains' && e3.trigger.clickUrlValue === undefined);
+check('edit: whens override round-trips through triggerWhens', (() => { const w = triggerWhens(e3); return w.length === 1 && w[0].variable === '{{Click Text}}' && w[0].condition === 'Contains' && w[0].value === 'Call us'; })());
+// A blank-value when row drops that condition entirely (never leaves a fires-on-everything trigger).
+const e4 = applyTagEdit(phone, { whens: [{ variable: '{{Click URL}}', condition: 'Starts with', value: '   ' }] });
+check('edit: a blank-value when row is dropped (no dangling filter)', triggerWhens(e4).length === 0);
+// The "(ignore case)" suffix survives an untouched condition; a fresh base operator drops it.
+const e5 = applyTagEdit(faqTag, { whens: [{ variable: '{{Click Text}}', condition: 'contains (ignore case)', value: 'x' }] });
+check('edit: condition "(ignore case)" suffix maps to ignoreCase=true', e5.trigger.clickTextIgnoreCase === true && e5.trigger.clickTextOperator === 'contains');
+
+// platform + triggerKind overrides.
+const e6 = applyTagEdit(phone, { platform: 'meta_pixel', triggerKind: 'all_clicks' });
+check('edit: platform + triggerKind override', e6.platform === 'meta_pixel' && e6.trigger.kind === 'all_clicks');
+
+// conditionToOperator inverse of the CONDITION map (+ unknown → equals).
+check('conditionToOperator: labels invert', conditionToOperator('Starts with').op === 'startsWith' && conditionToOperator('equals to').op === 'equals' && conditionToOperator('matches RegEx').op === 'matchRegex' && conditionToOperator('matches CSS selector').op === 'cssSelector');
+check('conditionToOperator: unknown → equals, ignore-case detected', conditionToOperator('nonsense').op === 'equals' && conditionToOperator('Contains (ignore case)').ignoreCase === true && conditionToOperator('Contains').ignoreCase === false);
+
+// A platform switch MIGRATES the existing params to the new platform's field (not orphaned) + clears the other.
+const pmig = applyTagEdit(phone, { platform: 'google_tag' });
+check('edit: ga4→google_tag migrates eventParameters into configSettings + clears eventParameters',
+  JSON.stringify(pmig.configSettings) === JSON.stringify([{ name: 'click_text', value: '{{Click Text}}' }, { name: 'click_url', value: '{{Click URL}}' }, { name: 'page_path', value: '{{Page Path}}' }]) && (pmig.eventParameters ?? []).length === 0);
+const gmig = applyTagEdit(gtag, { platform: 'ga4_event' });
+check('edit: google_tag→ga4 migrates configSettings into eventParameters + clears configSettings',
+  JSON.stringify(gmig.eventParameters) === JSON.stringify([{ name: 'send_page_view', value: 'true' }]) && (gmig.configSettings ?? []).length === 0);
+
+// A trigger KIND change clears the OLD kind's stranded filter fields (else the new kind's builder ignores
+// them and the tag fires on everything).
+const kmig = applyTagEdit(form, { triggerKind: 'link_click' });
+check('edit: kind change clears the old kind filter fields (no fires-on-everything)', kmig.trigger.kind === 'link_click' && kmig.trigger.formIdValue === undefined && triggerWhens(kmig).length === 0);
+// An explicit whens edit made alongside a kind change is honored (not wiped).
+const kw = applyTagEdit(form, { triggerKind: 'link_click', whens: [{ variable: '{{Click URL}}', condition: 'Contains', value: '/x' }] });
+check('edit: explicit whens survive a simultaneous kind change', triggerWhens(kw).length === 1 && kw.trigger.clickUrlValue === '/x' && kw.trigger.formIdValue === undefined);
+
+// applyWhensToTrigger clears ALL standard fields before re-applying (an emptied whens = no filter).
+const cleared = applyWhensToTrigger(phone.trigger, []);
+check('applyWhensToTrigger: empty whens clears every standard filter field', cleared.clickUrlValue === undefined && cleared.clickTextValue === undefined && cleared.formIdValue === undefined && cleared.pageUrlValue === undefined);
 
 console.log(`\ntag-template: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

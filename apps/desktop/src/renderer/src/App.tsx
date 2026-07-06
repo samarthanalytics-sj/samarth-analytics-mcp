@@ -25,7 +25,7 @@ import type {
   SuggestedTagView,
   TagScanResult,
 } from '../../shared/ipc';
-import { suggestionToGroup, suggestionsToTemplateCsv, dedupeViewsByGtmName, TEMPLATE_HEADERS } from '../../shared/tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
@@ -1300,15 +1300,6 @@ function GtmContextBar({
 /* ───────────────────── Tag suggestions (review & approve) ───────────────────── */
 
 type RowStatus = { state: 'idle' | 'creating' | 'ok' | 'err' | 'exists'; msg?: string };
-interface TagEdit {
-  tagName?: string;
-  eventName?: string;
-  measurementId?: string;
-  /** Override the trigger's PRIMARY condition value (the table's editable "Value" cell) — e.g. the
-   *  Click Text a CTA fires on, the Click URL extension, or the Form ID. */
-  triggerValue?: string;
-}
-
 /** Human-readable trigger condition (the filter GTM will apply). */
 function triggerCondition(s: SuggestedTagView): string {
   const t = s.trigger;
@@ -1346,7 +1337,27 @@ const tplStyles: Record<string, React.CSSProperties> = {
   // Editable cells are auto-growing WRAPPING textareas (see GrowCell) so a long tag name / regex
   // value wraps to multiple lines and stays fully visible instead of being clipped in a 1-line input.
   cellInput: { width: '100%', minWidth: 150, boxSizing: 'border-box', background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 6px', fontSize: 12, fontFamily: 'inherit', lineHeight: 1.35, resize: 'none', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word', display: 'block' },
+  cellSelect: { width: '100%', minWidth: 120, boxSizing: 'border-box', background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 4px', fontSize: 12, fontFamily: 'inherit', cursor: 'pointer' },
+  pager: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 13, color: 'var(--text-muted)' },
+  pagerBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 7, padding: '4px 12px', fontSize: 13, cursor: 'pointer' },
 };
+
+// Fixed option lists for the editable Trigger-when Variable / Condition selects.
+const VARIABLE_OPTIONS = STANDARD_TRIGGER_VARIABLES.map((v) => ({ value: v, label: v }));
+const CONDITION_OPTIONS = CONDITION_LABELS.map((l) => ({ value: l, label: l }));
+
+/** A styled inline <select> for the editable Table cells (Tag Type / Trigger Type / Trigger-when
+ *  Variable + Condition). If the current value isn't one of the options (e.g. a condition that still
+ *  carries "(ignore case)"), it is shown as a leading option so the controlled select never blanks. */
+function CellSelect({ value, options, disabled, onChange, ariaLabel }: { value: string; options: Array<{ value: string; label: string }>; disabled?: boolean; onChange: (v: string) => void; ariaLabel: string }): JSX.Element {
+  const known = options.some((o) => o.value === value);
+  return (
+    <select style={tplStyles.cellSelect} value={value} disabled={disabled} aria-label={ariaLabel} onChange={(e) => onChange(e.target.value)}>
+      {!known && <option value={value}>{value}</option>}
+      {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+}
 
 /** Auto-growing, wrapping textarea for the editable Table cells: long values (a full tag name, a
  *  regex trigger value) WRAP and stay fully visible instead of being clipped in a single-line input.
@@ -1378,6 +1389,7 @@ function GrowCell({ value, disabled, onChange, ariaLabel }: { value: string; dis
 // container (or just created) lock — no checkbox, no edit — so a tag can't be re-created.
 function SuggestionTemplateTable({
   suggestions,
+  edits,
   selected,
   statuses,
   creating,
@@ -1386,6 +1398,10 @@ function SuggestionTemplateTable({
   onEdit,
 }: {
   suggestions: SuggestedTagView[];
+  /** Raw inline-edit overlay (keyed by suggestion id). The editable Parameter/When ROWS render from these
+   *  raw arrays (not the re-projected effective view) so a transiently-blank name/value keeps its row
+   *  mounted instead of collapsing mid-keystroke; applyTagEdit sanitizes blanks only for create. */
+  edits: Record<string, TagEdit>;
   selected: Record<string, boolean>;
   statuses: Record<string, RowStatus>;
   creating: boolean;
@@ -1414,14 +1430,31 @@ function SuggestionTemplateTable({
             // out from under the cursor mid-keystroke. Renaming an "exists" row to a unique name re-shows
             // its checkbox. Selection itself still respects `exists` (shows "✓ exists", no checkbox).
             const editable = !created;
-            return Array.from({ length: g.rowCount }, (_, i) => {
+            // A lookup-table trigger's "when" rows can't be reversed losslessly (the texts→true map is
+            // lost), so those three cells stay read-only; every other field is editable.
+            const whensEditable = editable && !s.trigger.lookupTable?.name;
+            // Editable ROWS come from the raw edit overlay when present, so a transiently-blank param name
+            // or when value keeps its row mounted instead of collapsing mid-keystroke; untouched rows fall
+            // back to the projected group. rowCount + the create-time blank-drop follow from these.
+            const ed = edits[s.id];
+            const paramRows = ed?.params ?? g.params;
+            const whenRows = ed?.whens ?? g.whens;
+            const rowCount = Math.max(paramRows.length, whenRows.length, 1);
+            const editParam = (idx: number, patch: Partial<{ name: string; variable: string }>): void =>
+              onEdit(s.id, { params: paramRows.map((row, j) => (j === idx ? { ...row, ...patch } : row)) });
+            const editWhen = (idx: number, patch: Partial<TriggerWhen>): void =>
+              onEdit(s.id, { whens: whenRows.map((row, j) => (j === idx ? { ...row, ...patch } : row)) });
+            return Array.from({ length: rowCount }, (_, i) => {
               const first = i === 0;
-              const p = g.params[i];
-              const w = g.whens[i];
+              const p = paramRows[i];
+              const w = whenRows[i];
+              // Offer only variables not already claimed by ANOTHER when-row (plus this row's own value), so
+              // two rows can't collide on one trigger field (the model stores one value per variable).
+              const varOptions = w ? VARIABLE_OPTIONS.filter((o) => o.value === w.variable || !whenRows.some((r, j) => j !== i && r.variable === o.value)) : VARIABLE_OPTIONS;
               return (
                 <tr key={s.id + ':' + i}>
                   {first && (
-                    <td rowSpan={g.rowCount} style={tplStyles.selTd}>
+                    <td rowSpan={rowCount} style={tplStyles.selTd}>
                       {exists ? (
                         <span style={styles.existsChip} title="A tag with this name already exists in the container">✓ exists</span>
                       ) : created ? (
@@ -1443,46 +1476,40 @@ function SuggestionTemplateTable({
                     </td>
                   )}
                   {first && (
-                    <td rowSpan={g.rowCount} style={{ ...tplStyles.td, color: 'var(--text-dim)', whiteSpace: 'nowrap' }} title={`Found on ${s.page}`}>
-                      {s.page}
-                    </td>
-                  )}
-                  {first && <td rowSpan={g.rowCount} style={tplStyles.tdTag}>{g.tagType}</td>}
-                  {first && (
-                    <td rowSpan={g.rowCount} style={{ ...tplStyles.td, color: 'var(--text)', fontWeight: 600 }}>
-                      {editable ? (
-                        <GrowCell value={g.tagName} disabled={creating} onChange={(v) => onEdit(s.id, { tagName: v })} ariaLabel="Tag name" />
-                      ) : g.tagName}
+                    <td rowSpan={rowCount} style={{ ...tplStyles.td, whiteSpace: 'nowrap' }}>
+                      {editable ? <GrowCell value={s.page} disabled={creating} onChange={(v) => onEdit(s.id, { page: v })} ariaLabel="Page" /> : <span style={{ color: 'var(--text-dim)' }}>{s.page}</span>}
                     </td>
                   )}
                   {first && (
-                    <td rowSpan={g.rowCount} style={tplStyles.td}>
-                      {s.platform === 'ga4_event' && editable ? (
-                        <GrowCell value={g.eventName} disabled={creating} onChange={(v) => onEdit(s.id, { eventName: v })} ariaLabel="GA4 event name" />
-                      ) : g.eventName ? (
-                        <code style={mdStyles.code}>{g.eventName}</code>
-                      ) : (
-                        <span style={{ color: 'var(--text-faint)' }}>—</span>
-                      )}
+                    <td rowSpan={rowCount} style={tplStyles.tdTag}>
+                      {editable ? <CellSelect value={s.platform} options={TAG_TYPE_OPTIONS} disabled={creating} onChange={(v) => onEdit(s.id, { platform: v as SuggestedTagView['platform'] })} ariaLabel="Tag type" /> : g.tagType}
                     </td>
                   )}
-                  <td style={tplStyles.td}>{p?.name ?? ''}</td>
-                  <td style={tplStyles.td}>{p ? <code style={mdStyles.code}>{p.variable}</code> : ''}</td>
-                  {first && <td rowSpan={g.rowCount} style={tplStyles.td}>{g.triggerName}</td>}
-                  {first && <td rowSpan={g.rowCount} style={tplStyles.td}>{g.triggerType}</td>}
-                  <td style={tplStyles.td}>{w ? <code style={mdStyles.code}>{w.variable}</code> : ''}</td>
-                  <td style={tplStyles.td}>{w?.condition ?? ''}</td>
-                  <td style={tplStyles.td}>
-                    {w ? (
-                      i === 0 && editable ? (
-                        <GrowCell value={w.value} disabled={creating} onChange={(v) => onEdit(s.id, { triggerValue: v })} ariaLabel="Trigger condition value" />
-                      ) : (
-                        w.value
-                      )
-                    ) : (
-                      ''
-                    )}
-                  </td>
+                  {first && (
+                    <td rowSpan={rowCount} style={{ ...tplStyles.td, color: 'var(--text)', fontWeight: 600 }}>
+                      {editable ? <GrowCell value={g.tagName} disabled={creating} onChange={(v) => onEdit(s.id, { tagName: v })} ariaLabel="Tag name" /> : g.tagName}
+                    </td>
+                  )}
+                  {first && (
+                    <td rowSpan={rowCount} style={tplStyles.td}>
+                      {editable ? <GrowCell value={g.eventName} disabled={creating} onChange={(v) => onEdit(s.id, { eventName: v })} ariaLabel="Event name" />
+                        : g.eventName ? <code style={mdStyles.code}>{g.eventName}</code> : <span style={{ color: 'var(--text-faint)' }}>—</span>}
+                    </td>
+                  )}
+                  <td style={tplStyles.td}>{p ? (editable ? <GrowCell value={p.name} disabled={creating} onChange={(v) => editParam(i, { name: v })} ariaLabel="Parameter name" /> : p.name) : ''}</td>
+                  <td style={tplStyles.td}>{p ? (editable ? <GrowCell value={p.variable} disabled={creating} onChange={(v) => editParam(i, { variable: v })} ariaLabel="Parameter variable" /> : <code style={mdStyles.code}>{p.variable}</code>) : ''}</td>
+                  {first && (
+                    <td rowSpan={rowCount} style={tplStyles.td}>
+                      {editable ? <GrowCell value={g.triggerName} disabled={creating} onChange={(v) => onEdit(s.id, { triggerName: v })} ariaLabel="Trigger name" /> : g.triggerName}
+                    </td>
+                  )}
+                  {/* Trigger Type (the trigger KIND) is read-only: changing the kind strands the old
+                      kind's filter fields (which the new kind's builder ignores → fires on everything) and
+                      the conditions can't be re-specified in this table. Edit the kind in GTM instead. */}
+                  {first && <td rowSpan={rowCount} style={tplStyles.td} title="Trigger type is structural — change it in GTM, or pick a suggestion of the right type">{g.triggerType}</td>}
+                  <td style={tplStyles.td}>{w ? (whensEditable ? <CellSelect value={w.variable} options={varOptions} disabled={creating} onChange={(v) => editWhen(i, { variable: v })} ariaLabel="Trigger when variable" /> : <code style={mdStyles.code}>{w.variable}</code>) : ''}</td>
+                  <td style={tplStyles.td}>{w ? (whensEditable ? <CellSelect value={w.condition} options={CONDITION_OPTIONS} disabled={creating} onChange={(v) => editWhen(i, { condition: v })} ariaLabel="Trigger when condition" /> : w.condition) : ''}</td>
+                  <td style={tplStyles.td}>{w ? (whensEditable ? <GrowCell value={w.value} disabled={creating} onChange={(v) => editWhen(i, { value: v })} ariaLabel="Trigger when value" /> : w.value) : ''}</td>
                 </tr>
               );
             });
@@ -1881,6 +1908,10 @@ function TagReviewPanel({
   // Filter the suggestion list by ad PLATFORM (GA4 / Meta / Google Ads / TikTok / …) — only shown when a
   // scan produced more than one platform (e.g. a "Both" or multi-select scan). 'all' = no platform filter.
   const [platformFilter, setPlatformFilter] = useState<SuggestPlatform | 'all'>('all');
+  // Review table is paginated at 10 tags/page. Reset to the first page whenever a filter narrows the list
+  // so the user is never stranded on a now-empty page.
+  const [page, setPage] = useState(0);
+  useEffect(() => { setPage(0); }, [search, typeFilter, platformFilter]);
   const [statuses, setStatuses] = useState<Record<string, RowStatus>>({});
   const [confirming, setConfirming] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -2145,8 +2176,9 @@ function TagReviewPanel({
   const filterQuery = search.trim().toLowerCase();
   const searchMatches = suggestions.filter((s) => {
     if (!filterQuery) return true;
-    const eff = effective(s);
-    return `${eff.tagName} ${eff.eventName} ${s.page} ${s.label} ${triggerCondition(s)} ${s.note ?? ''}`
+    // Match on the RAW suggestion, not the effective (edited) one — otherwise renaming a tag so its new
+    // text stops matching the query would drop the row and unmount the input mid-keystroke.
+    return `${s.tagName} ${s.eventName} ${s.page} ${s.label} ${triggerCondition(s)} ${s.note ?? ''}`
       .toLowerCase()
       .includes(filterQuery);
   });
@@ -2182,40 +2214,23 @@ function TagReviewPanel({
   const filtered = searchMatches.filter(
     (s) => (typeFilter === 'all' || kindCategory(s) === typeFilter) && (activePlatformFilter === 'all' || platformGroupOf(s) === activePlatformFilter),
   );
-  // Selected tags float to the TOP (stable within each group, so relative order is otherwise preserved)
-  // — the user's picks stay grouped and visible instead of scattered down a long list. Array.sort is
-  // stable in the Electron/V8 runtime, so equal-rank rows keep their original order.
-  const visible = [...filtered].sort((a, b) => (selected[b.id] ? 1 : 0) - (selected[a.id] ? 1 : 0));
+  // Natural order (no selection-float sort): with pagination, re-sorting selected rows to the top would
+  // make ticking a checkbox on a later page relocate that row to page 1 mid-interaction. Rows stay put;
+  // the checkbox column + the "N selected" count surface the picks instead.
+  const visible = filtered;
+  // Show 10 tags per page (m/n pager). curPage is clamped so a shrinking list can't strand an empty page.
+  const PAGE_SIZE = 10;
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const curPage = Math.min(page, pageCount - 1);
+  const pageItems = visible.slice(curPage * PAGE_SIZE, curPage * PAGE_SIZE + PAGE_SIZE);
   // "Select all / new" never selects a tag that already exists; it operates on the VISIBLE rows (so it
   // respects the active filter) and merges over prior selections so hidden rows keep their state.
   const setAll = (pred: (s: SuggestedTagView) => boolean): void =>
     setSelected((prev) => ({ ...prev, ...Object.fromEntries(visible.map((s) => [s.id, pred(s) && !alreadyExists(s)])) }));
 
-  function effective(s: SuggestedTagView): SuggestedTagView {
-    const e = edits[s.id];
-    if (!e) return s;
-    const next: SuggestedTagView = {
-      ...s,
-      tagName: e.tagName ?? s.tagName,
-      eventName: e.eventName ?? s.eventName,
-      measurementId: e.measurementId ?? s.measurementId,
-    };
-    if (e.triggerValue !== undefined && e.triggerValue.trim() !== '') {
-      // Write the edited "Value" cell back to the trigger's primary condition — same priority order
-      // as triggerWhens (Click URL → Click Text → Form ID → Form Classes), so the edited cell maps
-      // to the field it was rendered from. The create flow sends this effective trigger. An EMPTY
-      // edit is ignored (falls back to the original value) — a blank condition would drop the filter
-      // and make the trigger fire on EVERYTHING, and would also remove the cell's own input.
-      const t = { ...s.trigger };
-      if (t.clickUrlValue) t.clickUrlValue = e.triggerValue;
-      else if (t.clickTextValue) t.clickTextValue = e.triggerValue;
-      else if (t.clickElementValue) t.clickElementValue = e.triggerValue;
-      else if (t.formIdValue) t.formIdValue = e.triggerValue;
-      else if (t.formClassesValue) t.formClassesValue = e.triggerValue;
-      next.trigger = t;
-    }
-    return next;
-  }
+  // Every inline edit (all table cells) is merged back into the effective tag by the shared, unit-tested
+  // applyTagEdit — the create flow, dedup, and merge grouping all read this effective view.
+  const effective = (s: SuggestedTagView): SuggestedTagView => applyTagEdit(s, edits[s.id]);
 
   // A suggestion already exists in the container if a tag of its (effective) name is
   // there, or — for the GA4 Configuration — if any GA4 base tag is already present.
@@ -2912,10 +2927,11 @@ function TagReviewPanel({
             {visible.length === 0 ? null : (
               <>
                 <div style={{ ...styles.muted, marginTop: -4 }}>
-                  Tick a row to create it in GTM; edit the Tag name, GA4 event, or trigger value inline.
+                  Tick a row to create it in GTM; edit fields inline (trigger type is fixed). Showing {curPage * PAGE_SIZE + 1}–{Math.min(visible.length, curPage * PAGE_SIZE + PAGE_SIZE)} of {visible.length} ({PAGE_SIZE} per page).
                 </div>
                 <SuggestionTemplateTable
-                  suggestions={visible.map(effective)}
+                  suggestions={pageItems.map(effective)}
+                  edits={edits}
                   selected={selected}
                   statuses={statuses}
                   creating={creating}
@@ -2923,6 +2939,13 @@ function TagReviewPanel({
                   onToggle={(id, v) => setSelected((sel) => ({ ...sel, [id]: v }))}
                   onEdit={(id, patch) => setEdits((m) => ({ ...m, [id]: { ...m[id], ...patch } }))}
                 />
+                {pageCount > 1 && (
+                  <div style={tplStyles.pager}>
+                    <button style={tplStyles.pagerBtn} disabled={curPage <= 0} onClick={() => setPage(Math.max(0, curPage - 1))} aria-label="Previous page">‹ Prev</button>
+                    <span style={{ minWidth: 64, textAlign: 'center' }} aria-label={`Page ${curPage + 1} of ${pageCount}`}>{curPage + 1}/{pageCount}</span>
+                    <button style={tplStyles.pagerBtn} disabled={curPage >= pageCount - 1} onClick={() => setPage(Math.min(pageCount - 1, curPage + 1))} aria-label="Next page">Next ›</button>
+                  </div>
+                )}
               </>
             )}
 
