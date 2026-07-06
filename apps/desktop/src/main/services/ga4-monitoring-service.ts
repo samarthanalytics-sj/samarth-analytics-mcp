@@ -111,6 +111,8 @@ interface TargetState {
   lastRunAt: number | null;
   lastError: string | null;
   lastRun: Ga4MonitorRun | null;
+  /** When this property's alerts last actually POSTED to Slack (not tests). */
+  lastSlackAt: number | null;
   seenIds: Set<string>;
 }
 
@@ -193,7 +195,7 @@ export class Ga4MonitoringService {
   private stateFor(propertyId: string): TargetState {
     let s = this.state.get(propertyId);
     if (!s) {
-      s = { lastRunAt: null, lastError: null, lastRun: null, seenIds: new Set() };
+      s = { lastRunAt: null, lastError: null, lastRun: null, lastSlackAt: null, seenIds: new Set() };
       this.state.set(propertyId, s);
     }
     return s;
@@ -204,15 +206,17 @@ export class Ga4MonitoringService {
     const targetStatuses: Ga4MonitorTargetStatus[] = this.config.targets.map((t) => {
       const s = this.state.get(t.propertyId);
       const ownRef = this.propertyWebhookRefForActive(t.propertyId);
-      return { ...t, lastRunAt: s?.lastRunAt ?? null, lastError: s?.lastError ?? null, lastRun: s?.lastRun ?? null, hasWebhook: ownRef ? this.deps.secrets.has(ownRef) : false };
+      return { ...t, lastRunAt: s?.lastRunAt ?? null, lastError: s?.lastError ?? null, lastRun: s?.lastRun ?? null, hasWebhook: ownRef ? this.deps.secrets.has(ownRef) : false, lastSlackAt: s?.lastSlackAt ?? null };
     });
     const lastRunAt = targetStatuses.reduce<number | null>((m, t) => (t.lastRunAt !== null && (m === null || t.lastRunAt > m) ? t.lastRunAt : m), null);
+    const lastSlackAt = targetStatuses.reduce<number | null>((m, t) => (t.lastSlackAt !== null && (m === null || t.lastSlackAt > m) ? t.lastSlackAt : m), null);
     return {
       ...this.config,
       running: this.timer !== null,
       lastRunAt,
       lastError: this.lastError,
       hasWebhook: ref ? this.deps.secrets.has(ref) : false,
+      lastSlackAt,
       targetStatuses,
     };
   }
@@ -360,7 +364,7 @@ export class Ga4MonitoringService {
           if (webhook) {
             const label = target.propertyLabel || target.propertyId;
             const send = await sendSlackWebhook(webhook, buildSlackPayload(label, result, newAlerts), { fetchImpl: this.deps.slackFetch });
-            if (send.ok) slackSent = 1;
+            if (send.ok) { slackSent = 1; st.lastSlackAt = at; }
             else slackError = send.error ?? 'Slack send failed.';
           }
         }

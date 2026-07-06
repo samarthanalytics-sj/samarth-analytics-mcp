@@ -778,6 +778,8 @@ export interface Ga4MonitorTargetStatus extends Ga4MonitorTarget {
   lastRun: Ga4MonitorRun | null;
   /** Whether this property has its OWN Slack channel connected (else it uses the default). */
   hasWebhook: boolean;
+  /** When this property's alerts last POSTED to Slack (real alert sends only, not tests). */
+  lastSlackAt: number | null;
 }
 
 export interface Ga4MonitorStatus extends Ga4MonitorConfig {
@@ -788,6 +790,8 @@ export interface Ga4MonitorStatus extends Ga4MonitorConfig {
   lastError: string | null;
   /** Whether the account's DEFAULT Slack webhook is stored (per-property channels override it). */
   hasWebhook: boolean;
+  /** Most recent Slack alert POST across all targets (null when none was ever sent). */
+  lastSlackAt: number | null;
   /** One entry per configured target, in config order. */
   targetStatuses: Ga4MonitorTargetStatus[];
 }
