@@ -1902,6 +1902,10 @@ function TagReviewPanel({
     });
   const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned']; inventory: TagScanResult['inventory']; installed: TagScanResult['installed'] } | null>(null);
   const [showLog, setShowLog] = useState(false);
+  // Browser-driver diagnostics (separate "show debug" toggle): per-page form-probe
+  // DOM counts + console/page errors — why a scan found nothing.
+  const [scanDebug, setScanDebug] = useState<TagScanResult['debug'] | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
   const [discoverMode, setDiscoverMode] = useState<'site' | 'single' | 'ai' | 'csv'>('site');
@@ -1968,6 +1972,7 @@ function TagReviewPanel({
     setMeta(res.summary);
     setWarnings(res.warnings);
     setScanLog({ pages: res.pages, notScanned: res.notScanned, inventory: res.inventory, installed: res.installed });
+    setScanDebug(res.debug ?? null);
     loadSuggestions(res.suggestions);
   }
 
@@ -2089,6 +2094,7 @@ function TagReviewPanel({
       setMeta(null);
       setWarnings(res.warnings);
       setScanLog(null);
+      setScanDebug(null);
       loadSuggestions(res.suggestions);
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -2790,6 +2796,83 @@ function TagReviewPanel({
           </div>
         )}
 
+        {/* Debug: browser-driver diagnostics (form-probe DOM counts + console/page errors) */}
+        {scanDebug && (
+          <div style={styles.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={styles.muted}>
+                Debug · driver {scanDebug.driver} · settle {scanDebug.settleMode} · {scanDebug.pages.length} page load(s) ·{' '}
+                {scanDebug.consoleErrors.length} console error(s) · {scanDebug.pageErrors.length} page error(s)
+              </div>
+              <button style={styles.linkBtn} onClick={() => setShowDebug((o) => !o)}>
+                {showDebug ? 'hide debug' : 'show debug'}
+              </button>
+            </div>
+            {showDebug && (
+              <div style={{ marginTop: 10 }}>
+                <div style={styles.h2}>Page loads ({scanDebug.pages.length})</div>
+                <div style={styles.invScroll}>
+                  <table style={styles.invTable}>
+                    <thead>
+                      <tr>
+                        <th style={styles.invTh}>Page</th>
+                        <th style={styles.invTh}>HTTP</th>
+                        <th style={styles.invTh}>DOM form/input/submit</th>
+                        <th style={styles.invTh}>Extracted</th>
+                        <th style={styles.invTh}>Error</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scanDebug.pages.map((p, i) => (
+                        <tr key={i}>
+                          <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{p.url}</td>
+                          <td style={styles.invTd}>{p.httpStatus ?? '—'}</td>
+                          <td style={styles.invTd}>{p.probe ? `${p.probe.forms}/${p.probe.inputs}/${p.probe.submitish}` : '—'}</td>
+                          <td style={styles.invTd}>{p.probe ? p.probe.extracted : '—'}</td>
+                          <td style={{ ...styles.invTd, color: 'var(--text-faint)' }}>{p.error ?? ''}</td>
+                        </tr>
+                      ))}
+                      {scanDebug.pages.length === 0 && (
+                        <tr>
+                          <td style={styles.invTd} colSpan={5}>
+                            none
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                {scanDebug.consoleErrors.length > 0 && (
+                  <>
+                    <div style={{ ...styles.h2, marginTop: 14 }}>Browser console errors ({scanDebug.consoleErrors.length})</div>
+                    <ul style={styles.resultList}>
+                      {scanDebug.consoleErrors.slice(0, 50).map((m, i) => (
+                        <li key={i} style={styles.resultRow}>{m}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {scanDebug.pageErrors.length > 0 && (
+                  <>
+                    <div style={{ ...styles.h2, marginTop: 12 }}>Page errors ({scanDebug.pageErrors.length})</div>
+                    <ul style={styles.resultList}>
+                      {scanDebug.pageErrors.map((m, i) => (
+                        <li key={i} style={styles.resultRow}>{m}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {scanDebug.consoleErrors.length === 0 && scanDebug.pageErrors.length === 0 && (
+                  <div style={{ ...styles.muted, marginTop: 10 }}>
+                    No browser console or page errors captured — the pages loaded cleanly. If suggestions are still missing, the
+                    elements likely aren&apos;t standard DOM (custom widgets) or the page needs more settle time.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Live crawl progress — the list below fills in as each page is read. */}
         {scanning && scanProgress && (
           <div style={styles.scanBanner}>
@@ -3044,6 +3127,9 @@ function ContainerAuditPanel({
   // one-shot confirmation that gates a bulk delete (the captured index list to remove).
   const [selectedDel, setSelectedDel] = useState<Record<number, boolean>>({});
   const [delConfirm, setDelConfirm] = useState<{ indices: number[] } | null>(null);
+  // "show debug": run context (scope + counts), the config-audit boundary +
+  // runtime-required checks, and a preview of the exact tool+args each fix calls.
+  const [showDebug, setShowDebug] = useState(false);
 
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
@@ -3351,6 +3437,71 @@ function ContainerAuditPanel({
               ({report.summary.critical} critical · {report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low ·{' '}
               {report.summary.info} info){fixable > 0 ? ` · ${fixable} auto-fixable` : ''}
             </div>
+            <div style={{ marginTop: 6 }}>
+              <button style={styles.linkBtn} onClick={() => setShowDebug((o) => !o)}>
+                {showDebug ? 'hide debug' : 'show debug'}
+              </button>
+            </div>
+            {showDebug && (
+              <div style={{ marginTop: 6 }}>
+                <div style={styles.h2}>Run context</div>
+                <div style={styles.muted}>
+                  account {ctx?.accountId ?? '—'} · container {ctx?.containerId ?? '—'} · workspace {ctx?.workspaceId ?? '—'} · tags{' '}
+                  {report.counts.tags} · triggers {report.counts.triggers} · variables {report.counts.variables}
+                  {report.counts.clients != null ? ` · clients ${report.counts.clients}` : ''}
+                  {report.counts.transformations != null ? ` · transformations ${report.counts.transformations}` : ''} · GA4 base config{' '}
+                  {report.hasGa4Config ? 'present' : 'absent'}
+                </div>
+                {report.boundary && (
+                  <>
+                    <div style={{ ...styles.h2, marginTop: 12 }}>Audit boundary</div>
+                    <div style={styles.muted}>{report.boundary}</div>
+                  </>
+                )}
+                {report.runtimeRequired && report.runtimeRequired.length > 0 && (
+                  <>
+                    <div style={{ ...styles.h2, marginTop: 12 }}>Needs live verification ({report.runtimeRequired.length})</div>
+                    <ul style={styles.resultList}>
+                      {report.runtimeRequired.map((r, i) => (
+                        <li key={i} style={styles.resultRow}>{r}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {(() => {
+                  const fixes = report.findings.filter((f) => f.fix);
+                  return (
+                    <>
+                      <div style={{ ...styles.h2, marginTop: 12 }}>Fix preview ({fixes.length}) — the exact tool + args “Apply fix” calls</div>
+                      {fixes.length === 0 ? (
+                        <div style={styles.muted}>No auto-fixable findings.</div>
+                      ) : (
+                        <div style={styles.invScroll}>
+                          <table style={styles.invTable}>
+                            <thead>
+                              <tr>
+                                <th style={styles.invTh}>Finding</th>
+                                <th style={styles.invTh}>Tool</th>
+                                <th style={styles.invTh}>Args</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {fixes.slice(0, 100).map((f, i) => (
+                                <tr key={i}>
+                                  <td style={styles.invTd}>{f.resource?.name ?? f.message.slice(0, 60)}</td>
+                                  <td style={styles.invTd}>{f.fix?.tool ?? ''}</td>
+                                  <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{JSON.stringify(f.fix?.args ?? {})}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
             {report.counts.findings > 0 && (
               <div style={styles.downloadBar}>
                 <span style={{ color: 'var(--text)', fontSize: 13.5, fontWeight: 600 }}>Download the full audit</span>

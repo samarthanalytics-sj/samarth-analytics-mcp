@@ -32,7 +32,7 @@ import {
 import { analyzeForms, type RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import type { SuggestedTag, SuggestPlatform } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
-import type { TagScanResult } from '../../shared/ipc';
+import type { TagScanResult, ScanDebug } from '../../shared/ipc';
 
 /** Non-GA4 platform → its GA4→platform deriver (mirrors buildSuggestions' PLATFORM_DERIVERS), so the
  *  AI-derived `extra` suggestions get the same per-platform counterparts as the engine ones. */
@@ -63,6 +63,10 @@ export interface PageDriver {
   /** Capture a PNG of the page loaded by the most recent open() (for the AI scan).
    *  Optional — only the browser drivers implement it (Cheerio can't). */
   screenshot?(): Promise<Buffer | null>;
+  /** Browser diagnostics accumulated across this driver's opens (form-probe counts,
+   *  console/page errors) for the debug toggle. Optional — only browser drivers
+   *  have them. Safe to call after close() (reads retained buffers). */
+  diagnostics?(): ScanDebug | undefined;
   close(): Promise<void>;
 }
 
@@ -327,6 +331,7 @@ export function assembleResult(
   opened: number,
   extra: SuggestedTag[] = [],
   platforms: SuggestPlatform[] = ['ga4'],
+  debug?: ScanDebug,
 ): TagScanResult {
   const input = buildSuggestInput(pageScans, siteHost);
   // full: include the GA4 Configuration base tag + the All-form / All-PDF catch-alls
@@ -391,6 +396,7 @@ export function assembleResult(
     installed: detectInstalled(pageScans.flatMap((p) => p.signals.scriptSrcs)),
     notScanned,
     warnings,
+    ...(debug ? { debug } : {}),
   };
 }
 
@@ -474,7 +480,7 @@ export async function crawlAndSuggest(
   if (queue.length > 0) {
     warnings.push(`${queue.length} more same-site page(s) were discovered but not scanned (page budget ${maxPages}).`);
   }
-  return assembleResult(start, siteHost, pageScans, notScanned, warnings, opened, [], platforms);
+  return assembleResult(start, siteHost, pageScans, notScanned, warnings, opened, [], platforms, driver.diagnostics?.());
 }
 
 /** Max pages a single "scan selected" run (Main website) or CSV import will deep-scan. */
@@ -541,5 +547,5 @@ export async function scanUrls(
   } finally {
     await driver.close();
   }
-  return assembleResult(start ?? list[0] ?? '', siteHost, pageScans, notScanned, warnings, opened, [], platforms);
+  return assembleResult(start ?? list[0] ?? '', siteHost, pageScans, notScanned, warnings, opened, [], platforms, driver.diagnostics?.());
 }

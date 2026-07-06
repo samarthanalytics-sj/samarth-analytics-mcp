@@ -513,6 +513,29 @@ export interface TagScanResult {
   installed: { containers: string[]; measurementIds: string[] };
   notScanned: Array<{ url: string; reason: string }>;
   warnings: string[];
+  /** Browser-driver diagnostics for the "Show debug" toggle (why a scan found nothing). */
+  debug?: ScanDebug;
+}
+
+/** One page's browser-driver diagnostics (form-probe DOM counts + nav status). */
+export interface ScanDebugPage {
+  url: string;
+  httpStatus: number | null;
+  /** DOM counts the form probe saw, and how many forms the extractor got out. */
+  probe?: { forms: number; inputs: number; textareas: number; selects: number; submitish: number; extracted: number };
+  error?: string;
+}
+/** Browser-driver diagnostics for a tag-suggestion scan (drives the debug toggle). */
+export interface ScanDebug {
+  /** Which driver(s) ran (e.g. 'electron', 'electron+cheerio'). */
+  driver: string;
+  /** Settle strategy: 'auto' (network-idle) or a fixed 'Nms'. */
+  settleMode: string;
+  pages: ScanDebugPage[];
+  /** Browser console errors/warnings observed during the scan (capped). */
+  consoleErrors: string[];
+  /** Page-level load failures (did-fail-load main frame, render-process-gone). */
+  pageErrors: string[];
 }
 
 /* ── Container audit (the "Container audit" panel) ── */
@@ -530,11 +553,15 @@ export interface AuditFindingView {
   fix?: { tool: string; args: Record<string, unknown> };
 }
 export interface AuditReportView {
-  counts: { tags: number; triggers: number; variables: number; findings: number };
+  counts: { tags: number; triggers: number; variables: number; findings: number; clients?: number; transformations?: number };
   summary: { critical: number; high: number; medium: number; low: number; info: number };
   findings: AuditFindingView[];
   /** True if a GA4/Google base Configuration tag is present (hides the "Add GA4 base" card). */
   hasGa4Config?: boolean;
+  /** Container-only boundary statement (what a config audit proves vs. can't) — shown in debug. */
+  boundary?: string;
+  /** Checks that need live verification, never scored as defects — shown in debug. */
+  runtimeRequired?: string[];
 }
 
 /** Result of discovering a site's pages (suggestions:discover). */

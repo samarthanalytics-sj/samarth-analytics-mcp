@@ -21,6 +21,7 @@ import { collectPageInBrowser, type PageScanRaw } from '../../../../web-audit-mc
 import { extractFormsInPage, type RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import { requestAllowed } from './ssrf';
 import type { PageDriver, DrivenPage } from './scan-core';
+import type { ScanDebug, ScanDebugPage } from '../../shared/ipc';
 
 export interface ElectronDriverOptions {
   navTimeoutMs?: number;
@@ -176,6 +177,40 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
     lastStatus = typeof httpResponseCode === 'number' ? httpResponseCode : null;
   });
 
+  // ── Debug diagnostics (surfaced via diagnostics() for the UI "Show debug" toggle) ──
+  const diagPages: ScanDebugPage[] = [];
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  // The console-message / did-fail-load signatures vary across Electron versions;
+  // register through a permissive cast and parse defensively.
+  const onWc = win.webContents.on.bind(win.webContents) as unknown as (ev: string, cb: (...a: unknown[]) => void) => void;
+  onWc('console-message', (...args: unknown[]) => {
+    const a1 = args[1];
+    let level: string | number = 0;
+    let message = '';
+    if (a1 && typeof a1 === 'object') {
+      const d = a1 as { level?: string | number; message?: string };
+      level = d.level ?? 0;
+      message = String(d.message ?? '');
+    } else {
+      level = typeof a1 === 'number' ? a1 : 0;
+      message = String(args[2] ?? '');
+    }
+    const isErr = level === 'error' || level === 'warning' || (typeof level === 'number' && level >= 2);
+    if (isErr && message && consoleErrors.length < 100) consoleErrors.push(message.slice(0, 300));
+  });
+  onWc('did-fail-load', (...args: unknown[]) => {
+    // (event, errorCode, errorDescription, validatedURL, isMainFrame)
+    const code = Number(args[1]);
+    const isMainFrame = args[4] === true;
+    if (!isMainFrame || code === -3) return; // -3 = ERR_ABORTED (noise: cancelled sub-resources)
+    if (pageErrors.length < 50) pageErrors.push(`did-fail-load: ${String(args[2] ?? '')} (${String(args[3] ?? '')})`.slice(0, 300));
+  });
+  onWc('render-process-gone', (...args: unknown[]) => {
+    const d = args[1] as { reason?: string } | undefined;
+    if (pageErrors.length < 50) pageErrors.push(`render-process-gone: ${d?.reason ?? 'unknown'}`);
+  });
+
   return {
     async open(url: string): Promise<DrivenPage> {
       if (!win || win.isDestroyed()) return { ok: false, httpStatus: null, finalUrl: null, error: 'driver closed' };
@@ -190,11 +225,13 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
           }
         });
       } catch (e) {
+        diagPages.push({ url, httpStatus: lastStatus, error: errMsg(e) });
         return { ok: false, httpStatus: lastStatus, finalUrl: null, error: errMsg(e) };
       }
 
       // HTTP error pages: report the status, skip the (pointless) DOM read.
       if (lastStatus !== null && lastStatus >= 400) {
+        diagPages.push({ url: wc.getURL() || url, httpStatus: lastStatus, error: `http ${lastStatus}` });
         return { ok: true, httpStatus: lastStatus, finalUrl: wc.getURL() || url };
       }
 
@@ -223,8 +260,10 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
           evalTimeoutMs,
           'form scan',
         )) as RawForm[];
+        const extracted = Array.isArray(rawForms) ? rawForms.length : 0;
+        let probe: { forms: number; inputs: number; textareas: number; selects: number; submitish: number } | undefined;
         try {
-          const p = (await withTimeout(wc.executeJavaScript(inPage(probeFormsDom), true), 2_000, 'form probe')) as {
+          probe = (await withTimeout(wc.executeJavaScript(inPage(probeFormsDom), true), 2_000, 'form probe')) as {
             forms: number;
             inputs: number;
             textareas: number;
@@ -232,11 +271,16 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
             submitish: number;
           };
           console.error(
-            `[form-probe] ${wc.getURL() || url}: <form>=${p.forms} input=${p.inputs} textarea=${p.textareas} select=${p.selects} submitish=${p.submitish} → extracted ${Array.isArray(rawForms) ? rawForms.length : 0} form(s)`,
+            `[form-probe] ${wc.getURL() || url}: <form>=${probe.forms} input=${probe.inputs} textarea=${probe.textareas} select=${probe.selects} submitish=${probe.submitish} → extracted ${extracted} form(s)`,
           );
         } catch {
           /* probe is best-effort diagnostics */
         }
+        diagPages.push({
+          url: wc.getURL() || url,
+          httpStatus: lastStatus,
+          ...(probe ? { probe: { ...probe, extracted } } : {}),
+        });
         return {
           ok: true,
           httpStatus: lastStatus,
@@ -245,6 +289,7 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
           rawForms: Array.isArray(rawForms) ? rawForms : [],
         };
       } catch (e) {
+        diagPages.push({ url: wc.getURL() || url, httpStatus: lastStatus, error: errMsg(e) });
         return { ok: false, httpStatus: lastStatus, finalUrl: wc.getURL() || null, error: errMsg(e) };
       }
     },
@@ -284,6 +329,17 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
           }
         }
       }
+    },
+
+    // Retained buffers — safe to read after close() for the debug toggle.
+    diagnostics(): ScanDebug {
+      return {
+        driver: 'electron',
+        settleMode: autoSettle ? 'auto' : `${fixedSettleMs}ms`,
+        pages: diagPages.slice(0, 100),
+        consoleErrors,
+        pageErrors,
+      };
     },
 
     async close(): Promise<void> {
