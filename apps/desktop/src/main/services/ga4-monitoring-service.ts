@@ -183,13 +183,37 @@ export class Ga4MonitoringService {
     return active ? slackWebhookRefForProperty(active.id, propertyId) : null;
   }
 
-  /** The webhook a property's alerts POST to: its OWN channel when connected, else the account's
-   *  default channel, else null (no Slack for this property). */
+  /** The webhook a property's alerts POST to: its OWN channel, or null (one property, one channel —
+   *  there is no shared/default channel any more). */
   private webhookForTarget(accountId: string, propertyId: string): string | null {
     const own = slackWebhookRefForProperty(accountId, propertyId);
-    if (this.deps.secrets.has(own)) return this.deps.secrets.get(own);
-    const def = slackWebhookRef(accountId);
-    return this.deps.secrets.has(def) ? this.deps.secrets.get(def) : null;
+    return this.deps.secrets.has(own) ? this.deps.secrets.get(own) : null;
+  }
+
+  /** One-time migration away from the removed DEFAULT channel: if the account still holds a legacy
+   *  account-level webhook, copy it to every monitored property that has no channel of its own
+   *  (inheriting the old global channel label), then delete the legacy secret. Idempotent; runs
+   *  lazily whenever an active account is known, and only once targets exist so the URL is never
+   *  discarded with nowhere to go. */
+  private migrateDefaultWebhook(accountId: string): void {
+    const defRef = slackWebhookRef(accountId);
+    if (!this.deps.secrets.has(defRef) || !this.config.targets.length) return;
+    const url = this.deps.secrets.get(defRef);
+    if (url) {
+      let labelChanged = false;
+      for (const t of this.config.targets) {
+        const own = slackWebhookRefForProperty(accountId, t.propertyId);
+        if (!this.deps.secrets.has(own)) {
+          this.deps.secrets.set(own, url);
+          if (!t.slackLabel && this.config.slackLabel) {
+            t.slackLabel = this.config.slackLabel;
+            labelChanged = true;
+          }
+        }
+      }
+      if (labelChanged && this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
+    }
+    this.deps.secrets.delete(defRef);
   }
 
   private stateFor(propertyId: string): TargetState {
@@ -202,6 +226,8 @@ export class Ga4MonitoringService {
   }
 
   status(): Ga4MonitorStatus {
+    const active = this.deps.registry.getActiveView();
+    if (active) this.migrateDefaultWebhook(active.id);
     const ref = this.webhookRefForActive();
     const targetStatuses: Ga4MonitorTargetStatus[] = this.config.targets.map((t) => {
       const s = this.state.get(t.propertyId);
@@ -264,8 +290,9 @@ export class Ga4MonitoringService {
     return this.status();
   }
 
-  /** Remove the default channel (no propertyId) or a property's own channel (its alerts then fall
-   *  back to the default). Also clears the property's channel label so no stale name lingers. */
+  /** Remove a property's channel (its alerts stop posting until a new one is connected). Also clears
+   *  the property's channel label so no stale name lingers. Without a propertyId it removes any
+   *  leftover legacy account-level webhook. */
   clearWebhook(propertyId?: string): Ga4MonitorStatus {
     const ref = propertyId ? this.propertyWebhookRefForActive(propertyId) : this.webhookRefForActive();
     if (ref) this.deps.secrets.delete(ref);
@@ -277,27 +304,17 @@ export class Ga4MonitoringService {
   }
 
   /** Post a confirmation message so the user can SEE which channel/workspace it lands in (Slack does
-   *  not expose that from the URL). With a propertyId, tests THAT property's effective channel (its
-   *  own, or the default it falls back to). Returns a structured result, never throws. */
+   *  not expose that from the URL). Tests the property's OWN channel — one property, one channel.
+   *  Returns a structured result, never throws. */
   async sendTest(propertyId?: string): Promise<{ ok: boolean; error: string | null }> {
     const active = this.deps.registry.getActiveView();
     if (!active) return { ok: false, error: 'No active account.' };
-    let webhook: string | null;
-    let label: string;
-    if (propertyId) {
-      webhook = this.webhookForTarget(active.id, propertyId);
-      const t = this.config.targets.find((x) => x.propertyId === propertyId);
-      label = t?.propertyLabel || propertyId;
-      if (!webhook) return { ok: false, error: 'No Slack channel is connected for this property (and no default channel is set).' };
-    } else {
-      const ref = this.webhookRefForActive();
-      webhook = ref ? this.deps.secrets.get(ref) : null;
-      if (!webhook) return { ok: false, error: 'No Slack webhook is saved for this account.' };
-      const first = this.config.targets[0];
-      label = this.config.targets.length > 1
-        ? `${this.config.targets.length} GA4 properties (${this.config.targets.map((t) => t.propertyLabel || t.propertyId).slice(0, 3).join(', ')}${this.config.targets.length > 3 ? ', …' : ''})`
-        : first?.propertyLabel || first?.propertyId || 'your GA4 property';
-    }
+    this.migrateDefaultWebhook(active.id);
+    if (!propertyId) return { ok: false, error: 'Pick a property to test — each property has its own Slack channel.' };
+    const webhook = this.webhookForTarget(active.id, propertyId);
+    const t = this.config.targets.find((x) => x.propertyId === propertyId);
+    const label = t?.propertyLabel || propertyId;
+    if (!webhook) return { ok: false, error: 'No Slack channel is connected for this property.' };
     const res = await sendSlackWebhook(webhook, buildSlackTestPayload(label), { fetchImpl: this.deps.slackFetch });
     return { ok: res.ok, error: res.ok ? null : res.error ?? 'Slack send failed.' };
   }
@@ -333,6 +350,9 @@ export class Ga4MonitoringService {
   private async runOnceInner(only?: string | string[]): Promise<Ga4MonitorRun[]> {
     const active = this.deps.registry.getActiveView();
     if (!active || !active.hasGoogleToken) return [];
+    // Background sweeps may run before the tab is ever opened — migrate the legacy default webhook
+    // here too so alerts keep flowing to the (now per-property) channels.
+    this.migrateDefaultWebhook(active.id);
     const wanted = only === undefined ? null : new Set(Array.isArray(only) ? only : [only]);
     // A manual "Run now" on a paused target still runs it (the user asked); the timer only sweeps
     // enabled ones (wanted === null).
