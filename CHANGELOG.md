@@ -1,3 +1,9 @@
+## [1.199.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.198.0...v1.199.0) (2026-07-06)
+
+### Features
+
+* **desktop:** harden verify-firing (custom-event, sGTM, consent, tid, settle) ([7e74a99](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7e74a99fed6f5fe55d944c53f60978a622ff0e71))
+
 ## [1.198.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.197.0...v1.198.0) (2026-07-06)
 
 ### Features
