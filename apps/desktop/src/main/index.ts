@@ -137,7 +137,17 @@ app.whenReady().then(() => {
   // manager + read-only GTM/GA4 data fetches. Client id/secret come from env or
   // oauth-client.json in the data dir.
   const oauthConfigPath = join(dataDir, 'oauth-client.json');
-  const clientManager = new AccountClientManager(registry, oauthConfigPath);
+  // When an account's refresh token is dead (invalid_grant), clear the vaulted token and
+  // tell every window: 'accounts:changed' flips the account to disconnected, and
+  // 'account:auth-expired' raises a one-time "Re-connect Google" banner for that account.
+  const clientManager = new AccountClientManager(registry, oauthConfigPath, undefined, (id) => {
+    try { registry.clearGoogleToken(id); } catch { /* already cleared */ }
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (w.isDestroyed()) continue;
+      w.webContents.send('account:auth-expired', { id });
+      w.webContents.send('accounts:changed');
+    }
+  });
   const googleAuth = new GoogleAuthService(registry, oauthConfigPath, (id) =>
     clientManager.invalidate(id)
   );

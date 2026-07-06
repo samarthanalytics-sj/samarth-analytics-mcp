@@ -71,6 +71,13 @@ const api = {
       ipcRenderer.on('accounts:changed', listener);
       return () => ipcRenderer.removeListener('accounts:changed', listener);
     },
+    // Fired when an account's Google refresh token is rejected (expired/revoked) — the
+    // token has been cleared; the renderer raises a "Re-connect Google" prompt for it.
+    onAuthExpired: (cb: (p: { id: string }) => void): (() => void) => {
+      const listener = (_e: unknown, p: { id: string }): void => cb(p);
+      ipcRenderer.on('account:auth-expired', listener);
+      return () => ipcRenderer.removeListener('account:auth-expired', listener);
+    },
   },
 
   // App-level LLM API keys (one per provider, shared by all accounts).
