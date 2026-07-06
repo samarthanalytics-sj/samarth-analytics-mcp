@@ -1,3 +1,9 @@
+## [1.204.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.204.1...v1.204.2) (2026-07-06)
+
+### Bug Fixes
+
+* **desktop:** show Container-audit verify messages inline, not in the global header ([3e9379e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3e9379eda1ea07d97c884e32328bcd30909f5a73))
+
 ## [1.204.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.204.0...v1.204.1) (2026-07-06)
 
 ### Bug Fixes
