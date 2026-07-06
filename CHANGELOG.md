@@ -1,3 +1,9 @@
+## [1.204.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.204.0...v1.204.1) (2026-07-06)
+
+### Bug Fixes
+
+* **desktop:** correct the stale Auto-preview 403 message (scope IS requested) ([9db4cdb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9db4cdb5ef989e6707dbf77a126e3219e4d7f23d)), closes [#333](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/333)
+
 ## [1.204.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.203.0...v1.204.0) (2026-07-06)
 
 ### Features
