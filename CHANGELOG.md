@@ -1,3 +1,9 @@
+## [1.194.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.194.0...v1.194.1) (2026-07-06)
+
+### Bug Fixes
+
+* **desktop:** create-then-verify tag firing + clean tab on mode switch ([b5bd935](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b5bd9359f44d73f5f48e0e3ddc4ba36cbfa02300))
+
 ## [1.194.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.193.0...v1.194.0) (2026-07-06)
 
 ### Features
