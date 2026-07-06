@@ -3,9 +3,9 @@
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/suggest.node.test.ts
  */
 import { detectFormProvider, detectEmbeddedForm } from '../providers.js';
-import { buildSuggestions, eventFromLabel } from '../suggest.js';
+import { buildSuggestions, eventFromLabel, flagOverlappingClickTexts } from '../suggest.js';
 import { isYouTubeEmbed } from '../video.js';
-import type { PageSignals, SuggestInput, DetectedForm } from '../types.js';
+import type { PageSignals, SuggestInput, DetectedForm, SuggestedTag } from '../types.js';
 
 let passed = 0;
 let failed = 0;
@@ -823,6 +823,31 @@ check('meta: an "Add to Cart" CTA → Meta "AddToCart"; a generic outbound click
   const leadInput: SuggestInput = { siteHost: 'a.com', forms: [{ page: '/contact', purpose: 'contact', action: '', provider: prov0, method: 'post', formId: 'lead-form' }], elements: [] };
   const leadMeta = buildSuggestions(leadInput, { platforms: ['meta'] }).find((s) => s.eventName === 'Lead');
   check('ecom: a form Lead Meta tag has NO ecommerce Object Properties (undefined eventParameters)', !!leadMeta && !leadMeta.eventParameters);
+}
+
+// ── near-duplicate click tags: a shorter click-text inside another CTA (won't fire / double-count) ──
+{
+  const mk = (text: string, op = 'equals'): SuggestedTag =>
+    ({ trigger: { kind: 'link_click', clickTextValue: text, clickTextOperator: op } } as unknown as SuggestedTag);
+  const s = [mk('Free Audit'), mk('Get Free Audit'), mk('Book a Call')];
+  flagOverlappingClickTexts(s);
+  check('overlap: shorter "Free Audit" flagged (contained in "Get Free Audit")', /contained in another CTA/.test(s[0].note ?? ''));
+  check('overlap: names the containing CTA', (s[0].note ?? '').includes('Get Free Audit'));
+  check('overlap: longer "Get Free Audit" NOT flagged', !s[1].note);
+  check('overlap: unrelated "Book a Call" NOT flagged', !s[2].note);
+  // Word-boundary only: "Audit" is NOT "inside" "Auditorium Tickets".
+  const s2 = [mk('Audit'), mk('Auditorium Tickets')];
+  flagOverlappingClickTexts(s2);
+  check('overlap: whole-word only ("Audit" not inside "Auditorium")', !s2[0].note);
+  // A 'contains' trigger isn't an equals under-fire risk → not flagged.
+  const s3 = [mk('Free Audit', 'contains'), mk('Get Free Audit')];
+  flagOverlappingClickTexts(s3);
+  check('overlap: only "equals" triggers are flagged', !s3[0].note);
+  // An existing note is preserved (appended, not overwritten).
+  const withNote = mk('Free Audit');
+  withNote.note = 'prior note.';
+  flagOverlappingClickTexts([withNote, mk('Get Free Audit')]);
+  check('overlap: appends to an existing note', withNote.note.startsWith('prior note.') && /contained in another CTA/.test(withNote.note));
 }
 
 console.log(`\nTag-suggest: ${passed} passed, ${failed} failed`);
