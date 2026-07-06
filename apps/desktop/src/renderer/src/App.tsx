@@ -1989,6 +1989,9 @@ function TagReviewPanel({
   const [healMeta, setHealMeta] = useState<{ injected: boolean; previewAuth: boolean }>({ injected: false, previewAuth: false });
   const [healSkipped, setHealSkipped] = useState<Record<string, boolean>>({});
   const [healNote, setHealNote] = useState('');
+  // Corrected triggers already applied to the draft, keyed by tag id — fed into the NEXT round's
+  // verify input so re-verify drives the FIXED interaction (not the stale original) and can converge.
+  const [appliedTriggers, setAppliedTriggers] = useState<Record<string, VerifyTagInput['trigger']>>({});
   const [settleMs, setSettleMs] = useState('2500');
   const [settleAuto, setSettleAuto] = useState(true);
   const effSettleMs = (): number | undefined => (settleAuto ? undefined : Number(settleMs) || undefined);
@@ -2075,12 +2078,14 @@ function TagReviewPanel({
     setWarnings(res.warnings);
     setScanLog({ pages: res.pages, notScanned: res.notScanned, inventory: res.inventory, installed: res.installed });
     setScanDebug(res.debug ?? null);
+    resetHeal(); // a new scan invalidates any prior heal verdicts
     loadSuggestions(res.suggestions);
   }
 
   // Clear the whole review state so switching source mode starts a fresh, clean
   // tab instead of showing the previous scan's stale suggestions/results.
   function resetScanState(): void {
+    resetHeal();
     setSuggestions([]);
     setMeta(null);
     setWarnings([]);
@@ -2431,6 +2436,7 @@ function TagReviewPanel({
       return n;
     });
     setDone(null);
+    resetHeal(); // a fresh create invalidates any prior heal run
     setCreateProgress({ done: 0, total: chosen.length });
     try {
       const outcomes: CreateTagOutcome[] = await window.desktop.tags.createTags(
@@ -2505,19 +2511,30 @@ function TagReviewPanel({
     else if (fixable.length > 0) { setHealPhase('review'); setHealNote(`Round ${round}: ${firing}/${activeV.length} firing · ${fixable.length} auto-fixable.`); }
     else { setHealPhase('paused'); setHealNote(`Round ${round}: ${firing}/${activeV.length} firing · ${notFired.length} need your call (no confident auto-fix).`); }
   }
+  function resetHeal(): void {
+    setHealPhase('idle');
+    setHealRound(0);
+    setHealVerdicts([]);
+    setHealMeta({ injected: false, previewAuth: false });
+    setHealSkipped({});
+    setHealNote('');
+    setAppliedTriggers({});
+  }
   // Mint a fresh preview (the draft changed) and verify the created tags, carrying the scan
-  // inventory so a non-firing tag gets a CONCRETE corrected trigger.
-  async function runHealRound(roundNo: number, skipped: Record<string, boolean>): Promise<void> {
-    if (!targetReady || !ctx) { setHealNote('Pick a GTM account, container and draft workspace first.'); return; }
+  // inventory so a non-firing tag gets a CONCRETE corrected trigger. `overrides` supplies the
+  // corrected triggers already applied to the draft (keyed by tag id) so re-verify drives the
+  // FIXED interaction, not the stale original. Guards leave a recoverable phase (never stuck 'busy').
+  async function runHealRound(roundNo: number, skipped: Record<string, boolean>, overrides: Record<string, VerifyTagInput['trigger']>): Promise<void> {
+    if (!targetReady || !ctx) { setHealPhase('idle'); setHealNote('Pick a GTM account, container and draft workspace first.'); return; }
     const target = url.trim();
-    if (!target) { setHealNote('Enter the site URL to verify against (the Main website / Single page field).'); return; }
+    if (!target) { setHealPhase('idle'); setHealNote('Enter the site URL to verify against (the Main website / Single page field).'); return; }
     const created = healableTags();
-    if (created.length === 0) { setHealNote('Create some tags first — there are none in the container to verify.'); return; }
+    if (created.length === 0) { setHealPhase('idle'); setHealNote('Create some tags first — there are none in the container to verify.'); return; }
     setHealPhase('busy');
     setHealNote(`Round ${roundNo}: minting a preview & verifying ${created.length} tag(s)…`);
     try {
       const { snippet } = await window.desktop.tags.mintPreview(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
-      const tags: VerifyTagInput[] = created.map((s) => ({ id: s.id, tagName: s.tagName, eventName: s.eventName, platform: s.platform, measurementId: s.measurementId, page: s.page, trigger: s.trigger }));
+      const tags: VerifyTagInput[] = created.map((s) => ({ id: s.id, tagName: s.tagName, eventName: s.eventName, platform: s.platform, measurementId: s.measurementId, page: s.page, trigger: overrides[s.id] ?? s.trigger }));
       const elements = scanLog?.inventory.elements ?? [];
       const res = await window.desktop.tags.verify(target, tags, elements, { containerSnippet: snippet });
       setHealVerdicts(res.verdicts);
@@ -2525,7 +2542,7 @@ function TagReviewPanel({
       setHealRound(roundNo);
       classifyAndSetPhase(res.verdicts, skipped, roundNo);
     } catch (e) {
-      setHealPhase('paused');
+      setHealPhase(healVerdicts.length > 0 ? 'paused' : 'idle');
       setHealNote(healErrorText(e));
     }
   }
@@ -2533,36 +2550,41 @@ function TagReviewPanel({
     setHealSkipped({});
     setHealVerdicts([]);
     setHealNote('');
-    await runHealRound(1, {});
+    setAppliedTriggers({});
+    await runHealRound(1, {}, {});
   }
   // Approve-per-round: apply every confident trigger fix (not skipped) via the retarget primitive,
-  // then re-verify. Stops at the round cap.
+  // record what was applied so the next round drives the corrected interaction, then re-verify.
   async function applyFixesAndReverify(): Promise<void> {
     if (!ctx) return;
     const fixable = healVerdicts.filter((v) => !v.fired && v.suggestedTrigger && !healSkipped[v.tagId]);
     if (fixable.length === 0) return;
     setHealPhase('busy');
     setHealNote(`Applying ${fixable.length} trigger fix(es) to the draft…`);
+    const applied: Record<string, VerifyTagInput['trigger']> = { ...appliedTriggers };
     try {
       for (const v of fixable) {
         await window.desktop.gtm.retargetTrigger({
           accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!,
           tagName: v.tagName, trigger: v.suggestedTrigger!,
         });
+        applied[v.tagId] = v.suggestedTrigger!; // re-verify must drive the FIXED interaction
       }
     } catch (e) {
+      setAppliedTriggers(applied); // keep whatever succeeded before the failure
       setHealNote(healErrorText(e));
       setHealPhase('review');
       return;
     }
+    setAppliedTriggers(applied);
     const next = healRound + 1;
     if (next > HEAL_MAX_ROUNDS) {
-      await runHealRound(healRound, healSkipped);
+      await runHealRound(healRound, healSkipped, applied);
       setHealPhase('done');
       setHealNote(`Stopped after ${HEAL_MAX_ROUNDS} rounds — re-verified; see what remains.`);
       return;
     }
-    await runHealRound(next, healSkipped);
+    await runHealRound(next, healSkipped, applied);
   }
   function skipHealTag(tagId: string): void {
     const next = { ...healSkipped, [tagId]: true };
