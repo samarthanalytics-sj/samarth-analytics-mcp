@@ -1,3 +1,9 @@
+## [1.215.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.215.0...v1.215.1) (2026-07-06)
+
+### Bug Fixes
+
+* **desktop:** survive provider rate limits (429) + cap oversized scan-tool output ([687b61a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/687b61a9f1e51165de921b116522164df4b38b3c))
+
 ## [1.215.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.214.0...v1.215.0) (2026-07-06)
 
 ### Features
