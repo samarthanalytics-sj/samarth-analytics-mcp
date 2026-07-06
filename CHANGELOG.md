@@ -1,3 +1,13 @@
+## [1.200.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.199.1...v1.200.0) (2026-07-06)
+
+### Features
+
+* **desktop:** evidence charts for the GA4 report (template's viz layer, computed by rule) ([d39bd5b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d39bd5bd6d6c0a120d129605be358d36454b8ca7))
+
+### Bug Fixes
+
+* **desktop:** verify auto-mint needs a version scope — add it (no publish) + restore paste ([69ccf89](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/69ccf89b7f5d25a60284ed9cc4267f5dec5dbc9d))
+
 ## [1.199.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.199.0...v1.199.1) (2026-07-06)
 
 ### Bug Fixes
