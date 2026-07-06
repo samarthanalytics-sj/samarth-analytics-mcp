@@ -10,8 +10,11 @@ export const GOOGLE_USERINFO_ENDPOINT = 'https://openidconnect.googleapis.com/v1
 
 // openid/email/profile identify the account; tagmanager.readonly + analytics.readonly
 // authorize reads. tagmanager.edit.containers authorizes creating/editing tags,
-// triggers, and variables IN A WORKSPACE (draft) — it does NOT allow publishing
-// (that needs edit.containerversions + publish, deliberately excluded).
+// triggers, and variables IN A WORKSPACE (draft). tagmanager.edit.containerversions
+// authorizes creating container VERSIONS — used ONLY to snapshot a workspace so its
+// draft tags can be previewed for "Verify firing"; it does NOT publish. The broad
+// tagmanager.publish scope stays deliberately EXCLUDED — nothing here ever publishes
+// a container live.
 // analytics.edit authorizes GA4 Admin config writes (key events, dimensions,
 // metrics, streams, links, audiences, channel groups, properties, …);
 // analytics.manage.users authorizes GA4 access-binding (user permission) writes.
@@ -23,6 +26,7 @@ export const DESKTOP_GOOGLE_SCOPES = [
   'profile',
   'https://www.googleapis.com/auth/tagmanager.readonly',
   'https://www.googleapis.com/auth/tagmanager.edit.containers',
+  'https://www.googleapis.com/auth/tagmanager.edit.containerversions',
   'https://www.googleapis.com/auth/analytics.readonly',
   'https://www.googleapis.com/auth/analytics.edit',
   'https://www.googleapis.com/auth/analytics.manage.users',

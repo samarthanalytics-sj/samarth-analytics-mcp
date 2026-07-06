@@ -447,11 +447,25 @@ export class GoogleDataService {
     const gtm = tagmanager({ version: 'v2', auth });
     const containerParent = `accounts/${accountId}/containers/${containerId}`;
 
-    // 1. Snapshot the workspace into a version (not published).
-    const cv = await gtm.accounts.containers.workspaces.create_version({
-      path: `${containerParent}/workspaces/${workspaceId}`,
-      requestBody: { name: 'Samarth Verify (auto)', notes: 'Auto-created to verify tag firing in Preview. Not published.' },
-    });
+    // 1. Snapshot the workspace into a version (not published). This needs the
+    //    tagmanager.edit.containerversions scope, which this app does NOT request
+    //    (it is built to never publish) — so translate the 403 into an actionable
+    //    message instead of a raw Gaxios stack.
+    let cv;
+    try {
+      cv = await gtm.accounts.containers.workspaces.create_version({
+        path: `${containerParent}/workspaces/${workspaceId}`,
+        requestBody: { name: 'Samarth Verify (auto)', notes: 'Auto-created to verify tag firing in Preview. Not published.' },
+      });
+    } catch (err) {
+      const code = (err as { code?: number; status?: number }).code ?? (err as { status?: number }).status;
+      if (code === 403) {
+        throw new Error(
+          'Auto preview needs the GTM "edit container versions" permission, which this app does not request (it is built to never publish). Paste a GTM Preview / Environment snippet instead, or re-connect Google after enabling that scope.'
+        );
+      }
+      throw err;
+    }
     const versionId = cv.data.containerVersion?.containerVersionId ?? '';
     if (!versionId) {
       throw new Error(
@@ -461,7 +475,10 @@ export class GoogleDataService {
       );
     }
 
-    // 2. Reuse-or-create a dedicated preview environment bound to that version.
+    // 2. Read the built-in "Latest" preview environment — it auto-tracks the newest
+    //    version (the one we just created), and reading it needs only a READ scope.
+    //    We deliberately do NOT create/reauthorize an environment: that needs the
+    //    publish scope, which this app never requests.
     const [publicId, environments] = await Promise.all([
       this.getContainerPublicId(accountId, containerId),
       collectPages(
@@ -470,34 +487,16 @@ export class GoogleDataService {
         (r) => r.data.nextPageToken
       ),
     ]);
-    const NAME = 'Samarth Verify (auto)';
-    const existing = environments.find((e) => e.name === NAME && e.type === 'user');
-    let env;
-    if (existing?.environmentId) {
-      const upd = await gtm.accounts.containers.environments.update({
-        path: `${containerParent}/environments/${existing.environmentId}`,
-        requestBody: { name: NAME, type: 'user', containerVersionId: versionId, enableDebug: true },
-      });
-      env = upd.data;
-    } else {
-      const created = await gtm.accounts.containers.environments.create({
-        parent: containerParent,
-        requestBody: { name: NAME, type: 'user', containerVersionId: versionId, enableDebug: true },
-      });
-      env = created.data;
-    }
-    // A fresh/updated environment may lack a gtm_auth token — reauthorize to mint one.
-    if (!env.authorizationCode && env.environmentId) {
-      const re = await gtm.accounts.containers.environments.reauthorize({
-        path: `${containerParent}/environments/${env.environmentId}`,
-        requestBody: {},
-      });
-      env = re.data;
+    const latest = environments.find((e) => e.type === 'latest' && e.authorizationCode && e.environmentId);
+    if (!latest?.authorizationCode || !latest.environmentId) {
+      throw new Error(
+        'Created a preview version, but the built-in "Latest" preview environment has no readable auth token (minting one would need the publish scope, which this app never requests). Paste a GTM Preview / Environment snippet instead.'
+      );
     }
     return {
-      snippet: buildEnvironmentSnippet(publicId, env.authorizationCode ?? '', env.environmentId ?? '').head,
+      snippet: buildEnvironmentSnippet(publicId, latest.authorizationCode, latest.environmentId).head,
       versionId,
-      environmentName: NAME,
+      environmentName: latest.name ?? 'Latest',
     };
   }
 
