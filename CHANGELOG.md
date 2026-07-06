@@ -1,3 +1,9 @@
+## [1.195.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.194.1...v1.195.0) (2026-07-06)
+
+### Features
+
+* **desktop:** auto-mint workspace preview for Verify firing (paste still supported) ([9108062](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9108062f96f2bfe0849b816645b8f3c89b7227cb))
+
 ## [1.194.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.194.0...v1.194.1) (2026-07-06)
 
 ### Bug Fixes
