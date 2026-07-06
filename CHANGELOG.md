@@ -1,3 +1,9 @@
+## [1.214.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.213.0...v1.214.0) (2026-07-06)
+
+### Features
+
+* **desktop:** configure a property's Slack channel in context (add flow + card editor) ([b9715bc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b9715bc7ab058fb62e045b91603d46a7970f0fbe))
+
 ## [1.213.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.212.0...v1.213.0) (2026-07-06)
 
 ### Features
