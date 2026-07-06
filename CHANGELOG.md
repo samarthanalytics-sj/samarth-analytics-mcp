@@ -1,3 +1,14 @@
+## [1.194.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.193.0...v1.194.0) (2026-07-06)
+
+### Features
+
+* **desktop:** GA4 campaign ranker + data-quality signals ([a3208f6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a3208f6766a4f5611233a89279011b3f24817913))
+* **desktop:** surface campaign ranking in the GA4 audit report ([b25c2d4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b25c2d437496592d00bcf5692264f3c247339149))
+
+### Bug Fixes
+
+* **desktop:** scan scroll re-measures page height so lazy-mounted forms are detected ([e4e6991](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e4e6991dca80fedbd15ba5c4c08f36b3cbbfd18c))
+
 ## [1.193.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.192.0...v1.193.0) (2026-07-06)
 
 ### Features
