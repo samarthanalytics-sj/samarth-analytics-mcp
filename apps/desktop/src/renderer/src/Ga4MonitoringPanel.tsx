@@ -203,7 +203,14 @@ function PropertyCard({ t, selected, runningId, busy, onSelect, onRun, onToggleP
           <span>Run a first check to see its health.</span>
         )}
         <span style={{ flex: 1 }} />
-        <span style={{ color: 'var(--text-faint)' }}>{t.lastError ? <span style={{ color: 'var(--c-red)' }} title={t.lastError}>check failed</span> : fmtAgo(t.lastRunAt)}</span>
+        <span style={{ color: 'var(--text-faint)', textAlign: 'right' }}>
+          {t.lastError
+            ? <span style={{ color: 'var(--c-red)' }} title={t.lastError}>check failed</span>
+            : <span title={t.lastRunAt ? `Last check: ${fmtTime(t.lastRunAt)}` : undefined}>{t.lastRunAt ? `checked ${fmtAgo(t.lastRunAt)}` : 'not checked yet'}</span>}
+          {t.lastSlackAt !== null && (
+            <span title={`Last Slack alert: ${fmtTime(t.lastSlackAt)}`}> · 📣 {fmtAgo(t.lastSlackAt)}</span>
+          )}
+        </span>
       </div>
 
       <div style={{ display: 'flex', gap: 6, borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 2 }}>
@@ -550,6 +557,9 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
                     ) : (
                       <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>{status?.hasWebhook ? 'uses the default channel' : 'no channel (default not set)'}</span>
                     )}
+                    <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }} title={t.lastSlackAt ? `Last alert posted: ${fmtTime(t.lastSlackAt)}` : 'No alert has been posted to Slack for this property yet'}>
+                      {t.lastSlackAt ? `last alert ${fmtAgo(t.lastSlackAt)}` : 'no alert sent yet'}
+                    </span>
                     <span style={{ flex: 1 }} />
                     {t.hasWebhook ? (
                       <>
@@ -580,6 +590,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       <div style={{ display: 'flex', gap: 16, fontSize: 12.5, color: 'var(--text-muted)', flexWrap: 'wrap' }}>
         <span>Background: <b style={{ color: status?.running ? 'var(--c-green)' : 'var(--text-faint)' }}>{status?.running ? 'on' : 'off'}</b></span>
         <span>Last check: {fmtTime(status?.lastRunAt ?? null)}</span>
+        <span>Last Slack alert: {status?.lastSlackAt ? fmtTime(status.lastSlackAt) : 'none sent yet'}</span>
       </div>
     </div>
   );

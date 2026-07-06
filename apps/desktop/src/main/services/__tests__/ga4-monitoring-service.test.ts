@@ -72,6 +72,10 @@ test('a new issue Slacks once; the same ongoing issue does not re-Slack on the n
   assert.equal(run2.slackSent, 0, 'no repeat Slack for the ongoing issue');
   assert.equal(posts.length, 1, 'still just one POST total');
   assert.equal(emitted.length, 2, 'both runs broadcast to the renderer');
+  // lastSlackAt records WHEN the alert actually posted, and does not move on no-send runs.
+  const ts = svc.status().targetStatuses[0];
+  assert.equal(ts.lastSlackAt, Date.parse('2026-07-02T09:00:00Z'), 'lastSlackAt set by the send');
+  assert.equal(svc.status().lastSlackAt, ts.lastSlackAt, 'status rolls up the most recent Slack send');
 });
 
 test('multi-property: a sweep runs every enabled target with INDEPENDENT alert dedup + one Slack per property', async () => {
