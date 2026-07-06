@@ -1,3 +1,9 @@
+## [1.191.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.191.0...v1.191.1) (2026-07-06)
+
+### Bug Fixes
+
+* **desktop:** quiet dev-only CSP console warning ([600cf8c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/600cf8c66d602a9777885f136daaaf95b3f6b9cc))
+
 ## [1.191.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.190.0...v1.191.0) (2026-07-06)
 
 ### Features
