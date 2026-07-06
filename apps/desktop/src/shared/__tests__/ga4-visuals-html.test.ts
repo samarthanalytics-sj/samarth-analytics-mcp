@@ -79,7 +79,7 @@ test('renders colour-coded device + channel bars', () => {
   const h = ga4VisualsHtml(view());
   assert.ok(h.includes('Device split') && h.includes('Channel mix'));
   assert.ok(h.includes('mobile') && h.includes('Organic Social'));
-  assert.ok(h.includes('#3b82f6') || h.includes('#22c55e'), 'palette colours present');
+  assert.ok(h.includes('#4F7BD1') || h.includes('#1FA5B8'), 'lab palette colours present');
 });
 
 test('untrusted channel attribution greys the channel charts and shows a caveat', () => {
