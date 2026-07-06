@@ -261,6 +261,15 @@ const api = {
       ipcRenderer.invoke('gtm:verifiableTags', accountId, containerId, workspaceId),
     applyFix: (fix: { tool: string; args: Record<string, unknown> }): Promise<unknown> =>
       ipcRenderer.invoke('gtm:applyFix', fix),
+    // Repair a created tag's firing trigger to a corrected shape (Verify firing auto-heal). Draft-only.
+    retargetTrigger: (ctx: {
+      accountId: string;
+      containerId: string;
+      workspaceId: string;
+      tagName: string;
+      trigger: SuggestedTagView['trigger'];
+    }): Promise<{ tagName: string; triggerId: string; mode: 'rewrite' | 'rebind'; triggerName: string }> =>
+      ipcRenderer.invoke('gtm:retargetTrigger', ctx),
     exportAudit: (defaultName: string, content: string): Promise<string | null> =>
       ipcRenderer.invoke('gtm:exportAudit', defaultName, content),
     // Save the audit as a styled PDF that mirrors the panel (severity cards, icons, type labels).

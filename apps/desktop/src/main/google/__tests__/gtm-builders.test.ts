@@ -86,6 +86,7 @@ import {
   matchesServerContainer,
   findGa4BaseTag,
   ga4VariablePlan,
+  planTriggerRetarget,
 } from '../gtm-builders';
 import { classifyPixel } from '../pixel-signatures';
 
@@ -3034,6 +3035,46 @@ test('snapEventType + buildSnapPixelTag: event mapping + flat advanced-matching 
   assert.equal(pval(t, 'user_phone_number'), undefined, 'unset AM field absent');
   assert.deepEqual(t.firingTriggerId, ['9']);
 });
+
+// ── planTriggerRetarget: decide rewrite-in-place vs rebind (shared trigger) ──────────────────────
+{
+  const snap = (): { tags: unknown[]; triggers: unknown[]; variables: unknown[] } => ({
+    tags: [
+      { tagId: 'tA', name: 'CTA Tag', type: 'gaawe', firingTriggerId: ['t1'], paused: false, parameter: [] },
+      { tagId: 'tB', name: 'Shared Tag', type: 'gaawe', firingTriggerId: ['tShared'], paused: false, parameter: [] },
+      { tagId: 'tC', name: 'Other', type: 'gaawe', firingTriggerId: ['tShared'], paused: false, parameter: [] },
+    ],
+    triggers: [
+      { triggerId: 't1', name: 'CTA click', type: 'linkClick' },
+      { triggerId: 'tShared', name: 'Any click', type: 'click' },
+    ],
+    variables: [],
+  });
+  const corrected = { name: 'CTA click', kind: 'link_click' as const, clickTextValue: 'Book a Call', clickTextOperator: 'contains' };
+
+  test('planTriggerRetarget: sole-owner trigger → rewrite in place', () => {
+    const p = planTriggerRetarget(snap() as never, 'CTA Tag', corrected);
+    assert.equal(p.mode, 'rewrite');
+    assert.equal(p.tagId, 'tA');
+    assert.equal(p.triggerId, 't1');
+    assert.equal(p.sharedBy, 1);
+    assert.equal(p.built.type, 'linkClick', 'built the corrected GTM trigger');
+  });
+
+  test('planTriggerRetarget: shared trigger → rebind (never mutate siblings)', () => {
+    const p = planTriggerRetarget(snap() as never, 'Shared Tag', { name: 'Any click', kind: 'all_clicks', clickTextValue: 'Buy', clickTextOperator: 'equals' });
+    assert.equal(p.mode, 'rebind');
+    assert.equal(p.sharedBy, 2, 'tShared fires two tags');
+    assert.equal(p.triggerId, 'tShared');
+  });
+
+  test('planTriggerRetarget: unknown tag / no firing trigger → throws', () => {
+    assert.throws(() => planTriggerRetarget(snap() as never, 'Nope', corrected), /No tag named/);
+    const s2 = snap();
+    (s2.tags as Array<{ firingTriggerId: string[] }>)[0].firingTriggerId = [];
+    assert.throws(() => planTriggerRetarget(s2 as never, 'CTA Tag', corrected), /no firing trigger/);
+  });
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

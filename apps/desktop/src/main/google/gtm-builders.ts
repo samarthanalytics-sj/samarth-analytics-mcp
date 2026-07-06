@@ -749,6 +749,37 @@ export function applyTriggerWaitDefaults(trigger: Record<string, unknown>): Reco
   return out;
 }
 
+/** How to repair a CREATED tag's firing trigger to a corrected shape (from "Verify firing"). */
+export interface TriggerRetargetPlan {
+  tagId: string;
+  tagName: string;
+  /** The tag's current (first) firing trigger id. */
+  triggerId: string;
+  /** 'rewrite' the trigger's conditions in place (it fires ONLY this tag), or 'rebind' this tag to a
+   *  fresh corrected trigger because the current one is shared by other tags (never disturb them). */
+  mode: 'rewrite' | 'rebind';
+  /** The corrected GTM trigger resource (from buildTrigger). */
+  built: GtmTriggerResource;
+  /** How many tags fire on the current trigger (>1 ⇒ rebind). */
+  sharedBy: number;
+}
+
+/**
+ * PURE: decide how to apply a corrected trigger to an existing (created) tag, given a container
+ * snapshot. Finds the tag by name and its first firing trigger; if that trigger fires only this tag
+ * it is rewritten in place, otherwise a corrected trigger is created and this tag is re-bound to it
+ * so sibling tags keep their trigger. Throws if the tag / firing trigger can't be found. No I/O.
+ */
+export function planTriggerRetarget(snapshot: ContainerSnapshot, tagName: string, corrected: TriggerInput): TriggerRetargetPlan {
+  const want = tagName.trim();
+  const tag = snapshot.tags.find((t) => (t.name ?? '').trim() === want);
+  if (!tag) throw new Error(`No tag named "${tagName}" in this workspace to repair.`);
+  const triggerId = (tag.firingTriggerId ?? [])[0];
+  if (!triggerId) throw new Error(`Tag "${tagName}" has no firing trigger to repair.`);
+  const sharedBy = snapshot.tags.filter((t) => (t.firingTriggerId ?? []).includes(triggerId)).length;
+  return { tagId: tag.tagId, tagName: tag.name, triggerId, mode: sharedBy > 1 ? 'rebind' : 'rewrite', built: buildTrigger(corrected), sharedBy };
+}
+
 export function buildTrigger(o: TriggerInput): GtmTriggerResource {
   switch (o.kind) {
     case 'link_click':
