@@ -1,3 +1,9 @@
+## [1.188.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.187.0...v1.188.0) (2026-07-06)
+
+### Features
+
+* **web-audit:** add opt-in debug output to tag-suggestions + compliance audit ([60a1566](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/60a15669b16102e76924803573a8755139f9d651))
+
 ## [1.187.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.186.0...v1.187.0) (2026-07-04)
 
 ### Features
