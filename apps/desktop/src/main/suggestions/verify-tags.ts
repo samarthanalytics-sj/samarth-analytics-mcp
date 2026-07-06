@@ -162,14 +162,20 @@ export function evaluateVerify(
     const observedBeacons = [...new Set(cap.hits.map((h) => beaconHost(h.url)).filter(Boolean))];
     const withBeacons = <T extends object>(v: T): T => (observedBeacons.length ? { ...v, observedBeacons } : v);
 
-    // Trigger matched nothing on the page → it can't fire for a real user either.
+    // The trigger matched no element on the page we drove. This is the single biggest source of
+    // FALSE "not firing": a click trigger for a CTA that lives on ANOTHER page (careers, blog, a
+    // service page) can't be exercised from the one URL we drove — that is not evidence the tag is
+    // broken. Only when we can bind a CONFIDENT on-page repair do we treat it as actionable; else
+    // it's inconclusive ("couldn't auto-test here"), never "not firing".
     if (!cap.targetFound) {
       const fix = proposeTrigger(tag, elements);
+      const repair = fix.trigger && repairFires(fix.trigger, elements) ? fix.trigger : undefined;
       return {
         ...base,
-        reason: `no element on the page matched this trigger (${describeTrigger(tag.trigger)})`,
+        ...(repair ? {} : { inconclusive: true }),
+        reason: `no element on the page we drove matched this trigger (${describeTrigger(tag.trigger)})`,
         interaction,
-        ...(fix.trigger && repairFires(fix.trigger, elements) ? { suggestedTrigger: fix.trigger } : {}),
+        ...(repair ? { suggestedTrigger: repair } : {}),
         fixNote: fix.note,
       };
     }
@@ -199,6 +205,13 @@ export function evaluateVerify(
         // event name(s) so the UI can offer "align the tag's Event Name to <observed>".
         return withBeacons({ ...base, reason: `the interaction fired GA4 hit(s) [${seen}] but none for "${tag.eventName}" — the tag or its event name may differ`, interaction, evidence: events[0].hit, ...(observedEvents.length ? { observedEvents } : {}) });
       }
+      if (cap.kind === 'custom_event') {
+        // We pushed a BARE synthetic dataLayer event (e.g. `form_submission`). Many containers wire
+        // one shared event for every form and split them by form-specific data (form name/ID, page).
+        // A bare push carries none of that, so per-form tags legitimately don't match — a limit of
+        // synthetic driving, NOT a broken tag. Inconclusive; verify with a real submit in Preview.
+        return withBeacons({ ...base, inconclusive: true, reason: `we pushed a synthetic "${tag.trigger.eventName ?? 'custom'}" dataLayer event, but this tag also keys off form-specific data (form name/ID/page) a bare push can't supply — verify it with a real submit in GTM Preview`, interaction });
+      }
       return withBeacons({ ...base, reason: 'the interaction ran but no GA4 hit fired — the tag/trigger may not be in the loaded container, or its condition does not match', interaction });
     }
 
@@ -212,7 +225,7 @@ export function evaluateVerify(
       return bp === want || (want === 'ad' && isKnownAdPlatform(bp));
     });
     if (fired) return withBeacons({ ...base, fired: true, event: beaconPlatform(fired.url), interaction, evidence: fired });
-    return withBeacons({ ...base, reason: `the interaction ran but no ${want === 'ad' ? 'ad/pixel' : want} beacon fired for this ${tag.platform} tag${observedBeacons.length ? ` (it did beacon to: ${observedBeacons.join(', ')})` : ''}`, interaction });
+    return withBeacons({ ...base, ...(cap.kind === 'custom_event' ? { inconclusive: true } : {}), reason: `the interaction ran but no ${want === 'ad' ? 'ad/pixel' : want} beacon fired for this ${tag.platform} tag${observedBeacons.length ? ` (it did beacon to: ${observedBeacons.join(', ')})` : ''}`, interaction });
   });
 }
 

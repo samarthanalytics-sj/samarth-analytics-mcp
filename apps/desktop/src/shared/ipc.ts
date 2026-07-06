@@ -575,6 +575,11 @@ export interface VerifyTagVerdict {
   tagName: string;
   /** true = a matching /collect hit fired after the tag's trigger interaction. */
   fired: boolean;
+  /** true = we could NOT actually test this tag on this run (its CTA/form isn't on the page we
+   *  drove, or it fires on a shared dataLayer event but keys off form-specific data a synthetic
+   *  push can't supply). NOT a failure — the tag may well fire for a real user. The UI files these
+   *  under "couldn't auto-test here" instead of "not firing" so a working tag isn't called broken. */
+  inconclusive?: boolean;
   /** The event name observed on the firing hit (GA4). */
   event?: string;
   /** Why it did not fire (always set when fired=false). */
