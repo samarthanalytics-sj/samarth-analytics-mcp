@@ -1,3 +1,9 @@
+## [1.213.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.212.0...v1.213.0) (2026-07-06)
+
+### Features
+
+* **desktop:** suggest_tags_from_url chat tool — Playwright trigger recommendations, no new tab ([7797910](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7797910b509a0360c88fb9c2108b4eabfae168a9))
+
 ## [1.212.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.211.0...v1.212.0) (2026-07-06)
 
 ### Features
