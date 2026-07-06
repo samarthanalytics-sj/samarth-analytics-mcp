@@ -150,13 +150,31 @@ test('production ceiling: best statuses the desktop audit can emit land in the H
     findings: [],
     growthAssessed: true,
   });
-  assert.ok(r.reliabilityPct >= 45 && r.reliabilityPct <= 55, `reachable ceiling ~45 (got ${r.reliabilityPct})`);
+  assert.ok(r.reliabilityPct >= 55 && r.reliabilityPct <= 65, `reachable ceiling ~60 under gate-fraction credit (got ${r.reliabilityPct})`);
   assert.equal(r.reliabilityConfidence, 'High confidence', 'the top band is reachable by a clean production property');
 });
 
 test('deterministic: same input → identical output', () => {
   const input = { areas: areas({ 'Data collection': 'partial' }), findings: [{ severity: 'high', category: 'growth' }] };
   assert.deepEqual(buildGa4Scorecard(input), buildGa4Scorecard(input));
+});
+
+
+test('critical-metric cap: unverified conversions/revenue cap the headline below High and are named', () => {
+  // Everything else clean, but growth never ran -> conversions + revenue unverified.
+  const r = buildGa4Scorecard({
+    areas: [
+      { area: 'Data collection', statusKey: 'partial' }, { area: 'Key events', statusKey: 'pass' },
+      { area: 'Ecommerce', statusKey: 'partial' }, { area: 'Attribution', statusKey: 'pass' },
+      { area: 'Consent', statusKey: 'not_verified' },
+    ],
+    findings: [],
+    growthAssessed: false,
+  });
+  assert.ok(r.reliabilityCappedBy.length >= 1, 'cap names the critical metrics: ' + JSON.stringify(r.reliabilityCappedBy));
+  assert.ok(r.reliabilityCappedBy.some((m) => m.includes('Conversion counts')), 'conversions named');
+  assert.ok(r.reliabilityPct <= 44, 'headline capped below the High band, got ' + r.reliabilityPct);
+  assert.notEqual(r.reliabilityConfidence, 'High confidence', 'cannot read High while critical metrics are unverified');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

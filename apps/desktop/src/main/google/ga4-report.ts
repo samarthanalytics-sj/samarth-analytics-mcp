@@ -14,6 +14,7 @@ import type { Ga4Baseline } from './data-service';
 import { buildGa4Scorecard } from './ga4-scorecard';
 import { analyzeGa4Trend } from './ga4-trend';
 import { deriveGa4Insights } from './ga4-insights';
+import { findChannelSpike, groupSeries, granularityFor } from '../../shared/ga4-visuals-html';
 import type { Ga4ExecSummaryView, Ga4VisualsView, Ga4SectionsView } from '../../shared/ipc';
 
 export interface Ga4ReportInput {
@@ -426,11 +427,57 @@ const growthReadLine = (gf: { category: string; severity: string } | undefined):
 // Combined findings (config + data quality + growth + campaigns) — the single source of truth for the
 // report. Campaign findings ("no campaigns tagged" / high-untagged-share advisories, plus the top-campaign
 // info line) are deterministically measured this run, so they carry the Confirmed state.
-function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, growth: Ga4GrowthResult | null, campaigns: Ga4CampaignReport | null): FindingRow[] {
+// Payment gateways / PSPs whose referrals indicate missing referral exclusions: the buyer bounces to
+// the gateway and back, GA4 re-attributes the purchase to the gateway, and referral/Direct inflate.
+const GATEWAY_RE = /(razorpay|paypal|stripe|payu\b|cashfree|braintree|klarna|ccavenue|billdesk|instamojo|paytm|phonepe|mollie|adyen|worldpay|2checkout|payoneer|checkout\.com)/i;
+
+/** Anti-lie checks computed straight off the reporting data (both DETERMINISTIC, state confirmed):
+ *  1. Concentration — one bucket (week/month) holding most of a channel that carries a meaningful
+ *     share of all sessions: the headline session count and prior-period comparison then describe an
+ *     event, not the business. Same detector the evidence chart uses, so chart and finding agree.
+ *  2. Payment-gateway referral leakage — a PSP showing up as a referral source means referral
+ *     exclusions are missing and purchase attribution is being re-assigned to the gateway. */
+function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCounts | null): FindingRow[] {
+  const out: FindingRow[] = [];
+  if (baseline && baseline.channelDaily?.length) {
+    const gran = granularityFor(baseline.dailySessions?.length ?? 0);
+    const anchor = baseline.dailySessions?.[0]?.date ?? '';
+    const spike = findChannelSpike(baseline.channelDaily.map((c) => ({ channel: c.channel, points: groupSeries(c.series, gran, anchor) })));
+    if (spike) {
+      const period = gran === 'day' ? 'day' : gran === 'week' ? 'week' : 'month';
+      out.push({
+        severity: 'high',
+        category: 'concentration',
+        area: 'Data quality',
+        message: `${spike.peakSharePct}% of ${spike.channel} sessions arrived in a single ${period} (${spike.peakLabel}: ${spike.peakValue.toLocaleString('en-US')} vs ${spike.restValue.toLocaleString('en-US')} across every other ${period}), and ${spike.channel} is ${spike.channelSharePct}% of all sessions - that is an event (a bot burst, a scrape, or an untagged campaign), not a channel baseline, and it distorts the headline session count and the prior-period comparison.`,
+        recommendation: `Identify what drove ${spike.channel} in ${spike.peakLabel} (source/medium + landing pages for that ${period}); segment or exclude it before quoting ${spike.channel} numbers or window totals.`,
+        state: 'confirmed',
+        businessRisk: 'Headline sessions and trend comparisons describe a one-off event, not the business',
+      });
+    }
+  }
+  const gateways = (dqCounts?.sourceMediums ?? []).filter((r) => / referral$/i.test(r.name) && GATEWAY_RE.test(r.name));
+  if (gateways.length) {
+    const total = gateways.reduce((s, g) => s + g.sessions, 0);
+    out.push({
+      severity: 'medium',
+      category: 'referral_leakage',
+      area: 'Data quality',
+      message: `Payment-gateway referral leakage: ${gateways.map((g) => `${g.name} (${g.sessions.toLocaleString('en-US')} sessions)`).join(', ')} - buyers bouncing back from the payment page start a NEW session attributed to the gateway, so purchases are re-attributed away from the real channel and referral/Direct inflate (${total.toLocaleString('en-US')} sessions affected).`,
+      recommendation: 'Add the gateway domains to "List unwanted referrals" (Admin > Data streams > Configure tag settings) so the purchase keeps its original attribution.',
+      state: 'confirmed',
+      businessRisk: 'Purchases credited to the payment gateway instead of the channel that earned them',
+    });
+  }
+  return out;
+}
+
+function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, growth: Ga4GrowthResult | null, campaigns: Ga4CampaignReport | null, baseline?: Ga4Baseline | null, dqCounts?: DataQualityCounts | null): FindingRow[] {
   return [
     ...config.findings.map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Config', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
     ...dq.findings.map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Data quality', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
     ...(campaigns?.findings ?? []).map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Campaigns', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
+    ...antiLieFindings(baseline ?? null, dqCounts ?? null),
     ...(growth?.findings ?? []).map((f: Ga4GrowthFinding): FindingRow => ({
       severity: f.severity,
       category: f.category,
@@ -487,10 +534,10 @@ function buildAreaRows(
 /** Structured Executive Summary (section 1) — drives the markdown report, the on-screen card panel
  *  and the styled PDF/Word export from one rule-based computation. */
 export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
-  const { snapshot: s, config, dataQuality: dq, growth, audienceCount, campaigns } = input;
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount, campaigns } = input;
   const pid = input.property.replace('properties/', '');
   const ecom = hasEcommerce(s);
-  const allFindings = buildAllFindings(config, dq, growth, campaigns);
+  const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts);
   const top = allFindings.filter((f) => f.severity !== 'info')[0];
   const areaRows = buildAreaRows(s, config, audienceCount, ecom);
   const nPartial = areaRows.filter((a) => a.statusKey === 'partial').length;
@@ -509,6 +556,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
     grade: scoreModel.grade,
     reliabilityPct: scoreModel.reliabilityPct,
     reliabilityConfidence: scoreModel.reliabilityConfidence,
+    reliabilityCappedBy: scoreModel.reliabilityCappedBy,
     verdict: overallVerdict(allFindings, nNotVerified, scoreModel.reliabilityPct, Boolean(growth?.assessed)),
     biggestRisk: top ? firstSentence(top.whyItMatters ?? top.message) : 'No high-severity risk; the ceiling on trust is coverage.',
     highestImpactFix: top ? firstSentence(top.recommendation ?? 'Confirm the unverified areas.') : 'Confirm the unverified areas (consent, ecommerce parameters) before sign-off.',
@@ -525,7 +573,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
   const daily = baseline?.dailySessions ?? [];
   const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
   // Channel-attribution trust comes from the same Data Trust Matrix the Executive Summary uses.
-  const allFindings = buildAllFindings(config, dq, growth, campaigns);
+  const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts);
   const areaRows = buildAreaRows(s, config, audienceCount, hasEcommerce(s));
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
@@ -561,7 +609,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
 export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
   const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount, campaigns } = input;
   const ecom = hasEcommerce(s);
-  const allFindings = buildAllFindings(config, dq, growth, campaigns);
+  const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts);
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
   const dqAttrib = allFindings.find((f) => f.category === 'data_quality' && f.severity !== 'info' && /source data|Unassigned|\(not set\)/.test(f.message));
@@ -696,7 +744,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
 
   // ── Single source of truth: combined findings (config + data quality + growth/anomaly + campaigns)
   // and the area-coverage rows. The verdict, All-findings table and counts all derive from these. ──
-  const allFindings = buildAllFindings(config, dq, growth, campaigns);
+  const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts);
   // The "top finding" that drives the Verdict + "What is wrong" is the worst ACTIONABLE one. An
   // info-only result (e.g. the data-quality "no major issues" advisory on a clean property) has no
   // top finding, so those sections take their clean-property fallbacks instead of mislabelling an
@@ -745,8 +793,8 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push('A consolidated read of the property’s measurement posture across configuration, event tracking, conversions, data quality, attribution and consent.');
   L.push('');
   L.push(`**Audit window:** ${auditWindowLabel(dq)}  `);
-  L.push(`**Reliability score:** ${score.composite ?? '—'}/100 (Grade ${score.grade})  `);
-  L.push(`**Reporting reliability:** ${score.reliabilityPct}% — ${score.reliabilityConfidence} (how much of this property’s data is safe to quote downstream today)  `);
+  L.push(`**Setup completeness:** ${score.composite ?? '—'}/100 (Grade ${score.grade})  `);
+  L.push(`**Reporting reliability:** ${score.reliabilityPct}% — ${score.reliabilityConfidence} (how much of this property’s data is safe to quote downstream today)${score.reliabilityCappedBy.length ? ` - capped by ${score.reliabilityCappedBy.join(', ')}` : ''}  `);
   L.push(`*These measure different things: the score rates how the property is configured, while reporting reliability rates how much of its data is safe to quote. A well-configured property can still have low reporting reliability when conversion, revenue, or consent checks are unverified.*  `);
   L.push(`**Overall verdict:** ${overallVerdict(allFindings, nNotVerified, score.reliabilityPct, Boolean(growth?.assessed))}  `);
   L.push(`**Biggest risk:** ${top ? firstSentence(top.whyItMatters ?? top.message) : 'No high-severity risk; the ceiling on trust is coverage.'}  `);
@@ -1031,7 +1079,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push('## 9 · Scope & metadata');
   L.push('');
   L.push(`**Audit ID:** ${auditId}  `);
-  L.push(`**Reliability score:** ${score.composite ?? '—'}/100 (Grade ${score.grade}) · **Reporting reliability:** ${score.reliabilityPct}%  `);
+  L.push(`**Setup completeness:** ${score.composite ?? '—'}/100 (Grade ${score.grade}) · **Reporting reliability:** ${score.reliabilityPct}%  `);
   L.push(`**Window:** ${windowLabel}${cmp}  `);
   L.push(`**Retention:** ${retentionLabel(s.dataRetention)}  `);
   L.push(`**Timezone / currency:** ${s.timeZone || '—'} / ${s.currencyCode || '—'}  `);

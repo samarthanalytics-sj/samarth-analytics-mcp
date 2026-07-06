@@ -520,7 +520,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
     h2('Scope & metadata') +
     card(
       metaRow('Audit ID', sc.auditId) +
-        metaRow('Reliability score', `${sc.composite ?? '—'}/100 (Grade ${sc.grade}) · Reporting reliability ${sc.reliabilityPct}%`) +
+        metaRow('Setup completeness', `${sc.composite ?? '—'}/100 (Grade ${sc.grade}) · Reporting reliability ${sc.reliabilityPct}%`) +
         metaRow('Window', sc.window) +
         metaRow('Retention', sc.retention) +
         metaRow('Timezone / currency', `${sc.timezone} / ${sc.currency}`) +

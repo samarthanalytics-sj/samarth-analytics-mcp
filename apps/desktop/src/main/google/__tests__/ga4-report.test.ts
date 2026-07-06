@@ -505,7 +505,7 @@ test('exec summary leads with the score + reliability and never claims "Well-con
   const md = buildGa4AuditReport(input());
   assert.ok(!/Well-configured/.test(md));
   assert.ok(/## 1 · Executive summary/.test(md), 'read-first exec summary present');
-  assert.ok(/\*\*Reliability score:\*\* \d+\/100 \(Grade [A-F]\)/.test(md), 'composite score + grade');
+  assert.ok(/\*\*Setup completeness:\*\* \d+\/100 \(Grade [A-F]\)/.test(md), 'composite score + grade');
   assert.ok(/\*\*Reporting reliability:\*\* \d+% - (High|Medium|Low) confidence/.test(md), 'reliability %');
   assert.ok(/Per-category scorecard/.test(md) && /\| \*\*Composite\*\* \|/.test(md), 'scorecard with composite row');
   assert.ok(/Data trust matrix/.test(md), 'data trust matrix');
@@ -606,6 +606,34 @@ test('campaign performance: no tagged campaigns → campaignPerformance is null 
   // A null campaigns input (query failed) leaves the section out entirely and adds no finding.
   const nullSections = buildGa4Sections(input({ campaigns: null }));
   assert.equal(nullSections.campaignPerformance, null, 'null campaigns → null view');
+});
+
+
+test('anti-lie findings: single-bucket channel concentration + payment-gateway referral leakage', () => {
+  const b = baseline({
+    channelDaily: [
+      { channel: 'Direct', series: [
+        { date: '20260610', sessions: 300 }, { date: '20260611', sessions: 22362 }, { date: '20260612', sessions: 310 },
+        { date: '20260613', sessions: 305 }, { date: '20260614', sessions: 300 },
+      ] },
+      { channel: 'Organic Search', series: [
+        { date: '20260610', sessions: 700 }, { date: '20260611', sessions: 750 }, { date: '20260612', sessions: 720 },
+        { date: '20260613', sessions: 730 }, { date: '20260614', sessions: 705 },
+      ] },
+    ],
+  });
+  const counts = dqCounts({ sourceMediums: [
+    { name: 'google / organic', sessions: 40000 },
+    { name: 'razorpay.com / referral', sessions: 512 },
+  ] });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b), dqCounts: counts, dataQuality: auditGa4DataQuality(counts) }));
+  assert.ok(/arrived in a single day/.test(md), 'concentration finding fires on the one-day Direct burst');
+  assert.ok(/an event .a bot burst, a scrape, or an untagged campaign., not a channel baseline/.test(md), 'concentration framing');
+  assert.ok(/Payment-gateway referral leakage/.test(md), 'gateway leakage finding fires');
+  assert.ok(/razorpay.com \/ referral/.test(md) && /List unwanted referrals/.test(md), 'names the gateway + the fix');
+  // A clean fixture produces neither.
+  const clean = buildGa4AuditReport(input());
+  assert.ok(!/arrived in a single day/.test(clean) && !/Payment-gateway referral leakage/.test(clean), 'no anti-lie findings on clean data');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

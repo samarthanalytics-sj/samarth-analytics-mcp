@@ -24,6 +24,7 @@ const view = (over: Partial<Ga4ExecSummaryView> = {}): Ga4ExecSummaryView => ({
   grade: 'D',
   reliabilityPct: 45,
   reliabilityConfidence: 'Medium confidence',
+  reliabilityCappedBy: [],
   verdict: 'Action required — fix things.',
   biggestRisk: 'Revenue may be wrong.',
   highestImpactFix: 'Check DebugView.',
