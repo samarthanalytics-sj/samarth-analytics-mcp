@@ -1,3 +1,9 @@
+## [1.189.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.188.0...v1.189.0) (2026-07-06)
+
+### Features
+
+* **desktop:** paginate + inline-edit the tag-suggestions review table ([67d487d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/67d487d5ec8766d0c8e53ec78f492a38b0d797d7))
+
 ## [1.188.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.187.0...v1.188.0) (2026-07-06)
 
 ### Features
