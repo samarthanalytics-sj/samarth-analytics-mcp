@@ -243,7 +243,7 @@ async function main(): Promise<void> {
       blocked === writeNames.length && fd.mutations() === 0,
       `${blocked}/${writeNames.length} write tools rejected, ${fd.mutations()} mutations`
     );
-    record('read-only registry exposes the 52 read tools', readOnlyNames.size === 52, `${readOnlyNames.size} tools`);
+    record('read-only registry exposes the 53 read tools', readOnlyNames.size === 53, `${readOnlyNames.size} tools`);
   }
 
   // ── B. Approval is DELETE-ONLY: a declining confirm blocks every destructive
@@ -281,8 +281,12 @@ async function main(): Promise<void> {
     const history = new AuditHistoryStore(join(histDir, 'h.json'));
     const reg = buildToolRegistry(fd.data, approve, undefined, history); // all tools, monitoring enabled
     const tools = reg.list();
+    // suggest_tags_from_url launches a real headless browser to scan a live URL — it can't run
+    // against the fake data service with a synthesized 'x' URL, so exclude it from liveness.
+    const SKIP_LIVENESS = new Set(['suggest_tags_from_url']);
+    const liveTools = tools.filter((t) => !SKIP_LIVENESS.has(t.name));
     let responded = 0;
-    for (const t of tools) {
+    for (const t of liveTools) {
       try {
         const out = await reg.execute(t.name, synthesize(t.inputSchema) as Record<string, unknown>);
         JSON.parse(out); // must be a structured JSON response
@@ -293,8 +297,8 @@ async function main(): Promise<void> {
     }
     record(
       'every tool returns a structured response',
-      responded === tools.length,
-      `${responded}/${tools.length} tools responded`
+      responded === liveTools.length,
+      `${responded}/${liveTools.length} tools responded (${SKIP_LIVENESS.size} browser tool skipped)`
     );
     rmSync(histDir, { recursive: true, force: true });
   }

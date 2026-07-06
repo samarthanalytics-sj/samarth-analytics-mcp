@@ -118,6 +118,30 @@ export interface Tool extends LlmToolDef {
 
 const EMPTY_SCHEMA = { type: 'object', properties: {}, additionalProperties: false } as const;
 const s = (v: unknown): string => String(v ?? '');
+
+/** Human-readable one-line description of a suggested tag's trigger condition, for suggest_tags_from_url. */
+function describeTriggerCondition(t: Record<string, unknown> | undefined): string {
+  const g = (k: string): string | undefined => (t && typeof t[k] === 'string' ? (t[k] as string) : undefined);
+  const kind = g('kind') ?? '';
+  const op = (k: string): string => g(k) ?? 'equals';
+  if (kind === 'form_submit') {
+    if (g('formIdValue')) return `form submit where Form ID ${op('formIdOperator')} "${g('formIdValue')}"`;
+    if (g('formClassesValue')) return `form submit where Form Classes ${op('formClassesOperator')} "${g('formClassesValue')}"`;
+    if (g('pagePathValue')) return `form submit on Page Path ${op('pagePathOperator')} "${g('pagePathValue')}"`;
+    return 'form submit (any form on the page)';
+  }
+  if (kind === 'link_click' || kind === 'all_clicks') {
+    const parts: string[] = [];
+    if (g('clickTextValue')) parts.push(`Click Text ${op('clickTextOperator')} "${g('clickTextValue')}"`);
+    if (g('clickUrlValue')) parts.push(`Click URL ${op('clickUrlOperator')} "${g('clickUrlValue')}"`);
+    if (g('clickElementValue')) parts.push(`Click Element matches "${g('clickElementValue')}"`);
+    const base = kind === 'link_click' ? 'link click' : 'click';
+    return parts.length ? `${base} where ${parts.join(' AND ')}` : `${base} (any)`;
+  }
+  if (kind === 'custom_event') return `custom event "${g('eventName') ?? ''}"`;
+  if (kind === 'pageview') return g('pageUrlValue') ? `page view where Page URL ${op('pageUrlOperator')} "${g('pageUrlValue')}"` : 'page view (All Pages)';
+  return kind || 'trigger';
+}
 const obj = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
 /** Read an optional boolean arg (a real boolean, or the strings "true"/"false"); undefined otherwise
@@ -346,6 +370,39 @@ export function buildToolRegistry(
         additionalProperties: false,
       },
       handler: (a) => data.listGtmTags(s(a.accountId), s(a.containerId), s(a.workspaceId)),
+    },
+    {
+      name: 'suggest_tags_from_url',
+      description:
+        'Scan a LIVE web page with a headless browser and return the GA4 event tags worth creating for it, INCLUDING the exact TRIGGER CONDITION each needs — form submits scoped by Form ID/classes (or page path), CTA/link clicks by Click Text or Click URL, mailto:/tel: clicks, file downloads, and outbound links. Read-only: it only inventories the DOM, it never submits forms or clicks anything. Use this to answer "how should the trigger be configured to track X on <url>?" and BEFORE create_gtm_tracking_tag: pass a returned suggestion\'s `trigger` object straight to create_gtm_tracking_tag so the created tag actually fires. Requires a full public http(s) URL (e.g. https://example.com/contact). Slow (launches a browser) — call it once per page.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The page URL to scan, e.g. https://example.com/contact' },
+        },
+        required: ['url'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        const { scanUrlForSuggestions } = await import('../suggestions/scan-url');
+        const res = await scanUrlForSuggestions(s(a.url));
+        const suggestions = (res.suggestions ?? []).map((t) => ({
+          tagName: t.tagName,
+          event: t.eventName,
+          platform: t.platform,
+          page: t.page,
+          // Human-readable condition + the raw trigger to hand to create_gtm_tracking_tag.
+          triggerCondition: describeTriggerCondition(t.trigger),
+          trigger: t.trigger,
+        }));
+        return {
+          url: s(a.url),
+          pagesScanned: res.summary?.pagesScanned ?? 1,
+          count: suggestions.length,
+          suggestions,
+          next: "Pass a suggestion's `trigger` (and its event/tagName) to create_gtm_tracking_tag to create it as a draft.",
+        };
+      },
     },
     {
       name: 'list_gtm_triggers',
