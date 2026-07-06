@@ -1,3 +1,13 @@
+## [1.218.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.217.0...v1.218.0) (2026-07-06)
+
+### Features
+
+* **chat:** get_form_tracking_recipe — one call gives the guide + listener + trigger for AJAX form plugins ([f11ef22](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f11ef220524451c878c840c82ac15651fe77bcde))
+
+### Bug Fixes
+
+* **desktop:** actionable message when a GTM workspace is "already submitted" ([dc4a067](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dc4a06731deaa3dd76a275e7a3327d0c552835e7))
+
 ## [1.217.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.216.0...v1.217.0) (2026-07-06)
 
 ### Features
