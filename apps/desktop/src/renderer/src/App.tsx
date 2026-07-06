@@ -1939,8 +1939,9 @@ function TagReviewPanel({
   // DOM counts + console/page errors — why a scan found nothing.
   const [scanDebug, setScanDebug] = useState<TagScanResult['debug'] | null>(null);
   const [showDebug, setShowDebug] = useState(false);
-  // Verify firing: auto-mint a workspace preview from the container, drive each tag's trigger, see what fires.
+  // Verify firing: auto-mint a workspace preview from the container (or paste one), drive each tag's trigger, see what fires.
   const [verifying, setVerifying] = useState(false);
+  const [verifySnippet, setVerifySnippet] = useState('');
   const [verifyResult, setVerifyResult] = useState<VerifyTagsResult | null>(null);
   const [verifyFixed, setVerifyFixed] = useState<Record<string, boolean>>({});
   const [minting, setMinting] = useState(false);
@@ -2031,7 +2032,7 @@ function TagReviewPanel({
     setVerifying(true);
     onError('');
     try {
-      const snippet = (snippetOverride ?? '').trim();
+      const snippet = (snippetOverride ?? verifySnippet).trim();
       const res = await window.desktop.tags.verify(target, tags, elements, snippet ? { containerSnippet: snippet } : {});
       setVerifyResult(res);
     } catch (e) {
@@ -2986,21 +2987,32 @@ function TagReviewPanel({
               <div style={{ flex: '1 1 320px' }}>
                 <div style={{ fontWeight: 600 }}>Verify firing</div>
                 <div style={styles.muted}>
-                  Proves the tags actually fire — <b>create them first</b>, then click Verify. It pulls a preview build straight
-                  from your container (snapshots the workspace to a version + preview environment, draft-level and never
-                  published), loads it, and drives each tag&apos;s trigger on its own page. Nothing real is sent — hits are
-                  captured and aborted.
+                  Proves the tags actually fire — <b>create them first</b>, then verify. <b>Auto</b> snapshots the workspace to a
+                  version and previews it from the container (needs the account re-connected with the &ldquo;edit container
+                  versions&rdquo; permission; never publishes). Or paste a GTM <b>Preview / Environment</b> snippet you generate
+                  in GTM. Each tag is driven on its own page; nothing real is sent (hits captured + aborted).
                 </div>
               </div>
-              <button
-                style={styles.primaryBtn}
-                onClick={() => void autoMintAndVerify()}
-                disabled={minting || verifying || !url.trim() || !targetReady}
-                title={targetReady ? 'Snapshot the workspace to a preview version + environment (draft-level, not published), then verify each tag' : 'Pick a GTM account, container and draft workspace first'}
-              >
-                {minting ? 'Preparing preview…' : verifying ? 'Verifying…' : 'Verify tags fire'}
-              </button>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button
+                  style={styles.primaryBtn}
+                  onClick={() => void autoMintAndVerify()}
+                  disabled={minting || verifying || !url.trim() || !targetReady}
+                  title={targetReady ? 'Snapshot the workspace to a version + preview it (never publishes), then verify each tag' : 'Pick a GTM account, container and draft workspace first'}
+                >
+                  {minting ? 'Preparing preview…' : 'Auto: create preview & verify'}
+                </button>
+                <button style={styles.toggleOff} onClick={() => void runVerify()} disabled={verifying || minting || !url.trim()}>
+                  {verifying && !minting ? 'Verifying…' : 'Verify pasted snippet'}
+                </button>
+              </div>
             </div>
+            <textarea
+              value={verifySnippet}
+              onChange={(e) => setVerifySnippet(e.target.value)}
+              placeholder="Paste a GTM PREVIEW / Environment snippet (with gtm_auth &amp; gtm_preview) so your DRAFT tags load — from GTM's Preview, or Admin → Environments → Get snippet. A plain published snippet (id only) loads the LIVE container and won't show uncreated tags."
+              style={{ ...styles.input, width: '100%', minHeight: 58, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
+            />
             {verifyResult && (
               <div style={{ marginTop: 10 }}>
                 {verifyResult.injected && !verifyResult.previewAuth && (
