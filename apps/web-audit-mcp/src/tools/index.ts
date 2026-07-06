@@ -221,7 +221,8 @@ export function registerAllTools(server: McpServer): void {
         'Enhanced Measurement ALREADY auto-tracks (file ' +
         'downloads, outbound clicks) is flagged enhancedMeasurementOverlap:true rather than pushed, so you do not ' +
         'double-track. Read-only and bounded by maxPages/scanPages and a private-network guard; forms are ' +
-        'inventoried, never filled or submitted, and no element other than the page itself is ever interacted with.',
+        'inventoried, never filled or submitted, and no element other than the page itself is ever interacted with. ' +
+        'Pass debug:true to add a `debug` block (browser console/page errors + run mode) when a scan comes back empty.',
       inputSchema: z.object({
         url: urlField,
         maxPages: z.number().int().positive().optional()
@@ -260,7 +261,8 @@ export function registerAllTools(server: McpServer): void {
         'engine. Pass gtmContainer to reconcile the configured GTM container against observed runtime ' +
         'behaviour ("reconciled" coverage) AND get tag-presence reconciliation — configured-but-never-fired, ' +
         'fired-but-not-configured, and GA4 measurement-id mismatches — in report.reconciliation + findings. ' +
-        'This is the recommended one-call entry point; use the focused tools to drill in.',
+        'This is the recommended one-call entry point; use the focused tools to drill in. ' +
+        'Pass debug:true to add a `debug` block (per-scenario browser console/page errors + run mode) when an audit sees no hits.',
       inputSchema: z.object({
         url: urlField,
         maxPages: z.number().int().positive().optional()
