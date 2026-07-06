@@ -1,3 +1,9 @@
+## [1.199.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.199.0...v1.199.1) (2026-07-06)
+
+### Bug Fixes
+
+* **desktop:** prioritize form pages in crawl + always union a final form read ([ca588f5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ca588f50b447f3a4027b52b50e686e92327100bf))
+
 ## [1.199.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.198.0...v1.199.0) (2026-07-06)
 
 ### Features
