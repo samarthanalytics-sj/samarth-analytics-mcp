@@ -115,6 +115,28 @@ test('a sharp drop → MEDIUM finding', () => {
   assert.equal(r.sessionsTrendPct, -67);
 });
 
+test('a sharp drop where revenue HELD -> LOW junk-shed reframe, never a tagging warning', () => {
+  // The user-reported contradiction: sessions -45% but revenue only -11%. If tagging had broken,
+  // revenue would fall with the sessions; it did not, so the read is low-value traffic washing out
+  // (e.g. an earlier one-off spike leaving the comparison window), graded LOW.
+  const r = auditGa4Growth(inp({ sessions: 11000, priorSessions: 20000, keyEvents: 4000, priorKeyEvents: 5000, revenue: 800000, priorRevenue: 900000 }));
+  assert.equal(r.findings.length, 1);
+  assert.equal(r.findings[0].severity, 'low');
+  assert.ok(/revenue held/.test(r.findings[0].message), 'leads with the revenue hold');
+  assert.ok(!/can indicate broken/.test(r.findings[0].message), 'no tagging accusation when revenue held');
+  assert.ok(/would drag revenue down/.test(r.findings[0].message), 'states WHY the break is ruled out');
+  assert.ok(/not a tracking break/.test(r.findings[0].message), 'explicitly rules the break out');
+  assert.equal(r.sessionsTrendPct, -45);
+  assert.equal(r.revenueTrendPct, -11);
+});
+
+test('a sharp drop that revenue CONFIRMS keeps the MEDIUM tagging warning and says the outcomes confirm it', () => {
+  const r = auditGa4Growth(inp({ sessions: 3000, priorSessions: 9000, keyEvents: 100, priorKeyEvents: 450, revenue: 30000, priorRevenue: 90000 }));
+  assert.equal(r.findings[0].severity, 'medium');
+  assert.ok(/revenue fell with it \(-67%\)/.test(r.findings[0].message), 'names the confirming revenue fall');
+  assert.ok(/the outcomes confirm/.test(r.findings[0].message));
+});
+
 test('normal variation (within ±threshold) → no finding', () => {
   assert.equal(auditGa4Growth(inp({ sessions: 10000, priorSessions: 9000 })).findings.length, 0); // +11%
   assert.equal(auditGa4Growth(inp({ sessions: 8000, priorSessions: 9000 })).findings.length, 0); // -11%

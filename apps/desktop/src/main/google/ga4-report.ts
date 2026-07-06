@@ -452,18 +452,25 @@ const PAID_CHANNEL_RE = /^(paid[\s_]|cross[\s_-]*network|display$)/i;
  *     paid channel shows means the report contains two irreconcilable revenue pictures. */
 function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCounts | null, campaigns?: Ga4CampaignReport | null): FindingRow[] {
   const out: FindingRow[] = [];
+  // The spike result is held so the reconciliation finding below can cross-reference it: untagged paid
+  // campaigns landing in Direct/organic buckets produce BOTH the single-bucket spike and the revenue
+  // mismatch, and a reader must see them as one root cause, not two unrelated problems.
+  let spike: ReturnType<typeof findChannelSpike> = null;
+  let spikePeriod = 'week';
   if (baseline && baseline.channelDaily?.length) {
     const gran = granularityFor(baseline.dailySessions?.length ?? 0);
     const anchor = baseline.dailySessions?.[0]?.date ?? '';
-    const spike = findChannelSpike(baseline.channelDaily.map((c) => ({ channel: c.channel, points: groupSeries(c.series, gran, anchor) })));
+    spike = findChannelSpike(baseline.channelDaily.map((c) => ({ channel: c.channel, points: groupSeries(c.series, gran, anchor) })));
     if (spike) {
       const period = gran === 'day' ? 'day' : gran === 'week' ? 'week' : 'month';
+      spikePeriod = period;
+      const span = spike.periods === 2 ? `two adjacent ${period}s` : `a single ${period}`;
       out.push({
         severity: 'high',
         category: 'concentration',
         area: 'Data quality',
-        message: `${spike.peakSharePct}% of ${spike.channel} sessions arrived in a single ${period} (${spike.peakLabel}: ${spike.peakValue.toLocaleString('en-US')} vs ${spike.restValue.toLocaleString('en-US')} across every other ${period}), and ${spike.channel} is ${spike.channelSharePct}% of all sessions - that is an event (a bot burst, a scrape, or an untagged campaign), not a channel baseline, and it distorts the headline session count and the prior-period comparison.`,
-        recommendation: `Identify what drove ${spike.channel} in ${spike.peakLabel} (source/medium + landing pages for that ${period}); segment or exclude it before quoting ${spike.channel} numbers or window totals.`,
+        message: `${spike.peakSharePct}% of ${spike.channel} sessions arrived in ${span} (${spike.peakLabel}: ${spike.peakValue.toLocaleString('en-US')} vs ${spike.restValue.toLocaleString('en-US')} across every other ${period}), and ${spike.channel} is ${spike.channelSharePct}% of all sessions - that is an event (a bot burst, a scrape, or an untagged campaign), not a channel baseline, and it distorts the headline session count and the prior-period comparison.`,
+        recommendation: `Identify what drove ${spike.channel} in ${spike.peakLabel} (source/medium + landing pages for that traffic); segment or exclude it before quoting ${spike.channel} numbers or window totals.`,
         state: 'confirmed',
         businessRisk: 'Headline sessions and trend comparisons describe a one-off event, not the business',
       });
@@ -493,16 +500,23 @@ function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCoun
     if (campRev > 0 && paidChanRev < campRev / 2) {
       const cur = campaigns.currencyCode ? `${campaigns.currencyCode} ` : '';
       const m = (x: number): string => `${cur}${Math.round(x).toLocaleString('en-US')}`;
-      const names = paidCamps.slice(0, 3).map((c) => `"${c.campaign}"`).join(', ');
+      // Auditable numerator: name the counted campaigns (top 3 + a count of the rest) so a reader can
+      // re-add the total; zero-revenue campaigns (e.g. traffic-only campaigns) are never counted.
+      const names = paidCamps.slice(0, 3).map((c) => `"${c.campaign}"`).join(', ') + (paidCamps.length > 3 ? ` + ${paidCamps.length - 3} more` : '');
       const topNonPaid = baseline.channelPerformance.filter((c) => !PAID_CHANNEL_RE.test(c.channel)).slice().sort((a, b) => b.revenue - a.revenue)[0];
       const landing = topNonPaid && topNonPaid.revenue > paidChanRev
         ? ` The likeliest explanation: that paid traffic is arriving without paid tagging and landing mislabeled in "${topNonPaid.channel}" (${m(topNonPaid.revenue)}, currently the top revenue channel); the alternative is that the campaign view counts ad-platform-attributed revenue while the channel view uses GA4 session attribution.`
         : ' Either the campaign view counts ad-platform-attributed revenue while the channel view uses GA4 session attribution, or paid traffic is being classified into non-paid channels.';
+      // Same root cause as the single-bucket spike when both fired: untagged paid traffic produces the
+      // spike AND the mismatch. Say so, or the reader treats them as two unrelated problems.
+      const spikeLink = spike
+        ? ` This is likely the same root cause as the ${spike.channel} ${spike.periods === 2 ? `two-${spikePeriod}` : `single-${spikePeriod}`} concentration flagged above - untagged campaign bursts land in ${spike.channel}/organic buckets, producing both that spike and this revenue mismatch.`
+        : '';
       out.push({
         severity: 'high',
         category: 'attribution_mismatch',
         area: 'Data quality',
-        message: `Campaign and channel revenue do not reconcile: paid-format campaigns (${names}) claim ${m(campRev)}, but all paid channels combined show only ${m(paidChanRev)}.${landing} Either way this report contains two revenue pictures that cannot both be true as stated.`,
+        message: `Campaign and channel revenue do not reconcile: ${paidCamps.length} paid-format campaign(s) with recorded revenue (${names}) claim ${m(campRev)}, but all paid channels combined show only ${m(paidChanRev)}.${landing} Either way this report contains two revenue pictures that cannot both be true as stated.${spikeLink}`,
         recommendation: 'Verify Google Ads auto-tagging (gclid) and the GA4-Google Ads link, add utm_medium=cpc/paid to ad links so paid sessions leave the organic/direct buckets, and quote revenue from ONE attribution view until the two reconcile.',
         state: 'confirmed',
         businessRisk: 'Paid-media budget and ROAS decisions made on revenue attributed to the wrong channel',
