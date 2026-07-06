@@ -215,12 +215,19 @@ function apiErrorMessage(e: unknown): string {
     errors?: Array<{ message?: string }>;
     message?: string;
   };
-  return (
+  const raw =
     g?.response?.data?.error?.message ??
     g?.errors?.[0]?.message ??
     g?.message ??
-    String(e)
-  );
+    String(e);
+  // GTM locks a workspace once a container VERSION has been created from it (a "submit") — e.g. by
+  // "Auto: create preview & verify" / the Auto-verify & heal loop, or a Submit/Publish in GTM. A
+  // submitted workspace is READ-ONLY, so every write (create tag/trigger/…) then fails. Make the fix
+  // obvious instead of surfacing the bare "Workspace is already submitted".
+  if (/already submitted|workspace .*submitted|workspace is submitted/i.test(raw)) {
+    return `${raw} — this GTM workspace is read-only because a version was already created from it (a "submit", e.g. by "Auto: create preview & verify" or a Submit/Publish in GTM). Create a NEW workspace (create_gtm_workspace, or pick/add one in the GTM bar) and retry there.`;
+  }
+  return raw;
 }
 
 /**
