@@ -1,7 +1,7 @@
 // Pure tests for the "GTM Structure - GA4 Events" template mapping (the table view
 // + CSV download share this). Run: tsx src/shared/__tests__/tag-template.test.ts
 
-import { suggestionToGroup, suggestionsToTemplateCsv, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator } from '../tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator, CONDITION_LABELS } from '../tag-template';
 import type { SuggestedTagView } from '../ipc';
 
 let passed = 0;
@@ -25,14 +25,14 @@ const phone = base({
   trigger: { name: 'Phone Click Trigger', kind: 'link_click', clickUrlValue: 'tel:', clickUrlOperator: 'startsWith' },
 });
 const pw = triggerWhens(phone);
-check('when: link_click clickUrl startsWith → {{Click URL}} / "Starts with" / value', pw.length === 1 && pw[0].variable === '{{Click URL}}' && pw[0].condition === 'Starts with' && pw[0].value === 'tel:');
+check('when: link_click clickUrl startsWith → {{Click URL}} / "starts with" / value', pw.length === 1 && pw[0].variable === '{{Click URL}}' && pw[0].condition === 'starts with' && pw[0].value === 'tel:');
 
 const form = base({
   id: 'f', tagName: 'GA4 Event - Search Form Tag', eventName: 'search',
   eventParameters: [{ name: 'form_id', value: '{{Form ID}}' }],
   trigger: { name: 'Search Form Trigger', kind: 'form_submit', formIdValue: 'searchForm', formIdOperator: 'equals' },
 });
-check('when: form_submit formId equals → {{Form ID}} / "equals to" / value', triggerWhens(form)[0].condition === 'equals to' && triggerWhens(form)[0].variable === '{{Form ID}}');
+check('when: form_submit formId equals → {{Form ID}} / "equals" / value', triggerWhens(form)[0].condition === 'equals' && triggerWhens(form)[0].variable === '{{Form ID}}');
 
 // FAQ accordion: {{Click Element}} matches CSS selector → the "matches CSS selector" condition row.
 const faqTag = base({ id: 'faq', tagName: 'GA4 - Event - FAQ Click Tag', eventName: 'faq_click', trigger: { name: 'FAQ Click Trigger', kind: 'all_clicks', clickElementValue: '.faq-q, .faq-q *', clickElementOperator: 'cssSelector' } });
@@ -89,7 +89,7 @@ const rows = csv.split('\r\n');
 check('csv: header is the template columns', rows[0] === TEMPLATE_HEADERS.join(','));
 check('csv: ends with a trailing CRLF', csv.endsWith('\r\n'));
 check('csv: tag block first row carries tag + trigger + param[0] + when[0]',
-  rows[1] === 'GA4 Event Tag,GA4 Event - Phone Click Tag,phone_click,click_text,{{Click Text}},Phone Click Trigger,Click - Just Links,{{Click URL}},Starts with,tel:');
+  rows[1] === 'GA4 Event Tag,GA4 Event - Phone Click Tag,phone_click,click_text,{{Click Text}},Phone Click Trigger,Click - Just Links,{{Click URL}},starts with,tel:');
 check('csv: subsequent param rows leave tag/trigger/when columns blank', rows[2] === ',,,click_url,{{Click URL}},,,,,' && rows[3] === ',,,page_path,{{Page Path}},,,,,');
 check('csv: every data row has exactly 10 columns', rows.slice(1).filter(Boolean).every((r) => r.split(',').length === TEMPLATE_HEADERS.length));
 
@@ -140,12 +140,12 @@ const e2g = applyTagEdit(gtag, { params: [{ name: 'send_page_view', variable: 'f
 check('edit: params for google_tag go to configSettings', JSON.stringify(e2g.configSettings) === JSON.stringify([{ name: 'send_page_view', value: 'false' }]) && (e2g.eventParameters ?? []).length === 0);
 
 // whens override → reverse-maps each row to the trigger field its variable names (value + operator move).
-const e3 = applyTagEdit(phone, { whens: [{ variable: '{{Click Text}}', condition: 'Contains', value: 'Call us' }] });
+const e3 = applyTagEdit(phone, { whens: [{ variable: '{{Click Text}}', condition: 'contains', value: 'Call us' }] });
 check('edit: whens override re-points the value to a different variable + clears the old field',
   e3.trigger.clickTextValue === 'Call us' && e3.trigger.clickTextOperator === 'contains' && e3.trigger.clickUrlValue === undefined);
-check('edit: whens override round-trips through triggerWhens', (() => { const w = triggerWhens(e3); return w.length === 1 && w[0].variable === '{{Click Text}}' && w[0].condition === 'Contains' && w[0].value === 'Call us'; })());
+check('edit: whens override round-trips through triggerWhens', (() => { const w = triggerWhens(e3); return w.length === 1 && w[0].variable === '{{Click Text}}' && w[0].condition === 'contains' && w[0].value === 'Call us'; })());
 // A blank-value when row drops that condition entirely (never leaves a fires-on-everything trigger).
-const e4 = applyTagEdit(phone, { whens: [{ variable: '{{Click URL}}', condition: 'Starts with', value: '   ' }] });
+const e4 = applyTagEdit(phone, { whens: [{ variable: '{{Click URL}}', condition: 'starts with', value: '   ' }] });
 check('edit: a blank-value when row is dropped (no dangling filter)', triggerWhens(e4).length === 0);
 // The "(ignore case)" suffix survives an untouched condition; a fresh base operator drops it.
 const e5 = applyTagEdit(faqTag, { whens: [{ variable: '{{Click Text}}', condition: 'contains (ignore case)', value: 'x' }] });
@@ -156,8 +156,15 @@ const e6 = applyTagEdit(phone, { platform: 'meta_pixel', triggerKind: 'all_click
 check('edit: platform + triggerKind override', e6.platform === 'meta_pixel' && e6.trigger.kind === 'all_clicks');
 
 // conditionToOperator inverse of the CONDITION map (+ unknown → equals).
-check('conditionToOperator: labels invert', conditionToOperator('Starts with').op === 'startsWith' && conditionToOperator('equals to').op === 'equals' && conditionToOperator('matches RegEx').op === 'matchRegex' && conditionToOperator('matches CSS selector').op === 'cssSelector');
-check('conditionToOperator: unknown → equals, ignore-case detected', conditionToOperator('nonsense').op === 'equals' && conditionToOperator('Contains (ignore case)').ignoreCase === true && conditionToOperator('Contains').ignoreCase === false);
+check('conditionToOperator: base labels invert (incl legacy "equals to")', conditionToOperator('starts with').op === 'startsWith' && conditionToOperator('equals').op === 'equals' && conditionToOperator('equals to').op === 'equals' && conditionToOperator('matches RegEx').op === 'matchRegex' && conditionToOperator('matches CSS selector').op === 'cssSelector');
+check('conditionToOperator: negations + numeric invert', conditionToOperator('does not equal').op === 'notEquals' && conditionToOperator('does not contain').op === 'notContains' && conditionToOperator('does not start with').op === 'notStartsWith' && conditionToOperator('does not match CSS selector').op === 'notCssSelector' && conditionToOperator('does not match RegEx').op === 'notMatchRegex' && conditionToOperator('less than').op === 'less' && conditionToOperator('less than or equal to').op === 'lessOrEquals' && conditionToOperator('greater than').op === 'greater' && conditionToOperator('greater than or equal to').op === 'greaterOrEquals');
+check('conditionToOperator: "does not match RegEx (ignore case)" → notMatchRegex + ignoreCase', conditionToOperator('does not match RegEx (ignore case)').op === 'notMatchRegex' && conditionToOperator('does not match RegEx (ignore case)').ignoreCase === true);
+check('conditionToOperator: unknown → equals, ignore-case detected', conditionToOperator('nonsense').op === 'equals' && conditionToOperator('contains (ignore case)').ignoreCase === true && conditionToOperator('contains').ignoreCase === false);
+// The Condition dropdown offers GTM's full 18-operator list, in GTM's order.
+check('CONDITION_LABELS is the full GTM operator list (18, GTM order)', CONDITION_LABELS.length === 18 && CONDITION_LABELS[0] === 'equals' && CONDITION_LABELS.includes('does not match RegEx (ignore case)') && CONDITION_LABELS.includes('greater than or equal to') && CONDITION_LABELS.includes('does not equal'));
+// A negated operator round-trips: edit → operator token → re-projected label.
+const neg = applyTagEdit(phone, { whens: [{ variable: '{{Click Text}}', condition: 'does not contain', value: 'spam' }] });
+check('edit: negation round-trips (does not contain → notContains → "does not contain")', neg.trigger.clickTextOperator === 'notContains' && triggerWhens(neg)[0].condition === 'does not contain' && neg.trigger.clickUrlValue === undefined);
 
 // A platform switch MIGRATES the existing params to the new platform's field (not orphaned) + clears the other.
 const pmig = applyTagEdit(phone, { platform: 'google_tag' });
@@ -172,7 +179,7 @@ check('edit: google_tag→ga4 migrates configSettings into eventParameters + cle
 const kmig = applyTagEdit(form, { triggerKind: 'link_click' });
 check('edit: kind change clears the old kind filter fields (no fires-on-everything)', kmig.trigger.kind === 'link_click' && kmig.trigger.formIdValue === undefined && triggerWhens(kmig).length === 0);
 // An explicit whens edit made alongside a kind change is honored (not wiped).
-const kw = applyTagEdit(form, { triggerKind: 'link_click', whens: [{ variable: '{{Click URL}}', condition: 'Contains', value: '/x' }] });
+const kw = applyTagEdit(form, { triggerKind: 'link_click', whens: [{ variable: '{{Click URL}}', condition: 'contains', value: '/x' }] });
 check('edit: explicit whens survive a simultaneous kind change', triggerWhens(kw).length === 1 && kw.trigger.clickUrlValue === '/x' && kw.trigger.formIdValue === undefined);
 
 // applyWhensToTrigger clears ALL standard fields before re-applying (an emptied whens = no filter).

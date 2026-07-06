@@ -29,14 +29,26 @@ const TRIGGER_TYPE: Record<string, string> = {
   youtube_video: 'YouTube Video',
 };
 
-// Our filter operator → the template's "Condition" wording.
+// Our filter-operator TOKEN → the exact GTM UI "Condition" label (so the review-table dropdown reads
+// identically to GTM's trigger-condition menu). Negated operators are distinct tokens; the two
+// "(ignore case)" RegEx variants are the base label + a suffix that triggerWhens appends when ignoreCase.
 const CONDITION: Record<string, string> = {
-  equals: 'equals to',
-  contains: 'Contains',
-  startsWith: 'Starts with',
-  endsWith: 'Ends with',
-  matchRegex: 'matches RegEx',
+  equals: 'equals',
+  notEquals: 'does not equal',
+  contains: 'contains',
+  notContains: 'does not contain',
+  startsWith: 'starts with',
+  notStartsWith: 'does not start with',
+  endsWith: 'ends with',
+  notEndsWith: 'does not end with',
   cssSelector: 'matches CSS selector',
+  notCssSelector: 'does not match CSS selector',
+  matchRegex: 'matches RegEx',
+  notMatchRegex: 'does not match RegEx',
+  less: 'less than',
+  lessOrEquals: 'less than or equal to',
+  greater: 'greater than',
+  greaterOrEquals: 'greater than or equal to',
 };
 
 export interface TriggerWhen {
@@ -55,7 +67,7 @@ export function triggerWhens(s: SuggestedTagView): TriggerWhen[] {
   if (t.clickTextValue) out.push({ variable: '{{Click Text}}', condition: cond(t.clickTextOperator, 'contains') + (t.clickTextIgnoreCase ? ' (ignore case)' : ''), value: t.clickTextValue });
   if (t.clickElementValue) out.push({ variable: '{{Click Element}}', condition: cond(t.clickElementOperator, 'cssSelector'), value: t.clickElementValue });
   // Lookup-table grouping: the trigger reads the companion smm variable ({{Click Text}} → true rows).
-  if (t.lookupTable?.name) out.push({ variable: `{{${t.lookupTable.name}}}`, condition: 'equals to', value: 'true' });
+  if (t.lookupTable?.name) out.push({ variable: `{{${t.lookupTable.name}}}`, condition: 'equals', value: 'true' });
   if (t.formIdValue) out.push({ variable: '{{Form ID}}', condition: cond(t.formIdOperator, 'equals'), value: t.formIdValue });
   if (t.formClassesValue) out.push({ variable: '{{Form Classes}}', condition: cond(t.formClassesOperator, 'contains'), value: t.formClassesValue });
   if (t.pagePathValue) out.push({ variable: '{{Page Path}}', condition: cond(t.pagePathOperator, 'equals'), value: t.pagePathValue });
@@ -132,8 +144,16 @@ export interface TagEdit {
 export const STANDARD_TRIGGER_VARIABLES = [
   '{{Click URL}}', '{{Click Text}}', '{{Click Element}}', '{{Form ID}}', '{{Form Classes}}', '{{Page Path}}', '{{Page URL}}',
 ] as const;
-/** The condition labels offered in the review table (the display side of the operator map). */
-export const CONDITION_LABELS = Object.values(CONDITION);
+/** The trigger-condition operators GTM offers, in its exact dropdown ORDER (the display side of the
+ *  operator map, plus the two "(ignore case)" RegEx variants). Offered by the review table's Condition
+ *  select so it reads identically to GTM's own menu. */
+export const CONDITION_LABELS: string[] = [
+  'equals', 'contains', 'starts with', 'ends with',
+  'matches CSS selector', 'matches RegEx', 'matches RegEx (ignore case)',
+  'does not equal', 'does not contain', 'does not start with', 'does not end with',
+  'does not match CSS selector', 'does not match RegEx', 'does not match RegEx (ignore case)',
+  'less than', 'less than or equal to', 'greater than', 'greater than or equal to',
+];
 /** {value, label} options for the editable Tag Type / Trigger Type selects. */
 export const TAG_TYPE_OPTIONS = Object.entries(TAG_TYPE).map(([value, label]) => ({ value, label }));
 export const TRIGGER_TYPE_OPTIONS = Object.entries(TRIGGER_TYPE).map(([value, label]) => ({ value, label }));
@@ -144,8 +164,15 @@ export function conditionToOperator(label: string): { op: string; ignoreCase: bo
   const ignoreCase = /\(ignore case\)/i.test(label ?? '');
   const base = (label ?? '').replace(/\s*\(ignore case\)\s*/i, '').trim().toLowerCase();
   const map: Record<string, string> = {
-    'equals to': 'equals', contains: 'contains', 'starts with': 'startsWith',
-    'ends with': 'endsWith', 'matches regex': 'matchRegex', 'matches css selector': 'cssSelector',
+    equals: 'equals', 'does not equal': 'notEquals',
+    contains: 'contains', 'does not contain': 'notContains',
+    'starts with': 'startsWith', 'does not start with': 'notStartsWith',
+    'ends with': 'endsWith', 'does not end with': 'notEndsWith',
+    'matches css selector': 'cssSelector', 'does not match css selector': 'notCssSelector',
+    'matches regex': 'matchRegex', 'does not match regex': 'notMatchRegex',
+    'less than': 'less', 'less than or equal to': 'lessOrEquals',
+    'greater than': 'greater', 'greater than or equal to': 'greaterOrEquals',
+    'equals to': 'equals', // legacy label (older exports) still maps correctly
   };
   return { op: map[base] ?? 'equals', ignoreCase };
 }

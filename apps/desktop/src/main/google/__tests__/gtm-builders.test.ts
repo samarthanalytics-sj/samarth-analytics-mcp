@@ -286,6 +286,23 @@ test('all_clicks trigger: matchRegex + clickTextIgnoreCase emits the condition-l
   assert.equal(pf.parameter.find((p) => p.key === 'ignore_case'), undefined);
 });
 
+test('trigger conditions: negated operators emit the base type + a negate parameter; numeric ops map through', () => {
+  // "does not contain" → type contains + {negate:true} (the GTM representation, corpus-verified). arg0/arg1 unchanged.
+  const neg = buildTrigger({ name: 'x', kind: 'all_clicks', clickTextValue: 'spam', clickTextOperator: 'notContains' });
+  const nf = (neg.filter ?? [])[0] as { type: string; parameter: Array<Record<string, unknown>> };
+  assert.equal(nf.type, 'contains');
+  assert.equal(nf.parameter.find((p) => p.key === 'arg1')?.value, 'spam');
+  const ng = nf.parameter.find((p) => p.key === 'negate');
+  assert.equal(ng?.type, 'boolean');
+  assert.equal(ng?.value, 'true');
+  // A non-negated operator emits NO negate parameter.
+  const pos = buildTrigger({ name: 'x', kind: 'all_clicks', clickTextValue: 'buy', clickTextOperator: 'contains' });
+  assert.equal(((pos.filter ?? [])[0] as { parameter: Array<Record<string, unknown>> }).parameter.find((p) => p.key === 'negate'), undefined);
+  // greaterOrEquals / lessOrEquals map straight to their GTM condition types.
+  const ge = buildTrigger({ name: 'x', kind: 'all_clicks', clickTextValue: '3', clickTextOperator: 'greaterOrEquals' });
+  assert.equal(((ge.filter ?? [])[0] as { type: string }).type, 'greaterOrEquals');
+});
+
 test('Lookup Table variable: corpus smm shape (setDefaultValue false, input {{Click Text}}, one row per exact text)', () => {
   const v = buildClickTextLookupVariable('Lookup - Learn More Variants', ['Learn More', 'LEARN MORE']);
   assert.equal(v.type, 'smm');
