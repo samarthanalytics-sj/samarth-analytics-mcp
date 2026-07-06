@@ -213,6 +213,14 @@ const api = {
       elements: DetectedElementView[],
       opts?: VerifyTagsOptions,
     ): Promise<VerifyTagsResult> => ipcRenderer.invoke('suggestions:verifyTags', url, tags, elements, opts),
+    // Auto-mint a workspace-preview snippet (create version + preview environment) so
+    // Verify firing can load DRAFT tags without a manual paste. Draft-level writes only.
+    mintPreview: (
+      accountId: string,
+      containerId: string,
+      workspaceId: string,
+    ): Promise<{ snippet: string; versionId: string; environmentName: string }> =>
+      ipcRenderer.invoke('suggestions:mintPreview', accountId, containerId, workspaceId),
     createTags: (
       accountId: string,
       containerId: string,

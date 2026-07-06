@@ -429,6 +429,78 @@ export class GoogleDataService {
     };
   }
 
+  /**
+   * Auto-mint a WORKSPACE-PREVIEW install snippet so a scan can load the workspace's
+   * DRAFT tags (for "Verify firing") without the user pasting anything. It:
+   *   1. creates a container VERSION from the workspace (a snapshot — NOT published),
+   *   2. binds a reusable "Samarth Verify (auto)" user environment to that version
+   *      (created + reauthorized once, updated on later runs),
+   *   3. returns that environment's preview snippet (carries gtm_auth/gtm_preview).
+   * Draft-level writes only; nothing is ever published.
+   */
+  async mintWorkspacePreview(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<{ snippet: string; versionId: string; environmentName: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const containerParent = `accounts/${accountId}/containers/${containerId}`;
+
+    // 1. Snapshot the workspace into a version (not published).
+    const cv = await gtm.accounts.containers.workspaces.create_version({
+      path: `${containerParent}/workspaces/${workspaceId}`,
+      requestBody: { name: 'Samarth Verify (auto)', notes: 'Auto-created to verify tag firing in Preview. Not published.' },
+    });
+    const versionId = cv.data.containerVersion?.containerVersionId ?? '';
+    if (!versionId) {
+      throw new Error(
+        cv.data.compilerError
+          ? 'The workspace has a compiler error, so a preview version could not be created. Fix the container in GTM, then retry.'
+          : 'Could not create a container version from the workspace (nothing to version, or a GTM error).'
+      );
+    }
+
+    // 2. Reuse-or-create a dedicated preview environment bound to that version.
+    const [publicId, environments] = await Promise.all([
+      this.getContainerPublicId(accountId, containerId),
+      collectPages(
+        (pageToken) => gtm.accounts.containers.environments.list({ parent: containerParent, pageToken }),
+        (r) => r.data.environment,
+        (r) => r.data.nextPageToken
+      ),
+    ]);
+    const NAME = 'Samarth Verify (auto)';
+    const existing = environments.find((e) => e.name === NAME && e.type === 'user');
+    let env;
+    if (existing?.environmentId) {
+      const upd = await gtm.accounts.containers.environments.update({
+        path: `${containerParent}/environments/${existing.environmentId}`,
+        requestBody: { name: NAME, type: 'user', containerVersionId: versionId, enableDebug: true },
+      });
+      env = upd.data;
+    } else {
+      const created = await gtm.accounts.containers.environments.create({
+        parent: containerParent,
+        requestBody: { name: NAME, type: 'user', containerVersionId: versionId, enableDebug: true },
+      });
+      env = created.data;
+    }
+    // A fresh/updated environment may lack a gtm_auth token — reauthorize to mint one.
+    if (!env.authorizationCode && env.environmentId) {
+      const re = await gtm.accounts.containers.environments.reauthorize({
+        path: `${containerParent}/environments/${env.environmentId}`,
+        requestBody: {},
+      });
+      env = re.data;
+    }
+    return {
+      snippet: buildEnvironmentSnippet(publicId, env.authorizationCode ?? '', env.environmentId ?? '').head,
+      versionId,
+      environmentName: NAME,
+    };
+  }
+
   async listGtmTags(
     accountId: string,
     containerId: string,
