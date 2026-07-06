@@ -386,7 +386,11 @@ export function buildToolRegistry(
       handler: async (a) => {
         const { scanUrlForSuggestions } = await import('../suggestions/scan-url');
         const res = await scanUrlForSuggestions(s(a.url));
-        const suggestions = (res.suggestions ?? []).map((t) => ({
+        const all = res.suggestions ?? [];
+        // Cap the payload so a link-heavy page can't balloon the chat context (and the LLM's
+        // per-minute token budget). The top suggestions are already ranked by relevance.
+        const CAP = 40;
+        const suggestions = all.slice(0, CAP).map((t) => ({
           tagName: t.tagName,
           event: t.eventName,
           platform: t.platform,
@@ -399,6 +403,7 @@ export function buildToolRegistry(
           url: s(a.url),
           pagesScanned: res.summary?.pagesScanned ?? 1,
           count: suggestions.length,
+          ...(all.length > CAP ? { truncated: `showing the top ${CAP} of ${all.length} — scan a more specific page for the rest` } : {}),
           suggestions,
           next: "Pass a suggestion's `trigger` (and its event/tagName) to create_gtm_tracking_tag to create it as a draft.",
         };
