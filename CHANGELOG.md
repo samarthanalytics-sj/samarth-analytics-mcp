@@ -1,3 +1,9 @@
+## [1.207.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.206.0...v1.207.0) (2026-07-06)
+
+### Features
+
+* **desktop:** combine GA4 Audit + GA4 Monitoring into one GA4 Tools tab ([ce1a726](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ce1a7267f82d52a1e968a09fda92c1039c62cf5b))
+
 ## [1.206.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.205.0...v1.206.0) (2026-07-06)
 
 ### Features
