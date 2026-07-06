@@ -159,6 +159,14 @@ const EMBED_PROVIDERS = new Set<FormProvider>([
   'hubspot', 'paperform', 'typeform', 'marketo', 'pardot',
   'calendly', 'jotform', 'formstack', 'tally', 'googleforms', 'wufoo',
 ]);
+// On-page WordPress form plugins that submit via AJAX (they preventDefault the native submit). Like the
+// embed providers, GTM's NATIVE Form Submission trigger usually won't fire for these — the reliable
+// route (per the AnalyticsMania recipes) is a Custom HTML listener on the plugin's own JS/DOM event
+// that dataLayer.pushes a Custom Event the tag fires on. Unlike embeds these are real on-page <form>s
+// (we still see the Form ID), so the note also offers the Form-ID fallback for non-AJAX configs.
+const AJAX_FORM_PROVIDERS = new Set<FormProvider>([
+  'contactform7', 'gravityforms', 'ninjaforms', 'wpforms', 'elementor',
+]);
 const PROVIDER_EVENT_HINT: Partial<Record<FormProvider, string>> = {
   hubspot: 'HubSpot fires a global submit callback (hsFormCallback / window message)',
   paperform: 'Paperform posts a window message on submit',
@@ -171,12 +179,24 @@ const PROVIDER_EVENT_HINT: Partial<Record<FormProvider, string>> = {
   tally: 'Tally posts a window message on submit',
   googleforms: 'Google Forms submits inside a cross-origin iframe — track the click into the form, or use server-side',
   wufoo: 'Wufoo submits inside its embed (confirmation redirect)',
+  // WordPress AJAX plugins — the DOM/jQuery event each fires on a successful submit.
+  contactform7: 'Contact Form 7 fires the wpcf7mailsent DOM event on a successful submit — listen for it',
+  gravityforms: 'Gravity Forms fires the gform_confirmation_loaded jQuery event on AJAX (non-redirect) forms — listen for it (needs jQuery)',
+  ninjaforms: 'Ninja Forms fires the nfFormSubmitResponse jQuery event on submit — listen for it',
+  wpforms: 'WPForms (AJAX) shows a .wpforms-confirmation-container success message — use Element Visibility on it, or emit a custom event from a listener',
+  elementor: 'Elementor Pro fires the submit_success jQuery event on submit — listen for it',
 };
 // The dataLayer EVENT the suggested Custom Event trigger fires on, per provider — from the corpus of
-// real form triggers ("hubspot-form-success" 15×; the generic "form_submit" 213× is the default). The
-// push itself comes from the provider listener described in PROVIDER_EVENT_HINT.
+// real form triggers ("hubspot-form-success" 15×; the generic "form_submit" 213× is the default) and
+// the AnalyticsMania form recipes (cf7submission etc.). The push itself comes from the listener
+// described in PROVIDER_EVENT_HINT.
 const PROVIDER_DL_EVENT: Partial<Record<FormProvider, string>> = {
   hubspot: 'hubspot-form-success',
+  contactform7: 'cf7submission',
+  gravityforms: 'gravityFormSubmission',
+  ninjaforms: 'ninjaFormSubmission',
+  wpforms: 'wpformsSubmission',
+  elementor: 'elementorFormSubmission',
 };
 
 // Framework/wrapper classes shared by EVERY form of a stack — useless (harmful)
@@ -449,12 +469,15 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   const isEmbed =
     EMBED_PROVIDERS.has(f.provider.vendor) &&
     !(f.provider.vendor === 'pardot' && (f.method === 'post' || f.method === 'get'));
+  // On-page WordPress AJAX plugin (CF7 / Gravity / Ninja / WPForms / Elementor) — the native trigger
+  // usually won't fire either, so it takes the same Custom Event route (but keeps the Form-ID fallback).
+  const isAjaxPlugin = AJAX_FORM_PROVIDERS.has(f.provider.vendor);
   // AJAX/embed + JS/div forms: the native Form Submission trigger usually never fires there, and the
   // corpus' dominant ("Best"-rated) route is a CUSTOM EVENT trigger — so suggest THAT trigger, fired
   // by the provider listener / submit-handler push described in the note. The {{Form ID}}/{{Form
   // Classes}} built-ins don't resolve on a pushed event, so only the page scope carries over (the
   // builder supports ANDed {{Page Path}} conditions on custom_event, as real containers do).
-  const dlEvent = isEmbed || f.method === 'js' ? (PROVIDER_DL_EVENT[f.provider.vendor] ?? 'form_submit') : null;
+  const dlEvent = isEmbed || isAjaxPlugin || f.method === 'js' ? (PROVIDER_DL_EVENT[f.provider.vendor] ?? 'form_submit') : null;
   if (dlEvent) {
     trigger.kind = 'custom_event';
     trigger.eventName = dlEvent;
@@ -466,6 +489,8 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   let note: string | undefined;
   if (isEmbed) {
     note = `${cap(f.provider.vendor)} submits in an iframe / via AJAX — GTM's native Form Submission trigger usually won't fire, so this tag fires on a "${dlEvent}" Custom Event. Add the push: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the provider submit event'} → dataLayer.push({event: "${dlEvent}"}). Fallback: an Element Visibility trigger on the thank-you message.`;
+  } else if (isAjaxPlugin) {
+    note = `${cap(f.provider.vendor)} submits via AJAX (it preventDefaults the native submit), so GTM's Form Submission trigger usually won't fire — this tag fires on a "${dlEvent}" Custom Event instead. Add a Custom HTML listener: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the plugin submit event'} → dataLayer.push({event: "${dlEvent}"${f.formId ? `, form_id: "${f.formId}"` : ''}}). AnalyticsMania publishes an importable recipe for this.${f.formId ? ` (If the plugin is set to NON-AJAX submit, a Form Submission trigger on {{Form ID}} equals "${f.formId}" also works.)` : ''}`;
   } else if (f.method === 'js') {
     note = `JS/div form (no native <form> submit) — GTM's Form Submission trigger may not fire, so this tag fires on a "${dlEvent}" Custom Event; push dataLayer.push({event: "${dlEvent}"}) from the form's submit handler. Fallbacks: an All-Clicks trigger on the submit button, or an Element Visibility trigger on the thank-you message.`;
   } else if (trigger.pagePathOperator === 'matchRegex') {

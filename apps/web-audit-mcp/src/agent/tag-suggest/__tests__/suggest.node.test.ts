@@ -27,6 +27,9 @@ check('provider: Typeform via action', detectFormProvider(sig({}), 'https://acme
 check('provider: Mailchimp via action', detectFormProvider(sig({}), 'https://x.us1.list-manage.com/subscribe/post').vendor === 'mailchimp');
 check('provider: Gravity Forms via class', detectFormProvider(sig({ classNames: ['gform_wrapper'] })).vendor === 'gravityforms');
 check('provider: CF7 via class', detectFormProvider(sig({ classNames: ['wpcf7'] })).vendor === 'contactform7');
+check('provider: WPForms via class', detectFormProvider(sig({ classNames: ['wpforms-form'] })).vendor === 'wpforms');
+check('provider: Ninja Forms via class', detectFormProvider(sig({ classNames: ['nf-form-cont'] })).vendor === 'ninjaforms');
+check('provider: Elementor via class', detectFormProvider(sig({ classNames: ['elementor-form'] })).vendor === 'elementor');
 check('provider: Marketo via id', detectFormProvider(sig({ selectorsPresent: ['#mktoForm_42'] })).vendor === 'marketo');
 check('provider: Pardot via script', detectFormProvider(sig({ scriptSrcs: ['https://pi.pardot.com/pd.js'] })).vendor === 'pardot');
 check('provider: unknown when no signal', detectFormProvider(sig({ classNames: ['btn', 'container'] })).vendor === 'unknown');
@@ -47,6 +50,26 @@ const out1 = buildSuggestions({ siteHost: 'acme.com', forms: [contactForm], elem
 check('form: contact (HubSpot embed) → contact_form on a Custom Event trigger (native form_submit would never fire)',
   out1.length === 1 && out1[0].eventName === 'contact_form' && out1[0].trigger.kind === 'custom_event' && out1[0].trigger.eventName === 'hubspot-form-success');
 check('form: label names the provider', out1[0].label.includes('hubspot'));
+
+// ── WordPress AJAX form plugins → Custom Event trigger (NOT native form_submit), per the recipes ──
+const wpAjaxCases: Array<{ vendor: 'contactform7' | 'gravityforms' | 'ninjaforms' | 'wpforms' | 'elementor'; ev: string }> = [
+  { vendor: 'contactform7', ev: 'cf7submission' },
+  { vendor: 'gravityforms', ev: 'gravityFormSubmission' },
+  { vendor: 'ninjaforms', ev: 'ninjaFormSubmission' },
+  { vendor: 'wpforms', ev: 'wpformsSubmission' },
+  { vendor: 'elementor', ev: 'elementorFormSubmission' },
+];
+for (const { vendor, ev } of wpAjaxCases) {
+  const out = buildSuggestions({
+    siteHost: 'wp.com',
+    forms: [{ page: '/contact', purpose: 'contact', action: '/wp-comments-post.php', method: 'post', provider: { vendor, confidence: 'high', evidence: 'class' }, fields: [{ type: 'email', name: 'email', required: true }] }],
+    elements: [],
+  });
+  const t = out[0]?.trigger;
+  check(`form: ${vendor} (AJAX) → Custom Event "${ev}" trigger, NOT native form_submit`,
+    out.length === 1 && t?.kind === 'custom_event' && t?.eventName === ev && !t?.formIdValue);
+  check(`form: ${vendor} note explains AJAX + listener`, /AJAX/i.test(out[0]?.note ?? '') && /Custom (HTML|Event)/i.test(out[0]?.note ?? ''));
+}
 check('form: directly creatable (platform + measurementId)', out1[0].platform === 'ga4_event' && out1[0].measurementId === '{{GA4 Measurement ID}}');
 check('naming: tag "GA4 Event - Contact Form Tag", trigger "Contact Form Trigger"', out1[0].tagName === 'GA4 - Event - Contact Form Tag' && out1[0].trigger.name === 'Contact Form Trigger');
 const provLow = { vendor: 'unknown' as const, confidence: 'low' as const, evidence: '' };

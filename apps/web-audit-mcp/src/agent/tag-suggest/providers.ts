@@ -45,6 +45,8 @@ const SIGNATURES: Signature[] = [
   { vendor: 'gravityforms', test: (s) => (hasClass(s, 'gform_wrapper') ? 'class .gform_wrapper' : null) },
   { vendor: 'contactform7', test: (s) => (hasClass(s, 'wpcf7') || hasClass(s, 'wpcf7-form') ? 'class .wpcf7' : null) },
   { vendor: 'wpforms', test: (s) => (hasClass(s, 'wpforms-form') || hasClass(s, 'wpforms-container') ? 'class .wpforms-form' : null) },
+  { vendor: 'ninjaforms', test: (s) => (hasClass(s, 'nf-form-cont') || hasClass(s, 'nf-form-layout') ? 'class .nf-form-cont' : null) },
+  { vendor: 'elementor', test: (s) => (hasClass(s, 'elementor-form') ? 'class .elementor-form' : null) },
   {
     vendor: 'marketo',
     // A Marketo form rendered without the #mktoForm_<n> id still carries class .mktoForm; the forms2

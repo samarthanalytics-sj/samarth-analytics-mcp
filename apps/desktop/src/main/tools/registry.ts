@@ -398,6 +398,9 @@ export function buildToolRegistry(
           // Human-readable condition + the raw trigger to hand to create_gtm_tracking_tag.
           triggerCondition: describeTriggerCondition(t.trigger),
           trigger: t.trigger,
+          // Caveat when present — e.g. an AJAX form plugin (CF7/Gravity/Ninja/…) whose native Form
+          // Submission trigger won't fire, with the listener + Custom Event to add.
+          ...(t.note ? { note: t.note } : {}),
         }));
         return {
           url: s(a.url),
