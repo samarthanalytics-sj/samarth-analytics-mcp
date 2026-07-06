@@ -1,3 +1,9 @@
+## [1.218.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.218.0...v1.218.1) (2026-07-06)
+
+### Bug Fixes
+
+* **desktop:** follow GTM to the fresh workspace after Auto-mint (no more "already submitted") ([f199177](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f19917797fd88a598ac979e059728140114d8b93))
+
 ## [1.218.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.217.0...v1.218.0) (2026-07-06)
 
 ### Features
