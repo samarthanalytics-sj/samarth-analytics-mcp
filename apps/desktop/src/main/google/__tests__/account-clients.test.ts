@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OAuth2Client } from 'google-auth-library';
-import { AccountClientManager, mergeGoogleTokens } from '../account-clients';
+import { AccountClientManager, mergeGoogleTokens, isInvalidGrant, GoogleAuthExpiredError } from '../account-clients';
 import type { TokenStore } from '../account-clients';
 
 let passed = 0;
@@ -88,6 +88,63 @@ test('invalidate drops the cached client', () => {
   assert.notEqual(c1, c2, 'a fresh client after invalidate');
 });
 
+test('isInvalidGrant detects the invalid_grant shapes, ignores transient errors', () => {
+  assert.ok(isInvalidGrant({ response: { data: { error: 'invalid_grant' } } }), 'gaxios response shape');
+  assert.ok(isInvalidGrant(new Error('invalid_grant')), 'message');
+  assert.ok(isInvalidGrant({ cause: { message: 'Token has been expired or revoked.' } }), 'cause message');
+  assert.ok(!isInvalidGrant(new Error('ETIMEDOUT')), 'network timeout is NOT invalid_grant');
+  assert.ok(!isInvalidGrant({ response: { data: { error: 'quotaExceeded' } } }), 'quota is NOT invalid_grant');
+  assert.ok(!isInvalidGrant(undefined), 'undefined is safe');
+});
+
+async function atest(name: string, fn: () => Promise<void>): Promise<void> {
+  try { await fn(); console.log(`  ✓ ${name}`); passed++; }
+  catch (e) { console.error(`  ✗ ${name}: ${(e as Error).message}`); failed++; }
+}
+
+void (async () => {
+await atest('a dead refresh token (invalid_grant) → AUTH_EXPIRED, drops client, notifies once', async () => {
+  const store = new FakeStore();
+  store.setGoogleToken('a', JSON.stringify({ refresh_token: 'rt' }));
+  let notified = 0;
+  const factory = (id: string, secret: string): OAuth2Client => {
+    const c = new OAuth2Client(id, secret);
+    // Force the underlying request to reject exactly as Google does for a dead refresh token.
+    (c as unknown as { request: () => Promise<never> }).request = () =>
+      Promise.reject({ response: { data: { error: 'invalid_grant' } } });
+    return c;
+  };
+  const mgr = new AccountClientManager(store, configFile, factory, () => { notified++; });
+  const client = mgr.getClient('a');
+  await assert.rejects(
+    () => (client.request as unknown as (o: unknown) => Promise<unknown>)({ url: 'https://x' }),
+    (e: unknown) => e instanceof GoogleAuthExpiredError && (e as { code?: string }).code === 'AUTH_EXPIRED'
+  );
+  assert.equal(notified, 1, 'onAuthExpired fired once');
+  // A second call on the same client still throws AUTH_EXPIRED but must not re-notify.
+  await assert.rejects(() => (client.request as unknown as (o: unknown) => Promise<unknown>)({ url: 'https://x' }));
+  assert.equal(notified, 1, 'not re-notified from the same client');
+});
+
+await atest('a non-auth error passes through untouched', async () => {
+  const store = new FakeStore();
+  store.setGoogleToken('a', JSON.stringify({ refresh_token: 'rt' }));
+  let notified = 0;
+  const factory = (id: string, secret: string): OAuth2Client => {
+    const c = new OAuth2Client(id, secret);
+    (c as unknown as { request: () => Promise<never> }).request = () => Promise.reject(new Error('ETIMEDOUT'));
+    return c;
+  };
+  const mgr = new AccountClientManager(store, configFile, factory, () => { notified++; });
+  const client = mgr.getClient('a');
+  await assert.rejects(
+    () => (client.request as unknown as (o: unknown) => Promise<unknown>)({ url: 'https://x' }),
+    /ETIMEDOUT/
+  );
+  assert.equal(notified, 0, 'transient error does NOT flag reauth');
+});
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
+})();

@@ -23,6 +23,33 @@ export function mergeGoogleTokens(current: Credentials, incoming: Credentials): 
 }
 
 /**
+ * True when an error is Google's `invalid_grant` — the refresh token is
+ * permanently expired or revoked (NOT a transient network/quota failure).
+ * The consent screen being in "Testing" makes this fire ~weekly (7-day refresh
+ * token lifetime), and a user revoking access triggers it too. Detected across
+ * the shapes google-auth-library / gaxios surface it in.
+ */
+export function isInvalidGrant(err: unknown): boolean {
+  const e = err as { response?: { data?: { error?: unknown } }; message?: unknown; cause?: { message?: unknown } };
+  if (e?.response?.data?.error === 'invalid_grant') return true;
+  const texts = [e?.message, e?.cause?.message].filter((t): t is string => typeof t === 'string');
+  return texts.some((t) => /invalid_grant|token has been expired or revoked/i.test(t));
+}
+
+/**
+ * Thrown in place of a raw Gaxios `invalid_grant` stack once the dead token has
+ * been cleared — a clean, one-line signal the UI turns into a "Re-connect Google"
+ * prompt. `code` lets callers detect it without string-matching.
+ */
+export class GoogleAuthExpiredError extends Error {
+  readonly code = 'AUTH_EXPIRED';
+  constructor(message = 'Your Google connection has expired or was revoked. Re-connect this account (sidebar → the account, or Settings → Connect) to continue.') {
+    super(message);
+    this.name = 'GoogleAuthExpiredError';
+  }
+}
+
+/**
  * Builds and caches one auto-refreshing OAuth2Client per account from its
  * vaulted token. google-auth-library refreshes the access token on demand using
  * the refresh_token + the OAuth client id/secret; we persist the refreshed
@@ -36,7 +63,11 @@ export class AccountClientManager {
     private readonly store: TokenStore,
     private readonly configPath: string,
     private readonly factory: (id: string, secret: string) => OAuth2Client = (id, secret) =>
-      new OAuth2Client(id, secret)
+      new OAuth2Client(id, secret),
+    /** Invoked once when an account's refresh token is rejected (invalid_grant),
+     *  after its cached client is dropped — the wiring clears the vaulted token and
+     *  tells the renderer to prompt a re-connect. */
+    private readonly onAuthExpired?: (accountId: string) => void
   ) {}
 
   getClient(accountId: string): OAuth2Client {
@@ -64,6 +95,29 @@ export class AccountClientManager {
         // client usable for the rest of the session.
       }
     });
+
+    // Single chokepoint: every googleapis REST call goes through client.request, and a
+    // dead refresh token surfaces as invalid_grant here. Turn that into a clean, typed
+    // error (once), drop the client, and fire onAuthExpired so the token is cleared and
+    // the UI prompts a re-connect — instead of every handler dumping a raw Gaxios stack.
+    const originalRequest = client.request.bind(client) as OAuth2Client['request'];
+    let notified = false;
+    client.request = (async (opts: Parameters<OAuth2Client['request']>[0]) => {
+      try {
+        return await originalRequest(opts);
+      } catch (err) {
+        if (isInvalidGrant(err)) {
+          if (!notified) {
+            notified = true;
+            this.invalidate(accountId);
+            try { this.onAuthExpired?.(accountId); } catch { /* best-effort notify */ }
+          }
+          throw new GoogleAuthExpiredError();
+        }
+        throw err;
+      }
+    }) as OAuth2Client['request'];
+
     this.cache.set(accountId, client);
     return client;
   }

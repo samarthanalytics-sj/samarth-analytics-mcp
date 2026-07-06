@@ -619,6 +619,9 @@ export function App(): JSX.Element {
   const [error, setError] = useState('');
   // Cross-tab GA4 monitoring banner: a background run with NEW issues surfaces here on any tab.
   const [monitorAlert, setMonitorAlert] = useState<Ga4MonitorRun | null>(null);
+  // An account whose Google token just expired/was revoked (backend cleared it) — raises a
+  // dismissible "Re-connect" banner so a dead session is obvious instead of silent failures.
+  const [reauthId, setReauthId] = useState<string | null>(null);
   // Inline rename of an account's sidebar label (pencil → input; Enter saves, Escape cancels).
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
 
@@ -642,7 +645,10 @@ export function App(): JSX.Element {
     const offRun = window.desktop.ga4monitoring.onRun((run) => {
       if (run.newAlertIds.length > 0 && run.health !== 'healthy') setMonitorAlert(run);
     });
-    return () => { off(); offRun(); };
+    // A dead Google token (invalid_grant) was just cleared by the backend — surface a
+    // reconnect prompt for that account (refresh() already ran via accounts:changed).
+    const offReauth = window.desktop.accounts.onAuthExpired(({ id }) => setReauthId(id));
+    return () => { off(); offRun(); offReauth(); };
   }, []);
 
   async function run(fn: () => Promise<unknown>): Promise<void> {
@@ -811,6 +817,22 @@ export function App(): JSX.Element {
             </span>
             <button style={styles.monitorBarBtn} onClick={() => { setView('ga4monitoring'); setMonitorAlert(null); }}>View</button>
             <button style={styles.errorClose} onClick={() => setMonitorAlert(null)}>✕</button>
+          </div>
+        )}
+
+        {reauthId && (
+          <div style={styles.monitorBarCrit}>
+            <span style={{ flex: 1 }}>
+              🔑 Google session expired for <b>{accounts.find((a) => a.id === reauthId)?.email ?? 'this account'}</b> — reads/writes will fail until you re-connect. Testing-mode consent screens expire tokens every 7 days.
+            </span>
+            <button
+              style={styles.monitorBarBtn}
+              disabled={connecting}
+              onClick={async () => { if (reauthId) await run(() => window.desktop.accounts.setActive(reauthId)); setReauthId(null); await connect(); }}
+            >
+              {connecting ? 'Connecting…' : 'Re-connect'}
+            </button>
+            <button style={styles.errorClose} onClick={() => setReauthId(null)}>✕</button>
           </div>
         )}
 
