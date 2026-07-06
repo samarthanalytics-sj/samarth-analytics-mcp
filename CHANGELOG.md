@@ -1,3 +1,9 @@
+## [1.217.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.216.0...v1.217.0) (2026-07-06)
+
+### Features
+
+* **desktop:** remove the default Slack channel - one property, one channel, plus the webhook guide ([fb97c89](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fb97c89e12879e638cc5e3a4a5bc63c94c6ce4ba))
+
 ## [1.216.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.215.1...v1.216.0) (2026-07-06)
 
 ### Features
