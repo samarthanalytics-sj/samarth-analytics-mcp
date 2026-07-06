@@ -19,7 +19,7 @@ import type {
 /** What the driver captured for one tag's trigger interaction. */
 export interface PerTagCapture {
   tagId: string;
-  kind: 'click' | 'submit' | 'navigate' | 'none';
+  kind: 'click' | 'submit' | 'navigate' | 'custom_event' | 'none';
   /** An element/form matching the trigger was found on the page. */
   targetFound: boolean;
   /** The interaction was actually performed. */
@@ -30,6 +30,26 @@ export interface PerTagCapture {
 }
 
 const norm = (s: string | undefined): string => (s ?? '').trim().toLowerCase();
+
+/** A literal Measurement ID (G-/GT-/AW-/DC-/UA-XXXX) — not a {{variable}} — for tid attribution. */
+function literalTid(mid: string | undefined): string | undefined {
+  const m = (mid ?? '').trim();
+  return /^(G|GT|AW|DC|UA)-[A-Z0-9-]+$/i.test(m) ? m.toUpperCase() : undefined;
+}
+/** The tid= on a GA4 collect hit URL. */
+function hitTid(url: string): string | undefined {
+  try {
+    const t = new URL(url).searchParams.get('tid');
+    return t ? t.toUpperCase() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+/** GA4-decodable collectors: direct GA4 and first-party server-side GTM (/g/collect, same payload). */
+function isGa4CollectorHit(url: string): boolean {
+  const c = classifyCollector(url);
+  return c === 'ga4' || c === 'server';
+}
 
 /** Which collector family proves a non-GA4 platform's tag fired. */
 function platformCollector(platform: string): string {
@@ -143,8 +163,13 @@ export function evaluateVerify(
 
     // Interaction ran — did the tag's hit fire?
     if (isGa4Platform(tag.platform)) {
+      // When the tag has a literal Measurement ID, also require the hit's tid= to match, so two GA4
+      // tags firing the same event on different properties are attributed correctly. A {{variable}}
+      // measurementId can't be matched, so fall back to event-name only.
+      const wantTid = literalTid(tag.measurementId);
       const events = cap.hits
-        .filter((h) => classifyCollector(h.url) === 'ga4')
+        .filter((h) => isGa4CollectorHit(h.url))
+        .filter((h) => !wantTid || hitTid(h.url) === wantTid)
         .flatMap((h) => parseGa4CollectHit({ url: h.url, body: h.body }).map((ev) => ({ ev, hit: h })));
       const want = norm(tag.eventName);
       const hit = events.find(({ ev }) => norm(ev.event) === want);

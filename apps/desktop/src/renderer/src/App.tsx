@@ -2026,7 +2026,7 @@ function TagReviewPanel({
     const chosen = suggestions.filter((s) => selected[s.id]);
     const list = chosen.length ? chosen : suggestions;
     if (list.length === 0) { onError('Scan a site first — there are no tags to verify.'); return; }
-    const tags: VerifyTagInput[] = list.map((s) => ({ id: s.id, tagName: s.tagName, eventName: s.eventName, platform: s.platform, page: s.page, trigger: s.trigger }));
+    const tags: VerifyTagInput[] = list.map((s) => ({ id: s.id, tagName: s.tagName, eventName: s.eventName, platform: s.platform, measurementId: s.measurementId, page: s.page, trigger: s.trigger }));
     const elements = scanLog?.inventory.elements ?? [];
     setVerifying(true);
     onError('');

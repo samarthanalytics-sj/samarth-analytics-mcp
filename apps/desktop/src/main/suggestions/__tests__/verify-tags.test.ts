@@ -12,7 +12,8 @@ function check(name: string, cond: boolean, detail?: string): void {
   else { failed += 1; failures.push(`✗ ${name}${detail ? ' — ' + detail : ''}`); }
 }
 
-const ga4Hit = (en: string): CapturedHitView => ({ url: `https://www.google-analytics.com/g/collect?v=2&tid=G-1&en=${en}`, body: null, collector: 'ga4' });
+const ga4Hit = (en: string, tid = 'G-1'): CapturedHitView => ({ url: `https://www.google-analytics.com/g/collect?v=2&tid=${tid}&en=${en}`, body: null, collector: 'ga4' });
+const serverHit = (en: string, tid = 'G-1'): CapturedHitView => ({ url: `https://gtm.example.com/g/collect?v=2&tid=${tid}&en=${en}`, body: null, collector: 'server' });
 const metaHit = (): CapturedHitView => ({ url: 'https://www.facebook.com/tr?id=1&ev=Lead', body: null, collector: 'meta' });
 
 const tag = (over: Partial<VerifyTagInput> = {}): VerifyTagInput => ({
@@ -78,6 +79,31 @@ const els: DetectedElementView[] = [{ page: '/', kind: 'cta', text: 'Get a Free 
   const t = tag({ id: 'm1', platform: 'meta_pixel', eventName: 'Lead' });
   const v = evaluateVerify([t], [cap({ tagId: 'm1', hits: [metaHit()] })], els);
   check('meta hit → fired true', v[0].fired === true);
+}
+
+// ── sGTM: first-party /g/collect (collector 'server') counts as GA4 firing ──────
+{
+  const v = evaluateVerify([tag()], [cap({ hits: [serverHit('cta_click')] })], els);
+  check('sGTM server hit → fired true', v[0].fired === true && v[0].event === 'cta_click');
+}
+
+// ── tid attribution: literal Measurement ID requires tid match ──────────────────
+{
+  const t = tag({ measurementId: 'G-1' });
+  check('tid match → fired', evaluateVerify([t], [cap({ hits: [ga4Hit('cta_click', 'G-1')] })], els)[0].fired === true);
+  check('tid mismatch → not fired', evaluateVerify([t], [cap({ hits: [ga4Hit('cta_click', 'G-2')] })], els)[0].fired === false);
+}
+{
+  // A {{variable}} measurementId can't be matched → event-name only (any tid).
+  const t = tag({ measurementId: '{{GA4 Measurement ID}}' });
+  check('variable measurementId → any tid fires', evaluateVerify([t], [cap({ hits: [ga4Hit('cta_click', 'G-999')] })], els)[0].fired === true);
+}
+
+// ── custom_event: driver pushed the dataLayer event → GA4 hit → fired ───────────
+{
+  const t = tag({ id: 'ce', eventName: 'newsletter_signup', trigger: { name: 'NL', kind: 'custom_event', eventName: 'newsletter_signup' } });
+  const v = evaluateVerify([t], [cap({ tagId: 'ce', kind: 'custom_event', hits: [ga4Hit('newsletter_signup')] })], els);
+  check('custom_event fired via dataLayer → fired true', v[0].fired === true);
 }
 
 // ── not exercised ────────────────────────────────────────────────────────────────
