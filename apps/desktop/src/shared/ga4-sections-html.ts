@@ -6,63 +6,64 @@ import type { Ga4SectionsView } from './ipc';
 
 const esc = (s: unknown): string => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const v = (token: string, fallback: string): string => `var(${token}, ${fallback})`;
-const TEXT = v('--text', '#1a1a1a');
-const MUTED = v('--text-muted', '#5b6472');
-const FAINT = v('--text-faint', '#8a93a0');
-const SURFACE = v('--surface', '#ffffff');
-const BORDER = v('--border', '#e3e6ea');
-const BLUE = v('--c-blue', '#2563eb');
-const GREEN = v('--c-green', '#16a34a');
-const AMBER = v('--c-amber', '#d97706');
+// Lab-report palette (fallbacks apply in the PDF/Word export; on-screen the app theme wins).
+const TEXT = v('--text', '#17191D');
+const MUTED = v('--text-muted', '#5B6069');
+const FAINT = v('--text-faint', '#8A8F98');
+const SURFACE = v('--surface', '#FFFFFF');
+const BORDER = v('--border', '#E3E3DC');
+const BLUE = v('--c-blue', '#26344E');
+const GREEN = v('--c-green', '#1E7A48');
+const AMBER = v('--c-amber', '#9A6206');
+const MONO = `ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace`;
 
 // Severity → accent bar colour + badge background.
 const SEV: Record<string, { bar: string; bg: string; txt: string }> = {
-  critical: { bar: '#dc2626', bg: v('--c-red-bg', '#fef2f2'), txt: 'CRITICAL' },
+  critical: { bar: '#A63527', bg: v('--c-red-bg', '#FBF1EF'), txt: 'CRITICAL' },
   high: { bar: '#ea580c', bg: v('--c-amber-bg', '#fff7ed'), txt: 'HIGH' },
-  medium: { bar: '#d97706', bg: v('--c-amber-bg', '#fffbeb'), txt: 'MEDIUM' },
-  low: { bar: '#2563eb', bg: v('--c-blue-bg', '#eff6ff'), txt: 'LOW' },
-  info: { bar: '#64748b', bg: 'rgba(148,163,184,.14)', txt: 'INFO' },
+  medium: { bar: '#9A6206', bg: v('--c-amber-bg', '#fffbeb'), txt: 'MEDIUM' },
+  low: { bar: '#26344E', bg: v('--c-blue-bg', '#eff6ff'), txt: 'LOW' },
+  info: { bar: '#6A6F78', bg: 'rgba(148,163,184,.14)', txt: 'INFO' },
 };
 const sevOf = (s: string): { bar: string; bg: string; txt: string } => SEV[s] ?? SEV.info;
 const badge = (s: { bar: string; bg: string; txt: string }): string =>
-  `<span style="display:inline-block;white-space:nowrap;font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 8px;border-radius:999px;background:${s.bg};color:${s.bar}">${s.txt}</span>`;
+  `<span style="display:inline-block;white-space:nowrap;font-family:${MONO};font-size:10px;letter-spacing:.07em;text-transform:uppercase;padding:2px 8px;border-radius:3px;background:${s.bg};color:${s.bar}">${s.txt}</span>`;
 
 // Area-status (section 5) chips: a coloured dot + label per coverage status.
 const STATUS: Record<string, { dot: string; label: string }> = {
-  pass: { dot: '#16a34a', label: 'Pass' },
-  partial: { dot: '#d97706', label: 'Partial' },
-  fail: { dot: '#dc2626', label: 'Fail' },
-  not_verified: { dot: '#94a3b8', label: 'Not Verified' },
+  pass: { dot: '#1E7A48', label: 'Pass' },
+  partial: { dot: '#9A6206', label: 'Partial' },
+  fail: { dot: '#A63527', label: 'Fail' },
+  not_verified: { dot: '#8A8F98', label: 'Not Verified' },
 };
 const statusChip = (key: string): string => {
   const s = STATUS[key] ?? STATUS.not_verified;
   return `<span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;font-weight:600;color:${TEXT}"><span style="width:9px;height:9px;border-radius:50%;background:${s.dot};display:inline-block;flex:0 0 auto"></span>${s.label}</span>`;
 };
-// Decision-readiness (section 7) status pill: green when answerable, grey otherwise.
+// Decision-readiness (section 7) status chip: solid green when answerable, outlined grey otherwise.
 const decisionPill = (status: string): string => {
   const ok = /^answer/i.test(status);
-  const c = ok ? GREEN : MUTED;
-  const bg = ok ? v('--c-green-bg', '#f0fdf4') : 'rgba(148,163,184,.14)';
-  return `<span style="display:inline-block;white-space:nowrap;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:${bg};color:${c}">${esc(status)}</span>`;
+  return ok
+    ? `<span style="display:inline-block;white-space:nowrap;font-family:${MONO};font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:3px;background:${GREEN};color:#fff">${esc(status)}</span>`
+    : `<span style="display:inline-block;white-space:nowrap;font-family:${MONO};font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:3px;border:1px solid ${v('--border-2', '#CFCFC6')};color:${MUTED}">${esc(status)}</span>`;
 };
-const THBG = 'rgba(148,163,184,.10)';
-const TH = `style="text-align:left;font-size:11.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:${FAINT};padding:8px 10px;background:${THBG};border-bottom:2px solid ${BORDER}"`;
-const THR = `style="text-align:right;font-size:11.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:${FAINT};padding:8px 10px;background:${THBG};border-bottom:2px solid ${BORDER}"`;
-const TD = `style="padding:8px 10px;border-bottom:1px solid ${BORDER};font-size:13px;color:${TEXT};vertical-align:top"`;
-const TDR = `style="padding:8px 10px;border-bottom:1px solid ${BORDER};font-size:13px;color:${TEXT};vertical-align:top;text-align:right;font-variant-numeric:tabular-nums"`;
+const TH = `style="text-align:left;font-family:${MONO};font-size:10.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:${FAINT};padding:8px 10px;border-bottom:1px solid ${BORDER}"`;
+const THR = `style="text-align:right;font-family:${MONO};font-size:10.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:${FAINT};padding:8px 10px;border-bottom:1px solid ${BORDER}"`;
+const TD = `style="padding:9px 10px;border-bottom:1px solid ${BORDER};font-size:13px;color:${TEXT};vertical-align:top"`;
+const TDR = `style="padding:9px 10px;border-bottom:1px solid ${BORDER};font-size:13px;color:${TEXT};vertical-align:top;text-align:right;font-family:${MONO};font-variant-numeric:tabular-nums"`;
 const metaRow = (lbl: string, val: string): string =>
   `<div style="font-size:13px;color:${TEXT};margin:4px 0;line-height:1.5"><span style="font-weight:700;color:${MUTED}">${esc(lbl)}:</span> ${esc(val)}</div>`;
 // Heading above each Section-6 breakdown table. `title` is escaped; `sub` is pre-built HTML (callers
 // only pass static parentheticals + already-escaped dynamic values), inserted raw.
 const tableCaption = (title: string, sub: string): string =>
-  `<div style="font-size:15px;font-weight:700;color:${TEXT};margin:16px 2px 6px">${esc(title)} <span style="font-size:12.5px;font-weight:400;color:${FAINT}">${sub}</span></div>`;
+  `<div style="font-size:15px;font-weight:600;color:${TEXT};margin:18px 2px 6px">${esc(title)} <span style="font-size:12.5px;font-weight:400;color:${FAINT}">${sub}</span></div>`;
 
 const eyebrow = (t: string): string =>
-  `<div style="font-size:11.5px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:${BLUE};margin-top:24px">${esc(t)}</div>`;
-const h2 = (t: string): string => `<h2 style="font-size:22px;font-weight:700;margin:2px 0 8px;color:${TEXT}">${esc(t)}</h2>`;
+  `<div style="font-family:${MONO};font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:${FAINT};margin-top:30px">${esc(t)}</div>`;
+const h2 = (t: string): string => `<h2 style="font-size:21px;font-weight:600;letter-spacing:-.01em;margin:2px 0 8px;color:${TEXT}">${esc(t)}</h2>`;
 // page-break-inside:avoid keeps a card from splitting across pages in the printed PDF.
 const card = (inner: string, accent: string): string =>
-  `<div style="border:1px solid ${BORDER};border-left:4px solid ${accent};border-radius:10px;padding:13px 15px;background:${SURFACE};margin:7px 0;page-break-inside:avoid">${inner}</div>`;
+  `<div style="border:1px solid ${BORDER};border-left:3px solid ${accent};border-radius:4px;padding:16px 18px;background:${SURFACE};margin:8px 0;page-break-inside:avoid">${inner}</div>`;
 const row = (lbl: string, val: string): string =>
   `<div style="font-size:13px;color:${TEXT};margin:4px 0;line-height:1.45"><span style="font-weight:700;color:${MUTED}">${esc(lbl)}:</span> ${esc(val)}</div>`;
 
@@ -173,7 +174,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       .map((a) => `<tr><td ${TD}><span style="font-weight:600">${esc(a.area)}</span></td><td ${TD}>${statusChip(a.statusKey)}</td><td ${TD}>${esc(a.confidence)}</td><td ${TD}>${esc(a.evidence)}</td></tr>`)
       .join('');
     s5 +=
-      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow:hidden;margin:6px 0">` +
+      `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow:hidden;margin:6px 0">` +
       `<table style="border-collapse:collapse;width:100%"><thead><tr><th ${TH}>Area</th><th ${TH}>Status</th><th ${TH}>Confidence</th><th ${TH}>Evidence</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
@@ -225,7 +226,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       .join('');
     s6 +=
       tableCaption('Channel performance', '(conversion rate and revenue per channel, not just traffic share)') +
-      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Channel</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cRows}</tbody></table></div>`;
   }
   // Landing-page table — top entry pages: which convert and which leak. Paths can be long, so the page
@@ -239,7 +240,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       .join('');
     s6 +=
       tableCaption('Landing pages', '(top entry pages: which convert and which leak)') +
-      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:460px"><thead><tr><th ${TH}>Landing page</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${lRows}</tbody></table></div>`;
   }
   // Device performance table — how each device type converts and spends.
@@ -252,7 +253,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       .join('');
     s6 +=
       tableCaption('Device performance', '(how each device type converts and spends)') +
-      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Device</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${dRows}</tbody></table></div>`;
   }
   // Market performance table — which geographies convert and spend (top markets by sessions).
@@ -265,7 +266,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       .join('');
     s6 +=
       tableCaption('Market performance', '(which geographies convert and spend)') +
-      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Market</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${gRows}</tbody></table></div>`;
   }
   // Campaign performance table — which marketing (utm_campaign-tagged) campaigns convert and earn, with
@@ -281,7 +282,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       .join('');
     s6 +=
       tableCaption('Campaign performance', `(which marketing campaigns convert and earn${cp.best ? ` — top: ${esc(cp.best)}` : ''}; untagged traffic ${esc(cp.untaggedShare)})`) +
-      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:440px"><thead><tr><th ${TH}>Campaign</th><th ${THR}>Sessions</th><th ${THR}>Conversions</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cpRows}</tbody></table></div>`;
   }
   // AI/LLM assistant referral traffic — which AI sources convert and earn. A systematic undercount
@@ -295,7 +296,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       .join('');
     s6 +=
       tableCaption('AI assistant traffic', `(which AI referrers convert and earn — ${esc(x.llmTraffic.share)})`) +
-      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>AI source</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${lRows}</tbody></table></div>` +
       `<div style="font-size:11px;color:${FAINT};margin:4px 2px 0;line-height:1.4">AI-referral traffic is a systematic undercount - visits from AI mobile/in-app browsers and copied links arrive with no referrer and land in Direct.</div>`;
   }
@@ -310,7 +311,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       .join('');
     s6 +=
       tableCaption('Ecommerce funnel', `(distinct users per step; overall view-to-purchase ${esc(x.funnel.overall)})`) +
-      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Step</th><th ${THR}>Users</th><th ${THR}>% of entry</th><th ${THR}>Step conversion</th></tr></thead><tbody>${fRows}</tbody></table></div>` +
       `<div style="font-size:11px;color:${FAINT};margin:4px 2px 0;line-height:1.4">Event-coverage approximation, not a strict sequential path - a later step can exceed an earlier one (saved carts, express checkout, or a missing step tag).</div>`;
   }
@@ -322,7 +323,7 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       .map((d) => `<tr><td ${TD}><span style="font-weight:600">${esc(d.q)}</span></td><td ${TD}>${decisionPill(d.status)}</td><td ${TD}>${esc(d.note)}</td></tr>`)
       .join('');
     s7 +=
-      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow:hidden;margin:6px 0">` +
+      `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow:hidden;margin:6px 0">` +
       `<table style="border-collapse:collapse;width:100%"><thead><tr><th ${TH}>Business question</th><th ${TH}>Status</th><th ${TH}>Missing input</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
