@@ -6,7 +6,7 @@
 // on the pages the user selects.
 
 import { safeFetch } from './ssrf';
-import { normalizeUrl, sameSite, detectInstalled } from './scan-core';
+import { normalizeUrl, sameSite, detectInstalled, prioritizeUrls } from './scan-core';
 
 export interface DiscoverResult {
   urls: string[];
@@ -153,11 +153,14 @@ export async function discoverSite(startUrl: string): Promise<DiscoverResult> {
   const sm = await discoverViaSitemap(start);
   if (sm.length > 0) {
     const urls = sm.includes(start) ? sm : [start, ...sm];
-    return { urls: urls.slice(0, MAX_URLS), viaSitemap: true, total: Math.min(urls.length, MAX_URLS), installed };
+    // STABLE-sort form-likely pages first (homepage always leads) so App.tsx's "first 25" pre-select
+    // naturally picks the contact/audit/consultation pages instead of raw sitemap order. Same URL SET,
+    // only its order — nothing is added or dropped.
+    return { urls: prioritizeUrls(urls).slice(0, MAX_URLS), viaSitemap: true, total: Math.min(urls.length, MAX_URLS), installed };
   }
   const crawled = await discoverViaCrawl(start);
   return {
-    urls: crawled,
+    urls: prioritizeUrls(crawled),
     viaSitemap: false,
     total: crawled.length,
     installed,

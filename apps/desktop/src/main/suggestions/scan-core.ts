@@ -107,7 +107,7 @@ const clamp = (v: number | undefined, dflt: number, cap: number): number =>
 const ASSET_RE =
   /\.(pdf|jpe?g|png|gif|svg|webp|avif|css|js|mjs|ico|zip|gz|rar|mp3|mp4|webm|mov|woff2?|ttf|eot|xml|rss|json)([?#]|$)/i;
 const FORMY_RE =
-  /contact|kontakt|signup|sign-up|register|registr|subscribe|newsletter|demo|quote|enquir|inquir|checkout|cart|book|apply|support|feedback|account|login/i;
+  /contact|kontakt|signup|sign-up|register|registr|subscribe|newsletter|demo|quote|enquir|inquir|checkout|cart|book|apply|support|feedback|account|login|audit|consult|estimate|proposal|get-?started|onboard|free-trial|trial|pricing|solution|service|partner|get-in-touch|reach-us|schedule|appointment|callback/i;
 
 const stripWww = (host: string): string => host.toLowerCase().replace(/^www\./, '');
 
@@ -135,6 +135,27 @@ export function normalizeUrl(raw: string, baseUrl: string): string | null {
 
 export function urlPriority(url: string): number {
   return FORMY_RE.test(url) ? 1 : 0;
+}
+
+/** Is this the origin root ("/")? Discovery started there, users expect it first, and the homepage
+ *  often has forms — so it must always sort ahead of everything, even a /contact page. */
+function isHomeUrl(url: string): boolean {
+  try {
+    const p = new URL(url).pathname;
+    return p === '' || p === '/';
+  } catch {
+    return false;
+  }
+}
+
+/** Order a URL list form-likely-first (STABLE): the origin root ("/") always leads, then form-likely
+ *  URLs (urlPriority 1), then the rest — preserving the original relative order WITHIN each tier via an
+ *  index tiebreak. Used by scanUrls (so a form page beyond the scan cap still survives) and by the
+ *  discover sort (so the review panel's "first N" pre-select naturally picks form pages). PURE. */
+export function prioritizeUrls(list: string[]): string[] {
+  // rank: 2 = home root, 1 = form-likely, 0 = plain. Higher sorts first.
+  const rank = (u: string): number => (isHomeUrl(u) ? 2 : urlPriority(u));
+  return [...list].map((u, i) => ({ u, i })).sort((a, b) => rank(b.u) - rank(a.u) || a.i - b.i).map((x) => x.u);
 }
 
 /** A crawled URL → its page path ("/contact", "/" for root); query/hash dropped. */
@@ -509,7 +530,10 @@ export async function scanUrls(
     }
   }
   const warnings: string[] = [];
-  const targets = list.slice(0, SCAN_URLS_CAP);
+  // STABLE-sort form-likely URLs (and the homepage) to the front BEFORE the cap, so a form page sitting
+  // beyond position SCAN_URLS_CAP in the raw selection order isn't silently dropped by the slice.
+  const ordered = prioritizeUrls(list);
+  const targets = ordered.slice(0, SCAN_URLS_CAP);
   if (list.length > SCAN_URLS_CAP) {
     warnings.push(`Selected ${list.length} pages; scanning the first ${SCAN_URLS_CAP} (cap).`);
   }

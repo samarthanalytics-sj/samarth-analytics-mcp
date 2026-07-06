@@ -5,7 +5,7 @@
 //   • createSuggestedTags() — the approved-create loop (outcome mapping).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/suggestion-service.test.ts
 
-import { crawlAndSuggest, scanUrls, assembleResult, dedupSuggestions, detectInstalled, type PageDriver, type DrivenPage, type ScanProgress } from '../scan-core';
+import { crawlAndSuggest, scanUrls, assembleResult, dedupSuggestions, detectInstalled, urlPriority, prioritizeUrls, SCAN_URLS_CAP, type PageDriver, type DrivenPage, type ScanProgress } from '../scan-core';
 import type { SuggestedTag } from '../../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import { mergeDriven } from '../multi-driver';
 import { parseSitemapLocs, extractCrawlLinks } from '../discover';
@@ -257,6 +257,84 @@ async function main(): Promise<void> {
     check('scanUrls: scans exactly the listed pages (2), no crawl', res.summary.pagesScanned === 2 && fd.opened().length === 2);
     check('scanUrls: builds suggestions from those pages', events.has('get_a_free_consultation_form') && events.has('email_click') && events.has('phone_click'));
     check('scanUrls: driver closed once', fd.closes() === 1);
+  }
+
+  // ── urlPriority: the broadened FORMY_RE token set ──────────────────────────
+  {
+    // Newly-added form-associated tokens all score 1 (prioritized).
+    const formy = [
+      'https://acme.com/free-audit',
+      'https://acme.com/solutions/tag-management-consultation',
+      'https://acme.com/get-started',
+      'https://acme.com/schedule-a-demo',
+      'https://acme.com/pricing',
+      'https://acme.com/request-an-estimate',
+      'https://acme.com/proposal',
+      'https://acme.com/onboarding',
+      'https://acme.com/free-trial',
+      'https://acme.com/services',
+      'https://acme.com/partner-program',
+      'https://acme.com/get-in-touch',
+      'https://acme.com/reach-us',
+      'https://acme.com/book-an-appointment',
+      'https://acme.com/callback',
+    ];
+    check('urlPriority: broadened tokens all score 1', formy.every((u) => urlPriority(u) === 1),
+      formy.filter((u) => urlPriority(u) !== 1).join(', '));
+    // Original tokens still score 1; unrelated pages still score 0.
+    check('urlPriority: original tokens still 1', urlPriority('https://acme.com/contact') === 1 && urlPriority('https://acme.com/signup') === 1);
+    check('urlPriority: plain pages still 0', urlPriority('https://acme.com/about') === 0 && urlPriority('https://acme.com/blog/2024/hello') === 0);
+    // 'get-started' with and without the hyphen (get-?started) both match.
+    check('urlPriority: getstarted variant matches', urlPriority('https://acme.com/getstarted') === 1);
+  }
+
+  // ── prioritizeUrls: home-first, form-likely-before-plain, stable in a tier ──
+  {
+    const home = 'https://acme.com/';
+    const list = [
+      'https://acme.com/about',
+      'https://acme.com/blog',
+      home,
+      'https://acme.com/contact',
+      'https://acme.com/team',
+      'https://acme.com/free-audit',
+    ];
+    const out = prioritizeUrls(list);
+    check('prioritizeUrls: home root sorts first', out[0] === home);
+    // Form-likely (contact, free-audit) come before the plain about/blog/team, in their original order.
+    check('prioritizeUrls: form-likely before plain', out.indexOf('https://acme.com/contact') < out.indexOf('https://acme.com/about') &&
+      out.indexOf('https://acme.com/free-audit') < out.indexOf('https://acme.com/blog'));
+    check('prioritizeUrls: stable within form tier (contact before free-audit)',
+      out.indexOf('https://acme.com/contact') < out.indexOf('https://acme.com/free-audit'));
+    check('prioritizeUrls: stable within plain tier (about<blog<team)',
+      out.indexOf('https://acme.com/about') < out.indexOf('https://acme.com/blog') &&
+      out.indexOf('https://acme.com/blog') < out.indexOf('https://acme.com/team'));
+    check('prioritizeUrls: same set, no add/drop', out.length === list.length && list.every((u) => out.includes(u)));
+    check('prioritizeUrls: does not mutate input', list[0] === 'https://acme.com/about');
+    // A /contact page must NOT be reordered ahead of the home root.
+    check('prioritizeUrls: home beats a form page', prioritizeUrls(['https://acme.com/contact', home])[0] === home);
+  }
+
+  // ── scanUrls: a form page past the cap SURVIVES the priority sort ───────────
+  {
+    // 55 plain pages, then a contact form page at the very TAIL (index 55) — beyond SCAN_URLS_CAP (50).
+    // Without the priority sort it would be sliced away; with it, it's pulled to the front and scanned.
+    const plain: string[] = [];
+    const pages: Record<string, DrivenPage> = {};
+    for (let i = 0; i < 55; i += 1) {
+      const u = `https://acme.com/p${i}`;
+      plain.push(u);
+      pages[u] = { ok: true, httpStatus: 200, finalUrl: u, raw: raw([]), rawForms: [] };
+    }
+    const tailForm = 'https://acme.com/contact';
+    pages[tailForm] = { ok: true, httpStatus: 200, finalUrl: tailForm, raw: raw([]), rawForms: [contactForm] };
+    const fd = fakeDriver(pages);
+    const res = await scanUrls(fd.driver, [...plain, tailForm], 'acme.com');
+    const openedContact = fd.opened().some((u) => u.replace(/\/$/, '') === tailForm);
+    check('scanUrls: tail form page beyond the cap is scanned (priority survives the slice)', openedContact);
+    check('scanUrls: still capped at SCAN_URLS_CAP pages', fd.opened().length === SCAN_URLS_CAP);
+    check('scanUrls: the tail form yields its suggestion',
+      res.suggestions.some((s) => s.eventName === 'get_a_free_consultation_form'));
   }
 
   // ── detectInstalled: GTM/GA4 ids live on the scanned site ──────────────────
