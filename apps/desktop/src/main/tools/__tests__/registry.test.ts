@@ -478,6 +478,7 @@ async function main(): Promise<void> {
       'run_ga4_report',
       'runtime_synthetic_test',
       'score_ga4_property',
+      'suggest_tags_from_url',
       'verify_server_endpoint',
       'verify_tracking_setup',
     ]);
@@ -500,7 +501,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 52, 'read-only registry has 52 tools');
+    assert.equal(readOnly.list().length, 53, 'read-only registry has 53 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -514,8 +515,8 @@ async function main(): Promise<void> {
     // plus the read-only audit_tracking_status = 100, plus the read-only runtime_synthetic_test = 101,
     // plus the read-only monitor_ga4_property = 102, plus the three new server tag types
     // (create_stackadapt_server_tag, create_reddit_capi_server_tag, create_amazon_capi_server_tag) = 105,
-    // plus the read-only rank_ga4_campaigns = 106.
-    assert.equal(withWrites.list().length, 106 + 60, 'read + write registry has 106 GTM/GA4-read/context + 60 GA4-write tools');
+    // plus the read-only rank_ga4_campaigns = 106, plus the read-only suggest_tags_from_url = 107.
+    assert.equal(withWrites.list().length, 107 + 60, 'read + write registry has 107 GTM/GA4-read/context + 60 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_reddit_capi_server_tag'), true, 'create_reddit_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_amazon_capi_server_tag'), true, 'create_amazon_capi_server_tag present');

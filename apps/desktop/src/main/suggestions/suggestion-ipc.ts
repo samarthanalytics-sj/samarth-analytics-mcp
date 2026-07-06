@@ -17,42 +17,16 @@ import type { ProviderKeyStore } from '../storage/provider-keys';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView } from '../../shared/ipc';
-import { crawlAndSuggest, scanUrls, type PageDriver, type ScanProgress } from './scan-core';
+import { crawlAndSuggest, scanUrls, type ScanProgress } from './scan-core';
 import { runVerifyDriver } from './verify-driver';
 import { evaluateVerify } from './verify-tags';
 import { discoverSite } from './discover';
-// Electron is the always-on, zero-install engine. Cheerio is added when present
-// (lazy-imported so a missing optional package never crashes startup). The two
-// run together per page and their results are MERGED — Electron renders JS +
-// same-origin iframes; Cheerio adds anything in the raw server HTML.
 import { createElectronDriver } from './electron-driver';
-import { createMultiDriver } from './multi-driver';
+// The merged page-driver builder (Electron + optional Cheerio/Playwright) lives in scan-url.ts,
+// shared with the `suggest_tags_from_url` chat tool so both scan paths render pages identically.
+import { makeDriver, clampSettle } from './scan-url';
 import { parseSuggestions, createSuggestedTags, planGoogleTagVars, provisionVariables } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
-
-const clampSettle = (ms: number | undefined): number | undefined =>
-  ms === undefined || !Number.isFinite(ms) || ms <= 0 ? undefined : Math.min(Math.floor(ms), 10_000);
-
-async function makeDriver(opts: TagScanOptions): Promise<PageDriver> {
-  const settleMs = clampSettle(opts.settleMs);
-  const drivers: PageDriver[] = [createElectronDriver(settleMs !== undefined ? { settleMs } : {})];
-  // Add the complementary static (Cheerio) engine if installed — purely additive.
-  try {
-    const { createCheerioDriver } = await import('./cheerio-driver');
-    drivers.push(createCheerioDriver());
-  } catch {
-    /* cheerio not installed — fine */
-  }
-  // Add Playwright if the user installed it — it waits for network-idle, so it
-  // renders JS/embedded forms more thoroughly than the default settle; merged in.
-  try {
-    const { createPlaywrightDriver } = await import('./playwright-driver');
-    drivers.push(await createPlaywrightDriver({ settleMs }));
-  } catch {
-    /* playwright not installed — fine, Electron+Cheerio still run */
-  }
-  return drivers.length === 1 ? drivers[0] : createMultiDriver(drivers);
-}
 
 export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: ProviderKeyStore): void {
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
