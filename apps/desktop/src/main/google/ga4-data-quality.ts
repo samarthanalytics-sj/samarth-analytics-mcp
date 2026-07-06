@@ -22,6 +22,18 @@ export interface DataQualityCounts {
   /** The current date in the property's timezone (YYYY-MM-DD) — set for trailing-N-day windows so the
    *  trend engine can exclude an in-progress final day. Undefined for custom historical ranges. */
   todayYmd?: string;
+  // The next three are OPTIONAL best-effort signals: a failed/absent query leaves the field undefined,
+  // and each detector SKIPS its check when its field is missing — so older callers keep working and a
+  // single flaky query never breaks the whole audit.
+  /** hostName → sessions (top-N). Feeds internal/staging-traffic detection. */
+  hostnames?: Array<{ name: string; sessions: number }>;
+  /** sessionSource → sessions + engagedSessions (top-N). Feeds referral/ghost-spam detection. */
+  sources?: Array<{ name: string; sessions: number; engagedSessions: number }>;
+  /** newVsReturning → sessions. Feeds identity-fragmentation detection. */
+  newVsReturning?: Array<{ name: string; sessions: number }>;
+  /** The property's createTime as YYYY-MM-DD (set by the data layer from admin.properties.get). Lets the
+   *  fragmentation detector skip brand-new properties, where ~0% returning users is expected, not a defect. */
+  propertyCreatedYmd?: string;
 }
 
 export interface Ga4DataQualityResult {
@@ -82,6 +94,176 @@ function sumWhere(rows: Array<{ name: string; sessions: number }>, re: RegExp): 
   return rows.filter((r) => re.test(r.name)).reduce((s, r) => s + r.sessions, 0);
 }
 
+// Known ghost-/referral-spam hosts — hits from these never actually loaded the site; a bot pinged GA4's
+// Measurement Protocol directly (or a share-button/SEO-spam script injected the referrer). Curated list.
+const REFERRAL_SPAM_RE =
+  /(semalt|buttons-for-website|free-?share-?buttons|best-?seo-?offer|darodar|ilovevitaly|econom\.co|success-seo|4webmasters|trafficmonetizer|get-free-traffic-now|sexyali|simple-share-buttons|social-buttons|floating-share-buttons|guardlink|videos-for-your-business)/i;
+// Registrable domains (last two dot-labels) of BIG legitimate referrers that routinely show low engaged-
+// session ratios — search engines, social/messaging apps, email clients. Their in-app-browser and prefetch
+// traffic must NOT be mistaken for ghost bots by the zero-engagement heuristic.
+const KNOWN_GOOD_REFERRER_DOMAINS = new Set([
+  'google.com', 'facebook.com', 'fb.com', 'instagram.com', 'twitter.com', 'x.com', 't.co', 'reddit.com',
+  'linkedin.com', 'lnkd.in', 'youtube.com', 'pinterest.com', 'tiktok.com', 'snapchat.com', 'whatsapp.com',
+  'telegram.org', 'bing.com', 'yahoo.com', 'duckduckgo.com', 'baidu.com', 'yandex.com', 'yandex.ru',
+  'outlook.com', 'live.com', 'messenger.com', 'quora.com', 'medium.com', 'substack.com', 'gmail.com',
+]);
+
+/** True for legitimate low-engagement referrers the ghost heuristic must never flag: mobile-app package
+ *  ids (com.google.android.gm, android-app://...) and any host whose registrable domain (last two dot-
+ *  labels) is a known big referrer (so mail.google.com→google.com and l.instagram.com→instagram.com are
+ *  exempt, and subdomains are covered — unlike an exact-anchored match). Known SPAM still flags separately. */
+function isKnownGoodReferrer(name: string): boolean {
+  const lower = (name ?? '').trim().toLowerCase();
+  if (!lower) return false;
+  if (/^com\./i.test(lower) || /^android-app/i.test(lower)) return true; // mobile app package ids
+  const labels = lower.split('.');
+  if (labels.length >= 2) {
+    const registrable = labels.slice(-2).join('.');
+    if (KNOWN_GOOD_REFERRER_DOMAINS.has(registrable)) return true;
+  }
+  return false;
+}
+
+/** Referral/ghost spam: known-bad referrer hosts (always flagged), plus a zero-engagement heuristic for
+ *  referral-looking sources (a source with ≥5% share and essentially no engaged sessions is almost always a
+ *  bot that never rendered a page). Legitimate low-engagement referrers (search/social/email, in-app
+ *  browsers) are exempt from the heuristic. Aggregates ALL suspects into ONE finding. Skipped if absent. */
+export function detectReferralSpam(
+  sources: Array<{ name: string; sessions: number; engagedSessions: number }> | undefined,
+  total: number
+): ScorecardFinding | null {
+  if (!sources || sources.length === 0 || total <= 0) return null;
+  const suspects = sources.filter((s) => {
+    const name = (s.name ?? '').trim();
+    if (!name) return false;
+    if (REFERRAL_SPAM_RE.test(name)) return true; // known ghost/referral-spam host — always flag
+    // GHOST signature: referral-looking host (has a '.'), meaningful share, ~zero engagement.
+    if (!name.includes('.')) return false;
+    if (isKnownGoodReferrer(name)) return false; // legit search/social/email/app referrer — not a ghost
+    const sh = share(s.sessions, total);
+    const engagementRatio = s.sessions > 0 ? s.engagedSessions / s.sessions : 0;
+    return sh >= 5 && engagementRatio < 0.02;
+  });
+  if (suspects.length === 0) return null;
+  const suspectSessions = suspects.reduce((sum, s) => sum + s.sessions, 0);
+  const sharePct = share(suspectSessions, total);
+  const sev = severityForShare(sharePct);
+  if (!sev) return null;
+  const names = suspects
+    .slice()
+    .sort((a, b) => b.sessions - a.sessions)
+    .slice(0, 6)
+    .map((s) => s.name);
+  const more = suspects.length > names.length ? ` and ${suspects.length - names.length} more` : '';
+  return {
+    severity: sev,
+    category: DQ,
+    message: `Suspected referral/ghost spam or zero-engagement bot traffic accounts for ${sharePct.toFixed(1)}% of sessions (${Math.min(suspectSessions, total)}/${total}) across ${suspects.length} source(s): ${names.join(', ')}${more}. These have near-zero engagement or match known spam domains and almost certainly never actually loaded the site.`,
+    recommendation:
+      'Create a GA4 data filter / referral-exclusion (or a hostname-match filter that only admits your real domains) to keep ghost spam out of reports — most of this traffic never hit the site and is inflating session and source counts. Confirm these are not legitimate low-engagement referrers (e.g. in-app browsers) before excluding them.',
+  };
+}
+
+/** Non-production hostnames polluting the production property: localhost/loopback, raw IPs, *.local, ngrok,
+ *  staging/dev/qa subdomains, and GENUINELY EPHEMERAL PaaS previews (Vercel branch/hash previews, Netlify
+ *  deploy-previews, Cloudflare Pages hash previews). A stable public PaaS-default host (myapp.vercel.app,
+ *  myapp.pages.dev, myapp.web.app) is NOT flagged — many real sites ARE hosted there in production. Skipped
+ *  if `hostnames` is absent. NOTE: the pre-existing Unassigned/(not set) findings share this attribution
+ *  class but are out of scope here.
+ *  The message intentionally leads with a STABLE PREFIX ("Non-production or preview hostnames received ")
+ *  so the monitor's dedup id (message.slice(0,24)) does not churn as the flagged share drifts run to run. */
+export function detectInternalTraffic(
+  hostnames: Array<{ name: string; sessions: number }> | undefined,
+  total: number
+): ScorecardFinding | null {
+  if (!hostnames || hostnames.length === 0 || total <= 0) return null;
+  const isNonProd = (raw: string): boolean => {
+    const name = (raw ?? '').trim().toLowerCase();
+    if (!name) return false;
+    // Unambiguous non-production hosts.
+    if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|::1)$/i.test(name)) return true;
+    if (/^(staging\.|stage\.|dev\.|test\.|qa\.|uat\.|preview\.|sandbox\.|local\.)/.test(name)) return true;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(name)) return true; // raw IPv4
+    if (/\.local$/.test(name)) return true;
+    if (/\.ngrok\.[a-z]+$/i.test(name)) return true; // ngrok tunnels are never production
+    // GENUINELY EPHEMERAL PaaS previews only (a stable myapp.vercel.app / myapp.pages.dev is NOT matched).
+    if (/-git-.+\.vercel\.app$/i.test(name)) return true; // Vercel git-branch preview
+    if (/-[a-z0-9]{8,}\.vercel\.app$/i.test(name)) return true; // Vercel deployment-hash preview
+    if (/^deploy-preview-\d+--/i.test(name)) return true; // Netlify deploy preview
+    if (/--[a-z0-9-]+\.netlify\.app$/i.test(name)) return true; // Netlify branch deploy
+    if (/^[0-9a-f]{8}\.[a-z0-9-]+\.pages\.dev$/i.test(name)) return true; // Cloudflare Pages hash preview
+    return false;
+  };
+  const offenders = hostnames.filter((h) => isNonProd(h.name));
+  // Guard: a single production hostname is the healthy norm — say nothing.
+  if (offenders.length === 0) return null;
+  const offSessions = offenders.reduce((s, h) => s + h.sessions, 0);
+  const sharePct = share(offSessions, total);
+  const sev = severityForShare(sharePct);
+  if (!sev) return null;
+  const names = offenders
+    .slice()
+    .sort((a, b) => b.sessions - a.sessions)
+    .slice(0, 8)
+    .map((h) => h.name);
+  const more = offenders.length > names.length ? ` and ${offenders.length - names.length} more` : '';
+  return {
+    severity: sev,
+    category: DQ,
+    message: `Non-production or preview hostnames received ${sharePct.toFixed(1)}% of sessions (${Math.min(offSessions, total)}/${total}): ${names.join(', ')}${more}.`,
+    recommendation:
+      'If these are not your production domain, the GA4/GTM tag is firing in non-production/preview environments; use a separate GA4 property/stream for non-prod or an internal-traffic / hostname-match filter so only your production domain is counted.',
+  };
+}
+
+/** Whole days from YYYY-MM-DD `a` to `b` (b - a). Pure + UTC-anchored (DST-immune); null on bad input. */
+function daysBetween(a?: string, b?: string): number | null {
+  if (!a || !b) return null;
+  const ta = Date.parse(`${a}T00:00:00Z`);
+  const tb = Date.parse(`${b}T00:00:00Z`);
+  if (!Number.isFinite(ta) || !Number.isFinite(tb)) return null;
+  return Math.round((tb - ta) / 86400000);
+}
+
+/** Identity fragmentation: over a 2+ week window with real volume, essentially zero returning users means the
+ *  same people are minting a fresh anonymous id each visit (Consent Mode denials, short cookie/ITP, no user_id),
+ *  inflating "new user" counts. Skipped unless windowDays ≥ 14 and total ≥ 500. Also skipped when the property
+ *  is brand new (the window starts < 30 days after createTime — no time for a returning cohort to form), when
+ *  both the window start and property createTime are known. */
+export function detectUserFragmentation(
+  newVsReturning: Array<{ name: string; sessions: number }> | undefined,
+  total: number,
+  windowDays: number,
+  opts: { windowStartYmd?: string; propertyCreatedYmd?: string } = {}
+): ScorecardFinding | null {
+  if (!newVsReturning || newVsReturning.length === 0) return null;
+  if (windowDays < 14 || total < 500) return null;
+  // Brand-new property guard: if the window starts less than 30 days after the property was created, there
+  // has been no chance for a returning cohort to build up, so ~0% returning is expected, not a defect.
+  const ageAtWindowStart = daysBetween(opts.propertyCreatedYmd, opts.windowStartYmd);
+  if (ageAtWindowStart !== null && ageAtWindowStart < 30) return null;
+  let newSessions = 0;
+  let returningSessions = 0;
+  for (const b of newVsReturning) {
+    const name = (b.name ?? '').trim().toLowerCase();
+    if (name === 'new') newSessions += b.sessions;
+    else if (name === 'returning') returningSessions += b.sessions;
+    // ignore '(not set)' and anything else
+  }
+  const denom = newSessions + returningSessions;
+  if (denom <= 0) return null;
+  const returningShare = returningSessions / denom;
+  if (returningShare >= 0.02) return null; // some returning users → not fragmented
+  const severity: Severity = windowDays >= 28 && returningShare < 0.005 ? 'medium' : 'low';
+  return {
+    severity,
+    category: DQ,
+    message: `Over ${windowDays} days, returning users are only ${(returningShare * 100).toFixed(2)}% of sessions (${returningSessions}/${denom}) — essentially everyone is counted as new. If this property is new or you are running a first-touch acquisition campaign, near-zero returning users can be expected. Otherwise this is a classic identity-fragmentation signature: a fresh anonymous id is being minted each visit, so the same people are duplicated as many "new users" and user counts are inflated.`,
+    recommendation:
+      'Likely Consent Mode denying analytics_storage for most users, a short cookie lifetime/ITP, or no user_id. Verify Consent Mode is not denying analytics_storage for the majority, check the cookie lifetime, and consider setting a User-ID. Treat returning-user metrics and unique-user counts as unreliable until this is fixed.',
+  };
+}
+
 export function auditGa4DataQuality(counts: DataQualityCounts): Ga4DataQualityResult {
   const findings: ScorecardFinding[] = [];
   const total = counts.totalSessions;
@@ -137,6 +319,18 @@ export function auditGa4DataQuality(counts: DataQualityCounts): Ga4DataQualityRe
       recommendation: 'A high "(not set)" source/medium share points to sessions starting without referrer/UTM data — often pre-consent tag fires or redirect loss. Verify Consent Mode and landing-page redirects.',
     });
   }
+
+  // Best-effort signals — each SKIPS itself when its source data is absent (older callers / a failed query),
+  // so the all-clear below still only fires when nothing at all flagged.
+  const spam = detectReferralSpam(counts.sources, total);
+  if (spam) findings.push(spam);
+  const internal = detectInternalTraffic(counts.hostnames, total);
+  if (internal) findings.push(internal);
+  const fragmentation = detectUserFragmentation(counts.newVsReturning, total, days, {
+    windowStartYmd: counts.startDate,
+    propertyCreatedYmd: counts.propertyCreatedYmd,
+  });
+  if (fragmentation) findings.push(fragmentation);
 
   if (findings.length === 0) {
     findings.push({

@@ -65,6 +65,7 @@ import { auditWorkspace, auditServerWorkspace, auditChanges } from '../google/au
 import { diffSnapshots } from '../google/gtm-monitor';
 import { auditGa4 } from '../google/ga4-audit';
 import { auditGa4DataQuality } from '../google/ga4-data-quality';
+import { rankGa4Campaigns } from '../google/ga4-campaigns';
 import { monitorGa4 } from '../google/ga4-monitor';
 import { gatherGa4MonitorInput } from '../services/ga4-monitoring-service';
 import { buildScorecard, type ScorecardSection } from '../google/scorecard';
@@ -909,6 +910,26 @@ export function buildToolRegistry(
         const n = Math.floor(Number(a.days));
         const days = a.days != null && Number.isFinite(n) ? Math.min(365, Math.max(1, n)) : 28;
         return auditGa4DataQuality(await data.getGa4DataQuality(s(a.property), days));
+      },
+    },
+    {
+      name: 'rank_ga4_campaigns',
+      description:
+        "Rank a GA4 property's marketing campaigns by conversions and revenue over a window — answers 'which campaign performed best' and flags untagged-campaign traffic. Read-only (GA4 Data API). Requires property like \"properties/123456\"; optional days (default 28).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          property: { type: 'string' },
+          days: { type: 'number', description: 'Lookback window in days (default 28).' },
+        },
+        required: ['property'],
+        additionalProperties: false,
+      },
+      handler: async (a) => {
+        // Coerce defensively (mirrors audit_ga4_data_quality): non-numeric → 28, clamp to [1, 365].
+        const n = Math.floor(Number(a.days));
+        const days = a.days != null && Number.isFinite(n) ? Math.min(365, Math.max(1, n)) : 28;
+        return rankGa4Campaigns(await data.getGa4CampaignPerformance(s(a.property), days));
       },
     },
     {

@@ -194,6 +194,22 @@ function fakeData(
         endDate: '2026-01-28',
       };
     },
+    getGa4CampaignPerformance: async (p: string, days: number) => {
+      calls.push(`ga4Campaigns:${p}:${days}`);
+      return {
+        rows: [
+          { campaign: 'summer_sale', sessions: 400, keyEvents: 40, revenue: 4000, engagementRate: 0.7 },
+          { campaign: 'spring_promo', sessions: 300, keyEvents: 10, revenue: 1000, engagementRate: 0.6 },
+          { campaign: '(organic)', sessions: 200, keyEvents: 5, revenue: 0, engagementRate: 0.5 },
+          { campaign: '(direct)', sessions: 100, keyEvents: 0, revenue: 0, engagementRate: 0.4 },
+        ],
+        totalSessions: 1000,
+        windowDays: days,
+        startDate: '2026-01-01',
+        endDate: '2026-01-28',
+        currencyCode: 'USD',
+      };
+    },
     getGa4PropertyDetails: async (p: string) => {
       calls.push(`ga4Details:${p}`);
       return { property: p, displayName: 'Site', timeZone: 'UTC', currencyCode: 'USD', industryCategory: 'TECHNOLOGY', serviceLevel: 'GOOGLE_ANALYTICS_STANDARD', parent: 'accounts/1', createTime: '' };
@@ -457,6 +473,7 @@ async function main(): Promise<void> {
       'list_unused_gtm_triggers',
       'list_unused_gtm_variables',
       'monitor_ga4_property',
+      'rank_ga4_campaigns',
       'run_ga4_realtime_report',
       'run_ga4_report',
       'runtime_synthetic_test',
@@ -483,7 +500,7 @@ async function main(): Promise<void> {
 
   await test('write tools appear ONLY when a confirm function is provided', async () => {
     const readOnly = buildToolRegistry(fakeData().data);
-    assert.equal(readOnly.list().length, 51, 'read-only registry has 51 tools');
+    assert.equal(readOnly.list().length, 52, 'read-only registry has 52 tools');
     assert.equal(readOnly.list().some((t) => t.name === 'create_gtm_tag'), false);
 
     const withWrites = buildToolRegistry(fakeData().data, approveAsIs);
@@ -496,8 +513,9 @@ async function main(): Promise<void> {
     // plus create_pinterest_capi_server_tag = 98, plus the read-only audit_install_drift = 99,
     // plus the read-only audit_tracking_status = 100, plus the read-only runtime_synthetic_test = 101,
     // plus the read-only monitor_ga4_property = 102, plus the three new server tag types
-    // (create_stackadapt_server_tag, create_reddit_capi_server_tag, create_amazon_capi_server_tag) = 105.
-    assert.equal(withWrites.list().length, 105 + 60, 'read + write registry has 105 GTM/GA4-read/context + 60 GA4-write tools');
+    // (create_stackadapt_server_tag, create_reddit_capi_server_tag, create_amazon_capi_server_tag) = 105,
+    // plus the read-only rank_ga4_campaigns = 106.
+    assert.equal(withWrites.list().length, 106 + 60, 'read + write registry has 106 GTM/GA4-read/context + 60 GA4-write tools');
     assert.equal(withWrites.list().some((t) => t.name === 'create_pinterest_capi_server_tag'), true, 'create_pinterest_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_reddit_capi_server_tag'), true, 'create_reddit_capi_server_tag present');
     assert.equal(withWrites.list().some((t) => t.name === 'create_amazon_capi_server_tag'), true, 'create_amazon_capi_server_tag present');
@@ -789,6 +807,35 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.includes('ga4DataQuality:properties/9:28'), 'non-numeric → default 28 (no "NaNdaysAgo")');
     assert.ok(fd.calls.includes('ga4DataQuality:properties/9:365'), 'huge → clamped to 365');
     assert.ok(fd.calls.includes('ga4DataQuality:properties/9:1'), 'negative → clamped to 1');
+  });
+
+  await test('rank_ga4_campaigns ranks tagged campaigns and reports untagged share (read-only)', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+    const out = JSON.parse(await reg.execute('rank_ga4_campaigns', { property: 'properties/9', days: 30 }));
+    assert.ok(fd.calls.includes('ga4Campaigns:properties/9:30'), 'routes days to the data-service');
+    assert.equal(out.totalSessions, 1000);
+    assert.equal(out.windowDays, 30);
+    assert.equal(out.primaryMetric, 'conversions', 'ranks by conversions when tagged campaigns have key events');
+    // summer_sale (40 conv) beats spring_promo (10 conv); the (organic)/(direct) buckets are untagged.
+    assert.deepEqual(out.taggedCampaigns.map((c: { campaign: string }) => c.campaign), ['summer_sale', 'spring_promo']);
+    assert.equal(out.bestCampaign.campaign, 'summer_sale');
+    assert.equal(out.untaggedSessions, 300, 'organic + direct sessions are untagged');
+    assert.equal(out.dateRange, 'Jan 1 – Jan 28, 2026');
+    assert.equal(out.currencyCode, 'USD', 'property currency flows through to the report');
+    // Revenue is labelled with the currency code, not a hardcoded '$'.
+    assert.ok(out.findings.some((f: { severity: string; message: string }) => f.severity === 'info' && /summer_sale/.test(f.message) && /USD 4000/.test(f.message)));
+    assert.ok(out.findings.every((f: { category: string }) => f.category === 'attribution'));
+  });
+
+  await test('rank_ga4_campaigns defaults to 28 days and coerces bad days safely', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data);
+    await reg.execute('rank_ga4_campaigns', { property: 'properties/9' });
+    await reg.execute('rank_ga4_campaigns', { property: 'properties/9', days: 'abc' });
+    await reg.execute('rank_ga4_campaigns', { property: 'properties/9', days: 100000 });
+    assert.ok(fd.calls.filter((c) => c === 'ga4Campaigns:properties/9:28').length === 2, 'omitted + non-numeric → 28');
+    assert.ok(fd.calls.includes('ga4Campaigns:properties/9:365'), 'huge → clamped to 365');
   });
 
   await test('GA4 config-completeness read tools (attribution, signals, MP secrets, BQ/Firebase links)', async () => {
@@ -1430,6 +1477,7 @@ async function main(): Promise<void> {
       'list_ga4_measurement_protocol_secrets',
       'list_ga4_properties',
       'monitor_ga4_property',
+      'rank_ga4_campaigns',
       'run_ga4_realtime_report',
       'run_ga4_report',
       'score_ga4_property',

@@ -11,6 +11,7 @@ import { withQuotaRetry } from './quota-retry';
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
+import type { Ga4CampaignInput } from './ga4-campaigns';
 import type { Ga4EventDeltaInput, Ga4TransactionInput } from './ga4-integrity';
 import { planRetentionCohorts, parseRetentionRows, type RetentionCohort } from './ga4-retention';
 import { mergeParametersByKey, addEventParameters, addServerGa4Params, setTemplateParam, type GtmParam } from './tag-params';
@@ -2670,43 +2671,49 @@ export class GoogleDataService {
   /** Session counts by channel group and by source/medium over a window — either the last `days`
    *  (default 28) or an explicit { startDate, endDate } custom range — for the pure data-quality
    *  engine. Read-only (analytics.readonly via the Data API). */
+  /** Resolve a data-quality/campaign window to EXPLICIT { startDate, endDate } (YYYY-MM-DD) plus the
+   *  inclusive day count. A trailing-N-days number resolves "today" in the PROPERTY's timezone (UTC
+   *  fallback) so the window matches GA4's day boundaries; an explicit range is queried verbatim (so the
+   *  displayed range == the queried range). Shared by getGa4DataQuality and getGa4CampaignPerformance. */
+  private async resolveGa4Window(
+    property: string,
+    window: number | { startDate: string; endDate: string }
+  ): Promise<{ startDate: string; endDate: string; windowDays: number; todayYmd?: string; createdYmd?: string }> {
+    if (typeof window === 'object') {
+      const startDate = window.startDate;
+      const endDate = window.endDate;
+      const a = Date.parse(`${startDate}T00:00:00Z`);
+      const b = Date.parse(`${endDate}T00:00:00Z`);
+      const windowDays = Number.isFinite(a) && Number.isFinite(b) ? Math.max(1, Math.round((b - a) / 86400000) + 1) : 0;
+      // Custom range: createTime is left undefined (the new-property fragmentation guard simply doesn't apply).
+      return { startDate, endDate, windowDays };
+    }
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsadmin>[0]['auth'];
+    const admin = analyticsadmin({ version: 'v1beta', auth });
+    // Single admin.properties.get supplies BOTH the timezone (for day boundaries) and createTime (for the
+    // brand-new-property fragmentation guard) — no extra API call.
+    const prop = await admin.properties.get({ name: property }).then((r) => r.data).catch(() => null);
+    const tz = prop?.timeZone || 'UTC';
+    const createdYmd = prop?.createTime ? prop.createTime.slice(0, 10) : undefined;
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const part = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+    const todayYmd = `${part('year')}-${part('month')}-${part('day')}`;
+    const { startDate, endDate } = windowDates(todayYmd, window);
+    return { startDate, endDate, windowDays: window, todayYmd, createdYmd };
+  }
+
   async getGa4DataQuality(
     property: string,
     window: number | { startDate: string; endDate: string } = 28
   ): Promise<DataQualityCounts> {
     const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
     const data = analyticsdata({ version: 'v1beta', auth });
-    let startDate: string;
-    let endDate: string;
-    let windowDays: number;
-    let todayYmd: string | undefined;
-    if (typeof window === 'object') {
-      // Explicit custom range — query exactly these dates (interpreted in the property's timezone
-      // by the Data API), so the displayed range == the queried range. windowDays = inclusive span.
-      startDate = window.startDate;
-      endDate = window.endDate;
-      const a = Date.parse(`${startDate}T00:00:00Z`);
-      const b = Date.parse(`${endDate}T00:00:00Z`);
-      windowDays = Number.isFinite(a) && Number.isFinite(b) ? Math.max(1, Math.round((b - a) / 86400000) + 1) : 0;
-    } else {
-      // Trailing N days: resolve "today" in the PROPERTY's timezone (UTC fallback) so the window
-      // matches GA4's day boundaries, then query EXPLICIT dates (no relative-token / local-clock drift).
-      const admin = analyticsadmin({ version: 'v1beta', auth });
-      const tz = await admin.properties
-        .get({ name: property })
-        .then((r) => r.data.timeZone || 'UTC')
-        .catch(() => 'UTC');
-      const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: tz,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-      }).formatToParts(new Date());
-      const part = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
-      todayYmd = `${part('year')}-${part('month')}-${part('day')}`;
-      ({ startDate, endDate } = windowDates(todayYmd, window));
-      windowDays = window;
-    }
+    const { startDate, endDate, windowDays, todayYmd, createdYmd } = await this.resolveGa4Window(property, window);
     const run = async (dimension: string, ordered: boolean) => {
       const res = await data.properties.runReport({
         property,
@@ -2725,18 +2732,105 @@ export class GoogleDataService {
         sessions: Number(r.metricValues?.[0]?.value ?? 0),
       }));
     };
-    const channelGroups = await run('sessionDefaultChannelGroup', false);
-    const sourceMediums = await run('sessionSourceMedium', true);
+    // BEST-EFFORT extra signals for the new detectors (referral/ghost spam, non-production hostnames,
+    // identity fragmentation). Each is wrapped so a failure yields `undefined` — the engine skips that
+    // check rather than throwing — and none of them can break the core channel/source/total queries.
+    const hostnamesQ = this.runGa4Report({
+      property,
+      startDate,
+      endDate,
+      dimensions: ['hostName'],
+      metrics: ['sessions'],
+      orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
+      limit: '100',
+    })
+      .then((r) => r.rows.map((row) => ({ name: row.dimensions[0] ?? '', sessions: Number(row.metrics[0]) || 0 })))
+      .catch(() => undefined);
+    const sourcesQ = this.runGa4Report({
+      property,
+      startDate,
+      endDate,
+      dimensions: ['sessionSource'],
+      metrics: ['sessions', 'engagedSessions'],
+      orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
+      limit: '100',
+    })
+      .then((r) =>
+        r.rows.map((row) => ({
+          name: row.dimensions[0] ?? '',
+          sessions: Number(row.metrics[0]) || 0,
+          engagedSessions: Number(row.metrics[1]) || 0,
+        }))
+      )
+      .catch(() => undefined);
+    const newVsReturningQ = this.runGa4Report({
+      property,
+      startDate,
+      endDate,
+      dimensions: ['newVsReturning'],
+      metrics: ['sessions'],
+    })
+      .then((r) => r.rows.map((row) => ({ name: row.dimensions[0] ?? '', sessions: Number(row.metrics[0]) || 0 })))
+      .catch(() => undefined);
     // Use the EXACT total from a no-dimension sessions query — the same query the baseline uses — so
     // the two never disagree in the report. (Summing a dimensioned report can drift from the true
     // total via GA4's metric estimation; fall back to the channel sum only if the total query is empty.)
-    const totalRes = await data.properties.runReport({
+    const totalResQ = data.properties.runReport({
       property,
       requestBody: { dateRanges: [{ startDate, endDate }], metrics: [{ name: 'sessions' }], limit: '1' },
     });
+    const [channelGroups, sourceMediums, totalRes, hostnames, sources, newVsReturning] = await Promise.all([
+      run('sessionDefaultChannelGroup', false),
+      run('sessionSourceMedium', true),
+      totalResQ,
+      hostnamesQ,
+      sourcesQ,
+      newVsReturningQ,
+    ]);
     const totalSessions =
       Number(totalRes.data.rows?.[0]?.metricValues?.[0]?.value ?? 0) || channelGroups.reduce((s, c) => s + c.sessions, 0);
-    return { totalSessions, channelGroups, sourceMediums, windowDays, startDate, endDate, todayYmd };
+    return { totalSessions, channelGroups, sourceMediums, windowDays, startDate, endDate, todayYmd, hostnames, sources, newVsReturning, propertyCreatedYmd: createdYmd };
+  }
+
+  /** Per-campaign performance (sessions, key events, revenue, engagement) over a window — either the last
+   *  `days` (default 28) or an explicit { startDate, endDate } custom range — for the pure campaign ranker.
+   *  totalSessions comes from an exact no-dimension query (falls back to the row sum). Read-only. */
+  async getGa4CampaignPerformance(
+    property: string,
+    window: number | { startDate: string; endDate: string } = 28
+  ): Promise<Ga4CampaignInput> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof analyticsdata>[0]['auth'];
+    const data = analyticsdata({ version: 'v1beta', auth });
+    const { startDate, endDate, windowDays } = await this.resolveGa4Window(property, window);
+    // The campaign query goes through data.properties.runReport DIRECTLY (not the runGa4Report helper, which
+    // drops response metadata) so we can read the property's currencyCode from res.data.metadata and label
+    // revenue correctly instead of hardcoding '$'.
+    const [campaignRes, totalReport] = await Promise.all([
+      data.properties.runReport({
+        property,
+        requestBody: {
+          dateRanges: [{ startDate, endDate }],
+          dimensions: [{ name: 'sessionCampaignName' }],
+          metrics: [{ name: 'sessions' }, { name: 'keyEvents' }, { name: 'totalRevenue' }, { name: 'engagementRate' }],
+          orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
+          limit: '50',
+        },
+      }),
+      this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: ['sessions'], limit: '1' }).catch(
+        () => null
+      ),
+    ]);
+    const rows = (campaignRes.data.rows ?? []).map((r) => ({
+      campaign: r.dimensionValues?.[0]?.value ?? '',
+      sessions: Number(r.metricValues?.[0]?.value) || 0,
+      keyEvents: Number(r.metricValues?.[1]?.value) || 0,
+      revenue: Number(r.metricValues?.[2]?.value) || 0,
+      engagementRate: Number(r.metricValues?.[3]?.value) || 0,
+    }));
+    const currencyCode = campaignRes.data.metadata?.currencyCode || undefined;
+    const totalSessions =
+      Number(totalReport?.rows?.[0]?.metrics?.[0] ?? 0) || rows.reduce((s, r) => s + r.sessions, 0);
+    return { rows, totalSessions, windowDays, startDate, endDate, currencyCode };
   }
 
   /** Every GA4 WEB-stream measurement id (G-XXXX) the user can access, with its
