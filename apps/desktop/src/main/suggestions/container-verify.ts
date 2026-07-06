@@ -31,6 +31,23 @@ function tagParam(tag: AuditTag, key: string): string | undefined {
   return p && typeof p.value === 'string' ? (p.value as string) : undefined;
 }
 
+/** First non-empty (present + non-whitespace) value. GA4 event tags ship an EMPTY
+ *  measurementId tagReference plus measurementIdOverride holding the real G-XXXX, so a
+ *  bare ?? chain over tagParam (which returns '' not undefined) would shadow the real id. */
+function firstNonEmpty(...vals: Array<string | undefined>): string | undefined {
+  for (const v of vals) if (v && v.trim()) return v;
+  return undefined;
+}
+
+/** True if a GTM condition is NEGATED. GTM stores "does not equal / contain" as the base
+ *  condition type PLUS a {type:boolean, key:'negate', value:'true'} parameter — NOT a distinct
+ *  type. The driver only does POSITIVE matching, so a negated condition can't be faithfully
+ *  driven and its trigger is skipped rather than mapped to an inverted positive match. */
+function isNegated(cond: Rec): boolean {
+  const params = Array.isArray(cond.parameter) ? (cond.parameter as Rec[]) : [];
+  return params.some((p) => p.key === 'negate' && (p.value === true || String(p.value).toLowerCase() === 'true'));
+}
+
 /** Map a GTM trigger type to the verify trigger kind, or null if not drivable here. */
 function kindOf(type: string): VerifyTagInput['trigger']['kind'] | null {
   const t = type.toLowerCase();
@@ -48,10 +65,18 @@ function isBuiltinTriggerId(id: string): boolean {
   return /^21474795\d{2}$/.test(id) || Number(id) >= 2147479553;
 }
 
-/** Build a verify trigger from a GTM trigger's conditions. Returns null if the type isn't drivable. */
+/** Build a verify trigger from a GTM trigger's conditions. Returns null when the trigger can't be
+ *  driven faithfully (unsupported type, negated condition, or no locatable target) — the caller
+ *  then records the tag in `skipped` instead of emitting a trigger that yields a wrong verdict. */
 function triggerFrom(trig: AuditTrigger): VerifyTagInput['trigger'] | null {
   const kind = kindOf(trig.type);
   if (!kind) return null;
+
+  // The driver has no negation support (it drives the element that POSITIVELY matches), so any
+  // negated condition ("does not equal/contain") would invert the verdict — skip the whole trigger.
+  const allConds = [...(trig.filter ?? []), ...(trig.autoEventFilter ?? []), ...(trig.customEventFilter ?? [])] as Rec[];
+  if (allConds.some(isNegated)) return null;
+
   const out: VerifyTagInput['trigger'] = { name: trig.name, kind };
 
   // Click/form conditions live in filter + autoEventFilter; custom-event name in customEventFilter.
@@ -87,8 +112,38 @@ function triggerFrom(trig: AuditTrigger): VerifyTagInput['trigger'] | null {
     const cef = (trig.customEventFilter ?? []) as Rec[];
     const ev = cef.map((c) => argOf(c, 'arg1')).find((v) => v && v !== '.*');
     if (ev) out.eventName = ev;
+    if (!out.eventName) return null; // no concrete dataLayer event name to push → can't drive it
+  }
+
+  // Click triggers need a text/URL the driver can locate on the page. A click scoped ONLY by
+  // {{Click ID}}/{{Click Classes}}/{{Click Element}} or by page (no Click Text/URL) has no
+  // locatable target — skip it rather than report a guaranteed false NOT-FIRED.
+  if ((kind === 'link_click' || kind === 'all_clicks') && !out.clickTextValue && !out.clickUrlValue) {
+    return null;
   }
   return out;
+}
+
+/** Route a page-scoped trigger to its own page so a page-specific click/form/pageview is driven
+ *  there — not on the homepage (where its target is absent → false NOT-FIRED). Only exact/prefix
+ *  path scopes are usable for navigation; a "contains" URL fragment is too ambiguous to route. */
+function pageFromTrigger(trigger: VerifyTagInput['trigger']): string | undefined {
+  const usable = (op?: string): boolean => op === undefined || op === 'equals' || op === 'startsWith';
+  if (trigger.pagePathValue && usable(trigger.pagePathOperator)) {
+    const p = trigger.pagePathValue.trim();
+    if (p.startsWith('/')) return p;
+  }
+  if (trigger.pageUrlValue && usable(trigger.pageUrlOperator)) {
+    const v = trigger.pageUrlValue.trim();
+    if (v.startsWith('/')) return v;
+    try {
+      const u = new URL(v);
+      if (u.pathname && u.pathname !== '/') return u.pathname;
+    } catch {
+      /* not a full URL and not a path — can't route */
+    }
+  }
+  return undefined;
 }
 
 /** GA4/base tag types this MVP can verify. Others (Meta template, Ads, Floodlight, …) are skipped. */
@@ -146,7 +201,15 @@ export function snapshotToVerifyInputs(snapshot: ContainerSnapshot): ContainerVe
     }
 
     const eventName = platform === 'ga4_event' ? tagParam(tag, 'eventName') ?? '' : 'page_view';
-    const measurementId = tagParam(tag, 'measurementId') ?? tagParam(tag, 'measurementIdOverride') ?? tagParam(tag, 'tagId');
+    // GA4 event tags ship an EMPTY measurementId tagReference + measurementIdOverride with the real
+    // G-XXXX; google tags carry it under tagId. Skip empty values so the real id (used for tid=
+    // attribution) isn't shadowed by the placeholder.
+    const measurementId = firstNonEmpty(
+      tagParam(tag, 'measurementId'),
+      tagParam(tag, 'measurementIdOverride'),
+      tagParam(tag, 'tagId'),
+    );
+    const page = pageFromTrigger(trigger);
 
     tags.push({
       id: tag.tagId,
@@ -154,6 +217,7 @@ export function snapshotToVerifyInputs(snapshot: ContainerSnapshot): ContainerVe
       eventName,
       platform,
       ...(measurementId ? { measurementId } : {}),
+      ...(page ? { page } : {}),
       trigger,
     });
   }
