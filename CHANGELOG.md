@@ -1,3 +1,9 @@
+## [1.204.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.204.3...v1.204.4) (2026-07-06)
+
+### Bug Fixes
+
+* **desktop:** GA4 audit windows end at YESTERDAY (today-1) - full days only ([e46025d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e46025da7c9acb3e89a480145c3e837c13a85abb))
+
 ## [1.204.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.204.2...v1.204.3) (2026-07-06)
 
 ### Bug Fixes
