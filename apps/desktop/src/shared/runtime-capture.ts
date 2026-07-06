@@ -122,6 +122,47 @@ export function classifyCollector(url: string, serverHost?: string | null): Coll
   return null;
 }
 
+/** The bare hostname of a captured URL — shows WHERE a tag beaconed. */
+export function beaconHost(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+/** A RICHER platform label than classifyCollector's abort-family: it NAMES the specific destination
+ *  (linkedin / pinterest / reddit / snapchat / bing / twitter / google_ads / hotjar / clarity) instead
+ *  of lumping them all into 'ad'. Lets a verify verdict attribute a beacon to the RIGHT tag (so two ad
+ *  tags on one interaction aren't both marked fired) and show exactly what fired — Phase A of "verify
+ *  all tag types". Returns 'other:<host>' for an unrecognised beacon so it stays visible. */
+export function beaconPlatform(url: string): string {
+  const c = classifyCollector(url);
+  if (c && c !== 'ad') return c; // ga4 | meta | tiktok | server
+  const host = beaconHost(url);
+  if (!host) return 'other';
+  const named: Array<[RegExp, string]> = [
+    [/(^|\.)linkedin\.com$/, 'linkedin'],
+    [/(^|\.)pinterest\.com$/, 'pinterest'],
+    [/(^|\.)reddit\.com$/, 'reddit'],
+    [/(^|\.)snapchat\.com$/, 'snapchat'],
+    [/(^|\.)bing\.com$/, 'bing'],
+    [/(^|\.)(twitter|x)\.com$/, 'twitter'],
+    [/(^|\.)hotjar\.com$/, 'hotjar'],
+    [/(^|\.)clarity\.ms$/, 'clarity'],
+    [/(^|\.)(doubleclick\.net|googleadservices\.com)$/, 'google_ads'],
+  ];
+  for (const [re, name] of named) if (re.test(host)) return name;
+  if (c === 'ad') return 'google_ads'; // the remaining google.<tld>/pagead conversion pixels
+  return `other:${host}`;
+}
+
+/** The ad/pixel platform families (everything except GA4 + the first-party server collect). */
+const KNOWN_AD_PLATFORMS = new Set(['meta', 'tiktok', 'linkedin', 'pinterest', 'reddit', 'snapchat', 'bing', 'twitter', 'google_ads', 'hotjar', 'clarity']);
+export function isKnownAdPlatform(p: string): boolean {
+  return KNOWN_AD_PLATFORMS.has(p);
+}
+
 // ── GA4 /g/collect parsing ─────────────────────────────────────────────────────
 
 /** Parse one flat parameter group (query string OR one body line) into a GA4 event.

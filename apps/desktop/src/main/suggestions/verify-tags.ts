@@ -6,7 +6,7 @@
 // the same hit brain the runtime synthetic test uses (parseGa4CollectHit /
 // classifyCollector) and the trigger-match logic (ctaTriggerFiresOn).
 
-import { parseGa4CollectHit, classifyCollector } from '../../shared/runtime-capture';
+import { parseGa4CollectHit, classifyCollector, beaconPlatform, beaconHost, isKnownAdPlatform } from '../../shared/runtime-capture';
 import { ctaTriggerFiresOn } from './scan-core';
 import type { SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import type {
@@ -51,12 +51,24 @@ function isGa4CollectorHit(url: string): boolean {
   return c === 'ga4' || c === 'server';
 }
 
-/** Which collector family proves a non-GA4 platform's tag fired. */
-function platformCollector(platform: string): string {
-  if (platform === 'meta_pixel') return 'meta';
-  if (platform === 'tiktok_pixel') return 'tiktok';
-  // linkedin / reddit / pinterest / google_ads_* / conversion_linker all beacon as 'ad'.
-  return 'ad';
+/** The SPECIFIC beacon platform that proves a non-GA4 tag fired (Phase A: precise per-platform
+ *  attribution). 'ad' = we don't know the exact destination for this tag type → any recognised
+ *  ad/pixel beacon counts. */
+function expectedBeaconPlatform(platform: string): string {
+  switch (platform) {
+    case 'meta_pixel': return 'meta';
+    case 'tiktok_pixel': return 'tiktok';
+    case 'linkedin_insight': return 'linkedin';
+    case 'reddit_pixel': return 'reddit';
+    case 'pinterest_tag': return 'pinterest';
+    case 'snap_pixel': return 'snapchat';
+    case 'hotjar': return 'hotjar';
+    case 'google_ads_conversion':
+    case 'google_ads_remarketing':
+    case 'google_ads_call_conversion':
+    case 'conversion_linker': return 'google_ads';
+    default: return 'ad';
+  }
 }
 
 /** Is this a GA4 tag (event name decodable from the hit) vs a pixel/ads tag? */
@@ -145,6 +157,10 @@ export function evaluateVerify(
       return { ...base, reason: 'the tag was not exercised by the driver', interaction: { kind: 'none', targetFound: false, performed: false } };
     }
     const interaction = { kind: cap.kind, targetFound: cap.targetFound, performed: cap.performed, ...(cap.note ? { note: cap.note } : {}) };
+    // EVERY distinct host the interaction beaconed to — so the user always sees what network activity
+    // fired, even for a tag type we can't decode. Phase A of "verify all tag types".
+    const observedBeacons = [...new Set(cap.hits.map((h) => beaconHost(h.url)).filter(Boolean))];
+    const withBeacons = <T extends object>(v: T): T => (observedBeacons.length ? { ...v, observedBeacons } : v);
 
     // Trigger matched nothing on the page → it can't fire for a real user either.
     if (!cap.targetFound) {
@@ -174,23 +190,29 @@ export function evaluateVerify(
       const want = norm(tag.eventName);
       const hit = events.find(({ ev }) => norm(ev.event) === want);
       if (hit) {
-        return { ...base, fired: true, event: hit.ev.event, interaction, evidence: hit.hit };
+        return withBeacons({ ...base, fired: true, event: hit.ev.event, interaction, evidence: hit.hit });
       }
       if (events.length > 0) {
         const observedEvents = [...new Set(events.map(({ ev }) => ev.event).filter((e): e is string => Boolean(e)))];
         const seen = observedEvents.join(', ') || '(page-level)';
         // The trigger fired a GA4 hit, just not under this tag's event name — surface the observed
         // event name(s) so the UI can offer "align the tag's Event Name to <observed>".
-        return { ...base, reason: `the interaction fired GA4 hit(s) [${seen}] but none for "${tag.eventName}" — the tag or its event name may differ`, interaction, evidence: events[0].hit, ...(observedEvents.length ? { observedEvents } : {}) };
+        return withBeacons({ ...base, reason: `the interaction fired GA4 hit(s) [${seen}] but none for "${tag.eventName}" — the tag or its event name may differ`, interaction, evidence: events[0].hit, ...(observedEvents.length ? { observedEvents } : {}) });
       }
-      return { ...base, reason: 'the interaction ran but no GA4 hit fired — the tag/trigger may not be in the loaded container, or its condition does not match', interaction };
+      return withBeacons({ ...base, reason: 'the interaction ran but no GA4 hit fired — the tag/trigger may not be in the loaded container, or its condition does not match', interaction });
     }
 
-    // Non-GA4 pixel/ads tag: we can't decode the event name; a hit to that platform's collector proves firing.
-    const family = platformCollector(tag.platform);
-    const fired = cap.hits.find((h) => classifyCollector(h.url) === family);
-    if (fired) return { ...base, fired: true, interaction, evidence: fired };
-    return { ...base, reason: `the interaction ran but no ${family} hit fired for this ${tag.platform} tag`, interaction };
+    // Non-GA4 pixel/ads tag: we can't decode an event name, so a beacon to the tag's OWN platform
+    // proves it fired. Match on the SPECIFIC platform (linkedin ≠ reddit ≠ meta …) so two ad tags on
+    // one interaction aren't both credited; when the tag type is unknown ('ad'), any recognised
+    // ad/pixel beacon counts.
+    const want = expectedBeaconPlatform(tag.platform);
+    const fired = cap.hits.find((h) => {
+      const bp = beaconPlatform(h.url);
+      return bp === want || (want === 'ad' && isKnownAdPlatform(bp));
+    });
+    if (fired) return withBeacons({ ...base, fired: true, event: beaconPlatform(fired.url), interaction, evidence: fired });
+    return withBeacons({ ...base, reason: `the interaction ran but no ${want === 'ad' ? 'ad/pixel' : want} beacon fired for this ${tag.platform} tag${observedBeacons.length ? ` (it did beacon to: ${observedBeacons.join(', ')})` : ''}`, interaction });
   });
 }
 

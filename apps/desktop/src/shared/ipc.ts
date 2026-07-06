@@ -582,6 +582,9 @@ export interface VerifyTagVerdict {
   /** For a "fired but wrong event name" verdict: the GA4 event name(s) actually observed on the
    *  interaction, so the UI can offer to align the tag's Event Name to one of them. */
   observedEvents?: string[];
+  /** Every distinct host the interaction beaconed to (any platform) — shows what network activity
+   *  actually fired, even for tag types we can't decode. */
+  observedBeacons?: string[];
   /** What the driver did to exercise the trigger. */
   interaction?: { kind: 'click' | 'submit' | 'navigate' | 'custom_event' | 'none'; targetFound: boolean; performed: boolean; note?: string };
   /** A sample captured hit as evidence. */
