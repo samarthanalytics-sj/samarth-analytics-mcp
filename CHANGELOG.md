@@ -1,3 +1,9 @@
+## [1.204.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.204.2...v1.204.3) (2026-07-06)
+
+### Bug Fixes
+
+* **desktop:** spike finding survives bucket-boundary shifts; drop finding decomposes against revenue; spike<->mismatch cross-link ([57fd2ec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/57fd2ec678e177c3d2151a9236494bdcf9b83f3a))
+
 ## [1.204.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.204.1...v1.204.2) (2026-07-06)
 
 ### Bug Fixes
