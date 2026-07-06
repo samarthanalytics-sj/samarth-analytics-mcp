@@ -1,3 +1,9 @@
+## [1.212.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.211.0...v1.212.0) (2026-07-06)
+
+### Features
+
+* **desktop:** show last check + last Slack alert times per property ([e3b56a9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e3b56a91ab272b9b4f23162a996f060120db2477))
+
 ## [1.211.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.210.0...v1.211.0) (2026-07-06)
 
 ### Features
