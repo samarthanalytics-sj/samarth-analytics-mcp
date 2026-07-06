@@ -137,6 +137,43 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   check('meta tag does NOT fire on a linkedin beacon (specific match)', evaluateVerify([unknown], [cap({ tagId: 'u1', hits: [linkedinHit()] })], els)[0].fired === false);
 }
 
+// ── inconclusive vs genuine: the "results are false" fix ─────────────────────────
+// A CTA whose control lives on ANOTHER page can't be exercised from the one page we drove.
+// That must be reported as "couldn't auto-test here" (inconclusive), NOT "not firing".
+{
+  const t = tag({ trigger: { name: 'X', kind: 'link_click', clickTextValue: 'View Open Positions', clickTextOperator: 'equals' } });
+  const careersEls: DetectedElementView[] = [{ page: '/careers', kind: 'cta', text: 'View Open Positions' }];
+  const v = evaluateVerify([t], [cap({ targetFound: false, performed: false, hits: [] })], careersEls)[0];
+  check('CTA on another page → inconclusive (not a failure)', v.inconclusive === true && v.fired === false);
+  check('CTA on another page → no scary suggestedTrigger', v.suggestedTrigger === undefined);
+}
+// A CONFIDENT on-page repair (closest control) stays ACTIONABLE, not inconclusive.
+{
+  const t = tag({ trigger: { name: 'CTA', kind: 'link_click', clickTextValue: 'Free Audit', clickTextOperator: 'equals' } });
+  const v = evaluateVerify([t], [cap({ targetFound: false, performed: false, hits: [] })], els)[0];
+  check('confident on-page repair → NOT inconclusive', !v.inconclusive && Boolean(v.suggestedTrigger));
+}
+// A shared custom event pushed synthetically can't carry form-specific data → inconclusive,
+// and the reason must tell the user to verify with a REAL submit (not "loosen the operator").
+{
+  const t = tag({ id: 'ce2', eventName: 'lead_form', trigger: { name: 'F', kind: 'custom_event', eventName: 'form_submission' } });
+  const v = evaluateVerify([t], [cap({ tagId: 'ce2', kind: 'custom_event', targetFound: true, performed: true, hits: [] })], els)[0];
+  check('custom_event bare-push no-hit → inconclusive', v.inconclusive === true && v.fired === false);
+  check('custom_event no-hit → reason points at a real submit', /real submit|form-specific/i.test(v.reason ?? ''));
+  check('custom_event no-hit → reason names the pushed event', /form_submission/.test(v.reason ?? ''));
+}
+// GENUINE failure is preserved: element FOUND + clicked, but no hit fired → NOT inconclusive.
+{
+  const v = evaluateVerify([tag()], [cap({ targetFound: true, performed: true, kind: 'click', hits: [] })], els)[0];
+  check('found + clicked + no-hit → genuine not-firing (not inconclusive)', v.fired === false && !v.inconclusive);
+}
+// A custom_event that DID fire is never inconclusive.
+{
+  const t = tag({ id: 'ce3', eventName: 'newsletter_signup', trigger: { name: 'NL', kind: 'custom_event', eventName: 'newsletter_signup' } });
+  const v = evaluateVerify([t], [cap({ tagId: 'ce3', kind: 'custom_event', hits: [ga4Hit('newsletter_signup')] })], els)[0];
+  check('custom_event fired → not inconclusive', v.fired === true && !v.inconclusive);
+}
+
 console.log(`\nverify-tags: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 12) { console.error(`expected >= 12 checks, got ${passed}`); process.exit(1); }
+if (passed < 20) { console.error(`expected >= 20 checks, got ${passed}`); process.exit(1); }

@@ -2509,11 +2509,26 @@ function TagReviewPanel({
   function classifyAndSetPhase(verdicts: VerifyTagsResult['verdicts'], skipped: Record<string, boolean>, round: number): void {
     const activeV = verdicts.filter((v) => !skipped[v.tagId]);
     const notFired = activeV.filter((v) => !v.fired);
-    const fixable = notFired.filter((v) => v.suggestedTrigger);
+    // Inconclusive-with-no-fix = "couldn't auto-test here" (CTA on another page / needs a real
+    // submit). Re-running rounds will never flip these, so they must NOT keep the loop paused
+    // forever — they don't block "done", and they're reported separately from genuine failures.
+    const inconclusive = notFired.filter((v) => v.inconclusive && !v.suggestedTrigger);
+    const genuine = notFired.filter((v) => !(v.inconclusive && !v.suggestedTrigger));
+    const fixable = genuine.filter((v) => v.suggestedTrigger);
     const firing = activeV.length - notFired.length;
-    if (notFired.length === 0) { setHealPhase('done'); setHealNote(`✅ All ${activeV.length} tag(s) fire.`); }
-    else if (fixable.length > 0) { setHealPhase('review'); setHealNote(`Round ${round}: ${firing}/${activeV.length} firing · ${fixable.length} auto-fixable.`); }
-    else { setHealPhase('paused'); setHealNote(`Round ${round}: ${firing}/${activeV.length} firing · ${notFired.length} need your call (no confident auto-fix).`); }
+    const tail = inconclusive.length ? ` · ${inconclusive.length} couldn't be auto-tested here` : '';
+    if (genuine.length === 0) {
+      setHealPhase('done');
+      setHealNote(inconclusive.length
+        ? `✅ All testable tag(s) fire.${tail} (their CTA/form is on another page or needs a real submit — verify those in GTM Preview).`
+        : `✅ All ${activeV.length} tag(s) fire.`);
+    } else if (fixable.length > 0) {
+      setHealPhase('review');
+      setHealNote(`Round ${round}: ${firing}/${activeV.length} firing · ${fixable.length} auto-fixable${tail}.`);
+    } else {
+      setHealPhase('paused');
+      setHealNote(`Round ${round}: ${firing}/${activeV.length} firing · ${genuine.length} need your call (no confident auto-fix)${tail}.`);
+    }
   }
   function resetHeal(): void {
     setHealPhase('idle');
@@ -3339,7 +3354,8 @@ function TagReviewPanel({
                   const fired = activeV.filter((v) => v.fired);
                   const notFired = activeV.filter((v) => !v.fired);
                   const fixable = notFired.filter((v) => v.suggestedTrigger);
-                  const needsYou = notFired.filter((v) => !v.suggestedTrigger);
+                  const untestable = notFired.filter((v) => !v.suggestedTrigger && v.inconclusive);
+                  const needsYou = notFired.filter((v) => !v.suggestedTrigger && !v.inconclusive);
                   const skippedCount = healVerdicts.length - activeV.length;
                   return (
                     <div style={{ marginTop: 10 }}>
@@ -3392,6 +3408,20 @@ function TagReviewPanel({
                           </ul>
                         </>
                       )}
+                      {untestable.length > 0 && (
+                        <>
+                          <div style={{ ...styles.h2, color: 'var(--c-amber)', marginTop: 10 }}>⏭ Couldn’t auto-test here ({untestable.length})</div>
+                          <div style={{ ...styles.muted, fontSize: 12 }}>Not broken — their CTA/form is on another page or needs a real submit. Verify in GTM Preview.</div>
+                          <ul style={styles.resultList}>
+                            {untestable.map((v) => (
+                              <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
+                                <div><span style={{ fontWeight: 600, color: 'var(--c-amber)' }}>UNTESTED HERE</span> {v.tagName}</div>
+                                {v.reason ? <div style={{ ...styles.muted, marginLeft: 8 }}>Why: {v.reason}</div> : null}
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
                       {skippedCount > 0 && <div style={{ ...styles.muted, marginTop: 6 }}>{skippedCount} skipped.</div>}
                       {(healPhase === 'paused' || healPhase === 'review') && (
                         <div style={{ marginTop: 8 }}>
@@ -3421,6 +3451,19 @@ function verdictKindLabel(v: VerifyTagsResult['verdicts'][number]): { label: str
     case 'custom_event': return { label: 'Custom event', icon: '⚡' };
     default: return { label: 'Tag', icon: '🏷' };
   }
+}
+
+// "How to actually verify this one" for an INCONCLUSIVE verdict (couldn't auto-test here). These
+// tags aren't broken — they just need the right page or a real interaction, not an operator change.
+function verdictHowToTest(v: VerifyTagsResult['verdicts'][number]): string {
+  const k = v.interaction?.kind;
+  if (k === 'custom_event') {
+    return 'This tag fires on a shared dataLayer event but keys off a specific form. Open GTM Preview and submit the matching form for real — the tag will fire when its form-specific condition is met. A synthetic push can’t supply that data.';
+  }
+  if (k === 'click' || k === 'submit') {
+    return 'The matching CTA/form isn’t on the page we drove — it likely lives on another page (e.g. careers, blog, a service page), or its exact label differs. Re-run Verify with that page’s URL, or confirm the button’s exact text.';
+  }
+  return 'Re-verify against the page this trigger’s element lives on, or exercise it with a real interaction in GTM Preview.';
 }
 
 // "What to change" for a NOT-FIRED verdict — actionable even without a scan inventory, derived from
@@ -3553,7 +3596,11 @@ function VerifyPanel({
   }
 
   const fired = vResult?.verdicts.filter((v) => v.fired) ?? [];
-  const notFired = vResult?.verdicts.filter((v) => !v.fired) ?? [];
+  // A tag we couldn't actually exercise on this run (CTA/form on another page, or a shared
+  // dataLayer event that needs form-specific data) is NOT a failure — separate it from genuine
+  // "not firing" so a working tag is never mislabelled broken.
+  const inconclusive = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive) ?? [];
+  const notFired = vResult?.verdicts.filter((v) => !v.fired && !v.inconclusive) ?? [];
 
   return (
     <div style={styles.reviewWrap}>
@@ -3645,8 +3692,17 @@ function VerifyPanel({
               </div>
             )}
             <div style={{ fontWeight: 600 }}>
-              {vResult.error ? `Error: ${vResult.error}` : `${fired.length} of ${vResult.verdicts.length} tag(s) fired`}
+              {vResult.error
+                ? `Error: ${vResult.error}`
+                : `${fired.length} of ${vResult.verdicts.length} tag(s) fired${notFired.length ? ` · ${notFired.length} need attention` : ''}${inconclusive.length ? ` · ${inconclusive.length} couldn't be auto-tested here` : ''}`}
             </div>
+            {inconclusive.length > 0 && !vResult.error && (
+              <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
+                “Couldn’t auto-test here” ≠ broken. A single page + synthetic events can’t reach a CTA that
+                lives on another page, or a form tag that keys off a specific form. Those need the CTA’s own
+                page or a real submit in GTM Preview — they may well fire for a real user.
+              </div>
+            )}
             {vResult.gtmDebug && vResult.gtmDebug.containerLoaded && (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
                 GTM debug: container {vResult.gtmDebug.containerIds.join(', ') || 'loaded'} · events seen: {vResult.gtmDebug.dataLayerEvents.slice(0, 12).join(', ') || '—'}
@@ -3710,6 +3766,33 @@ function VerifyPanel({
                             )}
                           </div>
                         )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
+            {inconclusive.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ ...styles.h2, color: 'var(--c-amber)' }}>⏭ Couldn’t auto-test here ({inconclusive.length})</div>
+                <div style={{ ...styles.muted, fontSize: 12, marginBottom: 4 }}>
+                  These aren’t broken — the verifier just couldn’t reach them from one page + synthetic events.
+                </div>
+                <ul style={styles.resultList}>
+                  {inconclusive.map((v) => {
+                    const k = verdictKindLabel(v);
+                    return (
+                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
+                        <div>
+                          <span style={{ fontWeight: 600, color: 'var(--c-amber)' }}>UNTESTED HERE</span>{' '}
+                          <span title={k.label}>{k.icon}</span> {v.tagName}
+                        </div>
+                        {v.reason ? <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2 }}>Why: {v.reason}</div> : null}
+                        {v.observedBeacons && v.observedBeacons.length > 0 && (
+                          <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2, fontSize: 12 }}>Beacons seen: {v.observedBeacons.join(', ')}</div>
+                        )}
+                        <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>How to verify: {verdictHowToTest(v)}</div>
                       </li>
                     );
                   })}
