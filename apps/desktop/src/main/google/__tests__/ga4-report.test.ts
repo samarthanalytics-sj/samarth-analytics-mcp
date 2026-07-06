@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { buildGa4AuditReport, buildGa4ExecSummary, type Ga4ReportInput } from '../ga4-report';
+import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Sections, type Ga4ReportInput } from '../ga4-report';
+import type { Ga4CampaignReport } from '../ga4-campaigns';
 import { auditGa4, type Ga4PropertySnapshot } from '../ga4-audit';
 import { auditGa4DataQuality } from '../ga4-data-quality';
 import { auditGa4Growth } from '../ga4-growth';
@@ -158,6 +159,30 @@ const input = (over: Partial<Ga4ReportInput> = {}): Ga4ReportInput => {
     growth: g,
     attribution: { reportingAttributionModel: 'CROSS_CHANNEL_DATA_DRIVEN', acquisitionConversionEventLookbackWindow: 'ACQUISITION_CONVERSION_EVENT_LOOKBACK_WINDOW_30_DAYS', otherConversionEventLookbackWindow: 'CONVERSION_EVENT_LOOKBACK_WINDOW_90_DAYS' },
     audienceCount: 4,
+    campaigns: null,
+    ...over,
+  };
+};
+
+// A ranked campaign report with two tagged campaigns and an untagged share, shaped like rankGa4Campaigns'
+// output so the report's campaignPerfView can format it without a live Data API call.
+const campaignReport = (over: Partial<Ga4CampaignReport> = {}): Ga4CampaignReport => {
+  const rows = over.taggedCampaigns ?? [
+    { campaign: 'summer_sale', sessions: 5000, keyEvents: 400, revenue: 250000, engagementRate: 0.62 },
+    { campaign: 'spring_promo', sessions: 3000, keyEvents: 150, revenue: 90000, engagementRate: 0.51 },
+  ];
+  return {
+    windowDays: 28,
+    dateRange: 'Jun 3 - Jun 30, 2026',
+    totalSessions: 20000,
+    primaryMetric: 'conversions',
+    taggedCampaigns: rows,
+    bestCampaign: rows[0] ?? null,
+    untaggedSessions: 12000,
+    untaggedSharePct: 60,
+    currencyCode: 'INR',
+    summary: 'Ranked 2 campaign(s) by conversions.',
+    findings: [{ severity: 'info', category: 'attribution', message: 'Top campaign by conversions: "summer_sale".' }],
     ...over,
   };
 };
@@ -550,6 +575,37 @@ test('table cells escape pipes (no broken Markdown rows)', () => {
   const s = snap({ customDimensions: [{ parameterName: 'user_email', displayName: 'a | b', scope: 'EVENT' }] });
   const md = buildGa4AuditReport(input({ snapshot: s, config: auditGa4(s) }));
   assert.ok(md.includes('\\|'), 'pipe escaped in a cell');
+});
+
+test('campaign performance: two tagged campaigns render rows, name the best, and format the untagged share', () => {
+  const camp = campaignReport();
+  const sections = buildGa4Sections(input({ campaigns: camp }));
+  assert.ok(sections.campaignPerformance, 'campaignPerformance present when campaigns are tagged');
+  assert.equal(sections.campaignPerformance!.rows.length, 2, 'both tagged campaigns become rows');
+  assert.equal(sections.campaignPerformance!.rows[0].campaign, 'summer_sale', 'top campaign first');
+  assert.equal(sections.campaignPerformance!.rows[0].conversions, '400', 'conversions formatted from keyEvents');
+  assert.equal(sections.campaignPerformance!.rows[0].revenue, 'INR 250,000', 'revenue prefixed with the property currency');
+  assert.equal(sections.campaignPerformance!.rows[0].engagement, '62%', 'engagement as a whole percent');
+  assert.ok(sections.campaignPerformance!.best?.startsWith('summer_sale'), 'best names the top campaign');
+  assert.ok(/400 conversions/.test(sections.campaignPerformance!.best!), 'best includes conversions');
+  assert.equal(sections.campaignPerformance!.untaggedShare, '60.0%', 'untagged share formatted to one decimal');
+  // The markdown report prints the campaign table + the campaign finding lands in section 4.
+  const md = buildGa4AuditReport(input({ campaigns: camp }));
+  assert.ok(md.includes('**Campaign performance**'), 'markdown has the campaign table heading');
+  assert.ok(/\| summer_sale \| 5,000 \| 400 \| INR 250,000 \|/.test(md), 'markdown renders the top campaign row');
+  assert.ok(md.includes('| Campaigns |'), 'the campaign finding lands in the All-findings table');
+});
+
+test('campaign performance: no tagged campaigns → campaignPerformance is null and markdown shows the advisory', () => {
+  const empty = campaignReport({ taggedCampaigns: [], bestCampaign: null, untaggedSharePct: 100, findings: [{ severity: 'medium', category: 'attribution', message: 'No sessions are attributed to a marketing campaign.', recommendation: 'Add utm_campaign/utm_source/utm_medium to your marketing links.' }] });
+  const sections = buildGa4Sections(input({ campaigns: empty }));
+  assert.equal(sections.campaignPerformance, null, 'null when there are no tagged campaigns');
+  const md = buildGa4AuditReport(input({ campaigns: empty }));
+  assert.ok(/No utm_campaign-tagged traffic/.test(md), 'markdown prints the no-campaign advisory');
+  assert.ok(!/\| Campaign \| Sessions \| Conversions \|/.test(md), 'no empty campaign table when untagged');
+  // A null campaigns input (query failed) leaves the section out entirely and adds no finding.
+  const nullSections = buildGa4Sections(input({ campaigns: null }));
+  assert.equal(nullSections.campaignPerformance, null, 'null campaigns → null view');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

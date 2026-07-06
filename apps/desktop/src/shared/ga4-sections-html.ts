@@ -268,6 +268,22 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Market</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${gRows}</tbody></table></div>`;
   }
+  // Campaign performance table — which marketing (utm_campaign-tagged) campaigns convert and earn, with
+  // the top campaign + untagged-traffic share in the caption. When there is no tagged campaign traffic
+  // the view is null and we show a one-line advisory instead of an empty table.
+  if (x.campaignPerformance && x.campaignPerformance.rows.length) {
+    const cp = x.campaignPerformance;
+    const cpRows = cp.rows
+      .map(
+        (c) =>
+          `<tr><td ${TD}><span style="font-weight:600">${esc(c.campaign)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDR}>${esc(c.conversions)}</td><td ${TDR}>${esc(c.revenue)}</td><td ${TDR}>${esc(c.engagement)}</td></tr>`,
+      )
+      .join('');
+    s6 +=
+      tableCaption('Campaign performance', `(which marketing campaigns convert and earn${cp.best ? ` — top: ${esc(cp.best)}` : ''}; untagged traffic ${esc(cp.untaggedShare)})`) +
+      `<div style="border:1px solid ${BORDER};border-radius:10px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<table style="border-collapse:collapse;width:100%;min-width:440px"><thead><tr><th ${TH}>Campaign</th><th ${THR}>Sessions</th><th ${THR}>Conversions</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cpRows}</tbody></table></div>`;
+  }
   // AI/LLM assistant referral traffic — which AI sources convert and earn. A systematic undercount
   // (referrer-stripped visits land in Direct), stated explicitly in the caveat below the table.
   if (x.llmTraffic && x.llmTraffic.rows.length) {

@@ -9,6 +9,7 @@
 import type { Ga4AuditReport, Ga4PropertySnapshot } from './ga4-audit';
 import type { Ga4DataQualityResult, DataQualityCounts } from './ga4-data-quality';
 import type { Ga4GrowthResult, Ga4GrowthFinding } from './ga4-growth';
+import type { Ga4CampaignReport } from './ga4-campaigns';
 import type { Ga4Baseline } from './data-service';
 import { buildGa4Scorecard } from './ga4-scorecard';
 import { analyzeGa4Trend } from './ga4-trend';
@@ -27,6 +28,9 @@ export interface Ga4ReportInput {
   growth: Ga4GrowthResult | null; // null = no baseline → growth not assessed
   attribution: { reportingAttributionModel: string; acquisitionConversionEventLookbackWindow: string; otherConversionEventLookbackWindow: string } | null;
   audienceCount: number | null;
+  /** Ranked marketing-campaign performance (tagged utm_campaign traffic + untagged share), or null when
+   *  the campaign query couldn't run — callers that don't pass it get null. */
+  campaigns: Ga4CampaignReport | null;
   /** Weekly-retention cohort headline (Week 1 / Week 4), or null when there isn't enough reliable data. */
   retentionSummary?: string | null;
 }
@@ -210,6 +214,28 @@ function llmTrafficView(baseline: Ga4Baseline | null, currency: string): { rows:
   const pct = total > 0 ? (aiSessions / total) * 100 : 0;
   const pctText = pct > 0 && pct < 0.1 ? '<0.1' : pct.toFixed(1);
   return { rows, share: `${num(aiSessions)} sessions, ${pctText}% of all` };
+}
+
+// Marketing-campaign PERFORMANCE view — the tagged (utm_campaign) campaigns ranked by the campaign engine,
+// formatted with the same helpers the other breakdown tables use so all surfaces read identically. Returns
+// null when there are no tagged campaigns (the markdown/HTML then print the "no campaign tagging" note),
+// so the caller never renders an empty table. Top 10 by the engine's ranking; revenue prefixed with the
+// property currency the engine echoed back.
+function campaignPerfView(
+  campaigns: Ga4CampaignReport | null,
+): { rows: Array<{ campaign: string; sessions: string; conversions: string; revenue: string; engagement: string }>; best: string | null; untaggedShare: string } | null {
+  if (!campaigns || campaigns.taggedCampaigns.length === 0) return null;
+  const cur = campaigns.currencyCode ? `${campaigns.currencyCode} ` : '';
+  const rows = campaigns.taggedCampaigns.slice(0, 10).map((c) => ({
+    campaign: c.campaign || '(not set)',
+    sessions: num(c.sessions),
+    conversions: num(c.keyEvents),
+    revenue: c.revenue > 0 ? `${cur}${num(Math.round(c.revenue))}` : '—',
+    engagement: `${Math.round(c.engagementRate * 100)}%`,
+  }));
+  const bc = campaigns.bestCampaign;
+  const best = bc ? `${bc.campaign} (${num(bc.keyEvents)} conversions${bc.revenue > 0 ? `, ${cur}${num(Math.round(bc.revenue))}` : ''})` : null;
+  return { rows, best, untaggedShare: `${campaigns.untaggedSharePct.toFixed(1)}%` };
 }
 
 const FUNNEL_LABELS: Record<string, string> = { view_item: 'View item', add_to_cart: 'Add to cart', begin_checkout: 'Begin checkout', purchase: 'Purchase' };
@@ -397,11 +423,14 @@ const growthReadLine = (gf: { category: string; severity: string } | undefined):
           ? 'Conversions grew with the traffic but slower than sessions — the conversion rate diluted (typical of a lower-converting channel mix), not a tracking break.'
           : 'Outcomes did NOT keep pace with traffic — the spike is unconfirmed and revenue/ROAS may be wrong right now.';
 
-// Combined findings (config + data quality + growth) — the single source of truth for the report.
-function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, growth: Ga4GrowthResult | null): FindingRow[] {
+// Combined findings (config + data quality + growth + campaigns) — the single source of truth for the
+// report. Campaign findings ("no campaigns tagged" / high-untagged-share advisories, plus the top-campaign
+// info line) are deterministically measured this run, so they carry the Confirmed state.
+function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, growth: Ga4GrowthResult | null, campaigns: Ga4CampaignReport | null): FindingRow[] {
   return [
     ...config.findings.map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Config', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
     ...dq.findings.map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Data quality', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
+    ...(campaigns?.findings ?? []).map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Campaigns', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
     ...(growth?.findings ?? []).map((f: Ga4GrowthFinding): FindingRow => ({
       severity: f.severity,
       category: f.category,
@@ -458,10 +487,10 @@ function buildAreaRows(
 /** Structured Executive Summary (section 1) — drives the markdown report, the on-screen card panel
  *  and the styled PDF/Word export from one rule-based computation. */
 export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
-  const { snapshot: s, config, dataQuality: dq, growth, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, growth, audienceCount, campaigns } = input;
   const pid = input.property.replace('properties/', '');
   const ecom = hasEcommerce(s);
-  const allFindings = buildAllFindings(config, dq, growth);
+  const allFindings = buildAllFindings(config, dq, growth, campaigns);
   const top = allFindings.filter((f) => f.severity !== 'info')[0];
   const areaRows = buildAreaRows(s, config, audienceCount, ecom);
   const nPartial = areaRows.filter((a) => a.statusKey === 'partial').length;
@@ -492,11 +521,11 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
 /** Structured visualisations payload (daily trend line + colour-coded device/channel bars) for the
  *  panel + PDF charts. */
 export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
-  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount, campaigns } = input;
   const daily = baseline?.dailySessions ?? [];
   const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
   // Channel-attribution trust comes from the same Data Trust Matrix the Executive Summary uses.
-  const allFindings = buildAllFindings(config, dq, growth);
+  const allFindings = buildAllFindings(config, dq, growth, campaigns);
   const areaRows = buildAreaRows(s, config, audienceCount, hasEcommerce(s));
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
@@ -530,9 +559,9 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
 /** Structured body sections (2-4) for the designed card panel + styled export. Computed from the same
  *  pure builders the markdown report uses, so the two surfaces can't drift. */
 export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
-  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount, campaigns } = input;
   const ecom = hasEcommerce(s);
-  const allFindings = buildAllFindings(config, dq, growth);
+  const allFindings = buildAllFindings(config, dq, growth, campaigns);
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
   const dqAttrib = allFindings.find((f) => f.category === 'data_quality' && f.severity !== 'info' && /source data|Unassigned|\(not set\)/.test(f.message));
@@ -656,18 +685,18 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     footer: 'Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.',
   };
 
-  return { topFinding, noIssueNote, outcomes, findings, blocked, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), llmTraffic: llmTrafficView(baseline, s.currencyCode), funnel: funnelView(baseline), insights: deriveGa4Insights(baseline, s.currencyCode, { convSafe: keSafe, revSafe }), perfProvisional: !keSafe || !revSafe, decisions, notVerified: { gate, items: nv }, scope };
+  return { topFinding, noIssueNote, outcomes, findings, blocked, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), campaignPerformance: campaignPerfView(campaigns), llmTraffic: llmTrafficView(baseline, s.currencyCode), funnel: funnelView(baseline), insights: deriveGa4Insights(baseline, s.currencyCode, { convSafe: keSafe, revSafe }), perfProvisional: !keSafe || !revSafe, decisions, notVerified: { gate, items: nv }, scope };
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
-  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount } = input;
+  const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount, campaigns } = input;
   const pid = input.property.replace('properties/', '');
   const ecom = hasEcommerce(s);
   const L: string[] = [];
 
-  // ── Single source of truth: combined findings (config + data quality + growth/anomaly) and the
-  // area-coverage rows. The verdict, All-findings table and counts all derive from these. ──
-  const allFindings = buildAllFindings(config, dq, growth);
+  // ── Single source of truth: combined findings (config + data quality + growth/anomaly + campaigns)
+  // and the area-coverage rows. The verdict, All-findings table and counts all derive from these. ──
+  const allFindings = buildAllFindings(config, dq, growth, campaigns);
   // The "top finding" that drives the Verdict + "What is wrong" is the worst ACTIONABLE one. An
   // info-only result (e.g. the data-quality "no major issues" advisory on a clean property) has no
   // top finding, so those sections take their clean-property fallbacks instead of mislabelling an
@@ -675,6 +704,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
   const areaRows = buildAreaRows(s, config, audienceCount, ecom);
+  const campaignPerf = campaignPerfView(campaigns);
 
   const windowLabel = auditWindowLabel(dq); // same label as section 1 + the styled section 9 card
   const cmp = baseline ? ` vs prior ${baseline.priorStartDate} – ${baseline.priorEndDate}` : '';
@@ -905,6 +935,20 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
       L.push('| Market | Sessions | Conv. rate | Revenue | Engagement |');
       L.push('|---|--:|--:|--:|--:|');
       for (const g of gpRows) L.push(`| ${cell(g.country)} | ${g.sessions} | ${g.convRate} | ${g.revenue} | ${g.engagement} |`);
+      L.push('');
+    }
+    // Campaign performance — the tagged utm_campaign traffic ranked by the campaign engine. When there
+    // is no tagged campaign traffic, print a one-line advisory instead of an empty table (the "no
+    // campaigns tagged" finding also lands in section 4).
+    if (campaignPerf) {
+      L.push(`**Campaign performance** (which marketing campaigns convert and earn — top campaign: ${campaignPerf.best ?? 'n/a'}; untagged traffic ${campaignPerf.untaggedShare})`);
+      L.push('');
+      L.push('| Campaign | Sessions | Conversions | Revenue | Engagement |');
+      L.push('|---|--:|--:|--:|--:|');
+      for (const c of campaignPerf.rows) L.push(`| ${cell(c.campaign)} | ${c.sessions} | ${c.conversions} | ${c.revenue} | ${c.engagement} |`);
+      L.push('');
+    } else if (campaigns) {
+      L.push(`**Campaign performance:** No utm_campaign-tagged traffic in this window (${campaigns.untaggedSharePct.toFixed(1)}% untagged) — add utm_campaign/utm_source/utm_medium to your marketing links so campaign ROI is measurable.`);
       L.push('');
     }
     const llm = llmTrafficView(baseline, s.currencyCode);
