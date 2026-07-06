@@ -65,15 +65,22 @@ export function formatDateRange(start?: string, end?: string): string | null {
 }
 
 /** [startDate, endDate] (YYYY-MM-DD) for the last `days` INCLUSIVE calendar days
- *  ending on todayYmd. Pure + UTC-anchored (DST-immune) so it's unit-testable;
- *  the data layer passes `today` resolved in the GA4 property's timezone, and
- *  these explicit bounds are what gets queried — so displayed == queried. */
+ *  ending YESTERDAY (todayYmd - 1). Today is always a partial day and GA4's own
+ *  processing lags up to 24-48h, so a window ending today systematically deflates
+ *  the current period vs the all-full-days prior period — biasing every trend %
+ *  downward and triggering spurious drop/dilution findings that degrade the
+ *  traffic-vs-conversion trust gate. Full days only makes current-vs-prior a
+ *  like-for-like comparison. Pure + UTC-anchored (DST-immune) so it's
+ *  unit-testable; the data layer passes `today` resolved in the GA4 property's
+ *  timezone, and these explicit bounds are what gets queried — so displayed ==
+ *  queried. (The monitor is unaffected: it already judges the last FULL day.) */
 export function windowDates(todayYmd: string, days: number): { startDate: string; endDate: string } {
   const [y, m, d] = todayYmd.split('-').map(Number);
   const pad = (n: number) => String(n).padStart(2, '0');
-  const start = new Date(Date.UTC(y, m - 1, d) - Math.max(0, days - 1) * 86400000);
-  const startDate = `${start.getUTCFullYear()}-${pad(start.getUTCMonth() + 1)}-${pad(start.getUTCDate())}`;
-  return { startDate, endDate: todayYmd };
+  const fmt = (t: Date): string => `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())}`;
+  const end = new Date(Date.UTC(y, m - 1, d) - 86400000);
+  const start = new Date(end.getTime() - Math.max(0, days - 1) * 86400000);
+  return { startDate: fmt(start), endDate: fmt(end) };
 }
 
 function share(part: number, total: number): number {
