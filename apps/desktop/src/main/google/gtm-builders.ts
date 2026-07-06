@@ -1616,6 +1616,175 @@ export function findUnusedVariables(snapshot: ContainerSnapshot): AuditVariable[
   return snapshot.variables.filter((v) => v.variableId !== '' && !refs.has(v.name));
 }
 
+/* ───────────── Broken-variable & variable-type inspector ─────────────
+ * Three PURE checks that extend the container audit with variable-health findings:
+ *   1) dangling {{references}} — a resource reads a variable that doesn't exist;
+ *   2) objectively-broken per-type config (empty Data Layer key, URL QUERY with no
+ *      queryKey, cookie with no name, empty Lookup/RegEx table);
+ *   3) placeholder/whitespace naming issues across tags + triggers + variables.
+ * All reuse the existing reference model (refsIn + the container snapshot). */
+
+/** GTM built-in variable DISPLAY names. A {{Page URL}}-style token resolves to a built-in that never
+ *  appears in `snapshot.variables`, so it must NOT be flagged dangling. (This is the enabled-built-ins
+ *  DISPLAY name set, not the internal `_`-prefixed keys — those are excluded separately.) */
+export const BUILTIN_VARIABLE_NAMES: ReadonlySet<string> = new Set<string>([
+  // Page / environment
+  'Page URL', 'Page Hostname', 'Page Path', 'Referrer', 'Event',
+  'Container ID', 'Container Version', 'Random Number', 'HTML ID',
+  'Environment Name', 'Debug Mode',
+  // Clicks
+  'Click Element', 'Click Classes', 'Click ID', 'Click Target', 'Click URL', 'Click Text',
+  // Forms
+  'Form Element', 'Form Classes', 'Form ID', 'Form Target', 'Form Text', 'Form URL',
+  // Errors
+  'Error Message', 'Error URL', 'Error Line',
+  // Scroll
+  'Scroll Depth Threshold', 'Scroll Depth Units', 'Scroll Direction',
+  // Video
+  'Video Provider', 'Video Status', 'Video URL', 'Video Title', 'Video Duration',
+  'Video Current Time', 'Video Percent', 'Video Visible',
+  // History
+  'New History Fragment', 'Old History Fragment', 'New History State', 'Old History State', 'History Source',
+  // Visibility
+  'Percent Visible', 'On-Screen Duration',
+]);
+
+/** Read a scalar (template) parameter value off an AuditVariable by key — '' when missing/blank. The
+ *  snapshot carries the raw GTM param shape ({type,key,value} for scalars), so we match on `key` and
+ *  stringify `value`. Ignores list params (they have no scalar `value`). */
+export function varParam(v: AuditVariable, key: string): string {
+  const params = Array.isArray(v.parameter) ? v.parameter : [];
+  const hit = params.find((p) => p && (p as { key?: unknown }).key === key);
+  const val = hit ? (hit as { value?: unknown }).value : undefined;
+  return val == null ? '' : String(val);
+}
+
+/** True when the variable has NO rows in its `map` list param (an empty Lookup/RegEx table) — the list
+ *  is absent, not an array, or an array of length 0. */
+function hasEmptyMap(v: AuditVariable): boolean {
+  const params = Array.isArray(v.parameter) ? v.parameter : [];
+  const map = params.find((p) => p && (p as { key?: unknown }).key === 'map');
+  if (!map) return true;
+  const list = (map as { list?: unknown }).list;
+  return !Array.isArray(list) || list.length === 0;
+}
+
+/** For EACH tag / trigger / variable, the variable names it references via {{...}} that are NOT
+ *  defined in this workspace, NOT a GTM built-in, and NOT an internal `_`-prefixed built-in (e.g.
+ *  {{_event}}) — i.e. DANGLING references that resolve to undefined at runtime. One entry per resource
+ *  with ≥1 missing ref. A variable never flags a reference to ITSELF. Skips resources with empty id.
+ *  ADVISORY: a "missing" name could still be a published-only variable or a built-in not in our list. PURE. */
+export function findDanglingVariableReferences(
+  snapshot: ContainerSnapshot,
+): Array<{ resource: { kind: 'tag' | 'trigger' | 'variable'; id: string; name: string }; missing: string[] }> {
+  const defined = new Set(snapshot.variables.map((v) => v.name));
+  const results: Array<{ resource: { kind: 'tag' | 'trigger' | 'variable'; id: string; name: string }; missing: string[] }> = [];
+
+  const missingFrom = (refs: Set<string>, self?: string): string[] =>
+    [...refs].filter(
+      (name) =>
+        name !== self &&
+        !defined.has(name) &&
+        !BUILTIN_VARIABLE_NAMES.has(name) &&
+        !name.startsWith('_'),
+    );
+
+  for (const t of snapshot.tags) {
+    if (t.tagId === '') continue;
+    const refs = new Set<string>();
+    refsIn(t.parameter, refs);
+    refsIn(t.consentSettings?.consentType, refs);
+    const missing = missingFrom(refs);
+    if (missing.length) results.push({ resource: { kind: 'tag', id: t.tagId, name: t.name }, missing });
+  }
+  for (const tr of snapshot.triggers) {
+    if (tr.triggerId === '') continue;
+    const refs = new Set<string>();
+    refsIn(tr.filter, refs);
+    refsIn(tr.autoEventFilter, refs);
+    refsIn(tr.customEventFilter, refs);
+    refsIn(tr.parameter, refs);
+    const missing = missingFrom(refs);
+    if (missing.length) results.push({ resource: { kind: 'trigger', id: tr.triggerId, name: tr.name }, missing });
+  }
+  for (const v of snapshot.variables) {
+    if (v.variableId === '') continue;
+    const refs = new Set<string>();
+    refsIn(v.parameter, refs);
+    const missing = missingFrom(refs, v.name); // a variable must not flag a self-reference
+    if (missing.length) results.push({ resource: { kind: 'variable', id: v.variableId, name: v.name }, missing });
+  }
+  return results;
+}
+
+/** Per-variable objectively-broken config, by type code. Only these four checks (jsm is covered by C5,
+ *  'c' constants are always valid). Each returns a stable checkId + a human-readable issue clause. PURE.
+ *   - 'v'  Data Layer:  the dataLayer key ('name') is empty         → always returns undefined
+ *   - 'u'  URL(QUERY):  component QUERY but 'queryKey' empty        → nothing to read
+ *   - 'k'  1st-party Cookie: cookie name ('name') empty             → nothing to read
+ *   - 'smm'/'remm' Lookup / RegEx table: 'map' has no rows          → always returns default/undefined */
+export function inspectVariableConfig(
+  snapshot: ContainerSnapshot,
+): Array<{ variable: AuditVariable; checkId: string; issue: string }> {
+  const out: Array<{ variable: AuditVariable; checkId: string; issue: string }> = [];
+  for (const v of snapshot.variables) {
+    if (v.variableId === '') continue;
+    switch (v.type) {
+      case 'v':
+        if (varParam(v, 'name') === '') {
+          out.push({ variable: v, checkId: 'variable-config-dlv', issue: 'has no Data Layer key set — always returns undefined' });
+        }
+        break;
+      case 'u':
+        if (varParam(v, 'component') === 'QUERY' && varParam(v, 'queryKey') === '') {
+          out.push({ variable: v, checkId: 'variable-config-url', issue: 'reads a URL query parameter but no query key is set' });
+        }
+        break;
+      case 'k':
+        if (varParam(v, 'name') === '') {
+          out.push({ variable: v, checkId: 'variable-config-cookie', issue: 'has no cookie name set' });
+        }
+        break;
+      case 'smm':
+      case 'remm':
+        if (hasEmptyMap(v)) {
+          out.push({ variable: v, checkId: 'variable-config-lookup', issue: 'has no rows — always returns its default/undefined' });
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  return out;
+}
+
+const PLACEHOLDER_NAME_RE = /^(untitled|copy of|new (tag|trigger|variable))\b/i;
+
+/** Objective naming issues across tags + triggers + variables:
+ *   - placeholder/default names ("Untitled…", "Copy of…", "New Tag/Trigger/Variable…", or empty) → 'placeholder-name'
+ *   - stray whitespace (leading/trailing, or a run of ≥2 spaces)                                  → 'name-whitespace'
+ *  Subjective prefix-consistency is intentionally out of scope for v1. PURE. */
+export function findVariableNamingIssues(
+  snapshot: ContainerSnapshot,
+): Array<{ resource: { kind: 'tag' | 'trigger' | 'variable'; id: string; name: string }; checkId: string; issue: string }> {
+  const out: Array<{ resource: { kind: 'tag' | 'trigger' | 'variable'; id: string; name: string }; checkId: string; issue: string }> = [];
+  const check = (kind: 'tag' | 'trigger' | 'variable', id: string, name: string): void => {
+    if (id === '') return;
+    const raw = name ?? '';
+    if (raw === '' || PLACEHOLDER_NAME_RE.test(raw)) {
+      out.push({ resource: { kind, id, name: raw }, checkId: 'placeholder-name', issue: raw === '' ? 'has no name' : `uses a placeholder/default name "${raw}"` });
+      return; // one naming finding per resource — a placeholder name subsumes whitespace nits
+    }
+    if (raw !== raw.trim() || /\s{2,}/.test(raw)) {
+      out.push({ resource: { kind, id, name: raw }, checkId: 'name-whitespace', issue: `has stray whitespace in its name "${raw}"` });
+    }
+  };
+  for (const t of snapshot.tags) check('tag', t.tagId, t.name);
+  for (const tr of snapshot.triggers) check('trigger', tr.triggerId, tr.name);
+  for (const v of snapshot.variables) check('variable', v.variableId, v.name);
+  return out;
+}
+
 /** Diagnostic: explain the orphaned-trigger count by showing how it would change under looser
  *  definitions. `orphanedStrict` is what the audit reports today (not firing/blocking/group, not
  *  built-in). The "…IfXUnused" variants relax one rule, so the gap between strict and a variant is
@@ -2100,6 +2269,63 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
         'Delete it if it is truly unused — delete_unused_gtm_variables removes all orphans at once (or a selected subset). First confirm it is NOT relied on by a published version or a field this audit cannot inspect (unlike triggers, GTM lets you delete a referenced variable, which silently breaks that reference).',
       autoFixable: true,
       fix: { tool: 'delete_gtm_variable', args: { variableId: v.variableId, name: v.name } },
+    });
+  }
+
+  // Broken-variable & variable-type inspector — three extensions to the variable audit.
+  //
+  // (a) Dangling {{references}}: a tag/trigger/variable reads a variable that this workspace does NOT
+  //     define and that isn't a GTM built-in → it resolves to undefined at runtime. ADVISORY (Medium /
+  //     Likely, no auto-fix): the missing name could be a published-only variable or a built-in not in
+  //     our list, so we recommend rather than mutate.
+  for (const d of findDanglingVariableReferences(s)) {
+    const list = d.missing.map((m) => `{{${m}}}`).join(', ');
+    const noun = d.resource.kind;
+    findings.push({
+      severity: 'medium',
+      confidence: 'likely',
+      category: 'variable',
+      checkId: 'dangling-variable-ref',
+      resource: { kind: d.resource.kind, id: d.resource.id, name: d.resource.name },
+      message: `${noun.charAt(0).toUpperCase() + noun.slice(1)} "${d.resource.name}" references ${d.missing.length > 1 ? 'variables' : 'a variable'} that no variable in this workspace defines: ${list} — ${d.missing.length > 1 ? 'they' : 'it'} will be undefined at runtime.`,
+      recommendation: 'Create the variable or fix the {{reference}} (check it isn\'t a renamed/deleted variable or a disabled built-in).',
+      autoFixable: false,
+    });
+  }
+
+  // (b) Objectively-broken per-type config (Data Layer key / URL query key / cookie name / empty
+  //     Lookup table). Certain — provable from the container — so Medium / Certain, no auto-fix.
+  for (const c of inspectVariableConfig(s)) {
+    findings.push({
+      severity: 'medium',
+      confidence: 'certain',
+      category: 'variable',
+      checkId: c.checkId,
+      resource: { kind: 'variable', id: c.variable.variableId, name: c.variable.name },
+      message: `Variable "${c.variable.name}" ${c.issue}.`,
+      recommendation:
+        c.checkId === 'variable-config-dlv'
+          ? 'Set the Data Layer Variable Name (the dataLayer key this variable should read).'
+          : c.checkId === 'variable-config-url'
+            ? 'Set the Query Key this URL variable should read (the ?name= parameter).'
+            : c.checkId === 'variable-config-cookie'
+              ? 'Set the cookie name this 1st-Party Cookie variable should read.'
+              : 'Add at least one row to the table, or delete the variable if it is not needed.',
+      autoFixable: false,
+    });
+  }
+
+  // (c) Placeholder / whitespace naming issues across tags + triggers + variables. Low / Certain.
+  for (const n of findVariableNamingIssues(s)) {
+    findings.push({
+      severity: 'low',
+      confidence: 'certain',
+      category: 'naming',
+      checkId: n.checkId,
+      resource: { kind: n.resource.kind, id: n.resource.id, name: n.resource.name },
+      message: `${n.resource.kind.charAt(0).toUpperCase() + n.resource.kind.slice(1)} "${n.resource.name}" ${n.issue}.`,
+      recommendation: 'Rename to a descriptive, convention-consistent name.',
+      autoFixable: false,
     });
   }
 

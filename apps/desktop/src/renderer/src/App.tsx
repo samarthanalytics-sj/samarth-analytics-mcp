@@ -3016,6 +3016,7 @@ const AUDIT_CATEGORY_LABELS: Array<[string, string]> = [
   ['ga4', 'GA4 config'],
   ['performance', 'Performance'],
   ['deprecated', 'Deprecated'],
+  ['variable', 'Broken variables'],
   ['naming', 'Naming'],
 ];
 const AUDIT_SEVERITIES: Array<[string, string]> = [
