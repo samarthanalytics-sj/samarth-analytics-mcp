@@ -86,11 +86,12 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
   ],
   campaignPerformance: {
     rows: [
-      { campaign: 'summer_sale', sessions: '5,000', conversions: '400', revenue: 'INR 250,000', engagement: '62%' },
-      { campaign: 'spring_promo', sessions: '3,000', conversions: '150', revenue: 'INR 90,000', engagement: '51%' },
+      { campaign: 'summer_sale', sessions: '5,000', conversions: '400', purchases: '12', revenue: 'INR 250,000', engagement: '62%' },
+      { campaign: 'spring_promo', sessions: '3,000', conversions: '150', purchases: '4', revenue: 'INR 90,000', engagement: '51%' },
     ],
-    best: 'summer_sale (400 conversions, INR 250,000)',
+    best: 'summer_sale (400 key events, 12 purchases, INR 250,000)',
     untaggedShare: '60.0%',
+    caveat: '"Key events" counts every configured key event (product views, add-to-carts, sign-ups, ...), NOT sales - Purchases is the real transaction count. Revenue here is campaign-attributed and will not match the channel table 1:1.',
   },
   llmTraffic: {
     rows: [
@@ -270,6 +271,9 @@ test('section 6 renders the campaign-performance table with the campaign name, b
   assert.ok(/Campaign performance/.test(h), 'campaign table heading');
   assert.ok(h.includes('summer_sale') && h.includes('400') && h.includes('INR 250,000'), 'a tagged-campaign row');
   assert.ok(/top: summer_sale/.test(h), 'best campaign in the caption');
+  assert.ok(/Key events<\/th>/.test(h) && !/>Conversions<\/th>/.test(h), 'column header says Key events, never Conversions');
+  assert.ok(/>Purchases<\/th>/.test(h) && h.includes('>12<'), 'real purchase count rendered in its own column');
+  assert.ok(h.includes('NOT sales') && h.includes('will not match the channel table 1:1'), 'guardrail caveat under the campaign table');
   assert.ok(/untagged traffic 60\.0%/.test(h), 'untagged share in the caption');
 });
 

@@ -2882,7 +2882,9 @@ export class GoogleDataService {
         requestBody: {
           dateRanges: [{ startDate, endDate }],
           dimensions: [{ name: 'sessionCampaignName' }],
-          metrics: [{ name: 'sessions' }, { name: 'keyEvents' }, { name: 'totalRevenue' }, { name: 'engagementRate' }],
+          // transactions = real purchase count, fetched alongside keyEvents so the report can show
+          // "key events" and "purchases" side by side instead of letting key-event counts read as sales.
+          metrics: [{ name: 'sessions' }, { name: 'keyEvents' }, { name: 'totalRevenue' }, { name: 'engagementRate' }, { name: 'transactions' }],
           orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
           limit: '50',
         },
@@ -2897,6 +2899,7 @@ export class GoogleDataService {
       keyEvents: Number(r.metricValues?.[1]?.value) || 0,
       revenue: Number(r.metricValues?.[2]?.value) || 0,
       engagementRate: Number(r.metricValues?.[3]?.value) || 0,
+      purchases: Number(r.metricValues?.[4]?.value) || 0,
     }));
     const currencyCode = campaignRes.data.metadata?.currencyCode || undefined;
     const totalSessions =

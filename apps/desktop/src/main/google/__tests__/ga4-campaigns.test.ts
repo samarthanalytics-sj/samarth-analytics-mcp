@@ -137,7 +137,7 @@ test('no tagged campaigns → ONE medium attribution finding', () => {
   assert.match(r.findings[0].recommendation!, /utm_campaign/);
 });
 
-test('best-campaign INFO finding names the winner with conversions, revenue, sessions', () => {
+test('best-campaign INFO finding names the winner with key events (never "conversions"), revenue, sessions', () => {
   const r = rankGa4Campaigns({
     rows: [row('summer_sale', 400, 40, 4000), row('(organic)', 100, 0, 0)],
     totalSessions: 500,
@@ -146,13 +146,26 @@ test('best-campaign INFO finding names the winner with conversions, revenue, ses
   const info = r.findings.find((f) => f.severity === 'info');
   assert.ok(info, 'info finding present');
   assert.equal(info!.category, 'attribution');
-  assert.match(info!.message, /Top campaign by conversions/);
+  // Key-event counts must never be presented as "conversions" (readable as sales).
+  assert.match(info!.message, /Top campaign by key events/);
   assert.match(info!.message, /"summer_sale"/);
-  assert.match(info!.message, /40 conversions/);
+  assert.match(info!.message, /40 key events - not purchases/);
+  assert.ok(!/\bconversions\b/.test(info!.message), 'the word "conversions" never appears');
   // No currencyCode supplied → bare number, never a misleading '$'.
-  assert.match(info!.message, /40 conversions, 4000, 400 sessions/);
+  assert.match(info!.message, /40 key events - not purchases, 4000, 400 sessions/);
   assert.ok(!info!.message.includes('$'), 'no hardcoded dollar sign when currency is unknown');
   assert.match(info!.message, /400 sessions/);
+});
+
+test('best-campaign INFO finding carries the real purchase count when it was fetched', () => {
+  const r = rankGa4Campaigns({
+    rows: [{ ...row('summer_sale', 400, 40, 4000), purchases: 3 }, row('(organic)', 100, 0, 0)],
+    totalSessions: 500,
+    windowDays: 28,
+  });
+  const info = r.findings.find((f) => f.severity === 'info');
+  assert.match(info!.message, /40 key events - not purchases, 3 purchases/);
+  assert.equal(r.bestCampaign?.purchases, 3, 'purchases preserved on the ranked row');
 });
 
 test('revenue is labelled with the property currency code when known (INR, USD, …)', () => {

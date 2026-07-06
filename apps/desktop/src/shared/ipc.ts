@@ -316,8 +316,10 @@ export interface Ga4SectionsView {
   /** Section 6 — market performance (which geographies convert and spend). */
   geoPerformance: Array<{ country: string; sessions: string; convRate: string; revenue: string; engagement: string }>;
   /** Section 6 — marketing-campaign performance (tagged utm_campaign traffic ranked by the campaign
-   *  engine), the top campaign, and the untagged-traffic share. null = no utm_campaign-tagged traffic. */
-  campaignPerformance: { rows: Array<{ campaign: string; sessions: string; conversions: string; revenue: string; engagement: string }>; best: string | null; untaggedShare: string } | null;
+   *  engine), the top campaign, and the untagged-traffic share. null = no utm_campaign-tagged traffic.
+   *  `conversions` is the KEY-EVENT count (rendered as "Key events", never as sales); `purchases` is the
+   *  real transaction count ('—' when not fetched); `caveat` is the mandatory guardrail footnote. */
+  campaignPerformance: { rows: Array<{ campaign: string; sessions: string; conversions: string; purchases: string; revenue: string; engagement: string }>; best: string | null; untaggedShare: string; caveat: string } | null;
   /** Section 6 — AI/LLM referral-traffic performance + its share of all sessions. null = no AI traffic. */
   llmTraffic: { rows: Array<{ source: string; sessions: string; convRate: string; revenue: string; engagement: string }>; share: string } | null;
   /** Section 6 — rule-based "Key insights" bullets (peaks/lows, top performers, the near-100%-conv flag). */

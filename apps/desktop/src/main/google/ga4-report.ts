@@ -224,19 +224,24 @@ function llmTrafficView(baseline: Ga4Baseline | null, currency: string): { rows:
 // property currency the engine echoed back.
 function campaignPerfView(
   campaigns: Ga4CampaignReport | null,
-): { rows: Array<{ campaign: string; sessions: string; conversions: string; revenue: string; engagement: string }>; best: string | null; untaggedShare: string } | null {
+): { rows: Array<{ campaign: string; sessions: string; conversions: string; purchases: string; revenue: string; engagement: string }>; best: string | null; untaggedShare: string; caveat: string } | null {
   if (!campaigns || campaigns.taggedCampaigns.length === 0) return null;
   const cur = campaigns.currencyCode ? `${campaigns.currencyCode} ` : '';
   const rows = campaigns.taggedCampaigns.slice(0, 10).map((c) => ({
     campaign: c.campaign || '(not set)',
     sessions: num(c.sessions),
     conversions: num(c.keyEvents),
+    purchases: typeof c.purchases === 'number' ? num(c.purchases) : '—',
     revenue: c.revenue > 0 ? `${cur}${num(Math.round(c.revenue))}` : '—',
     engagement: `${Math.round(c.engagementRate * 100)}%`,
   }));
   const bc = campaigns.bestCampaign;
-  const best = bc ? `${bc.campaign} (${num(bc.keyEvents)} conversions${bc.revenue > 0 ? `, ${cur}${num(Math.round(bc.revenue))}` : ''})` : null;
-  return { rows, best, untaggedShare: `${campaigns.untaggedSharePct.toFixed(1)}%` };
+  const best = bc ? `${bc.campaign} (${num(bc.keyEvents)} key events${typeof bc.purchases === 'number' ? `, ${num(bc.purchases)} purchases` : ''}${bc.revenue > 0 ? `, ${cur}${num(Math.round(bc.revenue))}` : ''})` : null;
+  // The guardrail the other tables already carry, worded for THIS table's two traps: key-event counts
+  // read as sales, and campaign-attributed revenue read as reconcilable with the channel table.
+  const caveat =
+    '"Key events" counts every configured key event (product views, add-to-carts, sign-ups, ...), NOT sales - Purchases is the real transaction count. Revenue here is campaign-attributed and will not match the channel table 1:1.';
+  return { rows, best, untaggedShare: `${campaigns.untaggedSharePct.toFixed(1)}%`, caveat };
 }
 
 const FUNNEL_LABELS: Record<string, string> = { view_item: 'View item', add_to_cart: 'Add to cart', begin_checkout: 'Begin checkout', purchase: 'Purchase' };
@@ -431,13 +436,21 @@ const growthReadLine = (gf: { category: string; severity: string } | undefined):
 // the gateway and back, GA4 re-attributes the purchase to the gateway, and referral/Direct inflate.
 const GATEWAY_RE = /(razorpay|paypal|stripe|payu\b|cashfree|braintree|klarna|ccavenue|billdesk|instamojo|paytm|phonepe|mollie|adyen|worldpay|2checkout|payoneer|checkout\.com)/i;
 
+// Campaign names that indicate PAID media (ad-platform shapes: Shopping/PMax/Search/Display formats and
+// the bare numeric IDs Google Ads reports when a campaign was never given a name), vs channel-group names
+// GA4 classifies as paid. Used to cross-check the two revenue pictures against each other.
+const PAID_CAMPAIGN_RE = /(shopping|perf(ormance)?[\s_-]*max|p-?max|search|display|video|discovery|demand[\s_-]*gen|remarketing|retargeting|adv\+|^\d{6,}$)/i;
+const PAID_CHANNEL_RE = /^(paid[\s_]|cross[\s_-]*network|display$)/i;
+
 /** Anti-lie checks computed straight off the reporting data (both DETERMINISTIC, state confirmed):
  *  1. Concentration — one bucket (week/month) holding most of a channel that carries a meaningful
  *     share of all sessions: the headline session count and prior-period comparison then describe an
  *     event, not the business. Same detector the evidence chart uses, so chart and finding agree.
  *  2. Payment-gateway referral leakage — a PSP showing up as a referral source means referral
- *     exclusions are missing and purchase attribution is being re-assigned to the gateway. */
-function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCounts | null): FindingRow[] {
+ *     exclusions are missing and purchase attribution is being re-assigned to the gateway.
+ *  3. Campaign vs channel revenue reconciliation — paid-looking campaigns claiming revenue that no
+ *     paid channel shows means the report contains two irreconcilable revenue pictures. */
+function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCounts | null, campaigns?: Ga4CampaignReport | null): FindingRow[] {
   const out: FindingRow[] = [];
   if (baseline && baseline.channelDaily?.length) {
     const gran = granularityFor(baseline.dailySessions?.length ?? 0);
@@ -469,6 +482,33 @@ function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCoun
       businessRisk: 'Purchases credited to the payment gateway instead of the channel that earned them',
     });
   }
+  // 3. Paid-campaign revenue vs paid-channel revenue. Numerator: tagged campaigns whose NAME is an ad-
+  // platform shape (Shopping/PMax/Search/... or a bare numeric Google Ads ID) — email/newsletter UTMs
+  // legitimately land in non-paid channels and must not trip this. Fires when the paid channels show
+  // less than HALF of what those campaigns claim: the two revenue pictures then cannot both be quoted.
+  if (campaigns && baseline?.channelPerformance?.length) {
+    const paidCamps = campaigns.taggedCampaigns.filter((c) => c.revenue > 0 && PAID_CAMPAIGN_RE.test(c.campaign));
+    const campRev = paidCamps.reduce((s, c) => s + c.revenue, 0);
+    const paidChanRev = baseline.channelPerformance.filter((c) => PAID_CHANNEL_RE.test(c.channel)).reduce((s, c) => s + c.revenue, 0);
+    if (campRev > 0 && paidChanRev < campRev / 2) {
+      const cur = campaigns.currencyCode ? `${campaigns.currencyCode} ` : '';
+      const m = (x: number): string => `${cur}${Math.round(x).toLocaleString('en-US')}`;
+      const names = paidCamps.slice(0, 3).map((c) => `"${c.campaign}"`).join(', ');
+      const topNonPaid = baseline.channelPerformance.filter((c) => !PAID_CHANNEL_RE.test(c.channel)).slice().sort((a, b) => b.revenue - a.revenue)[0];
+      const landing = topNonPaid && topNonPaid.revenue > paidChanRev
+        ? ` The likeliest explanation: that paid traffic is arriving without paid tagging and landing mislabeled in "${topNonPaid.channel}" (${m(topNonPaid.revenue)}, currently the top revenue channel); the alternative is that the campaign view counts ad-platform-attributed revenue while the channel view uses GA4 session attribution.`
+        : ' Either the campaign view counts ad-platform-attributed revenue while the channel view uses GA4 session attribution, or paid traffic is being classified into non-paid channels.';
+      out.push({
+        severity: 'high',
+        category: 'attribution_mismatch',
+        area: 'Data quality',
+        message: `Campaign and channel revenue do not reconcile: paid-format campaigns (${names}) claim ${m(campRev)}, but all paid channels combined show only ${m(paidChanRev)}.${landing} Either way this report contains two revenue pictures that cannot both be true as stated.`,
+        recommendation: 'Verify Google Ads auto-tagging (gclid) and the GA4-Google Ads link, add utm_medium=cpc/paid to ad links so paid sessions leave the organic/direct buckets, and quote revenue from ONE attribution view until the two reconcile.',
+        state: 'confirmed',
+        businessRisk: 'Paid-media budget and ROAS decisions made on revenue attributed to the wrong channel',
+      });
+    }
+  }
   return out;
 }
 
@@ -477,7 +517,7 @@ function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, grow
     ...config.findings.map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Config', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
     ...dq.findings.map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Data quality', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
     ...(campaigns?.findings ?? []).map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Campaigns', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
-    ...antiLieFindings(baseline ?? null, dqCounts ?? null),
+    ...antiLieFindings(baseline ?? null, dqCounts ?? null, campaigns),
     ...(growth?.findings ?? []).map((f: Ga4GrowthFinding): FindingRow => ({
       severity: f.severity,
       category: f.category,
@@ -991,9 +1031,13 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     if (campaignPerf) {
       L.push(`**Campaign performance** (which marketing campaigns convert and earn — top campaign: ${campaignPerf.best ?? 'n/a'}; untagged traffic ${campaignPerf.untaggedShare})`);
       L.push('');
-      L.push('| Campaign | Sessions | Conversions | Revenue | Engagement |');
-      L.push('|---|--:|--:|--:|--:|');
-      for (const c of campaignPerf.rows) L.push(`| ${cell(c.campaign)} | ${c.sessions} | ${c.conversions} | ${c.revenue} | ${c.engagement} |`);
+      L.push('| Campaign | Sessions | Key events | Purchases | Revenue | Engagement |');
+      L.push('|---|--:|--:|--:|--:|--:|');
+      for (const c of campaignPerf.rows) L.push(`| ${cell(c.campaign)} | ${c.sessions} | ${c.conversions} | ${c.purchases} | ${c.revenue} | ${c.engagement} |`);
+      L.push('');
+      // The one table that used to ship without a guardrail: key-event counts must never read as sales,
+      // and it carries the same provisional flag as the other performance tables when trust is unproven.
+      L.push(`_${campaignPerf.caveat}${!convSafe || !revSafe ? ' Key-event and revenue figures are provisional - unverified in the Data Trust Matrix.' : ''}_`);
       L.push('');
     } else if (campaigns) {
       L.push(`**Campaign performance:** No utm_campaign-tagged traffic in this window (${campaigns.untaggedSharePct.toFixed(1)}% untagged) — add utm_campaign/utm_source/utm_medium to your marketing links so campaign ROI is measurable.`);

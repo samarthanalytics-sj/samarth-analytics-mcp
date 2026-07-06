@@ -416,16 +416,22 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
   // the view is null and we show a one-line advisory instead of an empty table.
   if (x.campaignPerformance && x.campaignPerformance.rows.length) {
     const cp = x.campaignPerformance;
+    // Key events / purchases / revenue take the provisional ink (TDP) like every other unverified
+    // outcome column; sessions and engagement stay normal. Header says "Key events", never "Conversions",
+    // and the mandatory caveat renders as this table's own mono footnote — this used to be the one table
+    // with no guardrail, where key-event counts could read as sales.
     const cpRows = cp.rows
       .map(
         (c) =>
-          `<tr><td ${TD}><span style="font-weight:600">${esc(c.campaign)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDR}>${esc(c.conversions)}</td><td ${TDR}>${esc(c.revenue)}</td><td ${TDR}>${esc(c.engagement)}</td></tr>`,
+          `<tr><td ${TD}><span style="font-weight:600">${esc(c.campaign)}</span></td><td ${TDR}>${esc(c.sessions)}</td><td ${TDP}>${esc(c.conversions)}</td><td ${TDP}>${esc(c.purchases)}</td><td ${TDP}>${esc(c.revenue)}</td><td ${TDR}>${esc(c.engagement)}</td></tr>`,
       )
       .join('');
     s6 +=
       tableCaption('Campaign performance', `(which marketing campaigns convert and earn${cp.best ? ` — top: ${esc(cp.best)}` : ''}; untagged traffic ${esc(cp.untaggedShare)})`) +
       `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
-      `<table style="border-collapse:collapse;width:100%;min-width:440px"><thead><tr><th ${TH}>Campaign</th><th ${THR}>Sessions</th><th ${THR}>Conversions</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cpRows}</tbody></table></div>`;
+      `<table style="border-collapse:collapse;width:100%;min-width:500px"><thead><tr><th ${TH}>Campaign</th><th ${THR}>Sessions</th><th ${THR}>Key events</th><th ${THR}>Purchases</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${cpRows}</tbody></table></div>` +
+      `<div style="font-family:${MONO};font-size:11px;color:${FAINT};margin:4px 2px 8px;line-height:1.55">${esc(cp.caveat)}</div>` +
+      provNote;
   }
   // AI/LLM assistant referral traffic — which AI sources convert and earn. A systematic undercount
   // (referrer-stripped visits land in Direct), stated explicitly in the caveat below the table.
