@@ -1,3 +1,9 @@
+## [1.197.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.196.1...v1.197.0) (2026-07-06)
+
+### Features
+
+* **desktop:** verify firing straight from the container — drop the paste option ([f797227](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f7972272002e5932df818acc41c3d39685996ce3))
+
 ## [1.196.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.196.0...v1.196.1) (2026-07-06)
 
 ### Bug Fixes
