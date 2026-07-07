@@ -15,6 +15,7 @@ import { buildGa4Scorecard } from './ga4-scorecard';
 import { analyzeGa4Trend } from './ga4-trend';
 import { deriveGa4Insights } from './ga4-insights';
 import { findChannelSpike, groupSeries, granularityFor } from '../../shared/ga4-visuals-html';
+import { engagementClusters } from '../../shared/ga4-sections-html';
 import type { Ga4ExecSummaryView, Ga4VisualsView, Ga4SectionsView } from '../../shared/ipc';
 
 export interface Ga4ReportInput {
@@ -461,7 +462,10 @@ const PAID_CHANNEL_RE = /^(paid[\s_]|cross[\s_-]*network|display$)/i;
  *  2. Payment-gateway referral leakage — a PSP showing up as a referral source means referral
  *     exclusions are missing and purchase attribution is being re-assigned to the gateway.
  *  3. Campaign vs channel revenue reconciliation — paid-looking campaigns claiming revenue that no
- *     paid channel shows means the report contains two irreconcilable revenue pictures. */
+ *     paid channel shows means the report contains two irreconcilable revenue pictures.
+ *  4. Invalid-traffic signature — market engagement splitting into two clean populations (the same
+ *     bimodality detector the Section-6 evidence chart uses): the low cluster is where bot/proxy/junk
+ *     traffic concentrates, and when it carries a material session share it inflates the totals. */
 function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCounts | null, campaigns?: Ga4CampaignReport | null): FindingRow[] {
   const out: FindingRow[] = [];
   // The spike result is held so the reconciliation finding below can cross-reference it: untagged paid
@@ -501,6 +505,33 @@ function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCoun
       businessRisk: 'Purchases credited to the payment gateway instead of the channel that earned them',
     });
   }
+  // 4. Invalid-traffic signature: engagement bimodality across markets, computed by the SAME
+  // engagementClusters detector as the Section-6 evidence chart so the finding and the chart can
+  // never disagree. Only fires when the low cluster carries a material share of the listed sessions
+  // (>= 3%, HIGH at >= 10%) - a couple of stray low-engagement visitors are not a bot wave.
+  if (baseline?.geoPerformance && baseline.geoPerformance.length >= 4) {
+    const rows = baseline.geoPerformance.map((g) => ({ name: g.country || '(not set)', pct: Math.round(g.engagementRate * 100), sessions: g.sessions }));
+    const clusters = engagementClusters(rows);
+    if (clusters) {
+      const lowNames = new Set(clusters.low.map((r) => r.name));
+      const lowSessions = rows.filter((r) => lowNames.has(r.name)).reduce((sum, r) => sum + r.sessions, 0);
+      const total = rows.reduce((sum, r) => sum + r.sessions, 0);
+      const sharePct = total > 0 ? (lowSessions / total) * 100 : 0;
+      if (sharePct >= 3) {
+        const highMin = Math.min(...clusters.high.map((r) => r.pct));
+        out.push({
+          severity: sharePct >= 10 ? 'high' : 'medium',
+          category: 'invalid_traffic',
+          area: 'Data quality',
+          message: `Suspected invalid traffic: ${clusters.low.map((r) => `${r.name} (${r.pct}% engagement)`).join(', ')} sit ${clusters.gap} points below your other markets (${highMin}%+) - a split this clean separates real users from bot/proxy/junk traffic, and those markets carry ${lowSessions.toLocaleString('en-US')} sessions (${sharePct.toFixed(1)}% of the listed markets' total).`,
+          recommendation: `Check the source/medium and hostnames behind ${clusters.low.map((r) => r.name).join(', ')}; if it is bot or proxy traffic, exclude it (internal-traffic rules or a segment) before quoting session totals or market comparisons.`,
+          state: 'confirmed',
+          businessRisk: 'Session totals and market comparisons inflated by traffic that cannot buy',
+        });
+      }
+    }
+  }
+
   // 3. Paid-campaign revenue vs paid-channel revenue. Numerator: tagged campaigns whose NAME is an ad-
   // platform shape (Shopping/PMax/Search/... or a bare numeric Google Ads ID) — email/newsletter UTMs
   // legitimately land in non-paid channels and must not trip this. Fires when the paid channels show

@@ -808,5 +808,43 @@ test('data-collection continuity raises the reliability headline (the verificati
   assert.ok(verified.reliabilityPct > unverified.reliabilityPct, `verified ${verified.reliabilityPct}% > unverified ${unverified.reliabilityPct}%`);
 });
 
+test('anti-lie finding: engagement bimodality across markets -> invalid-traffic finding (same detector as the chart)', () => {
+  const b = baseline({
+    geoPerformance: [
+      { country: 'India', sessions: 50000, keyEvents: 1500, convRate: 0.03, revenue: 400000, engagementRate: 0.9 },
+      { country: 'United States', sessions: 12000, keyEvents: 900, convRate: 0.075, revenue: 250000, engagementRate: 0.92 },
+      { country: 'United Kingdom', sessions: 6000, keyEvents: 300, convRate: 0.05, revenue: 90000, engagementRate: 0.88 },
+      { country: 'Vietnam', sessions: 9000, keyEvents: 2, convRate: 0.0002, revenue: 0, engagementRate: 0.12 },
+    ],
+  });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(/Suspected invalid traffic/.test(md), 'finding fires');
+  assert.ok(/Vietnam \(12% engagement\)/.test(md), 'names the low-cluster market with its engagement');
+  assert.ok(/9,000 sessions \(11.7% of the listed markets' total\)/.test(md), 'quantifies the affected share');
+  assert.ok(/\| HIGH \| Data quality \| Suspected invalid traffic/.test(md), 'HIGH at >=10% share');
+
+  // A smooth engagement spread produces nothing.
+  const smooth = baseline({
+    geoPerformance: [
+      { country: 'India', sessions: 50000, keyEvents: 1500, convRate: 0.03, revenue: 400000, engagementRate: 0.62 },
+      { country: 'United States', sessions: 12000, keyEvents: 900, convRate: 0.075, revenue: 250000, engagementRate: 0.7 },
+      { country: 'United Kingdom', sessions: 6000, keyEvents: 300, convRate: 0.05, revenue: 90000, engagementRate: 0.55 },
+      { country: 'Germany', sessions: 4000, keyEvents: 150, convRate: 0.04, revenue: 60000, engagementRate: 0.48 },
+    ],
+  });
+  assert.ok(!/Suspected invalid traffic/.test(buildGa4AuditReport(input({ baseline: smooth, growth: growthOf(smooth) }))), 'no finding on a smooth spread');
+
+  // A tiny low cluster (<3% of listed sessions) is noise, not a bot wave.
+  const tiny = baseline({
+    geoPerformance: [
+      { country: 'India', sessions: 50000, keyEvents: 1500, convRate: 0.03, revenue: 400000, engagementRate: 0.9 },
+      { country: 'United States', sessions: 12000, keyEvents: 900, convRate: 0.075, revenue: 250000, engagementRate: 0.92 },
+      { country: 'United Kingdom', sessions: 6000, keyEvents: 300, convRate: 0.05, revenue: 90000, engagementRate: 0.88 },
+      { country: 'Vietnam', sessions: 900, keyEvents: 2, convRate: 0.002, revenue: 0, engagementRate: 0.12 },
+    ],
+  });
+  assert.ok(!/Suspected invalid traffic/.test(buildGa4AuditReport(input({ baseline: tiny, growth: growthOf(tiny) }))), 'sub-3% low cluster stays a breakdown note');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
