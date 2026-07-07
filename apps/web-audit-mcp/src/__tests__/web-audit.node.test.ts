@@ -122,6 +122,8 @@ check('crawl: contact prioritised', urlPriority('https://x.com/contact-us') > ur
 check('crawl: broadened form tokens prioritised',
   ['https://x.com/free-audit', 'https://x.com/consultation', 'https://x.com/get-started', 'https://x.com/pricing', 'https://x.com/schedule-a-demo', 'https://x.com/services']
     .every((u) => urlPriority(u) === 1) && urlPriority('https://x.com/about') === 0);
+// /careers carries the "Apply for … " form — must be prioritised so its form is discovered.
+check('crawl: careers page prioritised (has the apply form)', urlPriority('https://x.com/careers') === 1 && urlPriority('https://x.com/jobs') === 1);
 
 // ── form analysis ───────────────────────────────────────────────────────────
 
