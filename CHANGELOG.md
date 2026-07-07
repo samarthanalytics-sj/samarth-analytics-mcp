@@ -1,3 +1,9 @@
+## [1.238.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.237.0...v1.238.0) (2026-07-07)
+
+### Features
+
+* **tag-suggest:** install plan on every suggestion, not just forms ([0d8454f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0d8454f91c10e2de82ca7de789ce8ddc41244beb))
+
 ## [1.237.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.236.0...v1.237.0) (2026-07-07)
 
 ### Features
