@@ -2262,7 +2262,7 @@ export function buildToolRegistry(
     {
       name: 'create_server_tag',
       description:
-        'Create a tag in a SERVER container workspace (reads event data from the GA4 client). platform: "ga4" (forward events to GA4 — needs measurementId, optional eventName, defaults to forwarding the incoming event), "ads_conversion" (Google Ads conversion — needs conversionId + conversionLabel), "ads_conversion_linker" (Google Ads conversion linker), or "ads_remarketing" (Google Ads dynamic remarketing — needs conversionId). Optional firingTriggerId. Requires accountId, containerId, workspaceId, platform, name.',
+        'Create a tag in a SERVER container workspace (reads event data from the GA4 client). platform: "ga4" (forward events to GA4 — needs measurementId, optional eventName, defaults to forwarding the incoming event), "ads_conversion" (Google Ads conversion — needs conversionId + conversionLabel; set productReporting=true ONLY for an ecommerce/purchase conversion so it forwards the event\'s product data, otherwise it stays off), "ads_conversion_linker" (Google Ads conversion linker), or "ads_remarketing" (Google Ads dynamic remarketing — needs conversionId). Optional firingTriggerId. Requires accountId, containerId, workspaceId, platform, name.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -2275,6 +2275,7 @@ export function buildToolRegistry(
           conversionId: { type: 'string' },
           conversionLabel: { type: 'string' },
           eventName: { type: 'string' },
+          productReporting: { type: 'boolean', description: 'ads_conversion only — forward the event\'s product/cart data (Shopping reporting). Default false; set true only for ecommerce/purchase conversions.' },
           firingTriggerId: { type: 'array', items: { type: 'string' } },
         },
         required: ['accountId', 'containerId', 'workspaceId', 'platform', 'name'],
@@ -2294,7 +2295,7 @@ export function buildToolRegistry(
             break;
           case 'ads_conversion':
             if (!s(a.conversionId) || !s(a.conversionLabel)) throw new Error('platform "ads_conversion" requires conversionId and conversionLabel.');
-            tag = buildAdsConversionServerTag(name, s(a.conversionId), s(a.conversionLabel), ftid);
+            tag = buildAdsConversionServerTag(name, s(a.conversionId), s(a.conversionLabel), ftid, bln(a.productReporting));
             break;
           case 'ads_conversion_linker':
             tag = buildAdsConversionLinkerServerTag(name, ftid);
