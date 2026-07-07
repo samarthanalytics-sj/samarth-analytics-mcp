@@ -1,3 +1,9 @@
+## [1.259.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.258.0...v1.259.0) (2026-07-07)
+
+### Features
+
+* **verify:** screenshot the real-submit form section too (visual proof) ([2b6b163](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2b6b1632d2031c4efe1e24e9a8dbe51e79cd8cb3)), closes [#426](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/426)
+
 ## [1.258.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.257.1...v1.258.0) (2026-07-07)
 
 ### Features
