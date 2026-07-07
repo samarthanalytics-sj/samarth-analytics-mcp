@@ -57,6 +57,12 @@ check('classify: region1.google-analytics.com /g/collect → ga4', classifyColle
 check('classify: google-analytics.com /collect (MP) → ga4', classifyCollector('https://www.google-analytics.com/collect?v=1') === 'ga4');
 check('classify: facebook.com/tr → meta', classifyCollector('https://www.facebook.com/tr?id=1&ev=Purchase') === 'meta');
 check('classify: analytics.tiktok.com/api → tiktok', classifyCollector('https://analytics.tiktok.com/api/v2/pixel') === 'tiktok');
+// TikTok's WEB pixel uses the /i18n/pixel path, not /api — must still classify as tiktok so it is
+// aborted on a real submit AND named in the network log (was falling through to 'other' before).
+check('classify: analytics.tiktok.com/i18n/pixel → tiktok', classifyCollector('https://analytics.tiktok.com/i18n/pixel/events.js?sdkid=abc&event=CompleteRegistration') === 'tiktok');
+check('classify: analytics-sg.tiktok.com (regional) → tiktok', classifyCollector('https://analytics-sg.tiktok.com/i18n/pixel/track') === 'tiktok');
+check('classify: business-api.tiktok.com/open_api → tiktok', classifyCollector('https://business-api.tiktok.com/open_api/v1.3/event/track/') === 'tiktok');
+check('classify: www.tiktok.com content page (not tracking) → null', classifyCollector('https://www.tiktok.com/@user/video/123') === null);
 check('classify: unrelated host → null', classifyCollector('https://example.com/page') === null);
 check('classify: GA host but wrong path → null', classifyCollector('https://www.google-analytics.com/analytics.js') === null);
 check('classify: serverUrl host → server', classifyCollector('https://sgtm.example.com/g/collect?en=purchase', 'sgtm.example.com') === 'server');
@@ -155,6 +161,7 @@ check('beacon: LinkedIn → linkedin', beaconPlatform('https://px.ads.linkedin.c
 check('beacon: Pinterest → pinterest', beaconPlatform('https://ct.pinterest.com/v3/?tid=1') === 'pinterest');
 check('beacon: Reddit → reddit', beaconPlatform('https://alb.reddit.com/rp.gif?id=1') === 'reddit');
 check('beacon: Snap → snapchat', beaconPlatform('https://tr.snapchat.com/p?pid=1') === 'snapchat');
+check('beacon: TikTok web pixel (/i18n/pixel) → tiktok', beaconPlatform('https://analytics.tiktok.com/i18n/pixel/events.js?event=Purchase') === 'tiktok');
 check('beacon: Bing → bing', beaconPlatform('https://bat.bing.com/action/0?ti=1') === 'bing');
 check('beacon: DoubleClick → google_ads', beaconPlatform('https://ad.doubleclick.net/ddm/activity/src=1') === 'google_ads');
 check('beacon: google.com/pagead → google_ads', beaconPlatform('https://www.google.com/pagead/1p-conversion/123') === 'google_ads');
@@ -187,6 +194,9 @@ check('beacon: LinkedIn ≠ Reddit (per-platform attribution)', beaconPlatform('
 {
   const li = describeHit('https://px.ads.linkedin.com/collect?pid=99');
   check('describe: LinkedIn vendor', li.vendor === 'linkedin');
+  const tt = describeHit('https://analytics.tiktok.com/i18n/pixel/events.js?sdkid=C1&event=Purchase');
+  check('describe: TikTok web pixel vendor', tt.vendor === 'tiktok');
+  check('describe: TikTok params show event', /event=Purchase/.test(tt.params));
   const other = describeHit('https://site.com/api/leads');
   check('describe: non-analytics → other', other.vendor === 'other');
 }

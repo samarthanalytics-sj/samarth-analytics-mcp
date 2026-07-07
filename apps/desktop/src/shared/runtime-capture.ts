@@ -59,7 +59,7 @@ export interface CapturedHit {
  *  - ga4:    google-analytics.com / *.google-analytics.com / region1.google-analytics.com,
  *            path /g/collect or /collect (also analytics.google.com/g/collect).
  *  - meta:   facebook.com/tr (the Meta pixel/CAPI browser endpoint).
- *  - tiktok: analytics.tiktok.com/api (the TikTok pixel/Events API endpoint).
+ *  - tiktok: analytics.tiktok.com on any path (/api/v2/pixel, /i18n/pixel/…) + *.tiktok.com/api.
  *  - server: any other host, ONLY when it matches the optional serverUrl host (a first-party sGTM
  *            collector) — passed in so the driver aborts the user's own tagging server too.
  *  PURE. */
@@ -88,8 +88,14 @@ export function classifyCollector(url: string, serverHost?: string | null): Coll
     return 'meta';
   }
 
-  // TikTok pixel / Events API: analytics.tiktok.com/api/…
-  if ((host === 'analytics.tiktok.com' || host.endsWith('.tiktok.com')) && path.startsWith('/api')) {
+  // TikTok pixel / Events API. The dedicated tracking host (analytics.tiktok.com and regional
+  // analytics-sg./analytics-ipv6.) serves the web pixel on several paths: /api/v2/pixel,
+  // /i18n/pixel/events.js, /i18n/pixel/… — so match that host on ANY path, not just /api.
+  if (/^analytics(-[a-z0-9]+)?\.tiktok\.com$/.test(host)) {
+    return 'tiktok';
+  }
+  // Other *.tiktok.com collect endpoints (business-api.tiktok.com/open_api Events API, etc.).
+  if (host.endsWith('.tiktok.com') && (path.startsWith('/api') || path.startsWith('/open_api'))) {
     return 'tiktok';
   }
 
