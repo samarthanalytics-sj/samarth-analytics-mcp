@@ -1,3 +1,9 @@
+## [1.244.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.244.0...v1.244.1) (2026-07-07)
+
+### Bug Fixes
+
+* **desktop:** hide "How to install" on suggestions with nothing to install ([e71aa66](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e71aa665fdaed1a41439c801991898395f1f2c3f))
+
 ## [1.244.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.243.1...v1.244.0) (2026-07-07)
 
 ### Features
