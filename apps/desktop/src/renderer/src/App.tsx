@@ -3605,6 +3605,11 @@ function VerifyPanel({
   }
 
   const fired = vResult?.verdicts.filter((v) => v.fired) ?? [];
+  // Split real-interaction fires (real click / page load) from SYNTHETIC ones: a custom_event tag
+  // "fired" because WE pushed its dataLayer event, which proves the tag's config but NOT that a real
+  // submit emits it. Surfaced separately so a form fire isn't over-claimed as a real-submit proof.
+  const firedReal = fired.filter((v) => !v.synthetic);
+  const firedSynthetic = fired.filter((v) => v.synthetic);
   // A tag we couldn't actually exercise on this run (CTA/form on another page, or a shared
   // dataLayer event that needs form-specific data) is NOT a failure — separate it from genuine
   // "not firing" so a working tag is never mislabelled broken.
@@ -3703,7 +3708,7 @@ function VerifyPanel({
             <div style={{ fontWeight: 600 }}>
               {vResult.error
                 ? `Error: ${vResult.error}`
-                : `${fired.length} of ${vResult.verdicts.length} tag(s) fired${notFired.length ? ` · ${notFired.length} need attention` : ''}${inconclusive.length ? ` · ${inconclusive.length} couldn't be auto-tested here` : ''}`}
+                : `${firedReal.length} fired${firedSynthetic.length ? ` · ${firedSynthetic.length} config-verified (synthetic, not a real submit)` : ''}${notFired.length ? ` · ${notFired.length} need attention` : ''}${inconclusive.length ? ` · ${inconclusive.length} couldn't be auto-tested here` : ''}`}
             </div>
             {vResult.pagesDriven?.length && !vResult.error ? (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
@@ -3726,15 +3731,41 @@ function VerifyPanel({
               </div>
             )}
 
-            {fired.length > 0 && (
+            {firedReal.length > 0 && (
               <div style={{ marginTop: 10 }}>
-                <div style={{ ...styles.h2, color: 'var(--c-green)' }}>✅ Firing ({fired.length})</div>
+                <div style={{ ...styles.h2, color: 'var(--c-green)' }}>✅ Firing ({firedReal.length})</div>
                 <ul style={styles.resultList}>
-                  {fired.map((v) => {
+                  {firedReal.map((v) => {
                     const k = verdictKindLabel(v);
                     return (
                       <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
                         <span style={{ fontWeight: 600, color: 'var(--c-green)' }}>FIRED</span>{' '}
+                        <span title={k.label}>{k.icon}</span> {v.tagName}
+                        {v.event ? <span style={styles.muted}> — {v.event}</span> : null}
+                        {v.observedBeacons && v.observedBeacons.length > 0 && (
+                          <span style={{ ...styles.muted, marginLeft: 6, fontSize: 12 }}>→ {v.observedBeacons.join(', ')}</span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
+            {firedSynthetic.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ ...styles.h2, color: 'var(--c-amber)' }}>⚙ Config-verified — synthetic event, not a real submit ({firedSynthetic.length})</div>
+                <div style={{ ...styles.muted, fontSize: 12, marginBottom: 4 }}>
+                  The tag + trigger are wired correctly: it fired when we pushed its dataLayer event. But we did
+                  NOT submit the form — so this doesn’t prove the site actually emits that event on a real
+                  submit. Confirm each with a real submit in GTM Preview (real-submit testing is coming here).
+                </div>
+                <ul style={styles.resultList}>
+                  {firedSynthetic.map((v) => {
+                    const k = verdictKindLabel(v);
+                    return (
+                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
+                        <span style={{ fontWeight: 600, color: 'var(--c-amber)' }}>CONFIG OK</span>{' '}
                         <span title={k.label}>{k.icon}</span> {v.tagName}
                         {v.event ? <span style={styles.muted}> — {v.event}</span> : null}
                         {v.observedBeacons && v.observedBeacons.length > 0 && (

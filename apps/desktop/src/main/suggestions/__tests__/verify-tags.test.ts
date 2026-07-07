@@ -195,6 +195,24 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   check('generic ad tag fires on any recognised pixel beacon', v.fired === true);
 }
 
+// ── synthetic vs real firing: a custom_event fire is CONFIG-only (we pushed the event, no real submit) ─
+{
+  const t = tag({ id: 'sy', eventName: 'form_submission', trigger: { name: 'F', kind: 'custom_event', eventName: 'form_submission' } });
+  const v = evaluateVerify([t], [cap({ tagId: 'sy', kind: 'custom_event', hits: [ga4Hit('form_submission')] })], els)[0];
+  check('custom_event fire → fired + synthetic flagged (config-only)', v.fired === true && v.synthetic === true);
+}
+{
+  // A REAL click fire (we clicked the actual element) is NOT synthetic.
+  const v = evaluateVerify([tag()], [cap({ hits: [ga4Hit('cta_click')] })], els)[0];
+  check('real click fire → fired, not synthetic', v.fired === true && !v.synthetic);
+}
+{
+  // A non-GA4 pixel fired via a real click is also not synthetic.
+  const li = tag({ id: 'lisyn', platform: 'linkedin_insight', eventName: 'Lead' });
+  const v = evaluateVerify([li], [cap({ tagId: 'lisyn', hits: [linkedinHit()] })], els)[0];
+  check('real pixel-beacon fire → not synthetic', v.fired === true && !v.synthetic);
+}
+
 console.log(`\nverify-tags: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
 if (passed < 24) { console.error(`expected >= 24 checks, got ${passed}`); process.exit(1); }
