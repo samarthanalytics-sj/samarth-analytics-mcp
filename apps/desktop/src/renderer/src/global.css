@@ -1,0 +1,49 @@
+/* Global polish layered on top of the app's inline-style system. Inline styles can't express :hover /
+ * :active / :focus, so the interactive states live here and apply to every <button> app-wide. Colours
+ * come from the theme CSS variables (set on <body> by theme.ts), so this works in light and dark. */
+
+button {
+  transition: filter 0.12s ease, transform 0.05s ease, box-shadow 0.12s ease;
+}
+button:not(:disabled) {
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+button:focus-visible {
+  outline: 2px solid var(--c-blue);
+  outline-offset: 1px;
+}
+
+/* Native controls inherit Inter + sit on the themed surfaces (Windows otherwise renders them in a
+ * mismatched system font/colour). */
+input,
+select,
+textarea,
+button {
+  font-family: inherit;
+}
+
+/* Thin, themed scrollbars so long result/log lists don't show the chunky default OS bar. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-2) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  background-clip: padding-box;
+}
