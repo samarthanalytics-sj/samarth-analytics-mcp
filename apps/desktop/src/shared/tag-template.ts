@@ -357,14 +357,42 @@ function requirementMarkdown(r: NonNullable<SuggestedTagView['install']>['requir
   }
 }
 
+/** The one-glance status of an install plan, driving the review table's status chip.
+ *  - `ready`     : nothing to install (all native / provider-native).
+ *  - `ready-tip` : fires natively, but has ONE-OR-MORE optional improvements (an html-attribute, e.g.
+ *                  "add a form id for precise scoping"). The tag still fires without them.
+ *  - `listener`  : needs at least one Custom HTML listener tag created (1-click).
+ *  - `code`      : needs site code the user's developer must add.
+ *  Precedence for a mixed plan: code > listener > ready-tip > ready (the most-demanding ask wins the
+ *  chip; the panel still lists every requirement). Counts let the chip say "2 listener tags", etc. */
+export type InstallStatusKind = 'ready' | 'ready-tip' | 'listener' | 'code';
+export interface InstallStatus {
+  kind: InstallStatusKind;
+  listenerCount: number;
+  siteCodeCount: number;
+  /** html-attribute requirements — always optional (the tag fires without them). */
+  optionalCount: number;
+}
+export function installPlanStatus(install: SuggestedTagView['install'] | undefined): InstallStatus {
+  let listenerCount = 0;
+  let siteCodeCount = 0;
+  let optionalCount = 0;
+  for (const r of install?.requires ?? []) {
+    if (r.kind === 'listener-tag') listenerCount += 1;
+    else if (r.kind === 'site-code') siteCodeCount += 1;
+    else if (r.kind === 'html-attribute') optionalCount += 1;
+  }
+  const kind: InstallStatusKind =
+    siteCodeCount > 0 ? 'code' : listenerCount > 0 ? 'listener' : optionalCount > 0 ? 'ready-tip' : 'ready';
+  return { kind, listenerCount, siteCodeCount, optionalCount };
+}
+
 /** Does this install plan ask the user to actually add or create something on their SITE?
- *  True only when a requirement is a `listener-tag`, `html-attribute`, or `site-code`. A plan that is
- *  absent, empty, or entirely `native` / `provider-native` ("nothing to install") returns false.
+ *  True for every status except `ready` (all native / provider-native → nothing to install).
  *  Single source of truth shared by the runbook's native-only categorisation and the desktop review
  *  table, which hides its "How to install" affordance when this is false. */
 export function installPlanNeedsAction(install: SuggestedTagView['install'] | undefined): boolean {
-  const reqs = install?.requires ?? [];
-  return reqs.some((r) => r.kind === 'listener-tag' || r.kind === 'html-attribute' || r.kind === 'site-code');
+  return installPlanStatus(install).kind !== 'ready';
 }
 
 /**
