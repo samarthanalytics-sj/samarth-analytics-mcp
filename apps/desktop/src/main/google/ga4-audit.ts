@@ -7,6 +7,10 @@ export interface Ga4DataStreamConfig {
   displayName: string;
   /** WEB_DATA_STREAM | ANDROID_APP_DATA_STREAM | IOS_APP_DATA_STREAM */
   type: string;
+  /** WEB stream site URL (webStreamData.defaultUri) — the property's OWN domain, used to detect
+   *  self-referrals (broken cross-domain linking / missing referral exclusions). null = not a web
+   *  stream / unread. */
+  defaultUri?: string | null;
   /** Enhanced measurement MASTER on/off for WEB streams; null = unknown / not a web stream. */
   enhancedMeasurementEnabled: boolean | null;
   /** Enhanced-measurement SUB-toggles (web streams only; null when the master is off/unread). Only the

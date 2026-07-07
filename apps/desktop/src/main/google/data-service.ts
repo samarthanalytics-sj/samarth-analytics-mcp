@@ -626,6 +626,7 @@ export class GoogleDataService {
           name: s.name ?? '',
           displayName: s.displayName ?? '(unnamed)',
           type: s.type ?? '',
+          defaultUri: s.webStreamData?.defaultUri ?? null,
           enhancedMeasurementEnabled,
           enhancedMeasurement,
         };
