@@ -17,7 +17,7 @@ import { findGa4BaseTag } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult } from '../../shared/ipc';
-import { crawlAndSuggest, scanUrls, urlPriority, type ScanProgress } from './scan-core';
+import { crawlAndSuggest, scanUrls, urlPriority, contentLikely, type ScanProgress } from './scan-core';
 import { runVerifyDriver } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify } from './verify-tags';
@@ -163,8 +163,19 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       const hasClickTags = tagList.some((t) => t.trigger.kind === 'link_click' || t.trigger.kind === 'all_clicks');
       if (els.length === 0 && hasClickTags && o.crawlForPages !== false) {
         try {
-          const crawlDriver = await makeDriver({ maxPages: o.crawlMaxPages, maxDepth: o.crawlMaxDepth });
-          const scan = await crawlAndSuggest(crawlDriver, target, { maxPages: o.crawlMaxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'] });
+          // Seed the crawl with the sitemap's CONTENT-HUB pages (case-studies/blog/guides/about/team…)
+          // so click CTAs that live there ("Read Full Case Study", "Download Free Checklist", …) are
+          // inventoried — otherwise the form-likely-first BFS spends its budget before reaching them and
+          // those tags stay falsely "untested". Best-effort (no sitemap → plain BFS).
+          let seedUrls: string[] = [];
+          try {
+            const disc = await discoverSite(target);
+            seedUrls = disc.urls.filter((u) => u !== target && contentLikely(u)).slice(0, 10);
+          } catch { /* sitemap best-effort */ }
+          // With content seeds guaranteed first, a bigger budget covers content hubs + form-likely pages.
+          const maxPages = o.crawlMaxPages ?? (seedUrls.length ? 25 : undefined);
+          const crawlDriver = await makeDriver({ maxPages, maxDepth: o.crawlMaxDepth });
+          const scan = await crawlAndSuggest(crawlDriver, target, { maxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'], ...(seedUrls.length ? { seedUrls } : {}) });
           els = scan.inventory.elements as DetectedElementView[];
           pagesCrawled = scan.pages.length;
         } catch {

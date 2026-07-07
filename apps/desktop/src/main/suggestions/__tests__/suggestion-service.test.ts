@@ -5,7 +5,7 @@
 //   • createSuggestedTags() — the approved-create loop (outcome mapping).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/suggestion-service.test.ts
 
-import { crawlAndSuggest, scanUrls, assembleResult, dedupSuggestions, detectInstalled, urlPriority, prioritizeUrls, SCAN_URLS_CAP, type PageDriver, type DrivenPage, type ScanProgress } from '../scan-core';
+import { crawlAndSuggest, scanUrls, assembleResult, dedupSuggestions, detectInstalled, urlPriority, prioritizeUrls, contentLikely, crawlRank, SCAN_URLS_CAP, type PageDriver, type DrivenPage, type ScanProgress } from '../scan-core';
 import type { SuggestedTag } from '../../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import { mergeDriven } from '../multi-driver';
 import { parseSitemapLocs, extractCrawlLinks } from '../discover';
@@ -286,6 +286,26 @@ async function main(): Promise<void> {
     check('urlPriority: plain pages still 0', urlPriority('https://acme.com/about') === 0 && urlPriority('https://acme.com/blog/2024/hello') === 0);
     // 'get-started' with and without the hyphen (get-?started) both match.
     check('urlPriority: getstarted variant matches', urlPriority('https://acme.com/getstarted') === 1);
+  }
+
+  // ── contentLikely + crawlRank: verify crawl reaches content-hub CTAs ────────
+  {
+    // Content HUBS (shallow path) are content-likely — where "Read Full Case Study" / "Download
+    // Free Checklist" / "Subscribe to Insights" CTAs live.
+    check('contentLikely: case-studies / blog / guides hubs', contentLikely('https://acme.com/case-studies')
+      && contentLikely('https://acme.com/blog') && contentLikely('https://acme.com/guides')
+      && contentLikely('https://acme.com/about') && contentLikely('https://acme.com/team'));
+    // A DEEP individual article (path > 2 segments) is NOT a hub — we crawl the hub, not 150 posts.
+    check('contentLikely: deep individual articles excluded', !contentLikely('https://acme.com/blog/2024/03/some-post')
+      && !contentLikely('https://acme.com/guides/ga4/setup/advanced'));
+    // Plain / form pages are not content.
+    check('contentLikely: form + plain pages are not content', !contentLikely('https://acme.com/contact') && !contentLikely('https://acme.com/pricing'));
+    // crawlRank tiers: home(3) > form-likely(2) > content hub(1) > other(0).
+    check('crawlRank: home > form-likely > content > other',
+      crawlRank('https://acme.com/') === 3
+      && crawlRank('https://acme.com/contact') === 2
+      && crawlRank('https://acme.com/case-studies') === 1
+      && crawlRank('https://acme.com/privacy') === 0);
   }
 
   // ── prioritizeUrls: home-first, form-likely-before-plain, stable in a tier ──
