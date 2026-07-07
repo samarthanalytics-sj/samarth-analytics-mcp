@@ -570,18 +570,22 @@ export function buildServerEventTrigger(
  *  account id, conversionLabel the per-conversion label (both may be {{variables}}). The
  *  sgtmadsct template validates conversionId as a POSITIVE INTEGER, so the "AW-" prefix is
  *  stripped (an "AW-12345678" input becomes "12345678"); a {{variable}} is passed through. */
-export function buildAdsConversionServerTag(name: string, conversionId: string, conversionLabel: string, firingTriggerId?: string[]): GtmTagResource {
+export function buildAdsConversionServerTag(name: string, conversionId: string, conversionLabel: string, firingTriggerId?: string[], productReporting?: boolean): GtmTagResource {
+  const parameter: Param[] = [
+    tpl('conversionId', normalizeAdsConversionId(conversionId)),
+    tpl('conversionLabel', conversionLabel),
+    boolean('enableConversionLinker', true),
+    boolean('enableProductReporting', productReporting === true),
+  ];
+  // Product / Shopping (cart-data) reporting only matters for ECOMMERCE conversions, so it is OFF by
+  // default — a plain lead/signup conversion shouldn't advertise product reporting with no items to send.
+  // Pass productReporting=true for purchase-style conversions to forward the event's product data.
+  if (productReporting === true) parameter.push(tpl('productReportingDataSource', 'EVENT'));
+  parameter.push(boolean('rdp', false));
   return {
     name: sanitizeName(name),
     type: 'sgtmadsct',
-    parameter: [
-      tpl('conversionId', normalizeAdsConversionId(conversionId)),
-      tpl('conversionLabel', conversionLabel),
-      boolean('enableConversionLinker', true),
-      tpl('productReportingDataSource', 'EVENT'),
-      boolean('enableProductReporting', true),
-      boolean('rdp', false),
-    ],
+    parameter,
     ...(firingTriggerId ? { firingTriggerId } : {}),
   };
 }
@@ -3478,6 +3482,17 @@ export function buildTikTokCapiServerTag(
     boolean('enableEventEnhancement', opts?.eventEnhancement ?? true),
     boolean('generateTtp', opts?.generateTtp ?? true),
     tpl('adStorageConsent', opts?.requireConsent ? 'required' : 'optional'),
+    // The current stape-io/tiktok-tag template auto-extracts from the incoming event via six automap
+    // checkboxes (all default ON). We emit them explicitly so the tag's config is unambiguous, and STILL
+    // add our nested-aware `{{ed - …}}` override rows below (they win a key collision, guaranteeing the
+    // nested GA4 user_data / header fallbacks the template's flat automap can miss). mapEventData=false
+    // turns BOTH off for a fully manual tag.
+    boolean('autoMapCommonEventData', autoMap),
+    boolean('autoMapUserData', autoMap),
+    boolean('autoMapCustomData', autoMap),
+    boolean('autoMapPageData', autoMap),
+    boolean('autoMapAppData', autoMap),
+    boolean('autoMapAdData', autoMap),
   ];
   if (eventId && eventId.trim()) parameter.push(tpl('eventId', eventId));
   if (opts?.testEventCode && opts.testEventCode.trim()) parameter.push(tpl('testEventCode', opts.testEventCode));
@@ -3834,7 +3849,13 @@ export function buildPinterestCapiServerTag(
     const std = pinterestServerEvent(event);
     parameter.push(tpl('eventName', 'pinterestEventName'));
     if (std) parameter.push(tpl('eventNameStandard', std));
-    else parameter.push(tpl('eventNameStandard', 'custom_event'), tpl('adeEventName', event));
+    else {
+      // The template validates the custom name (adeEventName) against ^[a-zA-Z_]+$ (letters + underscores
+      // only), so coerce digits/spaces/hyphens to underscores — otherwise a forced custom event fails at
+      // create. Empty after cleaning → 'custom_event'.
+      const custom = event.replace(/[^a-zA-Z_]+/g, '_').replace(/^_+|_+$/g, '') || 'custom_event';
+      parameter.push(tpl('eventNameStandard', 'custom_event'), tpl('adeEventName', custom));
+    }
   } else {
     parameter.push(tpl('eventName', 'inherit'));
   }

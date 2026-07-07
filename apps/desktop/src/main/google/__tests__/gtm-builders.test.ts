@@ -1364,6 +1364,14 @@ test('Ads server tag builders emit the corpus-validated sgtm types + key fields'
   assert.equal(cp.find((x) => x.key === 'conversionId')?.value, '12345678', 'AW- prefix stripped to the numeric id');
   assert.equal(cp.find((x) => x.key === 'conversionLabel')?.value, 'abcLABEL');
   assert.equal(cp.find((x) => x.key === 'enableConversionLinker')?.value, 'true');
+  // Product (Shopping) reporting is OFF by default (a plain lead conversion) and emits no data-source field.
+  assert.equal(cp.find((x) => x.key === 'enableProductReporting')?.value, 'false');
+  assert.equal(cp.find((x) => x.key === 'productReportingDataSource'), undefined);
+  // Opt in (ecommerce/purchase conversion) → on + EVENT data source.
+  const convEcom = buildAdsConversionServerTag('Ads - Purchase', 'AW-1', 'L', undefined, true);
+  const ecp = (convEcom.parameter ?? []) as Array<{ key: string; value: string }>;
+  assert.equal(ecp.find((x) => x.key === 'enableProductReporting')?.value, 'true');
+  assert.equal(ecp.find((x) => x.key === 'productReportingDataSource')?.value, 'EVENT');
   // A {{variable}} conversion id passes through untouched.
   const convVar = buildAdsConversionServerTag('Ads', '{{Ads ID}}', 'L');
   assert.equal(((convVar.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'conversionId')?.value, '{{Ads ID}}');
@@ -1947,12 +1955,20 @@ test('buildTikTokCapiServerTag: mapEventData (default) auto-fills user_data + ev
   assert.equal(cd.get('order_id'), '{{ed - transaction_id}}'); // order_id reads the GA4 transaction_id
   assert.equal(cd.get('content_type'), 'product'); // literal, not a variable
   assert.equal(paramVal(t, 'eventId'), '{{ed - event_id}}');
+  // The current tiktok-tag template auto-extracts via six automap checkboxes — emitted ON by default,
+  // alongside the explicit {{ed - …}} override rows above.
+  for (const k of ['autoMapCommonEventData', 'autoMapUserData', 'autoMapCustomData', 'autoMapPageData', 'autoMapAppData', 'autoMapAdData']) {
+    assert.equal(paramVal(t, k), 'true', `${k} on by default`);
+  }
 });
 
 test('buildTikTokCapiServerTag: mapEventData=false leaves the lists empty; explicit rows override the auto-fill', () => {
   const off = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase', { mapEventData: false });
   assert.ok(!((off.parameter as Array<{ key?: string }>) ?? []).some((p) => ['userDataList', 'customDataList', 'additionalEventPropertiesList'].includes(String(p.key))));
   assert.equal(paramVal(off, 'eventId'), undefined);
+  // mapEventData=false also turns the template's automap checkboxes OFF → a fully manual tag.
+  assert.equal(paramVal(off, 'autoMapUserData'), 'false');
+  assert.equal(paramVal(off, 'autoMapCommonEventData'), 'false');
   const ex = buildTikTokCapiServerTag('cvt_TT01', 'x', 'P', 'T', 'purchase', {
     userData: [{ name: 'email', value: '{{My Email}}' }],
     eventProperties: [{ name: 'value', value: '{{My Value}}' }],
@@ -2940,6 +2956,10 @@ test('pinterestServerEvent + buildPinterestCapiServerTag: inherit by default, fo
   const cust = buildPinterestCapiServerTag('cvt_PINS', 'x', 'A', 'T', { event: 'my_thing' });
   assert.equal(pval(cust, 'eventNameStandard'), 'custom_event');
   assert.equal(pval(cust, 'adeEventName'), 'my_thing');
+  // adeEventName is coerced to the template's ^[a-zA-Z_]+$ validator (digits/spaces/hyphens → underscore,
+  // collapsed + trimmed), so a real-world custom name doesn't 400 at create.
+  assert.equal(pval(buildPinterestCapiServerTag('cvt_PINS', 'x', 'A', 'T', { event: 'add-to-cart 2' }), 'adeEventName'), 'add_to_cart');
+  assert.equal(pval(buildPinterestCapiServerTag('cvt_PINS', 'x', 'A', 'T', { event: '123' }), 'adeEventName'), 'custom_event');
   // Override rows → overrideMode ON + the table; testMode ON.
   const ov = buildPinterestCapiServerTag('cvt_PINS', 'x', 'A', 'T', { testMode: true, override: { customData: [{ name: 'value', value: '{{V}}' }] } });
   assert.equal(pval(ov, 'overrideMode'), 'true');
