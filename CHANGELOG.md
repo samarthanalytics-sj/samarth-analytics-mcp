@@ -1,3 +1,9 @@
+## [1.232.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.231.0...v1.232.0) (2026-07-07)
+
+### Features
+
+* **desktop:** anti-lie checks 6+7 - self-referrals (broken cross-domain) + data-thresholding exposure ([4804d15](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4804d15f689a1359fca9269a80178ef4fe649d30))
+
 ## [1.231.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.230.0...v1.231.0) (2026-07-07)
 
 ### Features
