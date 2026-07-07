@@ -78,6 +78,31 @@ test('per-account scoping: a property added under one mail is invisible (and nev
   assert.deepEqual(runsA.map((r) => r.property), ['properties/1'], 'acct1 sweep covers only its own');
 });
 
+test('per-property notify: legacy global toggles SEED targets once; alerts can be muted per property', async () => {
+  const secrets = makeSecrets();
+  const posts: string[] = [];
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account },
+    data: fakeData(),
+    secrets,
+    emit: () => {},
+    now: () => Date.parse('2026-07-02T09:00:00Z'),
+    slackFetch: async (_url, init) => { posts.push(init.body); return { ok: true, status: 200, text: async () => 'ok' }; },
+  });
+  // Old-shape config: targets WITHOUT notify + the old global toggles -> seeded per target.
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], slackEnabled: true, digestEnabled: true, auditEnabled: false });
+  const seeded = svc.status().targets[0].notify!;
+  assert.deepEqual(seeded, { alerts: true, digest: true, audit: false }, 'seeded from the legacy globals');
+
+  // Mute alerts on THIS property only: the sweep still runs, nothing posts.
+  svc.setWebhook('https://hooks.slack.com/services/T/B/acme', 'properties/1');
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true, notify: { alerts: false, digest: false, audit: false } }] });
+  const [run] = await svc.runOnce();
+  assert.ok(run && run.alerts.length > 0, 'the health check still finds the issue');
+  assert.equal(run.slackSent, 0, 'muted property posts nothing');
+  assert.equal(posts.length, 0, 'no Slack POST at all');
+});
+
 test('weekly digest: posts once per property per 7 days to its own channel, persists lastDigestAt, off by default', async () => {
   const secrets = makeSecrets();
   const posts: Array<{ url: string; body: string }> = [];
@@ -97,8 +122,8 @@ test('weekly digest: posts once per property per 7 days to its own channel, pers
   await svc.runOnce();
   assert.equal(posts.filter((x) => x.body.includes('Weekly health digest')).length, 0, 'no digest when disabled');
 
-  // Enable the digest: the next sweep posts one (first-ever digest is immediately due).
-  svc.configure({ digestEnabled: true });
+  // Enable the digest on the TARGET (notification choices live per property now).
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true, notify: { alerts: true, digest: true, audit: false } }] });
   await svc.runOnce();
   const digests = posts.filter((x) => x.body.includes('Weekly health digest'));
   assert.equal(digests.length, 1, 'one digest after enabling');
@@ -149,8 +174,8 @@ test('weekly scheduled audit: runs once per property per 7 days, posts the exec 
   await svc.runOnce();
   assert.equal(auditCalls.length, 0, 'no audit when disabled');
 
-  // Enabled: the next sweep runs it once and posts the exec summary.
-  svc.configure({ auditEnabled: true });
+  // Enabled on the TARGET: the next sweep runs it once and posts the exec summary.
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true, notify: { alerts: true, digest: false, audit: true } }] });
   await svc.runOnce();
   assert.deepEqual(auditCalls, ['properties/1'], 'audit ran for the property');
   const auditPosts = posts.filter((b) => b.includes('Weekly GA4 audit'));

@@ -854,6 +854,10 @@ export interface Ga4MonitorTarget {
   /** The account (mail) this property was added under. Targets only show/run for their own account;
    *  absent on configs from before per-account scoping (stamped lazily with the active account). */
   accountId?: string;
+  /** WHAT this property posts to its Slack channel — chosen when connecting/editing the channel.
+   *  alerts = new issues the moment they appear; digest = weekly health summary even when healthy;
+   *  audit = weekly full-audit executive summary. Seeded from the old global toggles on migration. */
+  notify?: { alerts: boolean; digest: boolean; audit: boolean };
   /** When this property's weekly health digest last posted (persisted so restarts don't re-send). */
   lastDigestAt?: number;
   /** When this property's weekly scheduled audit last ran (persisted so restarts don't re-run). */
@@ -870,15 +874,11 @@ export interface Ga4MonitorConfig {
   targets: Ga4MonitorTarget[];
   /** Lookback window (days) for trend + per-event regression detection (shared by all targets). */
   days: number;
-  /** Post new issues to Slack. Each property posts to its OWN channel when one is connected,
-   *  falling back to the account's default channel otherwise. */
+  /** LEGACY global toggles — notification choices now live PER TARGET (Ga4MonitorTarget.notify) and
+   *  are picked when connecting/editing a property's channel. These persist only to SEED targets
+   *  from configs created before per-property preferences existed. */
   slackEnabled: boolean;
-  /** Also post a WEEKLY health digest per property (even when everything is healthy), so a silent
-   *  channel proves the monitor is alive rather than broken. Uses each property's own channel. */
   digestEnabled: boolean;
-  /** Run the FULL GA4 audit weekly per property and post its executive summary (setup completeness,
-   *  reliability, biggest risk, fix) to the property's Slack channel. Heavier than a health check,
-   *  so it is opt-in and at most once per property per 7 days. */
   auditEnabled: boolean;
   /** Human label for the DEFAULT Slack channel + workspace (e.g. "#ga4-alerts · Acme"). Slack does
    *  not expose these from a webhook URL, so the user records them; shown as the connection status. */
