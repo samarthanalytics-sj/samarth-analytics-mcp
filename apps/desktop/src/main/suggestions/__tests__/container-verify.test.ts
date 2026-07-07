@@ -2,7 +2,7 @@
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/container-verify.test.ts
 
 import { snapshotToVerifyInputs } from '../container-verify';
-import type { ContainerSnapshot, AuditTag, AuditTrigger } from '../../google/gtm-builders';
+import type { ContainerSnapshot, AuditTag, AuditTrigger, AuditVariable } from '../../google/gtm-builders';
 
 let passed = 0;
 let failed = 0;
@@ -34,6 +34,9 @@ const tag = (over: Partial<AuditTag>): AuditTag => ({
 });
 const trig = (over: Partial<AuditTrigger>): AuditTrigger => ({ triggerId: 't1', name: 'Trig', type: 'linkClick', ...over });
 const snap = (tags: AuditTag[], triggers: AuditTrigger[]): ContainerSnapshot => ({ tags, triggers, variables: [] });
+const snapV = (tags: AuditTag[], triggers: AuditTrigger[], variables: AuditVariable[]): ContainerSnapshot => ({ tags, triggers, variables });
+// A Data Layer Variable: display name → the dataLayer key it reads (in its `name` parameter).
+const dlv = (name: string, key: string): AuditVariable => ({ variableId: name, name, type: 'v', parameter: [{ type: 'template', key: 'name', value: key }] });
 
 // ── GA4 event tag (REAL shape) + link-click trigger with a Click Text condition ─────────────────
 {
@@ -160,6 +163,73 @@ const snap = (tags: AuditTag[], triggers: AuditTrigger[]): ContainerSnapshot => 
   check('all three tags skipped, none survive', r.tags.length === 0 && r.skipped.length === 3, `tags=${r.tags.length} skipped=${r.skipped.length}`);
 }
 
+// ── condition-aware custom_event push: resolve {{DLV}} conditions → dataLayer key/value pairs ─────
+// Many tags share ONE form_submission event and split by {{form_name}}/{{form_id}}. Capture those so
+// the synthetic push satisfies the RIGHT tag instead of leaving every form tag "inconclusive".
+{
+  const s = snapV(
+    [tag({ tagId: 'gi', name: 'Get In Touch Form Tag', type: 'gaawe', firingTriggerId: ['tg'], parameter: ga4EventParams('G-1', 'generate_lead') })],
+    [trig({ triggerId: 'tg', type: 'customEvent', customEventFilter: [cond('{{_event}}', 'equals', 'form_submission')], filter: [cond('{{DLV - form_name}}', 'equals', 'Get In Touch')] })],
+    [dlv('DLV - form_name', 'form_name')],
+  );
+  const r = snapshotToVerifyInputs(s);
+  check('custom_event: DLV condition → customEventData key/value', r.tags[0]?.trigger.customEventData?.form_name === 'Get In Touch', JSON.stringify(r.tags[0]?.trigger.customEventData));
+  check('custom_event: event name still form_submission', r.tags[0]?.trigger.eventName === 'form_submission');
+}
+{
+  // Two DLV conditions on one event → both keys pushed. `contains`/`startsWith` push the literal value.
+  const s = snapV(
+    [tag({ tagId: 'm', name: 'Multi', type: 'gaawe', firingTriggerId: ['tm'], parameter: ga4EventParams('G-1', 'generate_lead') })],
+    [trig({ triggerId: 'tm', type: 'customEvent', customEventFilter: [cond('{{_event}}', 'equals', 'form_submission')], filter: [cond('{{DLV - form_id}}', 'equals', 'gform_5'), cond('{{DLV - form_name}}', 'contains', 'Consult')] })],
+    [dlv('DLV - form_id', 'form_id'), dlv('DLV - form_name', 'form_name')],
+  );
+  const r = snapshotToVerifyInputs(s);
+  const d = r.tags[0]?.trigger.customEventData ?? {};
+  check('custom_event: two DLV conditions → both keys', d.form_id === 'gform_5' && d.form_name === 'Consult', JSON.stringify(d));
+}
+{
+  // An UNRESOLVABLE variable (no matching DLV in the container) is left out → no false data pushed.
+  const s = snapV(
+    [tag({ tagId: 'u', name: 'Unresolvable', type: 'gaawe', firingTriggerId: ['tu'], parameter: ga4EventParams('G-1', 'generate_lead') })],
+    [trig({ triggerId: 'tu', type: 'customEvent', customEventFilter: [cond('{{_event}}', 'equals', 'form_submission')], filter: [cond('{{Some Custom JS}}', 'equals', 'x')] })],
+    [], // no variables
+  );
+  const r = snapshotToVerifyInputs(s);
+  check('custom_event: unresolvable variable → no customEventData', r.tags[0]?.trigger.customEventData === undefined);
+}
+{
+  // matchRegex + negated conditions can't be synthesized → excluded.
+  const s = snapV(
+    [tag({ tagId: 'rx', name: 'Regex', type: 'gaawe', firingTriggerId: ['trx'], parameter: ga4EventParams('G-1', 'generate_lead') })],
+    [trig({ triggerId: 'trx', type: 'customEvent', customEventFilter: [cond('{{_event}}', 'equals', 'form_submission')], filter: [cond('{{DLV - form_name}}', 'matchRegex', '.*'), cond('{{DLV - form_id}}', 'equals', 'x', true)] })],
+    [dlv('DLV - form_name', 'form_name'), dlv('DLV - form_id', 'form_id')],
+  );
+  const r = snapshotToVerifyInputs(s);
+  // The negated condition makes the WHOLE trigger un-drivable (existing behavior) → tag skipped.
+  check('custom_event: negated condition → trigger skipped entirely', r.tags.length === 0 && r.skipped.some((x) => x.tagId === 'rx'));
+}
+{
+  // A matchRegex-only extra condition (no negation) is dropped, but the event still drives (no data).
+  const s = snapV(
+    [tag({ tagId: 'rx2', name: 'RegexOnly', type: 'gaawe', firingTriggerId: ['trx2'], parameter: ga4EventParams('G-1', 'generate_lead') })],
+    [trig({ triggerId: 'trx2', type: 'customEvent', customEventFilter: [cond('{{_event}}', 'equals', 'form_submission')], filter: [cond('{{DLV - form_name}}', 'matchRegex', 'contact.*')] })],
+    [dlv('DLV - form_name', 'form_name')],
+  );
+  const r = snapshotToVerifyInputs(s);
+  check('custom_event: matchRegex extra condition → no customEventData, still drivable', r.tags.length === 1 && r.tags[0]?.trigger.customEventData === undefined);
+}
+{
+  // A built-in {{Page Path}} condition on a custom_event is NOT pushed as data — it routes the page.
+  const s = snapV(
+    [tag({ tagId: 'pp', name: 'Page-scoped form', type: 'gaawe', firingTriggerId: ['tpp'], parameter: ga4EventParams('G-1', 'generate_lead') })],
+    [trig({ triggerId: 'tpp', type: 'customEvent', customEventFilter: [cond('{{_event}}', 'equals', 'form_submission')], filter: [cond('{{Page Path}}', 'equals', '/contact'), cond('{{DLV - form_name}}', 'equals', 'Contact')] })],
+    [dlv('DLV - form_name', 'form_name')],
+  );
+  const r = snapshotToVerifyInputs(s);
+  check('custom_event: Page Path routes the page, not pushed as data', r.tags[0]?.page === '/contact');
+  check('custom_event: Page Path excluded from customEventData', r.tags[0]?.trigger.customEventData?.form_name === 'Contact' && !('page path' in (r.tags[0]?.trigger.customEventData ?? {})));
+}
+
 console.log(`\ncontainer-verify: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 22) { console.error(`expected >= 22 checks, got ${passed}`); process.exit(1); }
+if (passed < 30) { console.error(`expected >= 30 checks, got ${passed}`); process.exit(1); }

@@ -451,6 +451,11 @@ export interface SuggestedTagView {
     pageUrlValue?: string;
     pageUrlOperator?: string;
     eventName?: string;
+    /** For a custom_event trigger whose tag also keys off form-specific dataLayer data (e.g. one
+     *  shared `form_submission` event split by `{{form_name}}`/`{{form_id}}`): the dataLayer
+     *  key→value pairs to include in the synthetic push so the RIGHT tag's condition matches. Resolved
+     *  from the trigger's extra conditions + the container's Data Layer Variables. */
+    customEventData?: Record<string, string>;
   };
 }
 
