@@ -1,3 +1,9 @@
+## [1.243.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.243.0...v1.243.1) (2026-07-07)
+
+### Bug Fixes
+
+* **desktop:** three report-consistency defects found in the live Purple Tresor audit ([c84f83c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c84f83ceb3e9b43f47a9ac6e1074cc0da3fedd7e)), closes [#376](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/376)
+
 ## [1.243.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.242.0...v1.243.0) (2026-07-07)
 
 ### Features
