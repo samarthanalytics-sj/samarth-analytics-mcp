@@ -395,6 +395,52 @@ export function installPlanNeedsAction(install: SuggestedTagView['install'] | un
   return installPlanStatus(install).kind !== 'ready';
 }
 
+/** Progress of an install plan against a per-requirement "done" set (keyed by the requirement's index in
+ *  `requires`). A listener-tag is marked done when it is created/exists; site-code + optional (html-
+ *  attribute) steps are checked off by the user. `required` = listener-tag + site-code (the steps that
+ *  gate "done"); `optional` = html-attribute (nice-to-have, never blocks). Drives the review table's
+ *  chip: it flips to a green "✓ Done" once every required step is done (and every optional too). Pure. */
+export interface InstallProgress {
+  kind: InstallStatusKind;
+  requiredTotal: number;
+  requiredDone: number;
+  optionalTotal: number;
+  optionalDone: number;
+  /** requiredDone >= requiredTotal (vacuously true when there are no required steps). */
+  allRequiredDone: boolean;
+  /** every actionable step — required AND optional — is done. */
+  fullyDone: boolean;
+}
+export function installPlanProgress(
+  install: SuggestedTagView['install'] | undefined,
+  done?: Record<number, boolean>,
+): InstallProgress {
+  let requiredTotal = 0;
+  let requiredDone = 0;
+  let optionalTotal = 0;
+  let optionalDone = 0;
+  (install?.requires ?? []).forEach((r, i) => {
+    const isDone = done?.[i] === true;
+    if (r.kind === 'listener-tag' || r.kind === 'site-code') {
+      requiredTotal += 1;
+      if (isDone) requiredDone += 1;
+    } else if (r.kind === 'html-attribute') {
+      optionalTotal += 1;
+      if (isDone) optionalDone += 1;
+    }
+  });
+  const allRequiredDone = requiredDone >= requiredTotal;
+  return {
+    kind: installPlanStatus(install).kind,
+    requiredTotal,
+    requiredDone,
+    optionalTotal,
+    optionalDone,
+    allRequiredDone,
+    fullyDone: allRequiredDone && optionalDone >= optionalTotal,
+  };
+}
+
 /**
  * The WHOLE scan's measurement plan as a client-ready, GitHub-flavored Markdown "install runbook":
  * per tag the GTM tag/trigger/params to create PLUS the site-side install steps, and a consolidated
