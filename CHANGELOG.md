@@ -1,3 +1,9 @@
+## [1.254.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.254.0...v1.254.1) (2026-07-07)
+
+### Bug Fixes
+
+* **desktop:** move GA4 monitor add-property to the top and fix the next-step icon ([97a380d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/97a380da5b47fd97c5f45aa5bfddb4964ba0c5e0))
+
 ## [1.254.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.253.1...v1.254.0) (2026-07-07)
 
 ### Features
