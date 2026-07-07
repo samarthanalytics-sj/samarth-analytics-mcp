@@ -522,6 +522,29 @@ check('video: carries the standard video_* params valued by the Video built-ins'
 check('video: flagged as EM-overlap (GA4 Video engagement) but still suggested', ytTag?.enhancedMeasurementOverlap === true);
 check('video: no embed → no video tag', buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }).length === 0);
 
+// ── generalized "How to install": every non-form suggestion carries an install plan ──────────────
+{
+  // A mailto (link_click) element → a NATIVE plan ("nothing to install").
+  const mailto = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'email', text: 'Email us' }] });
+  check('install: mailto/link_click element → install.requires[0].kind === "native"',
+    !!mailto[0].install && mailto[0].install.requires[0].kind === 'native' && /nothing to install/i.test(mailto[0].install.summary));
+  // A YouTube video (youtube_video) suggestion → NATIVE.
+  const vidInstall = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [], videoEmbeds: [{ page: '/', provider: 'youtube' }] });
+  check('install: youtube_video suggestion → native plan', !!vidInstall[0].install && vidInstall[0].install.requires[0].kind === 'native');
+  // An ecommerce custom_event (add_to_cart) → a site-code plan whose snippet names add_to_cart + ecommerce.
+  const ecom = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [], websiteType: 'ecommerce' });
+  const atc = ecom.find((s) => s.eventName === 'add_to_cart' && s.trigger.kind === 'custom_event');
+  const atcCode = atc?.install?.requires.find((r) => r.kind === 'site-code') as { kind: 'site-code'; snippet: string } | undefined;
+  check('install: ecommerce add_to_cart custom_event → site-code snippet contains "add_to_cart" and "ecommerce"',
+    !!atc && atc.install?.requires[0].kind === 'site-code' && !!atcCode && atcCode.snippet.includes('add_to_cart') && atcCode.snippet.includes('ecommerce'));
+  // The base google_tag (full mode) → a non-empty native install plan (no confusing empty panel).
+  const cfg = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [] }, { full: true }).find((s) => s.platform === 'google_tag');
+  check('install: base google_tag carries a non-empty native install plan', !!cfg?.install && cfg.install.requires.length >= 1 && cfg.install.requires[0].kind === 'native');
+  // A derived Meta copy inherits install from its GA4 source.
+  const withMeta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'email', text: 'Email us' }] }, { platforms: ['ga4', 'meta'] });
+  check('install: derived Meta copy inherits the install plan', withMeta.filter((s) => s.platform === 'meta_pixel').every((s) => !!s.install));
+}
+
 // ── full mode: GA4 Configuration prepended (no form catch-all) ────────────────
 const fullForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, formId: 'c' }], elements: [] }, { full: true });
 check('full: GA4 Configuration (google_tag) is always FIRST, on All Pages', fullForm[0].platform === 'google_tag' && fullForm[0].tagName === 'GA4 Configuration' && fullForm[0].trigger.kind === 'pageview' && fullForm[0].tagId === '{{GA4 Measurement ID}}');

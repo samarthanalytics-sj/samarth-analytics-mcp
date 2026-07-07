@@ -354,3 +354,104 @@ export function buildFormInstallPlan(input: {
 
   return { requires, summary };
 }
+
+// ── Generic (non-form) trigger install plan ───────────────────────────────────
+// buildFormInstallPlan (above) is the rich, form-specific model. buildTriggerInstallPlan is the
+// FALLBACK for every OTHER SuggestedTag kind, so the "How to install" panel is meaningful on every
+// suggestion — a reassuring "✓ native, nothing to install" for the triggers GTM fires natively
+// (clicks/timer/pageview/video/native-form), and the PRECISE dataLayer contract for a custom_event tag
+// whose event the SITE must push (ecommerce funnel + custom interactions). PURE — string-building only.
+
+/** The standard GA4 ecommerce events, whose dataLayer push must carry the GA4 `ecommerce` object
+ *  (items[], value, currency, transaction_id for purchase). A custom_event with one of these names gets
+ *  the ecommerce-shaped snippet + note. */
+const ECOMMERCE_EVENT_NAMES = new Set<string>([
+  'view_item', 'add_to_cart', 'begin_checkout', 'add_payment_info', 'purchase',
+  'view_item_list', 'select_item', 'view_cart', 'remove_from_cart', 'refund',
+]);
+
+/** Human-readable native-trigger detail, per SuggestedTag trigger kind. */
+const NATIVE_TRIGGER_DETAIL: Record<string, string> = {
+  link_click:
+    "GTM's built-in Click - Just Links trigger fires on the link click; no site change needed.",
+  all_clicks:
+    "GTM's Click - All Elements trigger fires on the click; no site change needed.",
+  pageview: "fires on GTM's All Pages / Page View trigger.",
+  timer: "fires on GTM's Timer trigger.",
+  youtube_video:
+    "GTM's built-in YouTube Video trigger fires; enable the YouTube Video built-in variables.",
+  form_submit:
+    "GTM's built-in Form Submission trigger fires on the native <form> submit.",
+};
+
+/** Human label for a native trigger kind, used in the one-line summary ("Native Link Click — …"). */
+const NATIVE_TRIGGER_LABEL: Record<string, string> = {
+  link_click: 'Link Click',
+  all_clicks: 'All-Elements Click',
+  pageview: 'Page View',
+  timer: 'Timer',
+  youtube_video: 'YouTube Video',
+  form_submit: 'Form Submission',
+};
+
+/**
+ * The install plan for a NON-form suggestion, derived purely from its trigger kind (+ the dataLayer
+ * event name for a custom_event). This is the generic companion to buildFormInstallPlan:
+ *
+ *   - NATIVE kinds (link_click / all_clicks / pageview / timer / youtube_video / form_submit) →
+ *     a single `native` requirement — GTM's built-in trigger fires as-is, nothing to install.
+ *   - custom_event → a `site-code` requirement: GA4/GTM does NOT auto-collect the event, so the site
+ *     must push it to the dataLayer. For a standard GA4 ecommerce event the snippet + note require the
+ *     GA4 `ecommerce` object; for any other custom event the snippet is the bare event push.
+ */
+export function buildTriggerInstallPlan(input: { kind: string; eventName?: string; label?: string }): InstallPlan {
+  const { kind } = input;
+
+  // ── NATIVE trigger kinds — GTM's built-in trigger fires, no site change ──────
+  if (kind in NATIVE_TRIGGER_DETAIL) {
+    return {
+      requires: [{ kind: 'native', detail: NATIVE_TRIGGER_DETAIL[kind] }],
+      summary: `Native ${NATIVE_TRIGGER_LABEL[kind] ?? kind} — nothing to install.`,
+    };
+  }
+
+  // ── custom_event — the site (or its platform) MUST push this dataLayer event ──
+  if (kind === 'custom_event') {
+    const event = input.eventName && input.eventName.trim() ? input.eventName.trim() : 'custom_event';
+    const isEcommerce = ECOMMERCE_EVENT_NAMES.has(event);
+    // A purchase carries transaction_id in addition to items/value/currency; other ecommerce events
+    // just need items/value/currency. The snippet shows the shape; the note names the required fields.
+    const ecommerceInner =
+      event === 'purchase'
+        ? ` ecommerce:{ transaction_id:"…", value:0, currency:"USD", items:[…] }`
+        : ` ecommerce:{ value:0, currency:"USD", items:[…] }`;
+    const snippet = isEcommerce
+      ? `<script>window.dataLayer=window.dataLayer||[];dataLayer.push({event:${q(event)},${ecommerceInner}});</script>`
+      : `<script>window.dataLayer=window.dataLayer||[];dataLayer.push({event:${q(event)}});</script>`;
+    const detail =
+      `GA4/GTM does not auto-collect the "${event}" event — your site (or its platform) must push it to the ` +
+      `dataLayer when this interaction happens, then this Custom Event trigger fires.` +
+      (isEcommerce
+        ? ` As a standard GA4 ecommerce event it must include the GA4 ecommerce object (items[], value, currency` +
+          (event === 'purchase' ? ', transaction_id' : '') +
+          `).`
+        : '');
+    return {
+      requires: [
+        {
+          kind: 'site-code',
+          snippet,
+          where: "your site's code where the interaction completes (e.g. the ecommerce/dataLayer layer)",
+          detail,
+        },
+      ],
+      summary: `Your site must push the "${event}" dataLayer event (code required).`,
+    };
+  }
+
+  // ── Unknown kind — treat as native-ish (no known site requirement) so the panel is never empty. ──
+  return {
+    requires: [{ kind: 'native', detail: `fires on GTM's ${kind} trigger; no site change needed.` }],
+    summary: `Native ${kind} — nothing to install.`,
+  };
+}
