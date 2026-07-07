@@ -30,6 +30,7 @@ import {
   type PageScanRaw,
 } from './collect.js';
 import { buildSuggestions } from './suggest.js';
+import { detectExistingTracking, type ExistingTracking } from './existing-tracking.js';
 import type { SuggestedTag, FormPurpose } from './types.js';
 
 /** A page that was discovered but not turned into suggestions, with the reason. */
@@ -57,6 +58,9 @@ export interface TagSuggestionReport {
   };
   /** Ranked, deduped GA4 event tags — each directly creatable via create_gtm_tracking_tag. */
   suggestions: SuggestedTag[];
+  /** What tracking the site ALREADY ships (GTM/GA4/Ads/Meta/TikTok/LinkedIn + its own dataLayer events
+   *  + JS framework), harvested during the scan. Optional so existing callers are unaffected. */
+  existingTracking?: ExistingTracking;
   /** What was detected per scanned page (path → counts). */
   pages: { page: string; forms: number; elements: number }[];
   /** Discovered but not scanned: over budget, crawler-skipped, or nav failure. */
@@ -149,6 +153,7 @@ export function assembleTagReport(args: AssembleArgs): TagSuggestionReport {
       newTracking: suggestions.length - em,
     },
     suggestions,
+    existingTracking: detectExistingTracking(args.pageScans),
     pages: args.pageScans.map((p) => ({ page: p.page, forms: p.forms.length, elements: p.elements.length })),
     notScanned: args.notScanned,
     notes: args.notes,
