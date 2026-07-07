@@ -386,8 +386,9 @@ function isListItem(line: string): boolean {
   return /^\s*([-*]|\d+\.)\s+/.test(line);
 }
 
-/** A fenced code block rendered as a boxed snippet with a Copy button. */
-function CodeBlock({ code }: { code: string }): JSX.Element {
+/** A fenced code block rendered as a boxed snippet with a Copy button. An optional
+ *  `ariaLabel` describes the block for screen readers (used by the install panel). */
+function CodeBlock({ code, ariaLabel }: { code: string; ariaLabel?: string }): JSX.Element {
   const [copied, setCopied] = useState(false);
   const copy = (): void => {
     const done = (): void => {
@@ -399,10 +400,10 @@ function CodeBlock({ code }: { code: string }): JSX.Element {
   };
   return (
     <div style={mdStyles.codeWrap}>
-      <button style={mdStyles.copyBtn} onClick={copy} title="Copy to clipboard">
+      <button style={mdStyles.copyBtn} onClick={copy} title="Copy to clipboard" aria-label={ariaLabel ? `Copy ${ariaLabel}` : 'Copy to clipboard'}>
         {copied ? '✓ Copied' : 'Copy'}
       </button>
-      <pre style={mdStyles.pre}>
+      <pre style={mdStyles.pre} role="group" aria-label={ariaLabel}>
         <code>{code}</code>
       </pre>
     </div>
@@ -1364,6 +1365,17 @@ const tplStyles: Record<string, React.CSSProperties> = {
   cellSelect: { width: '100%', minWidth: 120, boxSizing: 'border-box', background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 5, padding: '3px 4px', fontSize: 12, fontFamily: 'inherit', cursor: 'pointer' },
   pager: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 13, color: 'var(--text-muted)' },
   pagerBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 7, padding: '4px 12px', fontSize: 13, cursor: 'pointer' },
+  // ── "How to install" panel (the site-side requirements a suggestion's trigger needs to fire) ──
+  installToggle: { background: 'transparent', border: 'none', color: 'var(--c-blue)', cursor: 'pointer', fontSize: 11, padding: '2px 0', marginTop: 4, textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: 4 },
+  installTd: { padding: 0, borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' },
+  // The panel is capped + scrolls internally so a long <script> never widens the table.
+  installPanel: { maxWidth: '100%', overflowX: 'auto', padding: '10px 14px', boxSizing: 'border-box' },
+  installSummary: { fontSize: 12, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' },
+  installReq: { border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: 'var(--surface)' },
+  installReqOk: { border: '1px solid var(--c-green-border)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: 'var(--c-green-bg)' },
+  installReqLabel: { fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', marginBottom: 4 },
+  installDetail: { fontSize: 12, color: 'var(--text-dim)', margin: '4px 0 0', whiteSpace: 'pre-wrap', lineHeight: 1.4 },
+  installMeta: { fontSize: 12, color: 'var(--text-dim)', margin: '2px 0' },
 };
 
 // Fixed option lists for the editable Trigger-when Variable / Condition selects.
@@ -1407,6 +1419,97 @@ function GrowCell({ value, disabled, onChange, ariaLabel }: { value: string; dis
     />
   );
 }
+
+// ── "How to install" panel ────────────────────────────────────────────────────
+// Read-only surface for a suggestion's structured install plan: the site-side
+// requirement(s) a tag's trigger needs to actually fire (a listener tag / an HTML
+// attribute / site code), or a green "nothing to install" when GTM's native
+// trigger already sees the event. Show/copy only — no create button in this phase.
+type InstallPlanView = NonNullable<SuggestedTagView['install']>;
+type InstallReqView = InstallPlanView['requires'][number];
+
+/** GTM trigger the listener tag attaches to → human wording. */
+const FIRES_LABEL: Record<Extract<InstallReqView, { kind: 'listener-tag' }>['tag']['fires'], string> = {
+  all_pages: 'All Pages',
+  dom_ready: 'DOM Ready',
+  window_loaded: 'Window Loaded',
+};
+
+/** Render one install requirement, styled by kind. */
+function InstallRequirementRow({ req }: { req: InstallReqView }): JSX.Element {
+  switch (req.kind) {
+    case 'native':
+      return (
+        <div style={tplStyles.installReqOk}>
+          <span style={{ color: 'var(--c-green)', fontWeight: 700 }}>✓ </span>
+          <span style={{ fontSize: 12, color: 'var(--text)' }}>{req.detail}</span>
+        </div>
+      );
+    case 'provider-native':
+      return (
+        <div style={tplStyles.installReqOk}>
+          <span style={{ color: 'var(--c-green)', fontWeight: 700 }}>✓ </span>
+          <span style={{ fontSize: 12, color: 'var(--text)' }}>{req.detail}</span>
+        </div>
+      );
+    case 'listener-tag':
+      return (
+        <div style={tplStyles.installReq}>
+          <div style={tplStyles.installReqLabel}>Create a Custom HTML listener tag</div>
+          <div style={tplStyles.installMeta}>
+            <strong style={{ color: 'var(--text)' }}>{req.tag.name}</strong>
+          </div>
+          <div style={tplStyles.installMeta}>
+            fires on: <code style={mdStyles.code}>{FIRES_LABEL[req.tag.fires]}</code>
+          </div>
+          <CodeBlock code={req.tag.html} ariaLabel={`Custom HTML listener tag "${req.tag.name}"`} />
+          {req.dlvScope && (
+            <div style={tplStyles.installMeta}>
+              Scopes the trigger via <code style={mdStyles.code}>{`{{dlv - ${req.dlvScope.key}}}`}</code> = <code style={mdStyles.code}>{req.dlvScope.value}</code>
+            </div>
+          )}
+          <div style={tplStyles.installDetail}>{req.detail}</div>
+        </div>
+      );
+    case 'html-attribute':
+      return (
+        <div style={tplStyles.installReq}>
+          <div style={tplStyles.installReqLabel}>Add an HTML attribute on your site</div>
+          <div style={tplStyles.installMeta}>
+            On your site: add <code style={mdStyles.code}>{`${req.attribute}="${req.value}"`}</code> to <code style={mdStyles.code}>{req.selector}</code>
+          </div>
+          <div style={tplStyles.installDetail}>{req.detail}</div>
+        </div>
+      );
+    case 'site-code':
+      return (
+        <div style={tplStyles.installReq}>
+          <div style={tplStyles.installReqLabel}>Add code to your site</div>
+          <div style={tplStyles.installMeta}>Add this to your site ({req.where}):</div>
+          <CodeBlock code={req.snippet} ariaLabel={`Site code snippet for ${req.where}`} />
+          <div style={tplStyles.installDetail}>{req.detail}</div>
+        </div>
+      );
+    default: {
+      // Exhaustiveness guard — a new requirement kind should force a compile error here.
+      const _never: never = req;
+      return <>{String(_never)}</>;
+    }
+  }
+}
+
+/** The expandable panel body for one suggestion's install plan. */
+function InstallPanel({ plan }: { plan: InstallPlanView }): JSX.Element {
+  return (
+    <div style={tplStyles.installPanel}>
+      <p style={tplStyles.installSummary}>{plan.summary}</p>
+      {plan.requires.map((req, i) => (
+        <InstallRequirementRow key={i} req={req} />
+      ))}
+    </div>
+  );
+}
+
 // The template table is interactive (parity with the Cards view): a leading checkbox selects a tag
 // to create in GTM, and the Tag name / GA4 event / trigger-Value cells are inline-editable (writing
 // into the same `edits`/`selected` state the Cards view + the create flow use). Rows already in the
@@ -1433,6 +1536,11 @@ function SuggestionTemplateTable({
   onToggle: (id: string, v: boolean) => void;
   onEdit: (id: string, patch: TagEdit) => void;
 }): JSX.Element {
+  // Which suggestions have their "How to install" panel expanded (keyed by id).
+  const [installOpen, setInstallOpen] = useState<Record<string, boolean>>({});
+  const toggleInstall = (id: string): void => setInstallOpen((o) => ({ ...o, [id]: !o[id] }));
+  // The install panel row spans every column: ✓ + Page + the 10 template headers.
+  const totalCols = 2 + TEMPLATE_HEADERS.length;
   return (
     <div style={tplStyles.wrap}>
       <table style={tplStyles.table}>
@@ -1468,7 +1576,7 @@ function SuggestionTemplateTable({
               onEdit(s.id, { params: paramRows.map((row, j) => (j === idx ? { ...row, ...patch } : row)) });
             const editWhen = (idx: number, patch: Partial<TriggerWhen>): void =>
               onEdit(s.id, { whens: whenRows.map((row, j) => (j === idx ? { ...row, ...patch } : row)) });
-            return Array.from({ length: rowCount }, (_, i) => {
+            const groupRows = Array.from({ length: rowCount }, (_, i) => {
               const first = i === 0;
               const p = paramRows[i];
               const w = whenRows[i];
@@ -1502,6 +1610,21 @@ function SuggestionTemplateTable({
                   {first && (
                     <td rowSpan={rowCount} style={{ ...tplStyles.td, whiteSpace: 'nowrap' }}>
                       {editable ? <GrowCell value={s.page} disabled={creating} onChange={(v) => onEdit(s.id, { page: v })} ariaLabel="Page" /> : <span style={{ color: 'var(--text-dim)' }}>{s.page}</span>}
+                      {/* "How to install" affordance — only when a structured install plan exists (form suggestions). */}
+                      {s.install && (
+                        <div>
+                          <button
+                            type="button"
+                            style={tplStyles.installToggle}
+                            onClick={() => toggleInstall(s.id)}
+                            aria-expanded={!!installOpen[s.id]}
+                            aria-label={`How to install ${g.tagName}`}
+                            title="Show the site-side requirements this tag's trigger needs to fire"
+                          >
+                            ⓘ How to install {installOpen[s.id] ? '▾' : '▸'}
+                          </button>
+                        </div>
+                      )}
                     </td>
                   )}
                   {first && (
@@ -1537,6 +1660,17 @@ function SuggestionTemplateTable({
                 </tr>
               );
             });
+            // One extra full-width row directly AFTER the group when its install panel is expanded.
+            if (s.install && installOpen[s.id]) {
+              groupRows.push(
+                <tr key={s.id + ':install'}>
+                  <td colSpan={totalCols} style={tplStyles.installTd}>
+                    <InstallPanel plan={s.install} />
+                  </td>
+                </tr>,
+              );
+            }
+            return groupRows;
           })}
         </tbody>
       </table>

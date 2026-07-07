@@ -5,6 +5,11 @@
 // booleans derived in the main process. Keeping secrets out of these types is
 // the type-level guarantee behind "the renderer never receives tokens or keys".
 
+// TYPE-ONLY import (erased at build) of the structured install plan attached to a
+// form suggestion — mirrors how the other web-audit tag-suggest types are pulled
+// into the main/shared layer. Carries no runtime dependency into the renderer.
+import type { InstallPlan } from '../../../web-audit-mcp/src/agent/tag-suggest/install-plan';
+
 export type LlmProvider = 'anthropic' | 'openai' | 'gemini';
 export type GoogleProduct = 'gtm' | 'ga4';
 
@@ -380,6 +385,12 @@ export interface SuggestedTagView {
   evidence: string;
   /** Optional caveat (e.g. an embedded provider whose native trigger won't fire). */
   note?: string;
+  /** The STRUCTURED, installable companion to `note`: the site-side requirement(s)
+   *  for this tag's trigger to fire (listener tag(s) / attributes / code), expressed
+   *  where possible as an auto-creatable Custom HTML listener tag. Currently attached
+   *  to form suggestions only — surfaced read-only in the review panel's "How to
+   *  install" panel. Carried through untouched from the engine SuggestedTag.install. */
+  install?: InstallPlan;
   confidence: 'high' | 'medium' | 'low';
   /** GA4 Enhanced Measurement already auto-tracks this — flagged, not pushed. */
   enhancedMeasurementOverlap: boolean;
