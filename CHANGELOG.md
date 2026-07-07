@@ -1,3 +1,9 @@
+## [1.220.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.220.2...v1.220.3) (2026-07-07)
+
+### Bug Fixes
+
+* **monitor:** an unreadable property is NOT healthy - surface the real fetch error ([7d2f8b4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7d2f8b454c69067a9b62415ded4ae389f05e4745))
+
 ## [1.220.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.220.1...v1.220.2) (2026-07-06)
 
 ### Bug Fixes
