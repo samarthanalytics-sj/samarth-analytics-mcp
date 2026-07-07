@@ -206,13 +206,13 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     const target = String(url ?? '').trim();
     const verdict = urlAllowed(target, []);
     if (!verdict.ok) throw new Error(`Cannot submit against that URL: ${verdict.reason}`);
-    const inp = (input && typeof input === 'object' ? input : {}) as { formId?: unknown; formClasses?: unknown; fields?: unknown };
+    const inp = (input && typeof input === 'object' ? input : {}) as { formId?: unknown; formClasses?: unknown; method?: unknown; fields?: unknown };
     const list = (Array.isArray(inp.fields) ? inp.fields : []) as FormSubmitFieldInput[];
     if (list.length === 0) return { ok: false, injected: false, previewAuth: false, filled: 0, submitted: false, error: 'No fields to submit.', events: [], beacons: [] };
     const o = opts ?? {};
     const res = await runFormSubmitDriver(
       target,
-      { formId: String(inp.formId ?? ''), formClasses: String(inp.formClasses ?? ''), fields: list },
+      { formId: String(inp.formId ?? ''), formClasses: String(inp.formClasses ?? ''), method: String(inp.method ?? ''), fields: list },
       { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}) },
     );
     // Pair the fired GA4 events to the container's ACTUAL tags (best-effort — needs container context).

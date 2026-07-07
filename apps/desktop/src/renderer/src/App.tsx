@@ -3783,7 +3783,7 @@ function FormFillReview({ active, onError }: { active: AccountView | undefined; 
         ...(snippet.trim() ? { containerSnippet: snippet.trim() } : {}),
         ...(canPair && ctx ? { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId! } : {}),
       };
-      const res = await window.desktop.tags.submitFormAndVerify(target, { formId: form.formId, formClasses: form.formClasses, fields }, Object.keys(submitOpts).length ? submitOpts : undefined);
+      const res = await window.desktop.tags.submitFormAndVerify(target, { formId: form.formId, formClasses: form.formClasses, method: form.method, fields }, Object.keys(submitOpts).length ? submitOpts : undefined);
       setResults((r) => ({ ...r, [form.index]: res }));
     } catch (e) {
       setNote(e instanceof Error ? e.message : String(e));
