@@ -1,3 +1,10 @@
+## [1.221.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.220.3...v1.221.0) (2026-07-07)
+
+### Features
+
+* **suggest:** flag near-duplicate click tags (a shorter click-text inside another CTA) ([7bd8ac1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7bd8ac133303c88de4374c523a0ae67a5123735f))
+* **verify:** multi-page drive — verify each click tag on the page its CTA lives on ([7c6cdff](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7c6cdff679e166b236450a8f99e682435c95c7f0)), closes [#1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/1)
+
 ## [1.220.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.220.2...v1.220.3) (2026-07-07)
 
 ### Bug Fixes
