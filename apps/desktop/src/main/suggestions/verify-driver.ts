@@ -12,7 +12,7 @@
 // Playwright is OPTIONAL (loaded lazily); if absent the caller gets a clear error.
 
 import { requestAllowed } from './ssrf';
-import { classifyCollector, syntheticDataLayerEvent, buildNetworkLog, type Collector, type DescribedHit } from '../../shared/runtime-capture';
+import { classifyCollector, syntheticDataLayerEvent, buildNetworkLog, summarizeDataLayer, type Collector, type DescribedHit, type DataLayerEventView } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
 import type { PerTagCapture } from './verify-tags';
 
@@ -136,16 +136,45 @@ export interface VerifyDriverResult {
   networkLog?: DescribedHit[];
   /** Present only when opts.gtmDebug — the on-page GTM debug signal (Phase B groundwork). */
   gtmDebug?: GtmDebugCapture;
+  /** The site's REAL dataLayer pushes captured during the drive, each with its parameters — the
+   *  Tag-Assistant-style dataLayer view. Shows exactly what the site emits (page_view, form_start,
+   *  cta_click, …) so a trigger can be built/aligned to the real event + params. Events the verifier
+   *  pushed synthetically to test custom_event tags are flagged `synthetic`. */
+  dataLayer?: DataLayerEventView[];
 }
 
-/** Read GTM's on-page debug signal (serialized to page.evaluate — DOM globals only). */
-function readGtmDebugInPage(): { containerIds: string[]; dataLayerEvents: string[] } {
+/** Read GTM's on-page debug signal + the real dataLayer pushes (serialized to page.evaluate — DOM
+ *  globals only). Each push is SANITISED to a JSON-safe { event, params } (DOM nodes/functions dropped,
+ *  nested objects summarised) so it survives the evaluate boundary; summarizeDataLayer formats it. */
+function readGtmDebugInPage(): { containerIds: string[]; dataLayerEvents: string[]; dataLayer: Array<{ event: string; params: Record<string, string> }> } {
   const w = window as unknown as { google_tag_manager?: Record<string, unknown>; dataLayer?: Array<Record<string, unknown>> };
   const containerIds = w.google_tag_manager ? Object.keys(w.google_tag_manager).filter((k) => /^GTM-/i.test(k)) : [];
-  const dataLayerEvents = Array.isArray(w.dataLayer)
-    ? [...new Set(w.dataLayer.map((e) => (e && typeof e === 'object' ? String((e as { event?: unknown }).event ?? '') : '')).filter(Boolean))]
-    : [];
-  return { containerIds, dataLayerEvents };
+  const rawDl = Array.isArray(w.dataLayer) ? w.dataLayer : [];
+  const dataLayerEvents = [...new Set(rawDl.map((e) => (e && typeof e === 'object' ? String((e as { event?: unknown }).event ?? '') : '')).filter(Boolean))];
+  const dataLayer: Array<{ event: string; params: Record<string, string> }> = [];
+  for (const item of rawDl.slice(-250)) {
+    if (!item || typeof item !== 'object') continue;
+    const ev = String((item as { event?: unknown }).event ?? '');
+    if (!ev) continue;
+    const params: Record<string, string> = {};
+    let n = 0;
+    for (const k of Object.keys(item)) {
+      if (k === 'event' || n >= 15) continue;
+      const v = (item as Record<string, unknown>)[k];
+      if (v == null) continue;
+      const t = typeof v;
+      if (t === 'function') continue;
+      if (t === 'object') {
+        if (typeof Node !== 'undefined' && v instanceof Node) continue; // a DOM element (gtm.element) — skip
+        try { params[k] = Array.isArray(v) ? `[${v.length}]` : `{${Object.keys(v as object).slice(0, 5).join(',')}}`; } catch { continue; }
+      } else {
+        params[k] = String(v).slice(0, 80);
+      }
+      n += 1;
+    }
+    dataLayer.push({ event: ev, params });
+  }
+  return { containerIds, dataLayerEvents, dataLayer };
 }
 
 /**
@@ -408,6 +437,10 @@ export async function runVerifyDriver(
     const pagesDriven: string[] = [];
     const debugContainerIds = new Set<string>();
     const debugEvents = new Set<string>();
+    // Real dataLayer pushes captured across pages + the event names WE pushed synthetically (so those
+    // are labelled and not mistaken for the site's own emissions).
+    const debugDataLayer: Array<{ event: string; params: Record<string, string> }> = [];
+    const syntheticEvents = new Set<string>();
 
     // Drive each tag on ITS page: group by page, navigate to each, inject the
     // (preview) container so DRAFT tags load, then drive the group's triggers.
@@ -479,6 +512,7 @@ export async function runVerifyDriver(
           const data = tag.trigger.customEventData ?? {};
           const payload = buildCustomEventPayload(evName, data, pushedDlKeys);
           Object.keys(data).forEach((k) => pushedDlKeys.add(k));
+          syntheticEvents.add(evName); // we pushed this — flag it in the dataLayer inspector
           try {
             await page.evaluate(pushDataLayerInPage, payload);
           } catch {
@@ -515,23 +549,24 @@ export async function runVerifyDriver(
         });
       }
 
-      // Phase B (best-effort): after driving this page, read GTM's on-page debug signal.
-      if (opts.gtmDebug) {
-        try {
-          const d = (await page.evaluate(readGtmDebugInPage)) as { containerIds: string[]; dataLayerEvents: string[] };
-          d.containerIds.forEach((c) => debugContainerIds.add(c));
-          d.dataLayerEvents.forEach((e) => debugEvents.add(e));
-        } catch {
-          /* best-effort — never fail verification over the debug read */
-        }
+      // After driving this page, read GTM's on-page debug signal + the site's real dataLayer pushes
+      // (always — the dataLayer inspector is core, not gated behind gtmDebug). Best-effort.
+      try {
+        const d = (await page.evaluate(readGtmDebugInPage)) as { containerIds: string[]; dataLayerEvents: string[]; dataLayer: Array<{ event: string; params: Record<string, string> }> };
+        d.containerIds.forEach((c) => debugContainerIds.add(c));
+        d.dataLayerEvents.forEach((e) => debugEvents.add(e));
+        for (const p of d.dataLayer) debugDataLayer.push(p);
+      } catch {
+        /* best-effort — never fail verification over the debug read */
       }
     }
 
     const gtmDebug: GtmDebugCapture | undefined = opts.gtmDebug
       ? { containerLoaded: debugContainerIds.size > 0, containerIds: [...debugContainerIds], dataLayerEvents: [...debugEvents] }
       : undefined;
+    const dataLayer = summarizeDataLayer(debugDataLayer.map((p) => ({ ...p, synthetic: syntheticEvents.has(p.event) })));
     const networkLog = buildNetworkLog(captured);
-    return { pagesOk: true, injected, previewAuth, perTag, ...(pagesDriven.length ? { pagesDriven } : {}), ...(networkLog.length ? { networkLog } : {}), ...(gtmDebug ? { gtmDebug } : {}) };
+    return { pagesOk: true, injected, previewAuth, perTag, ...(pagesDriven.length ? { pagesDriven } : {}), ...(networkLog.length ? { networkLog } : {}), ...(dataLayer.length ? { dataLayer } : {}), ...(gtmDebug ? { gtmDebug } : {}) };
   } catch (e) {
     return { pagesOk: false, injected: Boolean(loaderSrc), previewAuth, perTag, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
   } finally {

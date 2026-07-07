@@ -652,6 +652,11 @@ export interface VerifyTagsResult {
    *  Meta pixel (facebook.com/tr), GA4, the sGTM relay (/g/collect), and other pixels, with key params.
    *  Server-side Meta CAPI (graph.facebook.com) is NOT here — it never reaches the browser. */
   networkLog?: Array<{ vendor: string; endpoint: string; params: string }>;
+  /** The site's REAL dataLayer pushes captured during the run, each with its parameters — a
+   *  Tag-Assistant-style view of exactly what the site emits (page_view, form_start, cta_click, …) so
+   *  a trigger can be built/aligned to the real event + params. `synthetic` = a verifier-pushed event
+   *  (used to test a custom_event tag), NOT proof the site fires it. */
+  dataLayer?: Array<{ event: string; params: string; synthetic?: boolean }>;
   /** Phase B (best-effort): GTM's on-page debug signal — whether the container actually loaded +
    *  the dataLayer event stream. Present only when gtmDebug was requested. */
   gtmDebug?: { containerLoaded: boolean; containerIds: string[]; dataLayerEvents: string[] };

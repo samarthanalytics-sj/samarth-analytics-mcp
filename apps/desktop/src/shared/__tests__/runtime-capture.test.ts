@@ -11,6 +11,7 @@ import {
   syntheticDataLayerEvent,
   describeHit,
   buildNetworkLog,
+  summarizeDataLayer,
 } from '../runtime-capture';
 
 let passed = 0;
@@ -209,6 +210,26 @@ check('beacon: LinkedIn ≠ Reddit (per-platform attribution)', beaconPlatform('
   ]);
   check('networkLog: de-dups identical hits', log.length === 2);
   check('networkLog: keeps distinct vendors', log.some((h) => h.vendor === 'meta') && log.some((h) => h.vendor === 'sgtm'));
+}
+
+// ── summarizeDataLayer: the dataLayer inspector rows ────────────────────────────
+{
+  const rows = summarizeDataLayer([
+    { event: 'gtm.js', params: { 'gtm.start': 123, 'gtm.uniqueEventId': 1 } },
+    { event: 'form_submission', params: { form_name: 'get_in_touch', form_id: 'gform_1', 'gtm.elementId': 'x', eventCallback: 'fn' } },
+    { event: 'form_submission', params: { form_name: 'get_in_touch', form_id: 'gform_1' } }, // dup of the above (after noise stripped)
+    { event: '', params: { config: 'G-1' } }, // no event → skipped
+    { event: 'cta_click', params: { link_text: 'Get a Free Audit', link_url: 'https://x/audit' }, synthetic: true },
+  ]);
+  const names = rows.map((r) => r.event);
+  check('dataLayer: skips pushes with no event name', !names.includes(''));
+  check('dataLayer: keeps real event names', names.includes('gtm.js') && names.includes('form_submission') && names.includes('cta_click'));
+  const fs = rows.find((r) => r.event === 'form_submission');
+  check('dataLayer: surfaces trigger params (form_name/form_id)', /form_name=get_in_touch/.test(fs?.params ?? '') && /form_id=gform_1/.test(fs?.params ?? ''));
+  check('dataLayer: strips GTM-internal + callback noise keys', !/gtm\.|eventCallback/.test(fs?.params ?? ''));
+  check('dataLayer: de-dups identical event+params', rows.filter((r) => r.event === 'form_submission').length === 1);
+  check('dataLayer: gtm.js with only-noise params → empty params', rows.find((r) => r.event === 'gtm.js')?.params === '');
+  check('dataLayer: marks synthetic (verifier-pushed) events', rows.find((r) => r.event === 'cta_click')?.synthetic === true);
 }
 
 console.log(`\nruntime-capture: ${passed} passed, ${failed} failed`);
