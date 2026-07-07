@@ -1,3 +1,9 @@
+## [1.258.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.257.1...v1.258.0) (2026-07-07)
+
+### Features
+
+* **verify:** capture a screenshot of each tag's interaction (visual proof) ([6d55410](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6d5541021962cf3ab0d1eb585fa283816cd1b2c7))
+
 ## [1.257.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.257.0...v1.257.1) (2026-07-07)
 
 ### Bug Fixes
