@@ -6,8 +6,8 @@ import type { AccountView, Ga4MonitorStatus, Ga4MonitorRun, Ga4MonitorTargetStat
 //   How serious / how much? → the OVERVIEW KPI cards (open issues, checks passing, needs attention, last check).
 //   Why? → the AI SUMMARY card (the engine's plain-language read + the recommended next step).
 //   What next? → the HEALTH CHECK cards (every check as a pass/warn/fail tile) + the full alert list.
-// Multi-property: one TAB per monitored property; the selected property renders the dashboard above.
-// Global config (add property, schedule, Slack how-to) lives in the MONITORING SETTINGS card at the end.
+// The "Monitor a GA4 property" card sits at the TOP (add a property + schedule) so adding one is the
+// first action; below it, one TAB per monitored property renders the dashboard above for the selection.
 // Every value shown here traces to a real field on the monitor run (Ga4MonitoringService in main) —
 // no derived "confidence" scores or metrics the engine does not actually produce.
 
@@ -190,7 +190,7 @@ function AiSummary({ run }: { run: Ga4MonitorRun }): JSX.Element {
       </div>
       <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.6 }}>{run.summary}</div>
       <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-        <span style={{ fontSize: 15, marginTop: 1 }}>➡️</span>
+        <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--c-blue-bg, rgba(37,99,235,.15))', color: 'var(--c-blue, #2563eb)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 800, flexShrink: 0, marginTop: 1 }}>→</span>
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>Recommended next step</div>
           <div style={{ fontSize: 13.5, color: 'var(--text)', marginTop: 2, lineHeight: 1.5 }}>{nextStep}</div>
@@ -579,13 +579,64 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       {note && <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>{note}</div>}
       {status?.lastError && <div style={{ fontSize: 12.5, color: 'var(--c-red)' }}>Last sweep error — {status.lastError}</div>}
 
+      {/* ── Monitor a GA4 property (top of page): add a property (+ its optional Slack channel) and
+             the shared schedule. Placed above the dashboard so adding a property is the first action,
+             not something you scroll past the dashboard to reach. ── */}
+      <div style={card}>
+        <div style={{ ...sectionTitle, marginBottom: 14 }}>Monitor a GA4 property</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 260, flex: 1 }}>
+            <span style={label}>Add a GA4 property for monitoring</span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <select style={{ ...input, flex: 1 }} value={addId} onChange={(e) => { setAddId(e.target.value); setAddChanUrl(''); setAddChanLabel(''); }}>
+                <option value="">{properties === null ? 'Loading…' : addable.length ? 'Select a property…' : targets.length ? 'All accessible properties are being monitored' : 'No properties found'}</option>
+                {addable.map((p) => (
+                  <option key={p.property} value={p.property}>{p.displayName} ({p.property.replace('properties/', '')})</option>
+                ))}
+              </select>
+              <button style={primaryBtn} onClick={() => void addProperty()} disabled={busy || !addId}>+ Add</button>
+            </div>
+            {addId && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 2 }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <input style={{ ...input, flex: 2, minWidth: 220, fontSize: 12 }} type="password" placeholder="Slack webhook for this property (optional — connect later from its tab)" value={addChanUrl} onChange={(e) => setAddChanUrl(e.target.value)} />
+                  <input style={{ ...input, flex: 1, minWidth: 130, fontSize: 12 }} type="text" placeholder="#channel name" value={addChanLabel} onChange={(e) => setAddChanLabel(e.target.value)} />
+                </div>
+                <div style={{ background: 'var(--surface)', border: '1px dashed var(--border)', borderRadius: 8, padding: '8px 12px' }}>
+                  <NotifyPicker value={addNotify} onChange={setAddNotify} disabled={busy} />
+                </div>
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={label}>Check every</span>
+            <select style={input} value={status?.intervalMinutes ?? 60} onChange={(e) => void configure({ intervalMinutes: Number(e.target.value) })}>
+              {intervalOpts.map((m) => <option key={m} value={m}>{fmtInterval(m)}</option>)}
+            </select>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={label}>Trend window</span>
+            <select style={input} value={status?.days ?? 28} onChange={(e) => void configure({ days: Number(e.target.value) })}>
+              {[7, 14, 28, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
+            </select>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', paddingBottom: 7 }}>
+            <input type="checkbox" checked={Boolean(status?.enabled)} disabled={busy || !targets.length} onChange={(e) => void configure({ enabled: e.target.checked })} />
+            Run in the background
+          </label>
+          <button style={primaryBtn} onClick={() => void runNow()} disabled={runningId !== null || enabledCount === 0}>
+            {runningId === '*' ? 'Checking all…' : enabledCount > 1 ? `▶ Run all (${enabledCount})` : '▶ Run now'}
+          </button>
+        </div>
+      </div>
+
       {/* ── Property tabs + the selected property's dashboard ── */}
       {targets.length === 0 ? (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '40px 20px', color: 'var(--text-muted)' }}>
           <span style={{ fontSize: 30 }}>📡</span>
           <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text)' }}>No properties monitored yet</div>
           <div style={{ fontSize: 13, textAlign: 'center', maxWidth: 460, lineHeight: 1.5 }}>
-            Add a GA4 property in <b>Monitoring settings</b> below. Each check verifies data flow, key events, spikes/drops, conversion tracking and revenue integrity — and can alert your Slack channel when something breaks.
+            Pick a GA4 property in the <b>Monitor a GA4 property</b> panel above and click <b>＋ Add</b>. Each check verifies data flow, key events, spikes/drops, conversion tracking and revenue integrity — and can alert your Slack channel when something breaks.
           </div>
         </div>
       ) : (
@@ -637,55 +688,6 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
           )}
         </div>
       )}
-
-      {/* ── Monitoring settings: add a property (+ its optional Slack channel) and the shared schedule ── */}
-      <div style={card}>
-        <div style={{ ...sectionTitle, marginBottom: 14 }}>⚙️ Monitoring settings</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 260, flex: 1 }}>
-            <span style={label}>Add a property to monitor</span>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <select style={{ ...input, flex: 1 }} value={addId} onChange={(e) => { setAddId(e.target.value); setAddChanUrl(''); setAddChanLabel(''); }}>
-                <option value="">{properties === null ? 'Loading…' : addable.length ? 'Select a property…' : targets.length ? 'All accessible properties are being monitored' : 'No properties found'}</option>
-                {addable.map((p) => (
-                  <option key={p.property} value={p.property}>{p.displayName} ({p.property.replace('properties/', '')})</option>
-                ))}
-              </select>
-              <button style={primaryBtn} onClick={() => void addProperty()} disabled={busy || !addId}>+ Add</button>
-            </div>
-            {addId && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 2 }}>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <input style={{ ...input, flex: 2, minWidth: 220, fontSize: 12 }} type="password" placeholder="Slack webhook for this property (optional — connect later from its tab)" value={addChanUrl} onChange={(e) => setAddChanUrl(e.target.value)} />
-                  <input style={{ ...input, flex: 1, minWidth: 130, fontSize: 12 }} type="text" placeholder="#channel name" value={addChanLabel} onChange={(e) => setAddChanLabel(e.target.value)} />
-                </div>
-                <div style={{ background: 'var(--surface)', border: '1px dashed var(--border)', borderRadius: 8, padding: '8px 12px' }}>
-                  <NotifyPicker value={addNotify} onChange={setAddNotify} disabled={busy} />
-                </div>
-              </div>
-            )}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={label}>Check every</span>
-            <select style={input} value={status?.intervalMinutes ?? 60} onChange={(e) => void configure({ intervalMinutes: Number(e.target.value) })}>
-              {intervalOpts.map((m) => <option key={m} value={m}>{fmtInterval(m)}</option>)}
-            </select>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={label}>Trend window</span>
-            <select style={input} value={status?.days ?? 28} onChange={(e) => void configure({ days: Number(e.target.value) })}>
-              {[7, 14, 28, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
-            </select>
-          </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', paddingBottom: 7 }}>
-            <input type="checkbox" checked={Boolean(status?.enabled)} disabled={busy || !targets.length} onChange={(e) => void configure({ enabled: e.target.checked })} />
-            Run in the background
-          </label>
-          <button style={primaryBtn} onClick={() => void runNow()} disabled={runningId !== null || enabledCount === 0}>
-            {runningId === '*' ? 'Checking all…' : enabledCount > 1 ? `▶ Run all (${enabledCount})` : '▶ Run now'}
-          </button>
-        </div>
-      </div>
 
       {/* ── Slack alerts how-to: each property has its OWN channel (connect it from the property's
              dashboard above) — there is no shared default channel. ── */}
