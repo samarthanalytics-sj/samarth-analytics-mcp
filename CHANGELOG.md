@@ -1,3 +1,9 @@
+## [1.244.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.244.1...v1.244.2) (2026-07-07)
+
+### Bug Fixes
+
+* **verify:** one Tag-verification panel + URL; fix "Workspace already submitted" on Align ([5f4adc9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5f4adc901552cf9620cf97c40eda734c8090ce1c))
+
 ## [1.244.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.244.0...v1.244.1) (2026-07-07)
 
 ### Bug Fixes
