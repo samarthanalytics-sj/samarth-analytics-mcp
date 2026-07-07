@@ -3959,7 +3959,7 @@ const vStyles: Record<string, React.CSSProperties> = {
 // a fix suggestion when it doesn't fire). Real submits — an explicit warning + confirm gate them.
 // Rendered INSIDE VerifyPanel — shares the same URL + Preview snippet as tag verification (one panel,
 // one URL). This subsection does the container-tag-driven REAL-submit form check.
-function FormFillReview({ url, snippet, active, onError, runSignal }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number }): JSX.Element {
+function FormFillReview({ url, snippet, active, onError, runSignal, onStatus }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number; onStatus?: (s: { loading: boolean; count: number | null }) => void }): JSX.Element {
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [localeId, setLocaleId] = useState('us');
@@ -3992,6 +3992,8 @@ function FormFillReview({ url, snippet, active, onError, runSignal }: { url: str
     if (!target) { setNote('Enter your site’s main URL.'); return; }
     if (!ready || !ctx) { setNote('Pick a GTM account, container and workspace in the GTM bar above first — that’s the container whose form tags we verify.'); return; }
     setLoading(true); setNote(null); onError(''); setResults({}); setPlan(null); setTouched(false);
+    onStatus?.({ loading: true, count: null }); // this run's form-discovery is now in flight
+    let count: number | null = null;
     try {
       const res = await window.desktop.tags.formTagVerifyPlan(target, { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!, localeId: loc });
       setPlan(res);
@@ -4001,9 +4003,10 @@ function FormFillReview({ url, snippet, active, onError, runSignal }: { url: str
       if (res.locales?.length) setLocales(res.locales);
       if (res.error) setNote(res.error);
       else if (res.matched.length === 0) setNote(`Crawled ${res.pagesCrawled} page(s) but found no site form matching your container’s form tags — the forms may be on pages we didn’t reach, render late, or their names differ from the tags.`);
+      count = res.error ? null : res.matched.length;
     } catch (e) {
       setNote(e instanceof Error ? e.message : String(e));
-    } finally { setLoading(false); }
+    } finally { setLoading(false); onStatus?.({ loading: false, count }); }
   }
 
   async function submitAll(): Promise<void> {
@@ -4224,6 +4227,9 @@ function VerifyPanel({
   // The verification screenshot currently shown full-screen (visual proof), or null.
   const [vLightbox, setVLightbox] = useState<{ src: string; name: string } | null>(null);
   const showProof = (v: VVerdict): void => { if (v.screenshot) setVLightbox({ src: v.screenshot, name: v.tagName }); };
+  // The embedded form-discovery's status (bubbled up) so this ONE Verify run shows a single combined
+  // state — tags + forms — instead of two independent-looking passes.
+  const [vFormStatus, setVFormStatus] = useState<{ loading: boolean; count: number | null }>({ loading: false, count: null });
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   // Bumped whenever a tag-verify runs; the embedded Forms subsection watches it and auto-discovers the
   // site's forms-with-tags in the same pass — so there's ONE action, not a separate "find forms" button.
@@ -4340,10 +4346,11 @@ function VerifyPanel({
             </div>
           )}
           <div style={{ ...styles.muted, marginTop: 8 }}>
-            <b>Verify</b> loads the live site and drives each tag’s trigger — it tests the tags as they’re
-            <b> published</b> on this URL. <b>Nothing is created in your container</b> (no version, no preview).
-            To test UNPUBLISHED <b>draft</b> tags, open GTM <b>Preview</b> (Tag Assistant), copy its snippet and
-            paste it below — that loads your drafts and still creates nothing in the container.
+            <b>One Verify run</b> drives every tag’s trigger on the live site AND discovers the forms that
+            have a tracking tag — with a screenshot of each. It tests the tags as they’re <b>published</b> on
+            this URL; <b>nothing is created in your container</b> (no version, no preview). The real form
+            submit stays a separate, confirmed step below. To test UNPUBLISHED <b>draft</b> tags, paste a GTM
+            <b> Preview</b> snippet (Tag Assistant) below — that loads your drafts and still creates nothing.
           </div>
           <input
             value={vUrl}
@@ -4369,6 +4376,23 @@ function VerifyPanel({
               {vVerifying ? 'Verifying…' : 'Verify firing'}
             </button>
           </div>
+          {/* ONE run, two parts: this single action verifies the tags AND discovers the forms-with-tags.
+              A single combined status so it reads as one verification, not two. */}
+          {(vVerifying || vFormStatus.loading) ? (
+            <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span aria-hidden>⏳</span>
+              <span>
+                One verification running —{' '}
+                {vVerifying ? <b>checking tags</b> : <span style={{ color: 'var(--c-green)' }}>tags ✓</span>}
+                {' · '}
+                {vFormStatus.loading ? <b>discovering forms</b> : vFormStatus.count !== null ? <span style={{ color: 'var(--c-green)' }}>{vFormStatus.count} form(s) with tags ✓</span> : <span>forms</span>}
+              </span>
+            </div>
+          ) : (vResult && !vResult.error && vFormStatus.count !== null && vFormStatus.count > 0) ? (
+            <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--text-dim)' }}>
+              This run also found <b>{vFormStatus.count}</b> form(s) with a tracking tag — fill the data once and submit below to verify them by a real submit (gated).
+            </div>
+          ) : null}
           {vNote && (
             <div
               style={{
@@ -4558,7 +4582,7 @@ function VerifyPanel({
           </div>
         )}
 
-        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} />
+        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} />
       </div>
       {vLightbox && <ProofLightbox shot={vLightbox} onClose={() => setVLightbox(null)} />}
     </div>
