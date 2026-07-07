@@ -648,6 +648,10 @@ export interface VerifyTagsResult {
   /** How many pages the pre-verify crawl visited to locate each CTA's page (0 = no crawl / inventory
    *  was supplied by the caller). */
   pagesCrawled?: number;
+  /** How many pages the site actually has (from its sitemap/discovery). When pagesCrawled < pagesTotal,
+   *  some pages were beyond the scan budget, so a click tag whose CTA lives there stays "untested here"
+   *  — the UI surfaces this so the coverage is honest. */
+  pagesTotal?: number;
   /** DevTools-Network-style log of the analytics calls captured during the run (browser layer-1):
    *  Meta pixel (facebook.com/tr), GA4, the sGTM relay (/g/collect), and other pixels, with key params.
    *  Server-side Meta CAPI (graph.facebook.com) is NOT here — it never reaches the browser. */

@@ -4358,8 +4358,11 @@ function VerifyPanel({
             {vResult.pagesDriven?.length && !vResult.error ? (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
                 Drove across {vResult.pagesDriven.length} page(s)
-                {vResult.pagesCrawled ? ` (crawled ${vResult.pagesCrawled} to locate each CTA)` : ''} — each click tag is
+                {vResult.pagesCrawled ? ` (scanned ${vResult.pagesCrawled}${vResult.pagesTotal && vResult.pagesTotal > vResult.pagesCrawled ? ` of ${vResult.pagesTotal}` : ''} site page(s) from the sitemap to locate each CTA)` : ''} — each click tag is
                 driven on the page its CTA actually lives on.
+                {vResult.pagesTotal && vResult.pagesCrawled && vResult.pagesTotal > vResult.pagesCrawled
+                  ? ` The site has ${vResult.pagesTotal} pages; we scanned the ${vResult.pagesCrawled} highest-priority ones (forms/CTAs first) — a tag whose CTA lives only on an un-scanned page shows “untested here”.`
+                  : ''}
               </div>
             ) : null}
             {vResult.gtmDebug && vResult.gtmDebug.containerLoaded && (
