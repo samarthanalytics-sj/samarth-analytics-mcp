@@ -29,7 +29,7 @@ import type {
   FormTagVerifyPlanResult,
   SubmitFormVerifyResult,
 } from '../../shared/ipc';
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen } from '../../shared/tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanStatus, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen, type InstallStatus } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
@@ -1368,11 +1368,12 @@ const tplStyles: Record<string, React.CSSProperties> = {
   pager: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 13, color: 'var(--text-muted)' },
   pagerBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 7, padding: '4px 12px', fontSize: 13, cursor: 'pointer' },
   // ── "How to install" panel (the site-side requirements a suggestion's trigger needs to fire) ──
-  installToggle: { background: 'transparent', border: 'none', color: 'var(--c-blue)', cursor: 'pointer', fontSize: 11, padding: '2px 0', marginTop: 4, textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: 4 },
+  // A status chip (colour-coded by install status) doubles as the expand toggle — background/border/
+  // colour are set inline per status so it reads at a glance without opening the panel.
+  installChip: { display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 4, fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20, border: '1px solid transparent', cursor: 'pointer', lineHeight: 1.3 },
   installTd: { padding: 0, borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' },
   // The panel is capped + scrolls internally so a long <script> never widens the table.
   installPanel: { maxWidth: '100%', overflowX: 'auto', padding: '10px 14px', boxSizing: 'border-box' },
-  installSummary: { fontSize: 12, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' },
   installReq: { border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: 'var(--surface)' },
   installReqOk: { border: '1px solid var(--c-green-border)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: 'var(--c-green-bg)' },
   installReqLabel: { fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', marginBottom: 4 },
@@ -1382,6 +1383,14 @@ const tplStyles: Record<string, React.CSSProperties> = {
   installActions: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' },
   installCreateBtn: { background: 'var(--c-blue)', color: '#fff', border: 'none', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' },
   installCreateBtnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
+  // An OPTIONAL improvement (html-attribute) — a quiet muted row, NOT a mandatory-looking box, so it
+  // never contradicts a "fires natively" line above it.
+  installOptional: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', marginBottom: 8, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 },
+  optionalPill: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', background: 'var(--surface-3)', border: '1px solid var(--border)', borderRadius: 20, padding: '1px 8px', flexShrink: 0 },
+  installOptionalText: { fontSize: 12, color: 'var(--text-dim)', flex: 1, lineHeight: 1.4 },
+  installInfo: { fontSize: 13, color: 'var(--text-muted)', cursor: 'help', flexShrink: 0 },
+  // "Show code" disclosure — collapses a listener/site-code snippet so the panel stays short.
+  installDisclosure: { background: 'transparent', border: 'none', color: 'var(--c-blue)', cursor: 'pointer', fontSize: 11, padding: '2px 0', marginTop: 4 },
 };
 
 // Fixed option lists for the editable Trigger-when Variable / Condition selects.
@@ -1441,6 +1450,54 @@ const FIRES_LABEL: Record<Extract<InstallReqView, { kind: 'listener-tag' }>['tag
   window_loaded: 'Window Loaded',
 };
 
+/** A "Show code" disclosure — keeps a listener/site-code snippet collapsed by default so the panel stays
+ *  short; the CodeBlock (with its own copy button) appears only on demand. */
+function CollapsibleCode({ code, ariaLabel }: { code: string; ariaLabel: string }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button type="button" style={tplStyles.installDisclosure} onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        {open ? '▾ Hide code' : '▸ Show code'}
+      </button>
+      {open && <CodeBlock code={code} ariaLabel={ariaLabel} />}
+    </div>
+  );
+}
+
+/** Colour + label for an install-status chip. Tones map to the theme's status ramps: green = ready,
+ *  blue = a 1-click listener tag, amber = developer site code. */
+function installChipView(status: InstallStatus): { label: string; bg: string; border: string; color: string } {
+  switch (status.kind) {
+    case 'listener':
+      return { label: `${status.listenerCount} listener tag${status.listenerCount === 1 ? '' : 's'} to create`, bg: 'var(--c-blue-bg)', border: 'var(--c-blue-border)', color: 'var(--c-blue)' };
+    case 'code':
+      return { label: 'Needs site code', bg: 'var(--c-amber-bg)', border: 'var(--c-amber-border)', color: 'var(--c-amber)' };
+    case 'ready-tip':
+      return { label: `Ready · ${status.optionalCount} optional tip${status.optionalCount === 1 ? '' : 's'}`, bg: 'var(--c-green-bg)', border: 'var(--c-green-border)', color: 'var(--c-green)' };
+    case 'ready':
+    default:
+      return { label: 'Ready to fire', bg: 'var(--c-green-bg)', border: 'var(--c-green-border)', color: 'var(--c-green)' };
+  }
+}
+
+/** The row-cell status chip that doubles as the "How to install" expand toggle. Its colour + label
+ *  summarise the whole plan so the user can triage without opening the panel. */
+function InstallChip({ install, open, onClick, tagName }: { install: InstallPlanView; open: boolean; onClick: () => void; tagName: string }): JSX.Element {
+  const view = installChipView(installPlanStatus(install));
+  return (
+    <button
+      type="button"
+      style={{ ...tplStyles.installChip, background: view.bg, borderColor: view.border, color: view.color }}
+      onClick={onClick}
+      aria-expanded={open}
+      aria-label={`How to install ${tagName}: ${view.label}`}
+      title="Show what this tag needs to fire"
+    >
+      {view.label} {open ? '▾' : '▸'}
+    </button>
+  );
+}
+
 /** Render one install requirement, styled by kind. For a 'listener-tag' requirement, a "Create listener
  *  tag" button (wired by InstallPanel) creates it in the active DRAFT workspace on explicit click. */
 function InstallRequirementRow({
@@ -1482,7 +1539,7 @@ function InstallRequirementRow({
           <div style={tplStyles.installMeta}>
             fires on: <code style={mdStyles.code}>{FIRES_LABEL[req.tag.fires]}</code>
           </div>
-          <CodeBlock code={req.tag.html} ariaLabel={`Custom HTML listener tag "${req.tag.name}"`} />
+          <CollapsibleCode code={req.tag.html} ariaLabel={`Custom HTML listener tag "${req.tag.name}"`} />
           {req.dlvScope && (
             <div style={tplStyles.installMeta}>
               Scopes the trigger via <code style={mdStyles.code}>{`{{dlv - ${req.dlvScope.key}}}`}</code> = <code style={mdStyles.code}>{req.dlvScope.value}</code>
@@ -1509,13 +1566,15 @@ function InstallRequirementRow({
         </div>
       );
     case 'html-attribute':
+      // OPTIONAL improvement — the tag already fires; this only sharpens scoping. A quiet muted row (not
+      // a mandatory-looking box), with the long "why" tucked into the ⓘ tooltip.
       return (
-        <div style={tplStyles.installReq}>
-          <div style={tplStyles.installReqLabel}>Add an HTML attribute on your site</div>
-          <div style={tplStyles.installMeta}>
-            On your site: add <code style={mdStyles.code}>{`${req.attribute}="${req.value}"`}</code> to <code style={mdStyles.code}>{req.selector}</code>
-          </div>
-          <div style={tplStyles.installDetail}>{req.detail}</div>
+        <div style={tplStyles.installOptional}>
+          <span style={tplStyles.optionalPill}>Optional</span>
+          <span style={tplStyles.installOptionalText}>
+            Add <code style={mdStyles.code}>{`${req.attribute}="${req.value}"`}</code> to <code style={mdStyles.code}>{req.selector}</code> for precise scoping
+          </span>
+          <span style={tplStyles.installInfo} title={req.detail} aria-label={req.detail}>ⓘ</span>
         </div>
       );
     case 'site-code':
@@ -1523,7 +1582,7 @@ function InstallRequirementRow({
         <div style={tplStyles.installReq}>
           <div style={tplStyles.installReqLabel}>Add code to your site</div>
           <div style={tplStyles.installMeta}>Add this to your site ({req.where}):</div>
-          <CodeBlock code={req.snippet} ariaLabel={`Site code snippet for ${req.where}`} />
+          <CollapsibleCode code={req.snippet} ariaLabel={`Site code snippet for ${req.where}`} />
           <div style={tplStyles.installDetail}>{req.detail}</div>
         </div>
       );
@@ -1573,7 +1632,8 @@ function InstallPanel({ plan, gtmTarget }: { plan: InstallPlanView; gtmTarget: {
 
   return (
     <div style={tplStyles.installPanel}>
-      <p style={tplStyles.installSummary}>{plan.summary}</p>
+      {/* The status chip in the row already carries the summary, so the panel goes straight to the
+          per-requirement rows — no duplicated summary line. */}
       {plan.requires.map((req, i) => (
         <InstallRequirementRow
           key={i}
@@ -1691,21 +1751,13 @@ function SuggestionTemplateTable({
                   {first && (
                     <td rowSpan={rowCount} style={{ ...tplStyles.td, whiteSpace: 'nowrap' }}>
                       {editable ? <GrowCell value={s.page} disabled={creating} onChange={(v) => onEdit(s.id, { page: v })} ariaLabel="Page" /> : <span style={{ color: 'var(--text-dim)' }}>{s.page}</span>}
-                      {/* "How to install" affordance — only when the plan asks the user to add something
-                          site-side (a listener tag / HTML attribute / site code). Hidden for native GTM
-                          triggers (clicks, pageviews) and already-tracked events, where nothing installs. */}
-                      {installPlanNeedsAction(s.install) && (
+                      {/* Install-status chip — only when the plan asks the user to add something site-side
+                          (a listener tag / HTML attribute / site code). Hidden for native GTM triggers
+                          (clicks, pageviews) and already-tracked events, where nothing installs. The chip's
+                          colour + label triage the plan at a glance; click to expand the detail. */}
+                      {s.install && installPlanNeedsAction(s.install) && (
                         <div>
-                          <button
-                            type="button"
-                            style={tplStyles.installToggle}
-                            onClick={() => toggleInstall(s.id)}
-                            aria-expanded={!!installOpen[s.id]}
-                            aria-label={`How to install ${g.tagName}`}
-                            title="Show the site-side requirements this tag's trigger needs to fire"
-                          >
-                            ⓘ How to install {installOpen[s.id] ? '▾' : '▸'}
-                          </button>
+                          <InstallChip install={s.install} open={!!installOpen[s.id]} onClick={() => toggleInstall(s.id)} tagName={g.tagName} />
                         </div>
                       )}
                     </td>

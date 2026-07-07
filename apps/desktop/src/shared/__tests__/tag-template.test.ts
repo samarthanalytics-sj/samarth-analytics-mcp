@@ -1,7 +1,7 @@
 // Pure tests for the "GTM Structure - GA4 Events" template mapping (the table view
 // + CSV download share this). Run: tsx src/shared/__tests__/tag-template.test.ts
 
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator, CONDITION_LABELS } from '../tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanStatus, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator, CONDITION_LABELS } from '../tag-template';
 import type { SuggestedTagView } from '../ipc';
 
 let passed = 0;
@@ -270,6 +270,33 @@ check('needsAction: mixed native + html-attribute → true', installPlanNeedsAct
 check('needsAction: agrees with runbook native-only (nativeClick omitted from site-side work)',
   installPlanNeedsAction(nativeClick.install) === false &&
     suggestionsToInstallRunbookMarkdown([nativeClick], {}).includes("No site-side code needed"));
+
+// ── installPlanStatus — the one-glance status driving the review table's colour-coded chip ──────────
+check('status: native-only → ready', installPlanStatus(nativeClick.install).kind === 'ready');
+check('status: no plan → ready', installPlanStatus(noPlan.install).kind === 'ready');
+check('status: undefined → ready', installPlanStatus(undefined).kind === 'ready');
+const attrStatus = installPlanStatus(attrForm.install);
+check('status: native + optional html-attribute → ready-tip', attrStatus.kind === 'ready-tip');
+check('status: ready-tip counts the optional tips', attrStatus.optionalCount === 1);
+const listenerStatus = installPlanStatus(formA.install);
+check('status: listener-tag plan → listener', listenerStatus.kind === 'listener');
+check('status: listener count is 1', listenerStatus.listenerCount === 1);
+check('status: site-code plan → code', installPlanStatus(purchase.install).kind === 'code');
+// Precedence for a mixed plan: code beats listener beats ready-tip. A plan needing BOTH a listener tag
+// AND site code is a "code" status (the most-demanding ask wins the chip).
+const mixed = installPlanStatus({
+  requires: [
+    { kind: 'html-attribute', selector: 'form', attribute: 'id', value: '<id>', detail: 'x' },
+    { kind: 'listener-tag', event: 'form_submit', tag: { name: 'L', html: '<script></script>', fires: 'all_pages' }, detail: 'y' },
+    { kind: 'site-code', snippet: '<script></script>', where: 'z', detail: 'w' },
+  ],
+  summary: 's',
+});
+check('status: mixed listener+code+optional → code (most-demanding wins)', mixed.kind === 'code');
+check('status: mixed still counts every requirement kind', mixed.listenerCount === 1 && mixed.siteCodeCount === 1 && mixed.optionalCount === 1);
+// The chip is shown exactly when installPlanNeedsAction is true — i.e. any status except 'ready'.
+check('status: needsAction ⇔ status !== ready (ready)', installPlanNeedsAction(nativeClick.install) === (installPlanStatus(nativeClick.install).kind !== 'ready'));
+check('status: needsAction ⇔ status !== ready (listener)', installPlanNeedsAction(formA.install) === (installPlanStatus(formA.install).kind !== 'ready'));
 
 console.log(`\ntag-template: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
