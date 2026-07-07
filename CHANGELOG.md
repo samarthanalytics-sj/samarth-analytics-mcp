@@ -1,3 +1,9 @@
+## [1.248.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.247.0...v1.248.0) (2026-07-07)
+
+### Features
+
+* **verify:** pair pixel form tags (Meta/LinkedIn/Pinterest) by beacon; tighter panel merge ([d1da6dc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d1da6dc265de03e8307d9123325758f25f99713b))
+
 ## [1.247.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.246.0...v1.247.0) (2026-07-07)
 
 ### Features
