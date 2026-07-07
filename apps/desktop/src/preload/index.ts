@@ -41,6 +41,9 @@ import type {
   VerifyTagsResult,
   FormsForFillOptions,
   FormsForFillResult,
+  SubmitFormInputView,
+  SubmitFormVerifyOptions,
+  SubmitFormVerifyResult,
   DetectedElementView,
 } from '../shared/ipc';
 
@@ -226,6 +229,13 @@ const api = {
     // operator edits before Phase 2 submits. Read-only (fills/submits nothing).
     formsForFill: (url: string, opts?: FormsForFillOptions): Promise<FormsForFillResult> =>
       ipcRenderer.invoke('suggestions:formsForFill', url, opts),
+    // Phase 2 — REAL submit: fill the reviewed values + submit one form for real; reports the analytics
+    // events it fired. The form POST is delivered (a real lead); analytics hits are captured, not sent.
+    submitFormAndVerify: (
+      url: string,
+      input: SubmitFormInputView,
+      opts?: SubmitFormVerifyOptions,
+    ): Promise<SubmitFormVerifyResult> => ipcRenderer.invoke('suggestions:submitFormAndVerify', url, input, opts),
     // Auto-mint a workspace-preview snippet (create version + preview environment) so
     // Verify firing can load DRAFT tags without a manual paste. Draft-level writes only.
     mintPreview: (

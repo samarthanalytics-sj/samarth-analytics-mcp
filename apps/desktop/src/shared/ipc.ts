@@ -694,6 +694,39 @@ export interface FormsForFillResult {
   error?: string;
 }
 
+/** One reviewed field to fill before a REAL submit. */
+export interface FormSubmitFieldInputView {
+  selector: string;
+  type: string;
+  value: string;
+}
+/** The ONE reviewed form to submit — its identity (so the driver targets THIS form, not a same-named
+ *  field on another form) plus the fields to fill. */
+export interface SubmitFormInputView {
+  formId: string;
+  formClasses: string;
+  fields: FormSubmitFieldInputView[];
+}
+export interface SubmitFormVerifyOptions {
+  /** GTM Preview snippet so DRAFT tags load; omit to test the live/published container. */
+  containerSnippet?: string;
+}
+/** Result of a REAL form submission: what analytics events/beacons the tag fired. The form's POST is
+ *  delivered (a real submission); analytics hits are captured+aborted (no GA4/ad pollution). */
+export interface SubmitFormVerifyResult {
+  ok: boolean;
+  injected: boolean;
+  previewAuth: boolean;
+  filled: number;
+  submitted: boolean;
+  note?: string;
+  error?: string;
+  /** GA4 event names observed after the submit — the proof the form fired the tag. */
+  events: string[];
+  /** Distinct analytics beacon hosts observed. */
+  beacons: string[];
+}
+
 /* ── Container audit (the "Container audit" panel) ── */
 export interface AuditFindingView {
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';

@@ -1,0 +1,274 @@
+// REAL-SUBMIT form driver (Phase 2). Fills a form with the operator-reviewed values and submits it
+// FOR REAL, then reports the analytics events the tag fires.
+//
+// SAFETY MODEL — deliberately different from the abort-first verify driver:
+//  - The form's OWN submission (the POST to the site / CRM) is ALLOWED THROUGH. This creates a real
+//    submission (a real lead / email). It is operator-initiated per submit, behind an explicit warning.
+//  - ANALYTICS collectors (GA4 / first-party sGTM / Meta / …) are CAPTURED then aborted, so the tag
+//    firing is PROVEN without polluting GA4 / the ad platform with a test conversion.
+//  - Only recognised collectors are aborted (NOT every cross-site beacon), so the form POST — even to a
+//    third-party form host — is not blocked. An unrecognised pixel MAY deliver (documented limitation).
+//
+// Playwright is loaded lazily; absent → a clear error.
+
+import { requestAllowed } from './ssrf';
+import { classifyCollector, parseGa4CollectHit, beaconHost, type Collector } from '../../shared/runtime-capture';
+import { PlaywrightUnavailableError } from './playwright-driver';
+import { buildLoaderSrc, isPreviewLoader } from './verify-driver';
+
+interface PwRoute {
+  request(): { url(): string; postData(): string | null; resourceType(): string };
+  continue(): Promise<void>;
+  abort(): Promise<void>;
+}
+interface PwPage {
+  goto(url: string, opts?: Record<string, unknown>): Promise<unknown>;
+  evaluate<T = unknown>(fn: unknown, arg?: unknown): Promise<T>;
+  waitForTimeout(ms: number): Promise<void>;
+}
+interface PwContext {
+  route(pattern: string, handler: (route: PwRoute) => unknown): Promise<void>;
+  newPage(): Promise<PwPage>;
+}
+interface PwBrowser { newContext(opts?: Record<string, unknown>): Promise<PwContext>; close(): Promise<void> }
+interface Playwright { chromium: { launch(opts?: { headless?: boolean }): Promise<PwBrowser> } }
+
+async function loadPlaywright(): Promise<Playwright | null> {
+  try {
+    const specifier = 'playwright';
+    const mod = (await import(specifier)) as unknown as Playwright;
+    return mod.chromium ? mod : null;
+  } catch {
+    return null;
+  }
+}
+const safePostData = (req: { postData(): string | null }): string | null => {
+  try { return req.postData(); } catch { return null; }
+};
+
+/** An analytics hit to capture+abort (never deliver). classifyCollector catches direct GA4/Meta/TikTok,
+ *  but the verify driver only catches FIRST-PARTY sGTM via its "abort every cross-site beacon" mode —
+ *  which we can't use here (it would kill the form's own POST). So we ALSO match any GA4 Measurement
+ *  Protocol endpoint (`/g/collect`, or `/collect` carrying GA4 markers) on ANY host, so a first-party
+ *  sGTM conversion isn't delivered to real GA4. A normal form POST never hits these paths. */
+export function isAnalyticsHit(url: string): boolean {
+  if (classifyCollector(url)) return true;
+  try {
+    const u = new URL(url);
+    const path = u.pathname.toLowerCase();
+    if (path.endsWith('/g/collect')) return true;
+    if (path.endsWith('/collect') && (u.searchParams.get('v') === '2' || u.searchParams.has('tid') || u.searchParams.has('en'))) return true;
+  } catch { /* not a parseable URL */ }
+  return false;
+}
+
+export interface FormSubmitFieldInput {
+  selector: string;
+  /** input type / 'select' / 'textarea' / 'checkbox' / 'radio' — drives how the value is applied. */
+  type: string;
+  value: string;
+}
+/** The ONE reviewed form to submit — its identity (so we target it, not a same-named field on another
+ *  form) plus the fields to fill. */
+export interface FormSubmitInput {
+  formId: string;
+  formClasses: string;
+  fields: FormSubmitFieldInput[];
+}
+export interface FormSubmitDriverOptions {
+  /** GTM Preview snippet so DRAFT tags load; omit to test whatever's published on the live page. */
+  containerSnippet?: string;
+  navTimeoutMs?: number;
+  settleMs?: number;
+}
+export interface FormSubmitDriverResult {
+  ok: boolean;
+  injected: boolean;
+  previewAuth: boolean;
+  filled: number;
+  submitted: boolean;
+  note?: string;
+  error?: string;
+  /** GA4 event names observed after the submit (the proof the form fired the tag). */
+  events: string[];
+  /** Distinct analytics beacon hosts observed (GA4/sGTM/pixels). */
+  beacons: string[];
+}
+
+/** Grant Consent Mode v2 so consent-gated tags fire (same synthetic override the verify driver uses). */
+function grantConsentInPage(): void {
+  const w = window as unknown as { dataLayer?: unknown[] };
+  const dl = (w.dataLayer = w.dataLayer || []);
+  const gtag = function (this: unknown): void {
+    // eslint-disable-next-line prefer-rest-params
+    dl.push(arguments);
+  };
+  (gtag as unknown as (...a: unknown[]) => void)('consent', 'update', {
+    ad_storage: 'granted', analytics_storage: 'granted', ad_user_data: 'granted', ad_personalization: 'granted',
+  });
+}
+
+/** Resolve THE reviewed form on the page (by id, then exact class, then the form matching the MOST of
+ *  the reviewed field selectors), fill ONLY within it, and submit it. Scoping to one form is the
+ *  safety guarantee: a same-named field ([name="email"]) on another form is never touched, so we never
+ *  fill + submit an unrelated newsletter/search form. Serialized to page.evaluate — DOM globals only. */
+function fillAndSubmitInPage(spec: { formId: string; formClasses: string; fields: FormSubmitFieldInput[] }): { filled: number; submitted: boolean; note?: string } {
+  const forms = Array.prototype.slice.call(document.querySelectorAll('form')) as HTMLFormElement[];
+  if (forms.length === 0) return { filled: 0, submitted: false, note: 'no <form> element on the page (a div/JS form is not yet supported)' };
+  let form: HTMLFormElement | null = null;
+  if (spec.formId) form = forms.find((f) => f.id === spec.formId) || null;
+  if (!form && spec.formClasses) form = forms.find((f) => (f.getAttribute('class') || '') === spec.formClasses) || null;
+  if (!form) {
+    let best = 0;
+    for (const fm of forms) {
+      let c = 0;
+      for (const fld of spec.fields) { try { if (fm.querySelector(fld.selector)) c += 1; } catch { /* bad selector */ } }
+      if (c > best) { best = c; form = fm; }
+    }
+  }
+  if (!form) return { filled: 0, submitted: false, note: 'could not locate the reviewed form on the page (its fields matched no <form> — a div/JS form or iframe is not yet supported)' };
+
+  let filled = 0;
+  for (const f of spec.fields) {
+    let el: Element | null = null;
+    try { el = form.querySelector(f.selector); } catch { el = null; } // scoped to the target form ONLY
+    if (!el) continue;
+    const tag = el.tagName.toLowerCase();
+    if (f.type === 'checkbox' || f.type === 'radio') {
+      (el as HTMLInputElement).checked = f.value === 'true';
+    } else if (tag === 'select') {
+      const sel = el as HTMLSelectElement;
+      const opt = Array.prototype.slice.call(sel.options).find(
+        (o: HTMLOptionElement) => (o.textContent || '').trim() === f.value || o.value === f.value,
+      ) as HTMLOptionElement | undefined;
+      if (opt) sel.value = opt.value;
+      else if (f.value) sel.value = f.value;
+    } else {
+      (el as HTMLInputElement).value = f.value;
+    }
+    try {
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch { /* older engines */ }
+    filled += 1;
+  }
+  if (filled === 0) return { filled, submitted: false, note: 'none of the reviewed fields were found in the form — nothing submitted' };
+
+  const fe = form as HTMLFormElement & { requestSubmit?: () => void; checkValidity?: () => boolean };
+  // Don't claim "submitted" when the browser will block it: requestSubmit() silently no-ops on an
+  // invalid form (a required field we didn't fill), so a green "Submitted" would be a lie.
+  if (typeof fe.checkValidity === 'function' && !fe.checkValidity()) {
+    return { filled, submitted: false, note: 'the form failed HTML validation (a required field is empty or invalid) — nothing was submitted' };
+  }
+  try {
+    if (typeof fe.requestSubmit === 'function') fe.requestSubmit();
+    else fe.submit();
+    return { filled, submitted: true };
+  } catch (e) {
+    return { filled, submitted: false, note: String(e).slice(0, 150) };
+  }
+}
+
+/**
+ * Fill + submit ONE form for real, capturing the analytics beacons the tag fires.
+ * The form POST is delivered (real submission); analytics collectors are captured then aborted.
+ */
+export async function runFormSubmitDriver(
+  url: string,
+  input: FormSubmitInput,
+  opts: FormSubmitDriverOptions = {},
+): Promise<FormSubmitDriverResult> {
+  const navTimeoutMs = opts.navTimeoutMs ?? 20_000;
+  const settleMs = opts.settleMs ?? 1500;
+  const loaderSrc = buildLoaderSrc(opts.containerSnippet);
+  const previewAuth = isPreviewLoader(loaderSrc);
+  const base: FormSubmitDriverResult = { ok: false, injected: false, previewAuth, filled: 0, submitted: false, events: [], beacons: [] };
+
+  if (!(await requestAllowed(url))) {
+    return { ...base, error: `Refusing to load ${url}: blocked by the SSRF guard (private/loopback/invalid host).` };
+  }
+  const pw = await loadPlaywright();
+  if (!pw) throw new PlaywrightUnavailableError();
+
+  const captured: { url: string; body: string | null; collector: Collector }[] = [];
+  let browser: PwBrowser | null = null;
+  try {
+    browser = await pw.chromium.launch({ headless: true });
+    const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+
+    await context.route('**/*', (route) => {
+      const req = route.request();
+      const reqUrl = req.url();
+      if (isAnalyticsHit(reqUrl)) {
+        // Analytics hit (incl. first-party sGTM) → capture it as proof, never deliver it (no GA4/ad
+        // pollution). Unknown-host /g/collect hits get 'server' so the GA4 payload parser still runs.
+        captured.push({ url: reqUrl, body: safePostData(req), collector: classifyCollector(reqUrl) ?? 'server' });
+        void route.abort();
+        return;
+      }
+      // Everything else — INCLUDING the form's own POST — is allowed (subject to SSRF), so the real
+      // submission actually happens and the site fires its form_submission event.
+      void requestAllowed(reqUrl).then((ok) => (ok ? route.continue() : route.abort()), () => route.abort());
+    });
+
+    const page = await context.newPage();
+    try {
+      await page.goto(url, { waitUntil: 'networkidle', timeout: navTimeoutMs });
+    } catch (e) {
+      return { ...base, error: `could not load ${url}: ${(e instanceof Error ? e.message : String(e)).slice(0, 150)}` };
+    }
+
+    let injected = false;
+    if (loaderSrc) {
+      await page.evaluate((src: string) => {
+        const w = window as unknown as { dataLayer?: unknown[] };
+        w.dataLayer = w.dataLayer || [];
+        w.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
+        const s = document.createElement('script');
+        s.async = true;
+        s.src = src;
+        (document.head || document.documentElement).appendChild(s);
+      }, loaderSrc);
+      injected = true;
+      await page.waitForTimeout(Math.max(settleMs, 1200));
+    }
+    await page.evaluate(grantConsentInPage);
+
+    const before = captured.length;
+    let outcome: { filled: number; submitted: boolean; note?: string };
+    try {
+      outcome = await page.evaluate<{ filled: number; submitted: boolean; note?: string }>(fillAndSubmitInPage, { formId: input.formId, formClasses: input.formClasses, fields: input.fields });
+    } catch (e) {
+      outcome = { filled: 0, submitted: false, note: (e instanceof Error ? e.message : String(e)).slice(0, 150) };
+    }
+    // Give the AJAX round-trip + the tag time to fire, then settle.
+    await page.waitForTimeout(Math.max(settleMs, 1500));
+
+    const hits = captured.slice(before);
+    const events = [
+      ...new Set(
+        hits
+          .filter((h) => h.collector === 'ga4' || h.collector === 'server')
+          .flatMap((h) => parseGa4CollectHit({ url: h.url, body: h.body }).map((ev) => ev.event))
+          .filter((e): e is string => Boolean(e)),
+      ),
+    ];
+    const beacons = [...new Set(hits.map((h) => beaconHost(h.url)).filter(Boolean))];
+    return {
+      ...base,
+      ok: true,
+      injected,
+      filled: outcome.filled,
+      submitted: outcome.submitted,
+      ...(outcome.note ? { note: outcome.note } : {}),
+      events,
+      beacons,
+    };
+  } catch (e) {
+    return { ...base, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch { /* best-effort */ }
+    }
+  }
+}

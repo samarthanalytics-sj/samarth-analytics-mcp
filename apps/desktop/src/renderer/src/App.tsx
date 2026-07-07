@@ -28,6 +28,7 @@ import type {
   VerifyTagsResult,
   FormFillView,
   FormFillFieldView,
+  SubmitFormVerifyResult,
 } from '../../shared/ipc';
 import { suggestionToGroup, suggestionsToTemplateCsv, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
@@ -3517,11 +3518,33 @@ function FormFillReview({ onError }: { onError: (m: string) => void }): JSX.Elem
   const [note, setNote] = useState<string | null>(null);
   // Operator edits: form index → selector → value (a checkbox stores 'true' / '').
   const [edits, setEdits] = useState<Record<number, Record<string, string>>>({});
+  // Optional GTM Preview snippet so DRAFT tags load; blank = test the live/published container.
+  const [snippet, setSnippet] = useState('');
+  const [submitting, setSubmitting] = useState<number | null>(null);
+  const [confirming, setConfirming] = useState<number | null>(null);
+  const [results, setResults] = useState<Record<number, SubmitFormVerifyResult>>({});
 
   const valueOf = (fi: number, f: FormFillFieldView): string => edits[fi]?.[f.selector] ?? f.value;
   const setValue = (fi: number, selector: string, v: string): void =>
     setEdits((e) => ({ ...e, [fi]: { ...(e[fi] ?? {}), [selector]: v } }));
   const isCheckbox = (t: string): boolean => t === 'checkbox' || t === 'radio';
+
+  async function submitForm(form: FormFillView): Promise<void> {
+    const target = url.trim();
+    if (!target || submitting !== null) return;
+    setSubmitting(form.index);
+    setConfirming(null);
+    setResults((r) => { const n = { ...r }; delete n[form.index]; return n; });
+    try {
+      const fields = form.fields.map((f) => ({ selector: f.selector, type: f.type, value: valueOf(form.index, f) }));
+      const res = await window.desktop.tags.submitFormAndVerify(target, { formId: form.formId, formClasses: form.formClasses, fields }, snippet.trim() ? { containerSnippet: snippet.trim() } : undefined);
+      setResults((r) => ({ ...r, [form.index]: res }));
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(null);
+    }
+  }
 
   async function fetchForms(): Promise<void> {
     const target = url.trim();
@@ -3561,6 +3584,12 @@ function FormFillReview({ onError }: { onError: (m: string) => void }): JSX.Elem
               {loading ? 'Fetching…' : 'Fetch form fields'}
             </button>
           </div>
+          <textarea
+            value={snippet}
+            onChange={(e) => setSnippet(e.target.value)}
+            placeholder="Optional: paste a GTM Preview / Environment snippet (gtm_auth &amp; gtm_preview) to test DRAFT tags. Blank = the live/published container."
+            style={{ ...styles.input, width: '100%', minHeight: 44, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
+          />
           <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
             US only for now; UK / AUS come later. The test email uses a traceable gtm-verify+…@example.com alias so your CRM can filter these.
           </div>
@@ -3599,9 +3628,53 @@ function FormFillReview({ onError }: { onError: (m: string) => void }): JSX.Elem
                 </li>
               ))}
             </ul>
-            <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
-              Review these values. The actual submit + tag-firing check is coming next — nothing is sent yet.
-            </div>
+            {confirming === form.index ? (
+              <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--c-red)', background: 'rgba(220,60,60,0.08)', fontSize: 13 }}>
+                <div style={{ color: 'var(--text)' }}>
+                  ⚠ This <b>really submits the form</b> — it creates a real submission in your CRM / inbox and can
+                  trigger autoresponders, Slack/Zapier automations, or sales-rep assignment. GA4 and known ad-pixel
+                  hits are captured (not sent), but a less-common pixel or any server-side automation may still fire
+                  for real. Continue?
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                  <button style={styles.dangerGhost} onClick={() => void submitForm(form)} disabled={submitting !== null}>
+                    {submitting === form.index ? 'Submitting…' : 'Yes, submit for real'}
+                  </button>
+                  <button style={styles.toggleOff} onClick={() => setConfirming(null)} disabled={submitting !== null}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                <button style={styles.toggleOff} onClick={() => setConfirming(form.index)} disabled={submitting !== null}>
+                  Submit for real &amp; verify
+                </button>
+                <span style={{ ...styles.muted, fontSize: 12 }}>Sends a real submission; captures the tag&apos;s hit.</span>
+              </div>
+            )}
+            {results[form.index] && (() => {
+              const r = results[form.index];
+              const ok = r.submitted && !r.error;
+              return (
+                <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 8, color: 'var(--text)' }}>
+                  {r.error ? (
+                    <span style={{ color: 'var(--c-red)' }}>Error: {r.error}</span>
+                  ) : !r.submitted ? (
+                    <span style={{ color: 'var(--c-amber)' }}>Could not submit: {r.note ?? 'no <form> to submit'}</span>
+                  ) : (
+                    <>
+                      <span style={{ color: 'var(--c-green)', fontWeight: 600 }}>Submitted</span> ({r.filled} field(s) filled).{' '}
+                      {r.events.length > 0 ? (
+                        <span><b style={{ color: 'var(--c-green)' }}>Fired:</b> {r.events.join(', ')}</span>
+                      ) : (
+                        <span style={{ color: 'var(--c-amber)' }}>No GA4 event captured — the tag may need the DRAFT container (paste a Preview snippet), a page condition, or the form did not emit its event.</span>
+                      )}
+                      {r.beacons.length > 0 && <span style={styles.muted}> · beacons: {r.beacons.join(', ')}</span>}
+                      {ok && r.injected && !r.previewAuth && <span style={{ color: 'var(--c-amber)' }}> · snippet had no preview auth (published container loaded)</span>}
+                    </>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         ))}
       </div>
