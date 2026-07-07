@@ -1,3 +1,9 @@
+## [1.223.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.222.0...v1.223.0) (2026-07-07)
+
+### Features
+
+* **desktop:** rename the active account's display name from Settings ([ce647a3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ce647a354254846d0c387cdf9489f0b5d55007cd))
+
 ## [1.222.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.221.0...v1.222.0) (2026-07-07)
 
 ### Features
