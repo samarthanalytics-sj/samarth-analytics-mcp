@@ -39,6 +39,8 @@ import type {
   VerifyTagInput,
   VerifyTagsOptions,
   VerifyTagsResult,
+  FormsForFillOptions,
+  FormsForFillResult,
   DetectedElementView,
 } from '../shared/ipc';
 
@@ -220,6 +222,10 @@ const api = {
       elements: DetectedElementView[],
       opts?: VerifyTagsOptions,
     ): Promise<VerifyTagsResult> => ipcRenderer.invoke('suggestions:verifyTags', url, tags, elements, opts),
+    // Real-submit form review: read a page's forms + their OWN fields, return a locale fill plan the
+    // operator edits before Phase 2 submits. Read-only (fills/submits nothing).
+    formsForFill: (url: string, opts?: FormsForFillOptions): Promise<FormsForFillResult> =>
+      ipcRenderer.invoke('suggestions:formsForFill', url, opts),
     // Auto-mint a workspace-preview snippet (create version + preview environment) so
     // Verify firing can load DRAFT tags without a manual paste. Draft-level writes only.
     mintPreview: (

@@ -26,6 +26,8 @@ import type {
   TagScanResult,
   VerifyTagInput,
   VerifyTagsResult,
+  FormFillView,
+  FormFillFieldView,
 } from '../../shared/ipc';
 import { suggestionToGroup, suggestionsToTemplateCsv, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
@@ -1651,7 +1653,10 @@ function GtmToolsView({
       ) : tab === 'audit' ? (
         <ContainerAuditPanel key={(active?.id ?? 'none') + ':aud'} active={active} onError={onError} />
       ) : tab === 'verify' ? (
-        <VerifyPanel key={(active?.id ?? 'none') + ':vfy'} active={active} onError={onError} />
+        <>
+          <VerifyPanel key={(active?.id ?? 'none') + ':vfy'} active={active} onError={onError} />
+          <FormFillReview key={(active?.id ?? 'none') + ':ffr'} onError={onError} />
+        </>
       ) : (
         <ServerContainerPanel key={(active?.id ?? 'none') + ':srv'} active={active} onError={onError} />
       )}
@@ -3498,6 +3503,110 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
     return 'The base/config tag didn’t fire on load. Make sure the container is actually injected (use “Auto” or a Preview snippet), and that Consent Mode isn’t denying analytics_storage.';
   }
   return 'Confirm the container is injected (Auto / Preview snippet) and the trigger’s conditions match this page.';
+}
+
+// Real-submit form review (Phase 1b): fetch a page's forms + their OWN fields (Option 2) and show
+// each with a locale-appropriate, EDITABLE test value + a Location picker. READ-ONLY — nothing is
+// submitted here; the actual submit + tag-firing check is Phase 2.
+function FormFillReview({ onError }: { onError: (m: string) => void }): JSX.Element {
+  const [url, setUrl] = useState('');
+  const [localeId, setLocaleId] = useState('us');
+  const [locales, setLocales] = useState<Array<{ id: string; label: string }>>([{ id: 'us', label: 'United States' }]);
+  const [forms, setForms] = useState<FormFillView[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  // Operator edits: form index → selector → value (a checkbox stores 'true' / '').
+  const [edits, setEdits] = useState<Record<number, Record<string, string>>>({});
+
+  const valueOf = (fi: number, f: FormFillFieldView): string => edits[fi]?.[f.selector] ?? f.value;
+  const setValue = (fi: number, selector: string, v: string): void =>
+    setEdits((e) => ({ ...e, [fi]: { ...(e[fi] ?? {}), [selector]: v } }));
+  const isCheckbox = (t: string): boolean => t === 'checkbox' || t === 'radio';
+
+  async function fetchForms(): Promise<void> {
+    const target = url.trim();
+    if (!target) { setNote('Enter the URL of the page whose form(s) you want to test.'); return; }
+    setLoading(true); setNote(null); onError('');
+    try {
+      const res = await window.desktop.tags.formsForFill(target, { localeId });
+      setForms(res.forms);
+      setEdits({});
+      if (res.locales?.length) setLocales(res.locales);
+      if (res.error) setNote(`Loaded with a warning: ${res.error}`);
+      else if (res.forms.length === 0) setNote('No fillable forms found on that page. Try the exact page the form lives on.');
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={styles.reviewWrap}>
+      <div style={styles.chatHeader}>
+        <div>
+          <div style={styles.chatTitle}>Real-submit forms (preview)</div>
+          <div style={styles.chatSub}>Fetch a page’s form fields and review the test data we would submit. Nothing is submitted yet — the real submit + tag-firing check is the next step.</div>
+        </div>
+      </div>
+      <div style={styles.reviewBody}>
+        <div style={styles.card}>
+          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.example.com/contact — the page the form is on" style={{ ...styles.input, width: '100%' }} />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+            <label style={{ ...styles.muted, fontSize: 13 }}>Location</label>
+            <select value={localeId} onChange={(e) => setLocaleId(e.target.value)} style={{ ...styles.input, width: 'auto', minWidth: 160 }}>
+              {locales.map((l) => (<option key={l.id} value={l.id}>{l.label}</option>))}
+            </select>
+            <button style={styles.primaryBtn} onClick={() => void fetchForms()} disabled={loading || !url.trim()}>
+              {loading ? 'Fetching…' : 'Fetch form fields'}
+            </button>
+          </div>
+          <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
+            US only for now; UK / AUS come later. The test email uses a traceable gtm-verify+…@example.com alias so your CRM can filter these.
+          </div>
+          {note && (
+            <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)' }}>{note}</div>
+          )}
+        </div>
+
+        {forms && forms.map((form) => (
+          <div key={form.index} style={styles.card}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div style={styles.h2}>{form.title}</div>
+              <span style={{ ...styles.muted, fontSize: 12, border: '1px solid rgba(128,128,128,0.35)', borderRadius: 6, padding: '1px 6px' }}>{form.purpose}</span>
+              {form.method ? <span style={{ ...styles.muted, fontSize: 12 }}>{form.method.toUpperCase()}{form.action ? ` → ${form.action.replace(/^https?:\/\//, '').slice(0, 50)}` : ''}</span> : null}
+              {form.hidden ? <span style={{ color: 'var(--c-amber)', fontSize: 12 }}>(opens on a click)</span> : null}
+            </div>
+            <ul style={{ ...styles.resultList, marginTop: 8 }}>
+              {form.fields.map((f) => (
+                <li key={f.selector} style={{ ...styles.resultRow, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ minWidth: 150, fontSize: 13 }}>
+                    {f.label}{f.required ? <span style={{ color: 'var(--c-red)' }}> *</span> : null}
+                    <span style={{ ...styles.muted, marginLeft: 6, fontSize: 11 }}>{f.role}</span>
+                  </span>
+                  {isCheckbox(f.type) ? (
+                    <label style={{ ...styles.muted, fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <input type="checkbox" checked={valueOf(form.index, f) === 'true'} onChange={(e) => setValue(form.index, f.selector, e.target.checked ? 'true' : '')} />
+                      {valueOf(form.index, f) === 'true' ? 'checked' : 'unchecked'}
+                    </label>
+                  ) : f.options && f.options.length ? (
+                    <select value={valueOf(form.index, f)} onChange={(e) => setValue(form.index, f.selector, e.target.value)} style={{ ...styles.input, minWidth: 180 }}>
+                      {f.options.map((o) => (<option key={o} value={o}>{o}</option>))}
+                    </select>
+                  ) : (
+                    <input value={valueOf(form.index, f)} onChange={(e) => setValue(form.index, f.selector, e.target.value)} style={{ ...styles.input, flex: 1, minWidth: 180 }} />
+                  )}
+                </li>
+              ))}
+            </ul>
+            <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
+              Review these values. The actual submit + tag-firing check is coming next — nothing is sent yet.
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // Dedicated "Tag verification" workspace: proves the container's existing tags (and forms) fire when
