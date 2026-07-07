@@ -1,3 +1,14 @@
+## [1.255.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.254.1...v1.255.0) (2026-07-07)
+
+### Features
+
+* **verify:** crawl content-hub pages so content-page click tags get tested ([b0e56a7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b0e56a7e9c22e70fc6ba05dfb0c98120d89b8eee))
+* **verify:** dataLayer inspector — capture the site's real pushes + their params ([d745b16](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d745b1621204dacf239ec568ee7d7c064ef8f075))
+
+### Bug Fixes
+
+* **verify:** fill React/controlled inputs so the real submit actually fires ([8ea38d7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8ea38d781b5ab478e6bec6e4cedd3a43c9c87cac))
+
 ## [1.254.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.254.0...v1.254.1) (2026-07-07)
 
 ### Bug Fixes
