@@ -1,3 +1,9 @@
+## [1.254.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.253.1...v1.254.0) (2026-07-07)
+
+### Features
+
+* **desktop:** redesign GA4 Monitoring tab into an alert-first dashboard ([3a22ccd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3a22ccded1de7c01eb000cdd46d0de385e699fc8))
+
 ## [1.253.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.253.0...v1.253.1) (2026-07-07)
 
 ### Bug Fixes
