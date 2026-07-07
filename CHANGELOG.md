@@ -1,3 +1,9 @@
+## [1.234.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.233.0...v1.234.0) (2026-07-07)
+
+### Features
+
+* **desktop:** scheduled weekly audits - full audit per monitored property, exec summary to its Slack channel ([9d5002f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9d5002f4de993cb76787c6a9c389de77acc93831))
+
 ## [1.233.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.232.0...v1.233.0) (2026-07-07)
 
 ### Features
