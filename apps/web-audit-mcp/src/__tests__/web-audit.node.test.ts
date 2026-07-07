@@ -156,6 +156,23 @@ check('role: subject before message', classifyFieldRole(field({ label: 'Subject'
 check('role: a category select → select', classifyFieldRole(field({ tag: 'select', type: 'select-one', name: 'category', options: ['A', 'B'] })) === 'select');
 check('role: privacy checkbox → consent', classifyFieldRole(field({ type: 'checkbox', label: 'I agree to the privacy policy' })) === 'consent');
 check('role: marketing checkbox → marketing_opt_in', classifyFieldRole(field({ type: 'checkbox', label: 'Send me the newsletter' })) === 'marketing_opt_in');
+// Honeypot (anti-spam) fields — filling them makes the site silently reject the submit (form_start
+// fires but form_submission never does). Detect by name AND by a hidden text-style field.
+check('role: honeypot by name → honeypot', classifyFieldRole(field({ name: 'honeypot', label: 'Leave this empty' })) === 'honeypot');
+check('role: honeypot by hp name → honeypot', classifyFieldRole(field({ name: 'contact_hp' })) === 'honeypot');
+check('role: hidden text field (off-screen honeypot, innocuous name) → honeypot', classifyFieldRole(field({ name: 'b_1a2b_3c4d', hidden: true })) === 'honeypot');
+check('role: "php" name is NOT a honeypot (hp bounded)', classifyFieldRole(field({ name: 'php_nonce' })) !== 'honeypot');
+check('role: a VISIBLE email named honeypot-ish is still classified normally when hidden=false', classifyFieldRole(field({ type: 'email', name: 'work_email' })) === 'email');
+// buildFillPlan must DROP honeypots (not shown, not filled).
+{
+  const plan = buildFillPlan([
+    field({ type: 'email', name: 'email', required: true }),
+    field({ name: 'honeypot', label: 'honeypot' }),
+    field({ name: 'website_url', hidden: true }), // off-screen honeypot with an innocuous name
+  ], US_LOCALE, { emailTag: 'r' });
+  check('fill: honeypot fields are dropped from the plan', plan.length === 1 && plan[0].name === 'email');
+  check('fill: no dropped field is left with a value', !plan.some((p) => p.role === 'honeypot'));
+}
 
 // ── form-fill: plan values (US locale) ───────────────────────────────────────────────────────────
 {
