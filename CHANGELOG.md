@@ -1,3 +1,9 @@
+## [1.227.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.226.0...v1.227.0) (2026-07-07)
+
+### Features
+
+* **desktop:** anti-lie finding no.4 - invalid-traffic signature (market engagement bimodality) ([54ae29a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/54ae29a5e24eedab4130bcdecfc678589d79c455))
+
 ## [1.226.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.225.0...v1.226.0) (2026-07-07)
 
 ### Features
