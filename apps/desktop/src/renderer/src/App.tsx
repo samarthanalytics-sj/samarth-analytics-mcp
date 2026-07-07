@@ -3973,6 +3973,8 @@ function FormFillReview({ url, snippet, active, onError, runSignal }: { url: str
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [results, setResults] = useState<Record<number, SubmitFormVerifyResult>>({});
+  // The real-submit screenshot currently shown full-screen (visual proof), or null.
+  const [fLightbox, setFLightbox] = useState<{ src: string; name: string } | null>(null);
 
   const dedupKey = (role: string, label: string): string => (role === 'select' ? `select|${(label || '').toLowerCase().trim()}` : role);
   const isCheckbox = (t: string): boolean => t === 'checkbox' || t === 'radio';
@@ -4141,6 +4143,15 @@ function FormFillReview({ url, snippet, active, onError, runSignal }: { url: str
                             {r.events.length > 0 ? ` Fired: ${r.events.join(', ')}.` : ''}
                             {r.injected && !r.previewAuth ? ' (snippet had no preview auth — published container loaded)' : ''}
                           </div>
+                          {r.screenshot ? (
+                            <button
+                              onClick={() => setFLightbox({ src: r.screenshot!, name: form.formTitle || 'form' })}
+                              title="View the screenshot of the real submit (the form is ringed)"
+                              style={{ padding: 0, border: '1px solid var(--border-2)', borderRadius: 6, cursor: 'zoom-in', lineHeight: 0, background: 'none', marginTop: 6 }}
+                            >
+                              <img src={r.screenshot} alt={`Submit screenshot for ${form.formTitle}`} style={{ width: 132, height: 82, objectFit: 'cover', objectPosition: 'top', borderRadius: 5, display: 'block' }} />
+                            </button>
+                          ) : null}
                           {form.expectedTags.map((t) => {
                             const fired = (r.firedTags ?? []).some((ft) => ft.tagName === t.tagName);
                             // A pixel tag fed server-side (CAPI): no browser beacon, but the form relayed
@@ -4185,6 +4196,7 @@ function FormFillReview({ url, snippet, active, onError, runSignal }: { url: str
             </ul>
           </div>
         )}
+      {fLightbox && <ProofLightbox shot={fLightbox} onClose={() => setFLightbox(null)} />}
     </>
   );
 }
