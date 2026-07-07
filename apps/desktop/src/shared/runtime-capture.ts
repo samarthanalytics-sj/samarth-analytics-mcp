@@ -304,6 +304,54 @@ export function buildNetworkLog(hits: Array<{ url: string; body?: string | null 
   return out;
 }
 
+// ── dataLayer inspector (Tag-Assistant-style view of the site's REAL pushes) ─────
+//
+// The driver reads window.dataLayer in-page and hands each push here as { event, params } where params
+// is already a JSON-safe flat string map (the in-page reader sanitises DOM nodes/functions and
+// summarises nested objects). This layer FORMATS + de-dups them into the operator-facing rows and,
+// crucially, exposes the exact parameters a tag's trigger can key off (form_name, link_url, …).
+
+/** One real dataLayer event, ready to show: its `event` name + a compact one-line parameter summary. */
+export interface DataLayerEventView {
+  event: string;
+  /** "form_name=contact  form_id=gform_1" — the params the site actually pushed (trigger-condition fuel). */
+  params: string;
+  /** true = this event was PUSHED BY THE VERIFIER (a synthetic custom_event drive), not emitted by the
+   *  site itself — so a form/custom event here isn't proof the real site fires it. */
+  synthetic?: boolean;
+}
+
+/** GTM's own bookkeeping keys — never useful as a trigger condition, so drop them from the summary. */
+const DL_NOISE_KEY = /^(event|eventCallback|eventTimeout|eventModel|gtm\.|_clear$)/;
+
+/** Format + de-dup raw dataLayer pushes into operator rows. Each raw push is { event, params } with a
+ *  flat string param map (already sanitised in-page). Drops pushes with no `event`, strips GTM noise
+ *  keys, caps to the first 8 params, and de-dups by event+params (+synthetic). PURE. */
+export function summarizeDataLayer(
+  raw: Array<{ event?: unknown; params?: Record<string, unknown> | null; synthetic?: boolean }>,
+): DataLayerEventView[] {
+  const seen = new Set<string>();
+  const out: DataLayerEventView[] = [];
+  for (const push of Array.isArray(raw) ? raw : []) {
+    const event = typeof push?.event === 'string' ? push.event.trim() : '';
+    if (!event) continue; // config/set pushes (no event) aren't trigger-able — skip
+    const parts: string[] = [];
+    const params = push.params && typeof push.params === 'object' ? push.params : {};
+    for (const [k, v] of Object.entries(params)) {
+      if (DL_NOISE_KEY.test(k) || v == null || v === '') continue;
+      parts.push(`${k}=${String(v).slice(0, 48)}`);
+      if (parts.length >= 8) break;
+    }
+    const paramStr = parts.join('  ');
+    const synthetic = push.synthetic === true;
+    const key = `${event}|${paramStr}|${synthetic ? 's' : ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ event, params: paramStr, ...(synthetic ? { synthetic: true } : {}) });
+  }
+  return out;
+}
+
 // ── synthetic dataLayer payloads (deterministic, contract-driven) ───────────────
 
 /** A single synthetic ecommerce item — valid but obviously fake so a stray real hit is spottable. */

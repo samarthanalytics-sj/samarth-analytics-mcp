@@ -4139,6 +4139,7 @@ function VerifyPanel({
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
   const [vShowSkipped, setVShowSkipped] = useState(false);
   const [vShowNet, setVShowNet] = useState(false);
+  const [vShowDl, setVShowDl] = useState(false);
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   // Bumped whenever a tag-verify runs; the embedded Forms subsection watches it and auto-discovers the
   // site's forms-with-tags in the same pass — so there's ONE action, not a separate "find forms" button.
@@ -4380,6 +4381,34 @@ function VerifyPanel({
                       </ul>
                       <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 2 }}>
                         Browser-side only (captured then aborted — nothing was delivered). {hasSgtm ? 'A /g/collect to your sGTM means the web→server relay fired; ' : ''}the server-side Meta CAPI call (graph.facebook.com) is not visible here — confirm it in sGTM Preview / Events Manager → Test Events.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {vResult.dataLayer && vResult.dataLayer.length > 0 && (() => {
+              const dl = vResult.dataLayer!;
+              const real = dl.filter((e) => !e.synthetic);
+              return (
+                <div style={{ marginTop: 6 }}>
+                  <button style={styles.linkBtn} onClick={() => setVShowDl((o) => !o)}>
+                    {vShowDl ? 'hide' : 'show'} dataLayer ({real.length} real event{real.length === 1 ? '' : 's'} captured)
+                  </button>
+                  {vShowDl && (
+                    <div style={{ marginTop: 4 }}>
+                      <ul style={{ ...styles.resultList, fontFamily: 'monospace', fontSize: 11.5 }}>
+                        {dl.map((e, i) => (
+                          <li key={i} style={{ ...styles.resultRow, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                            <span style={{ minWidth: 150, fontWeight: 700, color: e.synthetic ? 'var(--c-amber)' : '#185FA5' }}>{e.event}</span>
+                            {e.params ? <span style={{ color: 'var(--text)' }}>{e.params}</span> : <span style={styles.muted}>(no params)</span>}
+                            {e.synthetic ? <span style={{ ...styles.muted, fontStyle: 'italic' }}>· pushed by verifier (test)</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                      <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 2 }}>
+                        What your site actually pushed to the dataLayer. Use the event name + params as the trigger condition (e.g. a tag that keys off <code>form_name</code> should match the exact value shown here). Amber rows were pushed by the verifier to test a custom-event tag — not proof the site fires them.
                       </div>
                     </div>
                   )}
