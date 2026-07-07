@@ -488,6 +488,10 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
               <input type="checkbox" checked={Boolean(status?.digestEnabled)} disabled={busy || !status?.slackEnabled} onChange={(e) => void configure({ digestEnabled: e.target.checked })} />
               Weekly health digest
             </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }} title="Runs the FULL GA4 audit once a week per property and posts its executive summary (reliability, setup completeness, biggest risk, fix) to the property's channel. Heavier than a health check.">
+              <input type="checkbox" checked={Boolean(status?.auditEnabled)} disabled={busy} onChange={(e) => void configure({ auditEnabled: e.target.checked })} />
+              Weekly audit summary
+            </label>
           </span>
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 8 }}>

@@ -40,6 +40,129 @@ async function writeReportFile(filePath: string, data: string | Uint8Array): Pro
   throw new Error('unreachable');
 }
 
+/** The FULL read-only audit pipeline (config + data quality + integrity + baseline + growth +
+ *  campaigns + retention -> markdown/exec/visuals/sections), extracted from the IPC handler so the
+ *  monitoring scheduler can run WEEKLY AUDITS with the exact same computation as the panel. `win`
+ *  must already be validated (trailing days clamped, or a checked YYYY-MM-DD range). */
+export async function runGa4AuditPipeline(
+  data: GoogleDataService,
+  p: string,
+  win: number | { startDate: string; endDate: string }
+): Promise<Ga4PropertyAuditResult> {
+  const [snap, dqCounts] = await Promise.all([
+    withQuotaRetry(() => data.getGa4PropertySnapshot(p)),
+    withQuotaRetry(() => data.getGa4DataQuality(p, win)),
+  ]);
+  // Dead custom-dimension probe (best-effort, read-only): which registered dimensions receive no data
+  // over a wide 90-day window. Fired here so it overlaps the enrichment queries below; its finding is
+  // seeded into auditGa4 so the Custom-definitions area/summary/counts stay consistent. category
+  // 'customdef' → feeds Event Tracking, never gates channel-attribution trust.
+  const registeredDims = snap.customDimensions ?? [];
+  const dimUsageP = registeredDims.length
+    ? data.getGa4CustomDimensionUsage(p, registeredDims).catch(() => null)
+    : Promise.resolve(null);
+  // Weekly retention cohorts (best-effort): its OWN backward window, independent of the audit window,
+  // so fire it here to overlap everything else. A headline is derived below.
+  const retentionP = data.getGa4RetentionCohorts(p).catch(() => null);
+  let dataQuality = auditGa4DataQuality(dqCounts);
+  // Data-integrity (reporting data): per-event regressions (a key event dropped to 0 = broken tag)
+  // and — for ecommerce properties — duplicate / unlabelled transactions (double-counted revenue).
+  // Best-effort; a failed query just omits those findings. Merged into the data-quality findings so
+  // they flow through the whole report; the "no issues" all-clear is dropped when a real one appears.
+  const ecom = (snap.keyEvents ?? []).some((k) => /purchase|add_to_cart|begin_checkout|view_item|add_payment_info/i.test(k.eventName));
+  const sd = dqCounts.startDate ?? '';
+  const ed = dqCounts.endDate ?? '';
+  const [deltas, txn, presentRec] = await Promise.all([
+    sd && ed ? withQuotaRetry(() => data.getGa4EventDeltas(p, sd, ed)).catch(() => null) : Promise.resolve(null),
+    ecom && sd && ed ? withQuotaRetry(() => data.getGa4Transactions(p, sd, ed)).catch(() => null) : Promise.resolve(null),
+    // Which of GA4's recommended online-sales events are actually sent — for the coverage check. The
+    // engine gates on observed anchor events, so this is safe to run on every property (a non-
+    // ecommerce site simply returns none and gets no finding).
+    sd && ed ? data.getGa4PresentEvents(p, sd, ed, ECOMMERCE_RECOMMENDED_EVENTS).catch(() => null) : Promise.resolve(null),
+  ]);
+  const integrityFindings = [
+    ...(deltas ? auditGa4EventDeltas({ events: deltas.events, keyEventNames: (snap.keyEvents ?? []).map((k) => k.eventName) }) : []),
+    ...(txn ? auditGa4Transactions({ hasEcommerce: true, transactions: txn.transactions, notSetShare: txn.notSetShare }) : []),
+  ];
+  if (integrityFindings.length) {
+    const base = dataQuality.findings.filter((f) => !(f.severity === 'info' && /No major data-quality issues/.test(f.message)));
+    dataQuality = { ...dataQuality, findings: [...base, ...integrityFindings] };
+  }
+  // Best-effort enrichments for the report doc — a failure just degrades that section to
+  // Not Verified, it never fails the audit (config + data quality always return).
+  const baseline = await withQuotaRetry(() => data.getGa4Baseline(p, dqCounts.startDate ?? '', dqCounts.endDate ?? '')).catch(() => null);
+  const attribution = await data.getGa4AttributionSettings(p).catch(() => null);
+  const audienceCount = await data.listGa4Audiences(p).then((a) => a.length).catch(() => null);
+  // Marketing-campaign performance (best-effort): rank the tagged utm_campaign traffic and surface the
+  // untagged share. A failed query just leaves the section out (null), never fails the audit.
+  const campaigns = await withQuotaRetry(() => data.getGa4CampaignPerformance(p, win)).then(rankGa4Campaigns).catch(() => null);
+  // Growth/anomaly: correlate the session change with the outcomes that should move with real
+  // growth (key events, revenue). Only when we have a baseline; the largest channel names the driver,
+  // returning-user share weighs bot-vs-real, and the no-source share links the spike to attribution loss.
+  const topChannel = [...dqCounts.channelGroups].sort((x, y) => y.sessions - x.sessions)[0]?.name ?? null;
+  let growth = null;
+  if (baseline) {
+    const nvrTotal = baseline.newVsReturning.reduce((a, r) => a + r.sessions, 0);
+    const returning = baseline.newVsReturning.find((r) => /return/i.test(r.name))?.sessions ?? 0;
+    const dqTotal = dqCounts.totalSessions || 0;
+    const unassigned = dqCounts.channelGroups.filter((c) => /unassigned/i.test(c.name)).reduce((a, c) => a + c.sessions, 0);
+    const notSet = dqCounts.sourceMediums.filter((c) => /\(not set\)/i.test(c.name)).reduce((a, c) => a + c.sessions, 0);
+    growth = auditGa4Growth({
+      sessions: baseline.sessions,
+      priorSessions: baseline.priorSessions,
+      keyEvents: baseline.keyEvents,
+      priorKeyEvents: baseline.priorKeyEvents,
+      revenue: baseline.revenue,
+      priorRevenue: baseline.priorRevenue,
+      topChannel,
+      returningSharePct: nvrTotal > 0 ? (returning / nvrTotal) * 100 : null,
+      // Clamp: numerator (dimensioned) and denominator (no-dimension total) are separate GA4 queries.
+      noSourceSharePct: dqTotal > 0 ? Math.min(100, (Math.max(unassigned, notSet) / dqTotal) * 100) : null,
+    });
+  }
+  // Resolve the dead-dimension probe (overlapped with the queries above) and fold its advisory into
+  // the config audit. `activelyMeasuring` gates it: with no traffic every dimension looks empty.
+  const dimUsage = await dimUsageP;
+  const deadDimensionFindings = dimUsage
+    ? auditGa4DeadDimensions({ usage: dimUsage, activelyMeasuring: (dqCounts.totalSessions || 0) > 0, windowDays: 90 })
+    : [];
+  // Recommended-event coverage: which GA4 recommended online-sales events an ecommerce property does
+  // not emit (an 'info' opportunity). The engine self-gates on observed anchor events, so a non-
+  // ecommerce property yields nothing. Seeded into the config audit alongside the dead-dim findings.
+  const coverageFindings = presentRec ? auditGa4EventCoverage({ presentRecommended: presentRec }) : [];
+  const config = auditGa4(snap, [...deadDimensionFindings, ...coverageFindings]);
+  // Resolve retention (overlapped above) into an honest one-line headline; null when there isn't
+  // enough reliable cohort data (small/immature cohorts are excluded, not shown as 0%).
+  const retentionCohorts = await retentionP;
+  const retentionSummary = retentionCohorts ? summarizeGa4Retention({ cohorts: retentionCohorts, minCohortSize: 100 }) : null;
+  // The transaction pass ALREADY ran above (txn) - hand its verdict to the report so the Ecommerce
+  // area (and therefore the Revenue trust gate) is graded on evidence instead of staying Partial.
+  const ecomVerification = ecom && txn
+    ? { transactionsChecked: txn.transactions.length, duplicateIds: txn.transactions.filter((t) => t.purchases > 1).length, notSetSharePct: txn.notSetShare }
+    : null;
+  const reportInput = {
+    property: p,
+    displayName: snap.displayName,
+    generatedAt: new Date().toISOString(),
+    snapshot: snap,
+    config,
+    dataQuality,
+    dqCounts,
+    baseline,
+    growth,
+    attribution,
+    audienceCount,
+    campaigns,
+    retentionSummary,
+    ecomVerification,
+  };
+  const markdown = buildGa4AuditReport(reportInput);
+  const exec = buildGa4ExecSummary(reportInput);
+  const visuals = buildGa4Visuals(reportInput);
+  const sections = buildGa4Sections(reportInput);
+  return { config, dataQuality, markdown, exec, visuals, sections };
+}
+
 export function registerGa4AuditIpc(data: GoogleDataService): void {
   // Flat list of every GA4 property (id + name + parent account) the active user can
   // reach, for the panel's search/select picker — one accountSummaries call (no per-account
@@ -69,118 +192,7 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
       const n = Math.floor(Number(window));
       win = window != null && Number.isFinite(n) ? Math.min(365, Math.max(1, n)) : 28;
     }
-    const [snap, dqCounts] = await Promise.all([
-      withQuotaRetry(() => data.getGa4PropertySnapshot(p)),
-      withQuotaRetry(() => data.getGa4DataQuality(p, win)),
-    ]);
-    // Dead custom-dimension probe (best-effort, read-only): which registered dimensions receive no data
-    // over a wide 90-day window. Fired here so it overlaps the enrichment queries below; its finding is
-    // seeded into auditGa4 so the Custom-definitions area/summary/counts stay consistent. category
-    // 'customdef' → feeds Event Tracking, never gates channel-attribution trust.
-    const registeredDims = snap.customDimensions ?? [];
-    const dimUsageP = registeredDims.length
-      ? data.getGa4CustomDimensionUsage(p, registeredDims).catch(() => null)
-      : Promise.resolve(null);
-    // Weekly retention cohorts (best-effort): its OWN backward window, independent of the audit window,
-    // so fire it here to overlap everything else. A headline is derived below.
-    const retentionP = data.getGa4RetentionCohorts(p).catch(() => null);
-    let dataQuality = auditGa4DataQuality(dqCounts);
-    // Data-integrity (reporting data): per-event regressions (a key event dropped to 0 = broken tag)
-    // and — for ecommerce properties — duplicate / unlabelled transactions (double-counted revenue).
-    // Best-effort; a failed query just omits those findings. Merged into the data-quality findings so
-    // they flow through the whole report; the "no issues" all-clear is dropped when a real one appears.
-    const ecom = (snap.keyEvents ?? []).some((k) => /purchase|add_to_cart|begin_checkout|view_item|add_payment_info/i.test(k.eventName));
-    const sd = dqCounts.startDate ?? '';
-    const ed = dqCounts.endDate ?? '';
-    const [deltas, txn, presentRec] = await Promise.all([
-      sd && ed ? withQuotaRetry(() => data.getGa4EventDeltas(p, sd, ed)).catch(() => null) : Promise.resolve(null),
-      ecom && sd && ed ? withQuotaRetry(() => data.getGa4Transactions(p, sd, ed)).catch(() => null) : Promise.resolve(null),
-      // Which of GA4's recommended online-sales events are actually sent — for the coverage check. The
-      // engine gates on observed anchor events, so this is safe to run on every property (a non-
-      // ecommerce site simply returns none and gets no finding).
-      sd && ed ? data.getGa4PresentEvents(p, sd, ed, ECOMMERCE_RECOMMENDED_EVENTS).catch(() => null) : Promise.resolve(null),
-    ]);
-    const integrityFindings = [
-      ...(deltas ? auditGa4EventDeltas({ events: deltas.events, keyEventNames: (snap.keyEvents ?? []).map((k) => k.eventName) }) : []),
-      ...(txn ? auditGa4Transactions({ hasEcommerce: true, transactions: txn.transactions, notSetShare: txn.notSetShare }) : []),
-    ];
-    if (integrityFindings.length) {
-      const base = dataQuality.findings.filter((f) => !(f.severity === 'info' && /No major data-quality issues/.test(f.message)));
-      dataQuality = { ...dataQuality, findings: [...base, ...integrityFindings] };
-    }
-    // Best-effort enrichments for the report doc — a failure just degrades that section to
-    // Not Verified, it never fails the audit (config + data quality always return).
-    const baseline = await withQuotaRetry(() => data.getGa4Baseline(p, dqCounts.startDate ?? '', dqCounts.endDate ?? '')).catch(() => null);
-    const attribution = await data.getGa4AttributionSettings(p).catch(() => null);
-    const audienceCount = await data.listGa4Audiences(p).then((a) => a.length).catch(() => null);
-    // Marketing-campaign performance (best-effort): rank the tagged utm_campaign traffic and surface the
-    // untagged share. A failed query just leaves the section out (null), never fails the audit.
-    const campaigns = await withQuotaRetry(() => data.getGa4CampaignPerformance(p, win)).then(rankGa4Campaigns).catch(() => null);
-    // Growth/anomaly: correlate the session change with the outcomes that should move with real
-    // growth (key events, revenue). Only when we have a baseline; the largest channel names the driver,
-    // returning-user share weighs bot-vs-real, and the no-source share links the spike to attribution loss.
-    const topChannel = [...dqCounts.channelGroups].sort((x, y) => y.sessions - x.sessions)[0]?.name ?? null;
-    let growth = null;
-    if (baseline) {
-      const nvrTotal = baseline.newVsReturning.reduce((a, r) => a + r.sessions, 0);
-      const returning = baseline.newVsReturning.find((r) => /return/i.test(r.name))?.sessions ?? 0;
-      const dqTotal = dqCounts.totalSessions || 0;
-      const unassigned = dqCounts.channelGroups.filter((c) => /unassigned/i.test(c.name)).reduce((a, c) => a + c.sessions, 0);
-      const notSet = dqCounts.sourceMediums.filter((c) => /\(not set\)/i.test(c.name)).reduce((a, c) => a + c.sessions, 0);
-      growth = auditGa4Growth({
-        sessions: baseline.sessions,
-        priorSessions: baseline.priorSessions,
-        keyEvents: baseline.keyEvents,
-        priorKeyEvents: baseline.priorKeyEvents,
-        revenue: baseline.revenue,
-        priorRevenue: baseline.priorRevenue,
-        topChannel,
-        returningSharePct: nvrTotal > 0 ? (returning / nvrTotal) * 100 : null,
-        // Clamp: numerator (dimensioned) and denominator (no-dimension total) are separate GA4 queries.
-        noSourceSharePct: dqTotal > 0 ? Math.min(100, (Math.max(unassigned, notSet) / dqTotal) * 100) : null,
-      });
-    }
-    // Resolve the dead-dimension probe (overlapped with the queries above) and fold its advisory into
-    // the config audit. `activelyMeasuring` gates it: with no traffic every dimension looks empty.
-    const dimUsage = await dimUsageP;
-    const deadDimensionFindings = dimUsage
-      ? auditGa4DeadDimensions({ usage: dimUsage, activelyMeasuring: (dqCounts.totalSessions || 0) > 0, windowDays: 90 })
-      : [];
-    // Recommended-event coverage: which GA4 recommended online-sales events an ecommerce property does
-    // not emit (an 'info' opportunity). The engine self-gates on observed anchor events, so a non-
-    // ecommerce property yields nothing. Seeded into the config audit alongside the dead-dim findings.
-    const coverageFindings = presentRec ? auditGa4EventCoverage({ presentRecommended: presentRec }) : [];
-    const config = auditGa4(snap, [...deadDimensionFindings, ...coverageFindings]);
-    // Resolve retention (overlapped above) into an honest one-line headline; null when there isn't
-    // enough reliable cohort data (small/immature cohorts are excluded, not shown as 0%).
-    const retentionCohorts = await retentionP;
-    const retentionSummary = retentionCohorts ? summarizeGa4Retention({ cohorts: retentionCohorts, minCohortSize: 100 }) : null;
-    // The transaction pass ALREADY ran above (txn) - hand its verdict to the report so the Ecommerce
-    // area (and therefore the Revenue trust gate) is graded on evidence instead of staying Partial.
-    const ecomVerification = ecom && txn
-      ? { transactionsChecked: txn.transactions.length, duplicateIds: txn.transactions.filter((t) => t.purchases > 1).length, notSetSharePct: txn.notSetShare }
-      : null;
-    const reportInput = {
-      property: p,
-      displayName: snap.displayName,
-      generatedAt: new Date().toISOString(),
-      snapshot: snap,
-      config,
-      dataQuality,
-      dqCounts,
-      baseline,
-      growth,
-      attribution,
-      audienceCount,
-      campaigns,
-      retentionSummary,
-      ecomVerification,
-    };
-    const markdown = buildGa4AuditReport(reportInput);
-    const exec = buildGa4ExecSummary(reportInput);
-    const visuals = buildGa4Visuals(reportInput);
-    const sections = buildGa4Sections(reportInput);
-    return { config, dataQuality, markdown, exec, visuals, sections };
+    return runGa4AuditPipeline(data, p, win);
   });
 
   // Save the (renderer-displayed) GA4 audit report to a user-chosen file in the requested format:

@@ -90,6 +90,31 @@ export function buildSlackDigestPayload(
   };
 }
 
+/** Weekly scheduled-audit summary: the executive verdict a client would pay to see, one message per
+ *  property to its own channel. Kept to exec-level facts (setup completeness, reliability + cap,
+ *  biggest risk, highest-impact fix) - the full report lives in the app. */
+export function buildSlackAuditPayload(
+  propertyLabel: string,
+  exec: { verdict: string; composite: number | null; grade: string; reliabilityPct: number; reliabilityCappedBy: string[]; biggestRisk: string; highestImpactFix: string; dateRange: string },
+): SlackPayload {
+  const label = propertyLabel || 'your GA4 property';
+  const capped = exec.reliabilityCappedBy.length ? ` (capped by ${exec.reliabilityCappedBy.join(', ')})` : '';
+  const text = `Weekly GA4 audit - ${label}: reliability ${exec.reliabilityPct}%${capped}; ${exec.verdict}`;
+  return {
+    text,
+    blocks: [
+      { type: 'header', text: { type: 'plain_text', text: truncate(`Weekly GA4 audit: ${label}`, 150), emoji: true } },
+      { type: 'section', text: { type: 'mrkdwn', text: `*Reporting reliability:* ${exec.reliabilityPct}%${capped}
+*Setup completeness:* ${exec.composite === null ? 'n/a' : `${exec.composite}/100`} (grade ${exec.grade})
+*Window:* ${truncate(exec.dateRange, 80)}` } },
+      { type: 'section', text: { type: 'mrkdwn', text: `*Verdict:* ${truncate(exec.verdict, 400)}` } },
+      { type: 'section', text: { type: 'mrkdwn', text: `*Biggest risk:* ${truncate(exec.biggestRisk, 400)}
+*Highest-impact fix:* ${truncate(exec.highestImpactFix, 400)}` } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: 'Full report in the app (GA4 Tools > GA4 Audit) · next audit in 7 days · Samarth Analytics' }] },
+    ],
+  };
+}
+
 export interface SendResult {
   ok: boolean;
   status: number;

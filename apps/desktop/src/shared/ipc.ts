@@ -760,6 +760,8 @@ export interface Ga4MonitorTarget {
   accountId?: string;
   /** When this property's weekly health digest last posted (persisted so restarts don't re-send). */
   lastDigestAt?: number;
+  /** When this property's weekly scheduled audit last ran (persisted so restarts don't re-run). */
+  lastAuditAt?: number;
 }
 
 /** Persisted config for the GA4 monitor (multi-property; mirrors the GTM MonitorConfig in shape). */
@@ -778,6 +780,10 @@ export interface Ga4MonitorConfig {
   /** Also post a WEEKLY health digest per property (even when everything is healthy), so a silent
    *  channel proves the monitor is alive rather than broken. Uses each property's own channel. */
   digestEnabled: boolean;
+  /** Run the FULL GA4 audit weekly per property and post its executive summary (setup completeness,
+   *  reliability, biggest risk, fix) to the property's Slack channel. Heavier than a health check,
+   *  so it is opt-in and at most once per property per 7 days. */
+  auditEnabled: boolean;
   /** Human label for the DEFAULT Slack channel + workspace (e.g. "#ga4-alerts · Acme"). Slack does
    *  not expose these from a webhook URL, so the user records them; shown as the connection status. */
   slackLabel: string;
