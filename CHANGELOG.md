@@ -1,3 +1,9 @@
+## [1.224.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.223.1...v1.224.0) (2026-07-07)
+
+### Features
+
+* **desktop:** ecommerce transaction verification feeds the trust gates - clean pass un-caps revenue ([151aab3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/151aab3a001b8712a73998b704ecb4f139ff9d8f))
+
 ## [1.223.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.223.0...v1.223.1) (2026-07-07)
 
 ### Bug Fixes
