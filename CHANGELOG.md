@@ -1,3 +1,9 @@
+## [1.249.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.248.0...v1.249.0) (2026-07-07)
+
+### Features
+
+* **desktop:** check off site-code / optional install steps → chip turns green ([6ee05b2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6ee05b266ab5a05731823125344a2d832035afa6))
+
 ## [1.248.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.247.0...v1.248.0) (2026-07-07)
 
 ### Features
