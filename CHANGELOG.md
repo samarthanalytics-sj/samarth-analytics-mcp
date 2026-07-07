@@ -1,3 +1,9 @@
+## [1.257.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.256.2...v1.257.0) (2026-07-07)
+
+### Features
+
+* **verify:** sitemap-driven coverage — scan every site page to locate all CTAs ([2bb90ce](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2bb90cecf69a1e5d869d41ee37cee0eba66387a8)), closes [#414](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/414)
+
 ## [1.256.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.256.1...v1.256.2) (2026-07-07)
 
 ### Bug Fixes
