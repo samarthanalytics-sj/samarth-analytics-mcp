@@ -41,6 +41,8 @@ import type {
   VerifyTagsResult,
   FormsForFillOptions,
   FormsForFillResult,
+  FormTagVerifyPlanOptions,
+  FormTagVerifyPlanResult,
   SubmitFormInputView,
   SubmitFormVerifyOptions,
   SubmitFormVerifyResult,
@@ -232,6 +234,10 @@ const api = {
     // operator edits before Phase 2 submits. Read-only (fills/submits nothing).
     formsForFill: (url: string, opts?: FormsForFillOptions): Promise<FormsForFillResult> =>
       ipcRenderer.invoke('suggestions:formsForFill', url, opts),
+    // Container-tag-driven plan: crawl a site, keep only forms that HAVE a container tag, de-dup their
+    // fields into one data-entry set. Read-only.
+    formTagVerifyPlan: (url: string, opts: FormTagVerifyPlanOptions): Promise<FormTagVerifyPlanResult> =>
+      ipcRenderer.invoke('suggestions:formTagVerifyPlan', url, opts),
     // Phase 2 — REAL submit: fill the reviewed values + submit one form for real; reports the analytics
     // events it fired. The form POST is delivered (a real lead); analytics hits are captured, not sent.
     submitFormAndVerify: (
