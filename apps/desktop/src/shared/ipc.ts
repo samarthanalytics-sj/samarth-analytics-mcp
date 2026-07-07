@@ -753,6 +753,8 @@ export interface Ga4MonitorTarget {
   /** The account (mail) this property was added under. Targets only show/run for their own account;
    *  absent on configs from before per-account scoping (stamped lazily with the active account). */
   accountId?: string;
+  /** When this property's weekly health digest last posted (persisted so restarts don't re-send). */
+  lastDigestAt?: number;
 }
 
 /** Persisted config for the GA4 monitor (multi-property; mirrors the GTM MonitorConfig in shape). */
@@ -768,6 +770,9 @@ export interface Ga4MonitorConfig {
   /** Post new issues to Slack. Each property posts to its OWN channel when one is connected,
    *  falling back to the account's default channel otherwise. */
   slackEnabled: boolean;
+  /** Also post a WEEKLY health digest per property (even when everything is healthy), so a silent
+   *  channel proves the monitor is alive rather than broken. Uses each property's own channel. */
+  digestEnabled: boolean;
   /** Human label for the DEFAULT Slack channel + workspace (e.g. "#ga4-alerts · Acme"). Slack does
    *  not expose these from a webhook URL, so the user records them; shown as the connection status. */
   slackLabel: string;

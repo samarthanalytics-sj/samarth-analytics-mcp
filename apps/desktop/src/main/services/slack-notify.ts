@@ -63,6 +63,33 @@ export function buildSlackTestPayload(propertyLabel: string): SlackPayload {
   };
 }
 
+/** The weekly health digest: posted even when everything is healthy, so a quiet channel reads as
+ *  "monitored and fine" instead of "is this thing on?". One message per property, to its own channel. */
+export function buildSlackDigestPayload(
+  propertyLabel: string,
+  result: Ga4MonitorResult,
+  meta: { checksPass: number; checksWarn: number; checksFail: number; openAlerts: number; intervalMinutes: number },
+): SlackPayload {
+  const label = propertyLabel || 'your GA4 property';
+  const text = `${HEALTH_EMOJI[result.health]} Weekly health digest — ${label}: ${result.summary}`;
+  const cadence = meta.intervalMinutes >= 60 ? `${Math.round(meta.intervalMinutes / 60)} hr` : `${meta.intervalMinutes} min`;
+  return {
+    text,
+    blocks: [
+      { type: 'header', text: { type: 'plain_text', text: truncate(`Weekly health digest: ${label}`, 150), emoji: true } },
+      { type: 'section', text: { type: 'mrkdwn', text: `${HEALTH_EMOJI[result.health]} *${result.health.toUpperCase()}* — ${truncate(result.summary, 280)}` } },
+      {
+        type: 'section',
+        fields: [
+          { type: 'mrkdwn', text: `*Checks:* ${meta.checksPass} pass · ${meta.checksWarn} warn · ${meta.checksFail} issue(s)` },
+          { type: 'mrkdwn', text: `*Open alerts:* ${meta.openAlerts}` },
+        ],
+      },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: `Checked every ${cadence} · next digest in 7 days · Samarth Analytics GA4 monitoring` }] },
+    ],
+  };
+}
+
 export interface SendResult {
   ok: boolean;
   status: number;

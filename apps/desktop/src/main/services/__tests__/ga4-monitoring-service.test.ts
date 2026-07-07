@@ -78,6 +78,45 @@ test('per-account scoping: a property added under one mail is invisible (and nev
   assert.deepEqual(runsA.map((r) => r.property), ['properties/1'], 'acct1 sweep covers only its own');
 });
 
+test('weekly digest: posts once per property per 7 days to its own channel, persists lastDigestAt, off by default', async () => {
+  const secrets = makeSecrets();
+  const posts: Array<{ url: string; body: string }> = [];
+  let nowMs = Date.parse('2026-07-02T09:00:00Z');
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account },
+    data: fakeData(),
+    secrets,
+    emit: () => {},
+    now: () => nowMs,
+    slackFetch: async (url, init) => { posts.push({ url: String(url), body: init.body }); return { ok: true, status: 200, text: async () => 'ok' }; },
+  });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], slackEnabled: true, enabled: false });
+  svc.setWebhook('https://hooks.slack.com/services/T/B/acme', 'properties/1');
+
+  // Digest OFF by default: only the alert posts.
+  await svc.runOnce();
+  assert.equal(posts.filter((x) => x.body.includes('Weekly health digest')).length, 0, 'no digest when disabled');
+
+  // Enable the digest: the next sweep posts one (first-ever digest is immediately due).
+  svc.configure({ digestEnabled: true });
+  await svc.runOnce();
+  const digests = posts.filter((x) => x.body.includes('Weekly health digest'));
+  assert.equal(digests.length, 1, 'one digest after enabling');
+  assert.ok(digests[0].url.endsWith('/acme'), 'digest posts to the property own channel');
+  assert.ok(digests[0].body.includes('Acme'), 'digest names the property');
+  assert.ok(digests[0].body.includes('Checks:'), 'digest carries the check counts');
+  const st = svc.status().targetStatuses[0];
+  assert.equal(st.lastDigestAt, nowMs, 'lastDigestAt persisted on the target');
+
+  // 1 day later: not due -> no second digest. 7 days later: due again.
+  nowMs += 24 * 60 * 60 * 1000;
+  await svc.runOnce();
+  assert.equal(posts.filter((x) => x.body.includes('Weekly health digest')).length, 1, 'not due after 1 day');
+  nowMs += 6 * 24 * 60 * 60 * 1000;
+  await svc.runOnce();
+  assert.equal(posts.filter((x) => x.body.includes('Weekly health digest')).length, 2, 'due again after 7 days');
+});
+
 test('a new issue Slacks once; the same ongoing issue does not re-Slack on the next run', async () => {
   const secrets = makeSecrets();
   const posts: string[] = [];
