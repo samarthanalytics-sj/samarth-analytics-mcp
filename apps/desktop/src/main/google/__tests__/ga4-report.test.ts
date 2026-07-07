@@ -737,5 +737,42 @@ test('REGRESSION: the concentration spike and the revenue mismatch fire TOGETHER
   assert.ok(!reconLine.includes('PT '), 'the zero-revenue traffic campaign is never counted or named in the mismatch');
 });
 
+test('ecommerce verification: a CLEAN transaction pass upgrades Ecommerce to PASS and un-caps revenue', () => {
+  const sEcom = snap({ keyEvents: [{ eventName: 'purchase' }, { eventName: 'add_to_cart' }] });
+  const inp = input({ snapshot: sEcom, config: auditGa4(sEcom), ecomVerification: { transactionsChecked: 180, duplicateIds: 0, notSetSharePct: 1.2 } });
+  const md = buildGa4AuditReport(inp);
+  assert.ok(/verified: 180 transaction_id\(s\) checked - no duplicates/.test(md), 'Ecommerce evidence shows the verified pass');
+  const exec = buildGa4ExecSummary(inp);
+  const rev = exec.trust.find((t) => t.metric === 'Revenue / AOV / ROAS')!;
+  // Collection is still Partial (Admin API ceiling), so revenue lands on CAUTION - quotable and
+  // credit-earning, no longer unverified/do-not-quote.
+  assert.ok(!/unverified|do not quote/i.test(rev.reason), 'revenue is no longer unverified: ' + rev.reason);
+  assert.ok(!exec.reliabilityCappedBy.some((c) => /Revenue/.test(c)), 'revenue no longer caps the reliability headline');
+  // The verified pass also clears the Section-8 blocked item + not-verified line.
+  const sections = buildGa4Sections(inp);
+  assert.ok(!(sections.blocked ?? []).some((b) => b.area === 'Ecommerce'), 'no Ecommerce blocked-by-verification item');
+  assert.ok(!sections.notVerified.items.some((i) => /Ecommerce item parameters/.test(i.item)), 'not-verified list drops the ecommerce line');
+});
+
+test('ecommerce verification: DUPLICATE transaction_ids fail the area and keep revenue do-not-quote', () => {
+  const sEcom = snap({ keyEvents: [{ eventName: 'purchase' }] });
+  const inp = input({ snapshot: sEcom, config: auditGa4(sEcom), ecomVerification: { transactionsChecked: 150, duplicateIds: 3, notSetSharePct: 0.4 } });
+  const md = buildGa4AuditReport(inp);
+  assert.ok(/verified: 3 duplicate transaction_id\(s\) among 150 checked/.test(md), 'duplicates named in the evidence');
+  const exec = buildGa4ExecSummary(inp);
+  const rev = exec.trust.find((t) => t.metric === 'Revenue / AOV / ROAS')!;
+  assert.equal(rev.safe, false, 'revenue not quotable with duplicated transactions');
+  assert.ok(exec.reliabilityCappedBy.some((c) => /Revenue/.test(c)), 'revenue caps the headline');
+});
+
+test('ecommerce verification: a high missing-id share stays PARTIAL (deduplication impossible)', () => {
+  const sEcom = snap({ keyEvents: [{ eventName: 'purchase' }] });
+  const md = buildGa4AuditReport(input({ snapshot: sEcom, config: auditGa4(sEcom), ecomVerification: { transactionsChecked: 90, duplicateIds: 0, notSetSharePct: 22.5 } }));
+  assert.ok(/22.5% of purchases have no id/.test(md), 'missing-id share named');
+  // An UNRUN pass keeps the original Partial wording (verification, not vibes).
+  const md2 = buildGa4AuditReport(input({ snapshot: sEcom, config: auditGa4(sEcom) }));
+  assert.ok(/item params & duplicate transactions not verified/.test(md2), 'unrun pass stays Partial with the old wording');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
