@@ -151,7 +151,7 @@ const dlv = (name: string, key: string): AuditVariable => ({ variableId: name, n
   const s = snap(
     [
       tag({ tagId: 'sp', name: 'Paused', type: 'gaawe', firingTriggerId: ['t1'], paused: true }),
-      tag({ tagId: 'sa', name: 'Ads Conv', type: 'awct', firingTriggerId: ['t1'] }),
+      tag({ tagId: 'sa', name: 'Conversion Linker', type: 'gclidw', firingTriggerId: ['t1'] }),
       tag({ tagId: 'ss', name: 'Scroll Tag', type: 'gaawe', firingTriggerId: ['ts'] }),
     ],
     [trig({ triggerId: 't1', type: 'linkClick', filter: [cond('{{Click Text}}', 'equals', 'Go')] }), trig({ triggerId: 'ts', type: 'scrollDepth' })],
@@ -230,6 +230,53 @@ const dlv = (name: string, key: string): AuditVariable => ({ variableId: name, n
   check('custom_event: Page Path excluded from customEventData', r.tags[0]?.trigger.customEventData?.form_name === 'Contact' && !('page path' in (r.tags[0]?.trigger.customEventData ?? {})));
 }
 
+// ── Meta / custom-template pixel tags are now VERIFIABLE (by network beacon), not skipped ─────────
+// The user's "Meta - Event - FAQs Click Tag" is a Custom Template (type cvt_5RM3Q); it used to be
+// "not verifiable in this MVP". Now it maps to meta_pixel so the driver's beacon capture proves it.
+{
+  const s = snap(
+    [tag({ tagId: 'meta1', name: 'Meta - Event - FAQs Click Tag', type: 'cvt_5RM3Q', firingTriggerId: ['tfaq'], parameter: [] })],
+    [trig({ triggerId: 'tfaq', type: 'linkClick', filter: [cond('{{Click Text}}', 'equals', 'FAQs')] })],
+  );
+  const r = snapshotToVerifyInputs(s);
+  check('cvt_ Meta tag → verifiable, not skipped', r.tags.length === 1 && r.skipped.length === 0);
+  check('cvt_ Meta tag → meta_pixel platform', r.tags[0]?.platform === 'meta_pixel');
+  check('cvt_ Meta tag → click trigger still mapped', r.tags[0]?.trigger.kind === 'link_click');
+}
+{
+  // A custom template with NO pinpointable vendor in its name → SKIPPED (a generic beacon match would
+  // risk crediting it for another pixel that fired on the same interaction). Honest over eager.
+  const s = snap(
+    [tag({ tagId: 'cv', name: 'Custom Conversion Tag', type: 'cvt_9XX', firingTriggerId: ['tc'], parameter: [] })],
+    [trig({ triggerId: 'tc', type: 'linkClick', filter: [cond('{{Click Text}}', 'equals', 'Buy')] })],
+  );
+  const r = snapshotToVerifyInputs(s);
+  check('cvt_ with no vendor in name → skipped (no cross-attribution guess)', r.tags.length === 0 && r.skipped.some((x) => x.tagId === 'cv'));
+}
+{
+  // Vendor-by-name across template + custom HTML + Google Ads conversion — all verifiable now.
+  const mk = (id: string, name: string, type: string): AuditTag => tag({ tagId: id, name, type, firingTriggerId: ['tk'], parameter: [] });
+  const s = snap(
+    [mk('tt', 'TikTok Pixel - Lead', 'cvt_1'), mk('li', 'LinkedIn Insight Tag', 'html'), mk('aw', 'Google Ads - Purchase', 'awct')],
+    [trig({ triggerId: 'tk', type: 'linkClick', filter: [cond('{{Click Text}}', 'equals', 'Go')] })],
+  );
+  const r = snapshotToVerifyInputs(s);
+  const by = (id: string): (typeof r.tags)[number] | undefined => r.tags.find((t) => t.id === id);
+  check('cvt_ TikTok by name → tiktok_pixel', by('tt')?.platform === 'tiktok_pixel');
+  check('Custom HTML LinkedIn by name → linkedin_insight', by('li')?.platform === 'linkedin_insight');
+  check('awct → google_ads_conversion', by('aw')?.platform === 'google_ads_conversion');
+  check('all three pixel/ad tags verifiable', r.tags.length === 3 && r.skipped.length === 0);
+}
+{
+  // A type with no observable client beacon (Conversion Linker) stays SKIPPED — honest, not a false pass.
+  const s = snap(
+    [tag({ tagId: 'cl', name: 'Conversion Linker', type: 'gclidw', firingTriggerId: ['tcl'], parameter: [] })],
+    [trig({ triggerId: 'tcl', type: 'linkClick', filter: [cond('{{Click Text}}', 'equals', 'X')] })],
+  );
+  const r = snapshotToVerifyInputs(s);
+  check('non-beacon type (gclidw) → still skipped', r.tags.length === 0 && r.skipped.some((x) => x.tagId === 'cl'));
+}
+
 console.log(`\ncontainer-verify: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 30) { console.error(`expected >= 30 checks, got ${passed}`); process.exit(1); }
+if (passed < 39) { console.error(`expected >= 39 checks, got ${passed}`); process.exit(1); }

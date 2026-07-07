@@ -3457,8 +3457,14 @@ function verdictKindLabel(v: VerifyTagsResult['verdicts'][number]): { label: str
 // tags aren't broken — they just need the right page or a real interaction, not an operator change.
 function verdictHowToTest(v: VerifyTagsResult['verdicts'][number]): string {
   const k = v.interaction?.kind;
+  const found = v.interaction?.targetFound;
   if (k === 'custom_event') {
     return 'This tag fires on a shared dataLayer event but keys off a specific form. Open GTM Preview and submit the matching form for real — the tag will fire when its form-specific condition is met. A synthetic push can’t supply that data.';
+  }
+  // Element WAS found + interacted, but no beacon we recognise fired → an undecodable Custom Template /
+  // Custom HTML (pixel) tag, not a wrong-page problem.
+  if ((k === 'click' || k === 'submit') && found) {
+    return 'This is a Custom Template / Custom HTML (pixel) tag we can’t decode. The interaction happened but no recognised pixel beacon fired — it may beacon to a host we don’t classify, run server-side, or be consent-gated. Confirm in GTM Preview or your browser’s Network tab (look for the vendor’s request).';
   }
   if (k === 'click' || k === 'submit') {
     return 'The matching CTA/form isn’t on the page we drove — it likely lives on another page (e.g. careers, blog, a service page), or its exact label differs. Re-run Verify with that page’s URL, or confirm the button’s exact text.';
@@ -3481,6 +3487,9 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
   }
   if (/fired GA4 hit/.test(r)) {
     return 'The trigger fired, but no hit for this tag’s event name. Align the tag’s Event Name with what actually fires (see the observed events in the reason), or fix the tag config.';
+  }
+  if (/no .* beacon fired/.test(r)) {
+    return 'The interaction fired but this pixel/ad tag sent no beacon to its vendor. Check the tag isn’t paused or blocked by an exception trigger, that its Consent Mode gate (ad_storage) isn’t denying it, and that the pixel/conversion id is set.';
   }
   if (/no GA4 hit fired|no .* hit fired/.test(r)) {
     return 'The trigger ran but no hit fired. The tag may not be in the loaded container (use “Auto” or paste a Preview snippet so DRAFT tags load), or a tag-level condition / Consent Mode gate is blocking it.';
