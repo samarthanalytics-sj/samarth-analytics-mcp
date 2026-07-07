@@ -213,6 +213,10 @@ export interface Ga4ExecSummaryView {
   reliabilityConfidence: string;
   /** Critical metrics (conversions/revenue) that capped the reliability headline; empty = uncapped. */
   reliabilityCappedBy: string[];
+  /** Itemized receipt for the headline (biggest loss first): which metric is losing points, the
+   *  SPECIFIC gate responsible, and the action that recovers them - so a low number always reads as
+   *  the property's verification state, never as the tool's judgement. */
+  reliabilityWhy: Array<{ metric: string; weightPct: number; lostPts: number; verdict: string; cause: string; fix: string }>;
   verdict: string;
   biggestRisk: string;
   highestImpactFix: string;

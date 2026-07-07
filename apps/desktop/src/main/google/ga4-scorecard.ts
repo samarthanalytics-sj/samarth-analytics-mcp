@@ -35,6 +35,23 @@ export interface ScorecardCategory {
   effectiveWeight: number;
 }
 export type TrustVerdict = 'safe' | 'caution' | 'unverified' | 'do_not_quote';
+/** One line of the reliability RECEIPT: a metric that is not earning its full weight, with the
+ *  points it costs, the SPECIFIC gate responsible, and the action that recovers them. Rendered under
+ *  the headline so a low number always reads as "your property's verification state", never as an
+ *  arbitrary judgement by the tool. */
+export interface ReliabilityWhyRow {
+  metric: string;
+  /** This metric's share of the 100-point scale. */
+  weightPct: number;
+  /** Points this metric is currently NOT earning (weight × missing gate credit). */
+  lostPts: number;
+  verdict: TrustVerdict;
+  /** The gate(s) responsible, e.g. "traffic-vs-conversion tracking failed". */
+  cause: string;
+  /** What recovers the points. */
+  fix: string;
+}
+
 export interface TrustRow {
   metric: string;
   /** PASS-GATED verdict: SAFE only when EVERY gating check passed. A failed gate → do_not_quote; a
@@ -55,6 +72,8 @@ export interface Ga4Scorecard {
   /** When a decision-critical metric (conversions, revenue) is unverified/failed the headline is
    *  capped below the High band; these are the metrics that capped it (empty = uncapped). */
   reliabilityCappedBy: string[];
+  /** Itemized points-lost receipt (biggest loss first) - why the headline is not higher. */
+  reliabilityWhy: ReliabilityWhyRow[];
   categories: ScorecardCategory[];
   trust: TrustRow[];
   notVerifiedAreas: number;
@@ -248,12 +267,45 @@ export function buildGa4Scorecard(input: Ga4ScorecardInput): Ga4Scorecard {
   // tops out near ~60 under gate-fraction credit — that IS the high band on this scale, and the critical-metric cap (44) always lands below it.
   const reliabilityConfidence = reliabilityPct >= 55 ? 'High confidence' : reliabilityPct >= 20 ? 'Medium confidence' : 'Low confidence';
 
+  // ── The receipt: every point below 100 is attributed to a NAMED gate with its fix, so the low
+  // number reads as the property's verification state, never the tool's opinion. Sorted by points
+  // lost, biggest first. Gate → remedy wording is fixed here so all surfaces say the same thing.
+  const GATE_FIX: Record<string, string> = {
+    'traffic-vs-conversion tracking': 'Verify in GA4 DebugView/Realtime that purchase + key events fire for the new traffic; the gate passes on the next window where outcomes track the sessions.',
+    'consent mode': 'Consent Mode is not readable via the Google APIs - verify it in DebugView / the tag setup once; it stays unverified until then.',
+    'data collection': 'The Admin API can only see configuration; a window where sessions arrive every single day upgrades this automatically.',
+    'ecommerce setup': 'Run a window with transactions: no duplicate transaction_ids and <5% missing ids upgrades revenue on evidence.',
+    'key events': 'Fix the conversion-integrity findings (an event that stopped or dropped sharply) so key-event counts are trustworthy.',
+    'channel grouping': 'Resolve the attribution findings (unattributed share, channel/campaign mismatch, self-referrals) so the channel split is quotable.',
+    'window integrity': 'Segment or exclude the one-off burst (see the concentration finding) so window totals describe the business again.',
+  };
+  const reliabilityWhy: ReliabilityWhyRow[] = trust
+    .map((t) => {
+      const weight = TRUST_WEIGHT[t.metric] ?? 0;
+      const earned = t.verdict === 'safe' || t.verdict === 'caution' ? metricShare(t.metric) : 0;
+      const lostPts = Math.round(weight * (1 - earned) * 10) / 10;
+      if (lostPts <= 0) return null;
+      const spec = TRUST_SPEC.find((x) => x.metric === t.metric);
+      // Cause lists every imperfect gate; the FIX targets the WORST one (a failed gate outranks an
+      // unverified one outranks a partial) - that is the action that actually moves the verdict.
+      const badRank: Record<string, number> = { fail: 3, not_verified: 2, partial: 1 };
+      const bad = (spec?.gates ?? []).filter(([, g]) => g !== 'pass').sort((a, b) => (badRank[b[1]] ?? 0) - (badRank[a[1]] ?? 0));
+      const cause = bad.length
+        ? bad.map(([n, g]) => `${n} ${g === 'fail' ? 'FAILED' : g === 'not_verified' ? 'not verified' : 'partial'}`).join('; ')
+        : 'gating checks incomplete';
+      const fix = bad.map(([n]) => GATE_FIX[n]).find(Boolean) ?? 'Re-run once the blocking checks can execute.';
+      return { metric: t.metric, weightPct: weight, lostPts, verdict: t.verdict, cause, fix };
+    })
+    .filter((r): r is ReliabilityWhyRow => r !== null)
+    .sort((a, b) => b.lostPts - a.lostPts);
+
   return {
     composite,
     grade,
     reliabilityPct,
     reliabilityConfidence,
     reliabilityCappedBy,
+    reliabilityWhy,
     categories,
     trust,
     notVerifiedAreas: areas.filter((a) => a.statusKey === 'not_verified').length,
