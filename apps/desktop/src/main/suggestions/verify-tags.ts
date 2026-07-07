@@ -196,7 +196,7 @@ export function evaluateVerify(
       const want = norm(tag.eventName);
       const hit = events.find(({ ev }) => norm(ev.event) === want);
       if (hit) {
-        return withBeacons({ ...base, fired: true, event: hit.ev.event, interaction, evidence: hit.hit });
+        return withBeacons({ ...base, fired: true, ...(cap.kind === 'custom_event' ? { synthetic: true } : {}), event: hit.ev.event, interaction, evidence: hit.hit });
       }
       if (events.length > 0) {
         const observedEvents = [...new Set(events.map(({ ev }) => ev.event).filter((e): e is string => Boolean(e)))];
@@ -225,7 +225,7 @@ export function evaluateVerify(
       const bp = beaconPlatform(h.url);
       return bp === want || (want === 'ad' && isKnownAdPlatform(bp));
     });
-    if (fired) return withBeacons({ ...base, fired: true, event: beaconPlatform(fired.url), interaction, evidence: fired });
+    if (fired) return withBeacons({ ...base, fired: true, ...(cap.kind === 'custom_event' ? { synthetic: true } : {}), event: beaconPlatform(fired.url), interaction, evidence: fired });
     // A GENERIC 'ad' tag is an undecodable Custom Template / Custom HTML we mapped by fallback: no
     // recognised beacon doesn't prove it's broken (it may be server-side, a non-pixel template, or a
     // beacon host we don't classify) → inconclusive. A SPECIFIC vendor (meta/tiktok/…) whose element

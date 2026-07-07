@@ -580,6 +580,11 @@ export interface VerifyTagVerdict {
   tagName: string;
   /** true = a matching /collect hit fired after the tag's trigger interaction. */
   fired: boolean;
+  /** true = the tag fired, but off a SYNTHETIC dataLayer event we pushed (a custom_event trigger) —
+   *  NOT a real user interaction. This proves the tag's config/trigger is correct, but NOT that the
+   *  site (e.g. a real form submit) actually emits that event. Real click/form/page-load fires leave
+   *  this false. Surfaced so form/custom-event "fires" aren't over-claimed as real-submit proof. */
+  synthetic?: boolean;
   /** true = we could NOT actually test this tag on this run (its CTA/form isn't on the page we
    *  drove, or it fires on a shared dataLayer event but keys off form-specific data a synthetic
    *  push can't supply). NOT a failure — the tag may well fire for a real user. The UI files these
