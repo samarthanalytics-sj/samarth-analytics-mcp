@@ -1,3 +1,9 @@
+## [1.240.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.239.0...v1.240.0) (2026-07-07)
+
+### Features
+
+* **desktop:** export a Measurement Installation Runbook (Markdown) ([f726784](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f72678412c4a90ccd9427f8cc4872f5bdafe483f))
+
 ## [1.239.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.238.0...v1.239.0) (2026-07-07)
 
 ### Features
