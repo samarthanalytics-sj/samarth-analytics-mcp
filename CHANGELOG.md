@@ -1,3 +1,9 @@
+## [1.222.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.221.0...v1.222.0) (2026-07-07)
+
+### Features
+
+* **verify:** condition-aware custom_event push — verify shared form_submission tags ([dbffc86](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dbffc866083d3a119e9052af7c7598c898597679))
+
 ## [1.221.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.220.3...v1.221.0) (2026-07-07)
 
 ### Features
