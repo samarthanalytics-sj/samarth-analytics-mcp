@@ -22,7 +22,8 @@ import { runVerifyDriver } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify } from './verify-tags';
 import { routeTagsToPages } from './verify-routing';
-import { toFormFillViews, localeOptions } from './form-fill-plan';
+import { toFormFillViews, localeOptions, matchFiredContainerTags } from './form-fill-plan';
+import { snapshotToVerifyInputs } from './container-verify';
 import { localeById } from '../../../../web-audit-mcp/src/agent/form-fill.js';
 import type { RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import { discoverSite } from './discover';
@@ -196,11 +197,23 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     const list = (Array.isArray(inp.fields) ? inp.fields : []) as FormSubmitFieldInput[];
     if (list.length === 0) return { ok: false, injected: false, previewAuth: false, filled: 0, submitted: false, error: 'No fields to submit.', events: [], beacons: [] };
     const o = opts ?? {};
-    return runFormSubmitDriver(
+    const res = await runFormSubmitDriver(
       target,
       { formId: String(inp.formId ?? ''), formClasses: String(inp.formClasses ?? ''), fields: list },
       { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}) },
     );
+    // Pair the fired GA4 events to the container's ACTUAL tags (best-effort — needs container context).
+    if (res.events.length > 0 && o.accountId && o.containerId && o.workspaceId) {
+      try {
+        const snap = await data.getGtmContainerSnapshot(o.accountId, o.containerId, o.workspaceId);
+        const { tags } = snapshotToVerifyInputs(snap);
+        const firedTags = matchFiredContainerTags(res.events, tags.map((t) => ({ tagName: t.tagName, eventName: t.eventName })));
+        if (firedTags.length > 0) return { ...res, firedTags };
+      } catch {
+        /* pairing is best-effort — return the raw events without it */
+      }
+    }
+    return res;
   });
 
   // Streaming variants — push 'suggestions:scan:event' (the RUNNING suggestion list +

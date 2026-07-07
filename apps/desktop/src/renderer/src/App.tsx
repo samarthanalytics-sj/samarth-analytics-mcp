@@ -1869,7 +1869,7 @@ function GtmToolsView({
       ) : tab === 'verify' ? (
         <>
           <VerifyPanel key={(active?.id ?? 'none') + ':vfy'} active={active} onError={onError} />
-          <FormFillReview key={(active?.id ?? 'none') + ':ffr'} onError={onError} />
+          <FormFillReview key={(active?.id ?? 'none') + ':ffr'} active={active} onError={onError} />
         </>
       ) : (
         <ServerContainerPanel key={(active?.id ?? 'none') + ':srv'} active={active} onError={onError} />
@@ -3723,7 +3723,10 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
 // Real-submit form review (Phase 1b): fetch a page's forms + their OWN fields (Option 2) and show
 // each with a locale-appropriate, EDITABLE test value + a Location picker. READ-ONLY — nothing is
 // submitted here; the actual submit + tag-firing check is Phase 2.
-function FormFillReview({ onError }: { onError: (m: string) => void }): JSX.Element {
+function FormFillReview({ active, onError }: { active: AccountView | undefined; onError: (m: string) => void }): JSX.Element {
+  const ctx = active?.gtmContext;
+  // Container context (optional) lets us PAIR the fired GA4 events to the actual container tags.
+  const canPair = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [url, setUrl] = useState('');
   const [localeId, setLocaleId] = useState('us');
   const [locales, setLocales] = useState<Array<{ id: string; label: string }>>([{ id: 'us', label: 'United States' }]);
@@ -3751,7 +3754,11 @@ function FormFillReview({ onError }: { onError: (m: string) => void }): JSX.Elem
     setResults((r) => { const n = { ...r }; delete n[form.index]; return n; });
     try {
       const fields = form.fields.map((f) => ({ selector: f.selector, type: f.type, value: valueOf(form.index, f) }));
-      const res = await window.desktop.tags.submitFormAndVerify(target, { formId: form.formId, formClasses: form.formClasses, fields }, snippet.trim() ? { containerSnippet: snippet.trim() } : undefined);
+      const submitOpts = {
+        ...(snippet.trim() ? { containerSnippet: snippet.trim() } : {}),
+        ...(canPair && ctx ? { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId! } : {}),
+      };
+      const res = await window.desktop.tags.submitFormAndVerify(target, { formId: form.formId, formClasses: form.formClasses, fields }, Object.keys(submitOpts).length ? submitOpts : undefined);
       setResults((r) => ({ ...r, [form.index]: res }));
     } catch (e) {
       setNote(e instanceof Error ? e.message : String(e));
@@ -3806,6 +3813,9 @@ function FormFillReview({ onError }: { onError: (m: string) => void }): JSX.Elem
           />
           <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
             US only for now; UK / AUS come later. The test email uses a traceable gtm-verify+…@example.com alias so your CRM can filter these.
+            {canPair
+              ? ' A real submit is paired to your container’s tags (it names which ones fired).'
+              : ' Pick a GTM account/container/workspace in the Chat tab to also name which container tags fired.'}
           </div>
           {note && (
             <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)' }}>{note}</div>
@@ -3884,6 +3894,18 @@ function FormFillReview({ onError }: { onError: (m: string) => void }): JSX.Elem
                       )}
                       {r.beacons.length > 0 && <span style={styles.muted}> · beacons: {r.beacons.join(', ')}</span>}
                       {ok && r.injected && !r.previewAuth && <span style={{ color: 'var(--c-amber)' }}> · snippet had no preview auth (published container loaded)</span>}
+                      {r.firedTags && r.firedTags.length > 0 && (
+                        <div style={{ marginTop: 4 }}>
+                          <span style={{ fontWeight: 600, color: 'var(--c-green)' }}>✓ FIRED container tag(s):</span>{' '}
+                          {r.firedTags.map((t) => t.tagName).join(', ')}
+                          <span style={styles.muted}> — verified on a real submit.</span>
+                        </div>
+                      )}
+                      {r.events.length > 0 && canPair && !(r.firedTags && r.firedTags.length > 0) && (
+                        <div style={{ ...styles.muted, marginTop: 4 }}>
+                          The event(s) fired, but no container tag matches them by event name — a tag may send a different GA4 event name than the event observed.
+                        </div>
+                      )}
                     </>
                   )}
                 </div>

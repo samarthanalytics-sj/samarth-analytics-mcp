@@ -17,6 +17,25 @@ export function localeOptions(): Array<{ id: string; label: string }> {
   return Object.values(LOCALES).map((l) => ({ id: l.id, label: l.label }));
 }
 
+/** Pair the GA4 events observed on a REAL submit to the container's tags (by event name), so the
+ *  operator sees WHICH actual container tags fired — a genuine FIRED, not a synthetic push. PURE. */
+export function matchFiredContainerTags(
+  events: string[],
+  tags: Array<{ tagName: string; eventName: string }>,
+): Array<{ tagName: string; eventName: string }> {
+  const seen = new Set(events.map((e) => (e ?? '').trim().toLowerCase()).filter(Boolean));
+  const out: Array<{ tagName: string; eventName: string }> = [];
+  const pushed = new Set<string>();
+  for (const t of tags) {
+    const en = (t.eventName ?? '').trim().toLowerCase();
+    if (en && seen.has(en) && !pushed.has(t.tagName)) {
+      out.push({ tagName: t.tagName, eventName: t.eventName });
+      pushed.add(t.tagName);
+    }
+  }
+  return out;
+}
+
 /** Convert raw forms (from driver.open) into per-form fill plans. `emailTag` makes the test email
  *  traceable + unique per run. PURE (deterministic given its inputs). */
 export function toFormFillViews(

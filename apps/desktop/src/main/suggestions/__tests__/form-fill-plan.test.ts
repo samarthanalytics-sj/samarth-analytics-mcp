@@ -1,7 +1,7 @@
 // Pure tests for the raw-forms → fill-plan bridge (no browser).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/form-fill-plan.test.ts
 
-import { toFormFillViews, localeOptions } from '../form-fill-plan';
+import { toFormFillViews, localeOptions, matchFiredContainerTags } from '../form-fill-plan';
 import type { RawForm, RawFormField } from '../../../../../web-audit-mcp/src/agent/forms.js';
 
 let passed = 0;
@@ -66,6 +66,29 @@ check('localeOptions includes US', localeOptions().some((l) => l.id === 'us'));
   check('unknown locale id falls back (still fills)', toFormFillViews([f], 'https://site.com', 'zz', 't')[0].fields[0].value.includes('gtm-verify+'));
 }
 
+// ── Phase 2b: pair fired GA4 events → the container's actual tags (by event name) ────────────────
+{
+  const tags = [
+    { tagName: 'GA4 - Event - Get In Touch Form Tag', eventName: 'get_in_touch_form' },
+    { tagName: 'GA4 - Event - Contact us Form Tag', eventName: 'contact_us_form' },
+    { tagName: 'GA4 - Event - CTA Click Tag', eventName: 'cta_click' },
+  ];
+  const matched = matchFiredContainerTags(['get_in_touch_form', 'form_submission'], tags);
+  check('pairing: matches a tag by its event name', matched.length === 1 && matched[0].tagName.includes('Get In Touch'));
+  check('pairing: is case-insensitive', matchFiredContainerTags(['GET_IN_TOUCH_FORM'], tags).length === 1);
+  check('pairing: no match → empty', matchFiredContainerTags(['newsletter_signup'], tags).length === 0);
+  check('pairing: empty events → empty', matchFiredContainerTags([], tags).length === 0);
+  check('pairing: ignores tags with no event name', matchFiredContainerTags(['x'], [{ tagName: 'Blank', eventName: '' }]).length === 0);
+}
+{
+  // Two tags share one event name → both named (dedup is by tagName, not event name).
+  const tags = [
+    { tagName: 'Tag A', eventName: 'generate_lead' },
+    { tagName: 'Tag B', eventName: 'generate_lead' },
+  ];
+  check('pairing: two tags on one event → both named', matchFiredContainerTags(['generate_lead'], tags).length === 2);
+}
+
 console.log(`\nform-fill-plan: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 13) { console.error(`expected >= 13 checks, got ${passed}`); process.exit(1); }
+if (passed < 19) { console.error(`expected >= 19 checks, got ${passed}`); process.exit(1); }

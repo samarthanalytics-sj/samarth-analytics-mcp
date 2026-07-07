@@ -721,6 +721,11 @@ export interface SubmitFormInputView {
 export interface SubmitFormVerifyOptions {
   /** GTM Preview snippet so DRAFT tags load; omit to test the live/published container. */
   containerSnippet?: string;
+  /** When set, after the submit the fired GA4 events are paired to THIS container's tags (by event
+   *  name) so the result names the actual tags that fired. Best-effort; omit to skip pairing. */
+  accountId?: string;
+  containerId?: string;
+  workspaceId?: string;
 }
 /** Result of a REAL form submission: what analytics events/beacons the tag fired. The form's POST is
  *  delivered (a real submission); analytics hits are captured+aborted (no GA4/ad pollution). */
@@ -736,6 +741,9 @@ export interface SubmitFormVerifyResult {
   events: string[];
   /** Distinct analytics beacon hosts observed. */
   beacons: string[];
+  /** The container's ACTUAL tags whose event name matches an observed event — paired when the caller
+   *  passed container context. These fired on the REAL submit (a genuine FIRED, not synthetic). */
+  firedTags?: Array<{ tagName: string; eventName: string }>;
 }
 
 /* ── Container audit (the "Container audit" panel) ── */
