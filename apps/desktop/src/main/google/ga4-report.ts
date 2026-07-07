@@ -166,7 +166,9 @@ function channelPerfRows(baseline: Ga4Baseline | null, currency: string): Array<
 function landingPageRows(baseline: Ga4Baseline | null, currency: string): Array<{ page: string; sessions: string; convRate: string; revenue: string; engagement: string }> {
   const cur = currency ? `${currency} ` : '';
   return (baseline?.landingPages ?? []).slice(0, 10).map((p) => ({
-    page: p.page || '(not set)',
+    // The report must never reproduce PII a broken site flow put in a URL - mask it here so EVERY
+    // surface (table, PDF, Word) shows the redacted path; the PII finding flags it separately.
+    page: maskPii(p.page || '(not set)'),
     sessions: num(p.sessions),
     convRate: `${(p.convRate * 100).toFixed(1)}%`,
     revenue: p.revenue > 0 ? `${cur}${num(Math.round(p.revenue))}` : '—',
@@ -455,6 +457,16 @@ const GATEWAY_RE = /(razorpay|paypal|stripe|payu\b|cashfree|braintree|klarna|cca
 const PAID_CAMPAIGN_RE = /(shopping|perf(ormance)?[\s_-]*max|p-?max|search|display|video|discovery|demand[\s_-]*gen|remarketing|retargeting|adv\+|^\d{6,}$)/i;
 const PAID_CHANNEL_RE = /^(paid[\s_]|cross[\s_-]*network|display$)/i;
 
+// PII reaching GA4 in page URLs: an email address anywhere in the path/query (raw or %40-encoded),
+// or a personal-data query parameter with a value. Matched against the landing pages the audit
+// already fetched; the finding always shows MASKED examples so the report never re-leaks the PII.
+const PII_EMAIL_RE = /[a-z0-9._%+-]+(?:@|%40)[a-z0-9.-]+\.[a-z]{2,}/i;
+const PII_PARAM_RE = /[?&](email|e-?mail|phone|tel|mobile|first_?name|last_?name|full_?name|address|postcode|zip_?code)=([^&#]+)/i;
+const maskPii = (page: string): string =>
+  page
+    .replace(new RegExp(PII_EMAIL_RE.source, 'gi'), '***@***')
+    .replace(new RegExp(PII_PARAM_RE.source, 'gi'), (_m, key: string) => `?${key}=***`);
+
 /** Anti-lie checks computed straight off the reporting data (both DETERMINISTIC, state confirmed):
  *  1. Concentration — one bucket (week/month) holding most of a channel that carries a meaningful
  *     share of all sessions: the headline session count and prior-period comparison then describe an
@@ -465,7 +477,9 @@ const PAID_CHANNEL_RE = /^(paid[\s_]|cross[\s_-]*network|display$)/i;
  *     paid channel shows means the report contains two irreconcilable revenue pictures.
  *  4. Invalid-traffic signature — market engagement splitting into two clean populations (the same
  *     bimodality detector the Section-6 evidence chart uses): the low cluster is where bot/proxy/junk
- *     traffic concentrates, and when it carries a material session share it inflates the totals. */
+ *     traffic concentrates, and when it carries a material session share it inflates the totals.
+ *  5. PII in page URLs — email addresses or personal-data query params reaching GA4 violate Google's
+ *     terms and create GDPR/DPDP exposure; the report shows MASKED examples, never the PII itself. */
 function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCounts | null, campaigns?: Ga4CampaignReport | null): FindingRow[] {
   const out: FindingRow[] = [];
   // The spike result is held so the reconciliation finding below can cross-reference it: untagged paid
@@ -529,6 +543,26 @@ function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCoun
           businessRisk: 'Session totals and market comparisons inflated by traffic that cannot buy',
         });
       }
+    }
+  }
+
+  // 5. PII in page URLs. Deterministic regex over the top landing pages the audit already fetched.
+  // Google's GA terms PROHIBIT sending PII; beyond the ToS risk this is GDPR/DPDP exposure and may
+  // require a data-deletion request. Examples are MASKED - the report must not repeat the PII.
+  if (baseline?.landingPages?.length) {
+    const hits = baseline.landingPages.filter((lp) => PII_EMAIL_RE.test(lp.page) || PII_PARAM_RE.test(lp.page));
+    if (hits.length) {
+      const sessions = hits.reduce((sum, h) => sum + h.sessions, 0);
+      const examples = hits.slice(0, 3).map((h) => `"${maskPii(h.page)}"`).join(', ');
+      out.push({
+        severity: 'high',
+        category: 'pii',
+        area: 'Privacy',
+        message: `PII is being sent to GA4 in page URLs: ${hits.length} of your top landing pages carry an email address or a personal-data query parameter (masked examples: ${examples}; ${sessions.toLocaleString('en-US')} sessions). Google's Analytics terms prohibit sending PII, and this is GDPR/DPDP exposure - the collected values may need a data-deletion request.`,
+        recommendation: 'Redact PII before the hit is sent: strip or hash these query parameters in the tag (GTM URL-scrubbing variable or a redact rule), fix the site flows that put emails/phones in URLs, then submit a GA4 data-deletion request for the affected ranges.',
+        state: 'confirmed',
+        businessRisk: 'Google ToS violation + GDPR/DPDP exposure; historical data may need deletion',
+      });
     }
   }
 
