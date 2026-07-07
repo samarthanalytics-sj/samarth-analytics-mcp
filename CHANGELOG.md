@@ -1,3 +1,9 @@
+## [1.237.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.236.0...v1.237.0) (2026-07-07)
+
+### Features
+
+* **verify:** Phase 2 — real form submit + tag-firing check (form-scoped, safety-reviewed) ([3cd8ca4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3cd8ca45034cf8f980ae609f18fc3946b225f786))
+
 ## [1.236.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.235.0...v1.236.0) (2026-07-07)
 
 ### Features
