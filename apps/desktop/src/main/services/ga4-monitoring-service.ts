@@ -198,6 +198,15 @@ export class Ga4MonitoringService {
         propertyLabel: (t as Ga4MonitorTarget).propertyLabel ? String((t as Ga4MonitorTarget).propertyLabel).slice(0, 200) : '',
         enabled: (t as Ga4MonitorTarget).enabled === undefined ? true : Boolean((t as Ga4MonitorTarget).enabled),
         slackLabel: (t as Ga4MonitorTarget).slackLabel ? String((t as Ga4MonitorTarget).slackLabel).slice(0, 120) : undefined,
+        // Per-target notification choices. Targets from BEFORE per-property preferences are seeded
+        // from the old global toggles, so nobody's alerts silently stop (or start) on upgrade.
+        notify: (t as Ga4MonitorTarget).notify
+          ? {
+              alerts: Boolean((t as Ga4MonitorTarget).notify!.alerts),
+              digest: Boolean((t as Ga4MonitorTarget).notify!.digest),
+              audit: Boolean((t as Ga4MonitorTarget).notify!.audit),
+            }
+          : { alerts: c?.slackEnabled !== false, digest: Boolean(c?.digestEnabled), audit: Boolean(c?.auditEnabled) },
         accountId: acct,
         lastDigestAt: Number.isFinite(Number((t as Ga4MonitorTarget).lastDigestAt)) && Number((t as Ga4MonitorTarget).lastDigestAt) > 0 ? Number((t as Ga4MonitorTarget).lastDigestAt) : undefined,
         lastAuditAt: Number.isFinite(Number((t as Ga4MonitorTarget).lastAuditAt)) && Number((t as Ga4MonitorTarget).lastAuditAt) > 0 ? Number((t as Ga4MonitorTarget).lastAuditAt) : undefined,
@@ -453,7 +462,7 @@ export class Ga4MonitoringService {
 
         let slackSent = 0;
         let slackError: string | null = null;
-        if (this.config.slackEnabled && newAlerts.length) {
+        if (target.notify?.alerts !== false && newAlerts.length) {
           // One property, one channel: the property's OWN webhook wins; the account default is the
           // fallback for properties that never connected their own.
           const webhook = this.webhookForTarget(active.id, target.propertyId);
@@ -485,14 +494,14 @@ export class Ga4MonitoringService {
         // with its executive summary posted to the property's own channel. Runs BEFORE the digest so
         // a first sweep with both enabled posts audit-then-digest deterministically. lastAuditAt is
         // persisted even when Slack is off/unconnected - the run happened; do not re-burn the quota.
-        if (this.config.auditEnabled && this.deps.runAudit) {
+        if (target.notify?.audit && this.deps.runAudit) {
           const auditDue = !target.lastAuditAt || at - target.lastAuditAt >= AUDIT_EVERY_MS;
           if (auditDue) {
             try {
               const exec = await this.deps.runAudit(target.propertyId, this.config.days);
               target.lastAuditAt = at;
               if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
-              const auditHook = this.config.slackEnabled ? this.webhookForTarget(active.id, target.propertyId) : null;
+              const auditHook = this.webhookForTarget(active.id, target.propertyId);
               if (auditHook) {
                 await sendSlackWebhook(auditHook, buildSlackAuditPayload(target.propertyLabel || target.propertyId, exec), { fetchImpl: this.deps.slackFetch });
               }
@@ -506,7 +515,7 @@ export class Ga4MonitoringService {
         // Weekly digest: post THIS property's health to its own channel even when nothing is wrong,
         // so a silent channel proves the monitor is alive. One per property per 7 days, persisted on
         // the target so restarts don't re-send; never counted as lastSlackAt (that's alerts only).
-        if (this.config.slackEnabled && this.config.digestEnabled) {
+        if (target.notify?.digest) {
           const due = !target.lastDigestAt || at - target.lastDigestAt >= DIGEST_EVERY_MS;
           const webhook = due ? this.webhookForTarget(active.id, target.propertyId) : null;
           if (due && webhook) {
