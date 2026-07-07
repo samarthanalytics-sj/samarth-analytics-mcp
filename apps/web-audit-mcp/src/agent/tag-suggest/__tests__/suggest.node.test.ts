@@ -923,5 +923,58 @@ check('meta: an "Add to Cart" CTA → Meta "AddToCart"; a generic outbound click
   check('overlap: appends to an existing note', withNote.note.startsWith('prior note.') && /contained in another CTA/.test(withNote.note));
 }
 
+// ── install-plan: "already tracked" awareness (Phase 2) ───────────────────────
+// A custom_event suggestion whose event the SITE already pushes (in input.dataLayerEvents) gets a
+// provider-native install requirement ("nothing to install"); one whose event is NOT present keeps the
+// generic site-code requirement.
+{
+  // An ecommerce site emits the GA4 funnel as custom_event tags with a site-code install plan by default.
+  const ecomInput: SuggestInput = {
+    siteHost: 'shop.com',
+    forms: [],
+    elements: [],
+    websiteType: 'ecommerce',
+    dataLayerEvents: ['add_to_cart', 'page_view'], // the store already pushes add_to_cart
+  };
+  const ecom = buildSuggestions(ecomInput);
+  const addToCart = ecom.find((s) => s.eventName === 'add_to_cart');
+  const purchase = ecom.find((s) => s.eventName === 'purchase');
+  check('install: add_to_cart IS pushed → requires[0].kind === provider-native',
+    addToCart?.install?.requires[0]?.kind === 'provider-native',
+    addToCart?.install?.requires[0]?.kind);
+  check('install: add_to_cart already-tracked summary', addToCart?.install?.summary === 'Already pushed to the dataLayer - nothing to install.');
+  check('install: add_to_cart detail names the event', (addToCart?.install?.requires[0] as { detail?: string })?.detail?.includes('add_to_cart') === true);
+  check('install: purchase NOT pushed → stays site-code', purchase?.install?.requires[0]?.kind === 'site-code',
+    purchase?.install?.requires[0]?.kind);
+
+  // Same store WITHOUT the dataLayerEvents union → add_to_cart stays site-code (no refinement).
+  const ecomNoDl = buildSuggestions({ ...ecomInput, dataLayerEvents: undefined });
+  const addToCartNoDl = ecomNoDl.find((s) => s.eventName === 'add_to_cart');
+  check('install: no dataLayerEvents → add_to_cart stays site-code', addToCartNoDl?.install?.requires[0]?.kind === 'site-code');
+
+  // A FORM must NEVER get the already-tracked downgrade — the refinement is for GENERIC (non-form) plans
+  // only. An unknown-vendor form (jotform → a site-code listener TODO) whose custom_event happens to be in
+  // the load-time dataLayer would otherwise wrongly read "nothing to install" and drop the listener it needs.
+  const jfForm = { page: '/contact', purpose: 'contact' as const, action: 'https://form.jotform.com/x', provider: { vendor: 'jotform' as const, confidence: 'high' as const, evidence: 'jotform' }, formId: 'jf-1' };
+  const jfBase = buildSuggestions({ siteHost: 'x.com', forms: [jfForm], elements: [] }).find((s) => s.trigger.kind === 'custom_event');
+  const jfEvent = jfBase?.trigger.eventName ?? 'form_submit';
+  const jfWithDl = buildSuggestions({ siteHost: 'x.com', forms: [jfForm], elements: [], dataLayerEvents: [jfEvent] }).find((s) => s.trigger.kind === 'custom_event');
+  check('install: a FORM is NOT downgraded by the already-tracked refinement even when its event is in the dataLayer',
+    !!jfWithDl?.install && jfWithDl.install.requires.every((r) => r.kind !== 'provider-native'));
+
+  // Form install plans are NEVER touched by the refinement (they set install via buildFormInstallPlan).
+  const formInput: SuggestInput = {
+    siteHost: 'wp.com',
+    forms: [{ page: '/contact', purpose: 'contact', action: '/x', method: 'post', provider: { vendor: 'contactform7', confidence: 'high', evidence: 'class' }, fields: [{ type: 'email', name: 'email', required: true }] }],
+    elements: [],
+    dataLayerEvents: ['cf7submission'], // even though the form's dlEvent is present, the FORM plan is untouched
+  };
+  const formOut = buildSuggestions(formInput);
+  const formTag = formOut.find((s) => s.trigger.kind === 'custom_event');
+  check('install: form custom_event plan is NOT downgraded (listener-tag preserved)',
+    !!formTag?.install?.requires.some((r) => r.kind === 'listener-tag'),
+    JSON.stringify(formTag?.install?.requires.map((r) => r.kind)));
+}
+
 console.log(`\nTag-suggest: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

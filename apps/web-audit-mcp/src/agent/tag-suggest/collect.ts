@@ -159,7 +159,63 @@ export function collectPageInBrowser(): PageScanRaw {
       /* cross-origin iframe — inaccessible */
     }
   }
-  return { elements, signals: { scriptSrcs: scriptSrcs.slice(0, 300), classNames: Array.from(classNames), selectorsPresent: Array.from(selectorsPresent), iframeSrcs: iframeSrcs.slice(0, 80) } };
+
+  // dataLayer snapshot: the distinct string `event` values the SITE ITSELF already pushes (mostly
+  // load-time pageview/consent/config events). Used later to mark a suggestion "already pushed to the
+  // dataLayer — nothing to install". Guarded end-to-end (a getter throwing, a frozen array, etc.) so a
+  // read failure degrades to [] rather than aborting the whole collect.
+  const dataLayerEvents: string[] = [];
+  try {
+    const dl = (window as unknown as { dataLayer?: unknown }).dataLayer;
+    if (Array.isArray(dl)) {
+      const seenEv = new Set<string>();
+      for (const entry of dl) {
+        if (seenEv.size >= 40) break;
+        try {
+          const ev = entry && typeof (entry as { event?: unknown }).event === 'string' ? (entry as { event: string }).event : '';
+          if (ev && !seenEv.has(ev)) seenEv.add(ev);
+        } catch {
+          /* a hostile getter on this entry — skip it */
+        }
+      }
+      dataLayerEvents.push(...seenEv);
+    }
+  } catch {
+    /* window.dataLayer access threw — leave dataLayerEvents empty */
+  }
+
+  // Framework marker: the FIRST cheap DOM/window signal that identifies the JS framework. Order matters —
+  // Next.js is a React app, so it must be checked before the generic React signal.
+  let framework: string | undefined;
+  try {
+    const w = window as unknown as Record<string, unknown>;
+    const has = (sel: string): boolean => {
+      try {
+        return !!document.querySelector(sel);
+      } catch {
+        return false;
+      }
+    };
+    if (w.__NEXT_DATA__ || has('#__next')) framework = 'next';
+    else if (has('#___gatsby')) framework = 'gatsby';
+    else if (w.ng || has('[ng-version]')) framework = 'angular';
+    else if (w.Vue || has('[data-v-app]') || (has('#app') && !!(document.querySelector('#app') as unknown as { __vue__?: unknown } | null)?.__vue__)) framework = 'vue';
+    else if (w.React || has('[data-reactroot],#root')) framework = 'react';
+  } catch {
+    /* framework probe threw — leave undefined */
+  }
+
+  return {
+    elements,
+    signals: {
+      scriptSrcs: scriptSrcs.slice(0, 300),
+      classNames: Array.from(classNames),
+      selectorsPresent: Array.from(selectorsPresent),
+      iframeSrcs: iframeSrcs.slice(0, 80),
+      dataLayerEvents,
+      ...(framework ? { framework } : {}),
+    },
+  };
 }
 
 /* ── PURE classification (unit-tested, no browser) ── */
@@ -430,6 +486,11 @@ export function buildSuggestInput(pages: PageScan[], siteHost: string): SuggestI
   // ecommerce site unlocks the ecommerce funnel event suggestions; a non-ecommerce site emits none.
   const scriptSrcs = pages.flatMap((p) => p.signals.scriptSrcs);
   const { isEcommerce, evidence } = detectEcommerceSignals(forms, elements, pages, scriptSrcs);
+  // Deduped union of the dataLayer `event` values the SITE already pushes — threaded to buildSuggestions
+  // so a custom_event tag whose event is already pushed becomes "already tracked, nothing to install".
+  const dlEventSet = new Set<string>();
+  for (const p of pages) for (const ev of p.signals.dataLayerEvents ?? []) if (ev) dlEventSet.add(ev);
+  const dataLayerEvents = [...dlEventSet];
   return {
     siteHost,
     forms,
@@ -437,6 +498,7 @@ export function buildSuggestInput(pages: PageScan[], siteHost: string): SuggestI
     ...(videoEmbeds.length ? { videoEmbeds } : {}),
     websiteType: isEcommerce ? 'ecommerce' : 'non_ecommerce',
     ...(evidence.length ? { ecommerceEvidence: evidence } : {}),
+    ...(dataLayerEvents.length ? { dataLayerEvents } : {}),
   };
 }
 

@@ -1566,8 +1566,31 @@ export function buildSuggestions(
   // "nothing to install"; a custom_event → the exact dataLayer push the site must add, incl. the GA4
   // ecommerce shape) gets buildTriggerInstallPlan here in ONE place. Done on the GA4 list BEFORE the
   // platform derivers run, so each derived Meta/Ads/etc. copy inherits `install` via its spread.
+  // Already-tracked awareness: the distinct dataLayer events the SITE already pushes (from the scan).
+  // A custom_event tag whose event is in this set needs NO new site code — the push already exists — so
+  // its generic "site-code" requirement is downgraded to "provider-native". Form install plans are built
+  // separately (buildFormInstallPlan) and are never touched here.
+  const alreadyPushed = new Set((input.dataLayerEvents ?? []).filter(Boolean));
   for (const s of ga4Suggestions) {
-    if (!s.install) s.install = buildTriggerInstallPlan({ kind: s.trigger.kind, eventName: s.eventName, label: s.label });
+    // Forms already carry their own (richer) install plan from buildFormInstallPlan — NEVER override it,
+    // and never apply the already-tracked downgrade to a form: an unknown-vendor form's generic
+    // 'form_submit' dlEvent could coincidentally be in the load-time dataLayer and wrongly suppress the
+    // listener it truly needs. The downgrade is only ever safe for the GENERIC (non-form) plans below.
+    if (s.install) continue;
+    s.install = buildTriggerInstallPlan({ kind: s.trigger.kind, eventName: s.eventName, label: s.label });
+    if (s.trigger.kind === 'custom_event') {
+      const event = (s.trigger.eventName ?? s.eventName ?? '').trim();
+      // Only when the plan WOULD otherwise require site code AND the event is already pushed by the site.
+      const idx = s.install.requires.findIndex((r) => r.kind === 'site-code');
+      if (event && alreadyPushed.has(event) && idx >= 0) {
+        s.install.requires[idx] = {
+          kind: 'provider-native',
+          provider: 'site',
+          detail: `Your site already pushes the "${event}" dataLayer event, so no new site code is needed - just create this trigger + tag.`,
+        };
+        s.install.summary = 'Already pushed to the dataLayer - nothing to install.';
+      }
+    }
   }
 
   // Which platforms to emit (default GA4 only, so existing callers are unchanged). Every non-GA4

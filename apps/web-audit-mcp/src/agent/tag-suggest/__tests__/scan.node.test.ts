@@ -108,9 +108,32 @@ check('report: notScanned + notes carried through', report.notScanned.length ===
     reasonFor('https://acme.com/contact').length === 1 && reasonFor('https://acme.com/contact')[0].reason.startsWith('scan failed'));
 }
 
+// ── report.existingTracking is populated (Phase 2) ────────────────────────────
+{
+  const trackedSig: PageSignals = {
+    scriptSrcs: ['https://www.googletagmanager.com/gtm.js?id=GTM-XYZ', 'https://www.googletagmanager.com/gtag/js?id=G-TRACK99', 'https://connect.facebook.net/en_US/fbevents.js'],
+    classNames: [], selectorsPresent: [],
+    dataLayerEvents: ['gtm.js', 'page_view'],
+    framework: 'next',
+  };
+  const trackedReport = assembleTagReport({
+    site: 'https://t.com', siteHost: 't.com', scannedAt: 't', pagesCrawled: 1,
+    pageScans: [{ page: '/', signals: trackedSig, forms: [], elements: [] }],
+    notScanned: [], notes: [],
+  });
+  const et = trackedReport.existingTracking;
+  check('report: existingTracking populated', !!et);
+  check('report: existingTracking detects gtm + ga4 + meta',
+    et?.gtm === true && et?.ga4 === true && et?.metaPixel === true, JSON.stringify(et));
+  check('report: existingTracking extracts G-TRACK99', et?.ga4MeasurementIds.includes('G-TRACK99') === true);
+  check('report: existingTracking carries dataLayerEvents + framework',
+    et?.dataLayerEvents.includes('page_view') === true && et?.framework === 'next');
+}
+
 // Empty input is a valid (empty) report, not a crash.
 const empty = assembleTagReport({ site: 's', siteHost: 'h', scannedAt: 't', pagesCrawled: 0, pageScans: [], notScanned: [], notes: [] });
 check('report: empty scan → zero suggestions, no throw', empty.summary.suggestions === 0 && empty.suggestions.length === 0 && empty.pages.length === 0);
+check('report: empty scan → existingTracking present but all-false', empty.existingTracking?.gtm === false && empty.existingTracking?.dataLayerEvents.length === 0);
 
 // ── debug passthrough (opt-in) ────────────────────────────────────────────────
 check('report: debug omitted by default', report.debug === undefined);

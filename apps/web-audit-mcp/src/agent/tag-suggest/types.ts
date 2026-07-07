@@ -19,6 +19,10 @@ export interface PageSignals {
   /** <iframe src> values — lets us detect a CROSS-ORIGIN embedded provider form
    *  (HubSpot/Typeform/Marketo) whose fields we can't read. */
   iframeSrcs?: string[];
+  /** distinct dataLayer `event` values the site already pushes (mostly load-time). */
+  dataLayerEvents?: string[];
+  /** detected JS framework (next/react/vue/angular/gatsby). */
+  framework?: string;
 }
 
 export type FormProvider =
@@ -125,6 +129,10 @@ export interface SuggestInput {
   websiteType?: 'ecommerce' | 'non_ecommerce';
   /** Human-readable signals that led to the ecommerce classification (for the UI's "why" tooltip). */
   ecommerceEvidence?: string[];
+  /** Distinct dataLayer `event` values the SITE already pushes (union across the scanned pages, set by
+   *  buildSuggestInput). Lets the install-plan step mark a custom_event suggestion whose event is
+   *  already pushed as "already tracked — nothing to install" instead of requiring new site code. */
+  dataLayerEvents?: string[];
 }
 
 export type TriggerKind = 'link_click' | 'all_clicks' | 'custom_event' | 'pageview' | 'form_submit' | 'youtube_video';
