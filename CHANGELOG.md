@@ -1,3 +1,9 @@
+## [1.226.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.225.0...v1.226.0) (2026-07-07)
+
+### Features
+
+* **desktop:** weekly Slack health digest per property (opt-in) ([59c96ce](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/59c96ce7a1123800ed612af6f01e79450bc8e967))
+
 ## [1.225.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.224.0...v1.225.0) (2026-07-07)
 
 ### Features
