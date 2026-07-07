@@ -1442,6 +1442,33 @@ const PLATFORM_DERIVERS: Record<Exclude<SuggestPlatform, 'ga4'>, (ga4: Suggested
  *  platforms to emit: 'ga4' returns the GA4 tags; every other selected platform returns its derived
  *  counterparts (each reusing its GA4 source's trigger name, so the trigger is SHARED on create). A
  *  non-'ga4' selection computes GA4 internally but does not return it. */
+/** Flag near-duplicate click tags: a shorter EQUALS click-text that appears as a whole phrase inside
+ *  another CTA's text (e.g. "Free Audit" inside "Get Free Audit"). The shorter tag may never fire (the
+ *  real button is the longer text) or may double-count — so it gets a note to verify the exact label.
+ *  Mutates the suggestions in place. PURE otherwise. */
+export function flagOverlappingClickTexts(suggestions: SuggestedTag[]): void {
+  const esc = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const clicks = suggestions.filter(
+    (s) =>
+      (s.trigger.kind === 'link_click' || s.trigger.kind === 'all_clicks') &&
+      Boolean(s.trigger.clickTextValue) &&
+      (s.trigger.clickTextOperator ?? 'equals') === 'equals',
+  );
+  for (const a of clicks) {
+    const at = (a.trigger.clickTextValue ?? '').trim().toLowerCase();
+    if (at.length < 3) continue;
+    const inside = clicks.find((b) => {
+      if (b === a) return false;
+      const bt = (b.trigger.clickTextValue ?? '').trim().toLowerCase();
+      return bt.length > at.length && new RegExp(`(^|\\s)${esc(at)}(\\s|$)`).test(bt);
+    });
+    if (inside) {
+      const warn = `⚠ "${a.trigger.clickTextValue}" is contained in another CTA "${inside.trigger.clickTextValue}" — an "equals" Click Text trigger on the shorter text may NOT fire (if the real button is the longer one) or may double-count with it. Verify the exact button label, or use "contains".`;
+      a.note = a.note ? `${a.note} ${warn}` : warn;
+    }
+  }
+}
+
 export function buildSuggestions(
   input: SuggestInput,
   opts: { full?: boolean; platforms?: SuggestPlatform[] } = {},
@@ -1489,6 +1516,7 @@ export function buildSuggestions(
       Number(a.enhancedMeasurementOverlap) - Number(b.enhancedMeasurementOverlap) ||
       a.label.localeCompare(b.label)
   );
+  flagOverlappingClickTexts(ranked); // warn on near-duplicate click tags (one text inside another)
   // The GA4 list (the base Google tag is prepended only in full mode).
   const ga4Suggestions = opts.full ? [ga4ConfigSuggestion(), ...ranked] : ranked;
 
