@@ -1,3 +1,13 @@
+## [1.251.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.250.0...v1.251.0) (2026-07-07)
+
+### Features
+
+* **verify:** show the captured network log (Meta pixel · GA4 · sGTM relay) in results ([d002520](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d0025203e1d3e3b9b38803aa1f81a0c7817b4669))
+
+### Bug Fixes
+
+* **verify:** recognise TikTok's web pixel path (/i18n/pixel), not just /api ([a520b3a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a520b3a22395f4589278126a6abe0a5eab85b5e6))
+
 ## [1.250.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.249.0...v1.250.0) (2026-07-07)
 
 ### Features
