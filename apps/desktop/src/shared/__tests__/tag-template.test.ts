@@ -1,7 +1,7 @@
 // Pure tests for the "GTM Structure - GA4 Events" template mapping (the table view
 // + CSV download share this). Run: tsx src/shared/__tests__/tag-template.test.ts
 
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanStatus, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator, CONDITION_LABELS } from '../tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanStatus, installPlanProgress, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator, CONDITION_LABELS } from '../tag-template';
 import type { SuggestedTagView } from '../ipc';
 
 let passed = 0;
@@ -297,6 +297,33 @@ check('status: mixed still counts every requirement kind', mixed.listenerCount =
 // The chip is shown exactly when installPlanNeedsAction is true — i.e. any status except 'ready'.
 check('status: needsAction ⇔ status !== ready (ready)', installPlanNeedsAction(nativeClick.install) === (installPlanStatus(nativeClick.install).kind !== 'ready'));
 check('status: needsAction ⇔ status !== ready (listener)', installPlanNeedsAction(formA.install) === (installPlanStatus(formA.install).kind !== 'ready'));
+
+// ── installPlanProgress — the chip's "done" progress against a per-requirement check-off set ────────
+// A site-code plan (purchase, requires[0] is the site-code): not done → still required outstanding;
+// once index 0 is checked off → allRequiredDone + fullyDone.
+const codeUndone = installPlanProgress(purchase.install, {});
+check('progress: site-code not checked → 1 required, 0 done, not allRequiredDone', codeUndone.requiredTotal === 1 && codeUndone.requiredDone === 0 && codeUndone.allRequiredDone === false);
+const codeDone = installPlanProgress(purchase.install, { 0: true });
+check('progress: site-code checked → allRequiredDone + fullyDone', codeDone.allRequiredDone === true && codeDone.fullyDone === true);
+// A listener plan (formA, requires[0] is the listener): marking index 0 done → fully done.
+check('progress: listener not created → not done', installPlanProgress(formA.install, {}).allRequiredDone === false);
+check('progress: listener marked done → fully done', installPlanProgress(formA.install, { 0: true }).fullyDone === true);
+// attrForm = native (index 0) + OPTIONAL html-attribute (index 1). No required steps, so allRequiredDone
+// is vacuously true from the start; fullyDone only once the optional tip is checked off.
+const optUndone = installPlanProgress(attrForm.install, {});
+check('progress: optional-only → allRequiredDone true but not fullyDone until the tip is applied', optUndone.requiredTotal === 0 && optUndone.allRequiredDone === true && optUndone.fullyDone === false && optUndone.optionalTotal === 1);
+check('progress: optional checked off → fullyDone', installPlanProgress(attrForm.install, { 1: true }).fullyDone === true);
+// A native-only plan has no actionable steps → everything is vacuously done.
+check('progress: native-only → fullyDone (nothing to do)', installPlanProgress(nativeClick.install, {}).fullyDone === true && installPlanProgress(nativeClick.install, {}).requiredTotal === 0);
+// Mixed listener + site-code + optional: both required must be checked before allRequiredDone.
+const mixedPlan = { requires: [
+  { kind: 'listener-tag' as const, event: 'form_submit', tag: { name: 'L', html: '<script></script>', fires: 'all_pages' as const }, detail: 'y' },
+  { kind: 'site-code' as const, snippet: '<script></script>', where: 'z', detail: 'w' },
+  { kind: 'html-attribute' as const, selector: 'form', attribute: 'id', value: '<id>', detail: 'x' },
+], summary: 's' };
+check('progress: mixed, only listener done → not allRequiredDone', installPlanProgress(mixedPlan, { 0: true }).allRequiredDone === false);
+check('progress: mixed, both required done → allRequiredDone but not fullyDone (optional left)', (() => { const p = installPlanProgress(mixedPlan, { 0: true, 1: true }); return p.allRequiredDone === true && p.fullyDone === false; })());
+check('progress: mixed, all three done → fullyDone', installPlanProgress(mixedPlan, { 0: true, 1: true, 2: true }).fullyDone === true);
 
 console.log(`\ntag-template: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

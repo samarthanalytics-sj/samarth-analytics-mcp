@@ -29,7 +29,7 @@ import type {
   FormTagVerifyPlanResult,
   SubmitFormVerifyResult,
 } from '../../shared/ipc';
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanStatus, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen, type InstallStatus } from '../../shared/tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
@@ -1391,6 +1391,10 @@ const tplStyles: Record<string, React.CSSProperties> = {
   installInfo: { fontSize: 13, color: 'var(--text-muted)', cursor: 'help', flexShrink: 0 },
   // "Show code" disclosure — collapses a listener/site-code snippet so the panel stays short.
   installDisclosure: { background: 'transparent', border: 'none', color: 'var(--c-blue)', cursor: 'pointer', fontSize: 11, padding: '2px 0', marginTop: 4 },
+  // "Mark done" check-off on site-code / optional rows — a manual toggle the user ticks once the work is
+  // done on their site (the app can't verify site-side code), turning the row + the row chip green.
+  installCheck: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-dim)', cursor: 'pointer', marginTop: 8, userSelect: 'none' },
+  installDoneText: { color: 'var(--c-green)', fontWeight: 600 },
 };
 
 // Fixed option lists for the editable Trigger-when Variable / Condition selects.
@@ -1464,26 +1468,33 @@ function CollapsibleCode({ code, ariaLabel }: { code: string; ariaLabel: string 
   );
 }
 
-/** Colour + label for an install-status chip. Tones map to the theme's status ramps: green = ready,
- *  blue = a 1-click listener tag, amber = developer site code. */
-function installChipView(status: InstallStatus): { label: string; bg: string; border: string; color: string } {
-  switch (status.kind) {
-    case 'listener':
-      return { label: `${status.listenerCount} listener tag${status.listenerCount === 1 ? '' : 's'} to create`, bg: 'var(--c-blue-bg)', border: 'var(--c-blue-border)', color: 'var(--c-blue)' };
-    case 'code':
-      return { label: 'Needs site code', bg: 'var(--c-amber-bg)', border: 'var(--c-amber-border)', color: 'var(--c-amber)' };
-    case 'ready-tip':
-      return { label: `Ready · ${status.optionalCount} optional tip${status.optionalCount === 1 ? '' : 's'}`, bg: 'var(--c-green-bg)', border: 'var(--c-green-border)', color: 'var(--c-green)' };
-    case 'ready':
-    default:
-      return { label: 'Ready to fire', bg: 'var(--c-green-bg)', border: 'var(--c-green-border)', color: 'var(--c-green)' };
+/** Colour + label for the install-status chip, computed against the plan's live "done" progress. Tones
+ *  map to the theme's status ramps: green = ready / done, blue = a 1-click listener, amber = site code.
+ *  Once every REQUIRED step is checked off, the chip flips to a green "✓ Done" regardless of kind. */
+function installChipView(p: InstallProgress): { label: string; bg: string; border: string; color: string } {
+  const GREEN = { bg: 'var(--c-green-bg)', border: 'var(--c-green-border)', color: 'var(--c-green)' };
+  const BLUE = { bg: 'var(--c-blue-bg)', border: 'var(--c-blue-border)', color: 'var(--c-blue)' };
+  const AMBER = { bg: 'var(--c-amber-bg)', border: 'var(--c-amber-border)', color: 'var(--c-amber)' };
+  const optLeft = p.optionalTotal - p.optionalDone;
+  // Nothing actionable (defensive — the chip isn't rendered for a pure-ready plan).
+  if (p.requiredTotal === 0 && p.optionalTotal === 0) return { label: 'Ready to fire', ...GREEN };
+  // Required steps still outstanding → the demanding chip (amber site code beats blue listener).
+  if (p.requiredTotal > 0 && !p.allRequiredDone) {
+    if (p.kind === 'code') return { label: 'Needs site code', ...AMBER };
+    const left = p.requiredTotal - p.requiredDone;
+    return { label: `${left} listener tag${left === 1 ? '' : 's'} to create`, ...BLUE };
   }
+  // Required done (or none). If there were required steps, that's a green "✓ Done"; a form that only
+  // fires natively with optional tips stays "Ready" until the tips are applied too.
+  if (p.requiredTotal > 0) return { label: optLeft > 0 ? `✓ Done · ${optLeft} optional left` : '✓ Done', ...GREEN };
+  return optLeft > 0 ? { label: `Ready · ${optLeft} optional tip${optLeft === 1 ? '' : 's'}`, ...GREEN } : { label: '✓ Done', ...GREEN };
 }
 
 /** The row-cell status chip that doubles as the "How to install" expand toggle. Its colour + label
- *  summarise the whole plan so the user can triage without opening the panel. */
-function InstallChip({ install, open, onClick, tagName }: { install: InstallPlanView; open: boolean; onClick: () => void; tagName: string }): JSX.Element {
-  const view = installChipView(installPlanStatus(install));
+ *  summarise the whole plan (against the live "done" check-offs) so the user can triage without opening
+ *  the panel — and it turns green "✓ Done" once every required step is checked off. */
+function InstallChip({ install, done, open, onClick, tagName }: { install: InstallPlanView; done: Record<number, boolean>; open: boolean; onClick: () => void; tagName: string }): JSX.Element {
+  const view = installChipView(installPlanProgress(install, done));
   return (
     <button
       type="button"
@@ -1498,12 +1509,16 @@ function InstallChip({ install, open, onClick, tagName }: { install: InstallPlan
   );
 }
 
-/** Render one install requirement, styled by kind. For a 'listener-tag' requirement, a "Create listener
- *  tag" button (wired by InstallPanel) creates it in the active DRAFT workspace on explicit click. */
+/** Render one install requirement, styled by kind. A 'listener-tag' gets a "Create listener tag" button
+ *  (wired by InstallPanel) that creates it in the active DRAFT workspace on explicit click; 'site-code'
+ *  and the optional 'html-attribute' get a manual "mark done" check-off (the app can't verify site-side
+ *  work) that turns the row — and the row's status chip — green. */
 function InstallRequirementRow({
   req,
   targetReady,
   status,
+  done,
+  onToggleDone,
   onCreate,
 }: {
   req: InstallReqView;
@@ -1511,6 +1526,10 @@ function InstallRequirementRow({
   targetReady: boolean;
   /** This requirement's create status (idle unless a listener-tag create was attempted). */
   status: ListenerCreateStatus;
+  /** Whether the user has checked this requirement off (persisted in the parent, survives collapse). */
+  done: boolean;
+  /** Toggle the done check-off (site-code / optional rows). */
+  onToggleDone?: (value: boolean) => void;
   /** Create handler (present only for a 'listener-tag' requirement). */
   onCreate?: () => void;
 }): JSX.Element {
@@ -1529,9 +1548,12 @@ function InstallRequirementRow({
           <span style={{ fontSize: 12, color: 'var(--text)' }}>{req.detail}</span>
         </div>
       );
-    case 'listener-tag':
+    case 'listener-tag': {
+      // Satisfied = created/exists this session, OR marked done in the parent (survives a collapse that
+      // resets the transient create status). A satisfied listener counts toward the chip's "done".
+      const satisfied = done || status.state === 'created' || status.state === 'exists';
       return (
-        <div style={tplStyles.installReq}>
+        <div style={{ ...tplStyles.installReq, ...(satisfied ? { borderColor: 'var(--c-green-border)' } : {}) }}>
           <div style={tplStyles.installReqLabel}>Create a Custom HTML listener tag</div>
           <div style={tplStyles.installMeta}>
             <strong style={{ color: 'var(--text)' }}>{req.tag.name}</strong>
@@ -1551,39 +1573,51 @@ function InstallRequirementRow({
           <div style={tplStyles.installActions}>
             <button
               type="button"
-              style={{ ...tplStyles.installCreateBtn, ...(!targetReady || status.state !== 'idle' && status.state !== 'err' ? tplStyles.installCreateBtnDisabled : {}) }}
+              style={{ ...tplStyles.installCreateBtn, ...(!targetReady || status.state === 'creating' || satisfied ? tplStyles.installCreateBtnDisabled : {}) }}
               onClick={onCreate}
-              disabled={!targetReady || status.state === 'creating' || status.state === 'created' || status.state === 'exists'}
+              disabled={!targetReady || status.state === 'creating' || satisfied}
               title={targetReady ? `Create the "${req.tag.name}" Custom HTML listener on All Pages in the draft workspace` : 'Select a GTM account, container and workspace first'}
               aria-label={`Create the listener tag "${req.tag.name}" in the draft workspace`}
             >
               {status.state === 'creating' ? 'Creating…' : 'Create listener tag'}
             </button>
-            {status.state === 'created' && <span style={{ color: 'var(--c-green)', fontSize: 12 }}>✓ Created{status.reused ? ' · trigger reused' : ''}</span>}
-            {status.state === 'exists' && <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Already exists</span>}
+            {status.state === 'created' && <span style={tplStyles.installDoneText}>✓ Created{status.reused ? ' · trigger reused' : ''}</span>}
+            {status.state === 'exists' && <span style={tplStyles.installDoneText}>✓ Already exists</span>}
+            {status.state === 'idle' && done && <span style={tplStyles.installDoneText}>✓ Done</span>}
             {status.state === 'err' && <span style={{ color: 'var(--c-red)', fontSize: 12 }} title={status.msg}>✗ {status.msg}</span>}
           </div>
         </div>
       );
+    }
     case 'html-attribute':
       // OPTIONAL improvement — the tag already fires; this only sharpens scoping. A quiet muted row (not
-      // a mandatory-looking box), with the long "why" tucked into the ⓘ tooltip.
+      // a mandatory-looking box), with the long "why" tucked into the ⓘ tooltip and a "mark applied" tick.
       return (
-        <div style={tplStyles.installOptional}>
+        <div style={{ ...tplStyles.installOptional, ...(done ? { borderColor: 'var(--c-green-border)' } : {}) }}>
           <span style={tplStyles.optionalPill}>Optional</span>
-          <span style={tplStyles.installOptionalText}>
+          <span style={{ ...tplStyles.installOptionalText, ...(done ? { textDecoration: 'line-through', color: 'var(--text-muted)' } : {}) }}>
             Add <code style={mdStyles.code}>{`${req.attribute}="${req.value}"`}</code> to <code style={mdStyles.code}>{req.selector}</code> for precise scoping
           </span>
           <span style={tplStyles.installInfo} title={req.detail} aria-label={req.detail}>ⓘ</span>
+          <label style={{ ...tplStyles.installCheck, marginTop: 0 }} title="Mark this optional tip as applied">
+            <input type="checkbox" checked={done} onChange={(e) => onToggleDone?.(e.target.checked)} />
+            {done ? <span style={tplStyles.installDoneText}>✓ Applied</span> : 'Applied'}
+          </label>
         </div>
       );
     case 'site-code':
       return (
-        <div style={tplStyles.installReq}>
+        <div style={{ ...tplStyles.installReq, ...(done ? { borderColor: 'var(--c-green-border)' } : {}) }}>
           <div style={tplStyles.installReqLabel}>Add code to your site</div>
           <div style={tplStyles.installMeta}>Add this to your site ({req.where}):</div>
           <CollapsibleCode code={req.snippet} ariaLabel={`Site code snippet for ${req.where}`} />
           <div style={tplStyles.installDetail}>{req.detail}</div>
+          <div>
+            <label style={tplStyles.installCheck} title="Tick once your developer has added this to the site">
+              <input type="checkbox" checked={done} onChange={(e) => onToggleDone?.(e.target.checked)} />
+              {done ? <span style={tplStyles.installDoneText}>✓ Added to my site</span> : "I've added this to my site"}
+            </label>
+          </div>
         </div>
       );
     default: {
@@ -1604,8 +1638,9 @@ type ListenerCreateStatus =
 
 /** The expandable panel body for one suggestion's install plan. Threads the active GTM target down so a
  *  'listener-tag' requirement can offer a "Create listener tag" button that creates it in the DRAFT
- *  workspace. Per-requirement create status is kept here (keyed by requirement index). */
-function InstallPanel({ plan, gtmTarget }: { plan: InstallPlanView; gtmTarget: { accountId?: string; containerId?: string; workspaceId?: string } }): JSX.Element {
+ *  workspace. Per-requirement create status is kept here (keyed by requirement index); the "done"
+ *  check-off state is owned by the parent (so it survives a collapse and feeds the row's status chip). */
+function InstallPanel({ plan, gtmTarget, done, onToggleDone }: { plan: InstallPlanView; gtmTarget: { accountId?: string; containerId?: string; workspaceId?: string }; done: Record<number, boolean>; onToggleDone: (index: number, value: boolean) => void }): JSX.Element {
   const [statuses, setStatuses] = useState<Record<number, ListenerCreateStatus>>({});
   const acct = gtmTarget.accountId ?? '';
   const cont = gtmTarget.containerId ?? '';
@@ -1625,6 +1660,9 @@ function InstallPanel({ plan, gtmTarget }: { plan: InstallPlanView; gtmTarget: {
             ? { state: 'exists' }
             : { state: 'err', msg: o.error ?? 'failed' },
       }));
+      // A created OR already-existing listener is "done" — record it in the parent so the row's chip
+      // turns green even after the panel is collapsed (which resets the transient status above).
+      if (o.ok || o.existing) onToggleDone(index, true);
     } catch (e) {
       setStatuses((s) => ({ ...s, [index]: { state: 'err', msg: e instanceof Error ? e.message : String(e) } }));
     }
@@ -1640,6 +1678,8 @@ function InstallPanel({ plan, gtmTarget }: { plan: InstallPlanView; gtmTarget: {
           req={req}
           targetReady={targetReady}
           status={statuses[i] ?? { state: 'idle' }}
+          done={done[i] === true}
+          onToggleDone={(v) => onToggleDone(i, v)}
           onCreate={req.kind === 'listener-tag' ? () => createListener(i, req.tag) : undefined}
         />
       ))}
@@ -1680,6 +1720,12 @@ function SuggestionTemplateTable({
   // Which suggestions have their "How to install" panel expanded (keyed by id).
   const [installOpen, setInstallOpen] = useState<Record<string, boolean>>({});
   const toggleInstall = (id: string): void => setInstallOpen((o) => ({ ...o, [id]: !o[id] }));
+  // Per-suggestion "done" check-offs for its install requirements (keyed by suggestion id → requirement
+  // index). Owned here (not in InstallPanel) so a mark survives the panel collapsing AND feeds the row's
+  // status chip. Session-scoped — a manual acknowledgement that site-side work is done, not persisted.
+  const [installDone, setInstallDone] = useState<Record<string, Record<number, boolean>>>({});
+  const setReqDone = (sid: string, index: number, value: boolean): void =>
+    setInstallDone((m) => ({ ...m, [sid]: { ...(m[sid] ?? {}), [index]: value } }));
   // The install panel row spans every column: ✓ + Page + the 10 template headers.
   const totalCols = 2 + TEMPLATE_HEADERS.length;
   return (
@@ -1757,7 +1803,7 @@ function SuggestionTemplateTable({
                           colour + label triage the plan at a glance; click to expand the detail. */}
                       {s.install && installPlanNeedsAction(s.install) && (
                         <div>
-                          <InstallChip install={s.install} open={!!installOpen[s.id]} onClick={() => toggleInstall(s.id)} tagName={g.tagName} />
+                          <InstallChip install={s.install} done={installDone[s.id] ?? {}} open={!!installOpen[s.id]} onClick={() => toggleInstall(s.id)} tagName={g.tagName} />
                         </div>
                       )}
                     </td>
@@ -1800,7 +1846,7 @@ function SuggestionTemplateTable({
               groupRows.push(
                 <tr key={s.id + ':install'}>
                   <td colSpan={totalCols} style={tplStyles.installTd}>
-                    <InstallPanel plan={s.install} gtmTarget={gtmTarget} />
+                    <InstallPanel plan={s.install} gtmTarget={gtmTarget} done={installDone[s.id] ?? {}} onToggleDone={(index, value) => setReqDone(s.id, index, value)} />
                   </td>
                 </tr>,
               );
