@@ -1,3 +1,9 @@
+## [1.228.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.227.0...v1.228.0) (2026-07-07)
+
+### Features
+
+* **desktop:** anti-lie finding no.5 - PII in page URLs, masked EVERYWHERE in the report ([2cc20b0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2cc20b0740e56f53050424525f9d7a30f5d0488c))
+
 ## [1.227.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.226.0...v1.227.0) (2026-07-07)
 
 ### Features
