@@ -5110,6 +5110,9 @@ function SettingsView({
   // Single source of truth for app-level provider keys so the Language-model hint and the Providers editor
   // never disagree — a key change in one updates the other immediately, and a probe failure surfaces.
   const [provStatus, setProvStatus] = useState<ProviderStatus | null>(null);
+  // Inline rename of the active account's display name (null = viewing; a string = editing that draft).
+  // Reuses the same accounts.rename IPC as the sidebar pencil; an empty name restores the Google name/email.
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
   useEffect(() => {
     window.desktop.providers.status().then(setProvStatus).catch((e) => onError(String(e)));
   }, []);
@@ -5141,6 +5144,42 @@ function SettingsView({
         <>
           <section style={styles.card}>
             <h2 style={styles.h2}>Active account</h2>
+            <div style={styles.kv}>
+              <span>Display name</span>
+              {nameDraft === null ? (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  <b style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {active.displayName || <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>Not set</span>}
+                  </b>
+                  <button style={styles.linkBtn} onClick={() => setNameDraft(active.displayName ?? '')}>
+                    Rename
+                  </button>
+                </span>
+              ) : (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, marginLeft: 16, minWidth: 0 }}>
+                  <input
+                    autoFocus
+                    value={nameDraft}
+                    placeholder={active.email}
+                    aria-label="Account display name"
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Enter saves; Escape cancels; an empty name restores the Google name/email.
+                      if (e.key === 'Enter') { const v = nameDraft.trim(); setNameDraft(null); void run(() => window.desktop.accounts.rename(active.id, v)); }
+                      else if (e.key === 'Escape') setNameDraft(null);
+                    }}
+                    style={{ ...styles.input, minWidth: 0 }}
+                  />
+                  <button
+                    style={styles.linkBtn}
+                    onClick={() => { const v = nameDraft.trim(); setNameDraft(null); void run(() => window.desktop.accounts.rename(active.id, v)); }}
+                  >
+                    Save
+                  </button>
+                  <button style={styles.linkBtn} onClick={() => setNameDraft(null)}>Cancel</button>
+                </span>
+              )}
+            </div>
             <div style={styles.kv}><span>Email</span><b>{active.email}</b></div>
             <div style={styles.kv}>
               <span>Google</span>
