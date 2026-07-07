@@ -26,6 +26,27 @@ const CHECK_PILL: Record<string, { label: string; color: string; bg: string; ico
   fail: { label: 'Issue', color: 'var(--c-red)', bg: 'var(--c-red-bg, rgba(239,68,68,.12))', icon: '✕' },
   skip: { label: 'Not run', color: 'var(--text-muted)', bg: 'var(--surface-3)', icon: '–' },
 };
+/** Card fill tones for the KPI + health tiles — the status colour plus its subtle background wash,
+ *  so a card reads green / amber / red at a glance. `neutral` keeps the plain surface. */
+const TONE: Record<'red' | 'amber' | 'green' | 'neutral', { color: string; bg: string }> = {
+  red: { color: 'var(--c-red)', bg: 'var(--c-red-bg, rgba(239,68,68,.12))' },
+  amber: { color: 'var(--c-amber, #b8860b)', bg: 'var(--c-amber-bg, rgba(245,158,11,.14))' },
+  green: { color: 'var(--c-green)', bg: 'var(--c-green-bg, rgba(34,197,94,.12))' },
+  neutral: { color: 'var(--text)', bg: 'var(--surface-2)' },
+};
+
+/** The Slack mark (official four-colour logo), inlined as SVG so it renders crisply at any size and
+ *  needs no external asset. Decorative — the adjacent text labels it. */
+function SlackMark({ size = 15 }: { size?: number }): JSX.Element {
+  return (
+    <svg viewBox="0 0 122.8 122.8" width={size} height={size} aria-hidden="true" style={{ flexShrink: 0, display: 'block' }}>
+      <path d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9zm6.5 0c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z" fill="#E01E5A" />
+      <path d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2zm0 6.5c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z" fill="#36C5F0" />
+      <path d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2zm-6.5 0c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z" fill="#2EB67D" />
+      <path d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9zm0-6.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z" fill="#ECB22E" />
+    </svg>
+  );
+}
 
 const box: React.CSSProperties = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
 const card: React.CSSProperties = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 14, padding: 18 };
@@ -118,12 +139,13 @@ function tallyChecks(checks: Ga4MonitorCheckView[]): Record<'pass' | 'warn' | 'f
   return c;
 }
 
-/** One overview metric tile — big number + label + one line of context. */
-function Kpi({ heading, value, sub, color }: { heading: string; value: React.ReactNode; sub?: string; color?: string }): JSX.Element {
+/** One overview metric tile — big number + label + one line of context, tinted by status tone. */
+function Kpi({ heading, value, sub, tone = 'neutral' }: { heading: string; value: React.ReactNode; sub?: string; tone?: 'red' | 'amber' | 'green' | 'neutral' }): JSX.Element {
+  const t = TONE[tone];
   return (
-    <div style={{ flex: '1 1 150px', minWidth: 140, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 14, padding: '14px 16px' }}>
-      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)' }}>{heading}</div>
-      <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.15, marginTop: 6, color: color ?? 'var(--text)' }}>{value}</div>
+    <div style={{ flex: '1 1 150px', minWidth: 140, background: t.bg, border: '1px solid var(--border)', borderLeft: `3px solid ${tone === 'neutral' ? 'var(--border)' : t.color}`, borderRadius: 14, padding: '14px 16px' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-muted)' }}>{heading}</div>
+      <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.15, marginTop: 6, color: t.color }}>{value}</div>
       {sub && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 }}>{sub}</div>}
     </div>
   );
@@ -204,11 +226,11 @@ function AiSummary({ run }: { run: Ga4MonitorRun }): JSX.Element {
 function CheckCard({ c }: { c: Ga4MonitorCheckView }): JSX.Element {
   const p = CHECK_PILL[c.status] ?? CHECK_PILL.skip;
   return (
-    <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${p.color}`, borderRadius: 10, padding: '12px 14px' }}>
+    <div style={{ background: p.bg, border: '1px solid var(--border)', borderLeft: `3px solid ${p.color}`, borderRadius: 10, padding: '12px 14px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ width: 20, height: 20, borderRadius: '50%', background: p.bg, color: p.color, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 800, flexShrink: 0 }}>{p.icon}</span>
+        <span style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--surface-2)', border: `1px solid ${p.color}`, color: p.color, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11.5, fontWeight: 800, flexShrink: 0 }}>{p.icon}</span>
         <span style={{ fontWeight: 700, fontSize: 13.5 }}>{c.label}</span>
-        <span style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 700, color: p.color, background: p.bg, borderRadius: 999, padding: '1px 8px' }}>{p.label}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 700, color: p.color, background: 'var(--surface-2)', border: `1px solid ${p.color}`, borderRadius: 999, padding: '1px 8px' }}>{p.label}</span>
       </div>
       <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 6, lineHeight: 1.5 }}>{c.detail}</div>
     </div>
@@ -304,19 +326,19 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
             <Kpi
               heading="Open issues"
               value={run.alerts.length}
-              color={run.alerts.length ? (run.health === 'critical' ? 'var(--c-red)' : 'var(--c-amber, #b8860b)') : 'var(--c-green)'}
+              tone={run.alerts.length ? (run.health === 'critical' ? 'red' : 'amber') : 'green'}
               sub={run.alerts.length ? `${run.alerts.filter((a) => a.severity === 'critical' || a.severity === 'high').length} high-priority` : 'none open'}
             />
             <Kpi
               heading="Checks passing"
               value={`${counts.pass}/${run.checks.length}`}
-              color={counts.pass === run.checks.length ? 'var(--c-green)' : 'var(--text)'}
+              tone={counts.fail === 0 && counts.warn === 0 ? 'green' : 'amber'}
               sub={counts.skip ? `${counts.skip} not run` : 'all checks ran'}
             />
             <Kpi
               heading="Needs attention"
               value={attention}
-              color={counts.fail ? 'var(--c-red)' : attention ? 'var(--c-amber, #b8860b)' : 'var(--c-green)'}
+              tone={counts.fail ? 'red' : attention ? 'amber' : 'green'}
               sub={attention ? `${counts.fail} failing · ${counts.warn} warning` : 'nothing flagged'}
             />
             <Kpi heading="Last checked" value={fmtAgo(run.at)} sub={fmtTime(run.at)} />
@@ -348,7 +370,7 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
       {/* ── This property's Slack channel ── */}
       <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>💬 Slack channel</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}><SlackMark size={14} /> Slack channel</span>
           {t.hasWebhook ? (
             <>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, background: 'var(--c-green-bg, rgba(34,197,94,.12))', color: 'var(--c-green)', borderRadius: 999, padding: '3px 12px', fontWeight: 600 }}>
@@ -693,7 +715,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
              dashboard above) — there is no shared default channel. ── */}
       <div style={box}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: 600 }}>Slack alerts</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontWeight: 600 }}><SlackMark size={16} /> Slack alerts</span>
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 8 }}>
           One property, one channel: connect each property's Slack channel from its dashboard above (<b>＋ Connect channel</b> / <b>✎ Edit channel</b>) and pick <b>what it receives</b> there — new issue alerts, the weekly health digest, and/or the weekly audit summary. How to get a webhook URL for a channel:
