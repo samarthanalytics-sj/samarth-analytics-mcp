@@ -180,7 +180,9 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           // Scan every discovered page, capped by the budget (crawlAndSuggest clamps to 50). With the
           // full prioritized page set seeded, the budget is spent on the pages most likely to carry CTAs.
           const maxPages = o.crawlMaxPages ?? (seedUrls.length ? 50 : undefined);
-          const crawlDriver = await makeDriver({ maxPages, maxDepth: o.crawlMaxDepth });
+          // cachePages: share rendered pages with the form-plan crawl that auto-runs on the same verify,
+          // so each page renders ONCE across both crawls (not twice).
+          const crawlDriver = await makeDriver({ maxPages, maxDepth: o.crawlMaxDepth, cachePages: true });
           const scan = await crawlAndSuggest(crawlDriver, target, { maxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'], ...(seedUrls.length ? { seedUrls } : {}) });
           els = scan.inventory.elements as DetectedElementView[];
           pagesCrawled = scan.pages.length;
@@ -273,7 +275,10 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // a low fixed cap found only the first couple; form-likely-first + a bigger budget covers them all.
       const formLikely = disc.urls.filter((u) => u !== target && urlPriority(u) === 1);
       const pages = [target, ...formLikely].slice(0, Math.max(1, Math.min(o.maxPages ?? 40, 60)));
-      const driver = await makeDriver({});
+      // cachePages: reuse pages already rendered by the click-tag verify crawl (which auto-runs on the
+      // same verify and covers the whole sitemap) — these form-likely pages are a subset, so with the
+      // cache this crawl adds ~no extra browser work.
+      const driver = await makeDriver({ cachePages: true });
       try {
         for (const page of pages) {
           if (!urlAllowed(page, []).ok) continue;
