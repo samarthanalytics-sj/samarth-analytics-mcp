@@ -3799,7 +3799,7 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
 // a fix suggestion when it doesn't fire). Real submits — an explicit warning + confirm gate them.
 // Rendered INSIDE VerifyPanel — shares the same URL + Preview snippet as tag verification (one panel,
 // one URL). This subsection does the container-tag-driven REAL-submit form check.
-function FormFillReview({ url, snippet, active, onError, trigger }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; trigger?: number }): JSX.Element {
+function FormFillReview({ url, snippet, active, onError, runSignal }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number }): JSX.Element {
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [localeId, setLocaleId] = useState('us');
@@ -3818,13 +3818,20 @@ function FormFillReview({ url, snippet, active, onError, trigger }: { url: strin
   const isCheckbox = (t: string): boolean => t === 'checkbox' || t === 'radio';
   const setShrd = (k: string, v: string): void => { setTouched(true); setShared((s) => ({ ...s, [k]: v })); };
 
-  async function fetchPlan(): Promise<void> {
+  // Auto-discover forms-with-tags whenever a tag-verify runs above (parent bumps runSignal). This is
+  // what replaces a separate "Find forms with tags" button — one verify action does both. Skips the
+  // initial mount (runSignal 0); fetchPlan itself no-ops with a note if the URL / GTM target isn't ready.
+  useEffect(() => {
+    if (runSignal > 0) void fetchPlan();
+  }, [runSignal]); // intentionally only on the verify signal — not on url/locale edits
+
+  async function fetchPlan(loc: string = localeId): Promise<void> {
     const target = url.trim();
     if (!target) { setNote('Enter your site’s main URL.'); return; }
     if (!ready || !ctx) { setNote('Pick a GTM account, container and workspace in the GTM bar above first — that’s the container whose form tags we verify.'); return; }
     setLoading(true); setNote(null); onError(''); setResults({}); setPlan(null); setTouched(false);
     try {
-      const res = await window.desktop.tags.formTagVerifyPlan(target, { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!, localeId });
+      const res = await window.desktop.tags.formTagVerifyPlan(target, { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!, localeId: loc });
       setPlan(res);
       const sv: Record<string, string> = {};
       for (const f of res.sharedFields) sv[f.key] = f.value;
@@ -3836,17 +3843,6 @@ function FormFillReview({ url, snippet, active, onError, trigger }: { url: strin
       setNote(e instanceof Error ? e.message : String(e));
     } finally { setLoading(false); }
   }
-
-  // The top-row "Track forms" button bumps `trigger`; run the crawl+match when it does (skip the
-  // initial 0 so the section stays idle until the operator asks for it).
-  const lastTrigger = useRef(0);
-  useEffect(() => {
-    if (trigger && trigger !== lastTrigger.current) {
-      lastTrigger.current = trigger;
-      void fetchPlan();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trigger]);
 
   async function submitAll(): Promise<void> {
     if (!plan || !ctx || submitting) return;
@@ -3883,20 +3879,28 @@ function FormFillReview({ url, snippet, active, onError, trigger }: { url: strin
   return (
     <>
       <div style={{ borderTop: '1px solid rgba(128,128,128,0.22)', marginTop: 14, paddingTop: 12 }}>
-        <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--text)' }}>Forms — verify by a real submit</div>
+        <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--text)' }}>Forms — verified by a real submit</div>
         <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 2, marginBottom: 6 }}>
-          Same URL as above: find the forms that HAVE a tracking tag, fill the data once, then submit each for real and verify its tag (with a fix when it doesn’t fire). Real submits create a real lead per form.
+          Runs automatically with the verify above: we find the forms that HAVE a tracking tag, you fill the data once, then submit each for real and verify its tag (with a fix when it doesn’t fire). Real submits create a real lead per form.
         </div>
       </div>
       <div style={styles.card}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <label style={{ ...styles.muted, fontSize: 13 }}>Location</label>
-          <select value={localeId} onChange={(e) => setLocaleId(e.target.value)} style={{ ...styles.input, width: 'auto', minWidth: 160 }}>
+          {/* No separate "find forms" button — the tag-verify above triggers discovery. Changing the
+              location re-discovers if we've already found forms once. */}
+          <select value={localeId} disabled={loading} onChange={(e) => { const v = e.target.value; setLocaleId(v); if (plan) void fetchPlan(v); }} style={{ ...styles.input, width: 'auto', minWidth: 160 }}>
             {locales.map((l) => (<option key={l.id} value={l.id}>{l.label}</option>))}
           </select>
-          <button style={styles.primaryBtn} onClick={() => void fetchPlan()} disabled={loading || !url.trim() || !ready}>
-            {loading ? 'Crawling & matching…' : 'Find forms with tags'}
-          </button>
+          {loading ? (
+            <span style={{ ...styles.muted, fontSize: 12.5 }}>Crawling &amp; matching forms…</span>
+          ) : plan ? (
+            <span style={{ fontSize: 12.5, color: matched.length ? 'var(--c-green)' : 'var(--text-muted)' }}>
+              {matched.length ? `✓ ${matched.length} form(s) with tags` : 'No forms with tags found'}
+            </span>
+          ) : (
+            <span style={{ ...styles.muted, fontSize: 12.5 }}>Runs when you verify above</span>
+          )}
         </div>
         <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
             US only for now; UK / AUS come later. The test email uses a traceable gtm-verify+…@example.com alias so your CRM can filter these.
@@ -4036,10 +4040,9 @@ function VerifyPanel({
   const [vShowSkipped, setVShowSkipped] = useState(false);
   const [vShowNet, setVShowNet] = useState(false);
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
-  // Bumped by the top-row "Track forms" button to kick the FormFillReview crawl+match (whose own
-  // "Find forms with tags" button lives further down) and scroll it into view.
-  const [vFormRun, setVFormRun] = useState(0);
-  const vFormRef = useRef<HTMLDivElement>(null);
+  // Bumped whenever a tag-verify runs; the embedded Forms subsection watches it and auto-discovers the
+  // site's forms-with-tags in the same pass — so there's ONE action, not a separate "find forms" button.
+  const [vRunSignal, setVRunSignal] = useState(0);
   // Event-name aligns applied this session (tagId → new event name), so the row shows "✓ aligned".
   const [aligned, setAligned] = useState<Record<string, string>>({});
   const [aligning, setAligning] = useState<string | null>(null);
@@ -4067,6 +4070,8 @@ function VerifyPanel({
     setVVerifying(true);
     setVNote(null);
     onError('');
+    // Kick the embedded Forms subsection to discover forms-with-tags for the same URL in parallel.
+    setVRunSignal((n) => n + 1);
     try {
       const { tags, skipped } = await window.desktop.gtm.verifiableTags(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
       setVSkipped(skipped);
@@ -4201,14 +4206,6 @@ function VerifyPanel({
             </button>
             <button style={styles.toggleOff} onClick={() => void runVerify()} disabled={!ready || vVerifying || vMinting || !vUrl.trim()}>
               {vVerifying && !vMinting ? 'Verifying…' : 'Verify (pasted / live)'}
-            </button>
-            <button
-              style={styles.toggleOff}
-              onClick={() => { setVFormRun((n) => n + 1); vFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
-              disabled={!ready || !vUrl.trim()}
-              title="Find the site's forms that have a tracking tag, fill the data once, then submit each for real and verify its tag fires"
-            >
-              Track forms
             </button>
           </div>
           {vNote && (
@@ -4463,9 +4460,7 @@ function VerifyPanel({
           </div>
         )}
 
-        <div ref={vFormRef}>
-          <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} trigger={vFormRun} />
-        </div>
+        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} />
       </div>
     </div>
   );
