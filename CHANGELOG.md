@@ -1,3 +1,9 @@
+## [1.245.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.244.3...v1.245.0) (2026-07-07)
+
+### Features
+
+* **desktop:** reliability receipt - every missing point attributed to a named check with its fix ([b16300e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b16300ea3c8860583b0887838c46edc630eaa8c3))
+
 ## [1.244.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.244.2...v1.244.3) (2026-07-07)
 
 ### Bug Fixes
