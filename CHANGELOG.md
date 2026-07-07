@@ -1,3 +1,9 @@
+## [1.243.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.242.0...v1.243.0) (2026-07-07)
+
+### Features
+
+* **tag-suggest:** harvest already-installed tracking + already-pushed dataLayer events ([8eb1fc3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8eb1fc388d60bf40c5687ec2e9c6814205d87a9c))
+
 ## [1.242.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.241.0...v1.242.0) (2026-07-07)
 
 ### Features
