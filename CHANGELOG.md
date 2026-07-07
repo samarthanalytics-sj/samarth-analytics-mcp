@@ -1,3 +1,9 @@
+## [1.256.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.256.0...v1.256.1) (2026-07-07)
+
+### Bug Fixes
+
+* **gtm-bar:** log the account→container→workspace fetch + surface an empty result ([6ef85fa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6ef85fad91a3995635a6b44883002f8215bf288d))
+
 ## [1.256.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.255.0...v1.256.0) (2026-07-07)
 
 ### Features
