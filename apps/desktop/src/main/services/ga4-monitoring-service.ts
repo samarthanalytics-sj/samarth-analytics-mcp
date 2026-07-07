@@ -134,7 +134,7 @@ export class Ga4MonitoringService {
 
   constructor(private readonly deps: Ga4MonitoringDeps) {
     const loaded = deps.configPath ? readJsonFile<Ga4MonitorConfig>(deps.configPath, DEFAULT_CONFIG) : DEFAULT_CONFIG;
-    this.config = this.normalize(loaded);
+    this.config = this.normalize(loaded, this.deps.registry.getActiveView()?.id ?? null);
     if (this.isActive()) this.start(true);
   }
 
@@ -146,36 +146,68 @@ export class Ga4MonitoringService {
     return this.config.enabled && this.config.targets.some((t) => t.enabled);
   }
 
-  private normalizeTargets(c: Partial<Ga4MonitorConfig> | null): Ga4MonitorTarget[] {
+  private activeId(): string | null {
+    return this.deps.registry.getActiveView()?.id ?? null;
+  }
+
+  /** The ACTIVE account's targets — the only ones shown, configured and swept. A property added under
+   *  one mail must never appear (or be queried, with the wrong token) under another. */
+  private mine(owner: string | null): Ga4MonitorTarget[] {
+    return this.config.targets.filter((t) => t.accountId === (owner ?? undefined) || (!t.accountId && owner === null));
+  }
+
+  /** Configs from before per-account scoping have ownerless targets: stamp them with the active
+   *  account the first time one is known (they were added while that user was working). */
+  private stampOwnerless(owner: string): void {
+    let changed = false;
+    for (const t of this.config.targets) {
+      if (!t.accountId) {
+        t.accountId = owner;
+        changed = true;
+      }
+    }
+    if (changed && this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
+  }
+
+  /** `owner` stamps targets that arrive without an accountId (new adds from the active account's
+   *  panel). Dedupe + the size cap are PER ACCOUNT. */
+  private normalizeTargets(c: Partial<Ga4MonitorConfig> | null, owner: string | null): Ga4MonitorTarget[] {
     const raw = Array.isArray(c?.targets) ? c.targets : [];
     const seen = new Set<string>();
+    const perAccount = new Map<string, number>();
     const targets: Ga4MonitorTarget[] = [];
     for (const t of raw) {
       const id = t && typeof t === 'object' && (t as Ga4MonitorTarget).propertyId ? String((t as Ga4MonitorTarget).propertyId) : '';
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
+      if (!id) continue;
+      const acct = (t as Ga4MonitorTarget).accountId ? String((t as Ga4MonitorTarget).accountId) : owner ?? undefined;
+      const key = `${acct ?? '?'}|${id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const n = perAccount.get(acct ?? '?') ?? 0;
+      if (n >= MAX_TARGETS) continue;
+      perAccount.set(acct ?? '?', n + 1);
       targets.push({
         propertyId: id,
         propertyLabel: (t as Ga4MonitorTarget).propertyLabel ? String((t as Ga4MonitorTarget).propertyLabel).slice(0, 200) : '',
         enabled: (t as Ga4MonitorTarget).enabled === undefined ? true : Boolean((t as Ga4MonitorTarget).enabled),
         slackLabel: (t as Ga4MonitorTarget).slackLabel ? String((t as Ga4MonitorTarget).slackLabel).slice(0, 120) : undefined,
+        accountId: acct,
       });
-      if (targets.length >= MAX_TARGETS) break;
     }
     // Legacy single-property config ({propertyId, propertyLabel}) → a one-entry list, so an existing
     // installation keeps monitoring what it was monitoring.
     const legacy = c as Partial<Ga4MonitorConfig> & { propertyId?: string | null; propertyLabel?: string };
     if (!targets.length && legacy?.propertyId) {
-      targets.push({ propertyId: String(legacy.propertyId), propertyLabel: legacy.propertyLabel ? String(legacy.propertyLabel) : '', enabled: true });
+      targets.push({ propertyId: String(legacy.propertyId), propertyLabel: legacy.propertyLabel ? String(legacy.propertyLabel) : '', enabled: true, accountId: owner ?? undefined });
     }
     return targets;
   }
 
-  private normalize(c: Partial<Ga4MonitorConfig> | null): Ga4MonitorConfig {
+  private normalize(c: Partial<Ga4MonitorConfig> | null, owner: string | null): Ga4MonitorConfig {
     return {
       enabled: Boolean(c?.enabled),
       intervalMinutes: Math.max(MIN_INTERVAL_MINUTES, Math.floor(Number(c?.intervalMinutes) || DEFAULT_CONFIG.intervalMinutes)),
-      targets: this.normalizeTargets(c),
+      targets: this.normalizeTargets(c, owner),
       days: Math.min(365, Math.max(1, Math.floor(Number(c?.days) || DEFAULT_CONFIG.days))),
       slackEnabled: c?.slackEnabled === undefined ? true : Boolean(c.slackEnabled),
       slackLabel: c?.slackLabel ? String(c.slackLabel).slice(0, 120) : '',
@@ -206,11 +238,12 @@ export class Ga4MonitoringService {
    *  discarded with nowhere to go. */
   private migrateDefaultWebhook(accountId: string): void {
     const defRef = slackWebhookRef(accountId);
-    if (!this.deps.secrets.has(defRef) || !this.config.targets.length) return;
+    const mine = this.mine(accountId);
+    if (!this.deps.secrets.has(defRef) || !mine.length) return;
     const url = this.deps.secrets.get(defRef);
     if (url) {
       let labelChanged = false;
-      for (const t of this.config.targets) {
+      for (const t of mine) {
         const own = slackWebhookRefForProperty(accountId, t.propertyId);
         if (!this.deps.secrets.has(own)) {
           this.deps.secrets.set(own, url);
@@ -225,21 +258,29 @@ export class Ga4MonitoringService {
     this.deps.secrets.delete(defRef);
   }
 
-  private stateFor(propertyId: string): TargetState {
-    let s = this.state.get(propertyId);
+  /** Runtime state is keyed per account+property so the same property monitored under two mails
+   *  never shares (or clobbers) alert-dedup memory. */
+  private stateFor(owner: string | null, propertyId: string): TargetState {
+    const key = `${owner ?? '?'}:${propertyId}`;
+    let s = this.state.get(key);
     if (!s) {
       s = { lastRunAt: null, lastError: null, lastRun: null, lastSlackAt: null, seenIds: new Set() };
-      this.state.set(propertyId, s);
+      this.state.set(key, s);
     }
     return s;
   }
 
   status(): Ga4MonitorStatus {
     const active = this.deps.registry.getActiveView();
-    if (active) this.migrateDefaultWebhook(active.id);
+    if (active) {
+      this.stampOwnerless(active.id);
+      this.migrateDefaultWebhook(active.id);
+    }
+    const owner = active?.id ?? null;
     const ref = this.webhookRefForActive();
-    const targetStatuses: Ga4MonitorTargetStatus[] = this.config.targets.map((t) => {
-      const s = this.state.get(t.propertyId);
+    const mine = this.mine(owner);
+    const targetStatuses: Ga4MonitorTargetStatus[] = mine.map((t) => {
+      const s = this.state.get(`${owner ?? '?'}:${t.propertyId}`);
       const ownRef = this.propertyWebhookRefForActive(t.propertyId);
       return { ...t, lastRunAt: s?.lastRunAt ?? null, lastError: s?.lastError ?? null, lastRun: s?.lastRun ?? null, hasWebhook: ownRef ? this.deps.secrets.has(ownRef) : false, lastSlackAt: s?.lastSlackAt ?? null };
     });
@@ -247,6 +288,9 @@ export class Ga4MonitoringService {
     const lastSlackAt = targetStatuses.reduce<number | null>((m, t) => (t.lastSlackAt !== null && (m === null || t.lastSlackAt > m) ? t.lastSlackAt : m), null);
     return {
       ...this.config,
+      // Only the ACTIVE account's targets go to the renderer, so its configure() round-trips can
+      // never touch (or leak) another mail's properties.
+      targets: mine,
       running: this.timer !== null,
       lastRunAt,
       lastError: this.lastError,
@@ -260,16 +304,25 @@ export class Ga4MonitoringService {
    *  disabled→enabled transition (all targets) or for NEWLY ADDED targets while active — editing the
    *  interval alone never triggers an extra API burst. */
   configure(patch: Partial<Ga4MonitorConfig>): Ga4MonitorStatus {
+    const owner = this.activeId();
+    if (owner) this.stampOwnerless(owner);
     const wasActive = this.isActive();
-    const prevIds = new Set(this.config.targets.map((t) => t.propertyId));
-    this.config = this.normalize({ ...this.config, ...patch });
+    const prevMine = new Set(this.mine(owner).map((t) => t.propertyId));
+    // A targets patch from the renderer contains ONLY the active account's list (status() scopes it),
+    // so merge it with the other accounts' targets instead of replacing everything.
+    let merged: Partial<Ga4MonitorConfig> = { ...this.config, ...patch };
+    if (patch.targets !== undefined && owner) {
+      const others = this.config.targets.filter((t) => t.accountId !== owner);
+      merged = { ...merged, targets: [...others, ...(Array.isArray(patch.targets) ? patch.targets : [])] };
+    }
+    this.config = this.normalize(merged, owner);
     if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
-    // Drop runtime state AND the per-property Slack webhook for removed targets, so a re-add starts
-    // with a clean alert-dedup slate and no orphaned channel secret lingers in the keychain.
-    const ids = new Set(this.config.targets.map((t) => t.propertyId));
-    for (const id of prevIds) {
-      if (ids.has(id)) continue;
-      this.state.delete(id);
+    // Drop runtime state AND the per-property Slack webhook for the active account's removed targets,
+    // so a re-add starts with a clean alert-dedup slate and no orphaned channel secret lingers.
+    const nowMine = new Set(this.mine(owner).map((t) => t.propertyId));
+    for (const id of prevMine) {
+      if (nowMine.has(id)) continue;
+      this.state.delete(`${owner ?? '?'}:${id}`);
       const ref = this.propertyWebhookRefForActive(id);
       if (ref) this.deps.secrets.delete(ref);
     }
@@ -279,7 +332,7 @@ export class Ga4MonitoringService {
       if (wasActive) {
         // Already running and still running: give any brand-new enabled targets an immediate first
         // check so adding a property shows results without waiting a full interval.
-        const added = this.config.targets.filter((t) => t.enabled && !prevIds.has(t.propertyId)).map((t) => t.propertyId);
+        const added = this.mine(owner).filter((t) => t.enabled && !prevMine.has(t.propertyId)).map((t) => t.propertyId);
         if (added.length) void this.runOnce(added);
       }
     }
@@ -306,7 +359,8 @@ export class Ga4MonitoringService {
     const ref = propertyId ? this.propertyWebhookRefForActive(propertyId) : this.webhookRefForActive();
     if (ref) this.deps.secrets.delete(ref);
     if (propertyId) {
-      this.config = this.normalize({ ...this.config, targets: this.config.targets.map((t) => (t.propertyId === propertyId ? { ...t, slackLabel: undefined } : t)) });
+      const owner = this.activeId();
+      this.config = this.normalize({ ...this.config, targets: this.config.targets.map((t) => (t.propertyId === propertyId && t.accountId === (owner ?? undefined) ? { ...t, slackLabel: undefined } : t)) }, owner);
       if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
     }
     return this.status();
@@ -321,7 +375,7 @@ export class Ga4MonitoringService {
     this.migrateDefaultWebhook(active.id);
     if (!propertyId) return { ok: false, error: 'Pick a property to test — each property has its own Slack channel.' };
     const webhook = this.webhookForTarget(active.id, propertyId);
-    const t = this.config.targets.find((x) => x.propertyId === propertyId);
+    const t = this.mine(active.id).find((x) => x.propertyId === propertyId);
     const label = t?.propertyLabel || propertyId;
     if (!webhook) return { ok: false, error: 'No Slack channel is connected for this property.' };
     const res = await sendSlackWebhook(webhook, buildSlackTestPayload(label), { fetchImpl: this.deps.slackFetch });
@@ -359,19 +413,21 @@ export class Ga4MonitoringService {
   private async runOnceInner(only?: string | string[]): Promise<Ga4MonitorRun[]> {
     const active = this.deps.registry.getActiveView();
     if (!active || !active.hasGoogleToken) return [];
-    // Background sweeps may run before the tab is ever opened — migrate the legacy default webhook
-    // here too so alerts keep flowing to the (now per-property) channels.
+    // Background sweeps may run before the tab is ever opened — stamp legacy ownerless targets and
+    // migrate the legacy default webhook here too so alerts keep flowing.
+    this.stampOwnerless(active.id);
     this.migrateDefaultWebhook(active.id);
     const wanted = only === undefined ? null : new Set(Array.isArray(only) ? only : [only]);
-    // A manual "Run now" on a paused target still runs it (the user asked); the timer only sweeps
-    // enabled ones (wanted === null).
-    const targets = this.config.targets.filter((t) => (wanted ? wanted.has(t.propertyId) : t.enabled));
+    // Only the ACTIVE account's targets are sweepable — another mail's property would be queried with
+    // the wrong token and fail anyway. A manual "Run now" on a paused target still runs it (the user
+    // asked); the timer only sweeps enabled ones (wanted === null).
+    const targets = this.mine(active.id).filter((t) => (wanted ? wanted.has(t.propertyId) : t.enabled));
     if (!targets.length) return [];
 
     const runs: Ga4MonitorRun[] = [];
     let sweepError: string | null = null;
     for (const target of targets) {
-      const st = this.stateFor(target.propertyId);
+      const st = this.stateFor(active.id, target.propertyId);
       try {
         const input = await gatherGa4MonitorInput(this.deps.data, target.propertyId, this.config.days, () => this.now());
         // The desktop tab shows ALL alert types (no severity gate); the minSeverity knob stays on the

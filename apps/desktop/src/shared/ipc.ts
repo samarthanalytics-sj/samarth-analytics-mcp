@@ -745,6 +745,9 @@ export interface Ga4MonitorTarget {
   /** Human label for this property's OWN Slack channel (e.g. "#acme-alerts"), when one is connected.
    *  The webhook URL itself lives encrypted in the OS keychain, keyed per account + property. */
   slackLabel?: string;
+  /** The account (mail) this property was added under. Targets only show/run for their own account;
+   *  absent on configs from before per-account scoping (stamped lazily with the active account). */
+  accountId?: string;
 }
 
 /** Persisted config for the GA4 monitor (multi-property; mirrors the GTM MonitorConfig in shape). */
