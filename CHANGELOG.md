@@ -1,3 +1,9 @@
+## [1.250.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.249.0...v1.250.0) (2026-07-07)
+
+### Features
+
+* **desktop:** shell refresh — accounts in Settings, clearer container picker, Inter font ([9fb71a6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9fb71a69c94f0b56167a3f4c0b01c472d109e16c))
+
 ## [1.249.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.248.0...v1.249.0) (2026-07-07)
 
 ### Features
