@@ -1,7 +1,7 @@
 // Pure tests for container-tag-driven form matching + field dedup (no browser).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/form-tag-match.test.ts
 
-import { matchFormsToTags, dedupeSharedFields, dedupKey, type PagedForm, type FormTagIdentity } from '../form-tag-match';
+import { matchFormsToTags, dedupeSharedFields, dedupKey, isFormEventName, type PagedForm, type FormTagIdentity } from '../form-tag-match';
 import type { FormFillFieldView } from '../../../shared/ipc';
 
 let passed = 0;
@@ -73,6 +73,30 @@ const tag = (tagName: string, eventName: string, formName?: string): FormTagIden
   check('given_name kept', shared.some((s) => s.role === 'given_name'));
   check('a select is keyed by role+label (kept distinct)', shared.some((s) => s.key === 'select|topic'));
 }
+
+// ── over-matching guard: a single shared GENERIC token must NOT pile every tag onto one form ──────
+// The real bug: a site exposes ONE "Get Your Free Custom Consultation" form, but ~18 "Get Your Free X
+// Consultation Form" tags all shared the generic token "consultation" and got attached to it — 17 then
+// falsely reported "not firing". Full-coverage matching keeps only the tag whose form name is covered.
+{
+  const forms = [form({ title: 'Get Your Free Custom Consultation', formId: 'wf-form-custom', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] })];
+  const tags = [
+    tag('Meta - Event - Get Your Free Custom Consultation Form Tag', 'get_your_free_custom_consultation_form', 'get_your_free_custom_consultation'),
+    tag('Meta - Event - Get Your Free CRO Consultation Form Tag', 'get_your_free_cro_consultation_form', 'get_your_free_cro_consultation'),
+    tag('Meta - Event - Get Your Free GTM Audit Form Tag', 'get_your_free_gtm_audit_form', 'get_your_free_gtm_audit'),
+    tag('Meta - Event - Stay Updated Form Tag', 'stay_updated_form', 'stay_updated'),
+  ];
+  const { matched, unmatchedTags } = matchFormsToTags(forms, tags);
+  check('over-match: only the Custom Consultation tag matches the Custom Consultation form', matched.length === 1 && matched[0].expectedTags.length === 1 && /Custom Consultation/.test(matched[0].expectedTags[0].tagName));
+  check('over-match: CRO/GTM/Stay tags are unmatched (their forms were not found), not piled on', unmatchedTags.length === 3 && unmatchedTags.some((n) => /CRO/.test(n)) && unmatchedTags.some((n) => /GTM Audit/.test(n)) && unmatchedTags.some((n) => /Stay Updated/.test(n)));
+}
+
+// ── isFormEventName: only true form-submit custom events count as form tags ───────────────────────
+check('isFormEventName: form_submission → true', isFormEventName('form_submission'));
+check('isFormEventName: submit_form → true', isFormEventName('submit_form'));
+check('isFormEventName: custom_scroll_depth → false', !isFormEventName('custom_scroll_depth'));
+check('isFormEventName: cta_click → false', !isFormEventName('cta_click'));
+check('isFormEventName: platform_view (contains "form") → false', !isFormEventName('platform_view'));
 
 // ── dedupKey ─────────────────────────────────────────────────────────────────────
 check('dedupKey: non-select is the role', dedupKey({ role: 'email', label: 'Email' }) === 'email');

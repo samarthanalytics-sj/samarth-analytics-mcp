@@ -3983,10 +3983,20 @@ function FormFillReview({ url, snippet, active, onError, runSignal }: { url: str
                           </div>
                           {form.expectedTags.map((t) => {
                             const fired = (r.firedTags ?? []).some((ft) => ft.tagName === t.tagName);
+                            // A pixel tag fed server-side (CAPI): no browser beacon, but the form relayed
+                            // to the first-party sGTM. Expected, not a failure — same rule as the synthetic path.
+                            const serverSide = !fired && (r.serverRelayTags ?? []).some((n) => n === t.tagName);
                             return (
                               <div key={t.tagName} style={{ marginTop: 4 }}>
                                 {fired ? (
                                   <span style={{ color: 'var(--c-green)', fontWeight: 600 }}>✓ FIRED — {t.tagName}</span>
+                                ) : serverSide ? (
+                                  <>
+                                    <span style={{ color: 'var(--c-blue)', fontWeight: 600 }}>🛰 SERVER-SIDE — {t.tagName}</span>
+                                    <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>
+                                      No browser beacon, but the form relayed to your first-party server container (sGTM). If this pixel is sent server-side via the Conversion API that’s expected — confirm it in the vendor’s Events Manager → Test Events.
+                                    </div>
+                                  </>
                                 ) : (
                                   <>
                                     <span style={{ color: 'var(--c-red)', fontWeight: 600 }}>✗ NOT FIRED — {t.tagName}</span>
