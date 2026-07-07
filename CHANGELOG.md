@@ -1,3 +1,9 @@
+## [1.252.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.252.0...v1.252.1) (2026-07-07)
+
+### Bug Fixes
+
+* **verify:** don't call a server-side (CAPI) pixel "not firing" ([b9a3193](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b9a3193f3fd227a8ea2b5e5aa8d8261031f2eee6))
+
 ## [1.252.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.251.0...v1.252.0) (2026-07-07)
 
 ### Features
