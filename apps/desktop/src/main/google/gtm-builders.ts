@@ -730,6 +730,13 @@ export interface TriggerInput {
   pageUrlOperator?: string;
   /** For custom_event: the dataLayer event name. */
   eventName?: string;
+  /** For custom_event: extra ANDed scope conditions that read a pushed dataLayer KEY via an
+   *  auto-created {{dlv - <key>}} Data Layer Variable — e.g. scope an AJAX/embed form's custom_event
+   *  to ONE form by the `form_id` its listener pushes. GTM's built-in {{Form ID}} does NOT resolve on a
+   *  manual dataLayer.push (it is only populated by the native form-submit auto-event), so a pushed-key
+   *  variable is the only reliable way to scope a data-layer form trigger. Each key auto-provisions its
+   *  `dlv - <key>` variable. Operator matches the other *Operator fields (default 'equals'). */
+  dataLayerConditions?: Array<{ key: string; value: string; operator?: string }>;
   /** For timer: fire every N milliseconds (required). */
   intervalMs?: number | string;
   /** For timer: max number of times to fire (omit/empty = unlimited). */
@@ -816,6 +823,15 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       if (o.formIdValue) filters.push(condition('{{Form ID}}', o.formIdOperator ?? 'equals', o.formIdValue));
       if (o.pagePathValue) filters.push(condition('{{Page Path}}', o.pagePathOperator ?? 'contains', o.pagePathValue));
       if (o.pageUrlValue) filters.push(condition('{{Page URL}}', o.pageUrlOperator ?? 'contains', o.pageUrlValue));
+      // Scope a custom_event to a pushed dataLayer KEY via its {{dlv - <key>}} variable — the reliable
+      // way to pin a manual-push form event to ONE form (built-in {{Form ID}} does NOT resolve on a
+      // pushed event). The dlv variable itself is auto-provisioned by create_gtm_tracking_tag.
+      for (const c of o.dataLayerConditions ?? []) {
+        const key = (c?.key ?? '').trim();
+        const value = c?.value ?? '';
+        if (!key || value === '') continue;
+        filters.push(condition(`{{dlv - ${key}}}`, c.operator ?? 'equals', value));
+      }
       if (filters.length) t.filter = filters;
       return t;
     }
@@ -1026,6 +1042,20 @@ export function normalizeTimerTrigger(trigger: Record<string, unknown>): Record<
 }
 
 /** Built-in variables a trigger needs (so we can auto-enable them). */
+/** The distinct, non-empty dataLayer KEYS a custom_event trigger scopes on via {{dlv - <key>}}
+ *  (from `dataLayerConditions`). Each drives auto-creation of its `dlv - <key>` Data Layer Variable
+ *  so the {{dlv - <key>}} the trigger references actually resolves. [] for any non-custom_event kind
+ *  (native {{Form ID}} works on form_submit — no dlv needed there). PURE. */
+export function triggerDataLayerVarKeys(o: TriggerInput): string[] {
+  if (o.kind !== 'custom_event') return [];
+  const out: string[] = [];
+  for (const c of o.dataLayerConditions ?? []) {
+    const key = (c?.key ?? '').trim();
+    if (key && !out.includes(key)) out.push(key);
+  }
+  return out;
+}
+
 export function triggerBuiltInVars(o: TriggerInput): string[] {
   const vars: string[] = [];
   if (o.kind === 'link_click' || o.kind === 'all_clicks') {

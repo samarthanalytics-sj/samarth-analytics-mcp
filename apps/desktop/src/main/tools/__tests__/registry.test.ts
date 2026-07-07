@@ -1409,6 +1409,27 @@ async function main(): Promise<void> {
     assert.ok(fd.calls.some((c) => c.startsWith('createVar:1:2:3:v:Ecommerce Item List ID')), 'created the Ecommerce Item List ID data-layer variable');
   });
 
+  await test('create_tracking_tag (custom_event + dataLayerConditions) auto-provisions the {{dlv - form_id}} variable + scopes the trigger on it', async () => {
+    const fd = fakeData();
+    const reg = buildToolRegistry(fd.data, approveAsIs);
+    const out = JSON.parse(
+      await reg.execute('create_gtm_tracking_tag', {
+        accountId: '1', containerId: '2', workspaceId: '3',
+        platform: 'ga4_event', tagName: 'GA4 - Event - HubSpot Contact Form Tag', measurementId: 'G-XYZ', eventName: 'form_submit',
+        trigger: {
+          name: 'HubSpot Contact Form Trigger', kind: 'custom_event', eventName: 'form_submit',
+          pagePathValue: '/contact', pagePathOperator: 'contains',
+          dataLayerConditions: [{ key: 'form_id', value: 'contact', operator: 'equals' }],
+        },
+      })
+    );
+    // The pushed-key form_id has no built-in {{Form ID}} that resolves on a manual push — so a
+    // Data Layer (type "v") variable "dlv - form_id" reading form_id is auto-created (missing here).
+    assert.ok(fd.calls.some((c) => c.startsWith('createVar:1:2:3:v:dlv - form_id')), 'created the dlv - form_id data-layer variable');
+    assert.deepEqual(out.createdVariables, ['dlv - form_id']);
+    assert.ok(fd.calls.some((c) => c.startsWith('createTrigger:1:2:3:HubSpot Contact Form Trigger')), 'created the custom_event trigger');
+  });
+
   await test('create_tracking_tag (timer) maps intervalMs/limit to top-level Trigger fields; missing interval fails loudly', async () => {
     const fd = fakeData();
     const reg = buildToolRegistry(fd.data, approveAsIs);

@@ -8,6 +8,7 @@
 import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, SuggestPlatform, FormProvider, VideoEmbed, TriggerKind, CtaIntent } from './types.js';
 import { CTA_BY_INTENT, classifyCtaIntent } from './cta-intents.js';
 import { buildSocialUrlPattern } from './social.js';
+import { buildFormInstallPlan, type FormMechanism, type InstallRequirement } from './install-plan.js';
 
 const GA4_VAR = '{{GA4 Measurement ID}}';
 // Event-parameter VALUES are GTM built-in variables, so the tag captures the
@@ -475,9 +476,29 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   // AJAX/embed + JS/div forms: the native Form Submission trigger usually never fires there, and the
   // corpus' dominant ("Best"-rated) route is a CUSTOM EVENT trigger — so suggest THAT trigger, fired
   // by the provider listener / submit-handler push described in the note. The {{Form ID}}/{{Form
-  // Classes}} built-ins don't resolve on a pushed event, so only the page scope carries over (the
-  // builder supports ANDed {{Page Path}} conditions on custom_event, as real containers do).
+  // Classes}} built-ins do NOT resolve on a pushed event, so drop them; instead, when the form has an
+  // id, scope by {{dlv - form_id}} equals <id> — a Data Layer Variable reading the `form_id` the
+  // install-plan listener pushes (belt-and-suspenders with the page-path scope kept below).
   const dlEvent = isEmbed || isAjaxPlugin || f.method === 'js' ? (PROVIDER_DL_EVENT[f.provider.vendor] ?? 'form_submit') : null;
+  // Build the install plan FIRST — it is the single source of truth for what the paired listener actually
+  // pushes. A custom_event trigger can only scope by {{dlv - <key>}} if the listener REALLY pushes that
+  // key=value; the install plan sets `dlvScope` only when it does (the generic submit delegate, which
+  // pushes form_id = this form's own DOM id). A provider listener pushes its OWN internal id under its own
+  // key (hs_form_id/marketo_form_id/a plugin number/none) that would never equal the DOM id — so no scope.
+  const mechanism: FormMechanism = isEmbed ? 'embed' : isAjaxPlugin ? 'ajax' : f.method === 'js' ? 'js' : 'native';
+  const formHasNativeForm = mechanism === 'native' || mechanism === 'ajax' || (mechanism === 'js' && !!f.formId);
+  const install = buildFormInstallPlan({
+    provider: f.provider.vendor,
+    mechanism,
+    dlEvent,
+    formId: f.formId,
+    // Prefer a {{Form ID}}-style selector when we have one, else fall through to the generic 'form'.
+    selector: f.formId ? `#${f.formId}` : undefined,
+    formHasNativeForm,
+  });
+  const dlvScope = install.requires.find(
+    (r): r is Extract<InstallRequirement, { kind: 'listener-tag' }> => r.kind === 'listener-tag' && !!r.dlvScope,
+  )?.dlvScope;
   if (dlEvent) {
     trigger.kind = 'custom_event';
     trigger.eventName = dlEvent;
@@ -485,14 +506,28 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
     delete trigger.formIdOperator;
     delete trigger.formClassesValue;
     delete trigger.formClassesOperator;
+    // Scope to THIS form ONLY when the paired listener provably pushes a matching form_id (the generic
+    // submit delegate). Otherwise the page-path scope (kept above) carries the trigger — it still fires,
+    // just page-wide — instead of a {{dlv - form_id}} condition that could never match the provider's push.
+    if (dlvScope) {
+      trigger.dataLayerConditions = [{ key: dlvScope.key, value: dlvScope.value, operator: 'equals' }];
+    }
   }
   let note: string | undefined;
+  // How this pushed-event tag is scoped to THIS form. With a form id → {{dlv - form_id}} equals "<id>"
+  // (a Data Layer Variable reading the form_id the listener pushes); {{Form ID}} does not resolve on a
+  // pushed event. Without an id → page-only scope carries over (+ a nudge to add a unique id).
+  const dlvScopeClause = dlvScope
+    ? ` Scoped to this form via {{dlv - form_id}} equals "${dlvScope.value}" (a Data Layer Variable reading the form_id the auto-created listener pushes) — {{Form ID}} does not resolve on a pushed event.`
+    : f.formId
+      ? ` The provider's own listener pushes its internal submit id (not this form's DOM id), so the tag stays page-scoped ({{Form ID}} does not resolve on a pushed event); for form-specific scoping, have the push also carry form_id: "${f.formId}" and AND {{dlv - form_id}} equals "${f.formId}".`
+      : ` Only the page scope carries over ({{Form ID}} does not resolve on a pushed event) — add a unique id to the <form> so a generic listener can push form_id and the trigger can scope via {{dlv - form_id}}.`;
   if (isEmbed) {
-    note = `${cap(f.provider.vendor)} submits in an iframe / via AJAX — GTM's native Form Submission trigger usually won't fire, so this tag fires on a "${dlEvent}" Custom Event. Add the push: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the provider submit event'} → dataLayer.push({event: "${dlEvent}"}). Fallback: an Element Visibility trigger on the thank-you message.`;
+    note = `${cap(f.provider.vendor)} submits in an iframe / via AJAX — GTM's native Form Submission trigger usually won't fire, so this tag fires on a "${dlEvent}" Custom Event. Add the push: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the provider submit event'} → dataLayer.push({event: "${dlEvent}"${f.formId ? `, form_id: "${f.formId}"` : ''}}).${dlvScopeClause} Fallback: an Element Visibility trigger on the thank-you message.`;
   } else if (isAjaxPlugin) {
-    note = `${cap(f.provider.vendor)} submits via AJAX (it preventDefaults the native submit), so GTM's Form Submission trigger usually won't fire — this tag fires on a "${dlEvent}" Custom Event instead. Add a Custom HTML listener: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the plugin submit event'} → dataLayer.push({event: "${dlEvent}"${f.formId ? `, form_id: "${f.formId}"` : ''}}). AnalyticsMania publishes an importable recipe for this.${f.formId ? ` (If the plugin is set to NON-AJAX submit, a Form Submission trigger on {{Form ID}} equals "${f.formId}" also works.)` : ''}`;
+    note = `${cap(f.provider.vendor)} submits via AJAX (it preventDefaults the native submit), so GTM's Form Submission trigger usually won't fire — this tag fires on a "${dlEvent}" Custom Event instead. Add a Custom HTML listener: ${PROVIDER_EVENT_HINT[f.provider.vendor] ?? 'listen for the plugin submit event'} → dataLayer.push({event: "${dlEvent}"${f.formId ? `, form_id: "${f.formId}"` : ''}}).${dlvScopeClause} AnalyticsMania publishes an importable recipe for this.${f.formId ? ` (If the plugin is set to NON-AJAX submit, a Form Submission trigger on {{Form ID}} equals "${f.formId}" also works.)` : ''}`;
   } else if (f.method === 'js') {
-    note = `JS/div form (no native <form> submit) — GTM's Form Submission trigger may not fire, so this tag fires on a "${dlEvent}" Custom Event; push dataLayer.push({event: "${dlEvent}"}) from the form's submit handler. Fallbacks: an All-Clicks trigger on the submit button, or an Element Visibility trigger on the thank-you message.`;
+    note = `JS/div form (no native <form> submit) — GTM's Form Submission trigger may not fire, so this tag fires on a "${dlEvent}" Custom Event; push dataLayer.push({event: "${dlEvent}"${f.formId ? `, form_id: "${f.formId}"` : ''}}) from the form's submit handler.${dlvScopeClause} Fallbacks: an All-Clicks trigger on the submit button, or an Element Visibility trigger on the thank-you message.`;
   } else if (trigger.pagePathOperator === 'matchRegex') {
     // The multi-page consolidated case: ONE tag scoped by a {{Page Path}} RegEx over the group's pages.
     // A Page-Path-only Form Submission trigger fires on EVERY form submit on those pages, so warn that
@@ -509,6 +544,10 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
   } else if (!trigger.formIdValue && !trigger.formClassesValue) {
     note = `This form has no id or unique class and appears on multiple pages, so the trigger fires on EVERY form submit. Add an id to each <form> to scope it.`;
   }
+
+  // (The STRUCTURED install plan `install` is built above — it drove `dlvScope`, which gated the
+  // trigger's dataLayerConditions so the {{dlv - form_id}} scope only appears when a listener really
+  // pushes it. It is attached to the returned suggestion below.)
 
   // form_name is a SINGLE reusable {{Form Name}} Custom JavaScript variable (GTM has no built-in
   // {{Form Name}}) — every form tag references the same one, resolved at submit time from the form
@@ -534,6 +573,7 @@ function formSuggestion(f: DetectedForm, ctx: FormScopeCtx): SuggestedTag | null
       (sig.length ? `; fields: ${sig.join(', ')}` : '') +
       (f.hidden ? '; hidden at page load — typically opens in a modal/popup or tab (e.g. a "Book a demo" overlay)' : ''),
     ...(note ? { note } : {}),
+    install,
     confidence: 'high',
     // GA4 EM "form interactions" is limited/generic; a dedicated lead event is valuable.
     enhancedMeasurementOverlap: false,

@@ -70,6 +70,36 @@ for (const { vendor, ev } of wpAjaxCases) {
     out.length === 1 && t?.kind === 'custom_event' && t?.eventName === ev && !t?.formIdValue);
   check(`form: ${vendor} note explains AJAX + listener`, /AJAX/i.test(out[0]?.note ?? '') && /Custom (HTML|Event)/i.test(out[0]?.note ?? ''));
 }
+// A CF7 (AJAX / custom_event) form WITH a form id → scoped by {{dlv - form_id}} equals the id (reading
+// the form_id its listener pushes), since {{Form ID}} does not resolve on a pushed event.
+{
+  const cf7WithId = buildSuggestions({
+    siteHost: 'wp.com',
+    forms: [{ page: '/contact', purpose: 'contact', action: '/wp-comments-post.php', method: 'post', provider: { vendor: 'contactform7', confidence: 'high', evidence: 'class' }, formId: 'wpcf7-f123-p1' }],
+    elements: [],
+  });
+  const t = cf7WithId[0]?.trigger;
+  // A PROVIDER form (CF7) must NOT get a {{dlv - form_id}} condition: CF7's own listener pushes CF7's
+  // internal numeric id, never the DOM id, so an equals-DOM-id condition could never match. It stays
+  // page-scoped (which still fires).
+  check('form: CF7 (AJAX, provider) → NO dataLayerConditions (page-scoped, no impossible {{dlv - form_id}} match)',
+    cf7WithId.length === 1 && t?.kind === 'custom_event' && !t?.formIdValue && !t?.dataLayerConditions);
+  check('form: CF7 note does NOT falsely claim a {{dlv - form_id}} scope',
+    !/Scoped to this form via \{\{dlv - form_id\}\}/.test(cf7WithId[0]?.note ?? ''));
+
+  // The COHERENT case: a generic JS form with a real <form> + id → the generic submit delegate pushes
+  // form_id = the DOM id, so the trigger DOES scope by {{dlv - form_id}} equals that id.
+  const jsFormWithId = buildSuggestions({
+    siteHost: 'a.com',
+    forms: [{ page: '/contact', purpose: 'contact', action: '', method: 'js', provider: { vendor: 'unknown', confidence: 'low', evidence: '' }, formId: 'contact-form', fields: [{ type: 'email', name: 'email', required: true }, { type: 'textarea', name: 'message', required: false }] }],
+    elements: [],
+  });
+  const jt = jsFormWithId[0]?.trigger;
+  check('form: generic JS <form> WITH id → dataLayerConditions {{dlv - form_id}} equals the DOM id (coherent with its listener push)',
+    jt?.kind === 'custom_event' && Array.isArray(jt?.dataLayerConditions) && jt!.dataLayerConditions!.length === 1
+      && jt!.dataLayerConditions![0].key === 'form_id' && jt!.dataLayerConditions![0].value === 'contact-form');
+  check('form: generic JS form note mentions the {{dlv - form_id}} scope', /Scoped to this form via \{\{dlv - form_id\}\}/.test(jsFormWithId[0]?.note ?? ''));
+}
 check('form: directly creatable (platform + measurementId)', out1[0].platform === 'ga4_event' && out1[0].measurementId === '{{GA4 Measurement ID}}');
 check('naming: tag "GA4 Event - Contact Form Tag", trigger "Contact Form Trigger"', out1[0].tagName === 'GA4 - Event - Contact Form Tag' && out1[0].trigger.name === 'Contact Form Trigger');
 const provLow = { vendor: 'unknown' as const, confidence: 'low' as const, evidence: '' };
@@ -196,7 +226,27 @@ check('form: title case variants group case-insensitively → ONE tag', caseVar.
 const hubForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: { vendor: 'hubspot', confidence: 'high', evidence: 'js.hsforms.net' }, method: 'js', formId: 'hsForm_123' }], elements: [] });
 check('form: HubSpot (embedded) → the trigger IS a Custom Event on the corpus event "hubspot-form-success"',
   hubForm[0].trigger.kind === 'custom_event' && hubForm[0].trigger.eventName === 'hubspot-form-success' && !hubForm[0].trigger.formIdValue);
-check('form: HubSpot note explains the dataLayer push + the Element Visibility fallback', /custom event/i.test(hubForm[0].note ?? '') && /hubspot/i.test(hubForm[0].note ?? '') && /dataLayer\.push/.test(hubForm[0].note ?? '') && /element visibility/i.test(hubForm[0].note ?? ''));
+// HubSpot's own listener pushes hs_form_id = HubSpot's internal GUID (not the host div's DOM id), so the
+// suggestion must NOT emit a {{dlv - form_id}} equals <DOM id> condition that could never match. It stays
+// page-scoped (which still fires); the note explains why + how to make it form-specific.
+check('form: HubSpot (with formId, provider) → NO dataLayerConditions (provider pushes its own id, not the DOM id)',
+  !hubForm[0].trigger.dataLayerConditions);
+check('form: HubSpot note explains the dataLayer push + the Element Visibility fallback, and does NOT claim a {{dlv - form_id}} scope',
+  /custom event/i.test(hubForm[0].note ?? '') && /hubspot/i.test(hubForm[0].note ?? '') && /dataLayer\.push/.test(hubForm[0].note ?? '') && /element visibility/i.test(hubForm[0].note ?? '')
+    && !/Scoped to this form via \{\{dlv - form_id\}\}/.test(hubForm[0].note ?? ''));
+// The STRUCTURED install-plan companion: a HubSpot suggestion carries an auto-creatable Custom HTML
+// listener tag whose pushed event === the tag's custom_event trigger eventName.
+{
+  const hubInstall = hubForm[0].install;
+  const hubListener = hubInstall?.requires.find((r) => r.kind === 'listener-tag') as
+    | { kind: 'listener-tag'; event: string; tag: { html: string; fires: string } }
+    | undefined;
+  check('form: HubSpot suggestion carries install.requires with a listener-tag', !!hubInstall && !!hubListener);
+  check('form: HubSpot listener-tag event === the tag custom_event trigger eventName',
+    !!hubListener && hubListener.event === hubForm[0].trigger.eventName);
+  check('form: HubSpot listener html is a <script> that pushes dataLayer with hsFormCallback',
+    !!hubListener && /^<script>/.test(hubListener.tag.html) && /dataLayer/.test(hubListener.tag.html) && /hsFormCallback/.test(hubListener.tag.html));
+}
 
 const jsForm = buildSuggestions({ siteHost: 'a.com', forms: [{ page: '/', purpose: 'contact', action: '', provider: prov0, method: 'js', fields: [{ type: 'email', name: 'email', required: true }] }], elements: [] });
 check('form: JS/div form → note the native Form Submission trigger may not fire', /native <form> submit|may not fire/i.test(jsForm[0].note ?? ''));
