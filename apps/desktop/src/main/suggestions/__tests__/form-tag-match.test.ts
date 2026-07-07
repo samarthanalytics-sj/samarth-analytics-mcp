@@ -17,7 +17,7 @@ const fld = (over: Partial<FormFillFieldView>): FormFillFieldView =>
 const form = (over: Partial<PagedForm>): PagedForm => ({
   index: 0, page: 'https://site.com/', title: '', formId: '', formClasses: '', action: '', method: 'post', purpose: 'contact', hidden: false, fields: [], ...over,
 } as PagedForm);
-const tag = (tagName: string, eventName: string, formName?: string): FormTagIdentity => ({ tagName, eventName, ...(formName ? { formName } : {}) });
+const tag = (tagName: string, eventName: string, formName?: string): FormTagIdentity => ({ tagName, eventName, platform: 'ga4_event', ...(formName ? { formName } : {}) });
 
 // ── matching by title / tag name / form_name ─────────────────────────────────────
 {

@@ -3830,19 +3830,26 @@ function FormFillReview({ url, snippet, active, onError }: { url: string; snippe
   }
 
   // For a NOT-fired tag on a submitted form: what to change.
-  const fixFor = (r: SubmitFormVerifyResult, eventName: string): string => {
+  const fixFor = (r: SubmitFormVerifyResult, tag: { eventName: string; platform: string }): string => {
     if (!r.submitted) return `The form couldn’t be submitted (${r.note ?? 'no form/submit control found'}). Check the form’s fields/selectors, then retry.`;
+    const isPixel = !(tag.platform === 'ga4_event' || tag.platform === 'google_tag');
+    if (isPixel) {
+      if (r.beacons.length === 0) return `The form submitted but this ${tag.platform.replace(/_/g, ' ')} tag sent NO beacon — check it isn’t paused / blocked by an exception, its Consent Mode gate (ad_storage) isn’t denying it, and its pixel/conversion id is set. For DRAFT tags, paste a Preview snippet above.`;
+      return `The form beaconed to [${r.beacons.join(', ')}] but not this tag’s vendor — the tag’s trigger/condition may not match this form, or it’s configured for a different pixel.`;
+    }
     if (r.events.length === 0) return `The form submitted but pushed NO GA4 event — the site isn’t emitting its form_submission dataLayer event. Add the form’s listener (a Custom HTML tag that pushes the event on submit-success), or, for DRAFT tags, paste a GTM Preview snippet above. Confirm in GTM Preview.`;
-    return `The form fired [${r.events.join(', ')}] but not “${eventName}”. Either this tag’s trigger condition (form name / id / page) doesn’t match this form, or its GA4 Event Name differs — align the tag’s Event Name to one of the fired events, or fix its form-name condition.`;
+    return `The form fired [${r.events.join(', ')}] but not “${tag.eventName}”. Either this tag’s trigger condition (form name / id / page) doesn’t match this form, or its GA4 Event Name differs — align the tag’s Event Name to one of the fired events, or fix its form-name condition.`;
   };
 
   const matched = plan?.matched ?? [];
 
   return (
     <>
-      <div style={{ ...styles.h2, marginTop: 20 }}>Form tag verification — real submit</div>
-      <div style={{ ...styles.muted, fontSize: 12.5, marginBottom: 6 }}>
-        Using the URL above: find the forms that HAVE a tracking tag, fill the data once, then submit each for real and verify its tag (with a fix when it doesn’t fire). Real submits create a real lead per form.
+      <div style={{ borderTop: '1px solid rgba(128,128,128,0.22)', marginTop: 14, paddingTop: 12 }}>
+        <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--text)' }}>Forms — verify by a real submit</div>
+        <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 2, marginBottom: 6 }}>
+          Same URL as above: find the forms that HAVE a tracking tag, fill the data once, then submit each for real and verify its tag (with a fix when it doesn’t fire). Real submits create a real lead per form.
+        </div>
       </div>
       <div style={styles.card}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -3942,7 +3949,7 @@ function FormFillReview({ url, snippet, active, onError }: { url: string; snippe
                                 ) : (
                                   <>
                                     <span style={{ color: 'var(--c-red)', fontWeight: 600 }}>✗ NOT FIRED — {t.tagName}</span>
-                                    <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)' }}>Fix: {fixFor(r, t.eventName)}</div>
+                                    <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)' }}>Fix: {fixFor(r, t)}</div>
                                   </>
                                 )}
                               </div>

@@ -13,6 +13,8 @@ export type PagedForm = FormFillView & { page: string };
 export interface FormTagIdentity {
   tagName: string;
   eventName: string;
+  /** ga4_event / meta_pixel / linkedin_insight / … — so the verdict + fix know GA4 vs pixel. */
+  platform: string;
   /** The tag's resolved form-name condition (customEventData), when present — the best match key. */
   formName?: string;
 }
@@ -85,7 +87,7 @@ export function matchFormsToTags(
         };
         byKey.set(key, mv);
       }
-      if (!mv.expectedTags.some((x) => x.tagName === tag.tagName)) mv.expectedTags.push({ tagName: tag.tagName, eventName: tag.eventName });
+      if (!mv.expectedTags.some((x) => x.tagName === tag.tagName)) mv.expectedTags.push({ tagName: tag.tagName, eventName: tag.eventName, platform: tag.platform });
     } else {
       unmatched.push(tag.tagName);
     }

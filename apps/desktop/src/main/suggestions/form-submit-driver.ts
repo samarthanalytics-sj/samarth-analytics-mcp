@@ -12,7 +12,7 @@
 // Playwright is loaded lazily; absent → a clear error.
 
 import { requestAllowed } from './ssrf';
-import { classifyCollector, parseGa4CollectHit, beaconHost, type Collector } from '../../shared/runtime-capture';
+import { classifyCollector, parseGa4CollectHit, beaconHost, beaconPlatform, type Collector } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
 import { buildLoaderSrc, isPreviewLoader } from './verify-driver';
 
@@ -95,6 +95,8 @@ export interface FormSubmitDriverResult {
   events: string[];
   /** Distinct analytics beacon hosts observed (GA4/sGTM/pixels). */
   beacons: string[];
+  /** Distinct beacon VENDORS observed (meta/linkedin/pinterest/…) — pairs pixel/ad tags. */
+  beaconPlatforms?: string[];
 }
 
 /** Grant Consent Mode v2 so consent-gated tags fire (same synthetic override the verify driver uses). */
@@ -303,6 +305,9 @@ export async function runFormSubmitDriver(
       ),
     ];
     const beacons = [...new Set(hits.map((h) => beaconHost(h.url)).filter(Boolean))];
+    // The specific vendor per beacon (from the FULL hit url — a bare host loses the /tr path Meta needs),
+    // so a pixel/ad form tag (Meta/LinkedIn/Pinterest/…) can be paired by its vendor.
+    const beaconPlatforms = [...new Set(hits.map((h) => beaconPlatform(h.url)).filter((p) => p && p !== 'other'))];
     return {
       ...base,
       ok: true,
@@ -312,6 +317,7 @@ export async function runFormSubmitDriver(
       ...(outcome.note ? { note: outcome.note } : {}),
       events,
       beacons,
+      beaconPlatforms,
     };
   } catch (e) {
     return { ...base, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
