@@ -1,3 +1,9 @@
+## [1.233.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.232.0...v1.233.0) (2026-07-07)
+
+### Features
+
+* **verify:** Phase 1b — real-submit form review UI (fetch fields + locale fill plan) ([4d69cdb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4d69cdb675b98a1e86216343fbbb42a25463b85f))
+
 ## [1.232.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.231.0...v1.232.0) (2026-07-07)
 
 ### Features
