@@ -226,7 +226,12 @@ export function evaluateVerify(
       return bp === want || (want === 'ad' && isKnownAdPlatform(bp));
     });
     if (fired) return withBeacons({ ...base, fired: true, event: beaconPlatform(fired.url), interaction, evidence: fired });
-    return withBeacons({ ...base, ...(cap.kind === 'custom_event' ? { inconclusive: true } : {}), reason: `the interaction ran but no ${want === 'ad' ? 'ad/pixel' : want} beacon fired for this ${tag.platform} tag${observedBeacons.length ? ` (it did beacon to: ${observedBeacons.join(', ')})` : ''}`, interaction });
+    // A GENERIC 'ad' tag is an undecodable Custom Template / Custom HTML we mapped by fallback: no
+    // recognised beacon doesn't prove it's broken (it may be server-side, a non-pixel template, or a
+    // beacon host we don't classify) → inconclusive. A SPECIFIC vendor (meta/tiktok/…) whose element
+    // was clicked but produced no beacon IS a genuine failure. custom_event pushes stay inconclusive.
+    const undecodable = want === 'ad' || cap.kind === 'custom_event';
+    return withBeacons({ ...base, ...(undecodable ? { inconclusive: true } : {}), reason: `the interaction ran but no ${want === 'ad' ? 'ad/pixel' : want} beacon fired for this ${tag.platform} tag${observedBeacons.length ? ` (it did beacon to: ${observedBeacons.join(', ')})` : ''}`, interaction });
   });
 }
 

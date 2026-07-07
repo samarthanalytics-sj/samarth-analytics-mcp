@@ -200,10 +200,38 @@ function pageFromTrigger(trigger: VerifyTagInput['trigger']): string | undefined
   return undefined;
 }
 
-/** GA4/base tag types this MVP can verify. Others (Meta template, Ads, Floodlight, …) are skipped. */
-function platformOf(type: string): VerifyTagInput['platform'] | null {
+/** Detect a pixel VENDOR from the tag's name, so a Custom-Template / Custom-HTML tag we can't decode
+ *  is matched to the SPECIFIC network beacon that proves it fired (facebook.com/tr for Meta, etc.).
+ *  Name-based (heuristic) — a clear vendor word wins; otherwise the caller falls back to a generic
+ *  'ad' match (any recognised pixel beacon counts). */
+function pixelPlatformFromName(name: string): VerifyTagInput['platform'] | undefined {
+  const n = (name || '').toLowerCase();
+  if (/\bmeta\b|facebook|\bfb\b|fbq|meta[\s-]*pixel/.test(n)) return 'meta_pixel';
+  if (/tiktok|ttq/.test(n)) return 'tiktok_pixel';
+  if (/linkedin/.test(n)) return 'linkedin_insight';
+  if (/pinterest|pintrk/.test(n)) return 'pinterest_tag';
+  if (/snap(chat)?\b/.test(n)) return 'snap_pixel';
+  if (/reddit|rdt/.test(n)) return 'reddit_pixel';
+  if (/hotjar/.test(n)) return 'hotjar';
+  return undefined;
+}
+
+/** The verify platform for a tag. GA4/base tags are decoded from their /collect hit; pixel/ad tags
+ *  can't be decoded but ARE proven by their network beacon. We map to a platform ONLY when the vendor
+ *  is pinned precisely — by NAME for Custom Templates / Custom HTML (Meta/TikTok/…), or by TYPE for
+ *  Google Ads — so a tag is matched only by ITS vendor's beacon and never cross-credited by another
+ *  pixel that fired on the same interaction. Anything we can't pin (unnamed template, no observable
+ *  beacon) returns null → honestly skipped, never a generic guess. */
+function platformOf(tag: AuditTag): VerifyTagInput['platform'] | null {
+  const type = tag.type;
   if (type === 'gaawe') return 'ga4_event';
   if (type === 'googtag' || type === 'gaawc') return 'google_tag';
+  // Custom Template (cvt_*) + Custom HTML: home of Meta/TikTok/… pixels. Verify only when the vendor
+  // is clear from the name — its SPECIFIC beacon proves firing. An unnamed template stays skipped.
+  if (type.startsWith('cvt_') || type === 'html') return pixelPlatformFromName(tag.name) ?? null;
+  // Google Ads conversion / remarketing: the TYPE pins the vendor precisely (not a name guess).
+  if (type === 'awct') return 'google_ads_conversion';
+  if (type === 'sp') return 'google_ads_remarketing';
   return null;
 }
 
@@ -225,7 +253,7 @@ export function snapshotToVerifyInputs(snapshot: ContainerSnapshot): ContainerVe
   const skipped: ContainerVerifyResult['skipped'] = [];
 
   for (const tag of snapshot.tags) {
-    const platform = platformOf(tag.type);
+    const platform = platformOf(tag);
     if (!platform) {
       skipped.push({ tagId: tag.tagId, name: tag.name, reason: `tag type "${tag.type}" not verifiable in this MVP` });
       continue;
@@ -255,7 +283,11 @@ export function snapshotToVerifyInputs(snapshot: ContainerSnapshot): ContainerVe
       continue;
     }
 
-    const eventName = platform === 'ga4_event' ? tagParam(tag, 'eventName') ?? '' : 'page_view';
+    // GA4 decodes its event from the /collect hit; the base Google tag sends page_view; pixel/ad tags
+    // aren't event-decodable (proven by beacon), so their eventName is cosmetic.
+    const eventName = platform === 'ga4_event' ? tagParam(tag, 'eventName') ?? ''
+      : platform === 'google_tag' ? 'page_view'
+      : tagParam(tag, 'eventName') ?? '';
     // GA4 event tags ship an EMPTY measurementId tagReference + measurementIdOverride with the real
     // G-XXXX; google tags carry it under tagId. Skip empty values so the real id (used for tid=
     // attribution) isn't shadowed by the placeholder.

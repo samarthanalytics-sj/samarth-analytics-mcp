@@ -174,6 +174,27 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   check('custom_event fired → not inconclusive', v.fired === true && !v.inconclusive);
 }
 
+// ── pixel/ad tags: a SPECIFIC vendor no-beacon is a real failure; a generic 'ad' no-beacon is not ──
+{
+  // A named Meta tag whose element was clicked but produced no facebook beacon → genuine not-fired.
+  const meta = tag({ id: 'me', platform: 'meta_pixel', eventName: '' });
+  const v = evaluateVerify([meta], [cap({ tagId: 'me', hits: [] })], els)[0];
+  check('specific pixel (meta) clicked, no beacon → genuine not-firing', v.fired === false && !v.inconclusive);
+}
+{
+  // A generic 'ad' tag (an undecodable Custom Template we mapped by fallback) with no recognised
+  // beacon is NOT provably broken → inconclusive, not a red failure.
+  const adTag = tag({ id: 'ad', platform: 'ad', eventName: '' });
+  const v = evaluateVerify([adTag], [cap({ tagId: 'ad', hits: [] })], els)[0];
+  check('generic ad tag clicked, no beacon → inconclusive', v.fired === false && v.inconclusive === true);
+}
+{
+  // A generic 'ad' tag DOES fire on any recognised pixel/ad beacon.
+  const adTag = tag({ id: 'ad2', platform: 'ad', eventName: '' });
+  const v = evaluateVerify([adTag], [cap({ tagId: 'ad2', hits: [linkedinHit()] })], els)[0];
+  check('generic ad tag fires on any recognised pixel beacon', v.fired === true);
+}
+
 console.log(`\nverify-tags: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 20) { console.error(`expected >= 20 checks, got ${passed}`); process.exit(1); }
+if (passed < 24) { console.error(`expected >= 24 checks, got ${passed}`); process.exit(1); }
