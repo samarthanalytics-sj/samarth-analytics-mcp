@@ -206,11 +206,12 @@ export function evaluateVerify(
         return withBeacons({ ...base, reason: `the interaction fired GA4 hit(s) [${seen}] but none for "${tag.eventName}" — the tag or its event name may differ`, interaction, evidence: events[0].hit, ...(observedEvents.length ? { observedEvents } : {}) });
       }
       if (cap.kind === 'custom_event') {
-        // We pushed a BARE synthetic dataLayer event (e.g. `form_submission`). Many containers wire
-        // one shared event for every form and split them by form-specific data (form name/ID, page).
-        // A bare push carries none of that, so per-form tags legitimately don't match — a limit of
-        // synthetic driving, NOT a broken tag. Inconclusive; verify with a real submit in Preview.
-        return withBeacons({ ...base, inconclusive: true, reason: `we pushed a synthetic "${tag.trigger.eventName ?? 'custom'}" dataLayer event, but this tag also keys off form-specific data (form name/ID/page) a bare push can't supply — verify it with a real submit in GTM Preview`, interaction });
+        // We pushed a synthetic dataLayer event (e.g. `form_submission`) plus any form-specific data
+        // we could resolve from the trigger's conditions (form_name/form_id/…). If it STILL didn't
+        // fire, a further condition we can't synthesize applies — a specific page, a Custom JS
+        // variable, a matchRegex/negated condition, or a blocking trigger. Not proof it's broken —
+        // inconclusive; verify with a real submit in GTM Preview.
+        return withBeacons({ ...base, inconclusive: true, reason: `we pushed a synthetic "${tag.trigger.eventName ?? 'custom'}" dataLayer event (with any resolvable form data), but this tag still didn't fire — it likely needs a further condition we can't synthesize (a specific page, a Custom JS variable, or a blocking trigger); verify it with a real submit in GTM Preview`, interaction });
       }
       return withBeacons({ ...base, reason: 'the interaction ran but no GA4 hit fired — the tag/trigger may not be in the loaded container, or its condition does not match', interaction });
     }

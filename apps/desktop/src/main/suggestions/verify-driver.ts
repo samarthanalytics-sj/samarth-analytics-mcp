@@ -67,6 +67,10 @@ export interface DriverTrigger {
   formClassesOperator?: string;
   /** For custom_event triggers: the dataLayer event name to push. */
   eventName?: string;
+  /** For custom_event triggers whose tag keys off form-specific data (a shared `form_submission`
+   *  event split by `{{form_name}}`/`{{form_id}}`): extra dataLayer key→value pairs to push
+   *  alongside the event, so the tag's condition matches. */
+  customEventData?: Record<string, string>;
 }
 export interface VerifyDriverTag {
   id: string;
@@ -211,6 +215,23 @@ function grantConsentInPage(): void {
     ad_user_data: 'granted',
     ad_personalization: 'granted',
   });
+}
+
+/**
+ * Build the dataLayer object to push for one custom_event drive: the synthetic event + this tag's
+ * resolved form-specific data, with every PRIOR-pushed key this tag is NOT setting blanked to '' so
+ * a stale value (a GTM Data Layer Variable reads the last value for its key) can't falsely satisfy
+ * this tag's condition and wrongly credit it. PURE — the driver owns the browser + the key set.
+ */
+export function buildCustomEventPayload(
+  evName: string,
+  customEventData: Record<string, string> | undefined,
+  priorKeys: ReadonlySet<string>,
+): Record<string, unknown> {
+  const data = customEventData ?? {};
+  const reset: Record<string, unknown> = {};
+  for (const k of priorKeys) if (!(k in data)) reset[k] = '';
+  return { ...(syntheticDataLayerEvent(evName) as Record<string, unknown>), ...reset, ...data };
 }
 
 /** Push a (synthetic) dataLayer event so a custom_event trigger fires. */
@@ -419,6 +440,13 @@ export async function runVerifyDriver(
       const settleQuiet = 400;
       const settleMax = Math.min(Math.max(settleMs, 900) * 3, 5000);
 
+      // Every dataLayer KEY any custom_event tag has pushed on THIS page. A GTM Data Layer Variable
+      // reads the LAST value pushed for its key, so without resetting, tag A's form_name would leak
+      // into tag B's evaluation and could FALSELY credit a later tag whose condition we didn't
+      // actually supply. Before each push we blank the prior keys this tag isn't setting. (Reset per
+      // page — page.goto starts a fresh document + dataLayer.)
+      const pushedDlKeys = new Set<string>();
+
       for (const tag of groupTags) {
         const kind = tag.trigger.kind;
 
@@ -442,8 +470,14 @@ export async function runVerifyDriver(
             continue;
           }
           const before = captured.length;
+          // Include any form-specific dataLayer data the tag's trigger keys off (form_name/form_id/…),
+          // resolved by container-verify, so a tag on a SHARED event (e.g. one form_submission split
+          // per form) matches its condition instead of being missed by a bare event push.
+          const data = tag.trigger.customEventData ?? {};
+          const payload = buildCustomEventPayload(evName, data, pushedDlKeys);
+          Object.keys(data).forEach((k) => pushedDlKeys.add(k));
           try {
-            await page.evaluate(pushDataLayerInPage, syntheticDataLayerEvent(evName) as Record<string, unknown>);
+            await page.evaluate(pushDataLayerInPage, payload);
           } catch {
             /* ignore push failure — reported as no-hit below */
           }

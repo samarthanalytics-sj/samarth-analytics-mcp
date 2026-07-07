@@ -6,10 +6,60 @@
 // No browser, no I/O — unit-testable. Best-effort + defensive: a tag whose trigger
 // can't be mapped to a drivable interaction is skipped (returned in `skipped`).
 
-import type { ContainerSnapshot, AuditTag, AuditTrigger } from '../google/gtm-builders';
+import type { ContainerSnapshot, AuditTag, AuditTrigger, AuditVariable } from '../google/gtm-builders';
 import type { VerifyTagInput } from '../../shared/ipc';
 
 type Rec = Record<string, unknown>;
+
+/** Built-in GTM variables that are NOT dataLayer keys (they're auto-event / URL data), so a condition
+ *  on one is never turned into a synthetic dataLayer push. */
+const BUILTIN_VAR_RE =
+  /^(click (text|url|id|classes|element|target|listener)|form (id|classes|element|text|url|target)|page (path|url|hostname|fragment)|referrer|event|container (id|version)|random number|html id|error (message|url|line)|new history fragment|old history fragment|history source|scroll (depth threshold|depth units|direction)|video .*|element (visibility|url))$/i;
+
+/** Map each Data Layer Variable's DISPLAY name (lowercased) → the dataLayer KEY it reads. A GTM DLV
+ *  (type "v") stores the key in its `name` parameter, e.g. display "DLV - form_name" reads key
+ *  "form_name". Lets a `{{DLV - form_name}}` condition be pushed as `{ form_name: … }`. */
+function dlvKeyMap(variables: AuditVariable[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const v of variables) {
+    if ((v.type ?? '').toLowerCase() !== 'v') continue; // "v" = Data Layer Variable
+    const nameParam = (v.parameter ?? []).find((p) => (p as Rec).key === 'name') as Rec | undefined;
+    const key = nameParam && typeof nameParam.value === 'string' ? nameParam.value.trim() : '';
+    const display = (v.name ?? '').trim().toLowerCase();
+    if (key && display) map.set(display, key);
+  }
+  return map;
+}
+
+/** Resolve a `{{Variable}}` reference to the dataLayer key to push, or undefined when it isn't a
+ *  pushable dataLayer variable (a built-in, or a non-DLV we can't synthesize a value for). */
+function dataLayerKeyOf(rawVar: string, map: Map<string, string>): string | undefined {
+  const display = rawVar.replace(/^\{\{/, '').replace(/\}\}$/, '').trim();
+  if (!display || BUILTIN_VAR_RE.test(display)) return undefined;
+  return map.get(display.toLowerCase());
+}
+
+/** For a custom_event trigger, resolve its EXTRA (ANDed) conditions into the dataLayer key→value pairs
+ *  the synthetic push must carry so the tag's condition matches — the fix for many tags sharing one
+ *  `form_submission` event but split by `{{form_name}}`/`{{form_id}}`. Only positive equals/contains/
+ *  startsWith/endsWith conditions on a resolvable Data Layer Variable are usable: pushing the literal
+ *  arg1 satisfies all four. matchRegex/cssSelector/negated/page conditions and unresolvable variables
+ *  are left out (the tag then stays "inconclusive" rather than being wrongly proven). */
+function customEventDataFrom(trig: AuditTrigger, map: Map<string, string>): Record<string, string> {
+  const data: Record<string, string> = {};
+  for (const c of (trig.filter ?? []) as Rec[]) {
+    if (isNegated(c)) continue;
+    const op = opOf(c);
+    if (!['equals', 'contains', 'startsWith', 'endsWith'].includes(op)) continue;
+    const value = argOf(c, 'arg1');
+    if (value === undefined) continue;
+    const key = dataLayerKeyOf(argOf(c, 'arg0') ?? '', map);
+    // Never let a resolved key clobber the reserved `event` key — that's the event name the push
+    // already sets, and overriding it would drive the wrong event.
+    if (key && key !== 'event') data[key] = value;
+  }
+  return data;
+}
 
 /** Read a condition/param arg (arg0 = the {{variable}}, arg1 = the value). */
 function argOf(cond: Rec, key: string): string | undefined {
@@ -68,7 +118,7 @@ function isBuiltinTriggerId(id: string): boolean {
 /** Build a verify trigger from a GTM trigger's conditions. Returns null when the trigger can't be
  *  driven faithfully (unsupported type, negated condition, or no locatable target) — the caller
  *  then records the tag in `skipped` instead of emitting a trigger that yields a wrong verdict. */
-function triggerFrom(trig: AuditTrigger): VerifyTagInput['trigger'] | null {
+function triggerFrom(trig: AuditTrigger, dlvMap: Map<string, string>): VerifyTagInput['trigger'] | null {
   const kind = kindOf(trig.type);
   if (!kind) return null;
 
@@ -113,6 +163,10 @@ function triggerFrom(trig: AuditTrigger): VerifyTagInput['trigger'] | null {
     const ev = cef.map((c) => argOf(c, 'arg1')).find((v) => v && v !== '.*');
     if (ev) out.eventName = ev;
     if (!out.eventName) return null; // no concrete dataLayer event name to push → can't drive it
+    // Carry the trigger's form-specific conditions so the synthetic push satisfies the RIGHT tag
+    // when many tags share one form_submission event (split by {{form_name}}/{{form_id}}/…).
+    const data = customEventDataFrom(trig, dlvMap);
+    if (Object.keys(data).length) out.customEventData = data;
   }
 
   // Click triggers need a text/URL the driver can locate on the page. A click scoped ONLY by
@@ -166,6 +220,7 @@ export interface ContainerVerifyResult {
  */
 export function snapshotToVerifyInputs(snapshot: ContainerSnapshot): ContainerVerifyResult {
   const triggerById = new Map(snapshot.triggers.map((t) => [t.triggerId, t]));
+  const dlvMap = dlvKeyMap(snapshot.variables ?? []);
   const tags: VerifyTagInput[] = [];
   const skipped: ContainerVerifyResult['skipped'] = [];
 
@@ -189,7 +244,7 @@ export function snapshotToVerifyInputs(snapshot: ContainerSnapshot): ContainerVe
         if (trigger) break;
         continue;
       }
-      const mapped = triggerFrom(trig);
+      const mapped = triggerFrom(trig, dlvMap);
       if (mapped) {
         trigger = mapped;
         break;
