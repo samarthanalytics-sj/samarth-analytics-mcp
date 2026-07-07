@@ -1,3 +1,10 @@
+## [1.229.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.228.0...v1.229.0) (2026-07-07)
+
+### Features
+
+* **forms:** Phase 1 core for real-submit form verification — field-fetch + fill engine ([37d8762](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/37d87628c819fa7181605045ea0027fe91e85cb9))
+* **verify:** verify Meta / pixel / ad tags by their network beacon (stop skipping them) ([455f498](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/455f49815fdda9a24273ed9a9d8ff5d4cd0a17a0))
+
 ## [1.228.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.227.0...v1.228.0) (2026-07-07)
 
 ### Features
