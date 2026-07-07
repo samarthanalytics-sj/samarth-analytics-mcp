@@ -1,3 +1,9 @@
+## [1.230.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.229.0...v1.230.0) (2026-07-07)
+
+### Features
+
+* **verify:** mark synthetic (form / custom-event) fires as config-only, not real-submit proof ([7574554](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/75745541241316eb4d73c50335df150abb7a3677))
+
 ## [1.229.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.228.0...v1.229.0) (2026-07-07)
 
 ### Features
