@@ -1,3 +1,9 @@
+## [1.252.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.252.1...v1.252.2) (2026-07-07)
+
+### Bug Fixes
+
+* **verify:** stop the form check over-matching tags + mark server-side pixels honestly ([133e0fb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/133e0fb27cb7cea667f8315ed6bd2218930cb5af)), closes [#411](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/411)
+
 ## [1.252.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.252.0...v1.252.1) (2026-07-07)
 
 ### Bug Fixes
