@@ -122,7 +122,7 @@ export interface Ga4EventInput {
  *  previous_page, bound to the default-enabled {{Page URL}} / {{Referrer}} built-in variables. These are
  *  CUSTOM names (not GA4's auto-collected page_location/page_referrer), so they add reportable data
  *  without clashing with automatic collection, and their variables need no setup. Mirrors the
- *  measurement-plan scan (ai-scan.ts PAGE_PARAMS). GA4 auto-collects session/engagement/geo/device, so
+ *  measurement-plan scan's default page params. GA4 auto-collects session/engagement/geo/device, so
  *  those are intentionally not re-added; context params (click_text, form_id) are added per-event by
  *  the scan / passed explicitly. */
 export const DEFAULT_GA4_EVENT_PARAMS: Array<{ name: string; value: string }> = [

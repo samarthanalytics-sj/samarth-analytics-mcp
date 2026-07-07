@@ -59,9 +59,9 @@ test('GA4_ECOMMERCE_REFERENCE maps each ecommerce event to its parameters', () =
   assert.ok(/ecommerce\.items/.test(m) && /Custom Event trigger/i.test(m), 'reads from the ecommerce data layer + Custom Event trigger');
 });
 
-test('GTM_CREATION_METHODOLOGY carries the shared build-methodology (same rules the tag-suggestion engine + AI scan use)', () => {
+test('GTM_CREATION_METHODOLOGY carries the shared build-methodology (same rules the tag-suggestion engine uses)', () => {
   const m = GTM_CREATION_METHODOLOGY;
-  // Shared event-selection prefix (also injected into the AI-scan vision prompt).
+  // Shared GA4 event-selection taxonomy prefix.
   assert.ok(/GA4 EVENT SELECTION/.test(m) && /snake_case/.test(m), 'includes the event-selection taxonomy in snake_case');
   assert.ok(/primary navigation/i.test(m) && /cookie-consent \/ CMP/i.test(m), 'names the skip list (nav + consent controls)');
   // Creation methodology.

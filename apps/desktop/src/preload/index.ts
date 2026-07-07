@@ -209,9 +209,6 @@ const api = {
     },
     fromJson: (json: string): Promise<ParsedSuggestionsResult> =>
       ipcRenderer.invoke('suggestions:fromJson', json),
-    // EXPERIMENTAL: single-page AI scan — screenshot + OpenAI vision picks the tags.
-    aiScan: (url: string, opts?: TagScanOptions): Promise<TagScanResult> =>
-      ipcRenderer.invoke('suggestions:aiScan', url, opts),
     // Save the (renderer-built) template CSV to a user-chosen file → saved path or null.
     exportCsv: (defaultName: string, csv: string): Promise<string | null> =>
       ipcRenderer.invoke('suggestions:exportCsv', defaultName, csv),

@@ -216,7 +216,7 @@ app.whenReady().then(() => {
   registerDataIpc(dataService);
   registerChatIpc(chatService);
   registerMonitorIpc(monitor);
-  registerSuggestionsIpc(dataService, providerKeys);
+  registerSuggestionsIpc(dataService);
   registerGtmAuditIpc(dataService);
   registerGa4AuditIpc(dataService);
   registerGa4MonitoringIpc(ga4Monitoring);
