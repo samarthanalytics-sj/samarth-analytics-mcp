@@ -1195,11 +1195,7 @@ function GtmContextBar({
     }
   }, [editing]);
 
-  async function pickAccount(accountId: string): Promise<void> {
-    const acc = accounts.find((a) => a.accountId === accountId);
-    setSel({ accountId, accountName: acc?.name });
-    setContainers([]);
-    setWorkspaces([]);
+  const loadContainers = async (accountId: string): Promise<void> => {
     if (!accountId) return;
     setLoading('containers');
     try {
@@ -1214,21 +1210,54 @@ function GtmContextBar({
     } finally {
       setLoading('');
     }
-  }
-
-  async function pickContainer(containerId: string): Promise<void> {
-    const c = containers.find((x) => x.containerId === containerId);
-    setSel((s) => ({ ...s, containerId, containerName: c?.name, containerPublicId: c?.publicId, workspaceId: undefined, workspaceName: undefined }));
-    setWorkspaces([]);
-    if (!containerId || !sel.accountId) return;
+  };
+  const loadWorkspaces = async (accountId: string, containerId: string): Promise<void> => {
+    if (!accountId || !containerId) return;
     setLoading('workspaces');
     try {
-      setWorkspaces(await window.desktop.data.listGtmWorkspaces(sel.accountId, containerId));
+      setWorkspaces(await window.desktop.data.listGtmWorkspaces(accountId, containerId));
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading('');
     }
+  };
+
+  // THE FIX: load containers whenever an account is selected — a MANUAL pick OR an account carried over
+  // from the saved context (the dropdown shows it, but NO onChange fires, so the fetch never ran → the
+  // container dropdown stayed empty). Ref-guarded so each account fetches once (also dedupes React
+  // StrictMode's double-mount). Same for workspaces once a container is selected.
+  const loadedForAccount = useRef<string>('');
+  const loadedForContainer = useRef<string>('');
+  useEffect(() => {
+    if (editing && sel.accountId && loadedForAccount.current !== sel.accountId) {
+      loadedForAccount.current = sel.accountId;
+      void loadContainers(sel.accountId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, sel.accountId]);
+  useEffect(() => {
+    const key = sel.accountId && sel.containerId ? `${sel.accountId}/${sel.containerId}` : '';
+    if (editing && key && loadedForContainer.current !== key) {
+      loadedForContainer.current = key;
+      void loadWorkspaces(sel.accountId!, sel.containerId!);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, sel.accountId, sel.containerId]);
+
+  function pickAccount(accountId: string): void {
+    const acc = accounts.find((a) => a.accountId === accountId);
+    setSel({ accountId, accountName: acc?.name });
+    setContainers([]);
+    setWorkspaces([]);
+    // containers load via the effect above — the single fetch path (also covers a pre-selected account)
+  }
+
+  function pickContainer(containerId: string): void {
+    const c = containers.find((x) => x.containerId === containerId);
+    setSel((s) => ({ ...s, containerId, containerName: c?.name, containerPublicId: c?.publicId, workspaceId: undefined, workspaceName: undefined }));
+    setWorkspaces([]);
+    // workspaces load via the effect above
   }
 
   function pickWorkspace(workspaceId: string): void {
