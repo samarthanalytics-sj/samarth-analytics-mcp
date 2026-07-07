@@ -282,12 +282,12 @@ test('section 6 omits the campaign table when there are no tagged campaigns (nul
   assert.ok(!/Campaign performance/.test(h), 'no campaign table when null');
 });
 
-test('section 6 renders the ecommerce funnel with steps, overall rate, and the approximation caveat', () => {
+test('section 6 renders ONE funnel (the bar chart), with step conversion folded in and no duplicate table', () => {
   const h = ga4SectionsHtml(view());
-  assert.ok(/Ecommerce funnel/.test(h), 'funnel heading');
-  assert.ok(/view-to-purchase 10\.0%/.test(h), 'overall rate in the caption');
-  assert.ok(h.includes('Begin checkout') && h.includes('50%'), 'a funnel step with its step conversion');
-  assert.ok(/Step conversion/.test(h) && /% of entry/.test(h), 'both funnel columns');
+  assert.ok(/Purchase funnel: users per step/.test(h), 'funnel chart heading');
+  assert.ok(/view-to-purchase is 10\.0%/.test(h), 'overall rate in the explainer');
+  assert.ok(h.includes('Begin checkout') && /step conv 50%/.test(h), 'step conversion carried on the bar value');
+  assert.ok(!/Ecommerce funnel<\/[a-z]+>|>Ecommerce funnel</.test(h) && !/Step conversion<\/th>/.test(h), 'the duplicate table is gone');
   assert.ok(/not a strict sequential path/.test(h), 'honesty caveat present');
 });
 
