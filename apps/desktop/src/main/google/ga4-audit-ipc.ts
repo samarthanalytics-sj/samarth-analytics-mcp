@@ -155,6 +155,11 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
     // enough reliable cohort data (small/immature cohorts are excluded, not shown as 0%).
     const retentionCohorts = await retentionP;
     const retentionSummary = retentionCohorts ? summarizeGa4Retention({ cohorts: retentionCohorts, minCohortSize: 100 }) : null;
+    // The transaction pass ALREADY ran above (txn) - hand its verdict to the report so the Ecommerce
+    // area (and therefore the Revenue trust gate) is graded on evidence instead of staying Partial.
+    const ecomVerification = ecom && txn
+      ? { transactionsChecked: txn.transactions.length, duplicateIds: txn.transactions.filter((t) => t.purchases > 1).length, notSetSharePct: txn.notSetShare }
+      : null;
     const reportInput = {
       property: p,
       displayName: snap.displayName,
@@ -169,6 +174,7 @@ export function registerGa4AuditIpc(data: GoogleDataService): void {
       audienceCount,
       campaigns,
       retentionSummary,
+      ecomVerification,
     };
     const markdown = buildGa4AuditReport(reportInput);
     const exec = buildGa4ExecSummary(reportInput);

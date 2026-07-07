@@ -34,6 +34,18 @@ export interface Ga4ReportInput {
   campaigns: Ga4CampaignReport | null;
   /** Weekly-retention cohort headline (Week 1 / Week 4), or null when there isn't enough reliable data. */
   retentionSummary?: string | null;
+  /** Ecommerce transaction verification (Data API pass over transaction_ids): how many ids were
+   *  checked, how many were duplicated, and the share of purchases with NO id. null/undefined = the
+   *  pass did not run (non-ecommerce property, query failed, or an older caller) — the Ecommerce area
+   *  then stays Partial and Revenue stays gated, exactly as before. */
+  ecomVerification?: EcomVerification | null;
+}
+
+/** Result of the ecommerce transaction-integrity pass (duplicate + missing transaction_ids). */
+export interface EcomVerification {
+  transactionsChecked: number;
+  duplicateIds: number;
+  notSetSharePct: number;
 }
 
 interface AreaRow {
@@ -553,22 +565,27 @@ function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, grow
  *  window, so any related conclusion is unmeasured (not a clean pass). Kept SEPARATE from
  *  buildAllFindings so they never perturb the severity counts or the rule-based scorecard; they are
  *  the actionable half of the Section-8 honesty layer, surfaced up where a reader will see them. */
-function verificationBlocks(config: Ga4AuditReport, ecom: boolean): Array<{ area: string; message: string; recommendation: string }> {
+function verificationBlocks(config: Ga4AuditReport, ecom: boolean, ecomVerified: boolean): Array<{ area: string; message: string; recommendation: string }> {
   const out = [
     { area: 'Measurement', message: 'Per-event parameter coverage was not computed, so it is unknown whether events carry the parameters reports and funnels rely on.', recommendation: 'Run a per-event Data API pass (or DebugView) to confirm parameter coverage.' },
     { area: 'Consent', message: 'Consent Mode v2 signals were not assessed, so consent-gated loss inflating "(not set)"/Unassigned cannot be ruled out.', recommendation: 'Verify Consent Mode in GA4 DebugView / tag setup.' },
   ];
-  if (ecom) out.push({ area: 'Ecommerce', message: 'Ecommerce item parameters and duplicate transactions were not verified, so revenue and abandonment figures cannot be confirmed.', recommendation: 'Audit item-scoped parameters and check for duplicate transaction_ids.' });
+  if (ecom && !ecomVerified) out.push({ area: 'Ecommerce', message: 'Ecommerce item parameters and duplicate transactions were not verified, so revenue and abandonment figures cannot be confirmed.', recommendation: 'Audit item-scoped parameters and check for duplicate transaction_ids.' });
   for (const a of config.areas.filter((x) => x.status === 'not_verified')) out.push({ area: a.area, message: `${a.area} config sub-resource could not be read, so the ${a.area} checks did not run.`, recommendation: `Re-run with access to the ${a.area} configuration.` });
   return out;
 }
 
 // Area-coverage rows = config areas + the report-level Attribution/Audiences/Ecommerce/Consent.
+// The Ecommerce row is GRADED when the transaction-integrity pass ran: clean (no duplicate ids,
+// <5% missing ids) earns a real Pass — which is what upgrades the Revenue trust gate and lifts the
+// reliability cap; duplicates are a Fail (revenue is double-counted, do not quote); a high missing-id
+// share stays Partial. An unrun pass stays Partial with the old wording — verification, not vibes.
 function buildAreaRows(
   s: Ga4PropertySnapshot,
   config: Ga4AuditReport,
   audienceCount: number | null,
   ecom: boolean,
+  ecomV?: EcomVerification | null,
 ): AreaRow[] {
   // Attribution is now a GRADED config area (auditGa4) with its own evidence, so it is not re-added
   // here as a passive "pass" row.
@@ -576,11 +593,22 @@ function buildAreaRows(
   if (audienceCount !== null) {
     rows.push({ area: 'Audiences', statusKey: audienceCount > 0 ? 'pass' : 'partial', evidence: `${audienceCount} audience(s)` });
   }
-  rows.push({
-    area: 'Ecommerce',
-    statusKey: ecom ? 'partial' : 'not_verified',
-    evidence: ecom ? 'purchase/item key events present; item params & duplicate transactions not verified' : 'no purchase/item key events found',
-  });
+  if (ecom && ecomV) {
+    const pct = ecomV.notSetSharePct.toFixed(1);
+    rows.push(
+      ecomV.duplicateIds > 0
+        ? { area: 'Ecommerce', statusKey: 'fail', evidence: `verified: ${ecomV.duplicateIds} duplicate transaction_id(s) among ${ecomV.transactionsChecked} checked - revenue is double-counted` }
+        : ecomV.notSetSharePct >= 5
+          ? { area: 'Ecommerce', statusKey: 'partial', evidence: `verified: no duplicate transaction_ids (${ecomV.transactionsChecked} checked), but ${pct}% of purchases have no id - those cannot be deduplicated` }
+          : { area: 'Ecommerce', statusKey: 'pass', evidence: `verified: ${ecomV.transactionsChecked} transaction_id(s) checked - no duplicates, ${pct}% missing ids` },
+    );
+  } else {
+    rows.push({
+      area: 'Ecommerce',
+      statusKey: ecom ? 'partial' : 'not_verified',
+      evidence: ecom ? 'purchase/item key events present; item params & duplicate transactions not verified' : 'no purchase/item key events found',
+    });
+  }
   rows.push({ area: 'Consent', statusKey: 'not_verified', evidence: 'consent mode not retrievable via the Admin API' });
   return rows;
 }
@@ -593,7 +621,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
   const ecom = hasEcommerce(s);
   const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts);
   const top = allFindings.filter((f) => f.severity !== 'info')[0];
-  const areaRows = buildAreaRows(s, config, audienceCount, ecom);
+  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification);
   const nPartial = areaRows.filter((a) => a.statusKey === 'partial').length;
   const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
   const scoreModel = buildGa4Scorecard({
@@ -628,7 +656,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
   const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
   // Channel-attribution trust comes from the same Data Trust Matrix the Executive Summary uses.
   const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts);
-  const areaRows = buildAreaRows(s, config, audienceCount, hasEcommerce(s));
+  const areaRows = buildAreaRows(s, config, audienceCount, hasEcommerce(s), input.ecomVerification);
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
     findings: allFindings.map((f) => ({ severity: f.severity, category: f.category })),
@@ -667,7 +695,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
   const dqAttrib = allFindings.find((f) => f.category === 'data_quality' && f.severity !== 'info' && /source data|Unassigned|\(not set\)/.test(f.message));
-  const areaRows = buildAreaRows(s, config, audienceCount, ecom);
+  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification);
   const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
@@ -727,7 +755,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
         };
 
   const findings = allFindings.map((f) => ({ severity: f.severity, area: f.area, message: f.message, businessRisk: riskFor(f), recommendation: f.recommendation ?? '—', state: f.state ?? 'confirmed' }));
-  const blocked = verificationBlocks(config, ecom);
+  const blocked = verificationBlocks(config, ecom, Boolean(input.ecomVerification));
 
   // ── Section 5 · Area status ──
   const areas = areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey, confidence: confidenceFor(a.statusKey), evidence: a.evidence }));
@@ -755,7 +783,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     { item: 'Per-event parameter coverage', blocks: 'whether events carry the parameters reports & funnels rely on' },
     { item: 'Consent Mode v2 signals', blocks: 'whether consent-gated loss is inflating "(not set)"/Unassigned' },
   ];
-  if (ecom) nv.push({ item: 'Ecommerce item parameters & duplicate transactions', blocks: 'whether revenue and abandonment figures are accurate' });
+  if (ecom && !input.ecomVerification) nv.push({ item: 'Ecommerce item parameters & duplicate transactions', blocks: 'whether revenue and abandonment figures are accurate' });
   else nv.push({ item: 'Ecommerce funnel (no purchase/add_to_cart key events)', blocks: 'product/checkout funnel analysis' });
   for (const a of config.areas.filter((x) => x.status === 'not_verified')) nv.push({ item: `${a.area} (config sub-resource unreadable)`, blocks: `the ${a.area} checks` });
   const gate =
@@ -805,7 +833,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   // all-clear as a problem.
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
-  const areaRows = buildAreaRows(s, config, audienceCount, ecom);
+  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification);
   const campaignPerf = campaignPerfView(campaigns);
 
   const windowLabel = auditWindowLabel(dq); // same label as section 1 + the styled section 9 card
@@ -945,7 +973,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   }
   // "Blocked by verification": checks that could not run this window, promoted here as first-class
   // items (they also appear in Section 8) so a reader sees the unmeasured gaps alongside the findings.
-  const blocked = verificationBlocks(config, ecom);
+  const blocked = verificationBlocks(config, ecom, Boolean(input.ecomVerification));
   if (blocked.length) {
     L.push('');
     L.push('**Blocked by verification** (checks that could not run this window, so any related conclusion is unconfirmed - not a clean pass):');
@@ -1121,7 +1149,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     { item: 'Per-event parameter coverage', blocks: 'whether events carry the parameters reports & funnels rely on' },
     { item: 'Consent Mode v2 signals', blocks: 'whether consent-gated loss is inflating "(not set)"/Unassigned' },
   ];
-  if (ecom) nv.push({ item: 'Ecommerce item parameters & duplicate transactions', blocks: 'whether revenue and abandonment figures are accurate' });
+  if (ecom && !input.ecomVerification) nv.push({ item: 'Ecommerce item parameters & duplicate transactions', blocks: 'whether revenue and abandonment figures are accurate' });
   else nv.push({ item: 'Ecommerce funnel (no purchase/add_to_cart key events)', blocks: 'product/checkout funnel analysis' });
   for (const a of config.areas.filter((x) => x.status === 'not_verified')) nv.push({ item: `${a.area} (config sub-resource unreadable)`, blocks: `the ${a.area} checks` });
   const gate =
