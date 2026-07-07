@@ -15,6 +15,7 @@ import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
 import type { ProviderKeyStore } from '../storage/provider-keys';
 import { findGa4BaseTag } from '../google/gtm-builders';
+import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult } from '../../shared/ipc';
 import { crawlAndSuggest, scanUrls, type ScanProgress } from './scan-core';
@@ -76,16 +77,42 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
   });
 
   // Save the install runbook (already rendered to Markdown in the renderer) to a
-  // file the user picks. Read-only export — no GTM access. Returns the saved path,
-  // or null if the user cancelled. Mirrors suggestions:exportCsv exactly.
-  ipcMain.handle('suggestions:exportRunbook', async (e, defaultName: unknown, markdown: unknown) => {
+  // file the user picks. Read-only export — no GTM access (just a local file save).
+  // Returns the saved path, or null if the user cancelled. The 'md' branch writes
+  // the Markdown unchanged; the 'pdf' branch reuses the GA4-report Markdown→HTML→PDF
+  // pipeline (reportHtmlDocument + a hidden, script-disabled printToPDF window),
+  // mirroring ga4:exportReport's PDF path exactly.
+  ipcMain.handle('suggestions:exportRunbook', async (e, defaultName: unknown, markdown: unknown, format?: unknown) => {
+    const fmt = format === 'pdf' ? 'pdf' : 'md';
     const win = BrowserWindow.fromWebContents(e.sender);
-    const name = String(defaultName ?? 'Measurement Install Runbook.md').replace(/[\\/:*?"<>|]/g, '_');
-    const opts = { title: 'Export install runbook', defaultPath: name, filters: [{ name: 'Markdown', extensions: ['md'] }] };
+    const base = String(defaultName ?? 'Measurement Install Runbook')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\.(md|pdf)$/i, '')
+      .trim() || 'Measurement Install Runbook';
+    const filterName = fmt === 'pdf' ? 'PDF' : 'Markdown';
+    const opts = { title: 'Export install runbook', defaultPath: `${base}.${fmt}`, filters: [{ name: filterName, extensions: [fmt] }] };
     const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (canceled || !filePath) return null;
-    await writeFile(filePath, String(markdown ?? ''), 'utf8');
-    return filePath;
+    if (fmt === 'md') {
+      await writeFile(filePath, String(markdown ?? ''), 'utf8');
+      return filePath;
+    }
+    // PDF — render the runbook HTML in a hidden, script-disabled window and print it to PDF.
+    const pdfWin = new BrowserWindow({
+      show: false,
+      webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    try {
+      await pdfWin.loadURL(
+        'data:text/html;charset=utf-8,' +
+          encodeURIComponent(reportHtmlDocument('Measurement Installation Runbook', String(markdown ?? ''), {})),
+      );
+      const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+      await writeFile(filePath, pdf);
+      return filePath;
+    } finally {
+      if (!pdfWin.isDestroyed()) pdfWin.destroy();
+    }
   });
 
   ipcMain.handle('suggestions:scan', async (_e, url: unknown, opts?: TagScanOptions) => {

@@ -2656,15 +2656,17 @@ function TagReviewPanel({
   // Markdown: per-tag GTM structure + site-side install steps + a consolidated
   // "what your developer must do" section. Uses the SAME deduped, edit-applied list
   // the CSV export uses.
-  async function downloadRunbook(): Promise<void> {
+  async function downloadRunbook(format: 'md' | 'pdf' = 'md'): Promise<void> {
     const picked = suggestions.filter((s) => selected[s.id]);
     const list = (picked.length ? picked : suggestions).map(effective);
     if (!list.length) return;
     setExportNote('');
     try {
       const md = suggestionsToInstallRunbookMarkdown(list, { site: scanMeta.site, scannedAt: scanMeta.scannedAt });
-      const saved = await window.desktop.tags.exportRunbook('Measurement Install Runbook.md', md);
-      setExportNote(saved ? `✓ Saved runbook to ${saved}` : 'Export cancelled');
+      const ext = format === 'pdf' ? 'pdf' : 'md';
+      const saved = await window.desktop.tags.exportRunbook('Measurement Install Runbook.' + ext, md, format);
+      const label = format === 'pdf' ? 'runbook (PDF)' : 'runbook';
+      setExportNote(saved ? `✓ Saved ${label} to ${saved}` : 'Export cancelled');
     } catch (e) {
       onError(String(e));
     }
@@ -3416,8 +3418,11 @@ function TagReviewPanel({
                 <button style={styles.linkBtn} onClick={() => void downloadStructureCsv()}>
                   ⬇ Download CSV
                 </button>
-                <button style={styles.linkBtn} onClick={() => void downloadRunbook()}>
+                <button style={styles.linkBtn} onClick={() => void downloadRunbook('md')}>
                   ⬇ Install runbook
+                </button>
+                <button style={styles.linkBtn} onClick={() => void downloadRunbook('pdf')}>
+                  ⬇ Runbook (PDF)
                 </button>
               </div>
             </div>
