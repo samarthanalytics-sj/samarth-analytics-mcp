@@ -164,13 +164,33 @@ export function buildGa4Scorecard(input: Ga4ScorecardInput): Ga4Scorecard {
     : growthWorst >= 2 ? 'not_verified'
     : input.growthAssessed === true ? 'pass'
     : 'not_verified';
-  // Channel grouping: unattributed-traffic findings first (medium+ = fail, low = partial), else the
-  // Attribution area's own status (not_verified when attribution settings weren't readable).
+  // Channel grouping: unattributed-traffic findings first (medium+ = fail, low = partial), else
+  // CONFIRMED channel-integrity anti-lie findings (a concentration burst, campaign/channel revenue
+  // that does not reconcile, or self-referrals) cap the gate at partial — the split exists but is
+  // measurably distorted, so it must read CAUTION, never SAFE — else the Attribution area's own
+  // status (not_verified when attribution settings weren't readable).
   const dqWorst = worstIn('data_quality');
-  const channelGate: GateStatus = dqWorst >= 2 ? 'fail' : dqWorst >= 1 ? 'partial' : areaGate('Attribution');
+  const chanIntegrityWorst = Math.max(worstIn('concentration'), worstIn('attribution_mismatch'), worstIn('self_referral'));
+  const attributionBase = areaGate('Attribution');
+  // The anti-lie degrade only ever pulls a PASS down to partial - it must never upgrade a failed or
+  // unverified gate (that would mint credit from a finding).
+  const channelGate: GateStatus =
+    dqWorst >= 2 ? 'fail'
+    : dqWorst >= 1 ? 'partial'
+    : chanIntegrityWorst >= 1 && attributionBase === 'pass' ? 'partial'
+    : attributionBase;
+  // Window integrity: a confirmed single-bucket burst (concentration) or an invalid-traffic cluster
+  // means the WINDOW TOTALS describe an event, not the business. The counts are real, so this caps
+  // Sessions at CAUTION (partial) rather than do-not-quote — but "SAFE" alongside a finding that
+  // says "distorts the headline session count" would be the report contradicting itself. The gate is
+  // a pure DEGRADER: it only joins the spec when a distortion was actually measured, so its absence
+  // never mints credit (an unrun check cannot make a metric safer, either).
+  const windowWorst = Math.max(worstIn('concentration'), worstIn('invalid_traffic'));
+  const sessionsGates: Array<[string, GateStatus]> = [['data collection', collectionGate]];
+  if (windowWorst >= 1) sessionsGates.push(['window integrity', 'partial']);
 
   const TRUST_SPEC: Array<{ metric: string; gates: Array<[string, GateStatus]> }> = [
-    { metric: 'Sessions, users, engagement rate', gates: [['data collection', collectionGate]] },
+    { metric: 'Sessions, users, engagement rate', gates: sessionsGates },
     { metric: 'Conversion counts', gates: [['data collection', collectionGate], ['key events', keyEventsGate], ['traffic-vs-conversion tracking', growthGate]] },
     { metric: 'Revenue / AOV / ROAS', gates: [['data collection', collectionGate], ['ecommerce setup', ecommerceGate], ['traffic-vs-conversion tracking', growthGate]] },
     // Channel attribution ALSO needs collection: the channel split of sessions whose collection is

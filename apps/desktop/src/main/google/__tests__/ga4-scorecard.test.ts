@@ -177,5 +177,28 @@ test('critical-metric cap: unverified conversions/revenue cap the headline below
   assert.notEqual(r.reliabilityConfidence, 'High confidence', 'cannot read High while critical metrics are unverified');
 });
 
+test('anti-lie categories degrade the gates: concentration -> Sessions caution; attribution_mismatch -> Channel caution', () => {
+  const areas = [
+    { area: 'Data collection', statusKey: 'pass' as const },
+    { area: 'Key events', statusKey: 'pass' as const },
+    { area: 'Attribution', statusKey: 'pass' as const },
+    { area: 'Ecommerce', statusKey: 'pass' as const },
+    { area: 'Consent', statusKey: 'not_verified' as const },
+  ];
+  const clean = buildGa4Scorecard({ areas, findings: [], growthAssessed: true });
+  const spiked = buildGa4Scorecard({ areas, findings: [{ severity: 'high', category: 'concentration' }], growthAssessed: true });
+  const sess = (r: ReturnType<typeof buildGa4Scorecard>) => r.trust.find((t) => t.metric === 'Sessions, users, engagement rate')!;
+  const chan = (r: ReturnType<typeof buildGa4Scorecard>) => r.trust.find((t) => t.metric === 'Channel attribution')!;
+  assert.equal(sess(clean).verdict, 'safe', 'clean sessions safe');
+  assert.equal(sess(spiked).verdict, 'caution', 'concentration demotes sessions to caution');
+  assert.ok(/window integrity/.test(sess(spiked).reason), 'reason names the gate');
+  assert.equal(chan(spiked).verdict, 'caution', 'concentration also caps the channel split');
+  assert.ok(spiked.reliabilityPct < clean.reliabilityPct, 'reliability strictly lower with a confirmed distortion');
+
+  const mismatched = buildGa4Scorecard({ areas, findings: [{ severity: 'high', category: 'attribution_mismatch' }], growthAssessed: true });
+  assert.equal(chan(mismatched).verdict, 'caution', 'revenue mismatch caps the channel split');
+  assert.equal(sess(mismatched).verdict, 'safe', 'a channel-only problem leaves sessions safe');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
