@@ -181,6 +181,28 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   const v = evaluateVerify([meta], [cap({ tagId: 'me', hits: [] })], els)[0];
   check('specific pixel (meta) clicked, no beacon → genuine not-firing', v.fired === false && !v.inconclusive);
 }
+// ── server-side pixel: no browser beacon but a first-party sGTM relay fired → NOT "not firing" ──
+// The real-world false negative on a server-side (CAPI) setup: a Meta tag whose event relays to the
+// site's own sGTM (/g/collect on a first-party host) sends no facebook.com/tr beacon — that's the
+// expected shape of server-side, not a break. Must be inconclusive + serverRelay, never a red failure.
+{
+  const meta = tag({ id: 'mss', platform: 'meta_pixel', eventName: '' });
+  const v = evaluateVerify([meta], [cap({ tagId: 'mss', hits: [serverHit('email_click')] })], els)[0];
+  check('meta pixel + server relay, no fb beacon → serverRelay inconclusive (not a failure)', v.fired === false && v.inconclusive === true && v.serverRelay === true);
+  check('meta pixel + server relay → NOT counted as genuine not-firing', !(v.fired === false && !v.inconclusive));
+}
+{
+  // Guard: a real facebook beacon still wins (fired), even alongside a server relay.
+  const meta = tag({ id: 'mok', platform: 'meta_pixel', eventName: '' });
+  const v = evaluateVerify([meta], [cap({ tagId: 'mok', hits: [serverHit('email_click'), metaHit()] })], els)[0];
+  check('meta pixel + real fb beacon (with relay) → fired, not serverRelay', v.fired === true && !v.serverRelay);
+}
+{
+  // Guard: no beacon AND no server relay stays a genuine not-firing (nothing fired at all).
+  const meta = tag({ id: 'mno', platform: 'meta_pixel', eventName: '' });
+  const v = evaluateVerify([meta], [cap({ tagId: 'mno', hits: [] })], els)[0];
+  check('meta pixel, no beacon + no relay → genuine not-firing (no serverRelay excuse)', v.fired === false && !v.inconclusive && !v.serverRelay);
+}
 {
   // A generic 'ad' tag (an undecodable Custom Template we mapped by fallback) with no recognised
   // beacon is NOT provably broken → inconclusive, not a red failure.

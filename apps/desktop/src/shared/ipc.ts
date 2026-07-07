@@ -605,6 +605,12 @@ export interface VerifyTagVerdict {
    *  push can't supply). NOT a failure — the tag may well fire for a real user. The UI files these
    *  under "couldn't auto-test here" instead of "not firing" so a working tag isn't called broken. */
   inconclusive?: boolean;
+  /** true = a specific-vendor pixel/ads tag (Meta/TikTok/…) sent NO browser beacon, BUT the same
+   *  interaction relayed to a first-party server container (sGTM /g/collect). Strong sign the
+   *  destination is fed SERVER-SIDE via the Conversion API — the browser never calls the vendor, so a
+   *  missing browser beacon is expected, not proof it's broken. Filed under a distinct "relayed
+   *  server-side" group (always also `inconclusive`), never "not firing". */
+  serverRelay?: boolean;
   /** The event name observed on the firing hit (GA4). */
   event?: string;
   /** Why it did not fire (always set when fired=false). */

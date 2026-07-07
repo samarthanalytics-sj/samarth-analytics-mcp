@@ -4144,7 +4144,11 @@ function VerifyPanel({
   // A tag we couldn't actually exercise on this run (CTA/form on another page, or a shared
   // dataLayer event that needs form-specific data) is NOT a failure — separate it from genuine
   // "not firing" so a working tag is never mislabelled broken.
-  const inconclusive = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive) ?? [];
+  // Server-side pixels (Meta/TikTok/… fed via the Conversion API) relay to the first-party sGTM and
+  // send NO browser beacon — that's expected, not broken. Give them their own group so they never sit
+  // under ❌ "not firing" NOR the "couldn't reach it" note (which would misdescribe why).
+  const serverRelayed = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive && v.serverRelay) ?? [];
+  const inconclusive = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive && !v.serverRelay) ?? [];
   const notFired = vResult?.verdicts.filter((v) => !v.fired && !v.inconclusive) ?? [];
 
   return (
@@ -4239,7 +4243,7 @@ function VerifyPanel({
             <div style={{ fontWeight: 600 }}>
               {vResult.error
                 ? `Error: ${vResult.error}`
-                : `${firedReal.length} fired${firedSynthetic.length ? ` · ${firedSynthetic.length} config-verified (synthetic, not a real submit)` : ''}${notFired.length ? ` · ${notFired.length} need attention` : ''}${inconclusive.length ? ` · ${inconclusive.length} couldn't be auto-tested here` : ''}`}
+                : `${firedReal.length} fired${firedSynthetic.length ? ` · ${firedSynthetic.length} config-verified (synthetic, not a real submit)` : ''}${serverRelayed.length ? ` · ${serverRelayed.length} relayed server-side` : ''}${notFired.length ? ` · ${notFired.length} need attention` : ''}${inconclusive.length ? ` · ${inconclusive.length} couldn't be auto-tested here` : ''}`}
             </div>
             {vResult.pagesDriven?.length && !vResult.error ? (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
@@ -4373,6 +4377,35 @@ function VerifyPanel({
                               ))
                             )}
                           </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
+            {serverRelayed.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ ...styles.h2, color: 'var(--c-blue)' }}>🛰 Relayed server-side ({serverRelayed.length})</div>
+                <div style={{ ...styles.muted, fontSize: 12, marginBottom: 4 }}>
+                  These pixel/ad tags sent NO browser beacon, but the interaction relayed to your first-party
+                  server container (sGTM). That’s the normal shape of a server-side (Conversion API) destination —
+                  the browser never calls the vendor, so a missing browser pixel is expected here, not broken.
+                  Confirm the server leg in sGTM Preview / the vendor’s Events Manager → Test Events.
+                </div>
+                <ul style={styles.resultList}>
+                  {serverRelayed.map((v) => {
+                    const k = verdictKindLabel(v);
+                    return (
+                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
+                        <div>
+                          <span style={{ fontWeight: 600, color: 'var(--c-blue)' }}>SERVER-SIDE</span>{' '}
+                          <span title={k.label}>{k.icon}</span> {v.tagName}
+                        </div>
+                        {v.reason ? <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2 }}>Why: {v.reason}</div> : null}
+                        {v.observedBeacons && v.observedBeacons.length > 0 && (
+                          <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2, fontSize: 12 }}>Relayed to: {v.observedBeacons.join(', ')}</div>
                         )}
                       </li>
                     );

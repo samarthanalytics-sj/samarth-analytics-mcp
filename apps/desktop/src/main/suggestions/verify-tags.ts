@@ -226,10 +226,22 @@ export function evaluateVerify(
       return bp === want || (want === 'ad' && isKnownAdPlatform(bp));
     });
     if (fired) return withBeacons({ ...base, fired: true, ...(cap.kind === 'custom_event' ? { synthetic: true } : {}), event: beaconPlatform(fired.url), interaction, evidence: fired });
+    // SERVER-SIDE destination: the interaction relayed to a FIRST-PARTY server container (a /g/collect
+    // on the site's own domain, classified 'server'), but no browser beacon reached this tag's vendor.
+    // For a pixel fed SERVER-SIDE via the Conversion API (e.g. Meta CAPI through sGTM), the browser
+    // NEVER calls facebook.com/tr — a missing browser beacon is EXPECTED, not proof it's broken. So a
+    // specific-vendor pixel whose interaction fired the server relay is inconclusive ("relayed
+    // server-side"), NOT "not firing" — the biggest false-negative on server-side setups.
+    const sawServerRelay = cap.hits.some((h) => classifyCollector(h.url) === 'server');
+    const specificVendor = want !== 'ad' && cap.kind !== 'custom_event';
+    if (specificVendor && sawServerRelay) {
+      return withBeacons({ ...base, inconclusive: true, serverRelay: true, reason: `no browser-side ${want} beacon fired, but this interaction relayed to your first-party server container (sGTM) — if ${want} is sent server-side via the Conversion API, the browser never calls the vendor directly and this is expected; confirm the server leg in sGTM Preview / the vendor's Events Manager. If you meant to run a browser pixel, check the tag isn't paused or consent-gated (ad_storage)`, interaction });
+    }
     // A GENERIC 'ad' tag is an undecodable Custom Template / Custom HTML we mapped by fallback: no
     // recognised beacon doesn't prove it's broken (it may be server-side, a non-pixel template, or a
     // beacon host we don't classify) → inconclusive. A SPECIFIC vendor (meta/tiktok/…) whose element
-    // was clicked but produced no beacon IS a genuine failure. custom_event pushes stay inconclusive.
+    // was clicked but produced no beacon (and no server relay) IS a genuine failure. custom_event
+    // pushes stay inconclusive.
     const undecodable = want === 'ad' || cap.kind === 'custom_event';
     return withBeacons({ ...base, ...(undecodable ? { inconclusive: true } : {}), reason: `the interaction ran but no ${want === 'ad' ? 'ad/pixel' : want} beacon fired for this ${tag.platform} tag${observedBeacons.length ? ` (it did beacon to: ${observedBeacons.join(', ')})` : ''}`, interaction });
   });
