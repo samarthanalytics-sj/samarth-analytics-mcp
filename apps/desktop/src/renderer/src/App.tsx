@@ -1203,7 +1203,12 @@ function GtmContextBar({
     if (!accountId) return;
     setLoading('containers');
     try {
-      setContainers(await window.desktop.data.listGtmContainers(accountId));
+      const list = await window.desktop.data.listGtmContainers(accountId);
+      setContainers(list);
+      // A silent empty dropdown looks broken — tell the user WHY nothing populated.
+      if (list.length === 0) {
+        onError('No GTM containers found for this account. This Google sign-in may not have access to its containers — check you picked the right account, or re-connect Google in Settings.');
+      }
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
