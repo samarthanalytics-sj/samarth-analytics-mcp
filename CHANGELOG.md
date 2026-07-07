@@ -1,3 +1,13 @@
+## [1.257.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.257.0...v1.257.1) (2026-07-07)
+
+### Bug Fixes
+
+* **test:** move makePageCache to an electron-free module so CI doesn't load electron ([a79aabf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a79aabfcfc2d00fa83de0ec979134ded107b61fa))
+
+### Performance Improvements
+
+* **verify:** render each page once across the two verify crawls (shared page cache) ([ec31214](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ec31214061f84325b045a1f518f0d22e1150415c))
+
 ## [1.257.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.256.2...v1.257.0) (2026-07-07)
 
 ### Features
