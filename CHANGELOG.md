@@ -1,3 +1,13 @@
+## [1.244.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.243.1...v1.244.0) (2026-07-07)
+
+### Features
+
+* **verify:** rebuild form verification as container-tag-driven (crawl → match → dedupe → submit → verify + fix) ([4ae4395](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4ae439508bc545c5a63dca2928ba193321821a89))
+
+### Bug Fixes
+
+* **desktop:** remove the duplicate Ecommerce-funnel table under the funnel chart ([8752ef5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8752ef5f47a4c0ceb29cf9fda2400b029a3d47ce))
+
 ## [1.243.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.243.0...v1.243.1) (2026-07-07)
 
 ### Bug Fixes
