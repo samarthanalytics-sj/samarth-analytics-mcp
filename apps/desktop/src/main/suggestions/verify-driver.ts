@@ -12,7 +12,7 @@
 // Playwright is OPTIONAL (loaded lazily); if absent the caller gets a clear error.
 
 import { requestAllowed } from './ssrf';
-import { classifyCollector, syntheticDataLayerEvent, type Collector } from '../../shared/runtime-capture';
+import { classifyCollector, syntheticDataLayerEvent, buildNetworkLog, type Collector, type DescribedHit } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
 import type { PerTagCapture } from './verify-tags';
 
@@ -131,6 +131,9 @@ export interface VerifyDriverResult {
   perTag: PerTagCapture[];
   /** The distinct page URLs the driver successfully navigated + drove (multi-page drive). */
   pagesDriven?: string[];
+  /** DevTools-Network-style log of the analytics calls captured (Meta pixel, GA4, sGTM relay, pixels)
+   *  — the browser-side (layer-1) evidence. Server-side CAPI (graph.facebook.com) never reaches here. */
+  networkLog?: DescribedHit[];
   /** Present only when opts.gtmDebug — the on-page GTM debug signal (Phase B groundwork). */
   gtmDebug?: GtmDebugCapture;
 }
@@ -527,7 +530,8 @@ export async function runVerifyDriver(
     const gtmDebug: GtmDebugCapture | undefined = opts.gtmDebug
       ? { containerLoaded: debugContainerIds.size > 0, containerIds: [...debugContainerIds], dataLayerEvents: [...debugEvents] }
       : undefined;
-    return { pagesOk: true, injected, previewAuth, perTag, ...(pagesDriven.length ? { pagesDriven } : {}), ...(gtmDebug ? { gtmDebug } : {}) };
+    const networkLog = buildNetworkLog(captured);
+    return { pagesOk: true, injected, previewAuth, perTag, ...(pagesDriven.length ? { pagesDriven } : {}), ...(networkLog.length ? { networkLog } : {}), ...(gtmDebug ? { gtmDebug } : {}) };
   } catch (e) {
     return { pagesOk: false, injected: Boolean(loaderSrc), previewAuth, perTag, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
   } finally {

@@ -4023,6 +4023,7 @@ function VerifyPanel({
   const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
   const [vShowSkipped, setVShowSkipped] = useState(false);
+  const [vShowNet, setVShowNet] = useState(false);
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   // Event-name aligns applied this session (tagId → new event name), so the row shows "✓ aligned".
   const [aligned, setAligned] = useState<Record<string, string>>({});
@@ -4240,6 +4241,35 @@ function VerifyPanel({
                 GTM debug: container {vResult.gtmDebug.containerIds.join(', ') || 'loaded'} · events seen: {vResult.gtmDebug.dataLayerEvents.slice(0, 12).join(', ') || '—'}
               </div>
             )}
+
+            {vResult.networkLog && vResult.networkLog.length > 0 && (() => {
+              const log = vResult.networkLog!;
+              const hasMeta = log.some((h) => h.vendor === 'meta');
+              const hasSgtm = log.some((h) => h.vendor === 'sgtm' || h.vendor === 'ga4');
+              return (
+                <div style={{ marginTop: 6 }}>
+                  <button style={styles.linkBtn} onClick={() => setVShowNet((o) => !o)}>
+                    {vShowNet ? 'hide' : 'show'} network log ({log.length} call{log.length === 1 ? '' : 's'} captured{hasMeta ? ' · Meta pixel seen' : ''})
+                  </button>
+                  {vShowNet && (
+                    <div style={{ marginTop: 4 }}>
+                      <ul style={{ ...styles.resultList, fontFamily: 'monospace', fontSize: 11.5 }}>
+                        {log.map((h, i) => (
+                          <li key={i} style={{ ...styles.resultRow, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                            <span style={{ minWidth: 74, fontWeight: 700, color: h.vendor === 'meta' ? '#993556' : h.vendor === 'ga4' || h.vendor === 'sgtm' ? '#185FA5' : 'var(--text)' }}>{h.vendor}</span>
+                            <span style={{ color: 'var(--text)' }}>{h.endpoint}</span>
+                            {h.params ? <span style={styles.muted}>{h.params}</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                      <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 2 }}>
+                        Browser-side only (captured then aborted — nothing was delivered). {hasSgtm ? 'A /g/collect to your sGTM means the web→server relay fired; ' : ''}the server-side Meta CAPI call (graph.facebook.com) is not visible here — confirm it in sGTM Preview / Events Manager → Test Events.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {firedReal.length > 0 && (
               <div style={{ marginTop: 10 }}>

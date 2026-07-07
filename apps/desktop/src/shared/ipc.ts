@@ -642,6 +642,10 @@ export interface VerifyTagsResult {
   /** How many pages the pre-verify crawl visited to locate each CTA's page (0 = no crawl / inventory
    *  was supplied by the caller). */
   pagesCrawled?: number;
+  /** DevTools-Network-style log of the analytics calls captured during the run (browser layer-1):
+   *  Meta pixel (facebook.com/tr), GA4, the sGTM relay (/g/collect), and other pixels, with key params.
+   *  Server-side Meta CAPI (graph.facebook.com) is NOT here — it never reaches the browser. */
+  networkLog?: Array<{ vendor: string; endpoint: string; params: string }>;
   /** Phase B (best-effort): GTM's on-page debug signal — whether the container actually loaded +
    *  the dataLayer event stream. Present only when gtmDebug was requested. */
   gtmDebug?: { containerLoaded: boolean; containerIds: string[]; dataLayerEvents: string[] };
