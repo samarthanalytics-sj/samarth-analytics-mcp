@@ -4134,7 +4134,6 @@ function VerifyPanel({
   const [vUrl, setVUrl] = useState('');
   const [vSnippet, setVSnippet] = useState('');
   const [vVerifying, setVVerifying] = useState(false);
-  const [vMinting, setVMinting] = useState(false);
   const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
   const [vShowSkipped, setVShowSkipped] = useState(false);
@@ -4197,28 +4196,6 @@ function VerifyPanel({
     }
   }
 
-  async function autoMintAndVerify(): Promise<void> {
-    if (!ready || !ctx || vMinting || vVerifying) return;
-    if (!vUrl.trim()) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against.' }); return; }
-    setVMinting(true);
-    setVNote(null);
-    onError('');
-    try {
-      const { snippet, newWorkspaceId } = await window.desktop.tags.mintPreview(ctx.accountId!, ctx.containerId!, vWsRef.current || ctx.workspaceId!);
-      // Minting SUBMITTED the workspace (now read-only) — follow GTM to the fresh editable one it
-      // created, so the user's next edit (align/chat/panel) targets THAT, not the submitted one.
-      if (newWorkspaceId && newWorkspaceId !== (vWsRef.current || ctx.workspaceId)) {
-        vWsRef.current = newWorkspaceId; // used immediately by alignEventName, before the prop catches up
-        if (active) { try { await window.desktop.accounts.setGtmContext(active.id, { ...ctx, workspaceId: newWorkspaceId, workspaceName: 'Workspace (auto)' }); } catch { /* best-effort */ } }
-      }
-      await runVerify(snippet);
-    } catch (e) {
-      setVNote({ kind: 'error', text: verifyErrorText(e) });
-    } finally {
-      setVMinting(false);
-    }
-  }
-
   // Apply the "align event name" fix: set the GA4 tag's Event Name to the value that actually
   // fired (draft-only write), then prompt a re-verify to confirm.
   async function alignEventName(v: VerifyTagsResult['verdicts'][number], eventName: string): Promise<void> {
@@ -4278,9 +4255,10 @@ function VerifyPanel({
             </div>
           )}
           <div style={{ ...styles.muted, marginTop: 8 }}>
-            <b>Auto</b> snapshots the workspace to a version and previews it from the container (never publishes; needs the
-            account re-connected with the “edit container versions” permission). Or paste a GTM <b>Preview / Environment</b>{' '}
-            snippet so DRAFT tags load. Leave the snippet blank to test whatever is already published on the live site.
+            <b>Verify</b> loads the live site and drives each tag’s trigger — it tests the tags as they’re
+            <b> published</b> on this URL. <b>Nothing is created in your container</b> (no version, no preview).
+            To test UNPUBLISHED <b>draft</b> tags, open GTM <b>Preview</b> (Tag Assistant), copy its snippet and
+            paste it below — that loads your drafts and still creates nothing in the container.
           </div>
           <input
             value={vUrl}
@@ -4299,14 +4277,11 @@ function VerifyPanel({
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
             <button
               style={styles.primaryBtn}
-              onClick={() => void autoMintAndVerify()}
-              disabled={!ready || vMinting || vVerifying || !vUrl.trim()}
-              title="Snapshot the workspace to a version + preview it (never publishes), then verify each tag"
+              onClick={() => void runVerify()}
+              disabled={!ready || vVerifying || !vUrl.trim()}
+              title="Load the live site and verify each tag — nothing is created in your container (no version, no preview)"
             >
-              {vMinting ? 'Preparing preview…' : 'Auto: create preview & verify'}
-            </button>
-            <button style={styles.toggleOff} onClick={() => void runVerify()} disabled={!ready || vVerifying || vMinting || !vUrl.trim()}>
-              {vVerifying && !vMinting ? 'Verifying…' : 'Verify (pasted / live)'}
+              {vVerifying ? 'Verifying…' : 'Verify firing'}
             </button>
           </div>
           {vNote && (
