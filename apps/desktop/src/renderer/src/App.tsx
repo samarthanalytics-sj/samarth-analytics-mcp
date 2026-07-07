@@ -3696,11 +3696,19 @@ function VerifyPanel({
                 ? `Error: ${vResult.error}`
                 : `${fired.length} of ${vResult.verdicts.length} tag(s) fired${notFired.length ? ` · ${notFired.length} need attention` : ''}${inconclusive.length ? ` · ${inconclusive.length} couldn't be auto-tested here` : ''}`}
             </div>
+            {vResult.pagesDriven?.length && !vResult.error ? (
+              <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
+                Drove across {vResult.pagesDriven.length} page(s)
+                {vResult.pagesCrawled ? ` (crawled ${vResult.pagesCrawled} to locate each CTA)` : ''} — each click tag is
+                driven on the page its CTA actually lives on.
+              </div>
+            ) : null}
             {inconclusive.length > 0 && !vResult.error && (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
-                “Couldn’t auto-test here” ≠ broken. A single page + synthetic events can’t reach a CTA that
-                lives on another page, or a form tag that keys off a specific form. Those need the CTA’s own
-                page or a real submit in GTM Preview — they may well fire for a real user.
+                “Couldn’t auto-test here” ≠ broken. Even after crawling, some CTAs weren’t found on any scanned
+                page (behind login, rendered late, or exact label differs), and form tags that key off a specific
+                form can’t be proven by a synthetic event. Those need the CTA’s own page or a real submit in GTM
+                Preview — they may well fire for a real user.
               </div>
             )}
             {vResult.gtmDebug && vResult.gtmDebug.containerLoaded && (
