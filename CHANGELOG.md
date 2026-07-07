@@ -1,3 +1,10 @@
+## [1.241.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.240.0...v1.241.0) (2026-07-07)
+
+### Features
+
+* **desktop:** pick WHAT each property posts to Slack in the channel add/edit form (with what-you-get copy) ([7777bce](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7777bcec68d4cf52b7c8d74c49719383573131ea))
+* **verify:** real-submit support for div/JS form widgets (no <form>) ([c73aa81](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c73aa81a9dc79112434bdf07ce55f2acfc60dc35))
+
 ## [1.240.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.239.0...v1.240.0) (2026-07-07)
 
 ### Features
