@@ -8,7 +8,7 @@
 import type { DetectedForm, DetectedElement, SuggestInput, SuggestedTag, SuggestPlatform, FormProvider, VideoEmbed, TriggerKind, CtaIntent } from './types.js';
 import { CTA_BY_INTENT, classifyCtaIntent } from './cta-intents.js';
 import { buildSocialUrlPattern } from './social.js';
-import { buildFormInstallPlan, type FormMechanism, type InstallRequirement } from './install-plan.js';
+import { buildFormInstallPlan, buildTriggerInstallPlan, type FormMechanism, type InstallRequirement } from './install-plan.js';
 
 const GA4_VAR = '{{GA4 Measurement ID}}';
 // Event-parameter VALUES are GTM built-in variables, so the tag captures the
@@ -1559,6 +1559,16 @@ export function buildSuggestions(
   flagOverlappingClickTexts(ranked); // warn on near-duplicate click tags (one text inside another)
   // The GA4 list (the base Google tag is prepended only in full mode).
   const ga4Suggestions = opts.full ? [ga4ConfigSuggestion(), ...ranked] : ranked;
+
+  // GENERALIZED "How to install": every suggestion carries a structured install plan, so the panel is
+  // meaningful on all of them — not just forms. Forms already set `install` (buildFormInstallPlan in
+  // formSuggestion), so those are left untouched; every OTHER kind (clicks/pageview/timer/video → native
+  // "nothing to install"; a custom_event → the exact dataLayer push the site must add, incl. the GA4
+  // ecommerce shape) gets buildTriggerInstallPlan here in ONE place. Done on the GA4 list BEFORE the
+  // platform derivers run, so each derived Meta/Ads/etc. copy inherits `install` via its spread.
+  for (const s of ga4Suggestions) {
+    if (!s.install) s.install = buildTriggerInstallPlan({ kind: s.trigger.kind, eventName: s.eventName, label: s.label });
+  }
 
   // Which platforms to emit (default GA4 only, so existing callers are unchanged). Every non-GA4
   // platform's tags are DERIVED from the GA4 list so each reuses its GA4 source's trigger name (one
