@@ -1,3 +1,9 @@
+## [1.256.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.256.1...v1.256.2) (2026-07-07)
+
+### Bug Fixes
+
+* **gtm-bar:** load containers for a pre-selected account (empty dropdown bug) ([683f9af](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/683f9af03a63ff017e021b90bb09fee30bbc08de))
+
 ## [1.256.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.256.0...v1.256.1) (2026-07-07)
 
 ### Bug Fixes
