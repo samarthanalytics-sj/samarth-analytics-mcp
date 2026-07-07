@@ -5,54 +5,18 @@
 // returned trigger straight to create_gtm_tracking_tag. Read-only: it inventories the DOM; it
 // never submits forms or clicks anything (consent-banner interaction only, if a driver needs it).
 
-import { scanUrls, type PageDriver, type DrivenPage } from './scan-core';
+import { scanUrls, type PageDriver } from './scan-core';
 import { createElectronDriver } from './electron-driver';
 import { createMultiDriver } from './multi-driver';
+import { makePageCache } from './page-cache';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 import type { TagScanOptions, TagScanResult } from '../../shared/ipc';
 
 export const clampSettle = (ms: number | undefined): number | undefined =>
   ms === undefined || !Number.isFinite(ms) || ms <= 0 ? undefined : Math.min(Math.floor(ms), 10_000);
 
-// ── shared page-render cache ─────────────────────────────────────────────────────────────────────
-// The "Verify" action runs TWO crawls back-to-back on the SAME site — the click-tag inventory crawl and
-// the form-plan crawl — and their page sets overlap (the form crawl's pages ⊆ the sitemap crawl's). Left
-// alone each renders the overlap independently (≈2× the browser work). This memoises driver.open(url)
-// across BOTH crawls (module-level, keyed by normalised URL) so each page renders ONCE. It stores the
-// in-flight PROMISE so concurrent crawls share a single render; a short TTL re-renders on a later verify;
-// failed renders are evicted so they retry. PURE-ish factory (clock injected) → unit-testable.
-export function makePageCache(now: () => number = Date.now, ttlMs = 90_000, max = 150): {
-  wrap(driver: PageDriver): PageDriver;
-  size(): number;
-} {
-  const cache = new Map<string, { at: number; p: Promise<DrivenPage> }>();
-  const keyOf = (url: string): string => url.replace(/#.*$/, '').replace(/\/+$/, '');
-  return {
-    wrap(driver: PageDriver): PageDriver {
-      return {
-        open: (url: string): Promise<DrivenPage> => {
-          const k = keyOf(url);
-          const t = now();
-          const hit = cache.get(k);
-          if (hit && t - hit.at < ttlMs) return hit.p;
-          const p = driver.open(url);
-          cache.set(k, { at: t, p });
-          // Don't keep a failed render — let a later request retry it.
-          p.then((d) => { if (!d || !d.ok) cache.delete(k); }, () => cache.delete(k));
-          if (cache.size > max) {
-            for (const [ck, cv] of cache) if (t - cv.at >= ttlMs) cache.delete(ck);
-            while (cache.size > max) { const f = cache.keys().next().value; if (f === undefined) break; cache.delete(f); }
-          }
-          return p;
-        },
-        close: () => driver.close(),
-        ...(driver.screenshot ? { screenshot: (): Promise<Buffer | null> => driver.screenshot!() } : {}),
-        ...(driver.diagnostics ? { diagnostics: () => driver.diagnostics!() } : {}),
-      };
-    },
-    size: () => cache.size,
-  };
-}
+// One process-wide render cache shared by the verify action's two crawls (see page-cache.ts). Enabled
+// per-driver via makeDriver({ cachePages: true }).
 const sharedPageCache = makePageCache();
 
 /**

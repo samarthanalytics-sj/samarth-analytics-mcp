@@ -2,7 +2,7 @@
 // action's TWO crawls render each page ONCE. Injected clock; a counting fake driver. No browser.
 // Run: tsx src/main/suggestions/__tests__/page-cache.test.ts
 
-import { makePageCache } from '../scan-url';
+import { makePageCache } from '../page-cache';
 import type { PageDriver, DrivenPage } from '../scan-core';
 
 let passed = 0;
