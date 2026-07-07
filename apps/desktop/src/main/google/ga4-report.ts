@@ -479,8 +479,12 @@ const maskPii = (page: string): string =>
  *     bimodality detector the Section-6 evidence chart uses): the low cluster is where bot/proxy/junk
  *     traffic concentrates, and when it carries a material session share it inflates the totals.
  *  5. PII in page URLs — email addresses or personal-data query params reaching GA4 violate Google's
- *     terms and create GDPR/DPDP exposure; the report shows MASKED examples, never the PII itself. */
-function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCounts | null, campaigns?: Ga4CampaignReport | null): FindingRow[] {
+ *     terms and create GDPR/DPDP exposure; the report shows MASKED examples, never the PII itself.
+ *  6. Self-referrals — the site's OWN domain as a referral source: sessions are being split
+ *     mid-visit (broken cross-domain linking / missing referral exclusion) and re-attributed.
+ *  7. Data-thresholding exposure — Google Signals + small daily traffic means GA4 silently withholds
+ *     rows below its privacy thresholds, so breakdowns under-count vs totals. */
+function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCounts | null, campaigns?: Ga4CampaignReport | null, snapshot?: Ga4PropertySnapshot | null): FindingRow[] {
   const out: FindingRow[] = [];
   // The spike result is held so the reconciliation finding below can cross-reference it: untagged paid
   // campaigns landing in Direct/organic buckets produce BOTH the single-bucket spike and the revenue
@@ -566,6 +570,59 @@ function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCoun
     }
   }
 
+  // 6. Self-referrals: the site's OWN domain appearing as a referral source. The domain comes from
+  // the web data streams' defaultUri; subdomains of it count too. Every self-referral session is a
+  // visit that got SPLIT mid-journey (cross-domain linker broken or referral exclusion missing) and
+  // re-attributed away from the channel that earned it.
+  if (snapshot && dqCounts?.sourceMediums?.length) {
+    const ownDomains = (snapshot.dataStreams ?? [])
+      .map((d) => d.defaultUri || '')
+      .filter(Boolean)
+      .map((u) => {
+        try { return new URL(u).hostname.replace(/^www\./i, '').toLowerCase(); } catch { return ''; }
+      })
+      .filter(Boolean);
+    if (ownDomains.length) {
+      const selfRefs = dqCounts.sourceMediums.filter((r) => {
+        const m = /^(.*?) \/ referral$/i.exec(r.name);
+        if (!m) return false;
+        const src = m[1].trim().replace(/^www\./i, '').toLowerCase();
+        return ownDomains.some((d) => src === d || src.endsWith(`.${d}`));
+      });
+      if (selfRefs.length) {
+        const total = selfRefs.reduce((sum, g) => sum + g.sessions, 0);
+        const sharePct = (dqCounts.totalSessions || 0) > 0 ? (total / dqCounts.totalSessions) * 100 : 0;
+        out.push({
+          severity: sharePct >= 2 ? 'high' : 'medium',
+          category: 'self_referral',
+          area: 'Data quality',
+          message: `Self-referrals: ${selfRefs.map((g) => `${g.name} (${g.sessions.toLocaleString('en-US')} sessions)`).join(', ')} - your own site is showing up as a traffic source, which means sessions are being SPLIT mid-visit (broken cross-domain linking or a missing referral exclusion) and the second half of each visit is re-attributed to yourself (${total.toLocaleString('en-US')} sessions, ${sharePct.toFixed(1)}% of the window).`,
+          recommendation: 'Add your own domain(s) to "List unwanted referrals" (Admin > Data streams > Configure tag settings), and if the journey crosses subdomains/domains (checkout, account, payment), configure cross-domain measurement in "Configure your domains" so the session survives the hop.',
+          state: 'confirmed',
+          businessRisk: 'Sessions double-counted and conversions re-attributed to your own site instead of the real channel',
+        });
+      }
+    }
+  }
+
+  // 7. Data-thresholding exposure: Google Signals + small daily traffic. GA4 withholds rows below its
+  // privacy thresholds in that configuration, so breakdowns silently under-count vs the totals. LOW -
+  // it is a documented platform behavior, but a reader comparing segment sums to totals must know.
+  if (snapshot?.googleSignals === 'GOOGLE_SIGNALS_ENABLED' && baseline && baseline.dailySessions.length > 0) {
+    const avgDaily = baseline.sessions / baseline.dailySessions.length;
+    if (avgDaily > 0 && avgDaily < 300) {
+      out.push({
+        severity: 'low',
+        category: 'thresholding',
+        area: 'Data quality',
+        message: `Reports are likely THRESHOLDED: Google Signals is enabled and daily traffic is small (~${Math.round(avgDaily)} sessions/day) - GA4 withholds rows below its privacy thresholds in this configuration, so demographic and low-volume breakdowns silently under-count and segment sums will not match totals.`,
+        recommendation: 'For auditing, switch Reporting identity to "Device-based" (Admin > Reporting identity) to see unthresholded rows - it is reversible and does not delete data - or read small-segment numbers as floors, not counts.',
+        state: 'confirmed',
+        businessRisk: 'Breakdown tables silently under-count; small segments look emptier than they are',
+      });
+    }
+  }
+
   // 3. Paid-campaign revenue vs paid-channel revenue. Numerator: tagged campaigns whose NAME is an ad-
   // platform shape (Shopping/PMax/Search/... or a bare numeric Google Ads ID) — email/newsletter UTMs
   // legitimately land in non-paid channels and must not trip this. Fires when the paid channels show
@@ -603,12 +660,12 @@ function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQualityCoun
   return out;
 }
 
-function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, growth: Ga4GrowthResult | null, campaigns: Ga4CampaignReport | null, baseline?: Ga4Baseline | null, dqCounts?: DataQualityCounts | null): FindingRow[] {
+function buildAllFindings(config: Ga4AuditReport, dq: Ga4DataQualityResult, growth: Ga4GrowthResult | null, campaigns: Ga4CampaignReport | null, baseline?: Ga4Baseline | null, dqCounts?: DataQualityCounts | null, snapshot?: Ga4PropertySnapshot | null): FindingRow[] {
   return [
     ...config.findings.map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Config', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
     ...dq.findings.map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Data quality', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
     ...(campaigns?.findings ?? []).map((f): FindingRow => ({ severity: f.severity, category: f.category, area: 'Campaigns', message: f.message, recommendation: f.recommendation, state: 'confirmed' })),
-    ...antiLieFindings(baseline ?? null, dqCounts ?? null, campaigns),
+    ...antiLieFindings(baseline ?? null, dqCounts ?? null, campaigns, snapshot),
     ...(growth?.findings ?? []).map((f: Ga4GrowthFinding): FindingRow => ({
       severity: f.severity,
       category: f.category,
@@ -704,7 +761,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
   const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount, campaigns } = input;
   const pid = input.property.replace('properties/', '');
   const ecom = hasEcommerce(s);
-  const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts);
+  const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts, s);
   const top = allFindings.filter((f) => f.severity !== 'info')[0];
   const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const nPartial = areaRows.filter((a) => a.statusKey === 'partial').length;
@@ -740,7 +797,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
   const daily = baseline?.dailySessions ?? [];
   const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
   // Channel-attribution trust comes from the same Data Trust Matrix the Executive Summary uses.
-  const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts);
+  const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts, s);
   const areaRows = buildAreaRows(s, config, audienceCount, hasEcommerce(s), input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
@@ -776,7 +833,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
 export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
   const { snapshot: s, config, dataQuality: dq, dqCounts, baseline, growth, audienceCount, campaigns } = input;
   const ecom = hasEcommerce(s);
-  const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts);
+  const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts, s);
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
   const dqAttrib = allFindings.find((f) => f.category === 'data_quality' && f.severity !== 'info' && /source data|Unassigned|\(not set\)/.test(f.message));
@@ -911,7 +968,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
 
   // ── Single source of truth: combined findings (config + data quality + growth/anomaly + campaigns)
   // and the area-coverage rows. The verdict, All-findings table and counts all derive from these. ──
-  const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts);
+  const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts, s);
   // The "top finding" that drives the Verdict + "What is wrong" is the worst ACTIONABLE one. An
   // info-only result (e.g. the data-quality "no major issues" advisory on a clean property) has no
   // top finding, so those sections take their clean-property fallbacks instead of mislabelling an

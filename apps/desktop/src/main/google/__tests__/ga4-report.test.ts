@@ -873,5 +873,49 @@ test('anti-lie finding: PII in landing-page URLs fires HIGH and MASKS the PII in
   assert.ok(!/PII is being sent/.test(buildGa4AuditReport(input({ baseline: clean, growth: growthOf(clean) }))), 'no finding on clean URLs');
 });
 
+test('anti-lie finding: SELF-REFERRALS (own domain as a referral source) fire with the cross-domain fix', () => {
+  const sOwn = snap({ dataStreams: [{ name: 'properties/1/dataStreams/9', displayName: 'Web', type: 'WEB_DATA_STREAM', defaultUri: 'https://www.acme-store.com', enhancedMeasurementEnabled: true }] });
+  const counts = dqCounts({ totalSessions: 50000, sourceMediums: [
+    { name: 'google / organic', sessions: 40000 },
+    { name: 'acme-store.com / referral', sessions: 900 },
+    { name: 'checkout.acme-store.com / referral', sessions: 400 },
+    { name: 'partner-site.com / referral', sessions: 250 },
+  ] });
+  const md = buildGa4AuditReport(input({ snapshot: sOwn, config: auditGa4(sOwn), dqCounts: counts, dataQuality: auditGa4DataQuality(counts) }));
+  assert.ok(/Self-referrals:/.test(md), 'finding fires');
+  assert.ok(/acme-store.com \/ referral \(900 sessions\)/.test(md), 'names the bare-domain self-referral');
+  assert.ok(/checkout.acme-store.com \/ referral \(400 sessions\)/.test(md), 'subdomains of the own domain count too');
+  assert.ok(!/partner-site.com \/ referral \(250/.test(md.split('Self-referrals:')[1]?.split('\n')[0] ?? ''), 'a genuine external referral is never flagged');
+  assert.ok(/1,300 sessions, 2.6% of the window/.test(md), 'quantified against the window total');
+  assert.ok(/\| HIGH \| Data quality \| Self-referrals/.test(md), 'HIGH at >=2% of sessions');
+  assert.ok(/cross-domain measurement/.test(md), 'fix names cross-domain configuration');
+
+  // No own-domain referrals -> no finding.
+  const clean = dqCounts({ totalSessions: 50000, sourceMediums: [
+    { name: 'google / organic', sessions: 40000 },
+    { name: 'partner-site.com / referral', sessions: 250 },
+  ] });
+  assert.ok(!/Self-referrals:/.test(buildGa4AuditReport(input({ snapshot: sOwn, config: auditGa4(sOwn), dqCounts: clean, dataQuality: auditGa4DataQuality(clean) }))), 'no finding without self-referrals');
+});
+
+test('anti-lie finding: data-THRESHOLDING exposure (Signals on + small daily traffic) flags LOW with the device-based fix', () => {
+  // ~200 sessions/day with Google Signals enabled (the default fixture snapshot has Signals on).
+  const b = baseline({
+    sessions: 2000,
+    dailySessions: Array.from({ length: 10 }, (_, i) => ({ date: `202606${String(15 + i).padStart(2, '0')}`, sessions: 200 })),
+  });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(/Reports are likely THRESHOLDED/.test(md), 'finding fires');
+  assert.ok(/~200 sessions\/day/.test(md), 'quantifies the daily volume');
+  assert.ok(/Device-based/.test(md), 'fix names the reporting-identity switch');
+
+  // Signals OFF -> no thresholding exposure, whatever the volume.
+  const sOff = snap({ googleSignals: 'GOOGLE_SIGNALS_DISABLED' });
+  assert.ok(!/likely THRESHOLDED/.test(buildGa4AuditReport(input({ snapshot: sOff, config: auditGa4(sOff), baseline: b, growth: growthOf(b) }))), 'no finding with Signals off');
+
+  // High traffic -> no finding (default fixture baseline averages thousands/day).
+  assert.ok(!/likely THRESHOLDED/.test(buildGa4AuditReport(input())), 'no finding on high traffic');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
