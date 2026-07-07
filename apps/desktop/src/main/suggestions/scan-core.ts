@@ -244,7 +244,7 @@ async function scanTarget(
 
 /** Dedup key for a suggestion — its event + trigger filter (mirrors buildSuggestions). */
 const suggestionKey = (s: SuggestedTag): string =>
-  `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.clickElementValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}|${s.trigger.pageUrlValue ?? ''}`;
+  `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.clickElementValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}|${s.trigger.pageUrlValue ?? ''}|${(s.trigger.dataLayerConditions ?? []).map((c) => `${c.key}=${c.value}`).join(',')}`;
 
 /** Remove suggestions that would create the SAME GTM tag, keeping the FIRST occurrence. Identity is
  *  platform + tag NAME only: GTM tag names MUST be unique, so two suggestions sharing a name can never

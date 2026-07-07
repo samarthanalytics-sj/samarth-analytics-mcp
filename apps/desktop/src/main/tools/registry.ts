@@ -17,6 +17,7 @@ import {
   buildCustomImageTag,
   buildTrigger,
   triggerBuiltInVars,
+  triggerDataLayerVarKeys,
   builtInVarsForTemplates,
   buildVariable,
   buildUrlQueryVariable,
@@ -1419,7 +1420,7 @@ export function buildToolRegistry(
         'PREFERRED way to create a tag that fires on an event — builds a CORRECT GTM resource from simple fields (you do not write raw GTM JSON). One call (applies directly to the draft workspace): enables needed built-in variables, reuses an existing same-named trigger or creates it, and creates the tag linked to it. ' +
         'platform: "ga4_event" (needs measurementId G-XXXX, eventName, optional eventParameters [{name,value}]); "google_tag" (the Google tag / gtag base that configures GA4/Ads — needs tagId G-XXXX/AW-XXXX/GT-XXXX, optional configSettings [{name,value}]); "meta_pixel" (a Meta/Facebook Pixel via the OFFICIAL gallery template — needs pixelId (or measurementId as the pixel id, e.g. a {{Meta Pixel ID}} variable) + eventName = the Meta event (PageView/Lead/AddToCart/Purchase/ViewContent/InitiateCheckout/Search/Subscribe/CompleteRegistration/Contact/…), optional eventParameters → Meta Object Properties); "tiktok_pixel" (a TikTok web Pixel via its gallery template - needs pixelId + eventName = the TikTok event Pageview/ViewContent/AddToCart/CompletePayment); "linkedin_insight" (the LinkedIn Insight base tag via its gallery template - needs pixelId = the LinkedIn Partner ID); "reddit_pixel" (a Reddit Pixel as Custom HTML - needs pixelId + eventName = the Reddit event PageVisit/ViewContent/AddToCart/Purchase/Lead/SignUp/Search; empty or PageVisit emits the full init snippet); "pinterest_tag" (a Pinterest web tag via its gallery template - needs pixelId + eventName = the Pinterest event pagevisit/viewcontent/addtocart/checkout/lead); "google_ads_conversion" (needs conversionId AW-XXXX, conversionLabel); "custom_html" (needs html — use for other pixels); ' +
         '"conversion_linker" (Google Ads Conversion Linker; no fields required; optional enableCrossDomain plus comma-separated linkerDomains); "google_ads_call_conversion" (needs phoneNumber exactly as shown on the page, conversionId, conversionLabel); "google_ads_remarketing" (needs conversionId; an all-pages audience tag); "floodlight" (Campaign Manager / DV360 Floodlight counter; needs advertiserId, groupTag, activityTag; optional countingMethod standard|unique); "custom_image" (a beacon/pixel; needs url). ' +
-        'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event; optional ANDed scope conditions — formIdValue, pagePathValue/pagePathOperator, pageUrlValue — e.g. event form_submit AND {{Page Path}} contains /contact, the corpus-standard data-layer form pattern), "pageview", "timer" (REQUIRES trigger.intervalMs in ms, optional trigger.limit), "form_submit" (optional formIdValue and/or formClassesValue, each with a *Operator — scopes the trigger to ONE form via {{Form ID}}/{{Form Classes}}; or pagePathValue/pagePathOperator to scope to a single page via {{Page Path}} when the form has no id/class; omit all and it fires on every form submit). ' +
+        'trigger.kind: "link_click" or "all_clicks" (optional clickUrlValue and/or clickTextValue, each with a *Operator equals|contains|startsWith|matchRegex), "custom_event" (eventName = dataLayer event; optional ANDed scope conditions — formIdValue, pagePathValue/pagePathOperator, pageUrlValue — e.g. event form_submit AND {{Page Path}} contains /contact, the corpus-standard data-layer form pattern; optional dataLayerConditions: [{key,value,operator}] — scopes a custom_event trigger by a pushed dataLayer key via an auto-created {{dlv - <key>}} variable (use this to scope an AJAX/embed form\'s custom_event to one form by the form_id the listener pushes; {{Form ID}} does NOT work on a pushed event)),"pageview", "timer" (REQUIRES trigger.intervalMs in ms, optional trigger.limit), "form_submit" (optional formIdValue and/or formClassesValue, each with a *Operator — scopes the trigger to ONE form via {{Form ID}}/{{Form Classes}}; or pagePathValue/pagePathOperator to scope to a single page via {{Page Path}} when the form has no id/class; omit all and it fires on every form submit). ' +
         'eventParameters values may be GTM built-in variables (e.g. {{Click URL}}, {{Click Text}}, {{Form ID}}, {{Form URL}}) — the needed built-in variables are auto-enabled.',
       inputSchema: {
         type: 'object',
@@ -1496,6 +1497,15 @@ export function buildToolRegistry(
               pageUrlValue: { type: 'string' },
               pageUrlOperator: { type: 'string' },
               eventName: { type: 'string' },
+              dataLayerConditions: {
+                type: 'array',
+                description: 'custom_event only — extra ANDed scope conditions on a pushed dataLayer key, each read via an auto-created {{dlv - <key>}} variable. Use to scope an AJAX/embed form\'s custom_event to ONE form by the form_id its listener pushes ({{Form ID}} does NOT resolve on a pushed event).',
+                items: {
+                  type: 'object',
+                  properties: { key: { type: 'string' }, value: { type: 'string' }, operator: { type: 'string' } },
+                  required: ['key', 'value'],
+                },
+              },
               intervalMs: { type: 'string', description: 'timer only — REQUIRED: the firing interval in milliseconds (e.g. "30000").' },
               limit: { type: 'string', description: 'timer only — max number of fires (omit = unlimited).' },
             },
@@ -1645,6 +1655,17 @@ export function buildToolRegistry(
           pageUrlValue: ts.pageUrlValue != null ? s(ts.pageUrlValue) : undefined,
           pageUrlOperator: ts.pageUrlOperator != null ? s(ts.pageUrlOperator) : undefined,
           eventName: ts.eventName != null ? s(ts.eventName) : undefined,
+          // Optional ANDed custom_event scope conditions on a pushed dataLayer key, read via an
+          // auto-created {{dlv - <key>}} variable (scopes an AJAX/embed form's custom_event to ONE form
+          // by the form_id its listener pushes). Coerce defensively — the model can pass any shape.
+          dataLayerConditions: Array.isArray(ts.dataLayerConditions)
+            ? ts.dataLayerConditions
+                .map((c) => {
+                  const o = obj(c);
+                  return { key: s(o.key).trim(), value: s(o.value), operator: o.operator != null ? s(o.operator) : undefined };
+                })
+                .filter((c) => c.key !== '' && c.value !== '')
+            : undefined,
           intervalMs: ts.intervalMs != null ? s(ts.intervalMs) : undefined,
           limit: ts.limit != null ? s(ts.limit) : undefined,
         };
@@ -1714,6 +1735,9 @@ export function buildToolRegistry(
         for (const val of templateVals) {
           for (const m of String(val ?? '').matchAll(/\{\{(Ecommerce [^}]+)\}\}/g)) ecommerceVarNames.add(m[1]);
         }
+        // A custom_event trigger scoped by pushed dataLayer keys (e.g. form_id) needs a {{dlv - <key>}}
+        // Data Layer Variable per key so the trigger condition resolves — auto-create the missing ones.
+        const dlvKeys = triggerDataLayerVarKeys(triggerInput);
         const createdVariables: string[] = [];
         // An ecommerce Meta tag references {{dlv - ecommerce.*}} in its Object Properties — best-effort
         // create those dataLayer variables so they resolve (idempotent; never fails the tag create).
@@ -1724,7 +1748,7 @@ export function buildToolRegistry(
             createdVariables.push(...(await data.createEcommerceDlvVariables(accountId, containerId, workspaceId)).created);
           } catch { /* best-effort: existing containers may already have them; the user can create them in GTM */ }
         }
-        if (urlVarNames.size || ecommerceVarNames.size || triggerInput.lookupTable || paramLookups.length || needsFormName) {
+        if (urlVarNames.size || ecommerceVarNames.size || triggerInput.lookupTable || paramLookups.length || needsFormName || dlvKeys.length) {
           const existingVarNames = new Set(
             (await data.listGtmVariables(accountId, containerId, workspaceId)).map((v) => v.name.toLowerCase())
           );
@@ -1776,6 +1800,18 @@ export function buildToolRegistry(
               createdVariables.push(l.variableName);
               existingVarNames.add(l.variableName.toLowerCase()); // de-dupe if two params share one lookup
             } catch { /* best-effort: the tag still references it; the user can create it in GTM */ }
+          }
+          // {{dlv - <key>}} Data Layer variables a custom_event trigger scopes on (e.g. dlv - form_id),
+          // reading the pushed key the install listener emits. Created only when missing — never
+          // overwrites an existing same-named variable.
+          for (const key of dlvKeys) {
+            const name = `dlv - ${key}`;
+            if (existingVarNames.has(name.toLowerCase())) continue;
+            try {
+              await data.createGtmVariable(accountId, containerId, workspaceId, buildVariable({ name, kind: 'data_layer', dataLayerName: key }) as unknown as Record<string, unknown>);
+              createdVariables.push(name);
+              existingVarNames.add(name.toLowerCase());
+            } catch { /* best-effort: the trigger still references it; the user can create it in GTM */ }
           }
         }
 

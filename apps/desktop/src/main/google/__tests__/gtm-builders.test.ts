@@ -71,6 +71,7 @@ import {
   consentTypesFor,
   evaluateConsentGate,
   triggerBuiltInVars,
+  triggerDataLayerVarKeys,
   builtInVarsForTemplates,
   buildVariable,
   buildFormNameVariable,
@@ -425,6 +426,65 @@ test('custom_event trigger: secondary ANDed scope conditions in filter (event AN
   assert.equal(filters[1].parameter.find((p) => p.key === 'arg0')?.value, '{{Page Path}}');
   assert.equal(filters[1].type, 'contains');
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'custom_event', eventName: 'form_submit', formIdValue: 'gform_2', pagePathValue: '/contact' }), ['formId', 'pagePath']);
+});
+
+test('custom_event trigger: dataLayerConditions scope on a pushed key via {{dlv - <key>}} (a manual push, where {{Form ID}} does not resolve)', () => {
+  // AJAX/embed forms push {event, form_id}; {{Form ID}} is NOT populated by a manual push, so scope on
+  // the pushed key via a {{dlv - form_id}} Data Layer Variable instead.
+  const tr = buildTrigger({
+    name: 'Contact Form (HubSpot)',
+    kind: 'custom_event',
+    eventName: 'form_submit',
+    pagePathValue: '/contact',
+    pagePathOperator: 'contains',
+    dataLayerConditions: [{ key: 'form_id', value: 'contact', operator: 'equals' }],
+  });
+  assert.equal(tr.type, 'customEvent');
+  // The {{_event}} customEventFilter is untouched.
+  const ce = (tr.customEventFilter ?? [])[0] as { parameter: Array<Record<string, unknown>> };
+  assert.equal(ce.parameter.find((p) => p.key === 'arg1')?.value, 'form_submit');
+  const filters = (tr.filter ?? []) as Array<{ type: string; parameter: Array<Record<string, unknown>> }>;
+  assert.equal(filters.length, 2); // Page Path (kept) AND dlv - form_id
+  // The DLV condition references {{dlv - form_id}} equals "contact".
+  const dlv = filters.find((fl) => fl.parameter.find((p) => p.key === 'arg0')?.value === '{{dlv - form_id}}');
+  assert.ok(dlv, 'a {{dlv - form_id}} condition is emitted');
+  assert.equal(dlv!.type, 'equals');
+  assert.equal(dlv!.parameter.find((p) => p.key === 'arg1')?.value, 'contact');
+  // triggerDataLayerVarKeys surfaces the key to auto-create the variable.
+  assert.deepEqual(triggerDataLayerVarKeys({ name: 'x', kind: 'custom_event', eventName: 'form_submit', dataLayerConditions: [{ key: 'form_id', value: 'contact' }] }), ['form_id']);
+  // The DLV is a CUSTOM variable, not a built-in, so nothing extra is enabled for it (only page scope here).
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'custom_event', eventName: 'form_submit', pagePathValue: '/contact', dataLayerConditions: [{ key: 'form_id', value: 'contact' }] }), ['pagePath']);
+});
+
+test('custom_event trigger: dataLayerConditions skips empty key/value; default operator is equals; keys are de-duped', () => {
+  const tr = buildTrigger({
+    name: 'x',
+    kind: 'custom_event',
+    eventName: 'lead',
+    dataLayerConditions: [
+      { key: 'form_id', value: 'a' }, // no operator → equals
+      { key: '', value: 'skip' }, // empty key → skipped
+      { key: 'form_id', value: '' }, // empty value → skipped
+      { key: 'form_id', value: 'b' }, // duplicate key (for var collection) → one key
+    ],
+  });
+  const filters = (tr.filter ?? []) as Array<{ type: string; parameter: Array<Record<string, unknown>> }>;
+  // Two non-empty conditions survive (form_id=a, form_id=b); both default to equals.
+  assert.equal(filters.length, 2);
+  assert.ok(filters.every((fl) => fl.type === 'equals'));
+  assert.ok(filters.every((fl) => fl.parameter.find((p) => p.key === 'arg0')?.value === '{{dlv - form_id}}'));
+  // Distinct non-empty keys only.
+  assert.deepEqual(triggerDataLayerVarKeys({ name: 'x', kind: 'custom_event', eventName: 'lead', dataLayerConditions: [{ key: 'form_id', value: 'a' }, { key: '', value: 'skip' }, { key: 'form_id', value: 'b' }] }), ['form_id']);
+});
+
+test('triggerDataLayerVarKeys: [] for a form_submit trigger — dataLayerConditions are ignored on non-custom_event kinds', () => {
+  // form_submit uses native {{Form ID}}, which DOES resolve there — no dlv needed.
+  const keys = triggerDataLayerVarKeys({ name: 'x', kind: 'form_submit', formIdValue: 'contact', dataLayerConditions: [{ key: 'form_id', value: 'contact' }] } as never);
+  assert.deepEqual(keys, []);
+  // And buildTrigger's form_submit path does NOT emit a {{dlv - ...}} condition.
+  const tr = buildTrigger({ name: 'x', kind: 'form_submit', formIdValue: 'contact', dataLayerConditions: [{ key: 'form_id', value: 'contact' }] } as never);
+  const filters = (tr.filter ?? []) as Array<{ parameter: Array<Record<string, unknown>> }>;
+  assert.ok(!filters.some((fl) => String(fl.parameter.find((p) => p.key === 'arg0')?.value ?? '').startsWith('{{dlv')));
 });
 
 test('form_submit trigger: scoped to one form by {{Form ID}} in filter, needs formId var', () => {

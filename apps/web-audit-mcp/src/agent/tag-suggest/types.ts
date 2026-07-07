@@ -1,3 +1,5 @@
+import type { InstallPlan } from './install-plan.js';
+
 // Phase 1 of "Measurement Plan from a URL": the data model for turning detected
 // page elements + forms into suggested GTM tags. PURE — no browser, no MCP. The
 // detection inputs (PageSignals, DetectedForm, DetectedElement) can be produced
@@ -140,6 +142,10 @@ export interface SuggestedTag {
   evidence: string;
   /** Optional caveat (e.g. an embedded provider whose native trigger won't fire). */
   note?: string;
+  /** The STRUCTURED, installable companion to `note`: the site-side requirement(s)
+   *  for this tag's trigger to fire, expressed (where possible) as an auto-creatable
+   *  GTM Custom HTML listener tag. Currently attached to form suggestions only. */
+  install?: InstallPlan;
   confidence: 'high' | 'medium' | 'low';
   /** GA4 Enhanced Measurement already auto-tracks this kind — flag, don't push. */
   enhancedMeasurementOverlap: boolean;
@@ -226,5 +232,10 @@ export interface SuggestedTag {
     pageUrlValue?: string;
     pageUrlOperator?: FilterOp;
     eventName?: string;
+    /** For custom_event: extra ANDed scope conditions on a pushed dataLayer KEY, read via an
+     *  auto-created {{dlv - <key>}} Data Layer Variable. Scopes an AJAX/embed form's custom_event to
+     *  ONE form by the `form_id` its install listener pushes — GTM's built-in {{Form ID}} does NOT
+     *  resolve on a manual dataLayer.push, so this pushed-key variable is the only reliable scope. */
+    dataLayerConditions?: Array<{ key: string; value: string; operator?: FilterOp }>;
   };
 }
