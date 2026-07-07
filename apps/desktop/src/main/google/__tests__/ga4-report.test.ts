@@ -917,5 +917,67 @@ test('anti-lie finding: data-THRESHOLDING exposure (Signals on + small daily tra
   assert.ok(!/likely THRESHOLDED/.test(buildGa4AuditReport(input())), 'no finding on high traffic');
 });
 
+test('CONSISTENCY: a confirmed concentration burst demotes Sessions + Channel from SAFE to CAUTION', () => {
+  // The contradiction from the live report: the finding said "distorts the headline session count"
+  // while the trust matrix said Sessions SAFE. Confirmed distortion must read CAUTION.
+  // 5-day window with full daily coverage on BOTH runs, so collection is VERIFIED (sessions would be
+  // SAFE) and the demotion below is attributable to the burst alone.
+  const counts = dqCounts({ windowDays: 5, startDate: '2026-06-10', endDate: '2026-06-14' });
+  const fullDays = [
+    { date: '20260610', sessions: 1000 }, { date: '20260611', sessions: 23112 }, { date: '20260612', sessions: 1030 },
+    { date: '20260613', sessions: 1035 }, { date: '20260614', sessions: 1005 },
+  ];
+  const b = baseline({
+    dailySessions: fullDays,
+    channelDaily: [
+      { channel: 'Direct', series: [
+        { date: '20260610', sessions: 300 }, { date: '20260611', sessions: 22362 }, { date: '20260612', sessions: 310 },
+        { date: '20260613', sessions: 305 }, { date: '20260614', sessions: 300 },
+      ] },
+      { channel: 'Organic Search', series: [
+        { date: '20260610', sessions: 700 }, { date: '20260611', sessions: 750 }, { date: '20260612', sessions: 720 },
+        { date: '20260613', sessions: 730 }, { date: '20260614', sessions: 705 },
+      ] },
+    ],
+  });
+  const sEcom = snap({ keyEvents: [{ eventName: 'purchase' }] });
+  const ecomOk = { transactionsChecked: 200, duplicateIds: 0, notSetSharePct: 0 };
+  const withSpike = buildGa4ExecSummary(input({ snapshot: sEcom, config: auditGa4(sEcom), ecomVerification: ecomOk, baseline: b, growth: growthOf(b), dqCounts: counts, dataQuality: auditGa4DataQuality(counts) }));
+  const sess = withSpike.trust.find((t) => t.metric === 'Sessions, users, engagement rate')!;
+  const chan = withSpike.trust.find((t) => t.metric === 'Channel attribution')!;
+  assert.equal(sess.safe, false, 'Sessions cannot be SAFE while the window is a confirmed event: ' + sess.reason);
+  assert.ok(/window integrity/.test(sess.reason), 'the reason names the window-integrity gate');
+  assert.equal(chan.safe, false, 'Channel split of a distorted window is CAUTION: ' + chan.reason);
+  // And the reliability headline is strictly lower than the clean-data run.
+  const cleanB = baseline({ dailySessions: fullDays });
+  const clean = buildGa4ExecSummary(input({ snapshot: sEcom, config: auditGa4(sEcom), ecomVerification: ecomOk, baseline: cleanB, growth: growthOf(cleanB), dqCounts: counts, dataQuality: auditGa4DataQuality(counts) }));
+  assert.ok(withSpike.reliabilityPct < clean.reliabilityPct, `${withSpike.reliabilityPct}% < ${clean.reliabilityPct}%`);
+});
+
+test('CONSISTENCY: the Section-3 Read line matches the drop story (never "conversions grew" on a -45% window)', () => {
+  const b = baseline({ sessions: 11000, priorSessions: 20000, keyEvents: 4000, priorKeyEvents: 5000, revenue: 800000, priorRevenue: 900000 });
+  const sections = buildGa4Sections(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(/Revenue held while sessions fell/.test(sections.outcomes!.read), 'drop read: ' + sections.outcomes!.read);
+  assert.ok(!/grew with the traffic/.test(sections.outcomes!.read), 'the spike-dilution wording never appears on a drop');
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(/\*\*Read:\*\* Revenue held while sessions fell/.test(md), 'markdown Read agrees');
+  // The spike-dilution LOW still gets its own wording (sessions UP).
+  const up = baseline({ sessions: 32165, priorSessions: 20000, keyEvents: 210, priorKeyEvents: 150, revenue: 120000, priorRevenue: 100000 });
+  const upSections = buildGa4Sections(input({ baseline: up, growth: growthOf(up) }));
+  if (/low/.test(JSON.stringify(upSections.findings.map((f) => f.severity)))) {
+    assert.ok(!/Revenue held while sessions fell/.test(upSections.outcomes!.read), 'spike read unchanged');
+  }
+});
+
+test('CONSISTENCY: a VERIFIED ecommerce property never claims "no purchase/add_to_cart key events" in Section 8', () => {
+  const sEcom = snap({ keyEvents: [{ eventName: 'purchase' }] });
+  const verified = buildGa4Sections(input({ snapshot: sEcom, config: auditGa4(sEcom), ecomVerification: { transactionsChecked: 250, duplicateIds: 0, notSetSharePct: 0 } }));
+  assert.ok(!verified.notVerified.items.some((i) => /no purchase\/add_to_cart/.test(i.item)), 'no false no-ecommerce line when verified');
+  assert.ok(!verified.notVerified.items.some((i) => /Ecommerce item parameters/.test(i.item)), 'no unverified-params line either');
+  // A property genuinely WITHOUT ecommerce still gets the funnel line.
+  const noEcom = buildGa4Sections(input());
+  assert.ok(noEcom.notVerified.items.some((i) => /no purchase\/add_to_cart/.test(i.item)), 'non-ecommerce property keeps the line');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

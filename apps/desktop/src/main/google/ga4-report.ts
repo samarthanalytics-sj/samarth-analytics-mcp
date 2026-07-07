@@ -432,8 +432,10 @@ function auditWindowLabel(dq: Ga4DataQualityResult): string {
 }
 
 // The section-3 "Read" line for a growth finding, shared by the markdown report and the structured
-// sections view so the two surfaces never word it differently.
-const growthReadLine = (gf: { category: string; severity: string } | undefined): string =>
+// sections view so the two surfaces never word it differently. LOW findings carry TWO different
+// stories (spike dilution vs drop-with-revenue-held), so the read is picked by the SESSION DIRECTION
+// too — a -45% window must never be described as "conversions grew with the traffic".
+const growthReadLine = (gf: { category: string; severity: string } | undefined, sessionsPct: number | null): string =>
   !gf || gf.category !== 'growth'
     ? 'Sessions are within normal variation vs the prior period.'
     : gf.severity === 'info'
@@ -441,7 +443,9 @@ const growthReadLine = (gf: { category: string; severity: string } | undefined):
       : gf.severity === 'medium'
         ? "Sessions moved sharply, but there isn't enough conversion signal to confirm what's behind it."
         : gf.severity === 'low'
-          ? 'Conversions grew with the traffic but slower than sessions — the conversion rate diluted (typical of a lower-converting channel mix), not a tracking break.'
+          ? (sessionsPct !== null && sessionsPct < 0
+              ? 'Revenue held while sessions fell — the lost sessions were low-value traffic washing out of the window (often an earlier one-off spike leaving the comparison), not a tracking break or a business decline.'
+              : 'Conversions grew with the traffic but slower than sessions — the conversion rate diluted (typical of a lower-converting channel mix), not a tracking break.')
           : 'Outcomes did NOT keep pace with traffic — the spike is unconfirmed and revenue/ROAS may be wrong right now.';
 
 // Combined findings (config + data quality + growth + campaigns) — the single source of truth for the
@@ -888,7 +892,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
           sessionsFrom: num(baseline.priorSessions), sessionsTo: num(baseline.sessions),
           keyEventsFrom: num(baseline.priorKeyEvents), keyEventsTo: num(baseline.keyEvents),
           revenueFrom: oMoney(baseline.priorRevenue), revenueTo: oMoney(baseline.revenue),
-          keSafe, revSafe, sesSafe, quoteNote, read: growthReadLine(growth.findings[0]), trendPattern,
+          keSafe, revSafe, sesSafe, quoteNote, read: growthReadLine(growth.findings[0], growth.sessionsTrendPct), trendPattern,
         }
       : {
           assessed: false, sessionsPct: null, keyEventsPct: null, revenuePct: null,
@@ -926,7 +930,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     { item: 'Consent Mode v2 signals', blocks: 'whether consent-gated loss is inflating "(not set)"/Unassigned' },
   ];
   if (ecom && !input.ecomVerification) nv.push({ item: 'Ecommerce item parameters & duplicate transactions', blocks: 'whether revenue and abandonment figures are accurate' });
-  else nv.push({ item: 'Ecommerce funnel (no purchase/add_to_cart key events)', blocks: 'product/checkout funnel analysis' });
+  else if (!ecom) nv.push({ item: 'Ecommerce funnel (no purchase/add_to_cart key events)', blocks: 'product/checkout funnel analysis' });
   for (const a of config.areas.filter((x) => x.status === 'not_verified')) nv.push({ item: `${a.area} (config sub-resource unreadable)`, blocks: `the ${a.area} checks` });
   const gate =
     top && (top.severity === 'critical' || top.severity === 'high') && top.category === 'growth'
@@ -1079,7 +1083,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     L.push(`Key events  ${trendPctText(growth.keyEventsTrendPct)}`);
     L.push(`Revenue     ${trendPctText(growth.revenueTrendPct)}`);
     L.push('```');
-    L.push(`**Read:** ${growthReadLine(growth.findings[0])}`);
+    L.push(`**Read:** ${growthReadLine(growth.findings[0], growth.sessionsTrendPct)}`);
     // Verdict-aware caveat: a FAILED gate says "not safe to quote"; an UNVERIFIED one says
     // "confirm before quoting" — never asserting untrustworthiness the matrix doesn't claim.
     if (keV === 'do_not_quote' || revV === 'do_not_quote') {
@@ -1292,7 +1296,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     { item: 'Consent Mode v2 signals', blocks: 'whether consent-gated loss is inflating "(not set)"/Unassigned' },
   ];
   if (ecom && !input.ecomVerification) nv.push({ item: 'Ecommerce item parameters & duplicate transactions', blocks: 'whether revenue and abandonment figures are accurate' });
-  else nv.push({ item: 'Ecommerce funnel (no purchase/add_to_cart key events)', blocks: 'product/checkout funnel analysis' });
+  else if (!ecom) nv.push({ item: 'Ecommerce funnel (no purchase/add_to_cart key events)', blocks: 'product/checkout funnel analysis' });
   for (const a of config.areas.filter((x) => x.status === 'not_verified')) nv.push({ item: `${a.area} (config sub-resource unreadable)`, blocks: `the ${a.area} checks` });
   const gate =
     top && (top.severity === 'critical' || top.severity === 'high') && top.category === 'growth'
