@@ -17,13 +17,14 @@ import type { ProviderKeyStore } from '../storage/provider-keys';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
-import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult } from '../../shared/ipc';
+import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult } from '../../shared/ipc';
 import { crawlAndSuggest, scanUrls, type ScanProgress } from './scan-core';
 import { runVerifyDriver } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify } from './verify-tags';
 import { routeTagsToPages } from './verify-routing';
 import { toFormFillViews, localeOptions, matchFiredContainerTags } from './form-fill-plan';
+import { matchFormsToTags, dedupeSharedFields, type PagedForm, type FormTagIdentity } from './form-tag-match';
 import { snapshotToVerifyInputs } from './container-verify';
 import { localeById } from '../../../../web-audit-mcp/src/agent/form-fill.js';
 import type { RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
@@ -223,6 +224,68 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     const emailTag = `d${Date.now().toString(36)}`;
     const forms = toFormFillViews(rawForms, target, locale.id, emailTag);
     return { url: target, localeId: locale.id, locales: localeOptions(), forms, ...(error ? { error } : {}) };
+  });
+
+  // CONTAINER-TAG-DRIVEN plan: crawl the site for forms, keep only forms that HAVE a matching container
+  // form tag, and collapse their fields into ONE de-duplicated data-entry set. READ-ONLY (reads the DOM
+  // + the container snapshot; fills/submits nothing — the operator submits from the review step).
+  ipcMain.handle('suggestions:formTagVerifyPlan', async (_e, url: unknown, opts?: FormTagVerifyPlanOptions): Promise<FormTagVerifyPlanResult> => {
+    const target = String(url ?? '').trim();
+    const verdict = urlAllowed(target, []);
+    if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
+    const o = (opts ?? {}) as FormTagVerifyPlanOptions;
+    const locale = localeById(o.localeId);
+    const emailTag = `d${Date.now().toString(36)}`;
+    let error: string | undefined;
+    const empty = (err: string): FormTagVerifyPlanResult => ({ url: target, localeId: locale.id, locales: localeOptions(), matched: [], sharedFields: [], unmatchedTags: [], pagesCrawled: 0, error: err });
+
+    // 1. The container's FORM (custom-event) tags → identities.
+    let tags: FormTagIdentity[] = [];
+    try {
+      if (o.accountId && o.containerId && o.workspaceId) {
+        const snap = await data.getGtmContainerSnapshot(o.accountId, o.containerId, o.workspaceId);
+        tags = snapshotToVerifyInputs(snap).tags
+          .filter((t) => t.trigger.kind === 'custom_event')
+          .map((t) => {
+            const cd = t.trigger.customEventData;
+            return { tagName: t.tagName, eventName: t.eventName, ...(cd ? { formName: Object.values(cd)[0] } : {}) };
+          });
+      }
+    } catch (e) {
+      return empty(`Could not read the container: ${(e instanceof Error ? e.message : String(e)).slice(0, 150)}`);
+    }
+    if (tags.length === 0) {
+      return empty(o.accountId ? 'This container has no form (custom-event) tags to verify. Create form-tracking tags first.' : 'Pick a GTM account, container and workspace (the GTM bar) so we know which form tags to verify.');
+    }
+
+    // 2. Crawl the site for forms across pages (same-site, bounded).
+    const pagedForms: PagedForm[] = [];
+    let pagesCrawled = 0;
+    try {
+      const disc = await discoverSite(target);
+      const pages = [target, ...disc.urls.filter((u) => u !== target)].slice(0, Math.max(1, Math.min(o.maxPages ?? 15, 25)));
+      const driver = await makeDriver({});
+      try {
+        for (const page of pages) {
+          if (!urlAllowed(page, []).ok) continue;
+          let driven: Awaited<ReturnType<typeof driver.open>> | null = null;
+          try { driven = await driver.open(page); } catch { continue; }
+          pagesCrawled += 1;
+          const raw = driven?.rawForms ?? [];
+          if (raw.length === 0) continue;
+          for (const v of toFormFillViews(raw, page, locale.id, emailTag)) pagedForms.push({ ...v, page });
+        }
+      } finally {
+        try { await driver.close(); } catch { /* best-effort */ }
+      }
+    } catch (e) {
+      error = `Crawl issue: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`;
+    }
+
+    // 3. Match forms ↔ tags, then collapse the matched forms' fields into ONE data-entry set.
+    const { matched, unmatchedTags } = matchFormsToTags(pagedForms, tags);
+    const sharedFields = dedupeSharedFields(matched);
+    return { url: target, localeId: locale.id, locales: localeOptions(), matched, sharedFields, unmatchedTags, pagesCrawled, ...(error ? { error } : {}) };
   });
 
   // Phase 2 — REAL submit: fill the operator-reviewed values and submit ONE form for real, then report

@@ -26,8 +26,7 @@ import type {
   TagScanResult,
   VerifyTagInput,
   VerifyTagsResult,
-  FormFillView,
-  FormFillFieldView,
+  FormTagVerifyPlanResult,
   SubmitFormVerifyResult,
 } from '../../shared/ipc';
 import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen } from '../../shared/tag-template';
@@ -3753,86 +3752,99 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
 // Real-submit form review (Phase 1b): fetch a page's forms + their OWN fields (Option 2) and show
 // each with a locale-appropriate, EDITABLE test value + a Location picker. READ-ONLY — nothing is
 // submitted here; the actual submit + tag-firing check is Phase 2.
+// Container-tag-driven form verification: from the site's MAIN url, crawl to find forms, keep only the
+// ones that HAVE a container form tag, collapse their fields into ONE de-duplicated data-entry set;
+// the operator fills once, then every matched form is submitted for real and each tag is verified (with
+// a fix suggestion when it doesn't fire). Real submits — an explicit warning + confirm gate them.
 function FormFillReview({ active, onError }: { active: AccountView | undefined; onError: (m: string) => void }): JSX.Element {
   const ctx = active?.gtmContext;
-  // Container context (optional) lets us PAIR the fired GA4 events to the actual container tags.
-  const canPair = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
+  const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [url, setUrl] = useState('');
   const [localeId, setLocaleId] = useState('us');
   const [locales, setLocales] = useState<Array<{ id: string; label: string }>>([{ id: 'us', label: 'United States' }]);
-  const [forms, setForms] = useState<FormFillView[] | null>(null);
+  const [plan, setPlan] = useState<FormTagVerifyPlanResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  // Operator edits: form index → selector → value (a checkbox stores 'true' / '').
-  const [edits, setEdits] = useState<Record<number, Record<string, string>>>({});
-  // Optional GTM Preview snippet so DRAFT tags load; blank = test the live/published container.
   const [snippet, setSnippet] = useState('');
-  const [submitting, setSubmitting] = useState<number | null>(null);
-  const [confirming, setConfirming] = useState<number | null>(null);
+  // The ONE shared, de-duplicated data-entry: dedup key → value. Filled once, applied to every form.
+  const [shared, setShared] = useState<Record<string, string>>({});
+  const [touched, setTouched] = useState(false); // Submit appears once the operator has entered/edited data
+  const [confirming, setConfirming] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [results, setResults] = useState<Record<number, SubmitFormVerifyResult>>({});
 
-  const valueOf = (fi: number, f: FormFillFieldView): string => edits[fi]?.[f.selector] ?? f.value;
-  const setValue = (fi: number, selector: string, v: string): void =>
-    setEdits((e) => ({ ...e, [fi]: { ...(e[fi] ?? {}), [selector]: v } }));
+  const dedupKey = (role: string, label: string): string => (role === 'select' ? `select|${(label || '').toLowerCase().trim()}` : role);
   const isCheckbox = (t: string): boolean => t === 'checkbox' || t === 'radio';
+  const setShrd = (k: string, v: string): void => { setTouched(true); setShared((s) => ({ ...s, [k]: v })); };
 
-  async function submitForm(form: FormFillView): Promise<void> {
+  async function fetchPlan(): Promise<void> {
     const target = url.trim();
-    if (!target || submitting !== null) return;
-    setSubmitting(form.index);
-    setConfirming(null);
-    setResults((r) => { const n = { ...r }; delete n[form.index]; return n; });
+    if (!target) { setNote('Enter your site’s main URL.'); return; }
+    if (!ready || !ctx) { setNote('Pick a GTM account, container and workspace in the GTM bar above first — that’s the container whose form tags we verify.'); return; }
+    setLoading(true); setNote(null); onError(''); setResults({}); setPlan(null); setTouched(false);
     try {
-      const fields = form.fields.map((f) => ({ selector: f.selector, type: f.type, value: valueOf(form.index, f) }));
-      const submitOpts = {
-        ...(snippet.trim() ? { containerSnippet: snippet.trim() } : {}),
-        ...(canPair && ctx ? { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId! } : {}),
-      };
-      const res = await window.desktop.tags.submitFormAndVerify(target, { formId: form.formId, formClasses: form.formClasses, method: form.method, fields }, Object.keys(submitOpts).length ? submitOpts : undefined);
-      setResults((r) => ({ ...r, [form.index]: res }));
-    } catch (e) {
-      setNote(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSubmitting(null);
-    }
-  }
-
-  async function fetchForms(): Promise<void> {
-    const target = url.trim();
-    if (!target) { setNote('Enter the URL of the page whose form(s) you want to test.'); return; }
-    setLoading(true); setNote(null); onError('');
-    try {
-      const res = await window.desktop.tags.formsForFill(target, { localeId });
-      setForms(res.forms);
-      setEdits({});
+      const res = await window.desktop.tags.formTagVerifyPlan(target, { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!, localeId });
+      setPlan(res);
+      const sv: Record<string, string> = {};
+      for (const f of res.sharedFields) sv[f.key] = f.value;
+      setShared(sv);
       if (res.locales?.length) setLocales(res.locales);
-      if (res.error) setNote(`Loaded with a warning: ${res.error}`);
-      else if (res.forms.length === 0) setNote('No fillable forms found on that page. Try the exact page the form lives on.');
+      if (res.error) setNote(res.error);
+      else if (res.matched.length === 0) setNote(`Crawled ${res.pagesCrawled} page(s) but found no site form matching your container’s form tags — the forms may be on pages we didn’t reach, render late, or their names differ from the tags.`);
     } catch (e) {
       setNote(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
+
+  async function submitAll(): Promise<void> {
+    if (!plan || !ctx || submitting) return;
+    setSubmitting(true); setConfirming(false); setResults({});
+    try {
+      for (let i = 0; i < plan.matched.length; i++) {
+        const form = plan.matched[i];
+        const fields = form.fields.map((f) => ({ selector: f.selector, type: f.type, value: shared[dedupKey(f.role, f.label)] ?? f.value }));
+        const submitOpts = { ...(snippet.trim() ? { containerSnippet: snippet.trim() } : {}), accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId! };
+        try {
+          const res = await window.desktop.tags.submitFormAndVerify(form.page, { formId: form.formId, formClasses: form.formClasses, method: form.method, fields }, submitOpts);
+          setResults((r) => ({ ...r, [i]: res }));
+        } catch (e) {
+          setResults((r) => ({ ...r, [i]: { ok: false, injected: false, previewAuth: false, filled: 0, submitted: false, error: e instanceof Error ? e.message : String(e), events: [], beacons: [] } }));
+        }
+      }
+    } finally { setSubmitting(false); }
+  }
+
+  // For a NOT-fired tag on a submitted form: what to change.
+  const fixFor = (r: SubmitFormVerifyResult, eventName: string): string => {
+    if (!r.submitted) return `The form couldn’t be submitted (${r.note ?? 'no form/submit control found'}). Check the form’s fields/selectors, then retry.`;
+    if (r.events.length === 0) return `The form submitted but pushed NO GA4 event — the site isn’t emitting its form_submission dataLayer event. Add the form’s listener (a Custom HTML tag that pushes the event on submit-success), or, for DRAFT tags, paste a GTM Preview snippet above. Confirm in GTM Preview.`;
+    return `The form fired [${r.events.join(', ')}] but not “${eventName}”. Either this tag’s trigger condition (form name / id / page) doesn’t match this form, or its GA4 Event Name differs — align the tag’s Event Name to one of the fired events, or fix its form-name condition.`;
+  };
+
+  const matched = plan?.matched ?? [];
 
   return (
     <div style={styles.reviewWrap}>
       <div style={styles.chatHeader}>
         <div>
-          <div style={styles.chatTitle}>Real-submit forms (preview)</div>
-          <div style={styles.chatSub}>Fetch a page’s form fields and review the test data we would submit. Nothing is submitted yet — the real submit + tag-firing check is the next step.</div>
+          <div style={styles.chatTitle}>Form tag verification</div>
+          <div style={styles.chatSub}>From your site’s main URL we find the forms that HAVE tracking tags, you fill the data once, then each form is submitted for real and its tag is verified (with a fix when it doesn’t fire).</div>
         </div>
       </div>
       <div style={styles.reviewBody}>
         <div style={styles.card}>
-          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.example.com/contact — the page the form is on" style={{ ...styles.input, width: '100%' }} />
+          <div style={styles.muted}>
+            Container:{' '}
+            {ready ? <b style={{ color: 'var(--text)' }}>{ctx?.accountName} › {ctx?.containerName} › {ctx?.workspaceName ?? 'workspace?'}</b> : <b style={{ color: 'var(--c-amber)' }}>none — pick one in the GTM bar above</b>}
+          </div>
+          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.your-site.com — your site’s main URL (we crawl it for forms)" style={{ ...styles.input, width: '100%', marginTop: 8 }} />
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
             <label style={{ ...styles.muted, fontSize: 13 }}>Location</label>
             <select value={localeId} onChange={(e) => setLocaleId(e.target.value)} style={{ ...styles.input, width: 'auto', minWidth: 160 }}>
               {locales.map((l) => (<option key={l.id} value={l.id}>{l.label}</option>))}
             </select>
-            <button style={styles.primaryBtn} onClick={() => void fetchForms()} disabled={loading || !url.trim()}>
-              {loading ? 'Fetching…' : 'Fetch form fields'}
+            <button style={styles.primaryBtn} onClick={() => void fetchPlan()} disabled={loading || !url.trim() || !ready}>
+              {loading ? 'Crawling & matching…' : 'Find forms with tags'}
             </button>
           </div>
           <textarea
@@ -3843,106 +3855,117 @@ function FormFillReview({ active, onError }: { active: AccountView | undefined; 
           />
           <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
             US only for now; UK / AUS come later. The test email uses a traceable gtm-verify+…@example.com alias so your CRM can filter these.
-            {canPair
-              ? ' A real submit is paired to your container’s tags (it names which ones fired).'
-              : ' Pick a GTM account/container/workspace in the Chat tab to also name which container tags fired.'}
           </div>
           {note && (
             <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)' }}>{note}</div>
           )}
         </div>
 
-        {forms && forms.map((form) => (
-          <div key={form.index} style={styles.card}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <div style={styles.h2}>{form.title}</div>
-              <span style={{ ...styles.muted, fontSize: 12, border: '1px solid rgba(128,128,128,0.35)', borderRadius: 6, padding: '1px 6px' }}>{form.purpose}</span>
-              {form.method ? <span style={{ ...styles.muted, fontSize: 12 }}>{form.method.toUpperCase()}{form.action ? ` → ${form.action.replace(/^https?:\/\//, '').slice(0, 50)}` : ''}</span> : null}
-              {form.hidden ? <span style={{ color: 'var(--c-amber)', fontSize: 12 }}>(opens on a click)</span> : null}
-            </div>
-            <ul style={{ ...styles.resultList, marginTop: 8 }}>
-              {form.fields.map((f) => (
-                <li key={f.selector} style={{ ...styles.resultRow, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <span style={{ minWidth: 150, fontSize: 13 }}>
-                    {f.label}{f.required ? <span style={{ color: 'var(--c-red)' }}> *</span> : null}
-                    <span style={{ ...styles.muted, marginLeft: 6, fontSize: 11 }}>{f.role}</span>
-                  </span>
-                  {isCheckbox(f.type) ? (
-                    <label style={{ ...styles.muted, fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
-                      <input type="checkbox" checked={valueOf(form.index, f) === 'true'} onChange={(e) => setValue(form.index, f.selector, e.target.checked ? 'true' : '')} />
-                      {valueOf(form.index, f) === 'true' ? 'checked' : 'unchecked'}
-                    </label>
-                  ) : f.options && f.options.length ? (
-                    <select value={valueOf(form.index, f)} onChange={(e) => setValue(form.index, f.selector, e.target.value)} style={{ ...styles.input, minWidth: 180 }}>
-                      {f.options.map((o) => (<option key={o} value={o}>{o}</option>))}
-                    </select>
-                  ) : (
-                    <input value={valueOf(form.index, f)} onChange={(e) => setValue(form.index, f.selector, e.target.value)} style={{ ...styles.input, flex: 1, minWidth: 180 }} />
-                  )}
-                </li>
-              ))}
-            </ul>
-            {confirming === form.index ? (
-              <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--c-red)', background: 'rgba(220,60,60,0.08)', fontSize: 13 }}>
-                <div style={{ color: 'var(--text)' }}>
-                  ⚠ This <b>really submits the form</b> — it creates a real submission in your CRM / inbox and can
-                  trigger autoresponders, Slack/Zapier automations, or sales-rep assignment. GA4 and known ad-pixel
-                  hits are captured (not sent), but a less-common pixel or any server-side automation may still fire
-                  for real. Continue?
-                </div>
-                <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                  <button style={styles.dangerGhost} onClick={() => void submitForm(form)} disabled={submitting !== null}>
-                    {submitting === form.index ? 'Submitting…' : 'Yes, submit for real'}
+        {plan && matched.length > 0 && (
+          <>
+            <div style={styles.card}>
+              <div style={styles.h2}>Enter the data once ({plan.sharedFields.length} field(s))</div>
+              <div style={{ ...styles.muted, fontSize: 12, marginBottom: 6 }}>
+                Fields are de-duplicated across the {matched.length} form(s) — this data fills every one of them. Edit anything, then submit.
+              </div>
+              <ul style={styles.resultList}>
+                {plan.sharedFields.map((f) => (
+                  <li key={f.key} style={{ ...styles.resultRow, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ minWidth: 150, fontSize: 13 }}>{f.label}<span style={{ ...styles.muted, marginLeft: 6, fontSize: 11 }}>{f.role}</span></span>
+                    {isCheckbox(f.type) ? (
+                      <label style={{ ...styles.muted, fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <input type="checkbox" checked={(shared[f.key] ?? f.value) === 'true'} onChange={(e) => setShrd(f.key, e.target.checked ? 'true' : '')} />
+                        {(shared[f.key] ?? f.value) === 'true' ? 'checked' : 'unchecked'}
+                      </label>
+                    ) : f.options && f.options.length ? (
+                      <select value={shared[f.key] ?? f.value} onChange={(e) => setShrd(f.key, e.target.value)} style={{ ...styles.input, minWidth: 180 }}>
+                        {f.options.map((o) => (<option key={o} value={o}>{o}</option>))}
+                      </select>
+                    ) : (
+                      <input value={shared[f.key] ?? f.value} onChange={(e) => setShrd(f.key, e.target.value)} style={{ ...styles.input, flex: 1, minWidth: 180 }} />
+                    )}
+                  </li>
+                ))}
+              </ul>
+              {(touched || Object.keys(results).length > 0) ? (
+                confirming ? (
+                  <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--c-red)', background: 'rgba(220,60,60,0.08)', fontSize: 13 }}>
+                    <div style={{ color: 'var(--text)' }}>
+                      ⚠ This <b>really submits all {matched.length} form(s)</b> — a real submission / lead is created for each in your CRM / inbox and can trigger
+                      autoresponders, Slack/Zapier automations, or sales-rep assignment. GA4 and known ad-pixel hits are captured (not sent), but a less-common
+                      pixel or server-side automation may still fire for real. Continue?
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                      <button style={styles.dangerGhost} onClick={() => void submitAll()} disabled={submitting}>{submitting ? 'Submitting…' : `Yes, submit all ${matched.length} & verify`}</button>
+                      <button style={styles.toggleOff} onClick={() => setConfirming(false)} disabled={submitting}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button style={styles.primaryBtn} onClick={() => setConfirming(true)} disabled={submitting}>
+                    {submitting ? 'Submitting…' : `Submit all ${matched.length} form(s) & verify`}
                   </button>
-                  <button style={styles.toggleOff} onClick={() => setConfirming(null)} disabled={submitting !== null}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                <button style={styles.toggleOff} onClick={() => setConfirming(form.index)} disabled={submitting !== null}>
-                  Submit for real &amp; verify
-                </button>
-                <span style={{ ...styles.muted, fontSize: 12 }}>Sends a real submission; captures the tag&apos;s hit.</span>
-              </div>
-            )}
-            {results[form.index] && (() => {
-              const r = results[form.index];
-              const ok = r.submitted && !r.error;
+                )
+              ) : (
+                <div style={{ ...styles.muted, fontSize: 12 }}>Review / edit the data above — the Submit button appears once you enter it.</div>
+              )}
+            </div>
+
+            {matched.map((form, i) => {
+              const r = results[i];
               return (
-                <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 8, color: 'var(--text)' }}>
-                  {r.error ? (
-                    <span style={{ color: 'var(--c-red)' }}>Error: {r.error}</span>
-                  ) : !r.submitted ? (
-                    <span style={{ color: 'var(--c-amber)' }}>Could not submit: {r.note ?? 'no <form> to submit'}</span>
-                  ) : (
-                    <>
-                      <span style={{ color: 'var(--c-green)', fontWeight: 600 }}>Submitted</span> ({r.filled} field(s) filled).{' '}
-                      {r.events.length > 0 ? (
-                        <span><b style={{ color: 'var(--c-green)' }}>Fired:</b> {r.events.join(', ')}</span>
+                <div key={`${form.page}|${form.formId}|${form.formTitle}`} style={styles.card}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={styles.h2}>{form.formTitle || '(untitled form)'}</div>
+                    <span style={{ ...styles.muted, fontSize: 12, border: '1px solid rgba(128,128,128,0.35)', borderRadius: 6, padding: '1px 6px' }}>{form.purpose}</span>
+                    <span style={{ ...styles.muted, fontSize: 12 }}>{form.page.replace(/^https?:\/\//, '').slice(0, 60)}</span>
+                    {form.method === 'js' ? <span style={{ ...styles.muted, fontSize: 12 }}>(JS/div widget)</span> : null}
+                  </div>
+                  <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 4 }}>Tag(s) expected to fire: {form.expectedTags.map((t) => t.tagName).join(', ')}</div>
+                  {r && (
+                    <div style={{ fontSize: 12.5, marginTop: 8 }}>
+                      {r.error ? (
+                        <span style={{ color: 'var(--c-red)' }}>Error: {r.error}</span>
                       ) : (
-                        <span style={{ color: 'var(--c-amber)' }}>No GA4 event captured — the tag may need the DRAFT container (paste a Preview snippet), a page condition, or the form did not emit its event.</span>
+                        <>
+                          <div style={{ ...styles.muted }}>
+                            {r.submitted ? `Submitted (${r.filled} field(s)).` : `Not submitted: ${r.note ?? 'no form/submit control'}.`}
+                            {r.events.length > 0 ? ` Fired: ${r.events.join(', ')}.` : ''}
+                            {r.injected && !r.previewAuth ? ' (snippet had no preview auth — published container loaded)' : ''}
+                          </div>
+                          {form.expectedTags.map((t) => {
+                            const fired = (r.firedTags ?? []).some((ft) => ft.tagName === t.tagName);
+                            return (
+                              <div key={t.tagName} style={{ marginTop: 4 }}>
+                                {fired ? (
+                                  <span style={{ color: 'var(--c-green)', fontWeight: 600 }}>✓ FIRED — {t.tagName}</span>
+                                ) : (
+                                  <>
+                                    <span style={{ color: 'var(--c-red)', fontWeight: 600 }}>✗ NOT FIRED — {t.tagName}</span>
+                                    <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)' }}>Fix: {fixFor(r, t.eventName)}</div>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </>
                       )}
-                      {r.beacons.length > 0 && <span style={styles.muted}> · beacons: {r.beacons.join(', ')}</span>}
-                      {ok && r.injected && !r.previewAuth && <span style={{ color: 'var(--c-amber)' }}> · snippet had no preview auth (published container loaded)</span>}
-                      {r.firedTags && r.firedTags.length > 0 && (
-                        <div style={{ marginTop: 4 }}>
-                          <span style={{ fontWeight: 600, color: 'var(--c-green)' }}>✓ FIRED container tag(s):</span>{' '}
-                          {r.firedTags.map((t) => t.tagName).join(', ')}
-                          <span style={styles.muted}> — verified on a real submit.</span>
-                        </div>
-                      )}
-                      {r.events.length > 0 && canPair && !(r.firedTags && r.firedTags.length > 0) && (
-                        <div style={{ ...styles.muted, marginTop: 4 }}>
-                          The event(s) fired, but no container tag matches them by event name — a tag may send a different GA4 event name than the event observed.
-                        </div>
-                      )}
-                    </>
+                    </div>
                   )}
                 </div>
               );
-            })()}
+            })}
+          </>
+        )}
+
+        {plan && plan.unmatchedTags.length > 0 && (
+          <div style={styles.card}>
+            <div style={{ ...styles.h2, color: 'var(--c-amber)' }}>Form tags with no matching form ({plan.unmatchedTags.length})</div>
+            <div style={{ ...styles.muted, fontSize: 12 }}>These container form tags matched no form we found on the site — the form may be on an un-crawled/behind-login page, render late, or its name differs from the tag. Verify those manually.</div>
+            <ul style={styles.resultList}>
+              {plan.unmatchedTags.map((n) => (<li key={n} style={styles.resultRow}>{n}</li>))}
+            </ul>
           </div>
-        ))}
+        )}
       </div>
     </div>
   );

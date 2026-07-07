@@ -748,6 +748,52 @@ export interface SubmitFormVerifyResult {
   firedTags?: Array<{ tagName: string; eventName: string }>;
 }
 
+/* ── Container-tag-driven form verification: crawl → keep only forms that HAVE a tag → one de-duped
+ *    data-entry → submit each → verify + fix. ── */
+/** One de-duplicated field in the shared data-entry set (email/name/phone shown ONCE across forms). */
+export interface SharedFillField {
+  /** Stable de-dup key (role, or role|label for selects) — each matched form pulls its value by this. */
+  key: string;
+  role: string;
+  label: string;
+  type: string;
+  value: string;
+  options?: string[];
+}
+/** A site form that has a matching container tag — the thing we submit + verify. */
+export interface MatchedFormView {
+  page: string;
+  formTitle: string;
+  formId: string;
+  formClasses: string;
+  method: string;
+  purpose: string;
+  fields: Array<{ selector: string; type: string; role: string; label: string; value: string; options?: string[] }>;
+  /** Container form tags expected to fire when this form is submitted (name + GA4 event name). */
+  expectedTags: Array<{ tagName: string; eventName: string }>;
+}
+export interface FormTagVerifyPlanOptions {
+  accountId: string;
+  containerId: string;
+  workspaceId: string;
+  localeId?: string;
+  /** Crawl budget for finding forms across the site. */
+  maxPages?: number;
+}
+export interface FormTagVerifyPlanResult {
+  url: string;
+  localeId: string;
+  locales: Array<{ id: string; label: string }>;
+  /** Unique forms that have a container tag (each lists the tags expected to fire on it). */
+  matched: MatchedFormView[];
+  /** The collapsed, editable data-entry set — fill once, applies to every matched form. */
+  sharedFields: SharedFillField[];
+  /** Container form tags that matched NO form on the site (a coverage gap to flag). */
+  unmatchedTags: string[];
+  pagesCrawled: number;
+  error?: string;
+}
+
 /* ── Container audit (the "Container audit" panel) ── */
 export interface AuditFindingView {
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
