@@ -1378,6 +1378,10 @@ const tplStyles: Record<string, React.CSSProperties> = {
   installReqLabel: { fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', marginBottom: 4 },
   installDetail: { fontSize: 12, color: 'var(--text-dim)', margin: '4px 0 0', whiteSpace: 'pre-wrap', lineHeight: 1.4 },
   installMeta: { fontSize: 12, color: 'var(--text-dim)', margin: '2px 0' },
+  // "Create listener tag" action row on a listener-tag requirement.
+  installActions: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' },
+  installCreateBtn: { background: 'var(--c-blue)', color: '#fff', border: 'none', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' },
+  installCreateBtnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
 };
 
 // Fixed option lists for the editable Trigger-when Variable / Condition selects.
@@ -1437,8 +1441,22 @@ const FIRES_LABEL: Record<Extract<InstallReqView, { kind: 'listener-tag' }>['tag
   window_loaded: 'Window Loaded',
 };
 
-/** Render one install requirement, styled by kind. */
-function InstallRequirementRow({ req }: { req: InstallReqView }): JSX.Element {
+/** Render one install requirement, styled by kind. For a 'listener-tag' requirement, a "Create listener
+ *  tag" button (wired by InstallPanel) creates it in the active DRAFT workspace on explicit click. */
+function InstallRequirementRow({
+  req,
+  targetReady,
+  status,
+  onCreate,
+}: {
+  req: InstallReqView;
+  /** Whether a GTM account/container/workspace is selected — gates the create button. */
+  targetReady: boolean;
+  /** This requirement's create status (idle unless a listener-tag create was attempted). */
+  status: ListenerCreateStatus;
+  /** Create handler (present only for a 'listener-tag' requirement). */
+  onCreate?: () => void;
+}): JSX.Element {
   switch (req.kind) {
     case 'native':
       return (
@@ -1471,6 +1489,23 @@ function InstallRequirementRow({ req }: { req: InstallReqView }): JSX.Element {
             </div>
           )}
           <div style={tplStyles.installDetail}>{req.detail}</div>
+          {/* Actionable create: drop this Custom HTML listener into the active DRAFT workspace on an
+              explicit click (draft-only, never published — same posture as the ✓ create-tags flow). */}
+          <div style={tplStyles.installActions}>
+            <button
+              type="button"
+              style={{ ...tplStyles.installCreateBtn, ...(!targetReady || status.state !== 'idle' && status.state !== 'err' ? tplStyles.installCreateBtnDisabled : {}) }}
+              onClick={onCreate}
+              disabled={!targetReady || status.state === 'creating' || status.state === 'created' || status.state === 'exists'}
+              title={targetReady ? `Create the "${req.tag.name}" Custom HTML listener on All Pages in the draft workspace` : 'Select a GTM account, container and workspace first'}
+              aria-label={`Create the listener tag "${req.tag.name}" in the draft workspace`}
+            >
+              {status.state === 'creating' ? 'Creating…' : 'Create listener tag'}
+            </button>
+            {status.state === 'created' && <span style={{ color: 'var(--c-green)', fontSize: 12 }}>✓ Created{status.reused ? ' · trigger reused' : ''}</span>}
+            {status.state === 'exists' && <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Already exists</span>}
+            {status.state === 'err' && <span style={{ color: 'var(--c-red)', fontSize: 12 }} title={status.msg}>✗ {status.msg}</span>}
+          </div>
         </div>
       );
     case 'html-attribute':
@@ -1500,13 +1535,53 @@ function InstallRequirementRow({ req }: { req: InstallReqView }): JSX.Element {
   }
 }
 
-/** The expandable panel body for one suggestion's install plan. */
-function InstallPanel({ plan }: { plan: InstallPlanView }): JSX.Element {
+/** Per-listener-requirement create status (keyed by requirement index within one plan). */
+type ListenerCreateStatus =
+  | { state: 'idle' }
+  | { state: 'creating' }
+  | { state: 'created'; reused: boolean }
+  | { state: 'exists' }
+  | { state: 'err'; msg: string };
+
+/** The expandable panel body for one suggestion's install plan. Threads the active GTM target down so a
+ *  'listener-tag' requirement can offer a "Create listener tag" button that creates it in the DRAFT
+ *  workspace. Per-requirement create status is kept here (keyed by requirement index). */
+function InstallPanel({ plan, gtmTarget }: { plan: InstallPlanView; gtmTarget: { accountId?: string; containerId?: string; workspaceId?: string } }): JSX.Element {
+  const [statuses, setStatuses] = useState<Record<number, ListenerCreateStatus>>({});
+  const acct = gtmTarget.accountId ?? '';
+  const cont = gtmTarget.containerId ?? '';
+  const ws = gtmTarget.workspaceId ?? '';
+  const targetReady = Boolean(acct && cont && ws);
+
+  async function createListener(index: number, tag: { name: string; html: string }): Promise<void> {
+    if (!targetReady) return;
+    setStatuses((s) => ({ ...s, [index]: { state: 'creating' } }));
+    try {
+      const o = await window.desktop.tags.createListenerTag(acct, cont, ws, { name: tag.name, html: tag.html });
+      setStatuses((s) => ({
+        ...s,
+        [index]: o.ok
+          ? { state: 'created', reused: o.triggerReused === true }
+          : o.existing
+            ? { state: 'exists' }
+            : { state: 'err', msg: o.error ?? 'failed' },
+      }));
+    } catch (e) {
+      setStatuses((s) => ({ ...s, [index]: { state: 'err', msg: e instanceof Error ? e.message : String(e) } }));
+    }
+  }
+
   return (
     <div style={tplStyles.installPanel}>
       <p style={tplStyles.installSummary}>{plan.summary}</p>
       {plan.requires.map((req, i) => (
-        <InstallRequirementRow key={i} req={req} />
+        <InstallRequirementRow
+          key={i}
+          req={req}
+          targetReady={targetReady}
+          status={statuses[i] ?? { state: 'idle' }}
+          onCreate={req.kind === 'listener-tag' ? () => createListener(i, req.tag) : undefined}
+        />
       ))}
     </div>
   );
@@ -1525,6 +1600,7 @@ function SuggestionTemplateTable({
   alreadyExists,
   onToggle,
   onEdit,
+  gtmTarget,
 }: {
   suggestions: SuggestedTagView[];
   /** Raw inline-edit overlay (keyed by suggestion id). The editable Parameter/When ROWS render from these
@@ -1537,6 +1613,9 @@ function SuggestionTemplateTable({
   alreadyExists: (s: SuggestedTagView) => boolean;
   onToggle: (id: string, v: boolean) => void;
   onEdit: (id: string, patch: TagEdit) => void;
+  /** The active GTM account/container/workspace, so the install panel's "Create listener tag" button
+   *  can create the listener in the right DRAFT workspace. Any field empty → the button is disabled. */
+  gtmTarget: { accountId?: string; containerId?: string; workspaceId?: string };
 }): JSX.Element {
   // Which suggestions have their "How to install" panel expanded (keyed by id).
   const [installOpen, setInstallOpen] = useState<Record<string, boolean>>({});
@@ -1667,7 +1746,7 @@ function SuggestionTemplateTable({
               groupRows.push(
                 <tr key={s.id + ':install'}>
                   <td colSpan={totalCols} style={tplStyles.installTd}>
-                    <InstallPanel plan={s.install} />
+                    <InstallPanel plan={s.install} gtmTarget={gtmTarget} />
                   </td>
                 </tr>,
               );
@@ -3397,6 +3476,7 @@ function TagReviewPanel({
                   alreadyExists={alreadyExists}
                   onToggle={(id, v) => setSelected((sel) => ({ ...sel, [id]: v }))}
                   onEdit={(id, patch) => setEdits((m) => ({ ...m, [id]: { ...m[id], ...patch } }))}
+                  gtmTarget={{ accountId: ctx?.accountId, containerId: ctx?.containerId, workspaceId: ctx?.workspaceId }}
                 />
                 {pageCount > 1 && (
                   <div style={tplStyles.pager}>

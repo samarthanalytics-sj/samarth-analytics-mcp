@@ -268,4 +268,56 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
       return outcomes;
     },
   );
+
+  // Create ONE Custom HTML listener tag from a suggestion's install plan (the
+  // 'listener-tag' requirement) as a DRAFT, on explicit user click. Same posture
+  // as createTags: the RENDERER already gated this behind a user click, so the
+  // confirm fn auto-approves the single create_gtm_tracking_tag write (draft-only,
+  // never published). The HTML is our own vetted install-plan template, not user
+  // input. The listener always fires on the built-in "All Pages" pageview trigger
+  // — the exact shape form-recipes.ts's listenerTag produces for the same purpose.
+  ipcMain.handle(
+    'suggestions:createListenerTag',
+    async (_e, accountId: unknown, containerId: unknown, workspaceId: unknown, listener: unknown): Promise<CreateTagOutcome> => {
+      const acct = String(accountId ?? '');
+      const cont = String(containerId ?? '');
+      const ws = String(workspaceId ?? '');
+      if (!acct || !cont || !ws) throw new Error('Pick a GTM account, container and draft workspace first.');
+      const l = (listener ?? {}) as { name?: unknown; html?: unknown };
+      const name = String(l.name ?? '').trim();
+      const html = String(l.html ?? '');
+      if (!name) throw new Error('The listener tag is missing a name.');
+      if (!html.trim()) throw new Error('The listener tag is missing its HTML.');
+
+      // Same create path as createTags — echo the args into the existing
+      // create_gtm_tracking_tag write tool (draft-only, no publish). The confirm fn
+      // auto-approves because the renderer already required an explicit click.
+      const approve: ConfirmFn = async (p) => p.details;
+      const reg = buildToolRegistry(data, approve, 'gtm');
+
+      // "Found entity with duplicate name" → the listener tag is already there:
+      // report it as existing (skipped), not an error. Mirrors createSuggestedTags.
+      const DUPLICATE_RE = /duplicate name|already exists|entity with duplicate|duplicate entity/i;
+      try {
+        const out = JSON.parse(
+          await reg.execute('create_gtm_tracking_tag', {
+            accountId: acct,
+            containerId: cont,
+            workspaceId: ws,
+            tagName: name,
+            platform: 'custom_html',
+            html,
+            trigger: { name: 'All Pages', kind: 'pageview' },
+          }),
+        ) as { declined?: boolean; alreadyExists?: boolean; tag?: { name?: string }; trigger?: { reused?: boolean } };
+        if (out?.declined) return { id: name, ok: false, error: 'declined' };
+        if (out?.alreadyExists) return { id: name, ok: false, existing: true, error: 'already exists' };
+        return { id: name, ok: true, tagName: out?.tag?.name ?? name, triggerReused: out?.trigger?.reused === true };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (DUPLICATE_RE.test(msg)) return { id: name, ok: false, existing: true, error: 'already exists' };
+        return { id: name, ok: false, error: msg };
+      }
+    },
+  );
 }

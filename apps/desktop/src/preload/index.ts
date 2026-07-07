@@ -251,6 +251,16 @@ const api = {
         .invoke('suggestions:createTags', requestId, accountId, containerId, workspaceId, suggestions)
         .finally(() => ipcRenderer.removeListener('suggestions:createTags:event', listener));
     },
+    // Create ONE Custom HTML listener tag from a suggestion's install plan as a
+    // DRAFT (the "How to install" panel's Create-listener-tag button). Same draft-
+    // only/no-publish path as createTags; on explicit user click only.
+    createListenerTag: (
+      accountId: string,
+      containerId: string,
+      workspaceId: string,
+      listener: { name: string; html: string },
+    ): Promise<CreateTagOutcome> =>
+      ipcRenderer.invoke('suggestions:createListenerTag', accountId, containerId, workspaceId, listener),
   },
 
   // Container audit: surface the existing audit engine + its fixes as a panel.
