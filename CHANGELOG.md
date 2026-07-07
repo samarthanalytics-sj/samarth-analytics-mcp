@@ -1,3 +1,10 @@
+## [1.253.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.253.0...v1.253.1) (2026-07-07)
+
+### Bug Fixes
+
+* **verify:** find the site's form pages (visit form-likely pages, not just the first 15) ([74fc5f3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/74fc5f30d52bf07af900c5c94cbf061227de66d9))
+* **verify:** never fill honeypot fields (they silently block the real submit) ([e922b59](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e922b59b65a17590f37d692b1056f87c3f155b57))
+
 ## [1.253.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.252.2...v1.253.0) (2026-07-07)
 
 ### Features
