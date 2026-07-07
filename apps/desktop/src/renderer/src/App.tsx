@@ -30,7 +30,7 @@ import type {
   FormFillFieldView,
   SubmitFormVerifyResult,
 } from '../../shared/ipc';
-import { suggestionToGroup, suggestionsToTemplateCsv, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen } from '../../shared/tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
@@ -2180,6 +2180,8 @@ function TagReviewPanel({
   const [pasteText, setPasteText] = useState('');
   const [suggestions, setSuggestions] = useState<SuggestedTagView[]>([]);
   const [meta, setMeta] = useState<TagScanResult['summary'] | null>(null);
+  // The scanned site + scan time (from the scan result) — surfaced in the install-runbook header.
+  const [scanMeta, setScanMeta] = useState<{ site?: string; scannedAt?: string }>({});
   const [warnings, setWarnings] = useState<string[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [edits, setEdits] = useState<Record<string, TagEdit>>({});
@@ -2298,6 +2300,7 @@ function TagReviewPanel({
 
   function applyScanResult(res: TagScanResult): void {
     setMeta(res.summary);
+    setScanMeta({ site: res.site || res.siteHost || undefined, scannedAt: res.scannedAt || undefined });
     setWarnings(res.warnings);
     setScanLog({ pages: res.pages, notScanned: res.notScanned, inventory: res.inventory, installed: res.installed });
     setScanDebug(res.debug ?? null);
@@ -2311,6 +2314,7 @@ function TagReviewPanel({
     resetHeal();
     setSuggestions([]);
     setMeta(null);
+    setScanMeta({});
     setWarnings([]);
     setScanLog(null);
     setScanDebug(null);
@@ -2643,6 +2647,24 @@ function TagReviewPanel({
       const csv = suggestionsToTemplateCsv(list);
       const saved = await window.desktop.tags.exportCsv('GTM Structure - GA4 Events.csv', csv);
       setExportNote(saved ? `✓ Saved ${list.length} tag(s) to ${saved}` : 'Export cancelled');
+    } catch (e) {
+      onError(String(e));
+    }
+  }
+
+  // Download the whole scan's measurement plan as a client-ready "install runbook"
+  // Markdown: per-tag GTM structure + site-side install steps + a consolidated
+  // "what your developer must do" section. Uses the SAME deduped, edit-applied list
+  // the CSV export uses.
+  async function downloadRunbook(): Promise<void> {
+    const picked = suggestions.filter((s) => selected[s.id]);
+    const list = (picked.length ? picked : suggestions).map(effective);
+    if (!list.length) return;
+    setExportNote('');
+    try {
+      const md = suggestionsToInstallRunbookMarkdown(list, { site: scanMeta.site, scannedAt: scanMeta.scannedAt });
+      const saved = await window.desktop.tags.exportRunbook('Measurement Install Runbook.md', md);
+      setExportNote(saved ? `✓ Saved runbook to ${saved}` : 'Export cancelled');
     } catch (e) {
       onError(String(e));
     }
@@ -3393,6 +3415,9 @@ function TagReviewPanel({
                 </button>
                 <button style={styles.linkBtn} onClick={() => void downloadStructureCsv()}>
                   ⬇ Download CSV
+                </button>
+                <button style={styles.linkBtn} onClick={() => void downloadRunbook()}>
+                  ⬇ Install runbook
                 </button>
               </div>
             </div>

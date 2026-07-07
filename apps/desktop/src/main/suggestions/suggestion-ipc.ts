@@ -74,6 +74,19 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     return filePath;
   });
 
+  // Save the install runbook (already rendered to Markdown in the renderer) to a
+  // file the user picks. Read-only export — no GTM access. Returns the saved path,
+  // or null if the user cancelled. Mirrors suggestions:exportCsv exactly.
+  ipcMain.handle('suggestions:exportRunbook', async (e, defaultName: unknown, markdown: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const name = String(defaultName ?? 'Measurement Install Runbook.md').replace(/[\\/:*?"<>|]/g, '_');
+    const opts = { title: 'Export install runbook', defaultPath: name, filters: [{ name: 'Markdown', extensions: ['md'] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    await writeFile(filePath, String(markdown ?? ''), 'utf8');
+    return filePath;
+  });
+
   ipcMain.handle('suggestions:scan', async (_e, url: unknown, opts?: TagScanOptions) => {
     const target = String(url ?? '').trim();
     const verdict = urlAllowed(target, []);

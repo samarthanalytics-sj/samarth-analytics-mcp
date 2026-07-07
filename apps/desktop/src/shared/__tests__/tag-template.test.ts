@@ -1,7 +1,7 @@
 // Pure tests for the "GTM Structure - GA4 Events" template mapping (the table view
 // + CSV download share this). Run: tsx src/shared/__tests__/tag-template.test.ts
 
-import { suggestionToGroup, suggestionsToTemplateCsv, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator, CONDITION_LABELS } from '../tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator, CONDITION_LABELS } from '../tag-template';
 import type { SuggestedTagView } from '../ipc';
 
 let passed = 0;
@@ -185,6 +185,74 @@ check('edit: explicit whens survive a simultaneous kind change', triggerWhens(kw
 // applyWhensToTrigger clears ALL standard fields before re-applying (an emptied whens = no filter).
 const cleared = applyWhensToTrigger(phone.trigger, []);
 check('applyWhensToTrigger: empty whens clears every standard filter field', cleared.clickUrlValue === undefined && cleared.clickTextValue === undefined && cleared.formIdValue === undefined && cleared.pageUrlValue === undefined);
+
+// ── install runbook (whole-scan measurement plan Markdown) ────────────────────
+// A native click suggestion (nothing to install), a form suggestion with a listener-tag install (the
+// same listener appears on TWO suggestions → deduped once), and a site-code ecommerce suggestion.
+const nativeClick = base({
+  id: 'nc', tagName: 'GA4 - Event - Buy Now Click Tag', eventName: 'buy_now_click', page: '/pricing',
+  trigger: { name: 'Buy Now Click Trigger', kind: 'all_clicks', clickTextValue: 'Buy Now', clickTextOperator: 'equals' },
+  install: { requires: [{ kind: 'native', detail: "GTM's Click - All Elements trigger fires on the click; no site change needed." }], summary: 'Native All-Elements Click — nothing to install.' },
+});
+const LISTENER_HTML = '<script>(function(){window.dataLayer=window.dataLayer||[];document.addEventListener("submit",function(e){var f=e.target;window.dataLayer.push({event:"form_submit",form_id:f.id||""});},true);})();</script>';
+const formA = base({
+  id: 'fa', tagName: 'GA4 - Event - Contact Form Tag', eventName: 'form_submit', page: '/contact',
+  trigger: { name: 'Contact Form Trigger', kind: 'custom_event', eventName: 'form_submit' },
+  install: { requires: [{ kind: 'listener-tag', event: 'form_submit', tag: { name: 'cust - Form listener (form_submit)', html: LISTENER_HTML, fires: 'all_pages' }, detail: 'A Custom HTML tag firing on All Pages adds a delegated submit listener.' }], summary: 'Auto-create 1 Custom HTML listener tag; no site code needed.' },
+});
+// A SECOND form suggestion carrying the SAME listener tag name → the consolidated section must list it once.
+const formB = base({
+  id: 'fb', tagName: 'GA4 - Event - Newsletter Form Tag', eventName: 'form_submit', page: '/newsletter',
+  trigger: { name: 'Newsletter Form Trigger', kind: 'custom_event', eventName: 'form_submit' },
+  install: { requires: [{ kind: 'listener-tag', event: 'form_submit', tag: { name: 'cust - Form listener (form_submit)', html: LISTENER_HTML, fires: 'all_pages' }, detail: 'A Custom HTML tag firing on All Pages adds a delegated submit listener.' }], summary: 'Auto-create 1 Custom HTML listener tag; no site code needed.' },
+});
+const PURCHASE_SNIPPET = '<script>window.dataLayer=window.dataLayer||[];dataLayer.push({event:"purchase", ecommerce:{ transaction_id:"…", value:0, currency:"USD", items:[…] }});</script>';
+const purchase = base({
+  id: 'pu', tagName: 'GA4 - Event - Purchase Tag', eventName: 'purchase', page: '/checkout/success',
+  trigger: { name: 'Purchase Trigger', kind: 'custom_event', eventName: 'purchase' },
+  install: { requires: [{ kind: 'site-code', snippet: PURCHASE_SNIPPET, where: "your site's ecommerce/dataLayer layer", detail: 'GA4/GTM does not auto-collect the "purchase" event — your site must push it.' }], summary: 'Your site must push the "purchase" dataLayer event (code required).' },
+});
+
+const rb = suggestionsToInstallRunbookMarkdown([nativeClick, formA, formB, purchase], { site: 'https://shop.example.com', scannedAt: '2026-07-07T10:00:00Z' });
+check('runbook: has the H1 title', rb.startsWith('# Measurement Installation Runbook'));
+check('runbook: subtitle carries site + scannedAt + counts', rb.includes('https://shop.example.com') && rb.includes('scanned 2026-07-07T10:00:00Z') && rb.includes('4 tags') && rb.includes('1 native-only') && rb.includes('2 need a listener tag') && rb.includes('1 need site code'));
+check('runbook: has Summary, Tags, and Site-side sections', rb.includes('## Summary') && rb.includes('## Tags') && rb.includes('## Site-side work (for your developer)'));
+check('runbook: a native click suggestion prints "Nothing to install"', rb.includes('- Nothing to install:'));
+check('runbook: each tag block has a numbered ### heading', rb.includes('### 1. GA4 - Event - Buy Now Click Tag') && rb.includes('### 4. GA4 - Event - Purchase Tag'));
+check('runbook: a listener suggestion shows the create-listener line + fenced html', rb.includes('Create a Custom HTML tag "cust - Form listener (form_submit)" on all_pages') && rb.includes('```html'));
+check('runbook: the purchase site-code snippet + its dataLayer push appear', rb.includes('Add to your site') && rb.includes('dataLayer.push({event:"purchase"'));
+check('runbook: consolidated "Listener tags to create in GTM" section present', rb.includes('### Listener tags to create in GTM'));
+check('runbook: consolidated "dataLayer events your site must push" section present', rb.includes('### dataLayer events your site must push'));
+// Dedup: the listener tag name appears ONCE in the consolidated section (though it's on TWO suggestions).
+const consolidated = rb.slice(rb.indexOf('## Site-side work'));
+const listenerHits = consolidated.split('cust - Form listener (form_submit)').length - 1;
+check('runbook: the shared listener is listed ONCE in the consolidated section (deduped across two tags)', listenerHits === 1, `hits=${listenerHits}`);
+// The purchase event appears once in the consolidated dataLayer-events list.
+const purchaseEventHits = consolidated.split('- purchase\n').length - 1;
+check('runbook: the purchase dataLayer event is listed once', purchaseEventHits === 1, `hits=${purchaseEventHits}`);
+
+// A suggestion with NO install plan → the per-tag "Install: native (nothing to install)" fallback.
+const noPlan = base({ id: 'np', tagName: 'GA4 - Event - Bare Tag', eventName: 'bare', trigger: { name: 'Bare Trigger', kind: 'all_clicks' } });
+const rbBare = suggestionsToInstallRunbookMarkdown([noPlan], {});
+check('runbook: a suggestion with no install plan prints the native fallback line', rbBare.includes('- Install: native (nothing to install)'));
+check('runbook: no meta → subtitle omits site/scannedAt but keeps counts', !rbBare.includes('scanned ') && rbBare.includes('1 tag') && rbBare.includes('1 native-only'));
+
+// An ALL-native list → the "No site-side code needed" message, and none of the sub-sections.
+const rbAllNative = suggestionsToInstallRunbookMarkdown([nativeClick, noPlan], {});
+check('runbook: an all-native list prints "No site-side code needed"', rbAllNative.includes("No site-side code needed - every tag fires on GTM's built-in triggers."));
+check('runbook: an all-native list omits the listener/event/attribute sub-sections', !rbAllNative.includes('### Listener tags to create in GTM') && !rbAllNative.includes('### dataLayer events your site must push'));
+
+// An html-attribute requirement (a native form with no id) surfaces in the consolidated attributes list.
+const attrForm = base({
+  id: 'af', tagName: 'GA4 - Event - Quote Form Tag', eventName: 'generate_lead', page: '/quote',
+  trigger: { name: 'Quote Form Trigger', kind: 'form_submit', pagePathValue: '/quote', pagePathOperator: 'contains' },
+  install: { requires: [
+    { kind: 'native', detail: 'This is a native <form> GTM detects — no site change is needed.' },
+    { kind: 'html-attribute', selector: 'form', attribute: 'id', value: '<a-unique-id>', detail: 'Add a stable id for precise {{Form ID}} scoping.' },
+  ], summary: 'Native form — nothing to install (add a unique id for precise scoping).' },
+});
+const rbAttr = suggestionsToInstallRunbookMarkdown([attrForm], {});
+check('runbook: an html-attribute requirement shows per-tag + in the consolidated "HTML attributes to add" section', rbAttr.includes('### HTML attributes to add') && rbAttr.includes('Add `id="<a-unique-id>"` to `form`'));
 
 console.log(`\ntag-template: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

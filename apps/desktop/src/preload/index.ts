@@ -213,6 +213,9 @@ const api = {
     // Save the (renderer-built) template CSV to a user-chosen file → saved path or null.
     exportCsv: (defaultName: string, csv: string): Promise<string | null> =>
       ipcRenderer.invoke('suggestions:exportCsv', defaultName, csv),
+    // Save the (renderer-built) install runbook Markdown to a user-chosen file → saved path or null.
+    exportRunbook: (defaultName: string, markdown: string): Promise<string | null> =>
+      ipcRenderer.invoke('suggestions:exportRunbook', defaultName, markdown),
     // The container's existing tag names + whether a GA4 base tag is present, to mark
     // suggestions that already exist (so they aren't re-created).
     existing: (accountId: string, containerId: string, workspaceId: string): Promise<{ names: string[]; hasGa4Base: boolean }> =>

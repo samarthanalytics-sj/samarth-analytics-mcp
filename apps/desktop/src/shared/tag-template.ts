@@ -294,3 +294,197 @@ export function suggestionsToTemplateCsv(suggestions: SuggestedTagView[]): strin
   }
   return lines.join('\r\n') + '\r\n';
 }
+
+/* ─────────────── Install runbook (client-ready Markdown of the whole scan) ─────────────── */
+
+/** One "when" row as a human trigger-condition fragment, matching App.tsx's triggerCondition wording
+ *  (`{{Variable}} <op> "value"`). Kept here so the runbook builder stays a pure, self-contained fn. */
+const whenToText = (w: TriggerWhen): string => `${w.variable} ${w.condition} "${w.value}"`;
+
+/** The full human trigger condition for a suggestion (mirrors App.tsx triggerCondition): the standard
+ *  filter rows joined with " AND ", the shared-form dataLayer conditions as `{{dlv - <key>}} equals
+ *  "<value>"`, and the built-in-trigger fallbacks ("fires on every click" / "…form submit" / YouTube).
+ *  PURE — no DOM. */
+export function triggerConditionText(s: SuggestedTagView): string {
+  const t = s.trigger;
+  const parts = triggerWhens(s).map(whenToText);
+  // A custom_event's own event name is part of its condition (the CSV shows it via the trigger kind, but
+  // the runbook spells it out so the developer sees the exact dataLayer event that must fire the tag).
+  if (t.eventName) parts.push(`event = "${t.eventName}"`);
+  // Shared form_submission tags key off extra dataLayer data — surface each as a {{dlv - key}} condition.
+  for (const [k, v] of Object.entries(t.customEventData ?? {})) parts.push(`{{dlv - ${k}}} equals "${v}"`);
+  if (parts.length === 0) {
+    return t.kind === 'all_clicks' ? 'fires on every click'
+      : t.kind === 'form_submit' ? 'fires on every form submit'
+      : t.kind === 'youtube_video' ? 'fires on YouTube video start / progress (25/50/75/90%) / complete'
+      : 'fires on its built-in trigger';
+  }
+  return parts.join(' AND ');
+}
+
+/** A fenced code block (```lang … ```), guaranteeing its own surrounding blank lines. */
+const fence = (code: string, lang = ''): string => '```' + lang + '\n' + code.trim() + '\n```';
+
+/** Render ONE install requirement as Markdown lines (the per-tag "Install:" body). */
+function requirementMarkdown(r: NonNullable<SuggestedTagView['install']>['requires'][number]): string[] {
+  switch (r.kind) {
+    case 'native':
+      return [`- Nothing to install: ${r.detail}`];
+    case 'provider-native':
+      return [`- Nothing to install (${r.provider}): ${r.detail}`];
+    case 'listener-tag': {
+      const scope = r.dlvScope ? ` (scopes via \`{{dlv - ${r.dlvScope.key}}}\` = "${r.dlvScope.value}")` : '';
+      return [
+        `- Create a Custom HTML tag "${r.tag.name}" on ${r.tag.fires}${scope}:`,
+        '',
+        fence(r.tag.html, 'html'),
+        '',
+        `  ${r.detail}`,
+      ];
+    }
+    case 'html-attribute':
+      return [`- Add \`${r.attribute}="${r.value}"\` to \`${r.selector}\`: ${r.detail}`];
+    case 'site-code':
+      return [
+        `- Add to your site (${r.where}):`,
+        '',
+        fence(r.snippet),
+        '',
+        `  ${r.detail}`,
+      ];
+    default:
+      return [];
+  }
+}
+
+/**
+ * The WHOLE scan's measurement plan as a client-ready, GitHub-flavored Markdown "install runbook":
+ * per tag the GTM tag/trigger/params to create PLUS the site-side install steps, and a consolidated
+ * "what your developer must do" section (deduped listener tags / dataLayer events / HTML attributes).
+ * PURE — no I/O, no Date (meta.scannedAt is passed in). The same suggestions the CSV export uses.
+ */
+export function suggestionsToInstallRunbookMarkdown(
+  suggestions: SuggestedTagView[],
+  meta?: { site?: string; scannedAt?: string },
+): string {
+  // Categorise each tag for the header counts + the "all native" shortcut.
+  const reqsOf = (s: SuggestedTagView): NonNullable<SuggestedTagView['install']>['requires'] => s.install?.requires ?? [];
+  const isNativeOnly = (s: SuggestedTagView): boolean => {
+    const reqs = reqsOf(s);
+    // No install plan, or every requirement is a "nothing to install" native/provider-native one.
+    return reqs.length === 0 || reqs.every((r) => r.kind === 'native' || r.kind === 'provider-native');
+  };
+  const needsListener = (s: SuggestedTagView): boolean => reqsOf(s).some((r) => r.kind === 'listener-tag');
+  const needsSiteCode = (s: SuggestedTagView): boolean => reqsOf(s).some((r) => r.kind === 'site-code');
+
+  const total = suggestions.length;
+  const nativeOnly = suggestions.filter(isNativeOnly).length;
+  const withListener = suggestions.filter(needsListener).length;
+  const withSiteCode = suggestions.filter(needsSiteCode).length;
+
+  const out: string[] = [];
+
+  // ── Title + subtitle ──────────────────────────────────────────────────────
+  out.push('# Measurement Installation Runbook');
+  const subParts: string[] = [];
+  if (meta?.site) subParts.push(meta.site);
+  if (meta?.scannedAt) subParts.push(`scanned ${meta.scannedAt}`);
+  subParts.push(`${total} tag${total === 1 ? '' : 's'}`);
+  subParts.push(`${nativeOnly} native-only`);
+  subParts.push(`${withListener} need a listener tag`);
+  subParts.push(`${withSiteCode} need site code`);
+  out.push('');
+  out.push(subParts.join(' · '));
+
+  // ── Summary ───────────────────────────────────────────────────────────────
+  out.push('');
+  out.push('## Summary');
+  out.push('');
+  out.push(`- Total tags to create: ${total}`);
+  out.push(`- Native-only (no site work): ${nativeOnly}`);
+  out.push(`- Need a listener tag in GTM: ${withListener}`);
+  out.push(`- Need site-side code: ${withSiteCode}`);
+  out.push('- Create these in GTM (draft), then complete the site-side steps, then Publish and Verify.');
+
+  // ── Tags ──────────────────────────────────────────────────────────────────
+  out.push('');
+  out.push('## Tags');
+  suggestions.forEach((s, i) => {
+    const g = suggestionToGroup(s);
+    out.push('');
+    out.push(`### ${i + 1}. ${s.tagName || s.label}`);
+    out.push('');
+    out.push(`- Page: ${s.page}`);
+    out.push(`- Platform: ${g.tagType}`);
+    const keyParams = g.params.filter((p) => p.name).map((p) => `${p.name} = ${p.variable}`);
+    const ev = g.eventName ? `GA4 event: ${g.eventName}` : 'GA4 event: (none)';
+    out.push(`- ${ev}${keyParams.length ? ` (params: ${keyParams.join('; ')})` : ''}`);
+    out.push(`- **Trigger:** ${g.triggerName} - ${g.triggerType} - ${triggerConditionText(s)}`);
+    out.push('');
+    out.push('**Install:**');
+    out.push('');
+    const reqs = reqsOf(s);
+    if (reqs.length === 0) {
+      out.push('- Install: native (nothing to install)');
+    } else {
+      for (const r of reqs) out.push(...requirementMarkdown(r));
+    }
+  });
+
+  // ── Site-side work (consolidated, deduped) ────────────────────────────────
+  // Deduped listener tags (by tag name), dataLayer events the site must push (by event name, from
+  // site-code requirements), and HTML attributes (by selector|attribute|value).
+  const listeners = new Map<string, { name: string; html: string }>();
+  const events = new Map<string, { event: string; snippet: string }>();
+  const attributes = new Map<string, string>();
+  for (const s of suggestions) {
+    for (const r of reqsOf(s)) {
+      if (r.kind === 'listener-tag') {
+        if (!listeners.has(r.tag.name)) listeners.set(r.tag.name, { name: r.tag.name, html: r.tag.html });
+      } else if (r.kind === 'site-code') {
+        // The dataLayer event a site-code snippet pushes is the tag's own custom_event trigger event
+        // (or its GA4 event name) — that's the key the developer must emit. Fall back to the snippet
+        // itself as the dedup key when no event name is knowable.
+        const key = s.trigger.eventName?.trim() || s.eventName?.trim() || r.snippet;
+        if (!events.has(key)) events.set(key, { event: key, snippet: r.snippet });
+      } else if (r.kind === 'html-attribute') {
+        const key = `${r.selector}|${r.attribute}|${r.value}`;
+        if (!attributes.has(key)) attributes.set(key, `Add \`${r.attribute}="${r.value}"\` to \`${r.selector}\``);
+      }
+    }
+  }
+
+  out.push('');
+  out.push('## Site-side work (for your developer)');
+  if (listeners.size === 0 && events.size === 0 && attributes.size === 0) {
+    out.push('');
+    out.push("No site-side code needed - every tag fires on GTM's built-in triggers.");
+    return out.join('\n') + '\n';
+  }
+  if (listeners.size > 0) {
+    out.push('');
+    out.push('### Listener tags to create in GTM');
+    for (const l of listeners.values()) {
+      out.push('');
+      out.push(`- ${l.name}`);
+      out.push('');
+      out.push(fence(l.html, 'html'));
+    }
+  }
+  if (events.size > 0) {
+    out.push('');
+    out.push('### dataLayer events your site must push');
+    for (const e of events.values()) {
+      out.push('');
+      out.push(`- ${e.event}`);
+      out.push('');
+      out.push(fence(e.snippet));
+    }
+  }
+  if (attributes.size > 0) {
+    out.push('');
+    out.push('### HTML attributes to add');
+    for (const a of attributes.values()) out.push(`- ${a}`);
+  }
+  return out.join('\n') + '\n';
+}
