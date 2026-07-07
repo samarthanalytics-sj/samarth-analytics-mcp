@@ -78,6 +78,10 @@ export interface ScanOptions {
   /** Which ad platforms to generate tags for (default ['ga4']). 'meta' adds Meta
    *  (Facebook) Pixel tags derived from the GA4 ones (sharing each trigger). */
   platforms?: SuggestPlatform[];
+  /** Extra URLs to crawl at TOP priority (before form-likely/BFS discovery) — used by verify to
+   *  guarantee content-hub pages (case-studies/blog/guides) are scanned so their click-CTAs enter the
+   *  inventory and their tags aren't falsely "untested". */
+  seedUrls?: string[];
 }
 
 /** Streamed after every page is scanned — the RUNNING (full) suggestion list so the
@@ -108,6 +112,11 @@ const ASSET_RE =
   /\.(pdf|jpe?g|png|gif|svg|webp|avif|css|js|mjs|ico|zip|gz|rar|mp3|mp4|webm|mov|woff2?|ttf|eot|xml|rss|json)([?#]|$)/i;
 const FORMY_RE =
   /contact|kontakt|signup|sign-up|register|registr|subscribe|newsletter|demo|quote|enquir|inquir|checkout|cart|book|apply|career|job|support|feedback|account|login|audit|consult|estimate|proposal|get-?started|onboard|free-trial|trial|pricing|solution|service|partner|get-in-touch|reach-us|schedule|appointment|callback/i;
+// CONTENT hub/index pages — not form-likely, but where CTAs like "Read Full Case Study", "View Case
+// Studies", "Subscribe to Insights", "Download Free Checklist" live. Verify crawls these too so those
+// click tags aren't falsely "untested". (Individual articles are excluded via a shallow-path check.)
+const CONTENT_RE =
+  /case-?stud|\bblog\b|\bguide|resource|insight|\bnews\b|article|\bstory|stories|portfolio|\bwork\b|about|\bteam\b|library|download|checklist|webinar|ebook|e-book|report|whitepaper|white-paper|\bpress\b|media|\blearn\b|help-?cent|knowledge|docs?\b/i;
 
 const stripWww = (host: string): string => host.toLowerCase().replace(/^www\./, '');
 
@@ -135,6 +144,27 @@ export function normalizeUrl(raw: string, baseUrl: string): string | null {
 
 export function urlPriority(url: string): number {
   return FORMY_RE.test(url) ? 1 : 0;
+}
+
+/** A CONTENT hub/index page (case-studies / blog / guides / about / team …) — where non-form CTAs
+ *  live. Excludes deep individual articles (path > 2 segments) so we crawl the hub, not 150 posts. */
+export function contentLikely(url: string): boolean {
+  try {
+    const path = new URL(url).pathname;
+    const segments = path.split('/').filter(Boolean);
+    return segments.length <= 2 && CONTENT_RE.test(path);
+  } catch {
+    return false;
+  }
+}
+
+/** Crawl priority for the VERIFY BFS: home (3) → form-likely (2) → content hub (1) → other (0). Content
+ *  hubs sort above plain pages so their CTAs enter the inventory before the page budget runs out. */
+export function crawlRank(url: string): number {
+  if (isHomeUrl(url)) return 3;
+  if (urlPriority(url) === 1) return 2;
+  if (contentLikely(url)) return 1;
+  return 0;
 }
 
 /** Is this the origin root ("/")? Discovery started there, users expect it first, and the homepage
@@ -457,12 +487,19 @@ export async function crawlAndSuggest(
   const pageScans: PageScan[] = [];
   const visited = new Set<string>();
   const discovered = new Set<string>([start]);
-  const queue: { url: string; depth: number }[] = [{ url: start, depth: 0 }];
+  const queue: { url: string; depth: number; seed?: boolean }[] = [{ url: start, depth: 0 }];
+  // Seed content-hub pages at TOP priority so they're scanned before the page budget is spent on the
+  // (many) form-likely pages — otherwise content CTAs ("Read Full Case Study", …) never get inventoried.
+  for (const s of opts.seedUrls ?? []) {
+    const n = normalizeUrl(s, start);
+    if (n && sameSite(n, start) && !discovered.has(n)) { discovered.add(n); queue.push({ url: n, depth: 0, seed: true }); }
+  }
   let opened = 0;
 
   try {
     while (queue.length > 0 && opened < maxPages) {
-      queue.sort((a, b) => a.depth - b.depth || urlPriority(b.url) - urlPriority(a.url));
+      // Seeds first, then shallowest, then by crawl rank (home → form-likely → content hub → other).
+      queue.sort((a, b) => (b.seed ? 1 : 0) - (a.seed ? 1 : 0) || a.depth - b.depth || crawlRank(b.url) - crawlRank(a.url));
       const { url, depth } = queue.shift()!;
       const key = url.replace(/\/$/, '');
       if (visited.has(key)) continue;
