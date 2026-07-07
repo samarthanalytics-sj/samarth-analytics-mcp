@@ -1,3 +1,9 @@
+## [1.244.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.244.2...v1.244.3) (2026-07-07)
+
+### Bug Fixes
+
+* **desktop:** align TikTok/Ads/Pinterest server builders with current templates ([22fdf47](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/22fdf473969308602156da9bfb66f653cd36ea22))
+
 ## [1.244.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.244.1...v1.244.2) (2026-07-07)
 
 ### Bug Fixes
