@@ -611,6 +611,12 @@ export interface VerifyTagsResult {
   pagesOk: boolean;
   error?: string;
   verdicts: VerifyTagVerdict[];
+  /** The distinct page URLs the driver actually navigated + drove tags on (multi-page drive). A
+   *  click tag whose CTA lives off the homepage is driven on ITS page, so this is usually >1. */
+  pagesDriven?: string[];
+  /** How many pages the pre-verify crawl visited to locate each CTA's page (0 = no crawl / inventory
+   *  was supplied by the caller). */
+  pagesCrawled?: number;
   /** Phase B (best-effort): GTM's on-page debug signal — whether the container actually loaded +
    *  the dataLayer event stream. Present only when gtmDebug was requested. */
   gtmDebug?: { containerLoaded: boolean; containerIds: string[]; dataLayerEvents: string[] };
@@ -625,6 +631,13 @@ export interface VerifyTagsOptions {
   /** Phase B: also read GTM's on-page debug signal (container loaded? + dataLayer events) so a
    *  "0 fired" result can tell "container didn't load" from "loaded but didn't match". */
   gtmDebug?: boolean;
+  /** Multi-page drive: when no element inventory is supplied, crawl the site first so click/link
+   *  tags whose CTA lives on another page are driven THERE (not always on the homepage). Default on;
+   *  set false to force single-page driving against the URL as-is. */
+  crawlForPages?: boolean;
+  /** Page/depth budget for that pre-verify crawl (clamped by the scanner). */
+  crawlMaxPages?: number;
+  crawlMaxDepth?: number;
 }
 
 /* ── Container audit (the "Container audit" panel) ── */

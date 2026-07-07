@@ -125,6 +125,8 @@ export interface VerifyDriverResult {
   previewAuth: boolean;
   error?: string;
   perTag: PerTagCapture[];
+  /** The distinct page URLs the driver successfully navigated + drove (multi-page drive). */
+  pagesDriven?: string[];
   /** Present only when opts.gtmDebug — the on-page GTM debug signal (Phase B groundwork). */
   gtmDebug?: GtmDebugCapture;
 }
@@ -379,6 +381,7 @@ export async function runVerifyDriver(
 
     const page = await context.newPage();
     let injected = false;
+    const pagesDriven: string[] = [];
     const debugContainerIds = new Set<string>();
     const debugEvents = new Set<string>();
 
@@ -393,6 +396,7 @@ export async function runVerifyDriver(
         for (const t of groupTags) perTag.push({ tagId: t.id, kind: 'navigate', targetFound: false, performed: false, note, hits: [] });
         continue;
       }
+      pagesDriven.push(pageUrl);
 
       if (loaderSrc) {
         await page.evaluate((src: string) => {
@@ -489,7 +493,7 @@ export async function runVerifyDriver(
     const gtmDebug: GtmDebugCapture | undefined = opts.gtmDebug
       ? { containerLoaded: debugContainerIds.size > 0, containerIds: [...debugContainerIds], dataLayerEvents: [...debugEvents] }
       : undefined;
-    return { pagesOk: true, injected, previewAuth, perTag, ...(gtmDebug ? { gtmDebug } : {}) };
+    return { pagesOk: true, injected, previewAuth, perTag, ...(pagesDriven.length ? { pagesDriven } : {}), ...(gtmDebug ? { gtmDebug } : {}) };
   } catch (e) {
     return { pagesOk: false, injected: Boolean(loaderSrc), previewAuth, perTag, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
   } finally {

@@ -20,6 +20,7 @@ import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput
 import { crawlAndSuggest, scanUrls, type ScanProgress } from './scan-core';
 import { runVerifyDriver } from './verify-driver';
 import { evaluateVerify } from './verify-tags';
+import { routeTagsToPages } from './verify-routing';
 import { discoverSite } from './discover';
 import { createElectronDriver } from './electron-driver';
 // The merged page-driver builder (Electron + optional Cheerio/Playwright) lives in scan-url.ts,
@@ -120,16 +121,36 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
       const verdict = urlAllowed(target, []);
       if (!verdict.ok) throw new Error(`Cannot verify that URL: ${verdict.reason}`);
       const tagList = (Array.isArray(tags) ? tags : []) as VerifyTagInput[];
-      const els = (Array.isArray(elements) ? elements : []) as DetectedElementView[];
+      let els = (Array.isArray(elements) ? elements : []) as DetectedElementView[];
       if (tagList.length === 0) return { url: target, injected: false, previewAuth: false, pagesOk: false, error: 'No tags selected to verify.', verdicts: [] };
       const o = opts ?? {};
+
+      // MULTI-PAGE DRIVE: a container's Click triggers are site-wide, so without knowing which page
+      // each CTA lives on the driver would drive them all on the homepage and falsely report
+      // "no element matched" for anything on /careers, /blog, a service page, etc. When the caller
+      // didn't supply a scan inventory, crawl the site to locate each CTA's page, then route each
+      // click tag there. Best-effort — any crawl failure falls back to single-page driving.
+      let pagesCrawled = 0;
+      const hasClickTags = tagList.some((t) => t.trigger.kind === 'link_click' || t.trigger.kind === 'all_clicks');
+      if (els.length === 0 && hasClickTags && o.crawlForPages !== false) {
+        try {
+          const crawlDriver = await makeDriver({ maxPages: o.crawlMaxPages, maxDepth: o.crawlMaxDepth });
+          const scan = await crawlAndSuggest(crawlDriver, target, { maxPages: o.crawlMaxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'] });
+          els = scan.inventory.elements as DetectedElementView[];
+          pagesCrawled = scan.pages.length;
+        } catch {
+          /* crawl is best-effort — fall back to single-page driving */
+        }
+      }
+      const routed = routeTagsToPages(tagList, els, target);
+
       const driven = await runVerifyDriver(
         target,
-        tagList.map((t) => ({ id: t.id, ...(t.page ? { page: t.page } : {}), trigger: t.trigger })),
+        routed.map((t) => ({ id: t.id, ...(t.page ? { page: t.page } : {}), trigger: t.trigger })),
         { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}), settleMs: clampSettle(o.settleMs), navTimeoutMs: o.navTimeoutMs, ...(o.gtmDebug ? { gtmDebug: true } : {}) },
       );
       const verdicts = evaluateVerify(tagList, driven.perTag, els);
-      return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
+      return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
     },
   );
 
