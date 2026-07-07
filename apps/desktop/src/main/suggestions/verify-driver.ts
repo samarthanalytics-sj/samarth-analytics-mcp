@@ -26,6 +26,7 @@ interface PwPage {
   goto(url: string, opts?: Record<string, unknown>): Promise<PwResponse | null>;
   evaluate<T = unknown>(fn: unknown, arg?: unknown): Promise<T>;
   waitForTimeout(ms: number): Promise<void>;
+  screenshot(opts?: { type?: 'jpeg' | 'png'; quality?: number; fullPage?: boolean; timeout?: number }): Promise<Buffer>;
 }
 interface PwContext {
   route(pattern: string, handler: (route: PwRoute) => unknown): Promise<void>;
@@ -314,6 +315,24 @@ interface DriveOutcome {
 
 /** Locate the element/form the trigger targets and perform the interaction. */
 function driveInPage(spec: DriveSpec): DriveOutcome {
+  // Ring the element we're about to drive + scroll it into view, so the screenshot the driver takes
+  // right after is visual PROOF of exactly which control was clicked / which form was submitted.
+  const highlight = (node: Element): void => {
+    try {
+      // Clear any PRIOR ring first, so each screenshot marks only the control THIS tag drove.
+      document.querySelectorAll('[data-sx-hl]').forEach((p) => {
+        const e = p as HTMLElement;
+        e.style.removeProperty('outline'); e.style.removeProperty('outline-offset'); e.style.removeProperty('box-shadow');
+        e.removeAttribute('data-sx-hl');
+      });
+      const h = node as HTMLElement;
+      h.setAttribute('data-sx-hl', '1');
+      h.style.setProperty('outline', '3px solid #ff2d55', 'important');
+      h.style.setProperty('outline-offset', '2px', 'important');
+      h.style.setProperty('box-shadow', '0 0 0 4px rgba(255,45,85,0.35)', 'important');
+      h.scrollIntoView({ block: 'center', inline: 'center' });
+    } catch { /* best-effort — never let highlighting break the drive */ }
+  };
   const matches = (hay: string, val: string | undefined, op: string | undefined): boolean => {
     if (!val) return false;
     const h = (hay || '').trim();
@@ -344,6 +363,7 @@ function driveInPage(spec: DriveSpec): DriveOutcome {
     if (!f && spec.formClasses) f = forms.find((x) => matches(x.className, spec.formClasses, spec.formClassesOp || 'contains'));
     if (!f && forms.length === 1) f = forms[0];
     if (!f) return { targetFound: false, performed: false, note: 'no matching <form> on the page' };
+    highlight(f);
     try {
       const form = f as HTMLFormElement & { requestSubmit?: () => void };
       if (typeof form.requestSubmit === 'function') form.requestSubmit();
@@ -367,11 +387,28 @@ function driveInPage(spec: DriveSpec): DriveOutcome {
     if (!spec.clickText && spec.clickUrl && okUrl) { el = n; break; }
   }
   if (!el) return { targetFound: false, performed: false, note: 'no element matched the trigger' };
+  highlight(el);
   try {
     (el as HTMLElement).click();
     return { targetFound: true, performed: true };
   } catch (e) {
     return { targetFound: true, performed: false, note: String(e).slice(0, 150) };
+  }
+}
+
+/** Cap on how many per-tag screenshots we embed, so a huge container can't balloon the IPC payload
+ *  (each JPEG is ~60-120KB; 80 ≈ a few MB). */
+const MAX_SCREENSHOTS = 80;
+/** A compact JPEG screenshot of the current page as a data URI — visual proof of the interaction the
+ *  driver just performed (for click/form tags the driven element is ringed). Best-effort + bounded. */
+async function captureShot(page: PwPage, state: { n: number }): Promise<string | undefined> {
+  if (state.n >= MAX_SCREENSHOTS) return undefined;
+  try {
+    const buf = await page.screenshot({ type: 'jpeg', quality: 55, timeout: 4000 });
+    state.n += 1;
+    return `data:image/jpeg;base64,${buf.toString('base64')}`;
+  } catch {
+    return undefined; // never fail verification over a screenshot
   }
 }
 
@@ -444,6 +481,7 @@ export async function runVerifyDriver(
     // are labelled and not mistaken for the site's own emissions).
     const debugDataLayer: Array<{ event: string; params: Record<string, string> }> = [];
     const syntheticEvents = new Set<string>();
+    const shotState = { n: 0 }; // screenshots embedded so far (bounded by MAX_SCREENSHOTS)
 
     // Drive each tag on ITS page: group by page, navigate to each, inject the
     // (preview) container so DRAFT tags load, then drive the group's triggers.
@@ -478,6 +516,9 @@ export async function runVerifyDriver(
       const loadHits = captured.slice(loadStart);
       const settleQuiet = 400;
       const settleMax = Math.min(Math.max(settleMs, 900) * 3, 5000);
+      // One screenshot of the freshly-loaded page — shared by every page-load / custom-event tag on it
+      // (they don't visibly change the page). Click/form tags capture their OWN shot (ringed element).
+      const pageShot = await captureShot(page, shotState);
 
       // Every dataLayer KEY any custom_event tag has pushed on THIS page. A GTM Data Layer Variable
       // reads the LAST value pushed for its key, so without resetting, tag A's form_name would leak
@@ -497,6 +538,7 @@ export async function runVerifyDriver(
             targetFound: true,
             performed: true,
             hits: loadHits.map((h) => ({ url: h.url, body: h.body, collector: h.collector })),
+            ...(pageShot ? { screenshot: pageShot } : {}),
           });
           continue;
         }
@@ -528,6 +570,7 @@ export async function runVerifyDriver(
             targetFound: true,
             performed: true,
             hits: captured.slice(before).map((h) => ({ url: h.url, body: h.body, collector: h.collector })),
+            ...(pageShot ? { screenshot: pageShot } : {}),
           });
           continue;
         }
@@ -542,6 +585,9 @@ export async function runVerifyDriver(
         }
         if (outcome.performed) await waitForHitsSettle(() => captured.length, page, settleQuiet, settleMax);
         const hits = captured.slice(before).map((h) => ({ url: h.url, body: h.body, collector: h.collector }));
+        // A screenshot with the driven control ringed — proof we clicked/submitted the right thing. On a
+        // not-found tag, fall back to the page shot so the operator can see the CTA genuinely isn't there.
+        const shot = outcome.performed ? await captureShot(page, shotState) : pageShot;
         perTag.push({
           tagId: tag.id,
           kind: kind === 'form_submit' ? 'submit' : 'click',
@@ -549,6 +595,7 @@ export async function runVerifyDriver(
           performed: outcome.performed,
           ...(outcome.note ? { note: outcome.note } : {}),
           hits,
+          ...(shot ? { screenshot: shot } : {}),
         });
       }
 
