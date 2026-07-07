@@ -42,6 +42,42 @@ const makeSecrets = () => {
 
 console.log('\nGA4 monitoring service:');
 
+test('per-account scoping: a property added under one mail is invisible (and never swept) under another', async () => {
+  const accountB: AccountView = { id: 'acct2', email: 'b@c.com', createdAt: 0, isActive: true, hasGoogleToken: true };
+  let current: AccountView = account; // acct1 active first
+  const swept: string[] = [];
+  const data = fakeData();
+  const orig = data.getGa4Baseline.bind(data);
+  (data as { getGa4Baseline: typeof data.getGa4Baseline }).getGa4Baseline = async (p: string, s: string, e: string) => { swept.push(p); return orig(p, s, e); };
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => current },
+    data, secrets: makeSecrets(), emit: () => {},
+    now: () => Date.parse('2026-07-02T09:00:00Z'),
+  });
+
+  // acct1 adds P1.
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme (acct1)', enabled: true }], enabled: false });
+  assert.equal(svc.status().targetStatuses.length, 1, 'acct1 sees its property');
+
+  // Switch to acct2: NOTHING of acct1's is visible or sweepable.
+  current = accountB;
+  assert.equal(svc.status().targetStatuses.length, 0, 'acct2 sees no acct1 properties');
+  assert.deepEqual(await svc.runOnce(), [], 'a sweep under acct2 never queries acct1 properties');
+  assert.ok(!swept.includes('properties/1') || swept.length === 1, 'no cross-account query yet');
+
+  // acct2 adds its own property; the lists stay independent.
+  svc.configure({ targets: [{ propertyId: 'properties/2', propertyLabel: 'Beta (acct2)', enabled: true }], enabled: false });
+  assert.deepEqual(svc.status().targetStatuses.map((t) => t.propertyId), ['properties/2'], 'acct2 sees only its own');
+  const runsB = await svc.runOnce();
+  assert.deepEqual(runsB.map((r) => r.property), ['properties/2'], 'acct2 sweep covers only its own');
+
+  // Back to acct1: its property (and only its property) is still there, untouched by acct2's configure.
+  current = account;
+  assert.deepEqual(svc.status().targetStatuses.map((t) => t.propertyId), ['properties/1'], 'acct1 list preserved across the switch');
+  const runsA = await svc.runOnce();
+  assert.deepEqual(runsA.map((r) => r.property), ['properties/1'], 'acct1 sweep covers only its own');
+});
+
 test('a new issue Slacks once; the same ongoing issue does not re-Slack on the next run', async () => {
   const secrets = makeSecrets();
   const posts: string[] = [];
