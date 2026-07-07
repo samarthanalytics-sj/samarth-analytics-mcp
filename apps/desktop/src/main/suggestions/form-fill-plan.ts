@@ -5,6 +5,8 @@
 import type { RawForm, RawFormField } from '../../../../web-audit-mcp/src/agent/forms.js';
 import { analyzeForms } from '../../../../web-audit-mcp/src/agent/forms.js';
 import { buildFillPlan, localeById, LOCALES } from '../../../../web-audit-mcp/src/agent/form-fill.js';
+import { isKnownAdPlatform } from '../../shared/runtime-capture';
+import { expectedBeaconPlatform } from './verify-tags';
 import type { FormFillView } from '../../shared/ipc';
 
 /** A field worth showing/filling: it has a name or id to target and isn't a control/hidden field. */
@@ -17,18 +19,33 @@ export function localeOptions(): Array<{ id: string; label: string }> {
   return Object.values(LOCALES).map((l) => ({ id: l.id, label: l.label }));
 }
 
-/** Pair the GA4 events observed on a REAL submit to the container's tags (by event name), so the
- *  operator sees WHICH actual container tags fired — a genuine FIRED, not a synthetic push. PURE. */
+function isGa4Platform(platform: string): boolean {
+  return platform === 'ga4_event' || platform === 'google_tag';
+}
+
+/** Pair what a REAL submit fired to the container's ACTUAL tags, so the operator sees WHICH tags fired.
+ *  GA4/base tags match by EVENT NAME (the /collect `en=`); pixel/ad tags (Meta/LinkedIn/Pinterest/…)
+ *  fire a BEACON not a GA4 event, so they match by the observed beacon's vendor. PURE. */
 export function matchFiredContainerTags(
   events: string[],
-  tags: Array<{ tagName: string; eventName: string }>,
+  beaconPlatforms: string[],
+  tags: Array<{ tagName: string; eventName: string; platform: string }>,
 ): Array<{ tagName: string; eventName: string }> {
-  const seen = new Set(events.map((e) => (e ?? '').trim().toLowerCase()).filter(Boolean));
+  const evSeen = new Set(events.map((e) => (e ?? '').trim().toLowerCase()).filter(Boolean));
+  const platsSeen = new Set(beaconPlatforms.filter(Boolean));
   const out: Array<{ tagName: string; eventName: string }> = [];
   const pushed = new Set<string>();
   for (const t of tags) {
-    const en = (t.eventName ?? '').trim().toLowerCase();
-    if (en && seen.has(en) && !pushed.has(t.tagName)) {
+    let fired = false;
+    if (isGa4Platform(t.platform)) {
+      const en = (t.eventName ?? '').trim().toLowerCase();
+      fired = Boolean(en && evSeen.has(en));
+    } else {
+      // Pixel/ad tag → fired if its OWN vendor's beacon was seen. 'ad' (undecodable) counts any pixel.
+      const want = expectedBeaconPlatform(t.platform);
+      fired = want === 'ad' ? [...platsSeen].some((p) => isKnownAdPlatform(p)) : platsSeen.has(want);
+    }
+    if (fired && !pushed.has(t.tagName)) {
       out.push({ tagName: t.tagName, eventName: t.eventName });
       pushed.add(t.tagName);
     }

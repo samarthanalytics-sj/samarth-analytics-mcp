@@ -248,7 +248,7 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
           .filter((t) => t.trigger.kind === 'custom_event')
           .map((t) => {
             const cd = t.trigger.customEventData;
-            return { tagName: t.tagName, eventName: t.eventName, ...(cd ? { formName: Object.values(cd)[0] } : {}) };
+            return { tagName: t.tagName, eventName: t.eventName, platform: t.platform, ...(cd ? { formName: Object.values(cd)[0] } : {}) };
           });
       }
     } catch (e) {
@@ -305,12 +305,14 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
       { formId: String(inp.formId ?? ''), formClasses: String(inp.formClasses ?? ''), method: String(inp.method ?? ''), fields: list },
       { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}) },
     );
-    // Pair the fired GA4 events to the container's ACTUAL tags (best-effort — needs container context).
-    if (res.events.length > 0 && o.accountId && o.containerId && o.workspaceId) {
+    // Pair what fired to the container's ACTUAL tags — GA4 by event name, PIXEL/AD (Meta/LinkedIn/
+    // Pinterest/…) by the observed beacon vendor. Run when EITHER an event OR a beacon fired (a Meta
+    // tag fires a beacon but no GA4 event). Best-effort — needs container context.
+    if ((res.events.length > 0 || (res.beaconPlatforms ?? []).length > 0) && o.accountId && o.containerId && o.workspaceId) {
       try {
         const snap = await data.getGtmContainerSnapshot(o.accountId, o.containerId, o.workspaceId);
         const { tags } = snapshotToVerifyInputs(snap);
-        const firedTags = matchFiredContainerTags(res.events, tags.map((t) => ({ tagName: t.tagName, eventName: t.eventName })));
+        const firedTags = matchFiredContainerTags(res.events, res.beaconPlatforms ?? [], tags.map((t) => ({ tagName: t.tagName, eventName: t.eventName, platform: t.platform })));
         if (firedTags.length > 0) return { ...res, firedTags };
       } catch {
         /* pairing is best-effort — return the raw events without it */

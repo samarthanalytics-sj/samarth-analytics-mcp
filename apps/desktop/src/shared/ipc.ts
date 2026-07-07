@@ -743,6 +743,8 @@ export interface SubmitFormVerifyResult {
   events: string[];
   /** Distinct analytics beacon hosts observed. */
   beacons: string[];
+  /** Distinct beacon VENDORS observed (meta/linkedin/pinterest/…) — used to pair pixel/ad tags. */
+  beaconPlatforms?: string[];
   /** The container's ACTUAL tags whose event name matches an observed event — paired when the caller
    *  passed container context. These fired on the REAL submit (a genuine FIRED, not synthetic). */
   firedTags?: Array<{ tagName: string; eventName: string }>;
@@ -769,8 +771,8 @@ export interface MatchedFormView {
   method: string;
   purpose: string;
   fields: Array<{ selector: string; type: string; role: string; label: string; value: string; options?: string[] }>;
-  /** Container form tags expected to fire when this form is submitted (name + GA4 event name). */
-  expectedTags: Array<{ tagName: string; eventName: string }>;
+  /** Container form tags expected to fire when this form is submitted (name + GA4 event name + platform). */
+  expectedTags: Array<{ tagName: string; eventName: string; platform: string }>;
 }
 export interface FormTagVerifyPlanOptions {
   accountId: string;

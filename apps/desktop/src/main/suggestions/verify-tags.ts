@@ -54,7 +54,7 @@ function isGa4CollectorHit(url: string): boolean {
 /** The SPECIFIC beacon platform that proves a non-GA4 tag fired (Phase A: precise per-platform
  *  attribution). 'ad' = we don't know the exact destination for this tag type → any recognised
  *  ad/pixel beacon counts. */
-function expectedBeaconPlatform(platform: string): string {
+export function expectedBeaconPlatform(platform: string): string {
   switch (platform) {
     case 'meta_pixel': return 'meta';
     case 'tiktok_pixel': return 'tiktok';

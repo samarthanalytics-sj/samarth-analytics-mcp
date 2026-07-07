@@ -69,26 +69,36 @@ check('localeOptions includes US', localeOptions().some((l) => l.id === 'us'));
 // ── Phase 2b: pair fired GA4 events → the container's actual tags (by event name) ────────────────
 {
   const tags = [
-    { tagName: 'GA4 - Event - Get In Touch Form Tag', eventName: 'get_in_touch_form' },
-    { tagName: 'GA4 - Event - Contact us Form Tag', eventName: 'contact_us_form' },
-    { tagName: 'GA4 - Event - CTA Click Tag', eventName: 'cta_click' },
+    { tagName: 'GA4 - Event - Get In Touch Form Tag', eventName: 'get_in_touch_form', platform: 'ga4_event' },
+    { tagName: 'GA4 - Event - Contact us Form Tag', eventName: 'contact_us_form', platform: 'ga4_event' },
+    { tagName: 'GA4 - Event - CTA Click Tag', eventName: 'cta_click', platform: 'ga4_event' },
   ];
-  const matched = matchFiredContainerTags(['get_in_touch_form', 'form_submission'], tags);
-  check('pairing: matches a tag by its event name', matched.length === 1 && matched[0].tagName.includes('Get In Touch'));
-  check('pairing: is case-insensitive', matchFiredContainerTags(['GET_IN_TOUCH_FORM'], tags).length === 1);
-  check('pairing: no match → empty', matchFiredContainerTags(['newsletter_signup'], tags).length === 0);
-  check('pairing: empty events → empty', matchFiredContainerTags([], tags).length === 0);
-  check('pairing: ignores tags with no event name', matchFiredContainerTags(['x'], [{ tagName: 'Blank', eventName: '' }]).length === 0);
+  const matched = matchFiredContainerTags(['get_in_touch_form', 'form_submission'], [], tags);
+  check('pairing: GA4 tag matches by event name', matched.length === 1 && matched[0].tagName.includes('Get In Touch'));
+  check('pairing: is case-insensitive', matchFiredContainerTags(['GET_IN_TOUCH_FORM'], [], tags).length === 1);
+  check('pairing: no match → empty', matchFiredContainerTags(['newsletter_signup'], [], tags).length === 0);
+  check('pairing: empty events + no beacons → empty', matchFiredContainerTags([], [], tags).length === 0);
+  check('pairing: GA4 tag with no event name → not matched', matchFiredContainerTags(['x'], [], [{ tagName: 'Blank', eventName: '', platform: 'ga4_event' }]).length === 0);
 }
 {
-  // Two tags share one event name → both named (dedup is by tagName, not event name).
+  // Two GA4 tags share one event name → both named (dedup is by tagName, not event name).
   const tags = [
-    { tagName: 'Tag A', eventName: 'generate_lead' },
-    { tagName: 'Tag B', eventName: 'generate_lead' },
+    { tagName: 'Tag A', eventName: 'generate_lead', platform: 'ga4_event' },
+    { tagName: 'Tag B', eventName: 'generate_lead', platform: 'ga4_event' },
   ];
-  check('pairing: two tags on one event → both named', matchFiredContainerTags(['generate_lead'], tags).length === 2);
+  check('pairing: two GA4 tags on one event → both named', matchFiredContainerTags(['generate_lead'], [], tags).length === 2);
+}
+{
+  // PIXEL tags fire a BEACON, not a GA4 event → matched by the observed beacon vendor.
+  const meta = { tagName: 'Meta - Event - Lead Form Tag', eventName: 'Lead', platform: 'meta_pixel' };
+  const li = { tagName: 'LinkedIn - Lead Form Tag', eventName: 'Lead', platform: 'linkedin_insight' };
+  const tags = [meta, li];
+  check('pairing: Meta tag fires on a meta beacon (no GA4 event)', matchFiredContainerTags([], ['meta'], tags).some((m) => m.tagName.includes('Meta')));
+  check('pairing: LinkedIn tag fires on its own beacon', matchFiredContainerTags([], ['linkedin'], tags).some((m) => m.tagName.includes('LinkedIn')));
+  check('pairing: Meta tag does NOT fire on a LinkedIn-only beacon', !matchFiredContainerTags([], ['linkedin'], [meta]).length);
+  check('pixel tag + no beacon → not matched', matchFiredContainerTags([], [], [meta]).length === 0);
 }
 
 console.log(`\nform-fill-plan: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 19) { console.error(`expected >= 19 checks, got ${passed}`); process.exit(1); }
+if (passed < 22) { console.error(`expected >= 22 checks, got ${passed}`); process.exit(1); }
