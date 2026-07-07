@@ -1,3 +1,9 @@
+## [1.225.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.224.0...v1.225.0) (2026-07-07)
+
+### Features
+
+* **desktop:** data-collection continuity check - Data API proof upgrades collection Partial->Pass ([464a707](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/464a707ee7422a8a91233f8d9a31290a404e1fa4))
+
 ## [1.224.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.223.1...v1.224.0) (2026-07-07)
 
 ### Features
