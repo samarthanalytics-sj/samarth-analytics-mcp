@@ -33,7 +33,9 @@ const hasEcommerce = (eventNames: string[]): boolean =>
   eventNames.some((n) => /purchase|add_to_cart|begin_checkout|view_item|add_payment_info/i.test(n));
 
 /** Fetch everything monitorGa4() needs, best-effort — every query is caught so one failure degrades a
- *  check to "skipped" rather than failing the whole run. `now` is injected for deterministic dates. */
+ *  check to "skipped" rather than failing the whole run. The FIRST underlying error message is kept
+ *  (fetchError) so a run where EVERYTHING failed can tell the user the real cause (expired session,
+ *  lost property access, quota) instead of six silent skips. `now` is injected for deterministic dates. */
 export async function gatherGa4MonitorInput(
   data: GoogleDataService,
   property: string,
@@ -43,12 +45,18 @@ export async function gatherGa4MonitorInput(
   const base = new Date(now());
   const startDate = YMD(days, base);
   const endDate = YMD(0, base);
+  const errors: string[] = [];
+  const grab = <T>(p: Promise<T>): Promise<T | null> =>
+    p.catch((e) => {
+      errors.push(e instanceof Error ? e.message : String(e));
+      return null;
+    });
 
   const [snap, dqCounts, realtime, baseline] = await Promise.all([
-    withQuotaRetry(() => data.getGa4PropertySnapshot(property)).catch(() => null),
-    withQuotaRetry(() => data.getGa4DataQuality(property, days)).catch(() => null),
-    data.runGa4RealtimeReport({ property, dimensions: [], metrics: ['activeUsers'] }).catch(() => null),
-    withQuotaRetry(() => data.getGa4Baseline(property, startDate, endDate)).catch(() => null),
+    grab(withQuotaRetry(() => data.getGa4PropertySnapshot(property))),
+    grab(withQuotaRetry(() => data.getGa4DataQuality(property, days))),
+    grab(data.runGa4RealtimeReport({ property, dimensions: [], metrics: ['activeUsers'] })),
+    grab(withQuotaRetry(() => data.getGa4Baseline(property, startDate, endDate))),
   ]);
 
   const keyEventNames = (snap?.keyEvents ?? []).map((k) => k.eventName);
@@ -60,12 +68,12 @@ export async function gatherGa4MonitorInput(
   // bounds. A separate report over the prior equal window; best-effort like the rest.
   const priorDqP =
     baseline?.priorStartDate && baseline?.priorEndDate
-      ? withQuotaRetry(() => data.getGa4DataQuality(property, { startDate: baseline.priorStartDate, endDate: baseline.priorEndDate })).catch(() => null)
+      ? grab(withQuotaRetry(() => data.getGa4DataQuality(property, { startDate: baseline.priorStartDate, endDate: baseline.priorEndDate })))
       : Promise.resolve(null);
 
   const [eventDeltas, transactions, priorDq] = await Promise.all([
-    withQuotaRetry(() => data.getGa4EventDeltas(property, sd, ed)).catch(() => null),
-    ecom ? withQuotaRetry(() => data.getGa4Transactions(property, sd, ed)).catch(() => null) : Promise.resolve(null),
+    grab(withQuotaRetry(() => data.getGa4EventDeltas(property, sd, ed))),
+    ecom ? grab(withQuotaRetry(() => data.getGa4Transactions(property, sd, ed))) : Promise.resolve(null),
     priorDqP,
   ]);
 
@@ -79,6 +87,7 @@ export async function gatherGa4MonitorInput(
     keyEventNames,
     hasEcommerce: ecom,
     priorNoSourceShare: priorDq ? noSourceSharePct(priorDq) : null,
+    fetchError: errors[0] ?? null,
   };
 }
 

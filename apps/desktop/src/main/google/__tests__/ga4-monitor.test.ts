@@ -160,11 +160,31 @@ test('duplicate transactions raise a revenue-integrity alert only when ecommerce
   assert.ok(!off.alerts.some((a) => a.kind === 'duplicate_tx'), 'no dup alert when ecommerce off');
 });
 
-test('missing inputs degrade to skipped checks, never false alarms', () => {
-  const r = monitorGa4({ property: 'properties/1', realtimeActiveUsers: null, baseline: null, dqCounts: null, eventDeltas: null, transactions: null, keyEventNames: [], hasEcommerce: false, priorNoSourceShare: null });
-  assert.equal(r.alerts.length, 0, 'no alerts with no data');
-  assert.equal(r.health, 'healthy');
-  assert.ok(r.checks.every((c) => c.status === 'skip'), 'every check skipped');
+test('SOME missing inputs degrade to skipped checks, never false alarms', () => {
+  // Realtime + baseline present (checks run), the rest missing → skips, no alerts, still healthy.
+  const r = monitorGa4(input({ eventDeltas: null, transactions: null, dqCounts: null, priorNoSourceShare: null }));
+  assert.equal(r.health, 'healthy', r.summary);
+  assert.ok(r.checks.some((c) => c.status === 'skip'), 'unfetchable checks skipped');
+  assert.ok(r.checks.some((c) => c.status !== 'skip'), 'fetched checks still ran');
+});
+
+test('ALL inputs missing is NOT healthy: the run surfaces the real fetch error as a failed access check', () => {
+  // The false-assurance bug: every query failed (expired token / lost access / quota) used to render
+  // "HEALTHY - Everything looks healthy" with six silent skips. It must say what actually happened.
+  const r = monitorGa4({ property: 'properties/1', realtimeActiveUsers: null, baseline: null, dqCounts: null, eventDeltas: null, transactions: null, keyEventNames: [], hasEcommerce: false, priorNoSourceShare: null, fetchError: 'invalid_grant: Token has been expired or revoked.' });
+  assert.equal(r.health, 'critical', r.summary);
+  assert.equal(r.checks[0].id, 'access', 'access check leads the table');
+  assert.equal(r.checks[0].status, 'fail');
+  assert.ok(/invalid_grant/.test(r.checks[0].detail), 'the underlying error is shown');
+  const a = r.alerts.find((x) => x.id === 'no_access');
+  assert.ok(a, 'no_access alert raised');
+  assert.equal(a!.severity, 'high');
+  assert.ok(/invalid_grant/.test(a!.detail), 'alert carries the real cause');
+  assert.ok(/Re-connect the Google account/.test(a!.recommendation ?? ''), 'actionable fix');
+  // Without a captured error message the guard still refuses to say "healthy".
+  const noMsg = monitorGa4({ property: 'properties/1', realtimeActiveUsers: null, baseline: null, dqCounts: null, eventDeltas: null, transactions: null, keyEventNames: [], hasEcommerce: false, priorNoSourceShare: null });
+  assert.equal(noMsg.health, 'critical');
+  assert.ok(noMsg.alerts.some((x) => x.id === 'no_access'));
 });
 
 test('alerts are ordered worst-severity first', () => {
