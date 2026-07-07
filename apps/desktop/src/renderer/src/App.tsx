@@ -3799,7 +3799,7 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
 // a fix suggestion when it doesn't fire). Real submits — an explicit warning + confirm gate them.
 // Rendered INSIDE VerifyPanel — shares the same URL + Preview snippet as tag verification (one panel,
 // one URL). This subsection does the container-tag-driven REAL-submit form check.
-function FormFillReview({ url, snippet, active, onError }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void }): JSX.Element {
+function FormFillReview({ url, snippet, active, onError, trigger }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; trigger?: number }): JSX.Element {
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [localeId, setLocaleId] = useState('us');
@@ -3836,6 +3836,17 @@ function FormFillReview({ url, snippet, active, onError }: { url: string; snippe
       setNote(e instanceof Error ? e.message : String(e));
     } finally { setLoading(false); }
   }
+
+  // The top-row "Track forms" button bumps `trigger`; run the crawl+match when it does (skip the
+  // initial 0 so the section stays idle until the operator asks for it).
+  const lastTrigger = useRef(0);
+  useEffect(() => {
+    if (trigger && trigger !== lastTrigger.current) {
+      lastTrigger.current = trigger;
+      void fetchPlan();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trigger]);
 
   async function submitAll(): Promise<void> {
     if (!plan || !ctx || submitting) return;
@@ -4025,6 +4036,10 @@ function VerifyPanel({
   const [vShowSkipped, setVShowSkipped] = useState(false);
   const [vShowNet, setVShowNet] = useState(false);
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
+  // Bumped by the top-row "Track forms" button to kick the FormFillReview crawl+match (whose own
+  // "Find forms with tags" button lives further down) and scroll it into view.
+  const [vFormRun, setVFormRun] = useState(0);
+  const vFormRef = useRef<HTMLDivElement>(null);
   // Event-name aligns applied this session (tagId → new event name), so the row shows "✓ aligned".
   const [aligned, setAligned] = useState<Record<string, string>>({});
   const [aligning, setAligning] = useState<string | null>(null);
@@ -4124,7 +4139,11 @@ function VerifyPanel({
   // A tag we couldn't actually exercise on this run (CTA/form on another page, or a shared
   // dataLayer event that needs form-specific data) is NOT a failure — separate it from genuine
   // "not firing" so a working tag is never mislabelled broken.
-  const inconclusive = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive) ?? [];
+  // Server-side pixels (Meta/TikTok/… fed via the Conversion API) relay to the first-party sGTM and
+  // send NO browser beacon — that's expected, not broken. Give them their own group so they never sit
+  // under ❌ "not firing" NOR the "couldn't reach it" note (which would misdescribe why).
+  const serverRelayed = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive && v.serverRelay) ?? [];
+  const inconclusive = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive && !v.serverRelay) ?? [];
   const notFired = vResult?.verdicts.filter((v) => !v.fired && !v.inconclusive) ?? [];
 
   return (
@@ -4183,6 +4202,14 @@ function VerifyPanel({
             <button style={styles.toggleOff} onClick={() => void runVerify()} disabled={!ready || vVerifying || vMinting || !vUrl.trim()}>
               {vVerifying && !vMinting ? 'Verifying…' : 'Verify (pasted / live)'}
             </button>
+            <button
+              style={styles.toggleOff}
+              onClick={() => { setVFormRun((n) => n + 1); vFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+              disabled={!ready || !vUrl.trim()}
+              title="Find the site's forms that have a tracking tag, fill the data once, then submit each for real and verify its tag fires"
+            >
+              Track forms
+            </button>
           </div>
           {vNote && (
             <div
@@ -4219,7 +4246,7 @@ function VerifyPanel({
             <div style={{ fontWeight: 600 }}>
               {vResult.error
                 ? `Error: ${vResult.error}`
-                : `${firedReal.length} fired${firedSynthetic.length ? ` · ${firedSynthetic.length} config-verified (synthetic, not a real submit)` : ''}${notFired.length ? ` · ${notFired.length} need attention` : ''}${inconclusive.length ? ` · ${inconclusive.length} couldn't be auto-tested here` : ''}`}
+                : `${firedReal.length} fired${firedSynthetic.length ? ` · ${firedSynthetic.length} config-verified (synthetic, not a real submit)` : ''}${serverRelayed.length ? ` · ${serverRelayed.length} relayed server-side` : ''}${notFired.length ? ` · ${notFired.length} need attention` : ''}${inconclusive.length ? ` · ${inconclusive.length} couldn't be auto-tested here` : ''}`}
             </div>
             {vResult.pagesDriven?.length && !vResult.error ? (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
@@ -4361,6 +4388,35 @@ function VerifyPanel({
               </div>
             )}
 
+            {serverRelayed.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ ...styles.h2, color: 'var(--c-blue)' }}>🛰 Relayed server-side ({serverRelayed.length})</div>
+                <div style={{ ...styles.muted, fontSize: 12, marginBottom: 4 }}>
+                  These pixel/ad tags sent NO browser beacon, but the interaction relayed to your first-party
+                  server container (sGTM). That’s the normal shape of a server-side (Conversion API) destination —
+                  the browser never calls the vendor, so a missing browser pixel is expected here, not broken.
+                  Confirm the server leg in sGTM Preview / the vendor’s Events Manager → Test Events.
+                </div>
+                <ul style={styles.resultList}>
+                  {serverRelayed.map((v) => {
+                    const k = verdictKindLabel(v);
+                    return (
+                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
+                        <div>
+                          <span style={{ fontWeight: 600, color: 'var(--c-blue)' }}>SERVER-SIDE</span>{' '}
+                          <span title={k.label}>{k.icon}</span> {v.tagName}
+                        </div>
+                        {v.reason ? <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2 }}>Why: {v.reason}</div> : null}
+                        {v.observedBeacons && v.observedBeacons.length > 0 && (
+                          <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2, fontSize: 12 }}>Relayed to: {v.observedBeacons.join(', ')}</div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
             {inconclusive.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <div style={{ ...styles.h2, color: 'var(--c-amber)' }}>⏭ Couldn’t auto-test here ({inconclusive.length})</div>
@@ -4407,7 +4463,9 @@ function VerifyPanel({
           </div>
         )}
 
-        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} />
+        <div ref={vFormRef}>
+          <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} trigger={vFormRun} />
+        </div>
       </div>
     </div>
   );
