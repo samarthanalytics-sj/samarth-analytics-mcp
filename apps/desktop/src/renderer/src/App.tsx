@@ -2236,15 +2236,10 @@ function TagReviewPanel({
   const [showDebug, setShowDebug] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
-  const [discoverMode, setDiscoverMode] = useState<'site' | 'single' | 'ai' | 'csv'>('site');
+  const [discoverMode, setDiscoverMode] = useState<'site' | 'single' | 'csv'>('site');
   // CSV mode: paste / load a list of landing-page URLs and scan them all directly (no discovery).
   const [csvText, setCsvText] = useState('');
   const csvFileRef = useRef<HTMLInputElement>(null);
-  // OpenAI key presence — gates the experimental AI (screenshot + vision) mode.
-  const [hasOpenAi, setHasOpenAi] = useState(false);
-  useEffect(() => {
-    window.desktop.providers.status().then((s) => setHasOpenAi(!!s.openai)).catch(() => setHasOpenAi(false));
-  }, []);
   const [selectedPages, setSelectedPages] = useState<Record<string, boolean>>({});
   // Optional crawl filter (opt-in): hide /blog|/news|/article pages from the discovered list and skip
   // them in the scan. Off by default.
@@ -2326,8 +2321,8 @@ function TagReviewPanel({
     setExportNote('');
   }
 
-  // Switch the source mode (Main website / Single page / AI / CSV) → clean slate.
-  function changeMode(m: 'site' | 'single' | 'ai' | 'csv'): void {
+  // Switch the source mode (Main website / Single page / CSV) → clean slate.
+  function changeMode(m: 'site' | 'single' | 'csv'): void {
     if (m === discoverMode) return;
     resetScanState();
     setDiscoverMode(m);
@@ -2363,34 +2358,11 @@ function TagReviewPanel({
 
   // Step 1 (Main website mode): enumerate the site's pages (sitemap/crawl), then
   // the user picks which to scan. In Single-page mode, scan the one URL directly.
-  // EXPERIMENTAL: screenshot the single page + let OpenAI vision pick the tags,
-  // wired to the real scraped elements. Non-streaming (one page, one LLM call).
-  async function doAiScan(): Promise<void> {
-    const target = url.trim();
-    if (!target || scanning || discovering) return;
-    onError('');
-    setScanning(true);
-    setScanProgress(null);
-    setDiscovered(null);
-    loadSuggestions([]);
-    try {
-      applyScanResult(await window.desktop.tags.aiScan(target, { settleMs: effSettleMs(), platforms }));
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setScanning(false);
-    }
-  }
-
   async function doDiscover(): Promise<void> {
     const target = url.trim();
     if (!target || discovering || scanning) return;
     if (discoverMode === 'single') {
       await doSinglePageScan();
-      return;
-    }
-    if (discoverMode === 'ai') {
-      await doAiScan();
       return;
     }
     onError('');
@@ -2891,18 +2863,16 @@ function TagReviewPanel({
         {/* Source */}
         <div style={styles.card}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
-            {(['site', 'single', 'ai', 'csv'] as const).map((m) => (
+            {(['site', 'single', 'csv'] as const).map((m) => (
               <button
                 key={m}
                 style={discoverMode === m ? styles.toggleOn : styles.toggleOff}
                 onClick={() => changeMode(m)}
-                disabled={scanning || discovering || (m === 'ai' && !hasOpenAi)}
-                title={m === 'ai' && !hasOpenAi ? 'Add an OpenAI API key in Settings → Providers to use this' : undefined}
+                disabled={scanning || discovering}
               >
-                {m === 'site' ? 'Main website' : m === 'single' ? 'Single page' : m === 'ai' ? '🤖 AI (single page)' : '📄 Landing pages (CSV)'}
+                {m === 'site' ? 'Main website' : m === 'single' ? 'Single page' : '📄 Landing pages (CSV)'}
               </button>
             ))}
-            {discoverMode === 'ai' && <span style={styles.muted}>experimental · screenshots the page + reads it with OpenAI vision</span>}
             {discoverMode === 'csv' && <span style={styles.muted}>scan a list of landing-page URLs directly (no crawl)</span>}
           </div>
           {/* Pre-scan platform choice: a MULTI-SELECT — toggle any subset of ad platforms. Each selected
@@ -2987,25 +2957,19 @@ function TagReviewPanel({
                   )}
                 </label>
                 <button style={styles.primaryBtn} onClick={doDiscover} disabled={!url.trim() || discovering || scanning}>
-                  {discoverMode === 'ai'
+                  {discoverMode === 'single'
                     ? scanning
-                      ? 'Analyzing…'
-                      : '🤖 Analyze with AI'
-                    : discoverMode === 'single'
-                      ? scanning
-                        ? 'Scanning…'
-                        : 'Scan page'
-                      : discovering
-                        ? 'Discovering…'
-                        : 'Discover pages'}
+                      ? 'Scanning…'
+                      : 'Scan page'
+                    : discovering
+                      ? 'Discovering…'
+                      : 'Discover pages'}
                 </button>
               </div>
               <div style={styles.muted}>
-                {discoverMode === 'ai'
-                  ? 'Screenshots this page and asks OpenAI vision which tags to create, wired to the page’s real elements (the screenshot is sent to OpenAI). Experimental.'
-                  : discoverMode === 'single'
-                    ? 'Scans ONLY this page (no crawl, no sitemap) and shows its tags directly'
-                    : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan (up to 50 pages per scan)'}
+                {discoverMode === 'single'
+                  ? 'Scans ONLY this page (no crawl, no sitemap) and shows its tags directly'
+                  : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan (up to 50 pages per scan)'}
                 {' '}— merging Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
                 approve.{' '}
                 <button style={styles.linkBtn} onClick={doQuickScan} disabled={!url.trim() || scanning || discovering}>

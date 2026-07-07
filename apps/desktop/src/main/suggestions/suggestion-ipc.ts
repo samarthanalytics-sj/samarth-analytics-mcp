@@ -13,7 +13,6 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
-import type { ProviderKeyStore } from '../storage/provider-keys';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
@@ -29,30 +28,14 @@ import { snapshotToVerifyInputs } from './container-verify';
 import { localeById } from '../../../../web-audit-mcp/src/agent/form-fill.js';
 import type { RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import { discoverSite } from './discover';
-import { createElectronDriver } from './electron-driver';
 // The merged page-driver builder (Electron + optional Cheerio/Playwright) lives in scan-url.ts,
 // shared with the `suggest_tags_from_url` chat tool so both scan paths render pages identically.
 import { makeDriver, clampSettle } from './scan-url';
 import { parseSuggestions, createSuggestedTags, planGoogleTagVars, provisionVariables } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 
-export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: ProviderKeyStore): void {
+export function registerSuggestionsIpc(data: GoogleDataService): void {
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
-
-  // EXPERIMENTAL: single-page AI scan — screenshot the page + let OpenAI vision pick
-  // the GA4 tags, wired to the real scraped elements. Uses the stored OpenAI key.
-  // Sends the page screenshot to OpenAI (opt-in, the user picked this mode).
-  ipcMain.handle('suggestions:aiScan', async (_e, url: unknown, opts?: TagScanOptions) => {
-    const target = String(url ?? '').trim();
-    const verdict = urlAllowed(target, []);
-    if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
-    const apiKey = providerKeys.getKey('openai');
-    if (!apiKey) throw new Error('No OpenAI API key found — add one in Settings → Providers to use the AI scan.');
-    const settleMs = clampSettle((opts ?? {}).settleMs);
-    const driver = createElectronDriver(settleMs !== undefined ? { settleMs } : {});
-    const { aiScanPage } = await import('./ai-scan');
-    return aiScanPage({ url: target, apiKey, model: 'gpt-4o', driver, platforms: (opts ?? {}).platforms ?? ['ga4'] });
-  });
 
   // Read-only: the container's existing tag names + whether a GA4 base/config tag is
   // present, so the review panel can mark suggestions that ALREADY EXIST (don't
