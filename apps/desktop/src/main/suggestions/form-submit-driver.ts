@@ -73,6 +73,8 @@ export interface FormSubmitFieldInput {
 export interface FormSubmitInput {
   formId: string;
   formClasses: string;
+  /** 'js' = a div/JS widget (no <form>) → click its submit control; anything else = native <form>. */
+  method: string;
   fields: FormSubmitFieldInput[];
 }
 export interface FormSubmitDriverOptions {
@@ -108,31 +110,15 @@ function grantConsentInPage(): void {
   });
 }
 
-/** Resolve THE reviewed form on the page (by id, then exact class, then the form matching the MOST of
- *  the reviewed field selectors), fill ONLY within it, and submit it. Scoping to one form is the
- *  safety guarantee: a same-named field ([name="email"]) on another form is never touched, so we never
- *  fill + submit an unrelated newsletter/search form. Serialized to page.evaluate — DOM globals only. */
-function fillAndSubmitInPage(spec: { formId: string; formClasses: string; fields: FormSubmitFieldInput[] }): { filled: number; submitted: boolean; note?: string } {
-  const forms = Array.prototype.slice.call(document.querySelectorAll('form')) as HTMLFormElement[];
-  if (forms.length === 0) return { filled: 0, submitted: false, note: 'no <form> element on the page (a div/JS form is not yet supported)' };
-  let form: HTMLFormElement | null = null;
-  if (spec.formId) form = forms.find((f) => f.id === spec.formId) || null;
-  if (!form && spec.formClasses) form = forms.find((f) => (f.getAttribute('class') || '') === spec.formClasses) || null;
-  if (!form) {
-    let best = 0;
-    for (const fm of forms) {
-      let c = 0;
-      for (const fld of spec.fields) { try { if (fm.querySelector(fld.selector)) c += 1; } catch { /* bad selector */ } }
-      if (c > best) { best = c; form = fm; }
-    }
-  }
-  if (!form) return { filled: 0, submitted: false, note: 'could not locate the reviewed form on the page (its fields matched no <form> — a div/JS form or iframe is not yet supported)' };
-
-  let filled = 0;
-  for (const f of spec.fields) {
-    let el: Element | null = null;
-    try { el = form.querySelector(f.selector); } catch { el = null; } // scoped to the target form ONLY
-    if (!el) continue;
+/** Fill the reviewed values and submit the ONE reviewed form. Two paths:
+ *   - native `<form>` (method != 'js'): scope to the resolved form, validate, requestSubmit().
+ *   - div/JS widget (method === 'js', no `<form>`): scope to the host container and CLICK its
+ *     Submit/Send control so the widget's own JS handler runs.
+ *  Scoping to one element is the safety guarantee: a same-named field on another form is never
+ *  touched, so we never fill + submit an unrelated newsletter/search form. Self-contained —
+ *  serialized to page.evaluate (DOM globals only, no external refs). */
+function fillAndSubmitInPage(spec: { formId: string; formClasses: string; method: string; fields: FormSubmitFieldInput[] }): { filled: number; submitted: boolean; note?: string } {
+  const setValue = (el: Element, f: FormSubmitFieldInput): void => {
     const tag = el.tagName.toLowerCase();
     if (f.type === 'checkbox' || f.type === 'radio') {
       (el as HTMLInputElement).checked = f.value === 'true';
@@ -150,10 +136,73 @@ function fillAndSubmitInPage(spec: { formId: string; formClasses: string; fields
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     } catch { /* older engines */ }
-    filled += 1;
-  }
-  if (filled === 0) return { filled, submitted: false, note: 'none of the reviewed fields were found in the form — nothing submitted' };
+  };
+  const fillWithin = (root: ParentNode): number => {
+    let n = 0;
+    for (const f of spec.fields) {
+      let el: Element | null = null;
+      try { el = root.querySelector(f.selector); } catch { el = null; } // scoped to the resolved widget ONLY
+      if (!el) continue;
+      setValue(el, f);
+      n += 1;
+    }
+    return n;
+  };
 
+  // ── div/JS widget: no <form> — fill within the host + click its submit control. ──
+  if (spec.method === 'js') {
+    let host: Element | null = spec.formId ? document.getElementById(spec.formId) : null;
+    if (!host && spec.formClasses) {
+      const first = spec.formClasses.split(/\s+/).filter(Boolean)[0];
+      if (first) { try { host = document.querySelector('.' + (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(first) : first)); } catch { host = null; } }
+    }
+    if (!host) {
+      // Resolve by structure: the nearest ancestor of a matched field that contains >=2 reviewed fields.
+      for (const f of spec.fields) {
+        let el: Element | null = null;
+        try { el = document.querySelector(f.selector); } catch { el = null; }
+        if (!el) continue;
+        let node: Element | null = el.parentElement;
+        for (let i = 0; node && i < 12; i++, node = node.parentElement) {
+          let c = 0;
+          for (const g of spec.fields) { try { if (node.querySelector(g.selector)) c += 1; } catch { /* */ } }
+          if (c >= Math.min(2, spec.fields.length)) { host = node; break; }
+        }
+        if (host) break;
+      }
+    }
+    if (!host) return { filled: 0, submitted: false, note: 'could not locate the JS/div form widget on the page' };
+    const filled = fillWithin(host);
+    if (filled === 0) return { filled, submitted: false, note: 'the widget was found but none of its reviewed fields matched' };
+    const SUBMIT_RE = /\b(submit|send|subscribe|sign\s*up|sign\s*me\s*up|get\s+started|register|join\b|request|contact\s+us|book\b|apply|continue|next)\b/i;
+    const ctrls = Array.prototype.slice.call(host.querySelectorAll('button, [role="button"], a, [onclick], input[type="submit"], input[type="button"]')) as HTMLElement[];
+    let btn: HTMLElement | null = null;
+    for (const c of ctrls) {
+      const label = ((c.textContent || '') + ' ' + ((c as HTMLInputElement).value || '')).trim();
+      if (SUBMIT_RE.test(label)) { btn = c; break; }
+    }
+    if (!btn && ctrls.length === 1) btn = ctrls[0]; // a lone button-like control
+    if (!btn) return { filled, submitted: false, note: 'filled the widget but could not find its Submit / Send button' };
+    try { btn.click(); return { filled, submitted: true }; } catch (e) { return { filled, submitted: false, note: String(e).slice(0, 150) }; }
+  }
+
+  // ── native <form> path ──
+  const forms = Array.prototype.slice.call(document.querySelectorAll('form')) as HTMLFormElement[];
+  if (forms.length === 0) return { filled: 0, submitted: false, note: 'no <form> element on the page' };
+  let form: HTMLFormElement | null = null;
+  if (spec.formId) form = forms.find((f) => f.id === spec.formId) || null;
+  if (!form && spec.formClasses) form = forms.find((f) => (f.getAttribute('class') || '') === spec.formClasses) || null;
+  if (!form) {
+    let best = 0;
+    for (const fm of forms) {
+      let c = 0;
+      for (const fld of spec.fields) { try { if (fm.querySelector(fld.selector)) c += 1; } catch { /* bad selector */ } }
+      if (c > best) { best = c; form = fm; }
+    }
+  }
+  if (!form) return { filled: 0, submitted: false, note: 'could not locate the reviewed form on the page (its fields matched no <form>)' };
+  const filled = fillWithin(form);
+  if (filled === 0) return { filled, submitted: false, note: 'none of the reviewed fields were found in the form — nothing submitted' };
   const fe = form as HTMLFormElement & { requestSubmit?: () => void; checkValidity?: () => boolean };
   // Don't claim "submitted" when the browser will block it: requestSubmit() silently no-ops on an
   // invalid form (a required field we didn't fill), so a green "Submitted" would be a lie.
@@ -237,7 +286,7 @@ export async function runFormSubmitDriver(
     const before = captured.length;
     let outcome: { filled: number; submitted: boolean; note?: string };
     try {
-      outcome = await page.evaluate<{ filled: number; submitted: boolean; note?: string }>(fillAndSubmitInPage, { formId: input.formId, formClasses: input.formClasses, fields: input.fields });
+      outcome = await page.evaluate<{ filled: number; submitted: boolean; note?: string }>(fillAndSubmitInPage, { formId: input.formId, formClasses: input.formClasses, method: input.method, fields: input.fields });
     } catch (e) {
       outcome = { filled: 0, submitted: false, note: (e instanceof Error ? e.message : String(e)).slice(0, 150) };
     }

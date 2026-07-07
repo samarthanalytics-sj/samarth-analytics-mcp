@@ -716,6 +716,8 @@ export interface FormSubmitFieldInputView {
 export interface SubmitFormInputView {
   formId: string;
   formClasses: string;
+  /** 'js' = a div/JS widget (click its submit control); otherwise a native <form>. */
+  method: string;
   fields: FormSubmitFieldInputView[];
 }
 export interface SubmitFormVerifyOptions {
