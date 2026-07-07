@@ -1,3 +1,9 @@
+## [1.247.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.246.0...v1.247.0) (2026-07-07)
+
+### Features
+
+* **desktop:** simpler "how to install" — status chip + decluttered panel ([0dad061](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0dad061d06e3aaeb7ceb682674b7a3f57949d516))
+
 ## [1.246.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.245.0...v1.246.0) (2026-07-07)
 
 ### Features
