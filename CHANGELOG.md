@@ -1,3 +1,9 @@
+## [1.246.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.245.0...v1.246.0) (2026-07-07)
+
+### Features
+
+* **desktop:** remove the experimental AI (single-page vision) scan option ([2746387](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/274638723d70f279f20ad4fff4beb206a09d9d55))
+
 ## [1.245.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.244.3...v1.245.0) (2026-07-07)
 
 ### Features
