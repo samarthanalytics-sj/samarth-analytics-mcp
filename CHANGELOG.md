@@ -1,3 +1,9 @@
+## [1.239.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.238.0...v1.239.0) (2026-07-07)
+
+### Features
+
+* **verify:** Phase 2b — pair a real form submit to the container's actual tags ([c612769](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c61276957791773654def87b8ad0df64d99cbf76)), closes [#389](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/389)
+
 ## [1.238.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.237.0...v1.238.0) (2026-07-07)
 
 ### Features
