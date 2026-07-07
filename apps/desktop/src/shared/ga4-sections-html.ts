@@ -466,8 +466,10 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
           }
         }
       }
+      // The bar value carries the step-conversion figure too (it used to live in a separate table
+      // that duplicated this chart row-for-row; the table is gone, the data is not).
       const bars = x.funnel.steps
-        .map((st, i) => chartBar(st.label, pnum(st.pctEntry), `${st.users} · ${st.pctEntry}`, SLATE, i === worst && worstDrop >= 0.5))
+        .map((st, i) => chartBar(st.label, pnum(st.pctEntry), `${st.users} · ${st.pctEntry}${st.stepConv && st.stepConv !== '—' ? ` · step conv ${st.stepConv}` : ''}`, SLATE, i === worst && worstDrop >= 0.5))
         .join('');
       const read =
         worst > 0 && worstDrop >= 0.5
@@ -478,20 +480,9 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       s6 += vizCard(
         'Purchase funnel: users per step',
         `Each step as a share of the entry step; overall view-to-purchase is ${x.funnel.overall}.`,
-        bars + read + vcap('Event-coverage approximation, not a strict sequential path. Treat the counts as directional.'),
+        bars + read + vcap('Event-coverage approximation, not a strict sequential path - a later step can exceed an earlier one (saved carts, express checkout, or a missing step tag).'),
       );
     }
-    const fRows = x.funnel.steps
-      .map(
-        (st) =>
-          `<tr><td ${TD}><span style="font-weight:600">${esc(st.label)}</span></td><td ${TDR}>${esc(st.users)}</td><td ${TDR}>${esc(st.pctEntry)}</td><td ${TDR}>${esc(st.stepConv)}</td></tr>`,
-      )
-      .join('');
-    s6 +=
-      tableCaption('Ecommerce funnel', `(distinct users per step; overall view-to-purchase ${esc(x.funnel.overall)})`) +
-      `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
-      `<table style="border-collapse:collapse;width:100%;min-width:420px"><thead><tr><th ${TH}>Step</th><th ${THR}>Users</th><th ${THR}>% of entry</th><th ${THR}>Step conversion</th></tr></thead><tbody>${fRows}</tbody></table></div>` +
-      `<div style="font-size:11px;color:${FAINT};margin:4px 2px 0;line-height:1.4">Event-coverage approximation, not a strict sequential path - a later step can exceed an earlier one (saved carts, express checkout, or a missing step tag).</div>`;
   }
 
   // ── Section 7 · Decision readiness ──
