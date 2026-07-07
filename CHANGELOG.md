@@ -1,3 +1,9 @@
+## [1.231.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.230.0...v1.231.0) (2026-07-07)
+
+### Features
+
+* **tag-suggest:** measurement install plan + DLV-scoped custom_event triggers ([265c8d7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/265c8d7fcbcbbf92d679e79a3b23d925645f3cb5))
+
 ## [1.230.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.229.0...v1.230.0) (2026-07-07)
 
 ### Features
