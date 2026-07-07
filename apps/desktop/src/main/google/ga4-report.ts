@@ -575,6 +575,18 @@ function verificationBlocks(config: Ga4AuditReport, ecom: boolean, ecomVerified:
   return out;
 }
 
+/** Data-collection CONTINUITY: verified when sessions arrived on EVERY day of the audit window
+ *  (GA4 omits zero days from dailySessions, so full coverage == full continuity). This is the
+ *  Data-API verification the Admin API cannot provide - it upgrades the Data collection area from
+ *  its Admin-only Partial ceiling to a real Pass. A single gap day (or a thin/new property) fails
+ *  the bar: an unproven stream must not read as verified. Windows longer than the daily series can
+ *  ever cover (custom ranges > ~366 days) are never claimed. */
+function collectionContinuity(baseline: Ga4Baseline | null, windowDays: number): { days: number } | null {
+  if (!baseline || windowDays <= 0 || windowDays > 366) return null;
+  const nonZeroDays = new Set(baseline.dailySessions.filter((d) => d.sessions > 0).map((d) => d.date));
+  return nonZeroDays.size >= windowDays ? { days: windowDays } : null;
+}
+
 // Area-coverage rows = config areas + the report-level Attribution/Audiences/Ecommerce/Consent.
 // The Ecommerce row is GRADED when the transaction-integrity pass ran: clean (no duplicate ids,
 // <5% missing ids) earns a real Pass — which is what upgrades the Revenue trust gate and lifts the
@@ -586,10 +598,18 @@ function buildAreaRows(
   audienceCount: number | null,
   ecom: boolean,
   ecomV?: EcomVerification | null,
+  continuity?: { days: number } | null,
 ): AreaRow[] {
   // Attribution is now a GRADED config area (auditGa4) with its own evidence, so it is not re-added
   // here as a passive "pass" row.
-  const rows: AreaRow[] = config.areas.map((a) => ({ area: a.area, statusKey: a.status, evidence: areaEvidence(a.area, s, config) }));
+  const rows: AreaRow[] = config.areas.map((a) => {
+    // Continuity verification upgrades the Admin-only Partial to a real Pass (never a Fail - a
+    // failing config grade stays failing regardless of traffic).
+    if (a.area === 'Data collection' && a.status === 'partial' && continuity) {
+      return { area: a.area, statusKey: 'pass' as const, evidence: `verified: sessions arrived on every day of the ${continuity.days}-day window (${areaEvidence(a.area, s, config)})` };
+    }
+    return { area: a.area, statusKey: a.status, evidence: areaEvidence(a.area, s, config) };
+  });
   if (audienceCount !== null) {
     rows.push({ area: 'Audiences', statusKey: audienceCount > 0 ? 'pass' : 'partial', evidence: `${audienceCount} audience(s)` });
   }
@@ -621,7 +641,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
   const ecom = hasEcommerce(s);
   const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts);
   const top = allFindings.filter((f) => f.severity !== 'info')[0];
-  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification);
+  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const nPartial = areaRows.filter((a) => a.statusKey === 'partial').length;
   const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
   const scoreModel = buildGa4Scorecard({
@@ -656,7 +676,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
   const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
   // Channel-attribution trust comes from the same Data Trust Matrix the Executive Summary uses.
   const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts);
-  const areaRows = buildAreaRows(s, config, audienceCount, hasEcommerce(s), input.ecomVerification);
+  const areaRows = buildAreaRows(s, config, audienceCount, hasEcommerce(s), input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
     findings: allFindings.map((f) => ({ severity: f.severity, category: f.category })),
@@ -695,7 +715,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
   const dqAttrib = allFindings.find((f) => f.category === 'data_quality' && f.severity !== 'info' && /source data|Unassigned|\(not set\)/.test(f.message));
-  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification);
+  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
@@ -833,7 +853,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   // all-clear as a problem.
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
-  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification);
+  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const campaignPerf = campaignPerfView(campaigns);
 
   const windowLabel = auditWindowLabel(dq); // same label as section 1 + the styled section 9 card

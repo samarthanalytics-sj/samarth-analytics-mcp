@@ -774,5 +774,39 @@ test('ecommerce verification: a high missing-id share stays PARTIAL (deduplicati
   assert.ok(/item params & duplicate transactions not verified/.test(md2), 'unrun pass stays Partial with the old wording');
 });
 
+test('data-collection continuity: sessions on EVERY day of the window upgrade Data collection to PASS', () => {
+  // 5-day window, all 5 days have traffic -> continuity verified via the Data API.
+  const counts = dqCounts({ windowDays: 5, startDate: '2026-06-25', endDate: '2026-06-29' });
+  const b = baseline({ dailySessions: [
+    { date: '20260625', sessions: 900 }, { date: '20260626', sessions: 950 }, { date: '20260627', sessions: 870 },
+    { date: '20260628', sessions: 910 }, { date: '20260629', sessions: 925 },
+  ] });
+  const inp = input({ baseline: b, growth: growthOf(b), dqCounts: counts, dataQuality: auditGa4DataQuality(counts) });
+  const md = buildGa4AuditReport(inp);
+  assert.ok(/verified: sessions arrived on every day of the 5-day window/.test(md), 'evidence names the verified continuity');
+  const exec = buildGa4ExecSummary(inp);
+  const sess = exec.trust.find((t) => t.metric === 'Sessions, users, engagement rate')!;
+  assert.equal(sess.safe, true, 'sessions become SAFE once collection is verified: ' + sess.reason);
+
+  // A gap day (or thin coverage) keeps the Admin-only Partial - unproven is not verified.
+  const gappy = baseline({ dailySessions: [
+    { date: '20260625', sessions: 900 }, { date: '20260626', sessions: 0 }, { date: '20260627', sessions: 870 },
+    { date: '20260628', sessions: 910 }, { date: '20260629', sessions: 925 },
+  ] });
+  const md2 = buildGa4AuditReport(input({ baseline: gappy, growth: growthOf(gappy), dqCounts: counts, dataQuality: auditGa4DataQuality(counts) }));
+  assert.ok(!/verified: sessions arrived on every day/.test(md2), 'a zero-session day fails the continuity bar');
+});
+
+test('data-collection continuity raises the reliability headline (the verification, not a relaxed gate)', () => {
+  const counts = dqCounts({ windowDays: 5, startDate: '2026-06-25', endDate: '2026-06-29' });
+  const full = baseline({ dailySessions: [
+    { date: '20260625', sessions: 900 }, { date: '20260626', sessions: 950 }, { date: '20260627', sessions: 870 },
+    { date: '20260628', sessions: 910 }, { date: '20260629', sessions: 925 },
+  ] });
+  const verified = buildGa4ExecSummary(input({ baseline: full, growth: growthOf(full), dqCounts: counts, dataQuality: auditGa4DataQuality(counts) }));
+  const unverified = buildGa4ExecSummary(input()); // default fixture: 90-day window, ~8 daily entries -> no continuity
+  assert.ok(verified.reliabilityPct > unverified.reliabilityPct, `verified ${verified.reliabilityPct}% > unverified ${unverified.reliabilityPct}%`);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
