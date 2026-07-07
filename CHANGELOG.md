@@ -1,3 +1,9 @@
+## [1.253.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.252.2...v1.253.0) (2026-07-07)
+
+### Features
+
+* **desktop:** tag-verification results — scorecard + table, semantic colours, button hover ([0f36e14](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0f36e14c0634cfbbe02661f7b81d9cdeb9e00086))
+
 ## [1.252.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.252.1...v1.252.2) (2026-07-07)
 
 ### Bug Fixes
