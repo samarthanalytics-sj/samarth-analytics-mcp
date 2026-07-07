@@ -16,11 +16,14 @@ import type { GoogleDataService } from '../google/data-service';
 import type { ProviderKeyStore } from '../storage/provider-keys';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
-import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView } from '../../shared/ipc';
+import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult } from '../../shared/ipc';
 import { crawlAndSuggest, scanUrls, type ScanProgress } from './scan-core';
 import { runVerifyDriver } from './verify-driver';
 import { evaluateVerify } from './verify-tags';
 import { routeTagsToPages } from './verify-routing';
+import { toFormFillViews, localeOptions } from './form-fill-plan';
+import { localeById } from '../../../../web-audit-mcp/src/agent/form-fill.js';
+import type { RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import { discoverSite } from './discover';
 import { createElectronDriver } from './electron-driver';
 // The merged page-driver builder (Electron + optional Cheerio/Playwright) lives in scan-url.ts,
@@ -153,6 +156,32 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
       return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
     },
   );
+
+  // Real-submit form verification (review step): open one URL, read each form's OWN fields, and
+  // return a locale fill plan the operator reviews + edits before Phase 2 actually submits. READ-ONLY:
+  // it opens the page and reads the DOM; it fills nothing and submits nothing.
+  ipcMain.handle('suggestions:formsForFill', async (_e, url: unknown, opts?: FormsForFillOptions): Promise<FormsForFillResult> => {
+    const target = String(url ?? '').trim();
+    const verdict = urlAllowed(target, []);
+    if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
+    const o = opts ?? {};
+    const locale = localeById(o.localeId);
+    let rawForms: RawForm[] = [];
+    let error: string | undefined;
+    const driver = await makeDriver({});
+    try {
+      const driven = await driver.open(target);
+      rawForms = driven.rawForms ?? [];
+    } catch (e) {
+      error = (e instanceof Error ? e.message : String(e)).slice(0, 200);
+    } finally {
+      try { await driver.close(); } catch { /* best-effort */ }
+    }
+    // A traceable, unique alias so a real submit (Phase 2) is filterable in the operator's CRM.
+    const emailTag = `d${Date.now().toString(36)}`;
+    const forms = toFormFillViews(rawForms, target, locale.id, emailTag);
+    return { url: target, localeId: locale.id, locales: localeOptions(), forms, ...(error ? { error } : {}) };
+  });
 
   // Streaming variants — push 'suggestions:scan:event' (the RUNNING suggestion list +
   // crawl progress, tagged by requestId) after every page, so the review panel fills

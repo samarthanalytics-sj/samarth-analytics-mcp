@@ -650,6 +650,50 @@ export interface VerifyTagsOptions {
   crawlMaxDepth?: number;
 }
 
+/* ── Real-submit form verification: fetch a form's OWN fields + a locale fill plan (review step) ── */
+/** One fillable field on a form with its locale-derived, user-editable test value. */
+export interface FormFillFieldView {
+  /** Stable selector (name-based, else id-based) the driver will fill in Phase 2. */
+  selector: string;
+  name: string;
+  label: string;
+  /** input type / 'select' / 'textarea' / 'checkbox' / 'radio'. */
+  type: string;
+  /** Detected fill role (given_name, email, phone, country, subject, consent, …). */
+  role: string;
+  required: boolean;
+  /** The value to submit — locale default, edited by the operator. For a checkbox: 'true' = checked. */
+  value: string;
+  /** For a <select>: its real option labels, so the review UI offers them. */
+  options?: string[];
+}
+/** A detected form + its fill plan, for the review-before-submit step. */
+export interface FormFillView {
+  index: number;
+  title: string;
+  formId: string;
+  formClasses: string;
+  action: string;
+  method: string;
+  purpose: string;
+  /** True = not rendered at scan time (a modal that opens on a click). */
+  hidden: boolean;
+  fields: FormFillFieldView[];
+}
+export interface FormsForFillOptions {
+  /** Location profile id (default 'us'). Drives locale-appropriate phone/postal/region + country. */
+  localeId?: string;
+  navTimeoutMs?: number;
+}
+export interface FormsForFillResult {
+  url: string;
+  localeId: string;
+  /** The supported locations for the picker (US now; UK/AUS later). */
+  locales: Array<{ id: string; label: string }>;
+  forms: FormFillView[];
+  error?: string;
+}
+
 /* ── Container audit (the "Container audit" panel) ── */
 export interface AuditFindingView {
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
