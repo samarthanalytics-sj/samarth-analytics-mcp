@@ -1,7 +1,7 @@
 // Pure tests for the "GTM Structure - GA4 Events" template mapping (the table view
 // + CSV download share this). Run: tsx src/shared/__tests__/tag-template.test.ts
 
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator, CONDITION_LABELS } from '../tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator, CONDITION_LABELS } from '../tag-template';
 import type { SuggestedTagView } from '../ipc';
 
 let passed = 0;
@@ -253,6 +253,23 @@ const attrForm = base({
 });
 const rbAttr = suggestionsToInstallRunbookMarkdown([attrForm], {});
 check('runbook: an html-attribute requirement shows per-tag + in the consolidated "HTML attributes to add" section', rbAttr.includes('### HTML attributes to add') && rbAttr.includes('Add `id="<a-unique-id>"` to `form`'));
+
+// ── installPlanNeedsAction — drives the review table's "How to install" toggle visibility ──────────
+// True ONLY when the plan asks the user to add something site-side (listener-tag / html-attribute /
+// site-code). False for native / provider-native / empty / absent — where the affordance is hidden.
+check('needsAction: native-only click plan → false', installPlanNeedsAction(nativeClick.install) === false);
+check('needsAction: no install plan → false', installPlanNeedsAction(noPlan.install) === false);
+check('needsAction: undefined install → false', installPlanNeedsAction(undefined) === false);
+check('needsAction: provider-native ("already pushed") → false',
+  installPlanNeedsAction({ requires: [{ kind: 'provider-native', provider: 'site', detail: 'Your site already pushes "add_to_cart".' }], summary: 'Already pushed - nothing to install.' }) === false);
+check('needsAction: listener-tag plan → true', installPlanNeedsAction(formA.install) === true);
+check('needsAction: site-code plan → true', installPlanNeedsAction(purchase.install) === true);
+check('needsAction: mixed native + html-attribute → true', installPlanNeedsAction(attrForm.install) === true);
+// The predicate must be the exact inverse of the runbook's "native-only" categorisation: a native-only
+// plan is exactly the set that prints "No site-side code needed" AND hides the toggle.
+check('needsAction: agrees with runbook native-only (nativeClick omitted from site-side work)',
+  installPlanNeedsAction(nativeClick.install) === false &&
+    suggestionsToInstallRunbookMarkdown([nativeClick], {}).includes("No site-side code needed"));
 
 console.log(`\ntag-template: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

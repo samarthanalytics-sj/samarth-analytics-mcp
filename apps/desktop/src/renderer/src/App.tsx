@@ -29,7 +29,7 @@ import type {
   FormTagVerifyPlanResult,
   SubmitFormVerifyResult,
 } from '../../shared/ipc';
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen } from '../../shared/tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
@@ -1691,8 +1691,10 @@ function SuggestionTemplateTable({
                   {first && (
                     <td rowSpan={rowCount} style={{ ...tplStyles.td, whiteSpace: 'nowrap' }}>
                       {editable ? <GrowCell value={s.page} disabled={creating} onChange={(v) => onEdit(s.id, { page: v })} ariaLabel="Page" /> : <span style={{ color: 'var(--text-dim)' }}>{s.page}</span>}
-                      {/* "How to install" affordance — only when a structured install plan exists (form suggestions). */}
-                      {s.install && (
+                      {/* "How to install" affordance — only when the plan asks the user to add something
+                          site-side (a listener tag / HTML attribute / site code). Hidden for native GTM
+                          triggers (clicks, pageviews) and already-tracked events, where nothing installs. */}
+                      {installPlanNeedsAction(s.install) && (
                         <div>
                           <button
                             type="button"
@@ -1742,7 +1744,7 @@ function SuggestionTemplateTable({
               );
             });
             // One extra full-width row directly AFTER the group when its install panel is expanded.
-            if (s.install && installOpen[s.id]) {
+            if (s.install && installPlanNeedsAction(s.install) && installOpen[s.id]) {
               groupRows.push(
                 <tr key={s.id + ':install'}>
                   <td colSpan={totalCols} style={tplStyles.installTd}>

@@ -357,6 +357,16 @@ function requirementMarkdown(r: NonNullable<SuggestedTagView['install']>['requir
   }
 }
 
+/** Does this install plan ask the user to actually add or create something on their SITE?
+ *  True only when a requirement is a `listener-tag`, `html-attribute`, or `site-code`. A plan that is
+ *  absent, empty, or entirely `native` / `provider-native` ("nothing to install") returns false.
+ *  Single source of truth shared by the runbook's native-only categorisation and the desktop review
+ *  table, which hides its "How to install" affordance when this is false. */
+export function installPlanNeedsAction(install: SuggestedTagView['install'] | undefined): boolean {
+  const reqs = install?.requires ?? [];
+  return reqs.some((r) => r.kind === 'listener-tag' || r.kind === 'html-attribute' || r.kind === 'site-code');
+}
+
 /**
  * The WHOLE scan's measurement plan as a client-ready, GitHub-flavored Markdown "install runbook":
  * per tag the GTM tag/trigger/params to create PLUS the site-side install steps, and a consolidated
@@ -369,11 +379,9 @@ export function suggestionsToInstallRunbookMarkdown(
 ): string {
   // Categorise each tag for the header counts + the "all native" shortcut.
   const reqsOf = (s: SuggestedTagView): NonNullable<SuggestedTagView['install']>['requires'] => s.install?.requires ?? [];
-  const isNativeOnly = (s: SuggestedTagView): boolean => {
-    const reqs = reqsOf(s);
-    // No install plan, or every requirement is a "nothing to install" native/provider-native one.
-    return reqs.length === 0 || reqs.every((r) => r.kind === 'native' || r.kind === 'provider-native');
-  };
+  // "Native-only" = no install plan, or every requirement is a "nothing to install" native/
+  // provider-native one. The inverse of installPlanNeedsAction, kept as one shared rule.
+  const isNativeOnly = (s: SuggestedTagView): boolean => !installPlanNeedsAction(s.install);
   const needsListener = (s: SuggestedTagView): boolean => reqsOf(s).some((r) => r.kind === 'listener-tag');
   const needsSiteCode = (s: SuggestedTagView): boolean => reqsOf(s).some((r) => r.kind === 'site-code');
 
