@@ -27,6 +27,9 @@ export interface PerTagCapture {
   note?: string;
   /** /collect hits captured (and aborted) after this interaction. */
   hits: CapturedHitView[];
+  /** A JPEG data-URI screenshot taken right after the interaction (the driven control ringed) — visual
+   *  proof of what was exercised. Best-effort; absent for un-driven / screenshot-capped tags. */
+  screenshot?: string;
 }
 
 const norm = (s: string | undefined): string => (s ?? '').trim().toLowerCase();
@@ -149,7 +152,17 @@ export function evaluateVerify(
 ): VerifyTagVerdict[] {
   const byId = new Map(captures.map((c) => [c.tagId, c]));
 
-  return tags.map((tag): VerifyTagVerdict => {
+  // Attach the interaction screenshot (if any) to whatever verdict we produce, without threading it
+  // through every return path below.
+  const withShot = (v: VerifyTagVerdict): VerifyTagVerdict => {
+    const shot = byId.get(v.tagId)?.screenshot;
+    return shot ? { ...v, screenshot: shot } : v;
+  };
+  return tags.map((tag): VerifyTagVerdict => withShot(evaluateOne(tag, byId, elements)));
+}
+
+function evaluateOne(tag: VerifyTagInput, byId: Map<string, PerTagCapture>, elements: DetectedElementView[]): VerifyTagVerdict {
+  {
     const cap = byId.get(tag.id);
     const base: VerifyTagVerdict = { tagId: tag.id, tagName: tag.tagName, fired: false };
 
@@ -244,7 +257,7 @@ export function evaluateVerify(
     // pushes stay inconclusive.
     const undecodable = want === 'ad' || cap.kind === 'custom_event';
     return withBeacons({ ...base, ...(undecodable ? { inconclusive: true } : {}), reason: `the interaction ran but no ${want === 'ad' ? 'ad/pixel' : want} beacon fired for this ${tag.platform} tag${observedBeacons.length ? ` (it did beacon to: ${observedBeacons.join(', ')})` : ''}`, interaction });
-  });
+  }
 }
 
 function describeTrigger(t: VerifyTagInput['trigger']): string {

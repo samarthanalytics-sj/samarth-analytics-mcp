@@ -235,6 +235,18 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   check('real pixel-beacon fire → not synthetic', v.fired === true && !v.synthetic);
 }
 
+// ── screenshot (visual proof) threads from the capture onto the verdict ───────────
+{
+  const shot = 'data:image/jpeg;base64,AAAA';
+  const withShot = evaluateVerify([tag()], [cap({ hits: [ga4Hit('cta_click')], screenshot: shot })], els)[0];
+  check('screenshot on the capture → attached to the verdict', withShot.screenshot === shot);
+  const noShot = evaluateVerify([tag()], [cap({ hits: [ga4Hit('cta_click')] })], els)[0];
+  check('no screenshot on the capture → none on the verdict', noShot.screenshot === undefined);
+  // A NOT-fired tag still carries its screenshot (proof the CTA/page was reached).
+  const missShot = evaluateVerify([tag()], [cap({ targetFound: true, performed: true, kind: 'click', hits: [], screenshot: shot })], els)[0];
+  check('not-fired verdict still carries the screenshot', missShot.fired === false && missShot.screenshot === shot);
+}
+
 console.log(`\nverify-tags: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
 if (passed < 24) { console.error(`expected >= 24 checks, got ${passed}`); process.exit(1); }

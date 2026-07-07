@@ -3867,14 +3867,29 @@ function VerifyScorecard({ fired, config, server, untested, issues }: { fired: n
   );
 }
 
+/** A clickable screenshot thumbnail (opens the full image in a lightbox) — the visual proof cell. */
+function ProofThumb({ v, onProof }: { v: VVerdict; onProof: (v: VVerdict) => void }): JSX.Element {
+  if (!v.screenshot) return <span style={styles.muted}>—</span>;
+  return (
+    <button
+      onClick={() => onProof(v)}
+      title="View the screenshot captured for this tag"
+      style={{ padding: 0, border: '1px solid var(--border-2)', borderRadius: 5, cursor: 'zoom-in', lineHeight: 0, background: 'none' }}
+    >
+      <img src={v.screenshot} alt={`Verification screenshot for ${v.tagName}`} style={{ width: 72, height: 46, objectFit: 'cover', objectPosition: 'top', borderRadius: 4, display: 'block' }} />
+    </button>
+  );
+}
+
 /** One table for every informational verdict (fired / config-verified / server-side / untested). */
-function VerifyResultsTable({ rows }: { rows: VVerdict[] }): JSX.Element {
+function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: VVerdict) => void }): JSX.Element {
+  const anyProof = rows.some((v) => v.screenshot);
   return (
     <div style={{ overflowX: 'auto', borderRadius: 10, border: '1px solid var(--border)' }}>
       <table style={vStyles.table}>
         <thead>
           <tr>
-            {['Status', 'Tag', 'Event', 'Fired via', 'Signal'].map((h) => (
+            {['Status', 'Tag', 'Event', 'Fired via', 'Signal', ...(anyProof ? ['Proof'] : [])].map((h) => (
               <th key={h} style={vStyles.th}>{h}</th>
             ))}
           </tr>
@@ -3894,11 +3909,32 @@ function VerifyResultsTable({ rows }: { rows: VVerdict[] }): JSX.Element {
                 <td style={vStyles.td}>{v.event ? <code style={mdStyles.code}>{v.event}</code> : <span style={styles.muted}>—</span>}</td>
                 <td style={{ ...vStyles.td, whiteSpace: 'nowrap' }}><span title={via.label} aria-hidden>{via.icon}</span> {via.label}</td>
                 <td style={{ ...vStyles.td, color: 'var(--text-muted)', fontSize: 12 }}>{signal}</td>
+                {anyProof ? <td style={vStyles.td}><ProofThumb v={v} onProof={onProof} /></td> : null}
               </tr>
             );
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** Full-screen overlay showing one verification screenshot. Click anywhere / Esc closes it. */
+function ProofLightbox({ shot, onClose }: { shot: { src: string; name: string }; onClose: () => void }): JSX.Element {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, cursor: 'zoom-out' }}
+    >
+      <div style={{ color: '#fff', fontSize: 13, marginBottom: 8, fontWeight: 600, maxWidth: '92vw', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        📸 {shot.name} <span style={{ opacity: 0.6, fontWeight: 400 }}>· click anywhere or press Esc to close</span>
+      </div>
+      <img src={shot.src} alt={`Verification screenshot for ${shot.name}`} style={{ maxWidth: '92vw', maxHeight: '84vh', objectFit: 'contain', borderRadius: 8, boxShadow: '0 8px 40px rgba(0,0,0,0.5)' }} />
     </div>
   );
 }
@@ -4173,6 +4209,9 @@ function VerifyPanel({
   const [vShowSkipped, setVShowSkipped] = useState(false);
   const [vShowNet, setVShowNet] = useState(false);
   const [vShowDl, setVShowDl] = useState(false);
+  // The verification screenshot currently shown full-screen (visual proof), or null.
+  const [vLightbox, setVLightbox] = useState<{ src: string; name: string } | null>(null);
+  const showProof = (v: VVerdict): void => { if (v.screenshot) setVLightbox({ src: v.screenshot, name: v.tagName }); };
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   // Bumped whenever a tag-verify runs; the embedded Forms subsection watches it and auto-discovers the
   // site's forms-with-tags in the same pass — so there's ONE action, not a separate "find forms" button.
@@ -4430,7 +4469,7 @@ function VerifyPanel({
 
             {(firedReal.length + firedSynthetic.length + serverRelayed.length + inconclusive.length) > 0 && !vResult.error && (
               <div style={{ marginTop: 12 }}>
-                <VerifyResultsTable rows={[...firedReal, ...firedSynthetic, ...serverRelayed, ...inconclusive]} />
+                <VerifyResultsTable rows={[...firedReal, ...firedSynthetic, ...serverRelayed, ...inconclusive]} onProof={showProof} />
                 {(firedSynthetic.length > 0 || serverRelayed.length > 0 || inconclusive.length > 0) && (
                   <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 8, lineHeight: 1.55, display: 'flex', flexDirection: 'column', gap: 3 }}>
                     {firedSynthetic.length > 0 && <span>⚙ <b style={{ color: 'var(--c-amber)' }}>Config-verified</b> — fired on a synthetic dataLayer push (trigger is wired right), NOT a real submit. Confirm with a real submit in GTM Preview.</span>}
@@ -4448,7 +4487,9 @@ function VerifyPanel({
                   {notFired.map((v) => {
                     const k = verdictKindLabel(v);
                     return (
-                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
+                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                        {v.screenshot ? <div style={{ flexShrink: 0, marginTop: 2 }}><ProofThumb v={v} onProof={showProof} /></div> : null}
+                        <div style={{ flex: 1, minWidth: 0 }}>
                         <div>
                           <span style={{ fontWeight: 600, color: 'var(--c-red)' }}>NOT FIRED</span>{' '}
                           <span title={k.label}>{k.icon}</span> {v.tagName}
@@ -4477,6 +4518,7 @@ function VerifyPanel({
                             )}
                           </div>
                         )}
+                        </div>
                       </li>
                     );
                   })}
@@ -4506,6 +4548,7 @@ function VerifyPanel({
 
         <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} />
       </div>
+      {vLightbox && <ProofLightbox shot={vLightbox} onClose={() => setVLightbox(null)} />}
     </div>
   );
 }

@@ -629,6 +629,9 @@ export interface VerifyTagVerdict {
   suggestedTrigger?: SuggestedTagView['trigger'];
   /** Human-readable description of the proposed fix. */
   fixNote?: string;
+  /** JPEG data-URI screenshot of the page right after this tag's interaction (the driven control
+   *  ringed) — visual proof of what was exercised. Best-effort; absent for un-driven/capped tags. */
+  screenshot?: string;
 }
 
 /** Result of verifying tag firing (suggestions:verifyTags). */
