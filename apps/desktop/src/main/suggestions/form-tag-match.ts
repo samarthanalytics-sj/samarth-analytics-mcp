@@ -30,13 +30,24 @@ function tokens(s: string): Set<string> {
   return new Set(norm.split(' ').filter((t) => t.length > 2 && !STOP.has(t)));
 }
 
-/** The tag's identity text: its resolved form_name if we have it, else the tag name with the GA4
- *  boilerplate ("GA4 - Event - … Form Tag") stripped by the STOP set. */
+/** The tag's FORM identity: its resolved form_name if we have it, else the tag name with the GA4
+ *  boilerplate ("GA4 - Event - … Form Tag") stripped by the STOP set. We deliberately do NOT fold in
+ *  the GA4 event name — it carries generic action words (generate, lead, signup) that produce weak
+ *  cross-form matches. Only fall back to the event name when neither form_name nor tag name yields a
+ *  distinctive token. */
 function tagIdentity(tag: FormTagIdentity): Set<string> {
-  const t = tokens(tag.formName && tag.formName.trim() ? tag.formName : tag.tagName);
-  // The tag's own event name often carries the form identity too (get_in_touch_form).
-  for (const e of tokens(tag.eventName)) t.add(e);
-  return t;
+  const primary = tag.formName && tag.formName.trim() ? tokens(tag.formName) : tokens(tag.tagName);
+  if (primary.size > 0) return primary;
+  return tokens(tag.eventName);
+}
+
+/** True when a custom-event trigger's event name denotes a FORM submission (form_submission,
+ *  form_submit, submit_form …). Scroll/CTA/other custom-event tags (custom_scroll_depth, cta_click)
+ *  are NOT form tags, so they must be excluded before form matching — otherwise they get piled onto a
+ *  form and reported as failing to "fire on submit". Bounded by `_`/ends so "platform_view" is not a
+ *  form event. PURE. */
+export function isFormEventName(eventName: string): boolean {
+  return /(^|_)forms?(_|$)/i.test(eventName ?? '');
 }
 
 /** The form's identity text: its visible title, then formName/id/classes. */
@@ -64,13 +75,18 @@ export function matchFormsToTags(
   const unmatched: string[] = [];
   for (const tag of tags) {
     const tt = tagIdentity(tag);
+    if (tt.size === 0) { unmatched.push(tag.tagName); continue; }
     let bestIdx = -1;
     let bestScore = 0;
     forms.forEach((_f, i) => {
       const sc = shared(tt, formTok[i]);
       if (sc > bestScore) { bestScore = sc; bestIdx = i; }
     });
-    if (bestIdx >= 0 && bestScore >= 1) {
+    // Require FULL coverage of the tag's identity: EVERY distinctive word of the tag's form name must
+    // appear in the form. A single shared generic token ("consultation") is NOT enough — that's what
+    // piled ~18 unrelated Meta tags onto one "Custom Consultation" form. A tag whose form isn't among
+    // the crawled forms falls through to unmatchedTags (a coverage gap), never a false "expected to fire".
+    if (bestIdx >= 0 && bestScore >= tt.size) {
       const f = forms[bestIdx];
       const key = `${f.page}|${f.formId}|${f.title}`;
       let mv = byKey.get(key);

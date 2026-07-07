@@ -22,8 +22,8 @@ import { runVerifyDriver } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify } from './verify-tags';
 import { routeTagsToPages } from './verify-routing';
-import { toFormFillViews, localeOptions, matchFiredContainerTags } from './form-fill-plan';
-import { matchFormsToTags, dedupeSharedFields, type PagedForm, type FormTagIdentity } from './form-tag-match';
+import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
+import { matchFormsToTags, dedupeSharedFields, isFormEventName, type PagedForm, type FormTagIdentity } from './form-tag-match';
 import { snapshotToVerifyInputs } from './container-verify';
 import { localeById } from '../../../../web-audit-mcp/src/agent/form-fill.js';
 import type { RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
@@ -228,7 +228,10 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       if (o.accountId && o.containerId && o.workspaceId) {
         const snap = await data.getGtmContainerSnapshot(o.accountId, o.containerId, o.workspaceId);
         tags = snapshotToVerifyInputs(snap).tags
-          .filter((t) => t.trigger.kind === 'custom_event')
+          // FORM tags only: a custom-event tag whose trigger event denotes a form submit. Excludes
+          // scroll-depth / CTA-click custom-event tags, which otherwise get matched to a form and
+          // wrongly reported as failing to fire on submit.
+          .filter((t) => t.trigger.kind === 'custom_event' && isFormEventName(t.trigger.eventName ?? ''))
           .map((t) => {
             const cd = t.trigger.customEventData;
             return { tagName: t.tagName, eventName: t.eventName, platform: t.platform, ...(cd ? { formName: Object.values(cd)[0] } : {}) };
@@ -295,8 +298,10 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       try {
         const snap = await data.getGtmContainerSnapshot(o.accountId, o.containerId, o.workspaceId);
         const { tags } = snapshotToVerifyInputs(snap);
-        const firedTags = matchFiredContainerTags(res.events, res.beaconPlatforms ?? [], tags.map((t) => ({ tagName: t.tagName, eventName: t.eventName, platform: t.platform })));
-        if (firedTags.length > 0) return { ...res, firedTags };
+        const { firedTags, serverRelayTags } = classifyFiredContainerTags(res.events, res.beaconPlatforms ?? [], tags.map((t) => ({ tagName: t.tagName, eventName: t.eventName, platform: t.platform })));
+        if (firedTags.length > 0 || serverRelayTags.length > 0) {
+          return { ...res, ...(firedTags.length ? { firedTags } : {}), ...(serverRelayTags.length ? { serverRelayTags } : {}) };
+        }
       } catch {
         /* pairing is best-effort — return the raw events without it */
       }

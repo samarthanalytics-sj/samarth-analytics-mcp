@@ -762,6 +762,10 @@ export interface SubmitFormVerifyResult {
   /** The container's ACTUAL tags whose event name matches an observed event — paired when the caller
    *  passed container context. These fired on the REAL submit (a genuine FIRED, not synthetic). */
   firedTags?: Array<{ tagName: string; eventName: string }>;
+  /** Pixel/ad tags that sent NO browser beacon but whose form relayed to a first-party server
+   *  container (server-side / Conversion API) — expected, not a failure. Shown as "server-side", never
+   *  ❌ NOT FIRED. Mirrors VerifyTagVerdict.serverRelay on the synthetic path. */
+  serverRelayTags?: string[];
 }
 
 /* ── Container-tag-driven form verification: crawl → keep only forms that HAVE a tag → one de-duped
