@@ -12,6 +12,7 @@ import { urlAllowed } from '../utils/urlGuard.js';
 import { classifyUrl, parseQuery, MEASUREMENT_GROUPS } from '../agent/browser.js';
 import { CMP_VENDORS, ACCEPT_TEXT_RE, REJECT_TEXT_RE } from '../agent/cmp.js';
 import { analyzeForms, classifyFieldPii, type RawForm, type RawFormField } from '../agent/forms.js';
+import { buildFillPlan, classifyFieldRole, selectorFor, localeById, US_LOCALE } from '../agent/form-fill.js';
 import { sameSite, normalizeUrl, urlPriority } from '../agent/crawler.js';
 import { extractConsentEvents, extractEventNames, type ScenarioCapture } from '../agent/capture.js';
 import {
@@ -138,6 +139,51 @@ check('pii: name by label', classifyFieldPii(field({ label: 'First name' })) ===
 check('pii: dob by label', classifyFieldPii(field({ label: 'Date of birth' })) === 'date_of_birth');
 check('pii: payment by autocomplete', classifyFieldPii(field({ autocomplete: 'cc-number' })) === 'payment');
 check('pii: plain text not pii', classifyFieldPii(field({ name: 'company_size' })) === null);
+
+// ── form-fill: role classification (Option 2 — from the form's OWN fields) ───────────────────────
+check('role: email by type', classifyFieldRole(field({ type: 'email' })) === 'email');
+check('role: phone by autocomplete', classifyFieldRole(field({ autocomplete: 'tel' })) === 'phone');
+check('role: first name → given_name', classifyFieldRole(field({ label: 'First Name' })) === 'given_name');
+check('role: last name → family_name', classifyFieldRole(field({ name: 'last_name' })) === 'family_name');
+check('role: full/your name → full_name', classifyFieldRole(field({ label: 'Your Name' })) === 'full_name');
+check('role: company distinct from name', classifyFieldRole(field({ label: 'Company Name' })) === 'company');
+check('role: city vs state vs postal vs country', classifyFieldRole(field({ name: 'city' })) === 'city'
+  && classifyFieldRole(field({ label: 'State / Province' })) === 'state'
+  && classifyFieldRole(field({ name: 'zip' })) === 'postal'
+  && classifyFieldRole(field({ autocomplete: 'country-name' })) === 'country');
+check('role: textarea → message', classifyFieldRole(field({ tag: 'textarea', type: 'textarea' })) === 'message');
+check('role: subject before message', classifyFieldRole(field({ label: 'Subject' })) === 'subject');
+check('role: a category select → select', classifyFieldRole(field({ tag: 'select', type: 'select-one', name: 'category', options: ['A', 'B'] })) === 'select');
+check('role: privacy checkbox → consent', classifyFieldRole(field({ type: 'checkbox', label: 'I agree to the privacy policy' })) === 'consent');
+check('role: marketing checkbox → marketing_opt_in', classifyFieldRole(field({ type: 'checkbox', label: 'Send me the newsletter' })) === 'marketing_opt_in');
+
+// ── form-fill: plan values (US locale) ───────────────────────────────────────────────────────────
+{
+  const fields: RawFormField[] = [
+    field({ type: 'email', name: 'email', required: true }),
+    field({ label: 'First Name', name: 'fname', required: true }),
+    field({ label: 'Last Name', name: 'lname' }),
+    field({ type: 'tel', name: 'phone' }),
+    field({ tag: 'select', type: 'select-one', name: 'country', options: ['Please select', 'Canada', 'United States', 'Mexico'] }),
+    field({ tag: 'select', type: 'select-one', name: 'category', options: ['-- Choose --', 'Sales', 'Support'] }),
+    field({ tag: 'textarea', type: 'textarea', name: 'message' }),
+    field({ type: 'checkbox', label: 'I accept the terms', name: 'consent', required: true }),
+  ];
+  const plan = buildFillPlan(fields, US_LOCALE, { emailTag: 'run1' });
+  const byName = (n: string): (typeof plan)[number] | undefined => plan.find((p) => p.name === n);
+  check('fill: email is a traceable +tag alias', byName('email')?.value === 'gtm-verify+run1@example.com');
+  check('fill: given/family names split', byName('fname')?.value === 'Gtm' && byName('lname')?.value === 'Verify');
+  check('fill: phone is a reserved US number', /^\+1 202-555-01/.test(byName('phone')?.value ?? ''));
+  check('fill: country select picks the matching real option', byName('country')?.value === 'United States');
+  check('fill: category select skips the placeholder, picks first real option', byName('category')?.value === 'Sales');
+  check('fill: message gets the disclaimer text', /test submission/i.test(byName('message')?.value ?? ''));
+  check('fill: required consent checkbox → checked', byName('consent')?.value === 'true');
+  check('fill: selector is name-based', byName('email')?.selector === '[name="email"]');
+  check('fill: required flag carried through', byName('email')?.required === true && byName('lname')?.required === false);
+  check('fill: options carried onto select rows', (byName('country')?.options ?? []).includes('Mexico'));
+}
+check('fill: unknown locale id falls back to US', localeById('zz').id === 'us');
+check('fill: selectorFor prefers name then id', selectorFor(field({ name: 'x' })) === '[name="x"]' && selectorFor(field({ id: 'y' })) === '#y');
 
 const contactForm = form({
   index: 0,

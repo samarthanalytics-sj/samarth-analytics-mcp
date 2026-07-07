@@ -113,7 +113,7 @@ function fieldOf($: CheerioAPI, el: AnyNode): RawFormField | null {
     if (c.length) label = c.text().trim();
   }
   if (!label) label = $el.attr('aria-label') || '';
-  return {
+  const field: RawFormField = {
     tag,
     type,
     name: $el.attr('name') || '',
@@ -123,6 +123,15 @@ function fieldOf($: CheerioAPI, el: AnyNode): RawFormField | null {
     autocomplete: $el.attr('autocomplete') || '',
     required: $el.attr('required') !== undefined,
   };
+  if (tag === 'select') {
+    const opts: string[] = [];
+    $el.find('option').each((_i, o) => {
+      const t = ($(o).text() || $(o).attr('value') || '').replace(/\s+/g, ' ').trim();
+      if (t) opts.push(t);
+    });
+    if (opts.length) field.options = opts.slice(0, 40);
+  }
+  return field;
 }
 
 function fieldsIn($: CheerioAPI, root: Cheerio<AnyNode>): RawFormField[] {

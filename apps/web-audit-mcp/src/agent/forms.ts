@@ -19,6 +19,10 @@ export interface RawFormField {
   autocomplete: string;
   required: boolean;
   checked?: boolean;
+  /** For a <select> (and later radio groups): the visible option labels, so a "Category"-style field
+   *  can be filled with a REAL option value instead of a made-up string. Capped. Placeholder options
+   *  ("Please select…") are kept as-is; the fill layer skips them when choosing a value. */
+  options?: string[];
 }
 
 export interface RawForm {
@@ -76,7 +80,7 @@ export function extractFormsInPage(): RawForm[] {
       if (closest) label = (closest.textContent || '').trim();
     }
     if (!label) label = el.getAttribute('aria-label') || '';
-    return {
+    const field: RawFormField = {
       tag: el.tagName.toLowerCase(),
       type,
       name: input.name || '',
@@ -87,6 +91,14 @@ export function extractFormsInPage(): RawForm[] {
       required: input.required === true,
       ...(type === 'checkbox' || type === 'radio' ? { checked: input.checked === true } : {}),
     };
+    if (el.tagName === 'SELECT') {
+      const opts = Array.from((el as unknown as HTMLSelectElement).options)
+        .map((o) => (o.textContent || (o as HTMLOptionElement).value || '').replace(/\s+/g, ' ').trim())
+        .filter((t) => t.length > 0)
+        .slice(0, 40);
+      if (opts.length) field.options = opts;
+    }
+    return field;
   };
   const fieldsIn = (root: Element): RawFormField[] => {
     const fields: RawFormField[] = [];
