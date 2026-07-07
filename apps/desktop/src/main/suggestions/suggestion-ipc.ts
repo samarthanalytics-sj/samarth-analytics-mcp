@@ -17,7 +17,7 @@ import { findGa4BaseTag } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult } from '../../shared/ipc';
-import { crawlAndSuggest, scanUrls, urlPriority, contentLikely, type ScanProgress } from './scan-core';
+import { crawlAndSuggest, scanUrls, urlPriority, type ScanProgress } from './scan-core';
 import { runVerifyDriver } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify } from './verify-tags';
@@ -160,24 +160,31 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // didn't supply a scan inventory, crawl the site to locate each CTA's page, then route each
       // click tag there. Best-effort — any crawl failure falls back to single-page driving.
       let pagesCrawled = 0;
+      let pagesTotal = 0;
       const hasClickTags = tagList.some((t) => t.trigger.kind === 'link_click' || t.trigger.kind === 'all_clicks');
       if (els.length === 0 && hasClickTags && o.crawlForPages !== false) {
         try {
-          // Seed the crawl with the sitemap's CONTENT-HUB pages (case-studies/blog/guides/about/team…)
-          // so click CTAs that live there ("Read Full Case Study", "Download Free Checklist", …) are
-          // inventoried — otherwise the form-likely-first BFS spends its budget before reaching them and
-          // those tags stay falsely "untested". Best-effort (no sitemap → plain BFS).
+          // SITEMAP-DRIVEN coverage: enumerate EVERY page the site lists (its sitemap, else a
+          // rendered-link crawl) and scan them so a click CTA on ANY page is inventoried — not just the
+          // homepage + its rendered links. discoverSite returns the pages already prioritized (home →
+          // form-likely → content hub → the rest); crawlAndSuggest seeds them at top priority and scans
+          // up to the budget. A tag whose CTA is on a page beyond the budget stays "untested here" —
+          // surfaced via pagesCrawled / pagesTotal so the coverage is honest. No sitemap (an SPA/landing
+          // page) → few URLs, so it falls back to the plain rendered-link BFS from the start URL.
           let seedUrls: string[] = [];
           try {
             const disc = await discoverSite(target);
-            seedUrls = disc.urls.filter((u) => u !== target && contentLikely(u)).slice(0, 10);
-          } catch { /* sitemap best-effort */ }
-          // With content seeds guaranteed first, a bigger budget covers content hubs + form-likely pages.
-          const maxPages = o.crawlMaxPages ?? (seedUrls.length ? 25 : undefined);
+            seedUrls = disc.urls.filter((u) => u !== target);
+            pagesTotal = disc.urls.length;
+          } catch { /* discovery best-effort — plain BFS below */ }
+          // Scan every discovered page, capped by the budget (crawlAndSuggest clamps to 50). With the
+          // full prioritized page set seeded, the budget is spent on the pages most likely to carry CTAs.
+          const maxPages = o.crawlMaxPages ?? (seedUrls.length ? 50 : undefined);
           const crawlDriver = await makeDriver({ maxPages, maxDepth: o.crawlMaxDepth });
           const scan = await crawlAndSuggest(crawlDriver, target, { maxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'], ...(seedUrls.length ? { seedUrls } : {}) });
           els = scan.inventory.elements as DetectedElementView[];
           pagesCrawled = scan.pages.length;
+          if (!pagesTotal) pagesTotal = pagesCrawled;
         } catch {
           /* crawl is best-effort — fall back to single-page driving */
         }
@@ -190,7 +197,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}), settleMs: clampSettle(o.settleMs), navTimeoutMs: o.navTimeoutMs, ...(o.gtmDebug ? { gtmDebug: true } : {}) },
       );
       const verdicts = evaluateVerify(tagList, driven.perTag, els);
-      return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
+      return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
     },
   );
 

@@ -79,7 +79,10 @@ export interface VerifyDriverTag {
   trigger: DriverTrigger;
 }
 
-const MAX_VERIFY_PAGES = 25;
+// Distinct pages the driver will navigate to drive tags on. Raised for sitemap-driven verification so a
+// container whose click tags spread across many landing pages is covered (the driver only visits pages
+// that actually have a routed tag, so this self-limits — it's a ceiling, not a fixed cost).
+const MAX_VERIFY_PAGES = 40;
 
 /** Resolve a tag's page ("/contact" | "site-wide" | undefined) to a full URL against the base. */
 function resolvePageUrl(baseUrl: string, page: string | undefined): string {
