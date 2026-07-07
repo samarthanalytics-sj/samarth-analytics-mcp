@@ -1,3 +1,9 @@
+## [1.236.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.235.0...v1.236.0) (2026-07-07)
+
+### Features
+
+* **desktop:** one-click 'Create listener tag' from the install panel ([beab731](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/beab73100ce8b883d74531d954de8c524bff57d0))
+
 ## [1.235.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.234.0...v1.235.0) (2026-07-07)
 
 ### Features
