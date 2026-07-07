@@ -17,7 +17,7 @@ import { findGa4BaseTag } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult } from '../../shared/ipc';
-import { crawlAndSuggest, scanUrls, type ScanProgress } from './scan-core';
+import { crawlAndSuggest, scanUrls, urlPriority, type ScanProgress } from './scan-core';
 import { runVerifyDriver } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify } from './verify-tags';
@@ -249,7 +249,12 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     let pagesCrawled = 0;
     try {
       const disc = await discoverSite(target);
-      const pages = [target, ...disc.urls.filter((u) => u !== target)].slice(0, Math.max(1, Math.min(o.maxPages ?? 15, 25)));
+      // Visit the homepage + every FORM-LIKELY page (contact/careers/services/solutions/audit/
+      // consultation/demo…), skipping blog posts & guides — those carry only the shared footer form we
+      // already capture on the homepage. On a large site (many /services/* + /solutions/* landing forms)
+      // a low fixed cap found only the first couple; form-likely-first + a bigger budget covers them all.
+      const formLikely = disc.urls.filter((u) => u !== target && urlPriority(u) === 1);
+      const pages = [target, ...formLikely].slice(0, Math.max(1, Math.min(o.maxPages ?? 40, 60)));
       const driver = await makeDriver({});
       try {
         for (const page of pages) {

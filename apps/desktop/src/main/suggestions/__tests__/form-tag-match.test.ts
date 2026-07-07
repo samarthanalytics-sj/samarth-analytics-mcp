@@ -91,6 +91,21 @@ const tag = (tagName: string, eventName: string, formName?: string): FormTagIden
   check('over-match: CRO/GTM/Stay tags are unmatched (their forms were not found), not piled on', unmatchedTags.length === 3 && unmatchedTags.some((n) => /CRO/.test(n)) && unmatchedTags.some((n) => /GTM Audit/.test(n)) && unmatchedTags.some((n) => /Stay Updated/.test(n)));
 }
 
+// ── page path disambiguates near-identical service forms ─────────────────────────────────────────
+// A bare "Get a Free Audit" form on /services/cro-audits carries {cro, audits} from its URL, so the CRO
+// tag matches it where the visible title alone (just "audit") would not. The Store Audit tag (a different
+// service, not in this page/title) correctly stays unmatched.
+{
+  const forms = [form({ title: 'Get a Free Audit', formId: 'af', page: 'https://site.com/services/cro-audits', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] })];
+  const tags = [
+    tag('Meta - Event - CRO Audit Form Tag', 'cro_audit_form', 'cro_audit'),
+    tag('Meta - Event - Store Audit Form Tag', 'store_audit_form', 'store_audit'),
+  ];
+  const { matched, unmatchedTags } = matchFormsToTags(forms, tags);
+  check('page path: CRO tag matches the audit form on /services/cro-audits', matched.length === 1 && matched[0].expectedTags.length === 1 && /CRO/.test(matched[0].expectedTags[0].tagName));
+  check('page path: a different-service (Store) tag stays unmatched', unmatchedTags.some((n) => /Store/.test(n)));
+}
+
 // ── isFormEventName: only true form-submit custom events count as form tags ───────────────────────
 check('isFormEventName: form_submission → true', isFormEventName('form_submission'));
 check('isFormEventName: submit_form → true', isFormEventName('submit_form'));

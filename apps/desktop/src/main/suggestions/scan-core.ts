@@ -107,7 +107,7 @@ const clamp = (v: number | undefined, dflt: number, cap: number): number =>
 const ASSET_RE =
   /\.(pdf|jpe?g|png|gif|svg|webp|avif|css|js|mjs|ico|zip|gz|rar|mp3|mp4|webm|mov|woff2?|ttf|eot|xml|rss|json)([?#]|$)/i;
 const FORMY_RE =
-  /contact|kontakt|signup|sign-up|register|registr|subscribe|newsletter|demo|quote|enquir|inquir|checkout|cart|book|apply|support|feedback|account|login|audit|consult|estimate|proposal|get-?started|onboard|free-trial|trial|pricing|solution|service|partner|get-in-touch|reach-us|schedule|appointment|callback/i;
+  /contact|kontakt|signup|sign-up|register|registr|subscribe|newsletter|demo|quote|enquir|inquir|checkout|cart|book|apply|career|job|support|feedback|account|login|audit|consult|estimate|proposal|get-?started|onboard|free-trial|trial|pricing|solution|service|partner|get-in-touch|reach-us|schedule|appointment|callback/i;
 
 const stripWww = (host: string): string => host.toLowerCase().replace(/^www\./, '');
 

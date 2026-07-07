@@ -50,10 +50,16 @@ export function isFormEventName(eventName: string): boolean {
   return /(^|_)forms?(_|$)/i.test(eventName ?? '');
 }
 
-/** The form's identity text: its visible title, then formName/id/classes. */
-function formIdentity(form: FormFillView): Set<string> {
+/** The form's identity text: its visible title + form id, PLUS the tokens of the page it lives on.
+ *  The page path disambiguates the many near-identical service/solution landing forms — e.g. a generic
+ *  "Get a Free Audit" form on /services/cro-audits contributes {cro, audits}, so the CRO tag matches it
+ *  where the visible title alone would not. */
+function formIdentity(form: FormFillView & { page?: string }): Set<string> {
   const t = tokens(form.title);
   for (const e of tokens(form.formId)) t.add(e);
+  if (form.page) {
+    try { for (const e of tokens(new URL(form.page).pathname.replace(/[/_-]+/g, ' '))) t.add(e); } catch { /* not a URL */ }
+  }
   return t;
 }
 
