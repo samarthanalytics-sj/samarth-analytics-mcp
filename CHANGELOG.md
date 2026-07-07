@@ -1,3 +1,9 @@
+## [1.223.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.223.0...v1.223.1) (2026-07-07)
+
+### Bug Fixes
+
+* **desktop:** GA4 Monitoring targets are per-account - one mail's properties never show under another ([47d4859](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/47d4859e2f40dc74ec8b750f4198f3ec8b9ece5a))
+
 ## [1.223.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.222.0...v1.223.0) (2026-07-07)
 
 ### Features
