@@ -631,7 +631,6 @@ export function App(): JSX.Element {
   // successful reconnect auto-hides its banner and a cancelled one keeps it (no premature clear).
   const [reauthIds, setReauthIds] = useState<string[]>([]);
   // Inline rename of an account's sidebar label (pencil → input; Enter saves, Escape cancels).
-  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
 
   const active = accounts.find((a) => a.isActive);
 
@@ -705,67 +704,28 @@ export function App(): JSX.Element {
           </div>
         </div>
 
-        <div style={styles.sideLabel}>Accounts</div>
-        <div style={styles.accountList}>
-          {accounts.length === 0 && <div style={styles.sideMuted}>No accounts yet</div>}
-          {accounts.map((a) => (
-            <div
-              key={a.id}
-              style={{ ...styles.acctBtn, ...(a.isActive ? styles.acctBtnActive : {}) }}
-              onClick={() => { if (renaming?.id !== a.id) void run(() => window.desktop.accounts.setActive(a.id)); }}
-              title={a.email}
-            >
-              <span style={{ ...styles.dot, background: a.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
-              {renaming?.id === a.id ? (
-                <input
-                  autoFocus
-                  style={styles.acctRenameInput}
-                  value={renaming.value}
-                  placeholder={a.email}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => setRenaming({ id: a.id, value: e.target.value })}
-                  onKeyDown={(e) => {
-                    // Enter saves; Escape cancels; an empty name restores the Google name/email.
-                    if (e.key === 'Enter') { const v = renaming.value; setRenaming(null); void run(() => window.desktop.accounts.rename(a.id, v)); }
-                    else if (e.key === 'Escape') setRenaming(null);
-                  }}
-                  onBlur={() => { const v = renaming.value; setRenaming(null); void run(() => window.desktop.accounts.rename(a.id, v)); }}
-                />
-              ) : (
-                <>
-                  <span style={styles.acctEmail}>{a.displayName || a.email}</span>
-                  <span
-                    role="button"
-                    aria-label="Rename account"
-                    title="Rename this account"
-                    style={styles.acctEditBtn}
-                    onClick={(e) => { e.stopPropagation(); setRenaming({ id: a.id, value: a.displayName ?? '' }); }}
-                  >
-                    ✏
-                  </span>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {connecting ? (
-          <div style={styles.connectRow}>
-            <button style={{ ...styles.connectBtn, flex: 1, marginTop: 0 }} disabled>
-              Signing in…
-            </button>
-            <button style={styles.cancelBtn} onClick={cancelConnect} title="Cancel sign-in">
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <button style={styles.connectBtn} onClick={connect} disabled={!google?.configured}>
-            + Connect account
-          </button>
-        )}
+        {/* Active account (read-only). Switching, connect, rename and remove all live in Settings →
+            Accounts now, so the sidebar stays a clean shell. Clicking the chip jumps to Settings. */}
+        <button
+          style={styles.activeAcct}
+          onClick={() => setView('settings')}
+          title={active ? `${active.email} — manage accounts in Settings` : 'Add an account in Settings'}
+        >
+          {active ? (
+            <>
+              <span style={{ ...styles.dot, background: active.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
+              <span style={styles.activeAcctName}>{active.displayName || active.email}</span>
+              <span style={styles.activeAcctManage}>Manage ›</span>
+            </>
+          ) : (
+            <span style={styles.sideMuted}>No account · add in Settings</span>
+          )}
+        </button>
         {google && !google.configured && (
           <div style={styles.sideWarn}>OAuth client not set — see Settings.</div>
         )}
+
+        <div style={{ flex: 1 }} />
 
         <div style={styles.sideNav}>
           <button
@@ -860,6 +820,10 @@ export function App(): JSX.Element {
         ) : view === 'settings' ? (
           <SettingsView
             active={active}
+            accounts={accounts}
+            connect={connect}
+            connecting={connecting}
+            cancelConnect={cancelConnect}
             google={google}
             info={info}
             selfTest={selfTest}
@@ -1280,14 +1244,19 @@ function GtmContextBar({
   if (!editing && ctx?.containerId) {
     return (
       <div style={styles.ctxBar}>
-        <span>
-          <span style={{ color: 'var(--text-muted)' }}>Working in: </span>
-          📁 {ctx.accountName} › <b style={{ color: 'var(--text)' }}>{ctx.containerName}</b>
-          {ctx.containerPublicId ? <span style={{ color: 'var(--text-faint)' }}> ({ctx.containerPublicId})</span> : null} ›{' '}
-          <b style={{ color: 'var(--c-blue)' }}>{ctx.workspaceName ?? 'workspace?'}</b>
+        <span style={styles.ctxBreadcrumb}>
+          <span style={styles.ctxMutedLabel}>Working in</span>
+          <span style={styles.ctxCrumb}>📁 {ctx.accountName}</span>
+          <span style={styles.ctxSep}>›</span>
+          {/* The selected container is highlighted in a blue pill so it reads as the active target. */}
+          <span style={styles.ctxContainerPill} title={ctx.containerPublicId ? `${ctx.containerName} (${ctx.containerPublicId})` : ctx.containerName}>
+            {ctx.containerName}{ctx.containerPublicId ? <span style={styles.ctxPillId}> {ctx.containerPublicId}</span> : null}
+          </span>
+          <span style={styles.ctxSep}>›</span>
+          <span style={styles.ctxWorkspacePill}>{ctx.workspaceName ?? 'workspace?'}</span>
         </span>
-        <button style={styles.linkBtn} onClick={() => { setSel(ctx); setEditing(true); }}>
-          change
+        <button style={styles.ctxChangeBtn} onClick={() => { setSel(ctx); setEditing(true); }}>
+          ✎ Change
         </button>
       </div>
     );
@@ -1295,27 +1264,38 @@ function GtmContextBar({
 
   return (
     <div style={styles.ctxBarEdit}>
-      <span style={styles.muted}>Working in:</span>
-      <select style={styles.ctxSelect} value={sel.accountId ?? ''} onChange={(e) => void pickAccount(e.target.value)}>
-        <option value="">Account…</option>
-        {accounts.map((a) => (
-          <option key={a.accountId} value={a.accountId}>{a.name}</option>
-        ))}
-      </select>
-      <select style={styles.ctxSelect} value={sel.containerId ?? ''} disabled={!sel.accountId || loading === 'containers'} onChange={(e) => void pickContainer(e.target.value)}>
-        <option value="">{loading === 'containers' ? 'Loading…' : 'Container…'}</option>
-        {containers.map((c) => (
-          <option key={c.containerId} value={c.containerId}>{c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
-        ))}
-      </select>
-      <select style={styles.ctxSelect} value={sel.workspaceId ?? ''} disabled={!sel.containerId || loading === 'workspaces'} onChange={(e) => pickWorkspace(e.target.value)}>
-        <option value="">{loading === 'workspaces' ? 'Loading…' : 'Workspace…'}</option>
-        {workspaces.map((w) => (
-          <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
-        ))}
-      </select>
-      <button style={styles.ghostBtn} onClick={save} disabled={!sel.containerId}>
-        Use
+      <span style={styles.ctxMutedLabel}>Working in</span>
+      {/* Each dropdown is labelled so it's clear which level you're picking; the container gets a blue
+          "chosen" highlight the moment it's selected, and Workspace unlocks only after a container. */}
+      <label style={styles.ctxField}>
+        <span style={styles.ctxFieldLabel}>Account</span>
+        <select style={{ ...styles.ctxSelect, ...(sel.accountId ? styles.ctxSelectChosen : {}) }} value={sel.accountId ?? ''} onChange={(e) => void pickAccount(e.target.value)}>
+          <option value="">Select account…</option>
+          {accounts.map((a) => (
+            <option key={a.accountId} value={a.accountId}>{a.name}</option>
+          ))}
+        </select>
+      </label>
+      <label style={styles.ctxField}>
+        <span style={styles.ctxFieldLabel}>Container</span>
+        <select style={{ ...styles.ctxSelect, ...(sel.containerId ? styles.ctxSelectChosen : {}) }} value={sel.containerId ?? ''} disabled={!sel.accountId || loading === 'containers'} onChange={(e) => void pickContainer(e.target.value)}>
+          <option value="">{loading === 'containers' ? 'Loading…' : !sel.accountId ? 'Pick an account first' : 'Select container…'}</option>
+          {containers.map((c) => (
+            <option key={c.containerId} value={c.containerId}>{c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
+          ))}
+        </select>
+      </label>
+      <label style={styles.ctxField}>
+        <span style={styles.ctxFieldLabel}>Workspace</span>
+        <select style={{ ...styles.ctxSelect, ...(sel.workspaceId ? styles.ctxSelectChosen : {}) }} value={sel.workspaceId ?? ''} disabled={!sel.containerId || loading === 'workspaces'} onChange={(e) => pickWorkspace(e.target.value)}>
+          <option value="">{loading === 'workspaces' ? 'Loading…' : !sel.containerId ? 'Pick a container first' : 'Select workspace…'}</option>
+          {workspaces.map((w) => (
+            <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
+          ))}
+        </select>
+      </label>
+      <button style={{ ...styles.ctxUseBtn, ...(!sel.containerId ? styles.ctxUseBtnDisabled : {}) }} onClick={save} disabled={!sel.containerId}>
+        ✓ Use this container
       </button>
       {ctx?.containerId && (
         <button style={styles.linkBtn} onClick={() => setEditing(false)}>cancel</button>
@@ -5658,6 +5638,10 @@ function Ga4AuditPanel({
 
 function SettingsView({
   active,
+  accounts,
+  connect,
+  connecting,
+  cancelConnect,
   google,
   info,
   selfTest,
@@ -5666,6 +5650,10 @@ function SettingsView({
   refresh,
 }: {
   active: AccountView | undefined;
+  accounts: AccountView[];
+  connect: () => Promise<void>;
+  connecting: boolean;
+  cancelConnect: () => Promise<void>;
   google: GoogleClientStatus | null;
   info: AppInfo | null;
   selfTest: SecretSelfTest | null;
@@ -5685,6 +5673,9 @@ function SettingsView({
   // Inline rename of the active account's display name (null = viewing; a string = editing that draft).
   // Reuses the same accounts.rename IPC as the sidebar pencil; an empty name restores the Google name/email.
   const [nameDraft, setNameDraft] = useState<string | null>(null);
+  // Inline rename in the Accounts list (id being renamed → draft value); separate from the active-account
+  // Display-name field above so renaming a non-active account doesn't disturb it.
+  const [rowRename, setRowRename] = useState<{ id: string; value: string } | null>(null);
   useEffect(() => {
     window.desktop.providers.status().then(setProvStatus).catch((e) => onError(String(e)));
   }, []);
@@ -5710,6 +5701,64 @@ function SettingsView({
       <section style={styles.card}>
         <h2 style={styles.h2}>Google sign-in (OAuth client)</h2>
         <OAuthClientCard google={google} />
+      </section>
+
+      {/* Accounts — the full switcher + management that used to live in the sidebar. Switch the active
+          account, rename it, disconnect its Google token, remove it, or connect a new one. */}
+      <section style={styles.card}>
+        <h2 style={styles.h2}>Accounts</h2>
+        <p style={styles.settingsSub}>Switch which Google account is active, rename it, or connect another. The active account is used across GTM Tools, GA4 Tools and Chat.</p>
+        <div style={styles.acctRows}>
+          {accounts.length === 0 && <p style={styles.muted}>No accounts yet — connect one below.</p>}
+          {accounts.map((a) => (
+            <div key={a.id} style={{ ...styles.acctRow, ...(a.isActive ? styles.acctRowActive : {}) }}>
+              <span style={{ ...styles.dot, background: a.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
+              {rowRename?.id === a.id ? (
+                <input
+                  autoFocus
+                  style={{ ...styles.input, flex: 1, minWidth: 0 }}
+                  value={rowRename.value}
+                  placeholder={a.email}
+                  aria-label="Account display name"
+                  onChange={(e) => setRowRename({ id: a.id, value: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { const v = rowRename.value.trim(); setRowRename(null); void run(() => window.desktop.accounts.rename(a.id, v)); }
+                    else if (e.key === 'Escape') setRowRename(null);
+                  }}
+                  onBlur={() => { const v = rowRename.value.trim(); setRowRename(null); void run(() => window.desktop.accounts.rename(a.id, v)); }}
+                />
+              ) : (
+                <span style={styles.acctRowName} title={a.email}>
+                  {a.displayName || a.email}
+                  {a.displayName ? <span style={styles.acctRowEmail}> · {a.email}</span> : null}
+                </span>
+              )}
+              {a.isActive ? (
+                <span style={styles.acctActiveBadge}>Active</span>
+              ) : (
+                <button style={styles.acctRowBtn} onClick={() => void run(() => window.desktop.accounts.setActive(a.id))}>Switch</button>
+              )}
+              <button style={styles.acctRowBtn} onClick={() => setRowRename({ id: a.id, value: a.displayName ?? '' })}>Rename</button>
+              {a.hasGoogleToken && (
+                <button style={styles.acctRowBtn} onClick={() => run(() => window.desktop.google.disconnect(a.id))} title="Sign this account out of Google (keeps the account)">Disconnect</button>
+              )}
+              <button style={styles.acctRowBtnDanger} onClick={() => run(() => window.desktop.accounts.remove(a.id))} title="Remove this account entirely">Remove</button>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 12 }}>
+          {connecting ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={styles.connectBtn} disabled>Signing in…</button>
+              <button style={styles.cancelBtn} onClick={cancelConnect} title="Cancel sign-in">Cancel</button>
+            </div>
+          ) : (
+            <button style={styles.connectBtn} onClick={connect} disabled={!google?.configured} title={google?.configured ? 'Connect another Google account' : 'Set the OAuth client above first'}>
+              + Connect account
+            </button>
+          )}
+          {google && !google.configured && <p style={{ ...styles.settingsSub, color: 'var(--c-amber)', marginTop: 8 }}>Set the OAuth client above before connecting an account.</p>}
+        </div>
       </section>
 
       {active ? (
@@ -6022,7 +6071,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     height: '100vh',
     margin: 0,
-    fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+    fontFamily: "'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
     color: 'var(--text)',
     background: 'var(--bg)',
   },
@@ -6047,6 +6096,19 @@ const styles: Record<string, React.CSSProperties> = {
   acctBtnActive: { background: 'var(--surface-3)', border: '1px solid var(--border-2)', color: 'var(--text)' },
   acctEmail: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 },
   acctEditBtn: { flexShrink: 0, fontSize: 12, color: 'var(--text-faint)', padding: '0 2px', cursor: 'pointer', lineHeight: 1 },
+  // Sidebar active-account chip (read-only; click → Settings). Replaces the old accounts list.
+  activeAcct: { display: 'flex', alignItems: 'center', gap: 8, width: '100%', background: 'var(--surface-3)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', color: 'var(--text)', cursor: 'pointer', textAlign: 'left', fontSize: 13 },
+  activeAcctName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 },
+  activeAcctManage: { fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 },
+  // Settings → Accounts list rows.
+  acctRows: { display: 'flex', flexDirection: 'column', gap: 6 },
+  acctRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', flexWrap: 'wrap' },
+  acctRowActive: { borderColor: 'var(--c-green-border)', background: 'var(--c-green-bg)' },
+  acctRowName: { flex: 1, minWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text)', fontWeight: 500 },
+  acctRowEmail: { color: 'var(--text-muted)', fontWeight: 400 },
+  acctActiveBadge: { fontSize: 11, fontWeight: 600, color: 'var(--c-green)', background: 'var(--surface)', border: '1px solid var(--c-green-border)', borderRadius: 20, padding: '2px 10px' },
+  acctRowBtn: { background: 'var(--surface-2)', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
+  acctRowBtnDanger: { background: 'transparent', color: 'var(--c-red)', border: '1px solid var(--c-red-border)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
   acctRenameInput: { flex: 1, minWidth: 0, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '3px 7px', fontSize: 13, fontFamily: 'inherit' },
   connectBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer', marginTop: 8 },
   connectRow: { display: 'flex', gap: 6, marginTop: 8, alignItems: 'stretch' },
@@ -6091,11 +6153,26 @@ const styles: Record<string, React.CSSProperties> = {
   toggle: { display: 'inline-flex', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 9, overflow: 'hidden', padding: 2, gap: 2 },
   toggleBtn: { background: 'transparent', color: 'var(--text-dim)', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', borderRadius: 7 },
   toggleActive: { background: '#2563eb', color: '#fff', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', borderRadius: 7, boxShadow: '0 1px 3px rgba(37,99,235,0.45)' },
-  chatTitle: { fontWeight: 600 },
-  chatSub: { fontSize: 12, color: 'var(--text-faint)', marginTop: 2 },
+  chatTitle: { fontWeight: 600, fontSize: 16, color: 'var(--text)', letterSpacing: -0.2 },
+  chatSub: { fontSize: 12.5, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.5 },
   ctxBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 20px', background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text-dim)' },
-  ctxBarEdit: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' },
-  ctxSelect: { background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '6px 8px', fontSize: 13, maxWidth: 200 },
+  ctxBarEdit: { display: 'flex', alignItems: 'flex-end', gap: 10, padding: '8px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' },
+  ctxSelect: { background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '6px 8px', fontSize: 13, maxWidth: 220 },
+  // Collapsed breadcrumb: the active container reads as a highlighted blue pill; "Change" is a proper button.
+  ctxBreadcrumb: { display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 },
+  ctxMutedLabel: { color: 'var(--text-muted)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 600 },
+  ctxCrumb: { color: 'var(--text-dim)' },
+  ctxSep: { color: 'var(--text-faint)' },
+  ctxContainerPill: { display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--c-blue-bg)', color: 'var(--c-blue)', border: '1px solid var(--c-blue-border)', borderRadius: 20, padding: '2px 10px', fontWeight: 600, fontSize: 12.5 },
+  ctxPillId: { color: 'var(--text-muted)', fontWeight: 400 },
+  ctxWorkspacePill: { display: 'inline-flex', alignItems: 'center', background: 'var(--surface-3)', color: 'var(--text-dim)', border: '1px solid var(--border)', borderRadius: 20, padding: '2px 10px', fontSize: 12.5 },
+  ctxChangeBtn: { display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--surface)', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 7, padding: '4px 12px', fontSize: 12.5, fontWeight: 500, cursor: 'pointer', flexShrink: 0 },
+  // Edit view: labelled fields; the chosen dropdown gets a blue border so progress is obvious.
+  ctxField: { display: 'flex', flexDirection: 'column', gap: 3 },
+  ctxFieldLabel: { fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', fontWeight: 600 },
+  ctxSelectChosen: { borderColor: 'var(--c-blue)', boxShadow: '0 0 0 1px var(--c-blue)' },
+  ctxUseBtn: { background: 'var(--c-blue)', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
+  ctxUseBtnDisabled: { opacity: 0.45, cursor: 'not-allowed' },
   chatLog: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 10 },
   empty: { color: 'var(--text-faint)', textAlign: 'center', maxWidth: 420, margin: '60px auto', lineHeight: 1.6, flexShrink: 0 },
   userMsg: { alignSelf: 'flex-end', background: '#2563eb', color: '#fff', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14 },
@@ -6142,9 +6219,10 @@ const styles: Record<string, React.CSSProperties> = {
 
   settings: { flex: 1, overflowY: 'auto', padding: 24, maxWidth: 720 },
   settingsTitle: { fontSize: 22, fontWeight: 700, margin: '0 0 16px' },
-  settingsSub: { color: 'var(--text-muted)', fontSize: 12.5, margin: '-4px 0 12px', lineHeight: 1.5 },
-  card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 18, marginBottom: 16, flexShrink: 0 },
-  h2: { fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-muted)', margin: '0 0 12px' },
+  settingsSub: { color: 'var(--text-muted)', fontSize: 13, margin: '-2px 0 14px', lineHeight: 1.55 },
+  card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 16, flexShrink: 0 },
+  // Section heading — a real 15px/600 heading (design level) rather than the old tiny all-caps label.
+  h2: { fontSize: 15, fontWeight: 600, letterSpacing: -0.2, color: 'var(--text)', margin: '0 0 12px' },
   kv: { display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border)', fontSize: 14 },
   warn: { background: 'var(--c-amber-bg)', border: '1px solid var(--c-amber-border)', borderRadius: 10, padding: 14, marginBottom: 16, color: 'var(--c-amber)', lineHeight: 1.5 },
   diag: { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px', marginBottom: 16, color: 'var(--text-muted)', fontSize: 12 },
