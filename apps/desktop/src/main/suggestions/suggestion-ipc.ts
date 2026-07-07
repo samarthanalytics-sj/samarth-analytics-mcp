@@ -16,9 +16,10 @@ import type { GoogleDataService } from '../google/data-service';
 import type { ProviderKeyStore } from '../storage/provider-keys';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
-import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult } from '../../shared/ipc';
+import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult } from '../../shared/ipc';
 import { crawlAndSuggest, scanUrls, type ScanProgress } from './scan-core';
 import { runVerifyDriver } from './verify-driver';
+import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify } from './verify-tags';
 import { routeTagsToPages } from './verify-routing';
 import { toFormFillViews, localeOptions } from './form-fill-plan';
@@ -181,6 +182,25 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     const emailTag = `d${Date.now().toString(36)}`;
     const forms = toFormFillViews(rawForms, target, locale.id, emailTag);
     return { url: target, localeId: locale.id, locales: localeOptions(), forms, ...(error ? { error } : {}) };
+  });
+
+  // Phase 2 — REAL submit: fill the operator-reviewed values and submit ONE form for real, then report
+  // the analytics events it fired. The form's POST is delivered (a real submission / lead); analytics
+  // hits are captured+aborted so GA4/ad platforms aren't polluted with a test conversion. Operator-
+  // initiated per submit (the renderer shows an explicit real-lead warning + confirm before calling).
+  ipcMain.handle('suggestions:submitFormAndVerify', async (_e, url: unknown, input: unknown, opts?: SubmitFormVerifyOptions): Promise<SubmitFormVerifyResult> => {
+    const target = String(url ?? '').trim();
+    const verdict = urlAllowed(target, []);
+    if (!verdict.ok) throw new Error(`Cannot submit against that URL: ${verdict.reason}`);
+    const inp = (input && typeof input === 'object' ? input : {}) as { formId?: unknown; formClasses?: unknown; fields?: unknown };
+    const list = (Array.isArray(inp.fields) ? inp.fields : []) as FormSubmitFieldInput[];
+    if (list.length === 0) return { ok: false, injected: false, previewAuth: false, filled: 0, submitted: false, error: 'No fields to submit.', events: [], beacons: [] };
+    const o = opts ?? {};
+    return runFormSubmitDriver(
+      target,
+      { formId: String(inp.formId ?? ''), formClasses: String(inp.formClasses ?? ''), fields: list },
+      { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}) },
+    );
   });
 
   // Streaming variants — push 'suggestions:scan:event' (the RUNNING suggestion list +
