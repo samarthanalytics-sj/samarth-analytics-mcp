@@ -1,3 +1,13 @@
+## [1.256.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.255.0...v1.256.0) (2026-07-07)
+
+### Features
+
+* **desktop:** tint GA4 monitor cards by status and use the real Slack logo ([2bc0d89](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2bc0d898a448239475957ee534603425fd91fc0c))
+
+### Bug Fixes
+
+* **verify:** don't auto-create a container version to verify tags ([d57342a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d57342a15a53d5a2e3aca94e095210044169090b))
+
 ## [1.255.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.254.1...v1.255.0) (2026-07-07)
 
 ### Features
