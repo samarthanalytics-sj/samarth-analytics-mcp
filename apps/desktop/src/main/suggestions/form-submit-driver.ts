@@ -120,23 +120,39 @@ function grantConsentInPage(): void {
  *  touched, so we never fill + submit an unrelated newsletter/search form. Self-contained —
  *  serialized to page.evaluate (DOM globals only, no external refs). */
 function fillAndSubmitInPage(spec: { formId: string; formClasses: string; method: string; fields: FormSubmitFieldInput[] }): { filled: number; submitted: boolean; note?: string } {
+  // React (and Vue/Angular) CONTROLLED inputs track their value through a framework-installed setter,
+  // so a plain `el.value = x` is ignored — on submit the form validates its framework STATE (still
+  // empty for our required fields) and BLOCKS the real submission, so only form_start fires, never
+  // form_submission. Setting through the NATIVE prototype setter + dispatching input makes the
+  // framework's onChange run and update its state, so the real submit proceeds.
+  const nativeSet = (node: Element, value: string): void => {
+    const proto =
+      node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
+      : node instanceof HTMLSelectElement ? HTMLSelectElement.prototype
+      : HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (desc && desc.set) desc.set.call(node, value);
+    else (node as HTMLInputElement).value = value;
+  };
   const setValue = (el: Element, f: FormSubmitFieldInput): void => {
     const tag = el.tagName.toLowerCase();
     if (f.type === 'checkbox' || f.type === 'radio') {
-      (el as HTMLInputElement).checked = f.value === 'true';
+      const box = el as HTMLInputElement;
+      // click() flips it AND fires the framework's onChange (setting .checked directly does not).
+      if (box.checked !== (f.value === 'true')) { try { box.click(); } catch { box.checked = f.value === 'true'; } }
     } else if (tag === 'select') {
       const sel = el as HTMLSelectElement;
       const opt = Array.prototype.slice.call(sel.options).find(
         (o: HTMLOptionElement) => (o.textContent || '').trim() === f.value || o.value === f.value,
       ) as HTMLOptionElement | undefined;
-      if (opt) sel.value = opt.value;
-      else if (f.value) sel.value = f.value;
+      nativeSet(sel, opt ? opt.value : f.value);
     } else {
-      (el as HTMLInputElement).value = f.value;
+      nativeSet(el, f.value);
     }
     try {
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur', { bubbles: true })); // many forms validate on blur (touched)
     } catch { /* older engines */ }
   };
   const fillWithin = (root: ParentNode): number => {
@@ -292,8 +308,9 @@ export async function runFormSubmitDriver(
     } catch (e) {
       outcome = { filled: 0, submitted: false, note: (e instanceof Error ? e.message : String(e)).slice(0, 150) };
     }
-    // Give the AJAX round-trip + the tag time to fire, then settle.
-    await page.waitForTimeout(Math.max(settleMs, 1500));
+    // Give the AJAX round-trip + the success-state dataLayer push (form_submission) + the tag time to
+    // fire, then settle. React forms push the event only after the fetch resolves, so wait generously.
+    await page.waitForTimeout(Math.max(settleMs, 2500));
 
     const hits = captured.slice(before);
     const events = [
