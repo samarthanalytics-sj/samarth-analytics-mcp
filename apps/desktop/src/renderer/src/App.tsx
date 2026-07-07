@@ -1866,10 +1866,7 @@ function GtmToolsView({
       ) : tab === 'audit' ? (
         <ContainerAuditPanel key={(active?.id ?? 'none') + ':aud'} active={active} onError={onError} />
       ) : tab === 'verify' ? (
-        <>
-          <VerifyPanel key={(active?.id ?? 'none') + ':vfy'} active={active} onError={onError} />
-          <FormFillReview key={(active?.id ?? 'none') + ':ffr'} active={active} onError={onError} />
-        </>
+        <VerifyPanel key={(active?.id ?? 'none') + ':vfy'} active={active} onError={onError} />
       ) : (
         <ServerContainerPanel key={(active?.id ?? 'none') + ':srv'} active={active} onError={onError} />
       )}
@@ -3756,16 +3753,16 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
 // ones that HAVE a container form tag, collapse their fields into ONE de-duplicated data-entry set;
 // the operator fills once, then every matched form is submitted for real and each tag is verified (with
 // a fix suggestion when it doesn't fire). Real submits — an explicit warning + confirm gate them.
-function FormFillReview({ active, onError }: { active: AccountView | undefined; onError: (m: string) => void }): JSX.Element {
+// Rendered INSIDE VerifyPanel — shares the same URL + Preview snippet as tag verification (one panel,
+// one URL). This subsection does the container-tag-driven REAL-submit form check.
+function FormFillReview({ url, snippet, active, onError }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void }): JSX.Element {
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
-  const [url, setUrl] = useState('');
   const [localeId, setLocaleId] = useState('us');
   const [locales, setLocales] = useState<Array<{ id: string; label: string }>>([{ id: 'us', label: 'United States' }]);
   const [plan, setPlan] = useState<FormTagVerifyPlanResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const [snippet, setSnippet] = useState('');
   // The ONE shared, de-duplicated data-entry: dedup key → value. Filled once, applied to every form.
   const [shared, setShared] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState(false); // Submit appears once the operator has entered/edited data
@@ -3824,36 +3821,22 @@ function FormFillReview({ active, onError }: { active: AccountView | undefined; 
   const matched = plan?.matched ?? [];
 
   return (
-    <div style={styles.reviewWrap}>
-      <div style={styles.chatHeader}>
-        <div>
-          <div style={styles.chatTitle}>Form tag verification</div>
-          <div style={styles.chatSub}>From your site’s main URL we find the forms that HAVE tracking tags, you fill the data once, then each form is submitted for real and its tag is verified (with a fix when it doesn’t fire).</div>
-        </div>
+    <>
+      <div style={{ ...styles.h2, marginTop: 20 }}>Form tag verification — real submit</div>
+      <div style={{ ...styles.muted, fontSize: 12.5, marginBottom: 6 }}>
+        Using the URL above: find the forms that HAVE a tracking tag, fill the data once, then submit each for real and verify its tag (with a fix when it doesn’t fire). Real submits create a real lead per form.
       </div>
-      <div style={styles.reviewBody}>
-        <div style={styles.card}>
-          <div style={styles.muted}>
-            Container:{' '}
-            {ready ? <b style={{ color: 'var(--text)' }}>{ctx?.accountName} › {ctx?.containerName} › {ctx?.workspaceName ?? 'workspace?'}</b> : <b style={{ color: 'var(--c-amber)' }}>none — pick one in the GTM bar above</b>}
-          </div>
-          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.your-site.com — your site’s main URL (we crawl it for forms)" style={{ ...styles.input, width: '100%', marginTop: 8 }} />
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
-            <label style={{ ...styles.muted, fontSize: 13 }}>Location</label>
-            <select value={localeId} onChange={(e) => setLocaleId(e.target.value)} style={{ ...styles.input, width: 'auto', minWidth: 160 }}>
-              {locales.map((l) => (<option key={l.id} value={l.id}>{l.label}</option>))}
-            </select>
-            <button style={styles.primaryBtn} onClick={() => void fetchPlan()} disabled={loading || !url.trim() || !ready}>
-              {loading ? 'Crawling & matching…' : 'Find forms with tags'}
-            </button>
-          </div>
-          <textarea
-            value={snippet}
-            onChange={(e) => setSnippet(e.target.value)}
-            placeholder="Optional: paste a GTM Preview / Environment snippet (gtm_auth &amp; gtm_preview) to test DRAFT tags. Blank = the live/published container."
-            style={{ ...styles.input, width: '100%', minHeight: 44, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
-          />
-          <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
+      <div style={styles.card}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ ...styles.muted, fontSize: 13 }}>Location</label>
+          <select value={localeId} onChange={(e) => setLocaleId(e.target.value)} style={{ ...styles.input, width: 'auto', minWidth: 160 }}>
+            {locales.map((l) => (<option key={l.id} value={l.id}>{l.label}</option>))}
+          </select>
+          <button style={styles.primaryBtn} onClick={() => void fetchPlan()} disabled={loading || !url.trim() || !ready}>
+            {loading ? 'Crawling & matching…' : 'Find forms with tags'}
+          </button>
+        </div>
+        <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
             US only for now; UK / AUS come later. The test email uses a traceable gtm-verify+…@example.com alias so your CRM can filter these.
           </div>
           {note && (
@@ -3966,8 +3949,7 @@ function FormFillReview({ active, onError }: { active: AccountView | undefined; 
             </ul>
           </div>
         )}
-      </div>
-    </div>
+    </>
   );
 }
 
@@ -3994,6 +3976,11 @@ function VerifyPanel({
   // Event-name aligns applied this session (tagId → new event name), so the row shows "✓ aligned".
   const [aligned, setAligned] = useState<Record<string, string>>({});
   const [aligning, setAligning] = useState<string | null>(null);
+  // The CURRENT editable workspace. "Auto" mints a preview which SUBMITS the workspace (now read-only)
+  // and hands back a fresh one; a later "Align Event Name" write must target THAT, not the stale
+  // context prop (which lags a render behind) — otherwise "Workspace is already submitted".
+  const vWsRef = useRef<string>(ctx?.workspaceId ?? '');
+  useEffect(() => { vWsRef.current = ctx?.workspaceId ?? ''; }, [ctx?.workspaceId]);
 
   function verifyErrorText(e: unknown): string {
     const m = e instanceof Error ? e.message : String(e);
@@ -4044,11 +4031,12 @@ function VerifyPanel({
     setVNote(null);
     onError('');
     try {
-      const { snippet, newWorkspaceId } = await window.desktop.tags.mintPreview(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
+      const { snippet, newWorkspaceId } = await window.desktop.tags.mintPreview(ctx.accountId!, ctx.containerId!, vWsRef.current || ctx.workspaceId!);
       // Minting SUBMITTED the workspace (now read-only) — follow GTM to the fresh editable one it
-      // created, so the user's next edit (chat/panel) doesn't fail "already submitted".
-      if (active && newWorkspaceId && newWorkspaceId !== ctx.workspaceId) {
-        try { await window.desktop.accounts.setGtmContext(active.id, { ...ctx, workspaceId: newWorkspaceId, workspaceName: 'Workspace (auto)' }); } catch { /* best-effort */ }
+      // created, so the user's next edit (align/chat/panel) targets THAT, not the submitted one.
+      if (newWorkspaceId && newWorkspaceId !== (vWsRef.current || ctx.workspaceId)) {
+        vWsRef.current = newWorkspaceId; // used immediately by alignEventName, before the prop catches up
+        if (active) { try { await window.desktop.accounts.setGtmContext(active.id, { ...ctx, workspaceId: newWorkspaceId, workspaceName: 'Workspace (auto)' }); } catch { /* best-effort */ } }
       }
       await runVerify(snippet);
     } catch (e) {
@@ -4065,7 +4053,7 @@ function VerifyPanel({
     setAligning(v.tagId);
     setVNote(null);
     try {
-      await window.desktop.gtm.setTagEventName({ accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!, tagName: v.tagName, eventName });
+      await window.desktop.gtm.setTagEventName({ accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: vWsRef.current || ctx.workspaceId!, tagName: v.tagName, eventName });
       setAligned((a) => ({ ...a, [v.tagId]: eventName }));
       setVNote({ kind: 'info', text: `Set “${v.tagName}” Event Name → ${eventName}. Re-verify to confirm it fires.` });
     } catch (e) {
@@ -4337,6 +4325,8 @@ function VerifyPanel({
             )}
           </div>
         )}
+
+        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} />
       </div>
     </div>
   );
