@@ -25,6 +25,9 @@ const view = (over: Partial<Ga4ExecSummaryView> = {}): Ga4ExecSummaryView => ({
   reliabilityPct: 45,
   reliabilityConfidence: 'Medium confidence',
   reliabilityCappedBy: [],
+  reliabilityWhy: [
+    { metric: 'Smart Bidding optimisation', weightPct: 10, lostPts: 10, verdict: 'unverified', cause: 'consent mode not verified', fix: 'Verify Consent Mode in DebugView / the tag setup once.' },
+  ],
   verdict: 'Action required — fix things.',
   biggestRisk: 'Revenue may be wrong.',
   highestImpactFix: 'Check DebugView.',
@@ -91,6 +94,16 @@ test('reliability colour bands by score (low=red, mid=amber, high=green) via CSS
   assert.ok(execSummaryHtml(view({ reliabilityPct: 20 })).includes('--c-red'));
   assert.ok(execSummaryHtml(view({ reliabilityPct: 50 })).includes('--c-amber'));
   assert.ok(execSummaryHtml(view({ reliabilityPct: 90 })).includes('--c-green'));
+});
+
+test('the hero carries the points-lost receipt: metric, cause, and the recovery action', () => {
+  const h = execSummaryHtml(view());
+  assert.ok(/Why not higher/.test(h), 'receipt eyebrow present');
+  assert.ok(/-10 pts/.test(h), 'points lost shown');
+  assert.ok(/Smart Bidding optimisation/.test(h) && /consent mode not verified/.test(h), 'metric + cause named');
+  assert.ok(/Recover: Verify Consent Mode/.test(h), 'fix line present');
+  const clean = execSummaryHtml(view({ reliabilityWhy: [] }));
+  assert.ok(!/Why not higher/.test(clean), 'no receipt when nothing is lost');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -58,6 +58,20 @@ export function execSummaryHtml(x: Ga4ExecSummaryView): string {
       ((x.reliabilityCappedBy ?? []).length
         ? `<div style="font-family:${MONO};font-size:11.5px;color:${AMBER};margin:10px 0 0">Capped by ${esc(x.reliabilityCappedBy.join(', '))} - a decision-critical metric is unquotable, so the headline cannot read higher.</div>`
         : '') +
+      ((x.reliabilityWhy ?? []).length
+        ? `<div style="margin:12px 0 0;border-top:1px dashed ${BORDER};padding-top:10px">` +
+          `<div style="font-family:${MONO};font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:${FAINT};margin-bottom:6px">Why not higher - the property's verification state, check by check</div>` +
+          x.reliabilityWhy
+            .map(
+              (w) =>
+                `<div style="font-size:12px;color:${MUTED};margin:0 0 7px;line-height:1.5">` +
+                `<span style="font-family:${MONO};color:${AMBER};font-weight:700">-${w.lostPts} pts</span> ` +
+                `<b style="color:${TEXT};font-weight:600">${esc(w.metric)}</b>: ${esc(w.cause)}.<br/>` +
+                `<span style="color:${FAINT}">Recover: ${esc(w.fix)}</span></div>`,
+            )
+            .join('') +
+          `</div>`
+        : '') +
       `<div style="font-size:14px;color:${MUTED};margin:12px 0 0;max-width:64ch"><b style="color:${TEXT};font-weight:600">Overall verdict:</b> ${esc(x.verdict)}</div>` +
       `<div style="font-size:12.5px;color:${MUTED};margin:10px 0 0"><b style="color:${TEXT};font-weight:600">Audit window:</b> ${esc(x.dateRange)}</div>`,
     '26px 26px',

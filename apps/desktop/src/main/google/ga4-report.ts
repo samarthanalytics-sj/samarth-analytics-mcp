@@ -785,6 +785,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
     reliabilityPct: scoreModel.reliabilityPct,
     reliabilityConfidence: scoreModel.reliabilityConfidence,
     reliabilityCappedBy: scoreModel.reliabilityCappedBy,
+    reliabilityWhy: scoreModel.reliabilityWhy,
     verdict: overallVerdict(allFindings, nNotVerified, scoreModel.reliabilityPct, Boolean(growth?.assessed)),
     biggestRisk: top ? firstSentence(top.whyItMatters ?? top.message) : 'No high-severity risk; the ceiling on trust is coverage.',
     highestImpactFix: top ? firstSentence(top.recommendation ?? 'Confirm the unverified areas.') : 'Confirm the unverified areas (consent, ecommerce parameters) before sign-off.',
@@ -1023,6 +1024,13 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   L.push(`**Audit window:** ${auditWindowLabel(dq)}  `);
   L.push(`**Setup completeness:** ${score.composite ?? '—'}/100 (Grade ${score.grade})  `);
   L.push(`**Reporting reliability:** ${score.reliabilityPct}% — ${score.reliabilityConfidence} (how much of this property’s data is safe to quote downstream today)${score.reliabilityCappedBy.length ? ` - capped by ${score.reliabilityCappedBy.join(', ')}` : ''}  `);
+  // The receipt: attribute every missing point to a NAMED gate + its fix, so the number is never
+  // read as the audit's opinion — it is the property's verification state, line by line.
+  if (score.reliabilityWhy.length) {
+    L.push('');
+    L.push(`**Why not higher** — the score reflects this property's verification state, not the audit; every missing point is a named check with a fix:`);
+    for (const w of score.reliabilityWhy) L.push(`- **${w.metric}** (-${w.lostPts} pts of its ${w.weightPct}): ${w.cause}. Fix: ${w.fix}`);
+  }
   L.push(`*These measure different things: the score rates how the property is configured, while reporting reliability rates how much of its data is safe to quote. A well-configured property can still have low reporting reliability when conversion, revenue, or consent checks are unverified.*  `);
   L.push(`**Overall verdict:** ${overallVerdict(allFindings, nNotVerified, score.reliabilityPct, Boolean(growth?.assessed))}  `);
   L.push(`**Biggest risk:** ${top ? firstSentence(top.whyItMatters ?? top.message) : 'No high-severity risk; the ceiling on trust is coverage.'}  `);
