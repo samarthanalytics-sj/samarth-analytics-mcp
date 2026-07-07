@@ -3790,6 +3790,96 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
   return 'Confirm the container is injected (Auto / Preview snippet) and the trigger’s conditions match this page.';
 }
 
+// ── Tag-verification results: scorecard + one results table (replaces the old wall-of-text lists) ──
+type VVerdict = VerifyTagsResult['verdicts'][number];
+type VStatus = 'fired' | 'config' | 'server' | 'untested' | 'issue';
+/** Bucket a verdict into a single status the scorecard + table share. */
+function verdictStatus(v: VVerdict): VStatus {
+  if (v.fired) return v.synthetic ? 'config' : 'fired';
+  if (v.serverRelay) return 'server';
+  if (v.inconclusive) return 'untested';
+  return 'issue';
+}
+// Semantic colour per status — green success, amber caveat, blue server, gray neutral, red error.
+const V_STATUS: Record<VStatus, { short: string; icon: string; color: string; bg: string; border: string }> = {
+  fired: { short: 'Fired', icon: '✅', color: 'var(--c-green)', bg: 'var(--c-green-bg)', border: 'var(--c-green-border)' },
+  config: { short: 'Config OK', icon: '⚙', color: 'var(--c-amber)', bg: 'var(--c-amber-bg)', border: 'var(--c-amber-border)' },
+  server: { short: 'Server-side', icon: '🛰', color: 'var(--c-blue)', bg: 'var(--c-blue-bg)', border: 'var(--c-blue-border)' },
+  untested: { short: 'Untested', icon: '⏭', color: 'var(--text-muted)', bg: 'var(--surface-3)', border: 'var(--border-2)' },
+  issue: { short: 'Issue', icon: '⚠', color: 'var(--c-red)', bg: 'var(--c-red-bg)', border: 'var(--c-red-border)' },
+};
+
+/** The result scorecard — big-number stat cards, one per meaningful outcome. */
+function VerifyScorecard({ fired, config, server, untested, issues }: { fired: number; config: number; server: number; untested: number; issues: number }): JSX.Element {
+  const cards: Array<{ label: string; n: number; s: VStatus }> = [
+    { label: 'Fired', n: fired, s: 'fired' },
+    ...(config ? [{ label: 'Config-verified', n: config, s: 'config' as const }] : []),
+    ...(server ? [{ label: 'Server-side', n: server, s: 'server' as const }] : []),
+    { label: 'Issues', n: issues, s: (issues ? 'issue' : 'fired') as VStatus },
+    ...(untested ? [{ label: 'Untested here', n: untested, s: 'untested' as const }] : []),
+  ];
+  return (
+    <div style={vStyles.scoreGrid}>
+      {cards.map((c) => {
+        const m = V_STATUS[c.s];
+        return (
+          <div key={c.label} style={{ ...vStyles.scoreCard, background: m.bg, borderColor: m.border }}>
+            <div style={{ ...vStyles.scoreNum, color: m.color }}>{c.n}</div>
+            <div style={vStyles.scoreLabel}>{c.label}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** One table for every informational verdict (fired / config-verified / server-side / untested). */
+function VerifyResultsTable({ rows }: { rows: VVerdict[] }): JSX.Element {
+  return (
+    <div style={{ overflowX: 'auto', borderRadius: 10, border: '1px solid var(--border)' }}>
+      <table style={vStyles.table}>
+        <thead>
+          <tr>
+            {['Status', 'Tag', 'Event', 'Fired via', 'Signal'].map((h) => (
+              <th key={h} style={vStyles.th}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((v) => {
+            const st = verdictStatus(v);
+            const m = V_STATUS[st];
+            const via = verdictKindLabel(v);
+            const signal = v.observedBeacons?.length ? v.observedBeacons.join(', ') : v.fired ? 'GA4 hit' : '—';
+            // Keep the per-tag "why / how to verify" guidance on hover so the compact table doesn't lose it.
+            const hint = st === 'untested' ? verdictHowToTest(v) : v.reason ?? '';
+            return (
+              <tr key={v.tagId} title={hint || undefined}>
+                <td style={vStyles.td}><span style={{ ...vStyles.statusPill, color: m.color, background: m.bg, borderColor: m.border }}>{m.icon} {m.short}</span></td>
+                <td style={{ ...vStyles.td, color: 'var(--text)', fontWeight: 500 }}>{v.tagName}</td>
+                <td style={vStyles.td}>{v.event ? <code style={mdStyles.code}>{v.event}</code> : <span style={styles.muted}>—</span>}</td>
+                <td style={{ ...vStyles.td, whiteSpace: 'nowrap' }}><span title={via.label} aria-hidden>{via.icon}</span> {via.label}</td>
+                <td style={{ ...vStyles.td, color: 'var(--text-muted)', fontSize: 12 }}>{signal}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const vStyles: Record<string, React.CSSProperties> = {
+  scoreGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(128px, 1fr))', gap: 10, margin: '12px 0 4px' },
+  scoreCard: { border: '1px solid var(--border)', borderRadius: 12, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 3 },
+  scoreNum: { fontSize: 28, fontWeight: 700, lineHeight: 1.05 },
+  scoreLabel: { fontSize: 13, color: 'var(--text-dim)', fontWeight: 500 },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
+  th: { textAlign: 'left', padding: '9px 12px', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', background: 'var(--surface-2)', borderBottom: '1px solid var(--border-2)', fontWeight: 600, whiteSpace: 'nowrap' },
+  td: { padding: '9px 12px', borderTop: '1px solid var(--border)', color: 'var(--text-dim)', verticalAlign: 'middle' },
+  statusPill: { display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid transparent', borderRadius: 20, padding: '2px 9px', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' },
+};
+
 // Real-submit form review (Phase 1b): fetch a page's forms + their OWN fields (Option 2) and show
 // each with a locale-appropriate, EDITABLE test value + a Location picker. READ-ONLY — nothing is
 // submitted here; the actual submit + tag-firing check is Phase 2.
@@ -4250,11 +4340,11 @@ function VerifyPanel({
                 ⚠ GTM debug: no GTM-XXXX container was detected on the page — the container didn’t load, so nothing could fire. Check the preview snippet / auth, or that the site isn’t blocking googletagmanager.com.
               </div>
             )}
-            <div style={{ fontWeight: 600 }}>
-              {vResult.error
-                ? `Error: ${vResult.error}`
-                : `${firedReal.length} fired${firedSynthetic.length ? ` · ${firedSynthetic.length} config-verified (synthetic, not a real submit)` : ''}${serverRelayed.length ? ` · ${serverRelayed.length} relayed server-side` : ''}${notFired.length ? ` · ${notFired.length} need attention` : ''}${inconclusive.length ? ` · ${inconclusive.length} couldn't be auto-tested here` : ''}`}
-            </div>
+            {vResult.error ? (
+              <div style={{ fontWeight: 600, color: 'var(--c-red)' }}>Error: {vResult.error}</div>
+            ) : (
+              <VerifyScorecard fired={firedReal.length} config={firedSynthetic.length} server={serverRelayed.length} untested={inconclusive.length} issues={notFired.length} />
+            )}
             {vResult.pagesDriven?.length && !vResult.error ? (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
                 Drove across {vResult.pagesDriven.length} page(s)
@@ -4262,14 +4352,6 @@ function VerifyPanel({
                 driven on the page its CTA actually lives on.
               </div>
             ) : null}
-            {inconclusive.length > 0 && !vResult.error && (
-              <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
-                “Couldn’t auto-test here” ≠ broken. Even after crawling, some CTAs weren’t found on any scanned
-                page (behind login, rendered late, or exact label differs), and form tags that key off a specific
-                form can’t be proven by a synthetic event. Those need the CTA’s own page or a real submit in GTM
-                Preview — they may well fire for a real user.
-              </div>
-            )}
             {vResult.gtmDebug && vResult.gtmDebug.containerLoaded && (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
                 GTM debug: container {vResult.gtmDebug.containerIds.join(', ') || 'loaded'} · events seen: {vResult.gtmDebug.dataLayerEvents.slice(0, 12).join(', ') || '—'}
@@ -4305,50 +4387,16 @@ function VerifyPanel({
               );
             })()}
 
-            {firedReal.length > 0 && (
-              <div style={{ marginTop: 10 }}>
-                <div style={{ ...styles.h2, color: 'var(--c-green)' }}>✅ Firing ({firedReal.length})</div>
-                <ul style={styles.resultList}>
-                  {firedReal.map((v) => {
-                    const k = verdictKindLabel(v);
-                    return (
-                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
-                        <span style={{ fontWeight: 600, color: 'var(--c-green)' }}>FIRED</span>{' '}
-                        <span title={k.label}>{k.icon}</span> {v.tagName}
-                        {v.event ? <span style={styles.muted}> — {v.event}</span> : null}
-                        {v.observedBeacons && v.observedBeacons.length > 0 && (
-                          <span style={{ ...styles.muted, marginLeft: 6, fontSize: 12 }}>→ {v.observedBeacons.join(', ')}</span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
-
-            {firedSynthetic.length > 0 && (
+            {(firedReal.length + firedSynthetic.length + serverRelayed.length + inconclusive.length) > 0 && !vResult.error && (
               <div style={{ marginTop: 12 }}>
-                <div style={{ ...styles.h2, color: 'var(--c-amber)' }}>⚙ Config-verified — synthetic event, not a real submit ({firedSynthetic.length})</div>
-                <div style={{ ...styles.muted, fontSize: 12, marginBottom: 4 }}>
-                  The tag + trigger are wired correctly: it fired when we pushed its dataLayer event. But we did
-                  NOT submit the form — so this doesn’t prove the site actually emits that event on a real
-                  submit. Confirm each with a real submit in GTM Preview (real-submit testing is coming here).
-                </div>
-                <ul style={styles.resultList}>
-                  {firedSynthetic.map((v) => {
-                    const k = verdictKindLabel(v);
-                    return (
-                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
-                        <span style={{ fontWeight: 600, color: 'var(--c-amber)' }}>CONFIG OK</span>{' '}
-                        <span title={k.label}>{k.icon}</span> {v.tagName}
-                        {v.event ? <span style={styles.muted}> — {v.event}</span> : null}
-                        {v.observedBeacons && v.observedBeacons.length > 0 && (
-                          <span style={{ ...styles.muted, marginLeft: 6, fontSize: 12 }}>→ {v.observedBeacons.join(', ')}</span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
+                <VerifyResultsTable rows={[...firedReal, ...firedSynthetic, ...serverRelayed, ...inconclusive]} />
+                {(firedSynthetic.length > 0 || serverRelayed.length > 0 || inconclusive.length > 0) && (
+                  <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 8, lineHeight: 1.55, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {firedSynthetic.length > 0 && <span>⚙ <b style={{ color: 'var(--c-amber)' }}>Config-verified</b> — fired on a synthetic dataLayer push (trigger is wired right), NOT a real submit. Confirm with a real submit in GTM Preview.</span>}
+                    {serverRelayed.length > 0 && <span>🛰 <b style={{ color: 'var(--c-blue)' }}>Server-side</b> — no browser beacon, but relayed to your sGTM (normal for Conversion-API destinations).</span>}
+                    {inconclusive.length > 0 && <span>⏭ <b>Untested here</b> ≠ broken — needs the CTA’s own page or a real interaction in GTM Preview.</span>}
+                  </div>
+                )}
               </div>
             )}
 
@@ -4395,61 +4443,6 @@ function VerifyPanel({
               </div>
             )}
 
-            {serverRelayed.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <div style={{ ...styles.h2, color: 'var(--c-blue)' }}>🛰 Relayed server-side ({serverRelayed.length})</div>
-                <div style={{ ...styles.muted, fontSize: 12, marginBottom: 4 }}>
-                  These pixel/ad tags sent NO browser beacon, but the interaction relayed to your first-party
-                  server container (sGTM). That’s the normal shape of a server-side (Conversion API) destination —
-                  the browser never calls the vendor, so a missing browser pixel is expected here, not broken.
-                  Confirm the server leg in sGTM Preview / the vendor’s Events Manager → Test Events.
-                </div>
-                <ul style={styles.resultList}>
-                  {serverRelayed.map((v) => {
-                    const k = verdictKindLabel(v);
-                    return (
-                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
-                        <div>
-                          <span style={{ fontWeight: 600, color: 'var(--c-blue)' }}>SERVER-SIDE</span>{' '}
-                          <span title={k.label}>{k.icon}</span> {v.tagName}
-                        </div>
-                        {v.reason ? <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2 }}>Why: {v.reason}</div> : null}
-                        {v.observedBeacons && v.observedBeacons.length > 0 && (
-                          <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2, fontSize: 12 }}>Relayed to: {v.observedBeacons.join(', ')}</div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
-
-            {inconclusive.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <div style={{ ...styles.h2, color: 'var(--c-amber)' }}>⏭ Couldn’t auto-test here ({inconclusive.length})</div>
-                <div style={{ ...styles.muted, fontSize: 12, marginBottom: 4 }}>
-                  These aren’t broken — the verifier just couldn’t reach them from one page + synthetic events.
-                </div>
-                <ul style={styles.resultList}>
-                  {inconclusive.map((v) => {
-                    const k = verdictKindLabel(v);
-                    return (
-                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
-                        <div>
-                          <span style={{ fontWeight: 600, color: 'var(--c-amber)' }}>UNTESTED HERE</span>{' '}
-                          <span title={k.label}>{k.icon}</span> {v.tagName}
-                        </div>
-                        {v.reason ? <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2 }}>Why: {v.reason}</div> : null}
-                        {v.observedBeacons && v.observedBeacons.length > 0 && (
-                          <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2, fontSize: 12 }}>Beacons seen: {v.observedBeacons.join(', ')}</div>
-                        )}
-                        <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>How to verify: {verdictHowToTest(v)}</div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
           </div>
         )}
 
@@ -6246,7 +6239,7 @@ const styles: Record<string, React.CSSProperties> = {
   toggle: { display: 'inline-flex', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 9, overflow: 'hidden', padding: 2, gap: 2 },
   toggleBtn: { background: 'transparent', color: 'var(--text-dim)', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', borderRadius: 7 },
   toggleActive: { background: '#2563eb', color: '#fff', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', borderRadius: 7, boxShadow: '0 1px 3px rgba(37,99,235,0.45)' },
-  chatTitle: { fontWeight: 600, fontSize: 16, color: 'var(--text)', letterSpacing: -0.2 },
+  chatTitle: { fontWeight: 600, fontSize: 19, color: 'var(--text)', letterSpacing: -0.3 },
   chatSub: { fontSize: 12.5, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.5 },
   ctxBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 20px', background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text-dim)' },
   ctxBarEdit: { display: 'flex', alignItems: 'flex-end', gap: 10, padding: '8px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' },
@@ -6324,9 +6317,9 @@ const styles: Record<string, React.CSSProperties> = {
   select: { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
   input: { flex: 1, minWidth: 120, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
   primaryBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
-  ghostBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
-  toggleOn: { background: '#1d4ed8', color: '#fff', border: '1px solid #2563eb', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
-  toggleOff: { background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
+  ghostBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 10, padding: '9px 14px', fontSize: 13, cursor: 'pointer' },
+  toggleOn: { background: '#1d4ed8', color: '#fff', border: '1px solid #2563eb', borderRadius: 10, padding: '8px 14px', fontSize: 13, cursor: 'pointer' },
+  toggleOff: { background: 'transparent', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 10, padding: '8px 14px', fontSize: 13, cursor: 'pointer' },
   dangerGhost: { background: 'transparent', color: 'var(--c-red)', border: '1px solid var(--c-red-border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
   dangerSolid: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
   resultList: { listStyle: 'none', margin: '12px 0 0', padding: 0 },
