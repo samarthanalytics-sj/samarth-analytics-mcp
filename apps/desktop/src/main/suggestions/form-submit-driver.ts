@@ -25,6 +25,7 @@ interface PwPage {
   goto(url: string, opts?: Record<string, unknown>): Promise<unknown>;
   evaluate<T = unknown>(fn: unknown, arg?: unknown): Promise<T>;
   waitForTimeout(ms: number): Promise<void>;
+  screenshot(opts?: { type?: 'jpeg' | 'png'; quality?: number; fullPage?: boolean; timeout?: number }): Promise<Buffer>;
 }
 interface PwContext {
   route(pattern: string, handler: (route: PwRoute) => unknown): Promise<void>;
@@ -97,6 +98,9 @@ export interface FormSubmitDriverResult {
   beacons: string[];
   /** Distinct beacon VENDORS observed (meta/linkedin/pinterest/…) — pairs pixel/ad tags. */
   beaconPlatforms?: string[];
+  /** JPEG data-URI screenshot of the form after the real submit (the form ringed) — visual proof of
+   *  what was submitted. Best-effort. */
+  screenshot?: string;
 }
 
 /** Grant Consent Mode v2 so consent-gated tags fire (same synthetic override the verify driver uses). */
@@ -166,6 +170,17 @@ function fillAndSubmitInPage(spec: { formId: string; formClasses: string; method
     }
     return n;
   };
+  // Ring the form we're submitting + scroll it into view, so the driver's screenshot is visual proof of
+  // exactly which form was submitted with what values.
+  const ring = (node: Element): void => {
+    try {
+      const h = node as HTMLElement;
+      h.style.setProperty('outline', '3px solid #ff2d55', 'important');
+      h.style.setProperty('outline-offset', '2px', 'important');
+      h.style.setProperty('box-shadow', '0 0 0 4px rgba(255,45,85,0.30)', 'important');
+      h.scrollIntoView({ block: 'center', inline: 'center' });
+    } catch { /* best-effort */ }
+  };
 
   // ── div/JS widget: no <form> — fill within the host + click its submit control. ──
   if (spec.method === 'js') {
@@ -201,6 +216,7 @@ function fillAndSubmitInPage(spec: { formId: string; formClasses: string; method
     }
     if (!btn && ctrls.length === 1) btn = ctrls[0]; // a lone button-like control
     if (!btn) return { filled, submitted: false, note: 'filled the widget but could not find its Submit / Send button' };
+    ring(host);
     try { btn.click(); return { filled, submitted: true }; } catch (e) { return { filled, submitted: false, note: String(e).slice(0, 150) }; }
   }
 
@@ -221,6 +237,7 @@ function fillAndSubmitInPage(spec: { formId: string; formClasses: string; method
   if (!form) return { filled: 0, submitted: false, note: 'could not locate the reviewed form on the page (its fields matched no <form>)' };
   const filled = fillWithin(form);
   if (filled === 0) return { filled, submitted: false, note: 'none of the reviewed fields were found in the form — nothing submitted' };
+  ring(form);
   const fe = form as HTMLFormElement & { requestSubmit?: () => void; checkValidity?: () => boolean };
   // Don't claim "submitted" when the browser will block it: requestSubmit() silently no-ops on an
   // invalid form (a required field we didn't fill), so a green "Submitted" would be a lie.
@@ -312,6 +329,13 @@ export async function runFormSubmitDriver(
     // fire, then settle. React forms push the event only after the fetch resolves, so wait generously.
     await page.waitForTimeout(Math.max(settleMs, 2500));
 
+    // Visual proof of the real submit — the ringed form (+ any success message it now shows).
+    let screenshot: string | undefined;
+    try {
+      const buf = await page.screenshot({ type: 'jpeg', quality: 60, timeout: 4000 });
+      screenshot = `data:image/jpeg;base64,${buf.toString('base64')}`;
+    } catch { /* never fail a submit over a screenshot */ }
+
     const hits = captured.slice(before);
     const events = [
       ...new Set(
@@ -335,6 +359,7 @@ export async function runFormSubmitDriver(
       events,
       beacons,
       beaconPlatforms,
+      ...(screenshot ? { screenshot } : {}),
     };
   } catch (e) {
     return { ...base, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };

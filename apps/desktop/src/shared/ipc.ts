@@ -778,6 +778,9 @@ export interface SubmitFormVerifyResult {
    *  container (server-side / Conversion API) — expected, not a failure. Shown as "server-side", never
    *  ❌ NOT FIRED. Mirrors VerifyTagVerdict.serverRelay on the synthetic path. */
   serverRelayTags?: string[];
+  /** JPEG data-URI screenshot of the form after the real submit (the form ringed) — visual proof of
+   *  what was submitted. Best-effort. */
+  screenshot?: string;
 }
 
 /* ── Container-tag-driven form verification: crawl → keep only forms that HAVE a tag → one de-duped
