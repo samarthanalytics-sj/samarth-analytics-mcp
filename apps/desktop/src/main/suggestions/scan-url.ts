@@ -8,18 +8,26 @@
 import { scanUrls, type PageDriver } from './scan-core';
 import { createElectronDriver } from './electron-driver';
 import { createMultiDriver } from './multi-driver';
+import { makePageCache } from './page-cache';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 import type { TagScanOptions, TagScanResult } from '../../shared/ipc';
 
 export const clampSettle = (ms: number | undefined): number | undefined =>
   ms === undefined || !Number.isFinite(ms) || ms <= 0 ? undefined : Math.min(Math.floor(ms), 10_000);
 
+// One process-wide render cache shared by the verify action's two crawls (see page-cache.ts). Enabled
+// per-driver via makeDriver({ cachePages: true }).
+const sharedPageCache = makePageCache();
+
 /**
  * Build the merged page driver: Electron (always-on) + Cheerio (static HTML, if installed) +
  * Playwright (network-idle JS render, if installed). Optional packages are lazy-imported so a
  * missing one never crashes. Shared by the suggestions IPC and the chat scan tool.
+ *
+ * `cachePages: true` wraps it in the shared page-render cache so the verify action's two crawls render
+ * each page only once (transparent — same DrivenPage data, no logic change).
  */
-export async function makeDriver(opts: TagScanOptions = {}): Promise<PageDriver> {
+export async function makeDriver(opts: TagScanOptions & { cachePages?: boolean } = {}): Promise<PageDriver> {
   const settleMs = clampSettle(opts.settleMs);
   const drivers: PageDriver[] = [createElectronDriver(settleMs !== undefined ? { settleMs } : {})];
   try {
@@ -34,7 +42,8 @@ export async function makeDriver(opts: TagScanOptions = {}): Promise<PageDriver>
   } catch {
     /* playwright not installed — Electron (+Cheerio) still run */
   }
-  return drivers.length === 1 ? drivers[0] : createMultiDriver(drivers);
+  const merged = drivers.length === 1 ? drivers[0] : createMultiDriver(drivers);
+  return opts.cachePages ? sharedPageCache.wrap(merged) : merged;
 }
 
 /**
