@@ -8,7 +8,7 @@
 
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
 import { monitorGa4, firstMetric, noSourceSharePct, type Ga4MonitorInput } from '../google/ga4-monitor';
-import { buildSlackPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
+import { buildSlackPayload, buildSlackDigestPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
 import { withQuotaRetry } from '../google/quota-retry';
 import type { GoogleDataService } from '../google/data-service';
 import type { AccountView, Ga4MonitorConfig, Ga4MonitorRun, Ga4MonitorStatus, Ga4MonitorTarget, Ga4MonitorTargetStatus } from '../../shared/ipc';
@@ -16,7 +16,9 @@ import type { AccountView, Ga4MonitorConfig, Ga4MonitorRun, Ga4MonitorStatus, Ga
 const MIN_INTERVAL_MINUTES = 15; // GA4 realtime + report quota — never hammer the API
 // Each target costs ~7 GA4 API calls per sweep, so the list is capped to keep a 15-min interval sane.
 const MAX_TARGETS = 10;
-const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, targets: [], days: 28, slackEnabled: true, slackLabel: '' };
+const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, targets: [], days: 28, slackEnabled: true, digestEnabled: false, slackLabel: '' };
+// One digest per property per week, posted after a sweep once due.
+const DIGEST_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Per-account secret ref for the DEFAULT Slack webhook (encrypted in the OS keychain). Properties
  *  without their own channel post here. */
@@ -192,6 +194,7 @@ export class Ga4MonitoringService {
         enabled: (t as Ga4MonitorTarget).enabled === undefined ? true : Boolean((t as Ga4MonitorTarget).enabled),
         slackLabel: (t as Ga4MonitorTarget).slackLabel ? String((t as Ga4MonitorTarget).slackLabel).slice(0, 120) : undefined,
         accountId: acct,
+        lastDigestAt: Number.isFinite(Number((t as Ga4MonitorTarget).lastDigestAt)) && Number((t as Ga4MonitorTarget).lastDigestAt) > 0 ? Number((t as Ga4MonitorTarget).lastDigestAt) : undefined,
       });
     }
     // Legacy single-property config ({propertyId, propertyLabel}) → a one-entry list, so an existing
@@ -210,6 +213,7 @@ export class Ga4MonitoringService {
       targets: this.normalizeTargets(c, owner),
       days: Math.min(365, Math.max(1, Math.floor(Number(c?.days) || DEFAULT_CONFIG.days))),
       slackEnabled: c?.slackEnabled === undefined ? true : Boolean(c.slackEnabled),
+      digestEnabled: Boolean(c?.digestEnabled),
       slackLabel: c?.slackLabel ? String(c.slackLabel).slice(0, 120) : '',
     };
   }
@@ -469,6 +473,27 @@ export class Ga4MonitoringService {
         st.lastRun = run;
         this.deps.emit(run);
         runs.push(run);
+
+        // Weekly digest: post THIS property's health to its own channel even when nothing is wrong,
+        // so a silent channel proves the monitor is alive. One per property per 7 days, persisted on
+        // the target so restarts don't re-send; never counted as lastSlackAt (that's alerts only).
+        if (this.config.slackEnabled && this.config.digestEnabled) {
+          const due = !target.lastDigestAt || at - target.lastDigestAt >= DIGEST_EVERY_MS;
+          const webhook = due ? this.webhookForTarget(active.id, target.propertyId) : null;
+          if (due && webhook) {
+            const counts = { pass: 0, warn: 0, fail: 0 };
+            for (const c of result.checks) if (c.status === 'pass' || c.status === 'warn' || c.status === 'fail') counts[c.status]++;
+            const digest = buildSlackDigestPayload(target.propertyLabel || target.propertyId, result, {
+              checksPass: counts.pass, checksWarn: counts.warn, checksFail: counts.fail,
+              openAlerts: result.alerts.length, intervalMinutes: this.config.intervalMinutes,
+            });
+            const sent = await sendSlackWebhook(webhook, digest, { fetchImpl: this.deps.slackFetch });
+            if (sent.ok) {
+              target.lastDigestAt = at;
+              if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
+            }
+          }
+        }
       } catch (e) {
         st.lastError = e instanceof Error ? e.message : String(e);
         sweepError = `${target.propertyLabel || target.propertyId}: ${st.lastError}`;

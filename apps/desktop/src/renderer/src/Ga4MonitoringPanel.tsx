@@ -477,12 +477,18 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       {/* ── Slack alerts: the global on/off switch + the webhook how-to guide. Each property has its
              OWN channel (connect it from the property's tab) — there is no shared default channel. ── */}
       <div style={box}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 600 }}>Slack alerts</span>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-            <input type="checkbox" checked={Boolean(status?.slackEnabled)} disabled={busy} onChange={(e) => void configure({ slackEnabled: e.target.checked })} />
-            Send new issues to Slack
-          </label>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={Boolean(status?.slackEnabled)} disabled={busy} onChange={(e) => void configure({ slackEnabled: e.target.checked })} />
+              Send new issues to Slack
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }} title="Posts each property's health summary to its channel once a week, even when everything is healthy - so a quiet channel proves the monitor is alive.">
+              <input type="checkbox" checked={Boolean(status?.digestEnabled)} disabled={busy || !status?.slackEnabled} onChange={(e) => void configure({ digestEnabled: e.target.checked })} />
+              Weekly health digest
+            </label>
+          </span>
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 8 }}>
           One property, one channel: connect each property's Slack channel from its tab above (<b>＋ Connect channel</b>). How to get a webhook URL for a channel:
