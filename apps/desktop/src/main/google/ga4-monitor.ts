@@ -33,6 +33,9 @@ export interface Ga4MonitorInput {
   /** Unattributed-session share (Unassigned / "(not set)", 0-100) for the PRIOR equal window, so a
    *  RISE vs the current window can flag consent-mode / attribution drift. null = not fetched. */
   priorNoSourceShare: number | null;
+  /** The FIRST underlying error message when queries failed (expired session, lost access, quota).
+   *  When EVERY check ends up skipped, the engine surfaces this instead of reporting "healthy". */
+  fetchError?: string | null;
 }
 
 /** Tunable thresholds for a monitor run. Omitted fields use the defaults below. `minSeverity` filters
@@ -319,6 +322,28 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
     }
   } else if (input.hasEcommerce) {
     checks.push({ id: 'transactions', label: 'Revenue integrity', status: 'skip', detail: 'No purchase data available on this run.' });
+  }
+
+  // ── Access guard: when EVERY check skipped, the property is not "healthy" — it is UNREADABLE.
+  // Reporting healthy here is false assurance (the exact state a broken token or lost property
+  // access produces), so surface the real underlying error as a failed check + a high alert. The
+  // stable id means it Slacks once when access breaks and clears when reading works again.
+  if (checks.length > 0 && checks.every((c) => c.status === 'skip')) {
+    const cause = input.fetchError ? clean(input.fetchError) ?? input.fetchError : null;
+    checks.unshift({
+      id: 'access',
+      label: 'Data access',
+      status: 'fail',
+      detail: cause ? `Every GA4 query failed on this run - ${cause}` : 'Every GA4 query failed on this run (no data could be read).',
+    });
+    pushAlert({
+      id: 'no_access',
+      kind: 'no_data',
+      severity: 'high',
+      title: 'Could not read this property',
+      detail: `${cause ? `GA4 returned an error: ${cause}. ` : ''}Every query failed, so no check could run. Usual causes: the Google session expired, this account lost access to the property, or the API quota is exhausted.`,
+      recommendation: 'Re-connect the Google account (sidebar), confirm it still has access to this GA4 property (GA4 Admin > Property access management), then click Run check again.',
+    });
   }
 
   // Sort alerts worst-first (stable for equal severity → deterministic output and Slack ordering).
