@@ -406,6 +406,10 @@ export function assembleResult(
       ...(pageScans.length > 0 && input.websiteType ? { websiteType: input.websiteType } : {}),
       ...(pageScans.length > 0 && input.ecommerceEvidence?.length ? { ecommerceEvidence: input.ecommerceEvidence } : {}),
     },
+    // The engine SuggestedTag[] flows straight into the view here (same field
+    // names). This is where each suggestion's structured `install` plan rides
+    // along untouched → SuggestedTagView.install → the review panel's "How to
+    // install" panel. (Nothing to map — the assignment carries it as-is.)
     suggestions,
     pages: pageScans.map((p) => ({ page: p.page, forms: p.forms.length, elements: p.elements.length })),
     // The full inventory: every detected element/form (before the engine dedups
