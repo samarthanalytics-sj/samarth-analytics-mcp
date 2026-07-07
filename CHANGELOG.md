@@ -1,3 +1,9 @@
+## [1.235.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.234.0...v1.235.0) (2026-07-07)
+
+### Features
+
+* **desktop:** 'How to install' panel surfaces the measurement install plan ([dd6c0e2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/dd6c0e2419c94d872c73b8af99c2a39eac21ba96)), closes [#383](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/383)
+
 ## [1.234.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.233.0...v1.234.0) (2026-07-07)
 
 ### Features
