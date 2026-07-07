@@ -225,6 +225,79 @@ export function parseGa4CollectHit(input: { url: string; body?: string | null })
   return out;
 }
 
+/** One captured network call, summarised for a DevTools-Network-style log. PURE. */
+export interface DescribedHit {
+  /** meta | ga4 | sgtm | tiktok | linkedin | pinterest | reddit | snapchat | google_ads | hotjar | clarity | bing | twitter | other */
+  vendor: string;
+  /** host + path, e.g. "www.facebook.com/tr" or "sgtm.example.com/g/collect". */
+  endpoint: string;
+  /** Short key params, e.g. "ev=PageView  id=123" or "en=form_submission  tid=G-1". */
+  params: string;
+}
+
+/** Describe a captured analytics call the way DevTools Network would — the vendor, its endpoint, and
+ *  the key params (Meta: ev/id/eid; GA4/sGTM: en/tid). Layer-1 (browser) only; the server-side Meta
+ *  CAPI call to graph.facebook.com never reaches the browser and so never appears here. PURE. */
+export function describeHit(url: string, body?: string | null): DescribedHit {
+  let u: URL;
+  try { u = new URL(url); } catch { return { vendor: 'other', endpoint: url.slice(0, 70), params: '' }; }
+  const host = u.hostname.toLowerCase();
+  const path = u.pathname;
+  const q = u.searchParams;
+  const endpoint = (host + (path && path !== '/' ? path : '')).slice(0, 72);
+
+  const isGaHost = host === 'google-analytics.com' || host.endsWith('.google-analytics.com') || host === 'analytics.google.com';
+  const c = classifyCollector(url);
+
+  let vendor: string;
+  if (c === 'meta' || ((host === 'facebook.com' || host.endsWith('.facebook.com')) && path.startsWith('/tr'))) vendor = 'meta';
+  else if (isGaHost && /\/(g\/)?collect$/.test(path)) vendor = 'ga4';
+  else {
+    // beaconPlatform returns 'server' for a first-party GA4 collect (sGTM), a NAMED pixel vendor, or
+    // 'other:<host>' for anything unrecognised. A named pixel (LinkedIn/Pinterest/…) wins before the
+    // sGTM fallback since several pixels also POST to a /collect path.
+    const bp = beaconPlatform(url);
+    if (bp === 'server') vendor = 'sgtm';
+    else if (bp && bp !== 'other' && !bp.startsWith('other:')) vendor = bp;
+    else if (/\/g\/collect$/.test(path) || (/\/collect$/.test(path) && (q.get('v') === '2' || q.has('tid') || q.has('en')))) vendor = 'sgtm';
+    else vendor = 'other';
+  }
+
+  let params = '';
+  if (vendor === 'meta') {
+    const p: string[] = [];
+    if (q.get('ev')) p.push('ev=' + q.get('ev'));
+    if (q.get('id')) p.push('id=' + q.get('id'));
+    if (q.get('eid')) p.push('eid=' + (q.get('eid') || '').slice(0, 12));
+    params = p.join('  ');
+  } else if (vendor === 'ga4' || vendor === 'sgtm') {
+    const evs = [...new Set(parseGa4CollectHit({ url, body: body ?? null }).map((e) => e.event).filter(Boolean))];
+    const p: string[] = [];
+    if (evs.length) p.push('en=' + evs.join(','));
+    if (q.get('tid')) p.push('tid=' + q.get('tid'));
+    params = p.join('  ');
+  } else {
+    const p: string[] = [];
+    for (const k of ['ev', 'event', 'id', 'pid', 'tid']) { const v = q.get(k); if (v) { p.push(k + '=' + v.slice(0, 18)); if (p.length >= 2) break; } }
+    params = p.join('  ');
+  }
+  return { vendor, endpoint, params };
+}
+
+/** De-duplicated network log from captured hits (one row per vendor+endpoint+params). PURE. */
+export function buildNetworkLog(hits: Array<{ url: string; body?: string | null }>): DescribedHit[] {
+  const seen = new Set<string>();
+  const out: DescribedHit[] = [];
+  for (const h of hits) {
+    const d = describeHit(h.url, h.body);
+    const key = `${d.vendor}|${d.endpoint}|${d.params}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(d);
+  }
+  return out;
+}
+
 // ── synthetic dataLayer payloads (deterministic, contract-driven) ───────────────
 
 /** A single synthetic ecommerce item — valid but obviously fake so a stray real hit is spottable. */

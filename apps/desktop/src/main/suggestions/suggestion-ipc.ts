@@ -179,7 +179,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}), settleMs: clampSettle(o.settleMs), navTimeoutMs: o.navTimeoutMs, ...(o.gtmDebug ? { gtmDebug: true } : {}) },
       );
       const verdicts = evaluateVerify(tagList, driven.perTag, els);
-      return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
+      return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
     },
   );
 

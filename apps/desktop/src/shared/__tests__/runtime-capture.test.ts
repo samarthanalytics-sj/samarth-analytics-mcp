@@ -9,6 +9,8 @@ import {
   isKnownAdPlatform,
   evaluateRuntimeCapture,
   syntheticDataLayerEvent,
+  describeHit,
+  buildNetworkLog,
 } from '../runtime-capture';
 
 let passed = 0;
@@ -163,6 +165,41 @@ check('beaconHost: extracts the host', beaconHost('https://ct.pinterest.com/v3/?
 check('isKnownAdPlatform: linkedin yes, ga4/other no', isKnownAdPlatform('linkedin') && !isKnownAdPlatform('ga4') && !isKnownAdPlatform('other:x'));
 // Distinct platforms → distinct labels: two ad tags on one interaction are attributable, not both "ad".
 check('beacon: LinkedIn ≠ Reddit (per-platform attribution)', beaconPlatform('https://px.ads.linkedin.com/collect') !== beaconPlatform('https://alb.reddit.com/rp.gif'));
+
+// ── describeHit: DevTools-Network-style summary of a captured call ───────────────
+{
+  const meta = describeHit('https://www.facebook.com/tr?id=123&ev=PageView&eid=abc123def456');
+  check('describe: Meta pixel vendor', meta.vendor === 'meta');
+  check('describe: Meta endpoint', meta.endpoint === 'www.facebook.com/tr');
+  check('describe: Meta params (ev + id)', /ev=PageView/.test(meta.params) && /id=123/.test(meta.params));
+}
+{
+  const ga4 = describeHit('https://www.google-analytics.com/g/collect?v=2&tid=G-1&en=form_submission');
+  check('describe: GA4 vendor', ga4.vendor === 'ga4');
+  check('describe: GA4 params (en + tid)', /en=form_submission/.test(ga4.params) && /tid=G-1/.test(ga4.params));
+}
+{
+  // First-party sGTM relay — a /g/collect on a NON-Google host.
+  const s = describeHit('https://sgtm.samarthanalytics.com/g/collect?v=2&tid=G-1&en=form_submission');
+  check('describe: first-party sGTM → vendor sgtm', s.vendor === 'sgtm');
+  check('describe: sGTM endpoint keeps host+path', s.endpoint === 'sgtm.samarthanalytics.com/g/collect');
+}
+{
+  const li = describeHit('https://px.ads.linkedin.com/collect?pid=99');
+  check('describe: LinkedIn vendor', li.vendor === 'linkedin');
+  const other = describeHit('https://site.com/api/leads');
+  check('describe: non-analytics → other', other.vendor === 'other');
+}
+{
+  // buildNetworkLog de-dups identical calls.
+  const log = buildNetworkLog([
+    { url: 'https://www.facebook.com/tr?id=1&ev=Lead' },
+    { url: 'https://www.facebook.com/tr?id=1&ev=Lead' },
+    { url: 'https://sgtm.samarthanalytics.com/g/collect?v=2&tid=G-1&en=x' },
+  ]);
+  check('networkLog: de-dups identical hits', log.length === 2);
+  check('networkLog: keeps distinct vendors', log.some((h) => h.vendor === 'meta') && log.some((h) => h.vendor === 'sgtm'));
+}
 
 console.log(`\nruntime-capture: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
