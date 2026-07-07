@@ -846,5 +846,32 @@ test('anti-lie finding: engagement bimodality across markets -> invalid-traffic 
   assert.ok(!/Suspected invalid traffic/.test(buildGa4AuditReport(input({ baseline: tiny, growth: growthOf(tiny) }))), 'sub-3% low cluster stays a breakdown note');
 });
 
+test('anti-lie finding: PII in landing-page URLs fires HIGH and MASKS the PII in the report', () => {
+  const b = baseline({
+    landingPages: [
+      { page: '/', sessions: 30000, keyEvents: 800, convRate: 0.026, revenue: 120000, engagementRate: 0.6 },
+      { page: '/account?email=jane.doe@example.com', sessions: 420, keyEvents: 10, convRate: 0.02, revenue: 0, engagementRate: 0.5 },
+      { page: '/thanks?phone=%2B919812345678&x=1', sessions: 180, keyEvents: 4, convRate: 0.02, revenue: 0, engagementRate: 0.55 },
+    ],
+  });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(/PII is being sent to GA4 in page URLs/.test(md), 'finding fires');
+  assert.ok(/\| HIGH \| Privacy \| PII is being sent/.test(md), 'HIGH severity in the findings table');
+  assert.ok(!md.includes('jane.doe@example.com'), 'the email itself NEVER appears in the report');
+  assert.ok(!md.includes('919812345678'), 'the phone value never appears in the report');
+  assert.ok(md.includes('***'), 'masked examples shown instead');
+  assert.ok(/600 sessions/.test(md), 'affected sessions quantified (420 + 180)');
+  assert.ok(/data-deletion request/.test(md), 'names the deletion remedy');
+
+  // Clean URLs (incl. harmless ids/gclids) produce nothing.
+  const clean = baseline({
+    landingPages: [
+      { page: '/', sessions: 30000, keyEvents: 800, convRate: 0.026, revenue: 120000, engagementRate: 0.6 },
+      { page: '/pricing?gclid=abc123&utm_campaign=x', sessions: 12000, keyEvents: 720, convRate: 0.06, revenue: 300000, engagementRate: 0.71 },
+    ],
+  });
+  assert.ok(!/PII is being sent/.test(buildGa4AuditReport(input({ baseline: clean, growth: growthOf(clean) }))), 'no finding on clean URLs');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
