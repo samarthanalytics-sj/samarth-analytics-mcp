@@ -1,3 +1,9 @@
+## [1.242.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.241.0...v1.242.0) (2026-07-07)
+
+### Features
+
+* **desktop:** export the install runbook as PDF too ([f330f31](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f330f31a407528eb7d4a1155ec85a3fbe785c223))
+
 ## [1.241.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.240.0...v1.241.0) (2026-07-07)
 
 ### Features
