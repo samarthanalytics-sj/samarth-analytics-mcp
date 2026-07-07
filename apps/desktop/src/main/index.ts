@@ -21,7 +21,7 @@ import { MonitorService } from './services/monitor-service';
 import { registerMonitorIpc } from './ipc/monitor-ipc';
 import { registerSuggestionsIpc } from './suggestions/suggestion-ipc';
 import { registerGtmAuditIpc } from './suggestions/gtm-audit-ipc';
-import { registerGa4AuditIpc } from './google/ga4-audit-ipc';
+import { registerGa4AuditIpc, runGa4AuditPipeline } from './google/ga4-audit-ipc';
 import { Ga4MonitoringService } from './services/ga4-monitoring-service';
 import { registerGa4MonitoringIpc } from './ipc/ga4-monitoring-ipc';
 import type { MonitorAlert, Ga4MonitorRun } from '../shared/ipc';
@@ -205,6 +205,8 @@ app.whenReady().then(() => {
     secrets,
     emit: broadcastGa4Run,
     configPath: join(dataDir, 'ga4-monitor-config.json'),
+    // Weekly scheduled audits reuse the EXACT panel pipeline; the scheduler posts the exec summary.
+    runAudit: (property, days) => runGa4AuditPipeline(dataService, property, days).then((r) => r.exec),
   });
 
   registerIpcHandlers();

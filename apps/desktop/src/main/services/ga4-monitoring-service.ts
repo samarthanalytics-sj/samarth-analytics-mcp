@@ -8,17 +8,19 @@
 
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
 import { monitorGa4, firstMetric, noSourceSharePct, type Ga4MonitorInput } from '../google/ga4-monitor';
-import { buildSlackPayload, buildSlackDigestPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
+import { buildSlackPayload, buildSlackDigestPayload, buildSlackAuditPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
 import { withQuotaRetry } from '../google/quota-retry';
 import type { GoogleDataService } from '../google/data-service';
-import type { AccountView, Ga4MonitorConfig, Ga4MonitorRun, Ga4MonitorStatus, Ga4MonitorTarget, Ga4MonitorTargetStatus } from '../../shared/ipc';
+import type { AccountView, Ga4ExecSummaryView, Ga4MonitorConfig, Ga4MonitorRun, Ga4MonitorStatus, Ga4MonitorTarget, Ga4MonitorTargetStatus } from '../../shared/ipc';
 
 const MIN_INTERVAL_MINUTES = 15; // GA4 realtime + report quota — never hammer the API
 // Each target costs ~7 GA4 API calls per sweep, so the list is capped to keep a 15-min interval sane.
 const MAX_TARGETS = 10;
-const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, targets: [], days: 28, slackEnabled: true, digestEnabled: false, slackLabel: '' };
+const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, targets: [], days: 28, slackEnabled: true, digestEnabled: false, auditEnabled: false, slackLabel: '' };
 // One digest per property per week, posted after a sweep once due.
 const DIGEST_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
+// One FULL audit per property per week (heavy: the whole audit pipeline), run after a sweep once due.
+const AUDIT_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Per-account secret ref for the DEFAULT Slack webhook (encrypted in the OS keychain). Properties
  *  without their own channel post here. */
@@ -114,6 +116,9 @@ export interface Ga4MonitoringDeps {
   configPath?: string;
   /** Injectable fetch for Slack (tests); defaults to the global fetch. */
   slackFetch?: FetchLike;
+  /** Run the FULL audit pipeline for a property (wired to runGa4AuditPipeline in main). Optional so
+   *  tests and older callers work; without it the weekly-audit toggle is inert. */
+  runAudit?: (property: string, days: number) => Promise<Ga4ExecSummaryView>;
 }
 
 /** Per-target runtime state — the alert-dedup memory and latest run live PER PROPERTY so one
@@ -195,6 +200,7 @@ export class Ga4MonitoringService {
         slackLabel: (t as Ga4MonitorTarget).slackLabel ? String((t as Ga4MonitorTarget).slackLabel).slice(0, 120) : undefined,
         accountId: acct,
         lastDigestAt: Number.isFinite(Number((t as Ga4MonitorTarget).lastDigestAt)) && Number((t as Ga4MonitorTarget).lastDigestAt) > 0 ? Number((t as Ga4MonitorTarget).lastDigestAt) : undefined,
+        lastAuditAt: Number.isFinite(Number((t as Ga4MonitorTarget).lastAuditAt)) && Number((t as Ga4MonitorTarget).lastAuditAt) > 0 ? Number((t as Ga4MonitorTarget).lastAuditAt) : undefined,
       });
     }
     // Legacy single-property config ({propertyId, propertyLabel}) → a one-entry list, so an existing
@@ -214,6 +220,7 @@ export class Ga4MonitoringService {
       days: Math.min(365, Math.max(1, Math.floor(Number(c?.days) || DEFAULT_CONFIG.days))),
       slackEnabled: c?.slackEnabled === undefined ? true : Boolean(c.slackEnabled),
       digestEnabled: Boolean(c?.digestEnabled),
+      auditEnabled: Boolean(c?.auditEnabled),
       slackLabel: c?.slackLabel ? String(c.slackLabel).slice(0, 120) : '',
     };
   }
@@ -473,6 +480,28 @@ export class Ga4MonitoringService {
         st.lastRun = run;
         this.deps.emit(run);
         runs.push(run);
+
+        // Weekly scheduled AUDIT: the full audit pipeline, at most once per property per 7 days,
+        // with its executive summary posted to the property's own channel. Runs BEFORE the digest so
+        // a first sweep with both enabled posts audit-then-digest deterministically. lastAuditAt is
+        // persisted even when Slack is off/unconnected - the run happened; do not re-burn the quota.
+        if (this.config.auditEnabled && this.deps.runAudit) {
+          const auditDue = !target.lastAuditAt || at - target.lastAuditAt >= AUDIT_EVERY_MS;
+          if (auditDue) {
+            try {
+              const exec = await this.deps.runAudit(target.propertyId, this.config.days);
+              target.lastAuditAt = at;
+              if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
+              const auditHook = this.config.slackEnabled ? this.webhookForTarget(active.id, target.propertyId) : null;
+              if (auditHook) {
+                await sendSlackWebhook(auditHook, buildSlackAuditPayload(target.propertyLabel || target.propertyId, exec), { fetchImpl: this.deps.slackFetch });
+              }
+            } catch (e) {
+              // A failed audit never breaks the health sweep; it surfaces as the target's lastError.
+              st.lastError = `weekly audit: ${e instanceof Error ? e.message : String(e)}`;
+            }
+          }
+        }
 
         // Weekly digest: post THIS property's health to its own channel even when nothing is wrong,
         // so a silent channel proves the monitor is alive. One per property per 7 days, persisted on

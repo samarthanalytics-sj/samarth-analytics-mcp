@@ -117,6 +117,62 @@ test('weekly digest: posts once per property per 7 days to its own channel, pers
   assert.equal(posts.filter((x) => x.body.includes('Weekly health digest')).length, 2, 'due again after 7 days');
 });
 
+test('weekly scheduled audit: runs once per property per 7 days, posts the exec summary, survives failures', async () => {
+  const secrets = makeSecrets();
+  const posts: string[] = [];
+  const auditCalls: string[] = [];
+  let auditShouldFail = false;
+  let nowMs = Date.parse('2026-07-02T09:00:00Z');
+  const fakeExec = {
+    propertyName: 'Acme', propertyId: '1', auditId: 'GA4-1-20260701', dateRange: 'Jun 4 - Jul 1, 2026 (28 days)',
+    composite: 76, grade: 'B', reliabilityPct: 58, reliabilityConfidence: 'High confidence', reliabilityCappedBy: [],
+    verdict: 'Trustworthy within the verified scope.', biggestRisk: 'None material.', highestImpactFix: 'Enable BigQuery export.',
+    coverage: { checked: 12, partial: 2, notVerified: 2 }, categories: [], trust: [],
+  };
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account },
+    data: fakeData(),
+    secrets,
+    emit: () => {},
+    now: () => nowMs,
+    slackFetch: async (_url, init) => { posts.push(init.body); return { ok: true, status: 200, text: async () => 'ok' }; },
+    runAudit: async (property) => {
+      auditCalls.push(property);
+      if (auditShouldFail) throw new Error('quota exhausted');
+      return fakeExec as never;
+    },
+  });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], slackEnabled: true, enabled: false });
+  svc.setWebhook('https://hooks.slack.com/services/T/B/acme', 'properties/1');
+
+  // OFF by default: sweeps never run the audit.
+  await svc.runOnce();
+  assert.equal(auditCalls.length, 0, 'no audit when disabled');
+
+  // Enabled: the next sweep runs it once and posts the exec summary.
+  svc.configure({ auditEnabled: true });
+  await svc.runOnce();
+  assert.deepEqual(auditCalls, ['properties/1'], 'audit ran for the property');
+  const auditPosts = posts.filter((b) => b.includes('Weekly GA4 audit'));
+  assert.equal(auditPosts.length, 1, 'exec summary posted');
+  assert.ok(auditPosts[0].includes('58%'), 'summary carries the reliability number');
+  assert.ok(auditPosts[0].includes('Biggest risk'), 'summary carries the risk line');
+  assert.equal(svc.status().targetStatuses[0].lastAuditAt, nowMs, 'lastAuditAt persisted');
+
+  // Not due tomorrow; due again after 7 days.
+  nowMs += 24 * 60 * 60 * 1000;
+  await svc.runOnce();
+  assert.equal(auditCalls.length, 1, 'not due after 1 day');
+  nowMs += 6 * 24 * 60 * 60 * 1000;
+  auditShouldFail = true;
+  await svc.runOnce();
+  assert.equal(auditCalls.length, 2, 'due again after 7 days');
+  // A failing audit records the error on the target but never breaks the health sweep.
+  const st = svc.status().targetStatuses[0];
+  assert.ok(/weekly audit: quota exhausted/.test(st.lastError ?? ''), 'audit failure surfaced as lastError');
+  assert.ok(st.lastRun, 'the health check itself still completed');
+});
+
 test('a new issue Slacks once; the same ongoing issue does not re-Slack on the next run', async () => {
   const secrets = makeSecrets();
   const posts: string[] = [];
