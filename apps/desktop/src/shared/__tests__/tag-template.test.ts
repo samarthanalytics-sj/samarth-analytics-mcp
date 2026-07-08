@@ -135,6 +135,10 @@ const getA = base({ id: 'ga', tagName: 'GA4 - Event - Get A Free Audit Click Tag
 const getF = base({ id: 'gf', tagName: 'GA4 - Event - Get Free Audit Click Tag', eventName: 'get_free_audit_click', trigger: { name: 'Get Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Get Free Audit', clickTextOperator: 'equals' } });
 check('dedupe: near-dupes with different events stay separate', dedupeViewsByGtmName([getA, getF]).length === 2);
 
+// The user's report: FOUR byte-identical "Contact Us Click Tag" rows on ONE page → ONE row.
+const cu = (id: string): SuggestedTagView => base({ id, page: '/services/server-side-tracking', tagName: 'GA4 - Event - Contact Us Click Tag', eventName: 'contact_us_click', trigger: { name: 'Contact Us Click Trigger', kind: 'link_click', clickTextValue: 'Contact Us', clickTextOperator: 'equals' } });
+check('dedupe: four byte-identical rows on one page collapse to ONE', dedupeViewsByGtmName([cu('a'), cu('b'), cu('c'), cu('d')]).length === 1);
+
 // ── inline editing: applyTagEdit / applyWhensToTrigger / conditionToOperator ──────────────────
 check('edit: no edit is identity', applyTagEdit(phone, undefined) === phone);
 
