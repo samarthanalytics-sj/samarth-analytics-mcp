@@ -985,9 +985,14 @@ function faqSharedClass(questions: DetectedElement[]): string | null {
   // scope the trigger: it disappears from the open row, so half the clicks wouldn't fire. It can look
   // accordion-ish ("collapsed"/"is-collapsed" match "collaps"), so BOTH picks reject utility/state
   // tokens — leaving a stable structural class (e.g. "acc-tog") for the distinctive fallback.
+  // The token must ALSO be a plain CSS class identifier: a Tailwind arbitrary-variant class like
+  // `[&[data-state=open]>svg]:rotate-180` (Radix/shadcn accordions) is a valid ATTRIBUTE value but NOT a
+  // usable `.class` selector — `.[&…]` throws in querySelector, breaking BOTH the proof-shot locate and
+  // the created GTM tag's {{Click Element}} matchCssSelector. Reject it → fall back to Click-Text-"?" only.
+  const isCssIdent = (t: string): boolean => /^-?[A-Za-z_][A-Za-z0-9_-]*$/.test(t);
   return (
-    shared.find((t) => FAQ_ACCORDION_RE.test(t) && !FAQ_UTILITY_RE.test(t) && !FAQ_STATE_RE.test(t)) ??
-    shared.find((t) => t.length >= 4 && !FAQ_UTILITY_RE.test(t) && !FAQ_GENERIC_CLASS_RE.test(t) && !FAQ_STATE_RE.test(t)) ??
+    shared.find((t) => isCssIdent(t) && FAQ_ACCORDION_RE.test(t) && !FAQ_UTILITY_RE.test(t) && !FAQ_STATE_RE.test(t)) ??
+    shared.find((t) => isCssIdent(t) && t.length >= 4 && !FAQ_UTILITY_RE.test(t) && !FAQ_GENERIC_CLASS_RE.test(t) && !FAQ_STATE_RE.test(t)) ??
     null
   );
 }

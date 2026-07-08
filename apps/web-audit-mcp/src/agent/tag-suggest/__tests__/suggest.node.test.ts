@@ -652,6 +652,16 @@ const noShared = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
 const noSharedFaq = noShared.find((s) => s.eventName === 'faq_click');
 check('faq: no shared class → ONE text-route tag ({{Click Text}} ends with "?" + {{Page Path}}), no per-question tags',
   !!noSharedFaq && noSharedFaq.trigger.clickTextValue === '?' && noSharedFaq.trigger.clickTextOperator === 'endsWith' && noSharedFaq.trigger.pagePathValue === '/x' && !noShared.some((s) => s.trigger.clickTextOperator === 'equals' && /\?$/.test(s.trigger.clickTextValue ?? '')));
+
+// A Tailwind ARBITRARY-VARIANT shared class (Radix/shadcn accordion, e.g. `[&[data-state=open]>svg]:rotate-180`)
+// is NOT a usable `.class` selector — `.[&…]` throws in querySelector, breaking the proof-shot locate AND
+// the created GTM tag's {{Click Element}}. It must be rejected → the tag falls back to Click-Text-"?" only.
+const twFaq = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/faq', kind: 'cta', text: 'Is it valid enough?', intent: 'generic', className: 'flex [&[data-state=open]>svg]:rotate-180' },
+  { page: '/faq', kind: 'cta', text: 'Does it fall back?', intent: 'generic', className: 'grid [&[data-state=open]>svg]:rotate-180' },
+] }).find((s) => s.eventName === 'faq_click');
+check('faq: a Tailwind arbitrary-variant class is NOT used as a CSS selector (falls back to Click-Text-"?" only)',
+  !!twFaq && twFaq.trigger.clickTextValue === '?' && twFaq.trigger.clickTextOperator === 'endsWith' && twFaq.trigger.clickElementValue === undefined && twFaq.trigger.clickElementOperator === undefined);
 // A generic component class (.btn) never scopes the selector — these group via the TEXT route instead
 // (no ".btn, .btn *" page-wide selector).
 const btnQ = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
