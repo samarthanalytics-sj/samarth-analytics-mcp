@@ -1,3 +1,9 @@
+## [1.264.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.263.0...v1.264.0) (2026-07-08)
+
+### Features
+
+* **desktop:** neutral surfaces for the GA4 monitor, color for indicators only ([e50fd07](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e50fd0714e771f1aab20226b3537054f0e52ce9f))
+
 ## [1.263.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.262.0...v1.263.0) (2026-07-08)
 
 ### Features
