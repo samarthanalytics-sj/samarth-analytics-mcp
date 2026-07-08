@@ -1,3 +1,15 @@
+## [1.260.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.0...v1.260.1) (2026-07-08)
+
+### Bug Fixes
+
+* **gtm:** timer trigger interval/limit are top-level fields, not parameter[] ([d0a8609](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d0a8609acf989b2240d9c782c6f26fd7e8f5ecb3))
+
+## [1.260.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.259.0...v1.260.0) (2026-07-07)
+
+### Features
+
+* **verify:** present tag-verify + form-discovery as ONE verify run ([98ebce7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/98ebce74daf5a8d993626f765a2c0446f1cdfbe6)), closes [#425](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/425)
+
 ## [1.259.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.258.0...v1.259.0) (2026-07-07)
 
 ### Features
