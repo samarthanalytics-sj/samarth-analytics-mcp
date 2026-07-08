@@ -842,6 +842,9 @@ export interface SuggestionShotTag {
   id: string;
   /** "/contact" | "site-wide" | undefined — the page whose element this tag would track. */
   page?: string;
+  /** The tag's GA4 event name (e.g. get_your_free_cro_consultation_form) — for a native form_submit tag
+   *  whose trigger carries no form id/class, this is the best source of tokens to locate the right form. */
+  eventName?: string;
   trigger: SuggestionShotTrigger;
 }
 export interface SuggestionShot {
@@ -870,6 +873,24 @@ export function specForShot(t: SuggestionShotTrigger): DriveSpec {
     ...(formId ? { formId, formIdOp: t.formIdOperator } : {}),
     ...(formClasses ? { formClasses, formClassesOp: t.formClassesOperator } : {}),
   };
+}
+
+/** A form locator for a NATIVE form_submit suggestion, so its proof shot rings the on-page <form>.
+ *  Prefers the trigger's {{Form ID}}/{{Form Classes}} scope, else seeds tokens from the tag's GA4 event
+ *  (get_your_free_cro_consultation_form → cro/consultation) so the RIGHT form is picked on multi-form
+ *  pages. ALWAYS returns an object → locateFormInPage's primary-form fallback rings SOME form even when
+ *  nothing token-matches, so a page-scoped form_submit tag always gets a screenshot. */
+export function formLocatorForSubmit(t: SuggestionShotTag): { formId?: string; tokens?: string[] } {
+  const trig = t.trigger;
+  const loc: { formId?: string; tokens?: string[] } = {};
+  if (trig.formIdValue) loc.formId = trig.formIdValue.replace(/^#/, '');
+  // Strip boilerplate + common CTA words so tokens are DISTINCTIVE (cro, consultation), not noise (get,
+  // free) that would add score to unrelated forms.
+  const stop = new Set(['ga4', 'event', 'tag', 'form', 'forms', 'submit', 'submission', 'the', 'of', 'to', 'your', 'our', 'a', 'an', 'get', 'free', 'new', 'now', 'us', 'we']);
+  const src = t.eventName || trig.formClassesValue || '';
+  const tokens = src.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1 && !stop.has(w));
+  if (tokens.length) loc.tokens = tokens;
+  return loc;
 }
 
 /** Re-scroll the currently-ringed element ([data-sx-hl]) back to center. Called right before the shot:
@@ -990,9 +1011,12 @@ export async function runSuggestionScreenshots(
         try {
           if (t.trigger.kind === 'pageview') {
             found = true; // a page-load tag's "location" is the whole page
-          } else if (t.trigger.kind === 'custom_event') {
-            // A custom-event FORM tag → ring its <form>; a non-form custom event has no on-page element.
-            const loc = formLocatorFor(t.trigger as DriverTrigger);
+          } else if (t.trigger.kind === 'custom_event' || t.trigger.kind === 'form_submit') {
+            // Ring the <form> the tag tracks. A native form_submit tag scoped only by page path (empty
+            // form id + a Tailwind class GTM can't use) has NO form scope in its DriveSpec, and
+            // driveInPage's sole-form fallback fails on a 2-form page → no shot. Route it through
+            // locateFormInPage instead (token-scored + primary-form fallback), so it always rings a form.
+            const loc = t.trigger.kind === 'custom_event' ? formLocatorFor(t.trigger as DriverTrigger) : formLocatorForSubmit(t);
             // Poll: a HubSpot/Marketo-style form embed can mount a second or two after load.
             if (loc) found = await waitForLocate(page, locateFormInPage, loc, (r) => Boolean((r as { found?: boolean }).found));
           } else {

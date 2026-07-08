@@ -6,7 +6,7 @@
 // `form_submission` event on the same page, a prior tag's `form_name` must NOT leak into a later
 // tag's evaluation and falsely credit it. The builder blanks prior keys the current tag isn't setting.
 
-import { buildCustomEventPayload, formLocatorFor, specForShot, waitForLocate } from '../verify-driver';
+import { buildCustomEventPayload, formLocatorFor, formLocatorForSubmit, specForShot, waitForLocate } from '../verify-driver';
 
 let passed = 0;
 let failed = 0;
@@ -118,6 +118,24 @@ function check(name: string, ok: boolean, detail?: string): void {
   check('specForShot: clickUrl cssSelector not re-sent as clickUrl', s.clickUrl === undefined);
 }
 
+// ── formLocatorForSubmit: locate the <form> for a NATIVE form_submit tag (page-path-scoped, no form id) ─
+{
+  // A page-scoped consultation form_submit tag: tokens from the GA4 event (get/free/your stripped →
+  // cro, consultation) drive the form match; the primary-form fallback in locateFormInPage catches the rest.
+  const cro = formLocatorForSubmit({ id: 'cro', eventName: 'get_your_free_cro_consultation_form', trigger: { kind: 'form_submit', pagePathValue: '/services/cro-audits' } as never });
+  check('formLocatorForSubmit: tokens from the event name, boilerplate stripped', JSON.stringify(cro.tokens) === JSON.stringify(['cro', 'consultation']));
+  check('formLocatorForSubmit: no form id when the trigger has none', cro.formId === undefined);
+
+  // A form_submit tag WITH a {{Form ID}} scope carries it through (leading # stripped).
+  const byId = formLocatorForSubmit({ id: 'x', eventName: 'contact_form', trigger: { kind: 'form_submit', formIdValue: '#contact-form' } as never });
+  check('formLocatorForSubmit: {{Form ID}} scope carried (# stripped)', byId.formId === 'contact-form');
+
+  // Always returns an object (never null) → locateFormInPage's primary-form fallback always fires, so a
+  // form_submit tag with no id/event tokens still gets a proof shot.
+  const bare = formLocatorForSubmit({ id: 'b', trigger: { kind: 'form_submit' } as never });
+  check('formLocatorForSubmit: never null (always routes to a form locate → primary-form fallback)', typeof bare === 'object' && bare !== null);
+}
+
 // ── waitForLocate: poll a pure in-page locate until found (capture immediately), bounded, never hangs ─
 // (async — kept off the module top level so the transform stays plain ESM; summary runs in .then).
 async function waitForLocateChecks(): Promise<void> {
@@ -152,5 +170,5 @@ async function waitForLocateChecks(): Promise<void> {
 void waitForLocateChecks().then(() => {
   console.log(`\nverify-driver-payload: ${passed} passed, ${failed} failed`);
   if (failed) { console.error(failures.join('\n')); process.exit(1); }
-  if (passed < 31) { console.error(`expected >= 31 checks, got ${passed}`); process.exit(1); }
+  if (passed < 35) { console.error(`expected >= 35 checks, got ${passed}`); process.exit(1); }
 });
