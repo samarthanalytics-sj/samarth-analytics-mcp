@@ -1,3 +1,9 @@
+## [1.261.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.261.0...v1.261.1) (2026-07-08)
+
+### Bug Fixes
+
+* **verify:** honest handling of un-implemented click targets + clearer form-tag "Untested" ([478b653](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/478b653517b3dce01b22f978c4bd49b05a289609))
+
 ## [1.261.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.4...v1.261.0) (2026-07-08)
 
 ### Features
