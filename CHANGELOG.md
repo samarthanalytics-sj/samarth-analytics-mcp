@@ -1,3 +1,9 @@
+## [1.269.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.268.2...v1.269.0) (2026-07-08)
+
+### Features
+
+* **desktop:** live progress card for proof-screenshot capture (n of N + current tag + bar) ([8e2c813](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8e2c813540b598ac1d53c5ad49fb661aa8203c02))
+
 ## [1.268.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.268.1...v1.268.2) (2026-07-08)
 
 ### Bug Fixes
