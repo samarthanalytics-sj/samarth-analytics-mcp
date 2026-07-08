@@ -1,3 +1,9 @@
+## [1.265.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.264.0...v1.265.0) (2026-07-08)
+
+### Features
+
+* **desktop:** readable accent buttons + expandable GA4 monitor checks ([5507e41](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5507e41f7b2234b72635adddb70e5157ef63f2c0))
+
 ## [1.264.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.263.0...v1.264.0) (2026-07-08)
 
 ### Features
