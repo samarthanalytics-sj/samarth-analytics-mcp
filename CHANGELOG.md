@@ -1,3 +1,9 @@
+## [1.269.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.3...v1.269.4) (2026-07-08)
+
+### Bug Fixes
+
+* **suggest:** form tags get a proof shot; don't waste the shot budget on deduped rows ([3471870](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3471870e9af6172d37c917f97dd8f92cc0fd6947))
+
 ## [1.269.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.2...v1.269.3) (2026-07-08)
 
 ### Bug Fixes
