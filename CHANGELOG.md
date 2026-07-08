@@ -1,3 +1,9 @@
+## [1.268.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.268.0...v1.268.1) (2026-07-08)
+
+### Bug Fixes
+
+* **suggest:** collapse same-destination CTAs into one tag (kill perceived duplicates) ([4c8cd66](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4c8cd667534f5a9195b43e62f58025987c280717))
+
 ## [1.268.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.267.1...v1.268.0) (2026-07-08)
 
 ### Features
