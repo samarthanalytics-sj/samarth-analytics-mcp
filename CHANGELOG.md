@@ -1,3 +1,9 @@
+## [1.268.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.268.1...v1.268.2) (2026-07-08)
+
+### Bug Fixes
+
+* **suggest:** render the de-duplicated list only when the scan finishes; show live progress ([8755af5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8755af5b00dc6eed4e7e812dca124dc97dc955e1))
+
 ## [1.268.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.268.0...v1.268.1) (2026-07-08)
 
 ### Bug Fixes
