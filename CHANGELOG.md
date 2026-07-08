@@ -1,3 +1,9 @@
+## [1.269.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.0...v1.269.1) (2026-07-08)
+
+### Bug Fixes
+
+* **suggest:** don't flag price+payment sites as ecommerce; reveal footer email in proof shot ([64b2290](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/64b2290643abb57bb90daffbfe97510aab229c6d))
+
 ## [1.269.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.268.2...v1.269.0) (2026-07-08)
 
 ### Features
