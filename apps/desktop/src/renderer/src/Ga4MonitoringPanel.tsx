@@ -20,19 +20,19 @@ const HEALTH: Record<string, { color: string; bg: string; label: string; icon: s
   warning: { color: 'var(--c-amber, #b8860b)', bg: 'var(--c-amber-bg, rgba(245,158,11,.14))', label: 'Warning', icon: '🟠' },
   healthy: { color: 'var(--c-green)', bg: 'var(--c-green-bg, rgba(34,197,94,.12))', label: 'Healthy', icon: '🟢' },
 };
-const CHECK_PILL: Record<string, { label: string; color: string; bg: string; icon: string }> = {
-  pass: { label: 'Pass', color: 'var(--c-green)', bg: 'var(--c-green-bg, rgba(34,197,94,.12))', icon: '✓' },
-  warn: { label: 'Warning', color: 'var(--c-amber, #b8860b)', bg: 'var(--c-amber-bg, rgba(245,158,11,.14))', icon: '!' },
-  fail: { label: 'Issue', color: 'var(--c-red)', bg: 'var(--c-red-bg, rgba(239,68,68,.12))', icon: '✕' },
-  skip: { label: 'Not run', color: 'var(--text-muted)', bg: 'var(--surface-3)', icon: '–' },
+const CHECK_PILL: Record<string, { label: string; color: string }> = {
+  pass: { label: 'Pass', color: 'var(--c-green)' },
+  warn: { label: 'Warning', color: 'var(--c-amber, #b8860b)' },
+  fail: { label: 'Issue', color: 'var(--c-red)' },
+  skip: { label: 'Not run', color: 'var(--text-muted)' },
 };
-/** Card fill tones for the KPI + health tiles — the status colour plus its subtle background wash,
- *  so a card reads green / amber / red at a glance. `neutral` keeps the plain surface. */
-const TONE: Record<'red' | 'amber' | 'green' | 'neutral', { color: string; bg: string }> = {
-  red: { color: 'var(--c-red)', bg: 'var(--c-red-bg, rgba(239,68,68,.12))' },
-  amber: { color: 'var(--c-amber, #b8860b)', bg: 'var(--c-amber-bg, rgba(245,158,11,.14))' },
-  green: { color: 'var(--c-green)', bg: 'var(--c-green-bg, rgba(34,197,94,.12))' },
-  neutral: { color: 'var(--text)', bg: 'var(--surface-2)' },
+/** Status tone for a KPI tile — colours the big number and the thin left accent border.
+ *  `neutral` has no status (border falls back to the default). */
+const TONE: Record<'red' | 'amber' | 'green' | 'neutral', { color: string }> = {
+  red: { color: 'var(--c-red)' },
+  amber: { color: 'var(--c-amber, #b8860b)' },
+  green: { color: 'var(--c-green)' },
+  neutral: { color: 'var(--text)' },
 };
 
 /** The Slack mark (official four-colour logo), inlined as SVG so it renders crisply at any size and
@@ -47,6 +47,28 @@ function SlackMark({ size = 15 }: { size?: number }): JSX.Element {
     </svg>
   );
 }
+
+/** A monochrome line icon per health-check TYPE (keyed by the engine's check id), so each row is
+ *  scannable by category at a glance. Drawn with currentColor — the caller sets the (status) colour. */
+const CHECK_ICON: Record<string, JSX.Element> = {
+  data_flow: <><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>,
+  events: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1.5" /></>,
+  trend: <><path d="M3 17l6-6 4 4 8-8" /><path d="M17 7h4v4" /></>,
+  growth: <><path d="M4 20h16" /><path d="M7 20v-5" /><path d="M12 20v-10" /><path d="M17 20v-3" /></>,
+  data_quality: <><path d="M4 4h16l-6.5 8v6l-3 2v-8z" /></>,
+  consent_drift: <><path d="M12 2l8 3v6c0 5-3.4 8-8 10-4.6-2-8-5-8-10V5z" /><path d="M9 12l2 2 4-4" /></>,
+  transactions: <><path d="M12 2v20" /><path d="M17 6H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" /></>,
+  access: <><circle cx="7.5" cy="15.5" r="4.5" /><path d="M10.7 12.3L20 3" /><path d="M16 7l3 3" /></>,
+};
+function CheckTypeIcon({ id, size = 18 }: { id: string; size?: number }): JSX.Element {
+  const inner = CHECK_ICON[id] ?? (<><circle cx="12" cy="12" r="9" /><path d="M9 12l2 2 4-4" /></>);
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, display: 'block' }}>{inner}</svg>
+  );
+}
+
+/** Scoped hover polish for the tiles — a subtle lift, no fake click affordance (the tile is not a link). */
+const TILE_HOVER_CSS = `.ga4mon-tile{transition:box-shadow .13s ease, transform .13s ease}.ga4mon-tile:hover{box-shadow:0 4px 14px rgba(0,0,0,.18);transform:translateY(-1px)}`;
 
 const box: React.CSSProperties = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
 const card: React.CSSProperties = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 14, padding: 18 };
@@ -143,10 +165,10 @@ function tallyChecks(checks: Ga4MonitorCheckView[]): Record<'pass' | 'warn' | 'f
 function Kpi({ heading, value, sub, tone = 'neutral' }: { heading: string; value: React.ReactNode; sub?: string; tone?: 'red' | 'amber' | 'green' | 'neutral' }): JSX.Element {
   const t = TONE[tone];
   return (
-    <div style={{ flex: '1 1 150px', minWidth: 140, background: t.bg, border: '1px solid var(--border)', borderLeft: `3px solid ${tone === 'neutral' ? 'var(--border)' : t.color}`, borderRadius: 14, padding: '14px 16px' }}>
+    <div className="ga4mon-tile" style={{ flex: '1 1 150px', minWidth: 140, background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${tone === 'neutral' ? 'var(--border)' : t.color}`, borderRadius: 14, padding: '18px 18px' }}>
       <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-muted)' }}>{heading}</div>
-      <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.15, marginTop: 6, color: t.color }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 }}>{sub}</div>}
+      <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1.15, marginTop: 8, color: t.color }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 5, lineHeight: 1.4 }}>{sub}</div>}
     </div>
   );
 }
@@ -204,9 +226,9 @@ function AiSummary({ run }: { run: Ga4MonitorRun }): JSX.Element {
   const nextStep = top?.recommendation || (top ? `Investigate: ${top.title}.` : 'No action needed — keep the background monitor running so a new issue pages you the moment it appears.');
   const h = HEALTH[run.health] ?? HEALTH.healthy;
   return (
-    <div style={{ ...card, background: 'var(--c-blue-bg, rgba(37,99,235,.06))', borderColor: 'var(--c-blue, #2563eb)' }}>
+    <div style={{ ...card, padding: 20, borderLeft: '3px solid var(--c-blue, #2563eb)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        <span style={{ fontSize: 16 }}>✨</span>
+        <span style={{ display: 'inline-flex', color: 'var(--c-blue, #2563eb)', fontSize: 16 }}>✨</span>
         <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.3 }}>AI summary</span>
         <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: h.color, background: h.bg, borderRadius: 999, padding: '2px 10px' }}>{h.icon} {h.label}</span>
       </div>
@@ -222,17 +244,18 @@ function AiSummary({ run }: { run: Ga4MonitorRun }): JSX.Element {
   );
 }
 
-/** One health check rendered as a status tile (icon + label + what-we-found). */
+/** One health check rendered as a NEUTRAL tile: a category icon in the status colour, the label,
+ *  and the status pill. Colour is reserved for those small indicators + a thin left edge. */
 function CheckCard({ c }: { c: Ga4MonitorCheckView }): JSX.Element {
   const p = CHECK_PILL[c.status] ?? CHECK_PILL.skip;
   return (
-    <div style={{ background: p.bg, border: '1px solid var(--border)', borderLeft: `3px solid ${p.color}`, borderRadius: 10, padding: '12px 14px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--surface-2)', border: `1px solid ${p.color}`, color: p.color, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11.5, fontWeight: 800, flexShrink: 0 }}>{p.icon}</span>
+    <div className="ga4mon-tile" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${p.color}`, borderRadius: 10, padding: '16px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+        <span style={{ color: p.color, display: 'inline-flex', flexShrink: 0 }}><CheckTypeIcon id={c.id} /></span>
         <span style={{ fontWeight: 700, fontSize: 13.5 }}>{c.label}</span>
         <span style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 700, color: p.color, background: 'var(--surface-2)', border: `1px solid ${p.color}`, borderRadius: 999, padding: '1px 8px' }}>{p.label}</span>
       </div>
-      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 6, lineHeight: 1.5 }}>{c.detail}</div>
+      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.5 }}>{c.detail}</div>
     </div>
   );
 }
@@ -286,7 +309,7 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
   const attention = counts ? counts.fail + counts.warn : 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* ── Property identity + controls ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ minWidth: 0 }}>
@@ -322,7 +345,7 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
           <HeroCard run={run} isRunning={isRunning} disabled={runDisabled} onRun={onRun} />
 
           {/* ── How serious / how much? ── */}
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
             <Kpi
               heading="Open issues"
               value={run.alerts.length}
@@ -350,7 +373,7 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
           {/* ── What next? ── */}
           <div>
             <div style={sectionTitle}>Health checks</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
               {run.checks.map((c) => <CheckCard key={c.id} c={c} />)}
             </div>
           </div>
@@ -574,7 +597,8 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
     : INTERVAL_PRESETS;
 
   return (
-    <div style={{ padding: 20, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ padding: 24, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <style>{TILE_HOVER_CSS}</style>
       {/* ── Header: identity + overall health + background status ── */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 260 }}>
@@ -676,7 +700,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
                   onClick={() => setSelectedId(t.propertyId)}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 7,
-                    background: on ? 'var(--c-blue-bg, rgba(59,130,246,.12))' : 'var(--surface-2)',
+                    background: on ? 'var(--surface-3)' : 'var(--surface-2)',
                     color: 'var(--text)',
                     border: `1px solid ${on ? 'var(--c-blue)' : 'var(--border)'}`,
                     borderRadius: 9, padding: '7px 14px', cursor: 'pointer', fontSize: 13,
