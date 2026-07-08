@@ -1,3 +1,13 @@
+## [1.270.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.4...v1.270.0) (2026-07-08)
+
+### Features
+
+* **suggest:** track "Share this article" widgets as one GA4 share tag (twitter/linkedin/facebook/copy_link) ([b01b36c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b01b36cc3866f3ed54610fb6bd0fc90a3e95418e))
+
+### Bug Fixes
+
+* **suggest:** native form_submit tags get a proof shot (route through the form locator) ([66f75cb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/66f75cb54b05d99e5488f2da2d8bb34b6d0832c9)), closes [#451](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/451) [#442](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/442) [#450](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/450)
+
 ## [1.269.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.3...v1.269.4) (2026-07-08)
 
 ### Bug Fixes
