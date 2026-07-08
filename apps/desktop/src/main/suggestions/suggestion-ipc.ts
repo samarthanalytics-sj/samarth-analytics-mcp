@@ -30,7 +30,7 @@ import type { RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import { discoverSite } from './discover';
 // The merged page-driver builder (Electron + optional Cheerio/Playwright) lives in scan-url.ts,
 // shared with the `suggest_tags_from_url` chat tool so both scan paths render pages identically.
-import { makeDriver, clampSettle } from './scan-url';
+import { makeDriver, makeDrivers, scanConcurrency, clampSettle } from './scan-url';
 import { parseSuggestions, createSuggestedTags, planGoogleTagVars, provisionVariables } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 
@@ -104,8 +104,10 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     const verdict = urlAllowed(target, []);
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
     const o = opts ?? {};
-    const driver = await makeDriver(o);
-    return crawlAndSuggest(driver, target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'] });
+    // Parallel crawl: a pool of drivers scans pages concurrently (bounded by the page budget).
+    const n = Math.min(scanConcurrency(o.scanConcurrency), o.maxPages ?? 25);
+    const pool = await makeDrivers(n, o);
+    return crawlAndSuggest(pool[0], target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) });
   });
 
   // Locate-only PROOF screenshots for suggested (creatable) tags: open each page a tag lives on, ring
@@ -150,14 +152,15 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     const list = Array.isArray(urls) ? urls.map((u) => String(u)).filter(Boolean) : [];
     if (list.length === 0) throw new Error('No pages selected to scan.');
     const o = opts ?? {};
-    const driver = await makeDriver(o);
+    // Parallel deep-scan: never more drivers than selected pages.
+    const pool = await makeDrivers(Math.min(scanConcurrency(o.scanConcurrency), list.length), o);
     let siteHost: string | undefined;
     try {
       siteHost = new URL(list[0]).hostname;
     } catch {
       /* per-URL admission still applies in scanUrls */
     }
-    return scanUrls(driver, list, siteHost, undefined, { platforms: o.platforms ?? ['ga4'] });
+    return scanUrls(pool[0], list, siteHost, undefined, { platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) });
   });
 
   // Auto-mint a workspace-PREVIEW snippet so Verify firing can load DRAFT tags with
@@ -210,9 +213,10 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           // full prioritized page set seeded, the budget is spent on the pages most likely to carry CTAs.
           const maxPages = o.crawlMaxPages ?? (seedUrls.length ? 50 : undefined);
           // cachePages: share rendered pages with the form-plan crawl that auto-runs on the same verify,
-          // so each page renders ONCE across both crawls (not twice).
-          const crawlDriver = await makeDriver({ maxPages, maxDepth: o.crawlMaxDepth, cachePages: true });
-          const scan = await crawlAndSuggest(crawlDriver, target, { maxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'], ...(seedUrls.length ? { seedUrls } : {}) });
+          // so each page renders ONCE across both crawls (not twice). The cache dedupes in-flight renders
+          // by URL, so it stays correct with a PARALLEL driver pool.
+          const crawlPool = await makeDrivers(Math.min(scanConcurrency(), maxPages ?? 25), { maxPages, maxDepth: o.crawlMaxDepth, cachePages: true });
+          const scan = await crawlAndSuggest(crawlPool[0], target, { maxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'], drivers: crawlPool.slice(1), ...(seedUrls.length ? { seedUrls } : {}) });
           els = scan.inventory.elements as DetectedElementView[];
           pagesCrawled = scan.pages.length;
           if (!pagesTotal) pagesTotal = pagesCrawled;
@@ -379,22 +383,23 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     const verdict = urlAllowed(target, []);
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
     const o = opts ?? {};
-    const driver = await makeDriver(o);
-    return crawlAndSuggest(driver, target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'] }, streamSink(event, String(requestId ?? '')));
+    const n = Math.min(scanConcurrency(o.scanConcurrency), o.maxPages ?? 25);
+    const pool = await makeDrivers(n, o);
+    return crawlAndSuggest(pool[0], target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) }, streamSink(event, String(requestId ?? '')));
   });
 
   ipcMain.handle('suggestions:scanUrlsStream', async (event, requestId: unknown, urls: unknown, opts?: TagScanOptions) => {
     const list = Array.isArray(urls) ? urls.map((u) => String(u)).filter(Boolean) : [];
     if (list.length === 0) throw new Error('No pages selected to scan.');
     const o = opts ?? {};
-    const driver = await makeDriver(o);
+    const pool = await makeDrivers(Math.min(scanConcurrency(o.scanConcurrency), list.length), o);
     let siteHost: string | undefined;
     try {
       siteHost = new URL(list[0]).hostname;
     } catch {
       /* per-URL admission still applies */
     }
-    return scanUrls(driver, list, siteHost, streamSink(event, String(requestId ?? '')), { platforms: o.platforms ?? ['ga4'] });
+    return scanUrls(pool[0], list, siteHost, streamSink(event, String(requestId ?? '')), { platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) });
   });
 
   ipcMain.handle(

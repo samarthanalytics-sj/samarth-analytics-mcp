@@ -506,6 +506,9 @@ export interface TagScanOptions {
   /** Which ad platforms to generate tags for (default ['ga4']). Any subset may be selected; each
    *  non-'ga4' platform adds tags derived from the GA4 ones (sharing each trigger). */
   platforms?: SuggestPlatform[];
+  /** How many pages to scan IN PARALLEL (a pool of independent browser drivers). Omitted → auto from
+   *  the machine's CPU (≈ cores/3, capped). Bounded by the page budget so it never over-provisions. */
+  scanConcurrency?: number;
 }
 
 /** One detected clickable element (before dedup) — the raw inventory. */
