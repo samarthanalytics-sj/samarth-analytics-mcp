@@ -178,6 +178,12 @@ const api = {
     // page). Reuses the verify driver; never clicks/submits. Returns a JPEG data-URI per tag.
     screenshotTags: (url: string, tags: SuggestedTagView[]): Promise<SuggestionScreenshotResult> =>
       ipcRenderer.invoke('suggestions:screenshotTags', url, tags),
+    /** Live per-tag progress while proof screenshots are being captured; returns an unsubscribe. */
+    onShotProgress: (cb: (p: { done: number; total: number; label: string; page: string }) => void): (() => void) => {
+      const listener = (_e: unknown, p: { done: number; total: number; label: string; page: string }): void => cb(p);
+      ipcRenderer.on('suggestions:shotProgress', listener);
+      return () => ipcRenderer.removeListener('suggestions:shotProgress', listener);
+    },
     // Streaming scan: `onProgress` fires with the running suggestion list after each
     // page; the promise resolves with the final result. Mirrors llm.chatStream.
     scanStream: (

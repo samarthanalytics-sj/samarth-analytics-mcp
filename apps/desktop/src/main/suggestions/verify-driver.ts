@@ -875,7 +875,13 @@ export async function waitForLocate(
 export async function runSuggestionScreenshots(
   url: string,
   tags: SuggestionShotTag[],
-  opts: { navTimeoutMs?: number; settleMs?: number } = {},
+  opts: {
+    navTimeoutMs?: number;
+    settleMs?: number;
+    /** Called before EACH tag's capture with how many are done, the total, and which tag/page is
+     *  being shot right now — drives the live progress card in the suggestions panel. */
+    onProgress?: (done: number, total: number, tagId: string, page: string) => void;
+  } = {},
 ): Promise<{ pagesOk: boolean; error?: string; shots: SuggestionShot[] }> {
   const navTimeoutMs = opts.navTimeoutMs ?? 20_000;
   const settleMs = opts.settleMs ?? 700;
@@ -903,6 +909,7 @@ export async function runSuggestionScreenshots(
       // A short head-start settle; the per-tag poll below covers anything that renders later.
       await page.waitForTimeout(Math.min(Math.max(settleMs, 400), 1200));
       for (const t of groupTags) {
+        opts.onProgress?.(shots.length, tags.length, t.id, pageUrl);
         let found = false;
         try {
           if (t.trigger.kind === 'pageview') {
