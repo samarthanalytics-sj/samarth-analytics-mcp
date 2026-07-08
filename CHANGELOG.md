@@ -1,3 +1,9 @@
+## [1.269.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.1...v1.269.2) (2026-07-08)
+
+### Bug Fixes
+
+* **suggest:** stop hiding sticky-* bars in proof shots; re-hide late CMPs; verify parity ([9d7c214](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9d7c214960acbb5cf4a1771316c9675f2fd1afda))
+
 ## [1.269.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.0...v1.269.1) (2026-07-08)
 
 ### Bug Fixes
