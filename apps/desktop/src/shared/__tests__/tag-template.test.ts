@@ -123,6 +123,18 @@ const faMeta = base({ id: 'fam', platform: 'meta_pixel', tagName: 'GA4 - Event -
 check('dedupe: same name on a different platform is NOT collapsed', dedupeViewsByGtmName([fa1, faMeta]).length === 2);
 check('dedupe: idempotent (running twice is a no-op)', dedupeViewsByGtmName(dedupeViewsByGtmName([fa1, contact, fa2])).length === 2);
 
+// The REAL bug: punctuation/whitespace-only NAME variants of the SAME CTA (same event) must collapse.
+// The old key kept them because `.toLowerCase()` alone left "Free Audit" ≠ "Free  Audit" ≠ "Free-Audit".
+const faDbl = base({ id: 'fad', tagName: 'GA4 - Event - Free  Audit Click Tag', eventName: 'free_audit_click', trigger: { name: 'Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Free Audit', clickTextOperator: 'equals' } });
+const faHyphen = base({ id: 'fah', tagName: 'GA4 - Event - Free-Audit Click Tag', eventName: 'free_audit_click', trigger: { name: 'Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Free Audit', clickTextOperator: 'equals' } });
+check('dedupe: punctuation/whitespace name variants of the same CTA collapse to ONE', dedupeViewsByGtmName([fa1, faDbl, faHyphen]).length === 1);
+
+// Genuinely-different near-dupes (different event AND normalized name) STAY separate — the user's
+// "Get a Free Audit" (get_a_free_audit_click) vs "Get Free Audit" (get_free_audit_click).
+const getA = base({ id: 'ga', tagName: 'GA4 - Event - Get A Free Audit Click Tag', eventName: 'get_a_free_audit_click', trigger: { name: 'Get A Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Get a free audit', clickTextOperator: 'equals' } });
+const getF = base({ id: 'gf', tagName: 'GA4 - Event - Get Free Audit Click Tag', eventName: 'get_free_audit_click', trigger: { name: 'Get Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Get Free Audit', clickTextOperator: 'equals' } });
+check('dedupe: near-dupes with different events stay separate', dedupeViewsByGtmName([getA, getF]).length === 2);
+
 // ── inline editing: applyTagEdit / applyWhensToTrigger / conditionToOperator ──────────────────
 check('edit: no edit is identity', applyTagEdit(phone, undefined) === phone);
 

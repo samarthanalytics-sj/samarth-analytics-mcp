@@ -839,6 +839,34 @@ export function specForShot(t: SuggestionShotTrigger): DriveSpec {
 }
 
 /**
+ * Poll a pure in-page LOCATE function until it reports the element is present, then return true
+ * IMMEDIATELY (capture the instant it renders). Read-only: `evalFn` only queries + rings the DOM
+ * (driveInPage locateOnly / locateFormInPage), and re-ringing is safe because highlight()/ring() clear
+ * the prior ring first. Bounded: at most `tries` probes every `intervalMs` (~5s) so a never-rendering
+ * element (SPA route, lazy/IntersectionObserver section, deferred embed) can't hang the run.
+ */
+export async function waitForLocate(
+  page: PwPage,
+  evalFn: unknown,
+  spec: unknown,
+  found: (r: unknown) => boolean,
+  opts: { tries?: number; intervalMs?: number } = {},
+): Promise<boolean> {
+  const tries = opts.tries ?? 16; // 16 × 300ms ≈ 4.8s worst case
+  const intervalMs = opts.intervalMs ?? 300;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await page.evaluate(evalFn, spec);
+      if (found(r)) return true; // found → capture now
+    } catch {
+      /* transient (navigation/detached during hydration) — retry */
+    }
+    if (i < tries - 1) await page.waitForTimeout(intervalMs);
+  }
+  return false;
+}
+
+/**
  * Open each page a suggested tag lives on and capture a proof screenshot of the element/location it
  * would track (ringed), reusing the verify driver's locate + captureShot. LOCATE-ONLY — never clicks
  * or submits, injects no container, sends no beacon. Best-effort + bounded (MAX_VERIFY_PAGES pages,
@@ -872,7 +900,8 @@ export async function runSuggestionScreenshots(
         for (const t of groupTags) shots.push({ tagId: t.id, page: pageUrl });
         continue;
       }
-      await page.waitForTimeout(Math.min(Math.max(settleMs, 400), 1500));
+      // A short head-start settle; the per-tag poll below covers anything that renders later.
+      await page.waitForTimeout(Math.min(Math.max(settleMs, 400), 1200));
       for (const t of groupTags) {
         let found = false;
         try {
@@ -881,13 +910,12 @@ export async function runSuggestionScreenshots(
           } else if (t.trigger.kind === 'custom_event') {
             // A custom-event FORM tag → ring its <form>; a non-form custom event has no on-page element.
             const loc = formLocatorFor(t.trigger as DriverTrigger);
-            if (loc) {
-              const r = await page.evaluate<{ found: boolean }>(locateFormInPage, loc);
-              found = r.found;
-            }
+            // Poll: a HubSpot/Marketo-style form embed can mount a second or two after load.
+            if (loc) found = await waitForLocate(page, locateFormInPage, loc, (r) => Boolean((r as { found?: boolean }).found));
           } else {
-            const r = await page.evaluate<DriveOutcome>(driveInPage, specForShot(t.trigger));
-            found = r.targetFound;
+            // Poll: an SPA route or lazy/IntersectionObserver section can mount the CTA after load;
+            // capture the instant it appears, else give up after ~5s (never hangs).
+            found = await waitForLocate(page, driveInPage, specForShot(t.trigger), (r) => Boolean((r as DriveOutcome).targetFound));
           }
         } catch {
           found = false;

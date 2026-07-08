@@ -1815,6 +1815,14 @@ function SuggestionTemplateTable({
               onEdit(s.id, { params: paramRows.map((row, j) => (j === idx ? { ...row, ...patch } : row)) });
             const editWhen = (idx: number, patch: Partial<TriggerWhen>): void =>
               onEdit(s.id, { whens: whenRows.map((row, j) => (j === idx ? { ...row, ...patch } : row)) });
+            // Add a SECOND trigger condition (ANDed) — e.g. scope a form/click tag to a specific
+            // {{Page Path}} when several forms share a name. Pre-fills the first unused variable; a
+            // blank-value row is dropped on create (applyWhensToTrigger), so an unfilled row is harmless.
+            const usedWhenVars = new Set(whenRows.map((r) => r.variable));
+            const freeWhenVar = VARIABLE_OPTIONS.find((o) => !usedWhenVars.has(o.value))?.value;
+            const addWhen = (): void => {
+              if (freeWhenVar) onEdit(s.id, { whens: [...whenRows, { variable: freeWhenVar, condition: 'equals', value: '' }] });
+            };
             const groupRows = Array.from({ length: rowCount }, (_, i) => {
               const first = i === 0;
               const p = paramRows[i];
@@ -1899,7 +1907,22 @@ function SuggestionTemplateTable({
                   {first && <td rowSpan={rowCount} style={tplStyles.td} title="Trigger type is structural — change it in GTM, or pick a suggestion of the right type">{g.triggerType}</td>}
                   <td style={tplStyles.td}>{w ? (whensEditable ? <CellSelect value={w.variable} options={varOptions} disabled={creating} onChange={(v) => editWhen(i, { variable: v })} ariaLabel="Trigger when variable" /> : <code style={mdStyles.code}>{w.variable}</code>) : ''}</td>
                   <td style={tplStyles.td}>{w ? (whensEditable ? <CellSelect value={w.condition} options={CONDITION_OPTIONS} disabled={creating} onChange={(v) => editWhen(i, { condition: v })} ariaLabel="Trigger when condition" /> : w.condition) : ''}</td>
-                  <td style={tplStyles.td}>{w ? (whensEditable ? <GrowCell value={w.value} disabled={creating} onChange={(v) => editWhen(i, { value: v })} ariaLabel="Trigger when value" /> : w.value) : ''}</td>
+                  <td style={tplStyles.td}>
+                    {w ? (whensEditable ? <GrowCell value={w.value} disabled={creating} onChange={(v) => editWhen(i, { value: v })} ariaLabel="Trigger when value" /> : w.value) : ''}
+                    {/* "+ condition" appears once, on the last when-row (or row 0 when there are none):
+                        append another ANDed condition such as {{Page Path}} equals "/contact". */}
+                    {whensEditable && freeWhenVar && i === Math.max(whenRows.length - 1, 0) && (
+                      <button
+                        type="button"
+                        onClick={addWhen}
+                        disabled={creating}
+                        title="Add another trigger condition (ANDed) — e.g. scope this tag to a specific Page Path"
+                        style={{ marginTop: 4, padding: '1px 7px', fontSize: 11, lineHeight: 1.6, color: 'var(--c-blue)', background: 'none', border: '1px dashed var(--border-2)', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                      >
+                        + condition
+                      </button>
+                    )}
+                  </td>
                 </tr>
               );
             });
