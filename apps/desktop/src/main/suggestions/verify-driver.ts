@@ -489,8 +489,14 @@ function locateFormInPage(loc: { formId?: string; tokens?: string[] }): { found:
     const want = loc.formId.toLowerCase();
     f = forms.find((x) => (x.id || '').toLowerCase() === want);
   }
+  const fieldCount = (form: HTMLFormElement): number =>
+    form.querySelectorAll('input:not([type="hidden"]),textarea,select').length;
   const tokens = (loc.tokens || []).filter(Boolean);
   if (!f && tokens.length) {
+    // A generic CTA word ("get"/"free") shouldn't pin a form on its own; a distinctive one ("cro",
+    // "consultation", "analytics") can. Everything else needs 2+ hits.
+    const COMMON = ['get', 'free', 'your', 'our', 'the', 'us', 'we', 'buy', 'now', 'new', 'all', 'click', 'submit', 'send', 'form', 'contact', 'tag', 'ga4', 'event'];
+    const distinctive = (t: string): boolean => t.length >= 3 && COMMON.indexOf(t) < 0;
     const hayOf = (form: HTMLFormElement): string => {
       const parts: string[] = [];
       if (form.id) parts.push(form.id);
@@ -501,20 +507,37 @@ function locateFormInPage(loc: { formId?: string; tokens?: string[] }): { found:
       // A short heading immediately ABOVE the form often names it ("Get In Touch").
       const prev = form.previousElementSibling;
       if (prev && prev.textContent && prev.textContent.trim().length < 120) parts.push(prev.textContent);
+      // Field names/placeholders + the submit label often carry the distinctive token ("CRO audit",
+      // a submit reading "Request Consultation") even when the heading is generic.
+      Array.prototype.slice.call(form.querySelectorAll('input,textarea,select')).forEach((c: Element) => {
+        const el = c as HTMLInputElement;
+        if (el.name) parts.push(el.name);
+        const ph = el.getAttribute && el.getAttribute('placeholder'); if (ph) parts.push(ph);
+      });
+      const submit = form.querySelector('button[type="submit"],input[type="submit"],button');
+      if (submit && submit.textContent) parts.push(submit.textContent);
       return parts.join(' ').toLowerCase();
     };
     let best: HTMLFormElement | undefined;
     let bestScore = 0;
+    let bestDistinct = false;
     for (const form of forms) {
       const hay = hayOf(form);
       let score = 0;
-      for (const t of tokens) if (hay.indexOf(t) >= 0) score++;
-      if (score > bestScore) { bestScore = score; best = form; }
+      let distinct = false;
+      for (const t of tokens) if (hay.indexOf(t) >= 0) { score++; if (distinctive(t)) distinct = true; }
+      if (score > bestScore) { bestScore = score; best = form; bestDistinct = distinct; }
     }
-    // Require a real overlap (2 tokens, or all of them when there are fewer) so we never ring a random form.
-    if (best && bestScore >= Math.min(2, tokens.length)) f = best;
+    // Accept 2+ token hits, OR a single DISTINCTIVE token — enough to pin the right form without ringing
+    // a random one on a generic single ("get") hit.
+    if (best && (bestScore >= Math.min(2, tokens.length) || (bestScore >= 1 && bestDistinct))) f = best;
   }
-  if (!f && forms.length === 1) f = forms[0];
+  // Last resort: ring the page's PRIMARY form — the one with the most (visible) fields, so a footer
+  // newsletter (1 field) doesn't win over the real conversion form. Better an honest "here's the form on
+  // this page" than a blank thumbnail for a form tag whose heading just didn't share a token.
+  if (!f && forms.length) {
+    f = forms.slice().sort((a, b) => fieldCount(b) - fieldCount(a))[0];
+  }
   if (!f) return { found: false };
   ring(f);
   return { found: true };

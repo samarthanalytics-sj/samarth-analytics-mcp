@@ -2573,10 +2573,14 @@ function TagReviewPanel({
     setScanLog({ pages: res.pages, notScanned: res.notScanned, inventory: res.inventory, installed: res.installed });
     setScanDebug(res.debug ?? null);
     resetHeal(); // a new scan invalidates any prior heal verdicts
-    loadSuggestions(res.suggestions);
+    // Dedupe ONCE and feed BOTH the render and the screenshot pass. Capturing over the RAW list wastes
+    // the bounded shot budget (MAX_SCREENSHOTS) on rows that were deduped away, which can starve later
+    // (form) tags of a screenshot even though they were locatable.
+    const deduped = dedupeViewsByGtmName(res.suggestions);
+    loadSuggestions(deduped);
     // Fill in a proof screenshot per creatable tag (the element it would track, ringed) — async +
     // best-effort so the suggestion list is usable immediately and screenshots appear as they arrive.
-    void captureSuggestionShots(res.suggestions, res.site || res.siteHost || url);
+    void captureSuggestionShots(deduped, res.site || res.siteHost || url);
   }
 
   // Reuse the verify driver's ring + capture (locate-only) to grab a proof screenshot of WHERE each
