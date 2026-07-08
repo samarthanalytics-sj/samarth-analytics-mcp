@@ -1,3 +1,9 @@
+## [1.260.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.3...v1.260.4) (2026-07-08)
+
+### Bug Fixes
+
+* **gtm:** resolve_conflict must send an Entity envelope; correct GA4 role example ([ea8853b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ea8853bc25fe738daf39b24e2d2eb9abcb824d79))
+
 ## [1.260.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.2...v1.260.3) (2026-07-08)
 
 ### Bug Fixes
