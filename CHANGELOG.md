@@ -1,3 +1,13 @@
+## [1.261.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.4...v1.261.0) (2026-07-08)
+
+### Features
+
+* **desktop:** premium polish — animations, page transitions, skeletons, empty states, shortcuts ([4bcf8ac](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4bcf8ac746cab78681b16a2618e30854068a1ed5))
+
+### Bug Fixes
+
+* **verify:** ring the real element for proof shots + add lightbox close button ([7927a2b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7927a2b4967b5d73a6f64a4cc66fac0d226a02a3))
+
 ## [1.260.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.3...v1.260.4) (2026-07-08)
 
 ### Bug Fixes
