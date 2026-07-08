@@ -455,7 +455,7 @@ function catalog(): ResourceDesc[] {
       create: {
         fields: {
           user: z.string().min(1).describe('Email of the user to grant access to.'),
-          roles: z.array(z.string()).min(1).describe('Roles, e.g. ["predefinedRoles/read"], ["predefinedRoles/analyst"], ["predefinedRoles/editor"], ["predefinedRoles/admin"].'),
+          roles: z.array(z.string()).min(1).describe('Roles, e.g. ["predefinedRoles/viewer"], ["predefinedRoles/analyst"], ["predefinedRoles/editor"], ["predefinedRoles/admin"]. (GA4 uses viewer/analyst/editor/admin — not the legacy read/collaborate/edit/manage names.)'),
         },
         toBody: (a) => ({ user: a.user, roles: a.roles }),
         desc: 'Grant a user access to a GA4 property (needs analytics.manage.users scope).',
