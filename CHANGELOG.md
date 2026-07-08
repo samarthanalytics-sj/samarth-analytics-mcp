@@ -1,3 +1,9 @@
+## [1.271.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.270.0...v1.271.0) (2026-07-08)
+
+### Features
+
+* **verify:** scan pages in parallel via a bounded worker pool (faster, exactly-once) ([5a166ad](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5a166ad5afd98cac00ba7bde3e7c794f95f27c94))
+
 ## [1.270.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.4...v1.270.0) (2026-07-08)
 
 ### Features
