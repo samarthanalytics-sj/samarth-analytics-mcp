@@ -1746,6 +1746,8 @@ function SuggestionTemplateTable({
   onToggle,
   onEdit,
   gtmTarget,
+  screenshots,
+  onShot,
 }: {
   suggestions: SuggestedTagView[];
   /** Raw inline-edit overlay (keyed by suggestion id). The editable Parameter/When ROWS render from these
@@ -1761,6 +1763,11 @@ function SuggestionTemplateTable({
   /** The active GTM account/container/workspace, so the install panel's "Create listener tag" button
    *  can create the listener in the right DRAFT workspace. Any field empty → the button is disabled. */
   gtmTarget: { accountId?: string; containerId?: string; workspaceId?: string };
+  /** tagId → proof-screenshot data-URI: the element/location this suggested tag would track, ringed.
+   *  Captured by the locate-only screenshot pass; shown as a thumbnail under the Page cell. */
+  screenshots?: Record<string, string>;
+  /** Open a suggestion's proof screenshot full-screen. */
+  onShot?: (shot: { src: string; name: string }) => void;
 }): JSX.Element {
   // Which suggestions have their "How to install" panel expanded (keyed by id).
   const [installOpen, setInstallOpen] = useState<Record<string, boolean>>({});
@@ -1849,6 +1856,16 @@ function SuggestionTemplateTable({
                       {s.install && installPlanNeedsAction(s.install) && (
                         <div>
                           <InstallChip install={s.install} done={installDone[s.id] ?? {}} open={!!installOpen[s.id]} onClick={() => toggleInstall(s.id)} tagName={g.tagName} />
+                        </div>
+                      )}
+                      {/* Proof screenshot: the element/location this tag would track, ringed on its page. */}
+                      {screenshots?.[s.id] && (
+                        <div style={{ marginTop: 6 }}>
+                          <ProofThumb
+                            screenshot={screenshots[s.id]}
+                            name={`${g.tagName} · ${s.page}`}
+                            onOpen={() => onShot?.({ src: screenshots[s.id], name: `${g.tagName} · ${s.page}` })}
+                          />
                         </div>
                       )}
                     </td>
@@ -2326,6 +2343,12 @@ function TagReviewPanel({
   const [warnings, setWarnings] = useState<string[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [edits, setEdits] = useState<Record<string, TagEdit>>({});
+  // Locate-only PROOF screenshots for the creatable suggestions (tagId → JPEG data-URI), captured
+  // after each scan by reusing the verify driver (ring the element + shot). `shotStatus` drives the
+  // "capturing…" line; `sLightbox` is the image shown full-screen. Best-effort — never blocks the panel.
+  const [sShots, setSShots] = useState<Record<string, string>>({});
+  const [shotStatus, setShotStatus] = useState<{ loading: boolean; done: number } | null>(null);
+  const [sLightbox, setSLightbox] = useState<{ src: string; name: string } | null>(null);
   // Suggestion-list filters (search text + type). Display-only: they narrow which rows are SHOWN,
   // never which ids are selected/created.
   const [search, setSearch] = useState('');
@@ -2420,6 +2443,9 @@ function TagReviewPanel({
   const containerLabel = (id: string): string => containerNames[id.toUpperCase()] ?? id;
 
   function loadSuggestions(rawList: SuggestedTagView[]): void {
+    // A new suggestion set invalidates any prior scan's proof screenshots.
+    setSShots({});
+    setShotStatus(null);
     // Guarantee "each GTM tag shown once": collapse any same-name duplicates before they reach the
     // list, the selection map, the CSV, or the create flow (belt-and-suspenders over the pipeline dedup).
     const list = dedupeViewsByGtmName(rawList);
@@ -2442,6 +2468,27 @@ function TagReviewPanel({
     setScanDebug(res.debug ?? null);
     resetHeal(); // a new scan invalidates any prior heal verdicts
     loadSuggestions(res.suggestions);
+    // Fill in a proof screenshot per creatable tag (the element it would track, ringed) — async +
+    // best-effort so the suggestion list is usable immediately and screenshots appear as they arrive.
+    void captureSuggestionShots(res.suggestions, res.site || res.siteHost || url);
+  }
+
+  // Reuse the verify driver's ring + capture (locate-only) to grab a proof screenshot of WHERE each
+  // suggested tag would fire. Never blocks the panel — screenshots are a nicety layered onto the list.
+  async function captureSuggestionShots(list: SuggestedTagView[], base: string): Promise<void> {
+    const target = (base || url || '').trim();
+    setSShots({});
+    if (!target || list.length === 0) { setShotStatus(null); return; }
+    setShotStatus({ loading: true, done: 0 });
+    try {
+      const res = await window.desktop.tags.screenshotTags(target, list);
+      const map: Record<string, string> = {};
+      for (const shot of res.shots) if (shot.screenshot) map[shot.tagId] = shot.screenshot;
+      setSShots(map);
+      setShotStatus({ loading: false, done: Object.keys(map).length });
+    } catch {
+      setShotStatus(null); // best-effort — a screenshot failure never breaks the suggestions
+    }
   }
 
   // Clear the whole review state so switching source mode starts a fresh, clean
@@ -2449,6 +2496,9 @@ function TagReviewPanel({
   function resetScanState(): void {
     resetHeal();
     setSuggestions([]);
+    setSShots({});
+    setShotStatus(null);
+    setSLightbox(null);
     setMeta(null);
     setScanMeta({});
     setWarnings([]);
@@ -3603,6 +3653,11 @@ function TagReviewPanel({
                 <div style={{ ...styles.muted, marginTop: -4 }}>
                   Tick a row to create it in GTM; edit fields inline (trigger type is fixed). Showing {curPage * PAGE_SIZE + 1}–{Math.min(visible.length, curPage * PAGE_SIZE + PAGE_SIZE)} of {visible.length} ({PAGE_SIZE} per page).
                 </div>
+                {shotStatus?.loading ? (
+                  <div style={{ ...styles.muted, fontSize: 12 }}>📸 Capturing a proof screenshot of each tag’s location on its page…</div>
+                ) : shotStatus && shotStatus.done > 0 ? (
+                  <div style={{ ...styles.muted, fontSize: 12 }}>📸 Captured {shotStatus.done} location screenshot(s) — click a thumbnail under “Page” to view.</div>
+                ) : null}
                 <SuggestionTemplateTable
                   suggestions={pageItems.map(effective)}
                   edits={edits}
@@ -3613,6 +3668,8 @@ function TagReviewPanel({
                   onToggle={(id, v) => setSelected((sel) => ({ ...sel, [id]: v }))}
                   onEdit={(id, patch) => setEdits((m) => ({ ...m, [id]: { ...m[id], ...patch } }))}
                   gtmTarget={{ accountId: ctx?.accountId, containerId: ctx?.containerId, workspaceId: ctx?.workspaceId }}
+                  screenshots={sShots}
+                  onShot={setSLightbox}
                 />
                 {pageCount > 1 && (
                   <div style={tplStyles.pager}>
@@ -3623,6 +3680,8 @@ function TagReviewPanel({
                 )}
               </>
             )}
+
+            {sLightbox && <ProofLightbox shot={sLightbox} onClose={() => setSLightbox(null)} />}
 
             {confirming ? (
               <div style={styles.confirm}>
@@ -3898,16 +3957,17 @@ function VerifyScorecard({ fired, config, server, untested, issues }: { fired: n
   );
 }
 
-/** A clickable screenshot thumbnail (opens the full image in a lightbox) — the visual proof cell. */
-function ProofThumb({ v, onProof }: { v: VVerdict; onProof: (v: VVerdict) => void }): JSX.Element {
-  if (!v.screenshot) return <span style={styles.muted}>—</span>;
+/** A clickable screenshot thumbnail (opens the full image in a lightbox) — the visual proof cell.
+ *  Shared by tag verification AND the tag-suggestion panel (both pass a JPEG data-URI + a name). */
+function ProofThumb({ screenshot, name, onOpen }: { screenshot?: string; name: string; onOpen: () => void }): JSX.Element {
+  if (!screenshot) return <span style={styles.muted}>—</span>;
   return (
     <button
-      onClick={() => onProof(v)}
-      title="View the screenshot captured for this tag"
+      onClick={onOpen}
+      title="View the full screenshot"
       style={{ padding: 0, border: '1px solid var(--border-2)', borderRadius: 5, cursor: 'zoom-in', lineHeight: 0, background: 'none' }}
     >
-      <img src={v.screenshot} alt={`Verification screenshot for ${v.tagName}`} style={{ width: 72, height: 46, objectFit: 'cover', objectPosition: 'top', borderRadius: 4, display: 'block' }} />
+      <img src={screenshot} alt={`Screenshot for ${name}`} style={{ width: 72, height: 46, objectFit: 'cover', objectPosition: 'top', borderRadius: 4, display: 'block' }} />
     </button>
   );
 }
@@ -3940,7 +4000,7 @@ function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: 
                 <td style={vStyles.td}>{v.event ? <code style={mdStyles.code}>{v.event}</code> : <span style={styles.muted}>—</span>}</td>
                 <td style={{ ...vStyles.td, whiteSpace: 'nowrap' }}><span title={via.label} aria-hidden>{via.icon}</span> {via.label}</td>
                 <td style={{ ...vStyles.td, color: 'var(--text-muted)', fontSize: 12 }}>{signal}</td>
-                {anyProof ? <td style={vStyles.td}><ProofThumb v={v} onProof={onProof} /></td> : null}
+                {anyProof ? <td style={vStyles.td}><ProofThumb screenshot={v.screenshot} name={v.tagName} onOpen={() => onProof(v)} /></td> : null}
               </tr>
             );
           })}
@@ -4581,7 +4641,7 @@ function VerifyPanel({
                     const k = verdictKindLabel(v);
                     return (
                       <li key={v.tagId} style={{ ...styles.resultRow, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                        {v.screenshot ? <div style={{ flexShrink: 0, marginTop: 2 }}><ProofThumb v={v} onProof={showProof} /></div> : null}
+                        {v.screenshot ? <div style={{ flexShrink: 0, marginTop: 2 }}><ProofThumb screenshot={v.screenshot} name={v.tagName} onOpen={() => showProof(v)} /></div> : null}
                         <div style={{ flex: 1, minWidth: 0 }}>
                         <div>
                           <span style={{ fontWeight: 600, color: 'var(--c-red)' }}>NOT FIRED</span>{' '}

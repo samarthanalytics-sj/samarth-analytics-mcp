@@ -47,6 +47,7 @@ import type {
   SubmitFormVerifyOptions,
   SubmitFormVerifyResult,
   DetectedElementView,
+  SuggestionScreenshotResult,
 } from '../shared/ipc';
 
 // Tracks the in-flight streaming chat so llm.stop() can abort the right one.
@@ -173,6 +174,10 @@ const api = {
       ipcRenderer.invoke('suggestions:scanUrls', urls, opts),
     scan: (url: string, opts?: TagScanOptions): Promise<TagScanResult> =>
       ipcRenderer.invoke('suggestions:scan', url, opts),
+    // Locate-only proof screenshots for the creatable suggestions (each tag's CTA/form ringed on its
+    // page). Reuses the verify driver; never clicks/submits. Returns a JPEG data-URI per tag.
+    screenshotTags: (url: string, tags: SuggestedTagView[]): Promise<SuggestionScreenshotResult> =>
+      ipcRenderer.invoke('suggestions:screenshotTags', url, tags),
     // Streaming scan: `onProgress` fires with the running suggestion list after each
     // page; the promise resolves with the final result. Mirrors llm.chatStream.
     scanStream: (

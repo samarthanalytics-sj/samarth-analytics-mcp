@@ -16,9 +16,9 @@ import type { GoogleDataService } from '../google/data-service';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
-import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult } from '../../shared/ipc';
+import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult, SuggestionScreenshotResult } from '../../shared/ipc';
 import { crawlAndSuggest, scanUrls, urlPriority, type ScanProgress } from './scan-core';
-import { runVerifyDriver } from './verify-driver';
+import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify } from './verify-tags';
 import { routeTagsToPages } from './verify-routing';
@@ -106,6 +106,19 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     const o = opts ?? {};
     const driver = await makeDriver(o);
     return crawlAndSuggest(driver, target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'] });
+  });
+
+  // Locate-only PROOF screenshots for suggested (creatable) tags: open each page a tag lives on, ring
+  // the element/form it would track, and return a JPEG data-URI per tag. Read-only — reuses the verify
+  // driver's ring + capture but NEVER clicks/submits/injects a container (the tag doesn't exist yet).
+  ipcMain.handle('suggestions:screenshotTags', async (_e, url: unknown, tags: unknown): Promise<SuggestionScreenshotResult> => {
+    const target = String(url ?? '').trim();
+    const verdict = urlAllowed(target, []);
+    if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
+    const list = (Array.isArray(tags) ? tags : []) as SuggestionShotTag[];
+    if (list.length === 0) return { url: target, shots: [] };
+    const { shots, error } = await runSuggestionScreenshots(target, list);
+    return { url: target, shots, ...(error ? { error } : {}) };
   });
 
   // Enumerate same-site pages (sitemap/crawl) so the user can pick which to scan.

@@ -96,8 +96,8 @@ function resolvePageUrl(baseUrl: string, page: string | undefined): string {
 }
 
 /** Group tags by the page their trigger lives on, so each is driven on the RIGHT page. */
-function groupByPage(baseUrl: string, tags: VerifyDriverTag[]): Map<string, VerifyDriverTag[]> {
-  const map = new Map<string, VerifyDriverTag[]>();
+function groupByPage<T extends { page?: string }>(baseUrl: string, tags: T[]): Map<string, T[]> {
+  const map = new Map<string, T[]>();
   for (const t of tags) {
     const pageUrl = resolvePageUrl(baseUrl, t.page);
     const arr = map.get(pageUrl);
@@ -296,7 +296,7 @@ async function waitForHitsSettle(getCount: () => number, page: PwPage, quietMs: 
   }
 }
 
-interface DriveSpec {
+export interface DriveSpec {
   kind: string;
   clickText?: string;
   clickTextOp?: string;
@@ -306,6 +306,11 @@ interface DriveSpec {
   formIdOp?: string;
   formClasses?: string;
   formClassesOp?: string;
+  /** A CSS selector the trigger scopes on ({{Click Element}} cssSelector, e.g. an FAQ accordion). */
+  cssSelector?: string;
+  /** Ring + scroll the target into view but DON'T click/submit it. Used by the suggestion-screenshot
+   *  pass, where the tag doesn't exist yet — we only want a proof image of WHERE it would fire. */
+  locateOnly?: boolean;
 }
 interface DriveOutcome {
   targetFound: boolean;
@@ -356,6 +361,19 @@ function driveInPage(spec: DriveSpec): DriveOutcome {
     }
   };
 
+  // A CSS-selector-scoped trigger ({{Click Element}} cssSelector, e.g. an FAQ accordion header): ring
+  // the first match. Falls through to text/URL matching below if the selector finds nothing.
+  if (spec.cssSelector) {
+    let hit: Element | null = null;
+    try { hit = document.querySelector(spec.cssSelector); } catch { hit = null; }
+    if (hit) {
+      highlight(hit);
+      if (spec.locateOnly) return { targetFound: true, performed: false };
+      try { (hit as HTMLElement).click(); return { targetFound: true, performed: true }; }
+      catch (e) { return { targetFound: true, performed: false, note: String(e).slice(0, 150) }; }
+    }
+  }
+
   if (spec.kind === 'form_submit') {
     const forms = Array.prototype.slice.call(document.querySelectorAll('form')) as HTMLFormElement[];
     let f: HTMLFormElement | undefined;
@@ -364,6 +382,7 @@ function driveInPage(spec: DriveSpec): DriveOutcome {
     if (!f && forms.length === 1) f = forms[0];
     if (!f) return { targetFound: false, performed: false, note: 'no matching <form> on the page' };
     highlight(f);
+    if (spec.locateOnly) return { targetFound: true, performed: false };
     try {
       const form = f as HTMLFormElement & { requestSubmit?: () => void };
       if (typeof form.requestSubmit === 'function') form.requestSubmit();
@@ -427,6 +446,7 @@ function driveInPage(spec: DriveSpec): DriveOutcome {
     }
   }
   highlight(el);
+  if (spec.locateOnly) return { targetFound: true, performed: false };
   try {
     (el as HTMLElement).click();
     return { targetFound: true, performed: true };
@@ -752,6 +772,133 @@ export async function runVerifyDriver(
     return { pagesOk: true, injected, previewAuth, perTag, ...(pagesDriven.length ? { pagesDriven } : {}), ...(networkLog.length ? { networkLog } : {}), ...(dataLayer.length ? { dataLayer } : {}), ...(gtmDebug ? { gtmDebug } : {}) };
   } catch (e) {
     return { pagesOk: false, injected: Boolean(loaderSrc), previewAuth, perTag, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
+  } finally {
+    if (browser) {
+      try {
+        await browser.close();
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+}
+
+// ── Suggestion screenshots ───────────────────────────────────────────────────
+// The "Tag suggestions" panel proposes tags the user could CREATE. This reuses the SAME screenshot
+// logic as tag verification (ring the target + captureShot), but LOCATE-ONLY: the tag doesn't exist
+// yet, so we never click/submit — we just show visual proof of WHERE each suggested tag would fire.
+
+/** The subset of a suggested tag's trigger the locate-only screenshot pass needs. */
+export interface SuggestionShotTrigger {
+  kind: string;
+  clickTextValue?: string;
+  clickTextOperator?: string;
+  clickUrlValue?: string;
+  clickUrlOperator?: string;
+  clickElementValue?: string;
+  clickElementOperator?: string;
+  formIdValue?: string;
+  formIdOperator?: string;
+  formClassesValue?: string;
+  formClassesOperator?: string;
+  eventName?: string;
+  customEventData?: Record<string, string>;
+}
+export interface SuggestionShotTag {
+  id: string;
+  /** "/contact" | "site-wide" | undefined — the page whose element this tag would track. */
+  page?: string;
+  trigger: SuggestionShotTrigger;
+}
+export interface SuggestionShot {
+  tagId: string;
+  page: string;
+  /** JPEG data-URI of the ringed element/location (absent when it couldn't be located). */
+  screenshot?: string;
+}
+
+/** DriveSpec for a locate-ONLY pass (ring + screenshot, never click) from a suggested tag's trigger. */
+export function specForShot(t: SuggestionShotTrigger): DriveSpec {
+  const cssSelector =
+    t.clickElementOperator === 'cssSelector' ? t.clickElementValue
+      : t.clickUrlOperator === 'cssSelector' ? t.clickUrlValue
+        : undefined;
+  // Suggestions store form scopes selector-style ("#contact-form", ".hs-form"); the driver matches raw
+  // id / className, so strip the leading #/. (a dotted multi-class becomes space-separated).
+  const formId = t.formIdValue ? t.formIdValue.replace(/^#/, '') : undefined;
+  const formClasses = t.formClassesValue ? t.formClassesValue.replace(/^\./, '').replace(/\./g, ' ') : undefined;
+  return {
+    kind: t.kind,
+    locateOnly: true,
+    ...(cssSelector ? { cssSelector } : {}),
+    ...(t.clickTextValue ? { clickText: t.clickTextValue, clickTextOp: t.clickTextOperator } : {}),
+    ...(t.clickUrlValue && t.clickUrlOperator !== 'cssSelector' ? { clickUrl: t.clickUrlValue, clickUrlOp: t.clickUrlOperator } : {}),
+    ...(formId ? { formId, formIdOp: t.formIdOperator } : {}),
+    ...(formClasses ? { formClasses, formClassesOp: t.formClassesOperator } : {}),
+  };
+}
+
+/**
+ * Open each page a suggested tag lives on and capture a proof screenshot of the element/location it
+ * would track (ringed), reusing the verify driver's locate + captureShot. LOCATE-ONLY — never clicks
+ * or submits, injects no container, sends no beacon. Best-effort + bounded (MAX_VERIFY_PAGES pages,
+ * MAX_SCREENSHOTS shots). Returns one entry per tag (screenshot absent when the element wasn't found).
+ */
+export async function runSuggestionScreenshots(
+  url: string,
+  tags: SuggestionShotTag[],
+  opts: { navTimeoutMs?: number; settleMs?: number } = {},
+): Promise<{ pagesOk: boolean; error?: string; shots: SuggestionShot[] }> {
+  const navTimeoutMs = opts.navTimeoutMs ?? 20_000;
+  const settleMs = opts.settleMs ?? 700;
+  const shots: SuggestionShot[] = [];
+  if (tags.length === 0) return { pagesOk: true, shots };
+  if (!(await requestAllowed(url))) {
+    return { pagesOk: false, error: `Refusing to load ${url}: blocked by the SSRF guard (private/loopback/invalid host).`, shots };
+  }
+  const pw = await loadPlaywright();
+  if (!pw) throw new PlaywrightUnavailableError();
+
+  let browser: PwBrowser | null = null;
+  try {
+    browser = await pw.chromium.launch({ headless: true });
+    const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+    const page = await context.newPage();
+    const shotState = { n: 0 };
+    for (const [pageUrl, groupTags] of groupByPage(url, tags)) {
+      try {
+        await page.goto(pageUrl, { waitUntil: 'networkidle', timeout: navTimeoutMs });
+      } catch {
+        for (const t of groupTags) shots.push({ tagId: t.id, page: pageUrl });
+        continue;
+      }
+      await page.waitForTimeout(Math.min(Math.max(settleMs, 400), 1500));
+      for (const t of groupTags) {
+        let found = false;
+        try {
+          if (t.trigger.kind === 'pageview') {
+            found = true; // a page-load tag's "location" is the whole page
+          } else if (t.trigger.kind === 'custom_event') {
+            // A custom-event FORM tag → ring its <form>; a non-form custom event has no on-page element.
+            const loc = formLocatorFor(t.trigger as DriverTrigger);
+            if (loc) {
+              const r = await page.evaluate<{ found: boolean }>(locateFormInPage, loc);
+              found = r.found;
+            }
+          } else {
+            const r = await page.evaluate<DriveOutcome>(driveInPage, specForShot(t.trigger));
+            found = r.targetFound;
+          }
+        } catch {
+          found = false;
+        }
+        const screenshot = found ? await captureShot(page, shotState) : undefined;
+        shots.push({ tagId: t.id, page: pageUrl, ...(screenshot ? { screenshot } : {}) });
+      }
+    }
+    return { pagesOk: true, shots };
+  } catch (e) {
+    return { pagesOk: false, error: (e instanceof Error ? e.message : String(e)).slice(0, 300), shots };
   } finally {
     if (browser) {
       try {

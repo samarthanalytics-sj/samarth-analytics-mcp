@@ -472,6 +472,19 @@ export interface SuggestedTagView {
      *  from the trigger's extra conditions + the container's Data Layer Variables. */
     customEventData?: Record<string, string>;
   };
+  /** Best-effort JPEG data-URI of the page location this tag would track (its CTA/form ringed),
+   *  captured by a locate-only pass that reuses the verify driver's screenshot logic. Absent when the
+   *  element couldn't be located, the kind has no on-page element, or the screenshot cap was hit. */
+  screenshot?: string;
+}
+
+/** Result of suggestions:screenshotTags — one locate-only proof screenshot per suggested (creatable)
+ *  tag: the element/location it would track, ringed. Reuses the verify driver's ring + capture.
+ *  `screenshot` is absent when the element couldn't be located on its page. */
+export interface SuggestionScreenshotResult {
+  url: string;
+  shots: Array<{ tagId: string; page: string; screenshot?: string }>;
+  error?: string;
 }
 
 /** Streamed after each page during a scan — the running suggestion list (so the
