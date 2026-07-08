@@ -15,6 +15,11 @@ const SEV_COLOR: Record<string, string> = {
   critical: 'var(--c-red)', high: 'var(--c-red)', medium: 'var(--c-amber, #b8860b)', low: 'var(--c-amber, #b8860b)', info: 'var(--text-muted)',
 };
 const SEV_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
+// Solid accent colours for white-text surfaces (primary buttons + the hero severity badge). The theme
+// --c-* accents INVERT to light pastels in dark mode (see memory: never put white on var(--c-*)), so
+// these fixed mid-dark solids are used wherever white text sits on a filled accent — readable in BOTH modes.
+const SOLID_BLUE = '#2563eb';
+const SEV_SOLID: Record<string, string> = { critical: '#dc2626', high: '#dc2626', medium: '#b45309', low: '#b45309', info: '#475569' };
 const HEALTH: Record<string, { color: string; bg: string; label: string; icon: string }> = {
   critical: { color: 'var(--c-red)', bg: 'var(--c-red-bg, rgba(239,68,68,.12))', label: 'Critical', icon: '🔴' },
   warning: { color: 'var(--c-amber, #b8860b)', bg: 'var(--c-amber-bg, rgba(245,158,11,.14))', label: 'Warning', icon: '🟠' },
@@ -76,7 +81,7 @@ const sectionTitle: React.CSSProperties = { fontSize: 12, fontWeight: 700, textT
 const label: React.CSSProperties = { fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 };
 const btn: React.CSSProperties = { background: 'var(--surface-3)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 8, padding: '7px 14px', cursor: 'pointer', fontSize: 13 };
 const ghostBtn: React.CSSProperties = { background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 7, padding: '5px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600 };
-const primaryBtn: React.CSSProperties = { ...btn, background: 'var(--c-blue)', color: '#fff', borderColor: 'transparent', fontWeight: 600 };
+const primaryBtn: React.CSSProperties = { ...btn, background: SOLID_BLUE, color: '#fff', borderColor: 'transparent', fontWeight: 600 };
 const input: React.CSSProperties = { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 9px', fontSize: 13, fontFamily: 'inherit' };
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
@@ -193,12 +198,13 @@ function HeroCard({ run, isRunning, disabled, onRun }: { run: Ga4MonitorRun; isR
   }
 
   const col = SEV_COLOR[top.severity] ?? 'var(--c-red)';
+  const solid = SEV_SOLID[top.severity] ?? '#dc2626';
   return (
     <div style={{ ...card, padding: 0, overflow: 'hidden', borderColor: col, display: 'flex' }}>
-      <div style={{ width: 6, background: col, flexShrink: 0 }} />
+      <div style={{ width: 6, background: solid, flexShrink: 0 }} />
       <div style={{ padding: 18, flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: '#fff', background: col, borderRadius: 6, padding: '3px 10px' }}>{top.severity}</span>
+          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: '#fff', background: solid, borderRadius: 6, padding: '3px 10px' }}>{top.severity}</span>
           <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>Most urgent finding</span>
           {isNew && <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--c-blue)', background: 'var(--c-blue-bg, rgba(59,130,246,.15))', borderRadius: 999, padding: '1px 8px' }}>NEW</span>}
         </div>
@@ -211,7 +217,7 @@ function HeroCard({ run, isRunning, disabled, onRun }: { run: Ga4MonitorRun; isR
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 14 }}>
-          <button style={{ ...primaryBtn, background: col }} disabled={disabled} onClick={onRun}>{isRunning ? 'Checking…' : '↻ Run check again'}</button>
+          <button style={{ ...primaryBtn, background: solid }} disabled={disabled} onClick={onRun}>{isRunning ? 'Checking…' : '↻ Run check again'}</button>
           {run.alerts.length > 1 && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>+{run.alerts.length - 1} more {run.alerts.length - 1 === 1 ? 'alert' : 'alerts'} below</span>}
         </div>
       </div>
@@ -244,18 +250,55 @@ function AiSummary({ run }: { run: Ga4MonitorRun }): JSX.Element {
   );
 }
 
-/** One health check rendered as a NEUTRAL tile: a category icon in the status colour, the label,
- *  and the status pill. Colour is reserved for those small indicators + a thin left edge. */
+/** Plain-language "what this check verifies and why" per check type — revealed when a tile is expanded,
+ *  so the operator's obvious next step (understand the signal) is one click away. */
+const CHECK_EXPLAIN: Record<string, string> = {
+  data_flow: 'Confirms sessions and users are still being recorded, so an outage or broken tag shows up as missing data.',
+  events: 'Watches your key events for any that stopped firing or dropped sharply versus their recent baseline.',
+  trend: 'Reads the direction of daily sessions across the trend window to catch a sustained rise or drop (today is excluded so an in-progress day is not misread).',
+  growth: 'Compares conversion and revenue growth against session growth, so a traffic spike that does not convert is flagged instead of celebrated.',
+  data_quality: 'Checks that traffic sources are attributed normally, rather than collapsing into (not set), self-referrals or internal traffic.',
+  consent_drift: 'Tracks the share of sessions with no source; a rise often signals a Consent Mode v2 or cookie-banner change suppressing attribution.',
+  transactions: 'Looks for duplicate or unlabelled purchase transactions that would inflate or distort reported revenue.',
+  access: 'Verifies the monitor can still read this property’s reporting data (permissions, API access, quota).',
+};
+
+/** One health check as a NEUTRAL, EXPANDABLE tile: a category icon in the status colour, the label and
+ *  status pill; click (or Enter/Space) to reveal a plain-language explainer of what the check verifies.
+ *  Colour is reserved for the small indicators + the thin left edge. */
 function CheckCard({ c }: { c: Ga4MonitorCheckView }): JSX.Element {
+  const [open, setOpen] = useState(false);
   const p = CHECK_PILL[c.status] ?? CHECK_PILL.skip;
+  const explain = CHECK_EXPLAIN[c.id] ?? 'An additional health signal for this property.';
+  const regionId = `ga4-check-${c.id}`;
+  const toggle = (): void => setOpen((o) => !o);
+  // The card body is a mouse convenience (click anywhere to expand); the real, keyboard-focusable and
+  // screen-reader-named control is the inner <button>, so AT announces a concise name + expanded state.
   return (
-    <div className="ga4mon-tile" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${p.color}`, borderRadius: 10, padding: '16px' }}>
+    <div
+      className="ga4mon-tile"
+      onClick={toggle}
+      style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${p.color}`, borderRadius: 10, padding: '16px', cursor: 'pointer' }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
         <span style={{ color: p.color, display: 'inline-flex', flexShrink: 0 }}><CheckTypeIcon id={c.id} /></span>
         <span style={{ fontWeight: 700, fontSize: 13.5 }}>{c.label}</span>
         <span style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 700, color: p.color, background: 'var(--surface-2)', border: `1px solid ${p.color}`, borderRadius: 999, padding: '1px 8px' }}>{p.label}</span>
       </div>
       <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.5 }}>{c.detail}</div>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={regionId}
+        onClick={(e) => { e.stopPropagation(); toggle(); }}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 8, padding: 0, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, color: 'var(--c-blue)' }}
+      >
+        <span aria-hidden="true" style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s ease' }}>▸</span>
+        {open ? 'Hide details' : 'What this checks'}
+      </button>
+      {open && (
+        <div id={regionId} style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed var(--border)', fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>{explain}</div>
+      )}
     </div>
   );
 }
