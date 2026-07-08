@@ -163,6 +163,15 @@ check('edit: a blank-value when row is dropped (no dangling filter)', triggerWhe
 const e5 = applyTagEdit(faqTag, { whens: [{ variable: '{{Click Text}}', condition: 'contains (ignore case)', value: 'x' }] });
 check('edit: condition "(ignore case)" suffix maps to ignoreCase=true', e5.trigger.clickTextIgnoreCase === true && e5.trigger.clickTextOperator === 'contains');
 
+// Removing a condition (the row's "×" button) → apply the REDUCED whens: the dropped field is cleared,
+// the kept one stays. Mirrors a user undoing an extra condition they'd added to a two-condition tag.
+const twoCond = base({
+  id: 'tc', tagName: 'GA4 - Event - Contact Form Tag', eventName: 'contact_form',
+  trigger: { name: 'Contact Form Trigger', kind: 'custom_event', eventName: 'form_submit', pagePathValue: '/contact', pagePathOperator: 'contains', clickUrlValue: 'x', clickUrlOperator: 'equals' },
+});
+const removed = applyTagEdit(twoCond, { whens: triggerWhens(twoCond).filter((w) => w.variable !== '{{Click URL}}') });
+check('edit: removing a condition clears its field + keeps the other', removed.trigger.clickUrlValue === undefined && removed.trigger.pagePathValue === '/contact' && triggerWhens(removed).length === 1);
+
 // platform + triggerKind overrides.
 const e6 = applyTagEdit(phone, { platform: 'meta_pixel', triggerKind: 'all_clicks' });
 check('edit: platform + triggerKind override', e6.platform === 'meta_pixel' && e6.trigger.kind === 'all_clicks');
