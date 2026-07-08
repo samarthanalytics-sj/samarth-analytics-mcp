@@ -1,3 +1,9 @@
+## [1.272.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.271.0...v1.272.0) (2026-07-08)
+
+### Features
+
+* **suggest:** scan crawler runs pages in parallel (driver pool), not one at a time ([1390dfb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1390dfb5f682e4c2cc0356c6813965220d44d07c))
+
 ## [1.271.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.270.0...v1.271.0) (2026-07-08)
 
 ### Features
