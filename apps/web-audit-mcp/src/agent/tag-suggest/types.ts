@@ -246,4 +246,8 @@ export interface SuggestedTag {
      *  resolve on a manual dataLayer.push, so this pushed-key variable is the only reliable scope. */
     dataLayerConditions?: Array<{ key: string; value: string; operator?: FilterOp }>;
   };
+  /** Best-effort JPEG data-URI of the page location this tag would track (its CTA/form ringed),
+   *  captured by a locate-only pass that reuses the verify driver's screenshot logic. Absent when the
+   *  element couldn't be located, the kind has no on-page element, or the screenshot cap was hit. */
+  screenshot?: string;
 }

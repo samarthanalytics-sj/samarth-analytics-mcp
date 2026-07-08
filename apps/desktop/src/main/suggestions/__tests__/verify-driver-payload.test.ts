@@ -6,7 +6,7 @@
 // `form_submission` event on the same page, a prior tag's `form_name` must NOT leak into a later
 // tag's evaluation and falsely credit it. The builder blanks prior keys the current tag isn't setting.
 
-import { buildCustomEventPayload, formLocatorFor } from '../verify-driver';
+import { buildCustomEventPayload, formLocatorFor, specForShot } from '../verify-driver';
 
 let passed = 0;
 let failed = 0;
@@ -91,6 +91,33 @@ function check(name: string, ok: boolean, detail?: string): void {
   check('bare "form" event with no id/name → null', formLocatorFor({ kind: 'custom_event', eventName: 'form' }) === null);
 }
 
+// ── specForShot: build a locate-ONLY DriveSpec from a suggested tag's trigger (suggestion screenshots) ─
+{
+  // A click tag → clickText carried, always locateOnly (never clicked in the screenshot pass).
+  const s = specForShot({ kind: 'link_click', clickTextValue: 'Get a Free Audit', clickTextOperator: 'equals' });
+  check('specForShot: locateOnly is always true', s.locateOnly === true);
+  check('specForShot: click text + op carried', s.clickText === 'Get a Free Audit' && s.clickTextOp === 'equals');
+  check('specForShot: no click, no submit fields leak', s.formId === undefined && s.cssSelector === undefined);
+}
+{
+  // A form tag stores selector-style scopes ("#contact-form" / ".hs-form") — strip the leading #/. .
+  const s = specForShot({ kind: 'form_submit', formIdValue: '#contact-form', formClassesValue: '.hs-form' });
+  check('specForShot: form id # stripped', s.formId === 'contact-form');
+  check('specForShot: form classes . stripped', s.formClasses === 'hs-form');
+}
+{
+  // An FAQ accordion → {{Click Element}} cssSelector: mapped to spec.cssSelector, not clickText.
+  const s = specForShot({ kind: 'all_clicks', clickElementValue: '.faq-item .faq-question', clickElementOperator: 'cssSelector' });
+  check('specForShot: cssSelector mapped from clickElement', s.cssSelector === '.faq-item .faq-question');
+  check('specForShot: cssSelector does not become clickText', s.clickText === undefined);
+}
+{
+  // A click-URL cssSelector (rare) also maps to cssSelector and is NOT re-sent as a clickUrl filter.
+  const s = specForShot({ kind: 'all_clicks', clickUrlValue: 'a.download', clickUrlOperator: 'cssSelector' });
+  check('specForShot: clickUrl cssSelector → cssSelector', s.cssSelector === 'a.download');
+  check('specForShot: clickUrl cssSelector not re-sent as clickUrl', s.clickUrl === undefined);
+}
+
 console.log(`\nverify-driver-payload: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 19) { console.error(`expected >= 19 checks, got ${passed}`); process.exit(1); }
+if (passed < 27) { console.error(`expected >= 27 checks, got ${passed}`); process.exit(1); }
