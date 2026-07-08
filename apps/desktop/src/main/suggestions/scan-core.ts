@@ -83,6 +83,11 @@ export interface ScanOptions {
    *  guarantee content-hub pages (case-studies/blog/guides) are scanned so their click-CTAs enter the
    *  inventory and their tags aren't falsely "untested". */
   seedUrls?: string[];
+  /** ADDITIONAL page drivers, beyond the primary one, to scan pages IN PARALLEL. The crawl runs one
+   *  worker per driver over a shared page queue (each URL scanned by exactly one worker), so N drivers
+   *  ≈ N× throughput on a multi-page site. Omitted / empty → the single primary driver → the original
+   *  strictly-sequential behaviour (unchanged). All drivers (primary + these) are closed when done. */
+  drivers?: PageDriver[];
 }
 
 /** Streamed after every page is scanned — the RUNNING (full) suggestion list so the
@@ -106,6 +111,26 @@ function runningSuggestions(pageScans: PageScan[], siteHost: string, platforms: 
 
 const clamp = (v: number | undefined, dflt: number, cap: number): number =>
   v === undefined || !Number.isFinite(v) || v <= 0 ? dflt : Math.min(Math.floor(v), cap);
+// A short yield used by the parallel crawl workers to wait for in-flight peers to enqueue newly
+// discovered links before concluding the queue is truly drained.
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Merge the debug diagnostics of every driver in a scan pool — pages are split across the pool, so the
+ *  "Show debug" panel must union all of them, not just the primary's. A single-driver pool returns that
+ *  driver's diagnostics verbatim (so concurrency 1 is unchanged). Diagnostics buffers are retained past
+ *  close(), so this is safe to read after the pool is torn down. */
+function mergePoolDiagnostics(pool: PageDriver[]): ScanDebug | undefined {
+  if (pool.length <= 1) return pool[0]?.diagnostics?.();
+  const parts = pool.map((d) => d.diagnostics?.()).filter((x): x is ScanDebug => Boolean(x));
+  if (!parts.length) return undefined;
+  return {
+    driver: [...new Set(parts.map((p) => p.driver))].join('+'),
+    settleMode: parts[0].settleMode,
+    pages: parts.flatMap((p) => p.pages),
+    consoleErrors: parts.flatMap((p) => p.consoleErrors),
+    pageErrors: parts.flatMap((p) => p.pageErrors),
+  };
+}
 
 // ── Crawl helpers (mirror apps/web-audit-mcp/src/agent/crawler.ts — keep in
 //    sync; re-stated to keep this module free of the Playwright browser import) ──
@@ -483,7 +508,10 @@ export async function crawlAndSuggest(
     /* validated upstream by urlAllowed */
   }
   if (!start) {
-    await driver.close();
+    // Close the WHOLE pool, not just the primary: the caller pre-allocates the extra drivers, so an
+    // early return here (e.g. an asset start URL like /sitemap.xml or /file.pdf that passes the SSRF
+    // guard but is not crawlable) must not leak them.
+    await Promise.all([driver, ...(opts.drivers ?? [])].map((d) => d.close().catch(() => undefined)));
     return emptyResult(startUrl, siteHost, ['Not a crawlable http(s) URL.']);
   }
 
@@ -499,54 +527,85 @@ export async function crawlAndSuggest(
     if (n && sameSite(n, start) && !discovered.has(n)) { discovered.add(n); queue.push({ url: n, depth: 0, seed: true }); }
   }
   let opened = 0;
+  let active = 0; // pages being scanned by SOME worker right now; a worker only exits when the queue is
+  //                 drained AND active === 0 (another in-flight worker may still enqueue discovered links).
+  const pool = [driver, ...(opts.drivers ?? [])];
 
-  try {
+  // Claim the next scannable URL SYNCHRONOUSLY (no await inside → atomic on JS's single thread, so no URL
+  // is ever handed to two workers): pop the highest-priority queued URL that passes the visited + SSRF
+  // checks, reserving a budget slot and an `active` slot. null when nothing is claimable right now.
+  const claimNext = (): { url: string; depth: number } | null => {
     while (queue.length > 0 && opened < maxPages) {
       // Seeds first, then shallowest, then by crawl rank (home → form-likely → content hub → other).
       queue.sort((a, b) => (b.seed ? 1 : 0) - (a.seed ? 1 : 0) || a.depth - b.depth || crawlRank(b.url) - crawlRank(a.url));
-      const { url, depth } = queue.shift()!;
-      const key = url.replace(/\/$/, '');
+      const item = queue.shift()!;
+      const key = item.url.replace(/\/$/, '');
       if (visited.has(key)) continue;
-      visited.add(key);
-
-      const verdict = urlAllowed(url, []);
+      const verdict = urlAllowed(item.url, []);
       if (!verdict.ok) {
-        notScanned.push({ url, reason: verdict.reason });
+        notScanned.push({ url: item.url, reason: verdict.reason });
         continue;
       }
-
+      visited.add(key);
       opened += 1;
-      const r = await scanTarget(driver, url, siteHost, start);
-      if (!r.page) {
-        notScanned.push({ url, reason: r.reason ?? 'not scanned' });
+      active += 1;
+      return { url: item.url, depth: item.depth };
+    }
+    return null;
+  };
+  // Add a scanned page's links to the frontier (synchronous critical section).
+  const enqueueLinks = (links: string[] | undefined, depth: number): void => {
+    if (depth >= maxDepth) return;
+    for (const norm of links ?? []) {
+      const k = norm.replace(/\/$/, '');
+      if (visited.has(k) || discovered.has(norm)) continue;
+      discovered.add(norm);
+      queue.push({ url: norm, depth: depth + 1 });
+    }
+  };
+
+  // One worker per driver, all draining the SAME queue. At concurrency 1 (a single driver, no extras)
+  // this reduces to the original strictly-sequential BFS.
+  const worker = async (d: PageDriver): Promise<void> => {
+    for (;;) {
+      const item = claimNext();
+      if (!item) {
+        if (active === 0) return; // queue drained and nobody can still enqueue → done
+        await delay(15); // work in flight elsewhere may still enqueue links — wait, don't exit early
         continue;
       }
-      pageScans.push(r.page);
-      if (depth < maxDepth) {
-        for (const norm of r.links ?? []) {
-          const k = norm.replace(/\/$/, '');
-          if (visited.has(k) || discovered.has(norm)) continue;
-          discovered.add(norm);
-          queue.push({ url: norm, depth: depth + 1 });
+      try {
+        const r = await scanTarget(d, item.url, siteHost, start);
+        if (!r.page) {
+          notScanned.push({ url: item.url, reason: r.reason ?? 'not scanned' });
+        } else {
+          pageScans.push(r.page);
+          enqueueLinks(r.links, item.depth);
+          // Stream the running list so the review panel fills in as the crawl proceeds.
+          if (onProgress) {
+            try {
+              onProgress({ scanned: pageScans.length, opened, queued: queue.length, suggestions: runningSuggestions(pageScans, siteHost, platforms) });
+            } catch {
+              /* a progress sink error must never abort the crawl */
+            }
+          }
         }
-      }
-      // Stream the running list so the review panel fills in as the crawl proceeds.
-      if (onProgress) {
-        try {
-          onProgress({ scanned: pageScans.length, opened, queued: queue.length, suggestions: runningSuggestions(pageScans, siteHost, platforms) });
-        } catch {
-          /* a progress sink error must never abort the crawl */
-        }
+      } finally {
+        active -= 1; // released AFTER enqueue, so a worker that observes active===0 sees a settled queue
       }
     }
+  };
+
+  try {
+    await Promise.all(pool.map((d) => worker(d)));
   } finally {
-    await driver.close();
+    await Promise.all(pool.map((d) => d.close().catch(() => undefined)));
   }
 
   if (queue.length > 0) {
     warnings.push(`${queue.length} more same-site page(s) were discovered but not scanned (page budget ${maxPages}).`);
   }
-  return assembleResult(start, siteHost, pageScans, notScanned, warnings, opened, [], platforms, driver.diagnostics?.());
+  return assembleResult(start, siteHost, pageScans, notScanned, warnings, opened, [], platforms, mergePoolDiagnostics(pool));
 }
 
 /** Max pages a single "scan selected" run (Main website) or CSV import will deep-scan. */
@@ -561,7 +620,7 @@ export async function scanUrls(
   urls: string[],
   siteHostHint?: string,
   onProgress?: OnScanProgress,
-  opts: { platforms?: SuggestPlatform[] } = {},
+  opts: { platforms?: SuggestPlatform[]; drivers?: PageDriver[] } = {},
 ): Promise<TagScanResult> {
   const platforms = opts.platforms ?? ['ga4'];
   const list = urls.filter(Boolean);
@@ -586,9 +645,16 @@ export async function scanUrls(
   const notScanned: TagScanResult['notScanned'] = [];
   const pageScans: PageScan[] = [];
   const seen = new Set<string>();
+  const pool = [driver, ...(opts.drivers ?? [])];
+  let idx = 0;
   let opened = 0;
-  try {
-    for (const raw of targets) {
+
+  // Claim the next target SYNCHRONOUSLY (no await inside → atomic on JS's single thread, so no URL is
+  // scanned twice). A fixed list has no frontier to grow, so a worker simply exits when the list is
+  // exhausted. At concurrency 1 this reduces to the original strictly-sequential loop.
+  const claimNext = (): string | null => {
+    while (idx < targets.length) {
+      const raw = targets[idx++];
       const url = normalizeUrl(raw, raw) ?? raw;
       const key = url.replace(/\/$/, '');
       if (seen.has(key)) continue;
@@ -599,7 +665,15 @@ export async function scanUrls(
         continue;
       }
       opened += 1;
-      const r = await scanTarget(driver, url, siteHost, url);
+      return url;
+    }
+    return null;
+  };
+  const worker = async (d: PageDriver): Promise<void> => {
+    for (;;) {
+      const url = claimNext();
+      if (!url) return;
+      const r = await scanTarget(d, url, siteHost, url);
       if (!r.page) {
         notScanned.push({ url, reason: r.reason ?? 'not scanned' });
         continue;
@@ -613,8 +687,12 @@ export async function scanUrls(
         }
       }
     }
+  };
+
+  try {
+    await Promise.all(pool.map((d) => worker(d)));
   } finally {
-    await driver.close();
+    await Promise.all(pool.map((d) => d.close().catch(() => undefined)));
   }
-  return assembleResult(start ?? list[0] ?? '', siteHost, pageScans, notScanned, warnings, opened, [], platforms, driver.diagnostics?.());
+  return assembleResult(start ?? list[0] ?? '', siteHost, pageScans, notScanned, warnings, opened, [], platforms, mergePoolDiagnostics(pool));
 }

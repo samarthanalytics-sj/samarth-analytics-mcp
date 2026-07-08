@@ -36,6 +36,9 @@ export interface ElectronDriverOptions {
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e)).slice(0, 200);
+// Monotonic id so each driver's ephemeral session partition is unique even when a pool of drivers is
+// created in the same millisecond (see the partition string below).
+let driverSeq = 0;
 
 // Race a promise against a timeout; runs onTimeout (e.g. stop the load) on expiry.
 async function withTimeout<T>(p: Promise<T>, ms: number, label: string, onTimeout?: () => void): Promise<T> {
@@ -138,8 +141,10 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
   // undefined → AUTO (network-idle); a number → that fixed wait.
   const autoSettle = opts.settleMs === undefined;
   const fixedSettleMs = opts.settleMs ?? 0;
-  // Ephemeral, in-memory session (no 'persist:' prefix) — cleared on close.
-  const partition = `tagsuggest-scan-${process.pid}-${Date.now()}`;
+  // Ephemeral, in-memory session (no 'persist:' prefix) — cleared on close. A monotonic counter keeps
+  // the partition UNIQUE even when several drivers are created in the same millisecond for a parallel
+  // scan (Date.now() alone would collide → they'd share one session).
+  const partition = `tagsuggest-scan-${process.pid}-${Date.now()}-${driverSeq++}`;
   const ses = session.fromPartition(partition, { cache: false });
   // Analytics / ad / service-worker noise we don't need for DOM scanning —
   // blocking it cuts the console spam (e.g. a server-side-GTM sw_iframe retry
