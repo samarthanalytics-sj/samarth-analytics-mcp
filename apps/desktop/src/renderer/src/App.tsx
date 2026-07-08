@@ -33,6 +33,7 @@ import type {
 import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
+import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
@@ -930,6 +931,8 @@ function ChatView({
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [product, setProduct] = useState<'gtm' | 'ga4'>('gtm');
+  // Slash-command autocomplete: highlighted index in the menu; reset whenever the input text changes.
+  const [slashIdx, setSlashIdx] = useState(0);
   // One stored conversation per account + product + container; survives tab switches + restarts.
   const threadKey = chatThreadKey(active?.id, product, active?.gtmContext?.containerId);
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadChatThread(threadKey));
@@ -967,6 +970,16 @@ function ChatView({
       ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
     }
   }, [input]);
+  // Reset the slash-menu highlight when the query text changes (typing narrows/refills the menu).
+  useEffect(() => { setSlashIdx(0); }, [input]);
+
+  // Accept a slash command from the menu: fill the box with "/name " and, if it needs a different
+  // toolset (e.g. /report → GA4), flip the product NOW so the thread is settled before the user sends.
+  const acceptSlash = (cmd: SlashCommand): void => {
+    setInput(`/${cmd.name} `);
+    if (cmd.product && cmd.product !== product) setProduct(cmd.product);
+    taRef.current?.focus();
+  };
 
   // A prompt picked from the Prompts tab seeds the input (nonce makes re-picks re-apply). A GA4
   // prompt also flips the chat to its GA4 toggle so it runs against the GA4 API, not GTM.
@@ -990,18 +1003,27 @@ function ChatView({
           ? 'Add an API key for this account (Settings).'
           : '';
 
+  // Slash-command autocomplete: which commands to offer for the current input, and the clamped highlight.
+  const slashMatches = ready && !busy ? slashMenuMatches(input) : [];
+  const slashActive = Math.min(slashIdx, Math.max(0, slashMatches.length - 1));
+
   async function send(): Promise<void> {
     const text = input.trim();
     if (!text || busy) return;
+    // Expand a slash command (/audit, /report, …) into the full instruction, and DISPLAY the short
+    // command while SENDING the expansion. A command whose toolset lives in the other product flips it
+    // first (keep the command in the box; the user presses Enter again once the thread has settled).
+    const resolved = resolveChatInput(text, product);
+    if (resolved.product !== product) { setProduct(resolved.product); return; }
     onError('');
     const history: ChatTurn[] = messages.map((m) => ({ role: m.role, text: m.text }));
     const now = Date.now();
-    setMessages((m) => [...m, { role: 'user', text, ts: now }, { role: 'assistant', text: '', tools: [], ts: now }]);
+    setMessages((m) => [...m, { role: 'user', text: resolved.display, ts: now }, { role: 'assistant', text: '', tools: [], ts: now }]);
     setInput('');
     setBusy(true);
     setRevertable(null);
     try {
-      await window.desktop.llm.chatStream(history, text, product, (ev) => {
+      await window.desktop.llm.chatStream(history, resolved.sent, product, (ev) => {
         setMessages((m) => {
           const copy = [...m];
           const last = copy[copy.length - 1];
@@ -1166,16 +1188,43 @@ function ChatView({
         </div>
       )}
 
-      <div style={styles.composer}>
+      <div style={{ ...styles.composer, position: 'relative' }}>
+        {slashMatches.length > 0 && (
+          <div className="sheet-in" style={styles.slashMenu} role="listbox" aria-label="Slash commands">
+            <div style={styles.slashMenuHead}>Commands</div>
+            {slashMatches.map((c, i) => (
+              <button
+                key={c.name}
+                type="button"
+                role="option"
+                aria-selected={i === slashActive}
+                style={{ ...styles.slashItem, ...(i === slashActive ? styles.slashItemActive : {}) }}
+                onMouseEnter={() => setSlashIdx(i)}
+                onMouseDown={(e) => { e.preventDefault(); acceptSlash(c); }}
+              >
+                <span style={styles.slashName}>/{c.name} <span style={styles.slashHint}>{c.hint}</span></span>
+                <span style={styles.slashDesc}>{c.desc}</span>
+              </button>
+            ))}
+            <div style={styles.slashMenuFoot}>↑↓ navigate · Enter select · Esc dismiss</div>
+          </div>
+        )}
         <textarea
           ref={taRef}
           style={styles.composerInput}
-          placeholder={ready ? 'Message…  (Enter to send, Shift+Enter for a new line)' : hint}
+          placeholder={ready ? 'Message, or / for commands…  (Enter to send, Shift+Enter for a new line)' : hint}
           value={input}
           disabled={!ready || busy}
           rows={1}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
+            // When the slash menu is open, the arrow/Enter/Tab/Esc keys drive it instead of the textarea.
+            if (slashMatches.length > 0) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((slashActive + 1) % slashMatches.length); return; }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((slashActive - 1 + slashMatches.length) % slashMatches.length); return; }
+              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptSlash(slashMatches[slashActive]); return; }
+              if (e.key === 'Escape') { e.preventDefault(); setInput(''); return; }
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
               void send();
@@ -6506,6 +6555,15 @@ const styles: Record<string, React.CSSProperties> = {
   toolErrors: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 },
   toolErrorLine: { background: 'var(--c-red-bg)', border: '1px solid var(--c-red-border)', color: 'var(--c-red)', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
   composer: { display: 'flex', gap: 8, padding: 16, borderTop: '1px solid var(--border)', alignItems: 'flex-end' },
+  // Slash-command autocomplete menu — floats above the composer.
+  slashMenu: { position: 'absolute', bottom: 'calc(100% - 6px)', left: 16, right: 16, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 12, boxShadow: '0 12px 32px rgba(2,6,23,0.22)', padding: 6, zIndex: 30, maxHeight: 300, overflowY: 'auto' },
+  slashMenuHead: { fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text-faint)', padding: '4px 8px 6px' },
+  slashItem: { display: 'flex', flexDirection: 'column', gap: 1, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderRadius: 8, padding: '7px 9px', cursor: 'pointer', color: 'var(--text)' },
+  slashItemActive: { background: 'var(--c-blue-bg)' },
+  slashName: { fontSize: 13, fontWeight: 600, color: 'var(--text)', fontFamily: 'ui-monospace, monospace' },
+  slashHint: { color: 'var(--text-faint)', fontWeight: 400, fontSize: 12 },
+  slashDesc: { fontSize: 12, color: 'var(--text-muted)' },
+  slashMenuFoot: { fontSize: 10.5, color: 'var(--text-faint)', padding: '6px 8px 3px', borderTop: '1px solid var(--border)', marginTop: 4 },
   composerInput: {
     flex: 1,
     background: 'var(--surface)',
