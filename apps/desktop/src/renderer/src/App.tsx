@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { applyTheme, loadTheme, saveTheme, type Theme } from './theme';
+import { ShortcutsOverlay, EmptyState } from './ui';
 import type { AppInfo } from '../../preload';
 import type {
   AccountView,
@@ -617,6 +618,8 @@ export function App(): JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [selfTest, setSelfTest] = useState<SecretSelfTest | null>(null);
   const [view, setView] = useState<View>('chat');
+  // Keyboard-shortcuts help overlay (opened with ?).
+  const [showShortcuts, setShowShortcuts] = useState(false);
   // GA4 Tools sub-tab is lifted to App (unlike GTM Tools' local state) so the cross-tab monitor
   // alert banner can deep-link straight to the Monitoring sub-tab.
   const [ga4Tab, setGa4Tab] = useState<Ga4Tab>('audit');
@@ -693,6 +696,27 @@ export function App(): JSX.Element {
     }
   }
 
+  // Global keyboard shortcuts: Ctrl/Cmd+1..5 switch the primary view (even while typing); "?" toggles
+  // the shortcuts overlay (ignored while typing so "?" still types into inputs).
+  useEffect(() => {
+    const VIEWS: View[] = ['chat', 'gtm', 'ga4', 'prompts', 'settings'];
+    const isTyping = (el: EventTarget | null): boolean => {
+      const t = el as HTMLElement | null;
+      return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key >= '1' && e.key <= '5') {
+        const v = VIEWS[Number(e.key) - 1];
+        if (v) { e.preventDefault(); setView(v); }
+        return;
+      }
+      if (isTyping(e.target)) return;
+      if (e.key === '?') { e.preventDefault(); setShowShortcuts((s) => !s); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
     <div style={styles.app}>
       <aside style={styles.sidebar}>
@@ -728,36 +752,23 @@ export function App(): JSX.Element {
         <div style={{ flex: 1 }} />
 
         <div style={styles.sideNav}>
-          <button
-            style={{ ...styles.navItem, ...(view === 'chat' ? styles.navActive : {}) }}
-            onClick={() => setView('chat')}
-          >
-            💬 Chat
-          </button>
-          <button
-            style={{ ...styles.navItem, ...(view === 'gtm' ? styles.navActive : {}) }}
-            onClick={() => setView('gtm')}
-          >
-            🗂 GTM Tools
-          </button>
-          <button
-            style={{ ...styles.navItem, ...(view === 'ga4' ? styles.navActive : {}) }}
-            onClick={() => setView('ga4')}
-          >
-            📊 GA4 Tools
-          </button>
-          <button
-            style={{ ...styles.navItem, ...(view === 'prompts' ? styles.navActive : {}) }}
-            onClick={() => setView('prompts')}
-          >
-            📖 Prompts
-          </button>
-          <button
-            style={{ ...styles.navItem, ...(view === 'settings' ? styles.navActive : {}) }}
-            onClick={() => setView('settings')}
-          >
-            ⚙ Settings
-          </button>
+          {([
+            ['chat', '💬 Chat'],
+            ['gtm', '🗂 GTM Tools'],
+            ['ga4', '📊 GA4 Tools'],
+            ['prompts', '📖 Prompts'],
+            ['settings', '⚙ Settings'],
+          ] as Array<[View, string]>).map(([v, label]) => (
+            <button
+              key={v}
+              className="nav-item"
+              data-active={view === v ? 'true' : 'false'}
+              style={{ ...styles.navItem, ...(view === v ? styles.navActive : {}) }}
+              onClick={() => setView(v)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <div style={styles.sideVersion}>v{info?.version ?? '0.0.0'}</div>
       </aside>
@@ -806,6 +817,10 @@ export function App(): JSX.Element {
         <div style={{ display: view === 'chat' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           <ChatView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} seed={chatSeed} />
         </div>
+        {/* Keyed by view so each switch replays the fade+lift entrance (smooth page transition). Chat is
+            excluded — it lives in the always-mounted div above so its stream survives tab switches. */}
+        {view !== 'chat' && (
+          <div key={view} className="view-enter" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
         {view === 'gtm' ? (
           <GtmToolsView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
         ) : view === 'ga4' ? (
@@ -832,7 +847,23 @@ export function App(): JSX.Element {
             refresh={refresh}
           />
         ) : null}
+          </div>
+        )}
       </main>
+      {showShortcuts && (
+        <ShortcutsOverlay
+          onClose={() => setShowShortcuts(false)}
+          shortcuts={[
+            { keys: ['Ctrl', '1'], label: 'Go to Chat' },
+            { keys: ['Ctrl', '2'], label: 'Go to GTM Tools' },
+            { keys: ['Ctrl', '3'], label: 'Go to GA4 Tools' },
+            { keys: ['Ctrl', '4'], label: 'Go to Prompts' },
+            { keys: ['Ctrl', '5'], label: 'Go to Settings' },
+            { keys: ['?'], label: 'Show / hide this help' },
+            { keys: ['Esc'], label: 'Close dialogs' },
+          ]}
+        />
+      )}
     </div>
   );
 }
@@ -1064,11 +1095,11 @@ function ChatView({
 
       <div style={styles.chatLog}>
         {messages.length === 0 && (
-          <div style={styles.empty}>
-            <div style={{ fontSize: 32, marginBottom: 8 }}>💬</div>
-            Ask about your GTM &amp; GA4 — “list my GTM accounts”, “run a GA4 report for last 28
-            days”, or “create an email-click event tag”.
-          </div>
+          <EmptyState
+            icon="💬"
+            title="Ask about your GTM & GA4"
+            hint={'Try “list my GTM accounts”, “run a GA4 report for last 28 days”, or “create an email-click event tag”.'}
+          />
         )}
         {messages.map((m, i) => (
           <div
@@ -3854,10 +3885,10 @@ function VerifyScorecard({ fired, config, server, untested, issues }: { fired: n
   ];
   return (
     <div style={vStyles.scoreGrid}>
-      {cards.map((c) => {
+      {cards.map((c, i) => {
         const m = V_STATUS[c.s];
         return (
-          <div key={c.label} style={{ ...vStyles.scoreCard, background: m.bg, borderColor: m.border }}>
+          <div key={c.label} className="hover-lift rise-in" style={{ ...vStyles.scoreCard, background: m.bg, borderColor: m.border, '--d': `${i * 0.05}s` } as React.CSSProperties}>
             <div style={{ ...vStyles.scoreNum, color: m.color }}>{c.n}</div>
             <div style={vStyles.scoreLabel}>{c.label}</div>
           </div>
@@ -6276,6 +6307,7 @@ const styles: Record<string, React.CSSProperties> = {
   app: {
     display: 'flex',
     height: '100vh',
+    position: 'relative',
     margin: 0,
     fontFamily: "'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
     color: 'var(--text)',
