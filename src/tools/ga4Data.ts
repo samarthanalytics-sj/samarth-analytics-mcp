@@ -135,10 +135,17 @@ export function registerGa4DataTools(
           });
           return out;
         });
+        // GA4's rowCount is the TOTAL matching rows, independent of limit/offset — so it can exceed the
+        // number of `rows` actually returned. Surface returnedRowCount + hasMore so a caller never mistakes
+        // a truncated page for the complete result (e.g. filtering the returned rows and wrongly concluding
+        // an event is absent when it only lives in an un-returned page). Page via `offset` when hasMore.
+        const totalRows = data.rowCount ?? rows.length;
         return jsonResult({
           property: toPropertyName(property),
           dateRange: { startDate, endDate },
-          rowCount: data.rowCount ?? rows.length,
+          rowCount: totalRows,
+          returnedRowCount: rows.length,
+          hasMore: totalRows > (offset ?? 0) + rows.length,
           dimensionHeaders: dimHeaders,
           metricHeaders: metHeaders,
           rows,
@@ -196,9 +203,15 @@ export function registerGa4DataTools(
           });
           return out;
         });
+        // rowCount is the total; the realtime report has no offset, so rows beyond `limit` are
+        // unreachable — flag truncated so the caller narrows dimensions / raises limit instead of
+        // trusting an incomplete set.
+        const totalRows = data.rowCount ?? rows.length;
         return jsonResult({
           property: toPropertyName(property),
-          rowCount: data.rowCount ?? rows.length,
+          rowCount: totalRows,
+          returnedRowCount: rows.length,
+          truncated: totalRows > rows.length,
           dimensionHeaders: dimHeaders,
           metricHeaders: metHeaders,
           rows,
