@@ -111,13 +111,29 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
   // Locate-only PROOF screenshots for suggested (creatable) tags: open each page a tag lives on, ring
   // the element/form it would track, and return a JPEG data-URI per tag. Read-only — reuses the verify
   // driver's ring + capture but NEVER clicks/submits/injects a container (the tag doesn't exist yet).
-  ipcMain.handle('suggestions:screenshotTags', async (_e, url: unknown, tags: unknown): Promise<SuggestionScreenshotResult> => {
+  ipcMain.handle('suggestions:screenshotTags', async (e, url: unknown, tags: unknown): Promise<SuggestionScreenshotResult> => {
     const target = String(url ?? '').trim();
     const verdict = urlAllowed(target, []);
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
     const list = (Array.isArray(tags) ? tags : []) as SuggestionShotTag[];
     if (list.length === 0) return { url: target, shots: [] };
-    const { shots, error } = await runSuggestionScreenshots(target, list);
+    // Human label per tag for the live progress card (the shot list is a structural subset of the
+    // full suggestion rows, which carry name/eventName).
+    const labelOf = new Map(
+      list.map((t) => {
+        const raw = t as unknown as { name?: string; eventName?: string };
+        return [t.id, String(raw.name ?? raw.eventName ?? t.id)] as const;
+      }),
+    );
+    const { shots, error } = await runSuggestionScreenshots(target, list, {
+      onProgress: (done, total, tagId, page) => {
+        try {
+          if (!e.sender.isDestroyed()) e.sender.send('suggestions:shotProgress', { done, total, label: labelOf.get(tagId) ?? tagId, page });
+        } catch {
+          /* window gone mid-capture — progress is a nicety */
+        }
+      },
+    });
     return { url: target, shots, ...(error ? { error } : {}) };
   });
 

@@ -2442,7 +2442,18 @@ function TagReviewPanel({
   // after each scan by reusing the verify driver (ring the element + shot). `shotStatus` drives the
   // "capturing…" line; `sLightbox` is the image shown full-screen. Best-effort — never blocks the panel.
   const [sShots, setSShots] = useState<Record<string, string>>({});
-  const [shotStatus, setShotStatus] = useState<{ loading: boolean; done: number } | null>(null);
+  const [shotStatus, setShotStatus] = useState<{ loading: boolean; done: number; total?: number; current?: string } | null>(null);
+  // Live per-tag capture progress pushed from main. Only applied while a capture is actually
+  // loading (a late event from a cancelled run must not resurrect the banner).
+  useEffect(
+    () =>
+      window.desktop.tags.onShotProgress((prog) => {
+        let path = prog.page;
+        try { path = new URL(prog.page).pathname || prog.page; } catch { /* keep raw */ }
+        setShotStatus((st) => (st && st.loading ? { loading: true, done: prog.done, total: prog.total, current: `${prog.label} · ${path}` } : st));
+      }),
+    [],
+  );
   const [sLightbox, setSLightbox] = useState<{ src: string; name: string } | null>(null);
   // Suggestion-list filters (search text + type). Display-only: they narrow which rows are SHOWN,
   // never which ids are selected/created.
@@ -3751,7 +3762,22 @@ function TagReviewPanel({
                   Tick a row to create it in GTM; edit fields inline (trigger type is fixed). Showing {curPage * PAGE_SIZE + 1}–{Math.min(visible.length, curPage * PAGE_SIZE + PAGE_SIZE)} of {visible.length} ({PAGE_SIZE} per page).
                 </div>
                 {shotStatus?.loading ? (
-                  <div style={{ ...styles.muted, fontSize: 12 }}>📸 Capturing a proof screenshot of each tag’s location on its page…</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 13px', background: 'var(--c-blue-bg, rgba(59,130,246,.12))', border: '1px solid var(--c-blue-bg, rgba(59,130,246,.25))', borderRadius: 8 }}>
+                    <span style={{ fontSize: 16 }}>📸</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>
+                        Capturing proof screenshots{shotStatus.total ? ` — ${Math.min(shotStatus.done + 1, shotStatus.total)} of ${shotStatus.total}` : '…'}
+                      </div>
+                      {shotStatus.current && (
+                        <div style={{ fontSize: 11.5, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          now: {shotStatus.current}
+                        </div>
+                      )}
+                      <div style={{ height: 4, background: 'var(--surface-3)', borderRadius: 2, marginTop: 6, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', borderRadius: 2, background: 'var(--c-blue)', transition: 'width .3s ease', width: shotStatus.total ? `${Math.round((shotStatus.done / Math.max(1, shotStatus.total)) * 100)}%` : '8%' }} />
+                      </div>
+                    </div>
+                  </div>
                 ) : shotStatus && shotStatus.done > 0 ? (
                   <div style={{ ...styles.muted, fontSize: 12 }}>📸 Captured {shotStatus.done} location screenshot(s) — click a thumbnail under “Page” to view.</div>
                 ) : null}
