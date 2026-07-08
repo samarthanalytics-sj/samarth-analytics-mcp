@@ -408,6 +408,24 @@ function driveInPage(spec: DriveSpec): DriveOutcome {
   const ranked = (leaves.length ? leaves : pool).slice().sort((a, b) => ownTextLen(a) - ownTextLen(b));
   const el: Element | undefined = ranked[0];
   if (!el) return { targetFound: false, performed: false, note: 'no element matched the trigger' };
+  // A "#section" link whose target isn't on the page means the feature it points to (e.g. an FAQ
+  // accordion) isn't implemented HERE — clicking it proves nothing and the proof shot would show an
+  // unrelated part of the page. Report not-found so it reads as honestly "untested", not fake-proven.
+  if ((el.tagName || '').toLowerCase() === 'a') {
+    const href = (el.getAttribute && el.getAttribute('href')) || '';
+    if (href.charAt(0) === '#' && href.length > 1) {
+      const id = href.slice(1);
+      let targetExists = false;
+      try {
+        targetExists = Boolean(document.getElementById(id) || document.querySelector('a[name="' + id.replace(/"/g, '\\"') + '"]'));
+      } catch {
+        targetExists = Boolean(document.getElementById(id));
+      }
+      if (!targetExists) {
+        return { targetFound: false, performed: false, note: 'the trigger matched a "' + href + '" link, but that in-page section is not on this page (the feature it points to is not implemented here)' };
+      }
+    }
+  }
   highlight(el);
   try {
     (el as HTMLElement).click();
