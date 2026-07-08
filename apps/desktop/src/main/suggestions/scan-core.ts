@@ -33,6 +33,7 @@ import { analyzeForms, type RawForm } from '../../../../web-audit-mcp/src/agent/
 import type { SuggestedTag, SuggestPlatform } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 import type { TagScanResult, ScanDebug } from '../../shared/ipc';
+import { suggestionDedupKey } from '../../shared/tag-template';
 
 /** Non-GA4 platform → its GA4→platform deriver (mirrors buildSuggestions' PLATFORM_DERIVERS), so the
  *  AI-derived `extra` suggestions get the same per-platform counterparts as the engine ones. */
@@ -277,14 +278,17 @@ const suggestionKey = (s: SuggestedTag): string =>
   `${s.eventName}|${s.trigger.kind}|${s.trigger.clickUrlValue ?? ''}|${s.trigger.clickTextValue ?? ''}|${s.trigger.clickElementValue ?? ''}|${s.trigger.formIdValue ?? ''}|${s.trigger.formClassesValue ?? ''}|${s.trigger.pagePathValue ?? ''}|${s.trigger.pageUrlValue ?? ''}|${(s.trigger.dataLayerConditions ?? []).map((c) => `${c.key}=${c.value}`).join(',')}`;
 
 /** Remove suggestions that would create the SAME GTM tag, keeping the FIRST occurrence. Identity is
- *  platform + tag NAME only: GTM tag names MUST be unique, so two suggestions sharing a name can never
- *  both be created — the second is always noise, even if its trigger differs slightly (the classic
- *  case: an engine tag and the AI vision pass's copy of the same button, whose triggers vary just
- *  enough to slip past the trigger-key filter). Deduping by name collapses those to one. PURE. */
+ *  platform + eventName + NORMALIZED tag name (see suggestionDedupKey): GTM tag names MUST be unique,
+ *  so two suggestions sharing a name can never both be created — the second is always noise, even if
+ *  its trigger differs slightly (the classic case: an engine tag and the AI vision pass's copy of the
+ *  same button, whose triggers vary just enough to slip past the trigger-key filter; or the same CTA
+ *  whose label differs only by punctuation/whitespace, e.g. "Free Audit" vs "Free  Audit", which yield
+ *  the same event but a punctuation-differing name). Normalizing the name to alphanumeric words
+ *  collapses those to one. MUST use the SAME key as the renderer net (dedupeViewsByGtmName). PURE. */
 export function dedupSuggestions(list: SuggestedTag[]): SuggestedTag[] {
   const byIdentity = new Map<string, SuggestedTag>();
   for (const s of list) {
-    const k = `${s.platform}|${s.tagName.trim().toLowerCase()}`;
+    const k = suggestionDedupKey(s);
     if (!byIdentity.has(k)) byIdentity.set(k, s);
   }
   return [...byIdentity.values()];

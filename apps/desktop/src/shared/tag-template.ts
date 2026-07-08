@@ -250,11 +250,23 @@ export function applyTagEdit(s: SuggestedTagView, e: TagEdit | undefined): Sugge
  *  live-streamed running list is only key-deduped; applying the same name-dedup at every point the
  *  review list is set guarantees the table, the CSV export, and the create flow never show a visual
  *  duplicate — including mid-scan. Pure + idempotent. */
+/** Collapse-key for "show each GTM tag once". The tag NAME is normalized to alphanumeric words, so
+ *  punctuation/whitespace variants of the SAME CTA — "Free Audit" / "Free-Audit" / "Free  Audit" /
+ *  "Free—Audit" — collapse to ONE row (their names differ only by separators, but `.toLowerCase()`
+ *  alone left those distinct). platform + eventName stay in the key so genuinely-different tags keep
+ *  their own row ("Get a Free Audit" get_a_free_audit_click vs "Get Free Audit" get_free_audit_click).
+ *  Used by BOTH the renderer net (below) and the main-process net (scan-core `dedupSuggestions`) — the
+ *  two MUST agree or the mid-scan streamed list and the final list disagree and rows flicker. */
+export function suggestionDedupKey(s: { platform: string; eventName?: string; tagName: string }): string {
+  const alnum = (v: string): string => v.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return `${s.platform}|${(s.eventName ?? '').trim().toLowerCase()}|${alnum(s.tagName)}`;
+}
+
 export function dedupeViewsByGtmName(list: SuggestedTagView[]): SuggestedTagView[] {
   const seen = new Set<string>();
   const out: SuggestedTagView[] = [];
   for (const s of list) {
-    const k = `${s.platform}|${s.tagName.trim().toLowerCase()}`;
+    const k = suggestionDedupKey(s);
     if (seen.has(k)) continue;
     seen.add(k);
     out.push(s);
