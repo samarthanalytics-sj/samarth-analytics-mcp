@@ -377,15 +377,36 @@ function driveInPage(spec: DriveSpec): DriveOutcome {
   const nodes = Array.prototype.slice.call(
     document.querySelectorAll('a,button,[role="button"],input[type="submit"],input[type="button"]'),
   ) as Element[];
-  let el: Element | undefined;
+  // A "FAQs" nav link in the header and the in-content FAQ control share the same Click Text, but the
+  // header link scrolls the proof screenshot to the top of the page (looks like the wrong place). When
+  // several controls match, prefer an in-CONTENT one over page chrome (header/nav/footer).
+  const inChrome = (n: Element): boolean => {
+    let p: Element | null = n;
+    while (p) {
+      const tag = (p.tagName || '').toLowerCase();
+      const role = ((p.getAttribute && p.getAttribute('role')) || '').toLowerCase();
+      if (tag === 'header' || tag === 'nav' || tag === 'footer' || role === 'banner' || role === 'navigation' || role === 'contentinfo') return true;
+      p = p.parentElement;
+    }
+    return false;
+  };
+  const ownTextLen = (n: Element): number => ((n.textContent || (n as HTMLInputElement).value || '') as string).trim().length;
+  const candidates: Element[] = [];
   for (const n of nodes) {
     const txt = ((n.textContent || (n as HTMLInputElement).value || '') as string).trim();
     const href = (n.getAttribute && n.getAttribute('href')) || '';
     const okText = spec.clickText ? matches(txt, spec.clickText, spec.clickTextOp || 'equals') : true;
     const okUrl = spec.clickUrl ? matches(href, spec.clickUrl, spec.clickUrlOp || 'contains') : true;
-    if (spec.clickText && okText && okUrl) { el = n; break; }
-    if (!spec.clickText && spec.clickUrl && okUrl) { el = n; break; }
+    if (spec.clickText && okText && okUrl) candidates.push(n);
+    else if (!spec.clickText && spec.clickUrl && okUrl) candidates.push(n);
   }
+  // Prefer content over chrome; then the innermost control (drop any that merely wraps another match);
+  // then the tightest label (a button reading exactly "FAQs" beats a card that just contains it).
+  const content = candidates.filter((n) => !inChrome(n));
+  const pool = content.length ? content : candidates;
+  const leaves = pool.filter((a) => !pool.some((b) => b !== a && a.contains(b)));
+  const ranked = (leaves.length ? leaves : pool).slice().sort((a, b) => ownTextLen(a) - ownTextLen(b));
+  const el: Element | undefined = ranked[0];
   if (!el) return { targetFound: false, performed: false, note: 'no element matched the trigger' };
   highlight(el);
   try {
@@ -394,6 +415,64 @@ function driveInPage(spec: DriveSpec): DriveOutcome {
   } catch (e) {
     return { targetFound: true, performed: false, note: String(e).slice(0, 150) };
   }
+}
+
+/** For a custom-event FORM tag (fired by a synthetic dataLayer push, not a real submit), ring the
+ *  on-page <form> the tag tracks so the proof screenshot shows the RIGHT form — not the top of the
+ *  page. Best-effort; returns whether a form was located. Matched by form id, then by name-token
+ *  overlap with the form's title/heading, then the sole form on the page. */
+function locateFormInPage(loc: { formId?: string; tokens?: string[] }): { found: boolean } {
+  const ring = (node: Element): void => {
+    try {
+      document.querySelectorAll('[data-sx-hl]').forEach((p) => {
+        const e = p as HTMLElement;
+        e.style.removeProperty('outline'); e.style.removeProperty('outline-offset'); e.style.removeProperty('box-shadow');
+        e.removeAttribute('data-sx-hl');
+      });
+      const h = node as HTMLElement;
+      h.setAttribute('data-sx-hl', '1');
+      h.style.setProperty('outline', '3px solid #ff2d55', 'important');
+      h.style.setProperty('outline-offset', '2px', 'important');
+      h.style.setProperty('box-shadow', '0 0 0 4px rgba(255,45,85,0.35)', 'important');
+      h.scrollIntoView({ block: 'center', inline: 'center' });
+    } catch { /* best-effort — never let ringing break the run */ }
+  };
+  const forms = Array.prototype.slice.call(document.querySelectorAll('form')) as HTMLFormElement[];
+  if (!forms.length) return { found: false };
+  let f: HTMLFormElement | undefined;
+  if (loc.formId) {
+    const want = loc.formId.toLowerCase();
+    f = forms.find((x) => (x.id || '').toLowerCase() === want);
+  }
+  const tokens = (loc.tokens || []).filter(Boolean);
+  if (!f && tokens.length) {
+    const hayOf = (form: HTMLFormElement): string => {
+      const parts: string[] = [];
+      if (form.id) parts.push(form.id);
+      const al = form.getAttribute && form.getAttribute('aria-label');
+      if (al) parts.push(al);
+      const named = form.querySelector('legend,h1,h2,h3,h4,[class*="title"],[class*="heading"]');
+      if (named && named.textContent) parts.push(named.textContent);
+      // A short heading immediately ABOVE the form often names it ("Get In Touch").
+      const prev = form.previousElementSibling;
+      if (prev && prev.textContent && prev.textContent.trim().length < 120) parts.push(prev.textContent);
+      return parts.join(' ').toLowerCase();
+    };
+    let best: HTMLFormElement | undefined;
+    let bestScore = 0;
+    for (const form of forms) {
+      const hay = hayOf(form);
+      let score = 0;
+      for (const t of tokens) if (hay.indexOf(t) >= 0) score++;
+      if (score > bestScore) { bestScore = score; best = form; }
+    }
+    // Require a real overlap (2 tokens, or all of them when there are fewer) so we never ring a random form.
+    if (best && bestScore >= Math.min(2, tokens.length)) f = best;
+  }
+  if (!f && forms.length === 1) f = forms[0];
+  if (!f) return { found: false };
+  ring(f);
+  return { found: true };
 }
 
 /** Cap on how many per-tag screenshots we embed, so a huge container can't balloon the IPC payload
@@ -420,6 +499,25 @@ function specFor(trigger: DriverTrigger): DriveSpec {
     ...(trigger.formIdValue ? { formId: trigger.formIdValue, formIdOp: trigger.formIdOperator } : {}),
     ...(trigger.formClassesValue ? { formClasses: trigger.formClassesValue, formClassesOp: trigger.formClassesOperator } : {}),
   };
+}
+
+/** Build a form locator for a custom-event tag whose event/data is form-shaped, so the driver can ring
+ *  the matching <form> for the proof screenshot. Returns null for non-form custom events (nothing to
+ *  ring → no misleading top-of-page shot). Tokens come from form_name, else the event name. */
+export function formLocatorFor(trigger: DriverTrigger): { formId?: string; tokens?: string[] } | null {
+  const data = trigger.customEventData ?? {};
+  const formId = data.form_id || data.formId || '';
+  const rawName = data.form_name || data.formName || '';
+  const ev = trigger.eventName ?? '';
+  if (!/form/i.test(ev) && !formId && !rawName) return null; // not a form tag
+  const stop = new Set(['ga4', 'event', 'tag', 'form', 'forms', 'submit', 'submission', 'the', 'of', 'to', 'your', 'a', 'an']);
+  const tok = (s: string): string[] =>
+    (s || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1 && !stop.has(w));
+  const tokens = rawName ? tok(rawName) : tok(ev);
+  const loc: { formId?: string; tokens?: string[] } = {};
+  if (formId) loc.formId = String(formId);
+  if (tokens.length) loc.tokens = tokens;
+  return loc.formId || loc.tokens ? loc : null;
 }
 
 /**
@@ -564,13 +662,28 @@ export async function runVerifyDriver(
             /* ignore push failure — reported as no-hit below */
           }
           await waitForHitsSettle(() => captured.length, page, settleQuiet, settleMax);
+          // Proof screenshot: for a FORM tag, ring the actual <form> this tag tracks (right place)
+          // rather than the generic top-of-page shot. If we can't locate a form (or it's a non-form
+          // custom event), attach NO screenshot — a top-of-page image reads as "checked the wrong
+          // place". This path config-verifies via a synthetic push; the REAL submit + firing proof is
+          // the separate, gated Forms section.
+          let ceShot: string | undefined;
+          const formLoc = formLocatorFor(tag.trigger);
+          if (formLoc) {
+            try {
+              const loc = await page.evaluate<{ found: boolean }>(locateFormInPage, formLoc);
+              if (loc.found) ceShot = await captureShot(page, shotState);
+            } catch {
+              /* best-effort — no shot on failure */
+            }
+          }
           perTag.push({
             tagId: tag.id,
             kind: 'custom_event',
             targetFound: true,
             performed: true,
             hits: captured.slice(before).map((h) => ({ url: h.url, body: h.body, collector: h.collector })),
-            ...(pageShot ? { screenshot: pageShot } : {}),
+            ...(ceShot ? { screenshot: ceShot } : {}),
           });
           continue;
         }
@@ -585,9 +698,11 @@ export async function runVerifyDriver(
         }
         if (outcome.performed) await waitForHitsSettle(() => captured.length, page, settleQuiet, settleMax);
         const hits = captured.slice(before).map((h) => ({ url: h.url, body: h.body, collector: h.collector }));
-        // A screenshot with the driven control ringed — proof we clicked/submitted the right thing. On a
-        // not-found tag, fall back to the page shot so the operator can see the CTA genuinely isn't there.
-        const shot = outcome.performed ? await captureShot(page, shotState) : pageShot;
+        // A screenshot with the driven control ringed — proof we clicked/submitted the RIGHT thing.
+        // Only when we actually located the element (it's ringed + scrolled into view); a not-found
+        // tag gets NO shot, because the top-of-page fallback reads as "checked the wrong place". The
+        // status + note already tell the operator the control wasn't found.
+        const shot = outcome.targetFound ? await captureShot(page, shotState) : undefined;
         perTag.push({
           tagId: tag.id,
           kind: kind === 'form_submit' ? 'submit' : 'click',

@@ -6,7 +6,7 @@
 // `form_submission` event on the same page, a prior tag's `form_name` must NOT leak into a later
 // tag's evaluation and falsely credit it. The builder blanks prior keys the current tag isn't setting.
 
-import { buildCustomEventPayload } from '../verify-driver';
+import { buildCustomEventPayload, formLocatorFor } from '../verify-driver';
 
 let passed = 0;
 let failed = 0;
@@ -60,6 +60,37 @@ function check(name: string, ok: boolean, detail?: string): void {
   check('reset + event are one object (no separate reset event)', p.event === 'form_submission' && p.form_name === '');
 }
 
+// ── formLocatorFor: which <form> the proof screenshot should ring for a custom-event tag ─────────
+// A form tag's proof screenshot must show the RIGHT form (not the top of the page). formLocatorFor
+// turns the tag's trigger into { formId?, tokens? } used to locate that form in-page.
+{
+  // A form-shaped event name → tokens (form/submit/etc. stripped, "get"/"in"/"touch" kept).
+  const loc = formLocatorFor({ kind: 'custom_event', eventName: 'get_in_touch_form' });
+  check('form event → locator built', loc !== null);
+  check('form event tokens strip boilerplate', JSON.stringify(loc?.tokens) === JSON.stringify(['get', 'in', 'touch']));
+  check('form event with no form_id has no formId', loc?.formId === undefined);
+}
+{
+  // form_name in customEventData wins over the event name for the tokens.
+  const loc = formLocatorFor({ kind: 'custom_event', eventName: 'form_submission', customEventData: { form_name: 'Get In Touch' } });
+  check('form_name drives the tokens', JSON.stringify(loc?.tokens) === JSON.stringify(['get', 'in', 'touch']));
+}
+{
+  // An explicit form id is carried through for an exact match.
+  const loc = formLocatorFor({ kind: 'custom_event', eventName: 'form_submission', customEventData: { form_id: 'gform_5' } });
+  check('form_id carried as formId', loc?.formId === 'gform_5');
+}
+{
+  // A NON-form custom event → null (nothing to ring → no misleading screenshot).
+  check('faqs_click (no form) → null locator', formLocatorFor({ kind: 'custom_event', eventName: 'faqs_click' }) === null);
+  check('scroll_depth (no form) → null locator', formLocatorFor({ kind: 'custom_event', eventName: 'scroll_depth' }) === null);
+}
+{
+  // An event that is only the word "form" (all tokens are stopwords) still yields a locator via id,
+  // but with no usable tokens returns null when there's also no id/name.
+  check('bare "form" event with no id/name → null', formLocatorFor({ kind: 'custom_event', eventName: 'form' }) === null);
+}
+
 console.log(`\nverify-driver-payload: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 11) { console.error(`expected >= 11 checks, got ${passed}`); process.exit(1); }
+if (passed < 19) { console.error(`expected >= 19 checks, got ${passed}`); process.exit(1); }

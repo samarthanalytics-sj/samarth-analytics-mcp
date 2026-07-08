@@ -3950,8 +3950,9 @@ function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: 
   );
 }
 
-/** Full-screen overlay showing one verification screenshot. Click anywhere / Esc closes it. */
+/** Full-screen overlay showing one verification screenshot. Close via the ✕ button, clicking the backdrop, or Esc. */
 function ProofLightbox({ shot, onClose }: { shot: { src: string; name: string }; onClose: () => void }): JSX.Element {
+  const [hoverClose, setHoverClose] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -3962,10 +3963,35 @@ function ProofLightbox({ shot, onClose }: { shot: { src: string; name: string };
       onClick={onClose}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, cursor: 'zoom-out' }}
     >
+      {/* Explicit close button (top-right) — some users don't discover click-anywhere/Esc. */}
+      <button
+        type="button"
+        aria-label="Close screenshot"
+        title="Close (Esc)"
+        onClick={(e) => { e.stopPropagation(); onClose(); }}
+        onMouseEnter={() => setHoverClose(true)}
+        onMouseLeave={() => setHoverClose(false)}
+        style={{
+          position: 'fixed', top: 16, right: 20, zIndex: 1001,
+          width: 40, height: 40, borderRadius: '50%', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 22, lineHeight: 1, color: '#fff',
+          background: hoverClose ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.12)',
+          border: '1px solid rgba(255,255,255,0.35)',
+          transition: 'background 0.12s ease',
+        }}
+      >
+        ✕
+      </button>
       <div style={{ color: '#fff', fontSize: 13, marginBottom: 8, fontWeight: 600, maxWidth: '92vw', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        📸 {shot.name} <span style={{ opacity: 0.6, fontWeight: 400 }}>· click anywhere or press Esc to close</span>
+        📸 {shot.name} <span style={{ opacity: 0.6, fontWeight: 400 }}>· click ✕, the backdrop, or press Esc to close</span>
       </div>
-      <img src={shot.src} alt={`Verification screenshot for ${shot.name}`} style={{ maxWidth: '92vw', maxHeight: '84vh', objectFit: 'contain', borderRadius: 8, boxShadow: '0 8px 40px rgba(0,0,0,0.5)' }} />
+      <img
+        src={shot.src}
+        alt={`Verification screenshot for ${shot.name}`}
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: '92vw', maxHeight: '84vh', objectFit: 'contain', borderRadius: 8, boxShadow: '0 8px 40px rgba(0,0,0,0.5)', cursor: 'default' }}
+      />
     </div>
   );
 }
