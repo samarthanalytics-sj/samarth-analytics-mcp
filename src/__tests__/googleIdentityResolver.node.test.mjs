@@ -192,5 +192,53 @@ await test('requiredAnyScopes passes when at least one is granted (host-prefix t
   assert.ok(client.credentials.access_token, 'resolves a usable client');
 });
 
+await test('bounds the cache at maxCacheEntries, evicting the LRU (touch-on-hit)', async () => {
+  // now() fixed at 0 → nothing expires by TTL, so only the LRU bound can evict.
+  const { fetchImpl, calls } = makeFetch();
+  const r = createGoogleIdentityResolver({
+    projectId: 'project-test-x',
+    secret: 's',
+    fetchImpl,
+    now: () => 0,
+    maxCacheEntries: 2,
+  });
+  await r.resolve('org1', 'mem1'); // miss → calls 1, cache [mem1]
+  await r.resolve('org1', 'mem2'); // miss → calls 2, cache [mem1, mem2]
+  await r.resolve('org1', 'mem1'); // hit  → calls 2, mem1 now most-recent [mem2, mem1]
+  assert.strictEqual(calls.length, 2, 'touch is a cache hit, no extra Stytch call');
+
+  await r.resolve('org1', 'mem3'); // miss → evicts the LRU (mem2), cache [mem1, mem3]
+  assert.strictEqual(calls.length, 3);
+  assert.strictEqual(r.cacheSize(), 2, 'cache never exceeds maxCacheEntries');
+
+  await r.resolve('org1', 'mem1'); // still cached (survived as most-recently-used) → no call
+  assert.strictEqual(calls.length, 3, 'mem1 was retained, not evicted');
+
+  await r.resolve('org1', 'mem2'); // evicted earlier → re-pulls
+  assert.strictEqual(calls.length, 4, 'the LRU member (mem2) was evicted and must re-pull');
+  assert.strictEqual(r.cacheSize(), 2);
+});
+
+await test('evicts expired entries before the LRU when the bound is hit', async () => {
+  // mem1 gets a short TTL and goes stale; when the bound is hit it should be
+  // dropped as expired (not counted against the live LRU victim).
+  const { fetchImpl, calls } = makeFetch({ expiresIn: 100 });
+  let t = 0;
+  const r = createGoogleIdentityResolver({
+    projectId: 'project-test-x',
+    secret: 's',
+    fetchImpl,
+    now: () => t,
+    refreshBufferSeconds: 10,
+    maxCacheEntries: 2,
+  });
+  await r.resolve('org1', 'mem1'); // stale at (100-10)s = 90_000ms
+  await r.resolve('org1', 'mem2');
+  t = 95_000; // mem1 + mem2 now both past their staleness point
+  await r.resolve('org1', 'mem3'); // bound hit → expired sweep clears room first
+  assert.ok(r.cacheSize() <= 2, 'cache stays within the bound');
+  assert.ok(calls.length >= 3);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

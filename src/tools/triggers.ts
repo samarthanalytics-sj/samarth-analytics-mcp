@@ -81,7 +81,10 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         customEventFilter: conditionSchema.describe('Used for custom event triggers.'),
         autoEventFilter: conditionSchema.describe('Conditions for auto-event triggers (legacy; most scopes use `filter`).'),
         eventName: paramSchema.describe('Custom event name (for customEvent type).'),
-        parameter: gtmParameterArray.describe('Trigger settings as a parameter list — e.g. a YouTube Video trigger\'s captureStart/progressThresholdsPercent, a timer\'s interval/limit, scroll thresholds, element-visibility selector.'),
+        interval: paramSchema.describe('Timer trigger: firing interval in MILLISECONDS as a single Parameter {type:"template", value:"5000"} (no key). This is a dedicated TOP-LEVEL GTM field — do NOT put it in `parameter`.'),
+        intervalSeconds: paramSchema.describe('Timer trigger: firing interval in SECONDS as a single Parameter (no key). Top-level GTM field. Use interval (ms) OR intervalSeconds, not both.'),
+        limit: paramSchema.describe('Timer trigger: max number of times the timer fires, as a single Parameter {type:"template", value:"3"} (no key). Dedicated TOP-LEVEL GTM field — do NOT put it in `parameter`.'),
+        parameter: gtmParameterArray.describe('Trigger settings as a parameter list — e.g. a YouTube Video trigger\'s captureStart/progressThresholdsPercent, scroll thresholds, element-visibility selector. NOTE: a timer\'s interval/limit are the separate top-level `interval`/`limit` fields, NOT here.'),
         waitForTags: paramSchema.describe('Form/link trigger: a single boolean Parameter {type:"boolean", value:"true|false"} (no key).'),
         checkValidation: paramSchema.describe('Form/link trigger: a single boolean Parameter (no key).'),
         waitForTagsTimeout: paramSchema.describe('Form/link trigger: a single template Parameter with the timeout ms.'),
@@ -90,7 +93,7 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         confirm: z.boolean(),
       }),
     },
-    async ({ accountId, containerId, workspaceId, name, type, filter, customEventFilter, autoEventFilter, eventName, parameter, waitForTags, checkValidation, waitForTagsTimeout, notes, parentFolderId, confirm }) => {
+    async ({ accountId, containerId, workspaceId, name, type, filter, customEventFilter, autoEventFilter, eventName, interval, intervalSeconds, limit, parameter, waitForTags, checkValidation, waitForTagsTimeout, notes, parentFolderId, confirm }) => {
       try {
         const config = getGuardrailConfig();
         const { dryRun } = checkGuardrails('write', confirm, config);
@@ -100,7 +103,7 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         const client = getClient();
         const res = await client.accounts.containers.workspaces.triggers.create({
           parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
-          requestBody: { name, type, filter, customEventFilter, autoEventFilter, eventName, parameter, waitForTags, checkValidation, waitForTagsTimeout, notes, parentFolderId } as tagmanager_v2.Schema$Trigger,
+          requestBody: { name, type, filter, customEventFilter, autoEventFilter, eventName, interval, intervalSeconds, limit, parameter, waitForTags, checkValidation, waitForTagsTimeout, notes, parentFolderId } as tagmanager_v2.Schema$Trigger,
         });
         return jsonResult(res.data);
       } catch (err) {
@@ -122,6 +125,9 @@ export function registerTriggerTools(server: McpServer, getClient: () => GtmClie
         customEventFilter: conditionSchema,
         autoEventFilter: conditionSchema,
         eventName: paramSchema,
+        interval: paramSchema.describe('Timer trigger: firing interval in ms as a single Parameter. Top-level GTM field — not in `parameter`.'),
+        intervalSeconds: paramSchema.describe('Timer trigger: firing interval in seconds as a single Parameter. Top-level GTM field.'),
+        limit: paramSchema.describe('Timer trigger: max fire count as a single Parameter. Top-level GTM field — not in `parameter`.'),
         parameter: gtmParameterArray,
         waitForTags: paramSchema,
         checkValidation: paramSchema,

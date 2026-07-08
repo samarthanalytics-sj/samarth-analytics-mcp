@@ -1,3 +1,16 @@
+## [1.260.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.1...v1.260.2) (2026-07-08)
+
+### Bug Fixes
+
+* **audit:** paginate every list + only count G- googtags as GA4 config ([229aab1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/229aab136458be41551c0b2104a394dc63dcd7e6))
+* **ga4:** surface truncation on run_report / run_realtime_report ([4e5fe13](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4e5fe13bcf60fe926114f9df6ff7d7e88f2ed0d0))
+
+## [1.260.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.0...v1.260.1) (2026-07-08)
+
+### Bug Fixes
+
+* **gtm:** timer trigger interval/limit are top-level fields, not parameter[] ([d0a8609](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d0a8609acf989b2240d9c782c6f26fd7e8f5ecb3))
+
 ## [1.260.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.259.0...v1.260.0) (2026-07-07)
 
 ### Features

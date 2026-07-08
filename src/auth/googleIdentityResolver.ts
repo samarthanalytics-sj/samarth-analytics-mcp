@@ -38,6 +38,13 @@ export interface ResolverConfig {
    * Leave unset to skip the check (default).
    */
   requiredAnyScopes?: string[];
+  /**
+   * Upper bound on cached per-member entries. On the single-process hosted endpoint the cache would
+   * otherwise grow without eviction as distinct members sign in over time, retaining their (short-lived)
+   * access tokens + OAuth2Client instances forever. When the bound is hit, expired entries are dropped
+   * first, then the least-recently-used. Default 5000.
+   */
+  maxCacheEntries?: number;
 }
 
 /**
@@ -79,6 +86,7 @@ export function createGoogleIdentityResolver(cfg: ResolverConfig): GoogleIdentit
   const now = cfg.now ?? (() => Date.now());
   const fetchImpl = cfg.fetchImpl ?? fetch;
   const bufferMs = (cfg.refreshBufferSeconds ?? 60) * 1000;
+  const maxCacheEntries = Math.max(1, cfg.maxCacheEntries ?? 5000);
   const authHeader =
     'Basic ' + Buffer.from(`${cfg.projectId}:${cfg.secret}`).toString('base64');
   const cache = new Map<string, CacheEntry>();
@@ -137,6 +145,9 @@ export function createGoogleIdentityResolver(cfg: ResolverConfig): GoogleIdentit
       const key = `${organizationId}:${memberId}`;
       const hit = cache.get(key);
       if (hit && hit.expiresAtMs > now()) {
+        // Touch: re-insert so Map iteration order tracks recency (LRU eviction below).
+        cache.delete(key);
+        cache.set(key, hit);
         return hit.client;
       }
 
@@ -167,6 +178,16 @@ export function createGoogleIdentityResolver(cfg: ResolverConfig): GoogleIdentit
       );
       const client = new OAuth2Client();
       client.setCredentials({ access_token: accessToken });
+      // Keep the cache bounded so a long-lived process serving many one-time members doesn't retain
+      // their tokens/clients forever: drop expired entries first, then the least-recently-used.
+      if (cache.size >= maxCacheEntries) {
+        for (const [k, v] of cache) if (v.expiresAtMs <= now()) cache.delete(k);
+        while (cache.size >= maxCacheEntries) {
+          const oldest = cache.keys().next().value;
+          if (oldest === undefined) break;
+          cache.delete(oldest);
+        }
+      }
       cache.set(key, { client, expiresAtMs });
       return client;
     },
