@@ -1,3 +1,9 @@
+## [1.263.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.262.0...v1.263.0) (2026-07-08)
+
+### Features
+
+* **suggest:** proof screenshot + page path for each creatable tag ([6769f60](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6769f60d45fbeecc67080c6dc44c07a3439449c4))
+
 ## [1.262.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.261.1...v1.262.0) (2026-07-08)
 
 ### Features
