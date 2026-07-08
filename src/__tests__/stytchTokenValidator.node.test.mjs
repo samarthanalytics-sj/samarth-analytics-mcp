@@ -96,6 +96,22 @@ await test('expired token → rejected', async () => {
   await assert.rejects(() => v.validate(signJwt({ ...goodPayload, exp: nowSec - 3600 })), /expired/);
 });
 
+await test('token with no exp claim → rejected (no unbounded lifetime)', async () => {
+  const { fetchImpl } = jwksFetch();
+  const v = createStytchTokenValidator({ jwksUrl: 'https://x/jwks', fetchImpl, now: () => NOW });
+  const { exp, ...noExp } = goodPayload;
+  await assert.rejects(() => v.validate(signJwt(noExp)), /exp/);
+});
+
+await test('token with string exp claim → rejected (must be numeric)', async () => {
+  const { fetchImpl } = jwksFetch();
+  const v = createStytchTokenValidator({ jwksUrl: 'https://x/jwks', fetchImpl, now: () => NOW });
+  await assert.rejects(
+    () => v.validate(signJwt({ ...goodPayload, exp: String(nowSec + 3600) })),
+    /exp/
+  );
+});
+
 await test('tampered payload → signature fails', async () => {
   const { fetchImpl } = jwksFetch();
   const v = createStytchTokenValidator({ jwksUrl: 'https://x/jwks', fetchImpl, now: () => NOW });
