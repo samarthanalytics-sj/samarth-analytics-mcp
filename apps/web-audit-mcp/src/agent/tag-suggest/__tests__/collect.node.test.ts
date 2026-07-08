@@ -223,6 +223,20 @@ check('social: internal "discord.acme.com" subdomain → null (internal nav)', c
   const stripeOnly: PageScan = shopPage({ signals: ecomSig({ scriptSrcs: ['https://js.stripe.com/v3/'] }) });
   check('ecom: a lone Stripe payment script (single medium) → non_ecommerce', buildSuggestInput([stripeOnly], 'donate.org').websiteType === 'non_ecommerce');
 
+  // PRICE + PAYMENT with NO cart-related signal (path/text) → NOT ecommerce. This is the analytics /
+  // consultancy false positive: it lists service prices ($X) and books via Stripe, but sells no products.
+  const priceAndPay: PageScan = {
+    page: '/pricing',
+    elements: [{ page: '/pricing', kind: 'cta', text: 'Starting at $499/mo', intent: 'generic' }],
+    forms: [],
+    signals: ecomSig({ scriptSrcs: ['https://js.stripe.com/v3/'] }),
+  };
+  const paRes = buildSuggestInput([priceAndPay], 'samarthanalytics.com');
+  check('ecom: price + payment WITHOUT a cart path/text → non_ecommerce (consultancy false positive)', paRes.websiteType === 'non_ecommerce' && !(paRes.ecommerceEvidence ?? []).length);
+  // But a real store: a purchase-action TEXT ("Buy now") + a price IS ecommerce (a cart-related signal is present).
+  const buyNowPrice: PageScan = { page: '/', elements: [{ page: '/', kind: 'cta', text: 'Buy now', intent: 'generic' }, { page: '/', kind: 'cta', text: 'Only $19', intent: 'generic' }], forms: [], signals: ecomSig({}) };
+  check('ecom: purchase-action text ("Buy now") + price ⇒ ecommerce', buildSuggestInput([buyNowPrice], 'shop.com').websiteType === 'ecommerce');
+
   // A single "Checkout" button (text "Checkout" + href "/checkout") must NOT self-satisfy two medium
   // categories — "checkout" is a destination word covered by the path category, not a purchase ACTION,
   // so ONE such element is a single signal → non_ecommerce (guards the path-via-href double-count).

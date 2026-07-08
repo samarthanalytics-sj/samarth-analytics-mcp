@@ -426,7 +426,13 @@ export function detectEcommerceSignals(
     }
   }
 
-  const isEcommerce = strong || medium.size >= 2;
+  // ecommerce = a STRONG signal alone, OR 2+ medium categories WHERE at least one is genuinely
+  // CART-related (a store path like /cart|/shop|/products, or a purchase-action text like "add to
+  // cart"/"buy now"). Price + a payment script are BOTH common on NON-stores — an analytics/consulting
+  // site that lists service prices and books via Stripe, a donation page, a SaaS pricing page — so those
+  // two alone must NOT classify a site as ecommerce (the false positive on samarthanalytics.com).
+  const cartish = medium.has('path') || medium.has('text');
+  const isEcommerce = strong || (cartish && medium.size >= 2);
   return { isEcommerce, evidence: isEcommerce ? evidence : [] };
 }
 

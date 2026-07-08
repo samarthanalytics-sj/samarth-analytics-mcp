@@ -838,6 +838,26 @@ export function specForShot(t: SuggestionShotTrigger): DriveSpec {
   };
 }
 
+/** Hide fixed/sticky cookie-consent + similar overlays so a ringed FOOTER element (email/phone/footer
+ *  CTA — the usual site-wide mailto) isn't obscured behind the banner in the proof screenshot. Only
+ *  hides fixed/sticky consent-style containers; best-effort and read-only-ish (a discarded page). */
+function hideCookieOverlaysInPage(): void {
+  try {
+    const sel = [
+      '[id*="cookie" i]', '[class*="cookie" i]', '[id*="consent" i]', '[class*="consent" i]',
+      '[id*="gdpr" i]', '[class*="gdpr" i]', '[aria-label*="cookie" i]', '[aria-label*="consent" i]',
+      '[class*="cky-" i]', '#onetrust-banner-sdk', '#onetrust-consent-sdk', '[id*="usercentrics" i]', '[id*="cookiebot" i]',
+    ].join(',');
+    Array.prototype.slice.call(document.querySelectorAll(sel)).forEach((e: Element) => {
+      const el = e as HTMLElement;
+      const cs = window.getComputedStyle(el);
+      if (cs.position === 'fixed' || cs.position === 'sticky') el.style.setProperty('display', 'none', 'important');
+    });
+  } catch {
+    /* best-effort — never fail a screenshot over this */
+  }
+}
+
 /**
  * Poll a pure in-page LOCATE function until it reports the element is present, then return true
  * IMMEDIATELY (capture the instant it renders). Read-only: `evalFn` only queries + rings the DOM
@@ -908,6 +928,9 @@ export async function runSuggestionScreenshots(
       }
       // A short head-start settle; the per-tag poll below covers anything that renders later.
       await page.waitForTimeout(Math.min(Math.max(settleMs, 400), 1200));
+      // Drop the cookie-consent banner (and similar fixed overlays) so a ringed FOOTER element — an
+      // email/phone/footer CTA, the usual site-wide mailto — isn't hidden behind it in the proof shot.
+      try { await page.evaluate(hideCookieOverlaysInPage); } catch { /* best-effort */ }
       for (const t of groupTags) {
         opts.onProgress?.(shots.length, tags.length, t.id, pageUrl);
         let found = false;
