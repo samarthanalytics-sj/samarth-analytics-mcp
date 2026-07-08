@@ -1872,6 +1872,10 @@ function SuggestionTemplateTable({
             const addWhen = (): void => {
               if (freeWhenVar) onEdit(s.id, { whens: [...whenRows, { variable: freeWhenVar, condition: 'equals', value: '' }] });
             };
+            // Remove a condition — lets the user undo an added "when" (or drop any condition they don't
+            // want) if they change their mind. Writes the reduced list as the edit overlay; on create,
+            // applyWhensToTrigger rebuilds the trigger from exactly the remaining rows.
+            const removeWhen = (idx: number): void => onEdit(s.id, { whens: whenRows.filter((_, j) => j !== idx) });
             const groupRows = Array.from({ length: rowCount }, (_, i) => {
               const first = i === 0;
               const p = paramRows[i];
@@ -1957,7 +1961,24 @@ function SuggestionTemplateTable({
                   <td style={tplStyles.td}>{w ? (whensEditable ? <CellSelect value={w.variable} options={varOptions} disabled={creating} onChange={(v) => editWhen(i, { variable: v })} ariaLabel="Trigger when variable" /> : <code style={mdStyles.code}>{w.variable}</code>) : ''}</td>
                   <td style={tplStyles.td}>{w ? (whensEditable ? <CellSelect value={w.condition} options={CONDITION_OPTIONS} disabled={creating} onChange={(v) => editWhen(i, { condition: v })} ariaLabel="Trigger when condition" /> : w.condition) : ''}</td>
                   <td style={tplStyles.td}>
-                    {w ? (whensEditable ? <GrowCell value={w.value} disabled={creating} onChange={(v) => editWhen(i, { value: v })} ariaLabel="Trigger when value" /> : w.value) : ''}
+                    {w ? (
+                      whensEditable ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <GrowCell value={w.value} disabled={creating} onChange={(v) => editWhen(i, { value: v })} ariaLabel="Trigger when value" />
+                          {/* Remove THIS condition — undo an added "when" or drop one that's not wanted. */}
+                          <button
+                            type="button"
+                            onClick={() => removeWhen(i)}
+                            disabled={creating}
+                            title="Remove this condition"
+                            aria-label="Remove this trigger condition"
+                            style={{ flexShrink: 0, width: 18, height: 18, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, fontSize: 13, lineHeight: 1, color: 'var(--text-muted)', background: 'none', border: '1px solid var(--border-2)', borderRadius: 4, cursor: 'pointer' }}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ) : w.value
+                    ) : ''}
                     {/* "+ condition" appears once, on the last when-row (or row 0 when there are none):
                         append another ANDed condition such as {{Page Path}} equals "/contact". */}
                     {whensEditable && freeWhenVar && i === Math.max(whenRows.length - 1, 0) && (
