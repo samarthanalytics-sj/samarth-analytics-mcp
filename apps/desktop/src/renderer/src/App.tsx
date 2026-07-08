@@ -1446,14 +1446,16 @@ function triggerCondition(s: SuggestedTagView): string {
 // one block per tag (tag + trigger on the first row; one row per event parameter /
 // trigger condition). Same data the CSV download writes — via suggestionToGroup.
 const tplStyles: Record<string, React.CSSProperties> = {
-  // flexShrink:0 + maxWidth:100% so the table keeps its full height inside the scrolling flex column
-  // (otherwise it gets compressed and rows are clipped) and scrolls horizontally instead of overflowing.
-  wrap: { overflowX: 'auto', maxWidth: '100%', border: '1px solid var(--border)', borderRadius: 12, flexShrink: 0 },
+  // The table is its OWN scroll viewport in BOTH axes: maxWidth:100% keeps it inside the flex column,
+  // maxHeight caps it so the horizontal scrollbar sits at the bottom of the VISIBLE table (always
+  // reachable) instead of stranded below a tall table; flexShrink:0 stops the flex column from
+  // compressing it; and the sticky header (th/selTh) keeps the column labels in view while rows scroll.
+  wrap: { overflow: 'auto', maxWidth: '100%', maxHeight: 'calc(100vh - 300px)', border: '1px solid var(--border)', borderRadius: 12, flexShrink: 0 },
   table: { borderCollapse: 'collapse', width: '100%', fontSize: 12, color: 'var(--text-dim)' },
-  th: { textAlign: 'left', padding: '8px 10px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' },
+  th: { position: 'sticky', top: 0, zIndex: 2, textAlign: 'left', padding: '8px 10px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' },
   td: { padding: '6px 10px', borderBottom: '1px solid var(--border)', verticalAlign: 'top', whiteSpace: 'normal', wordBreak: 'break-word' },
   tdTag: { padding: '6px 10px', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--c-blue-bg)', verticalAlign: 'top', background: 'var(--surface-2)' },
-  selTh: { width: 56, textAlign: 'center', padding: '8px 8px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)' },
+  selTh: { position: 'sticky', top: 0, zIndex: 3, width: 56, textAlign: 'center', padding: '8px 8px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)' },
   selTd: { padding: '6px 8px', textAlign: 'center', verticalAlign: 'top', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', whiteSpace: 'nowrap' },
   // Editable cells are auto-growing WRAPPING textareas (see GrowCell) so a long tag name / regex
   // value wraps to multiple lines and stays fully visible instead of being clipped in a 1-line input.
