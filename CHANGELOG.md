@@ -1,3 +1,9 @@
+## [1.266.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.265.0...v1.266.0) (2026-07-08)
+
+### Features
+
+* **desktop:** slash commands in the chat — /audit /report /create-tag /debug /explain ([ed728e3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ed728e3f44c95a8bddb478388c907928d3f05c9d)), closes [#438](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/438)
+
 ## [1.265.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.264.0...v1.265.0) (2026-07-08)
 
 ### Features
