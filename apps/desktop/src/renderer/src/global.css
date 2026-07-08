@@ -47,3 +47,71 @@ button {
   background: var(--text-faint);
   background-clip: padding-box;
 }
+
+/* ── Premium polish: micro-animations, transitions, skeletons, hover, empty states ────────────────
+ * Keep it tasteful — short durations, gentle easing. Everything is disabled under
+ * prefers-reduced-motion (bottom of file) so it never fights accessibility. */
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes viewEnter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes riseIn { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes popIn { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: scale(1); } }
+@keyframes shimmer { from { background-position: -180% 0; } to { background-position: 180% 0; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes drawLine { from { stroke-dashoffset: var(--dash, 1200); } to { stroke-dashoffset: 0; } }
+@keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheetIn { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+/* Page/view transition — the switched-in view fades + lifts into place. */
+.view-enter { animation: viewEnter 0.24s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+
+/* Staggered card entrance — add .rise-in; set --d for a per-card delay if desired. */
+.rise-in { animation: riseIn 0.34s cubic-bezier(0.22, 0.61, 0.36, 1) both; animation-delay: var(--d, 0s); }
+.pop-in { animation: popIn 0.2s ease-out both; }
+
+/* Lift-on-hover for interactive cards/rows/stat tiles. */
+.hover-lift { transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease; }
+.hover-lift:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(15, 23, 42, 0.10); }
+
+/* Primary/solid buttons get a soft shadow on hover (on top of the global brightness bump). */
+button:hover:not(:disabled) { box-shadow: 0 2px 10px rgba(15, 23, 42, 0.10); }
+
+/* Sidebar nav items: smooth colour/indent + an animated active accent bar. */
+.nav-item { position: relative; transition: background 0.14s ease, color 0.14s ease, padding-left 0.14s ease; }
+.nav-item:hover { padding-left: 13px; }
+.nav-item::before {
+  content: ''; position: absolute; left: 0; top: 50%; height: 0; width: 3px; border-radius: 3px;
+  background: var(--c-blue); transform: translateY(-50%); transition: height 0.18s ease; opacity: 0.9;
+}
+.nav-item[data-active='true']::before { height: 60%; }
+
+/* Skeleton loading placeholder — a shimmering block. Size it with inline width/height. */
+.skeleton {
+  position: relative; overflow: hidden; border-radius: 8px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%);
+  background-size: 300% 100%; animation: shimmer 1.3s ease-in-out infinite;
+}
+
+/* Inline spinner (add to an element, size via font-size/width). */
+.spinner {
+  display: inline-block; width: 1em; height: 1em; border-radius: 50%;
+  border: 2px solid var(--border-2); border-top-color: var(--c-blue);
+  animation: spin 0.7s linear infinite;
+}
+
+/* Chart line draw-in — set --dash to the path length; add .draw-line to a <polyline>/<path>. */
+.draw-line { stroke-dasharray: var(--dash, 1200); animation: drawLine 0.9s ease-out both; }
+
+/* Modal / command-overlay entrance. */
+.overlay-in { animation: overlayIn 0.16s ease both; }
+.sheet-in { animation: sheetIn 0.22s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .hover-lift:hover { transform: none; }
+}
