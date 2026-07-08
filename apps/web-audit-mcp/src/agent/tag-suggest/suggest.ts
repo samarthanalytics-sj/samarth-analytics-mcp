@@ -1509,6 +1509,91 @@ export function flagOverlappingClickTexts(suggestions: SuggestedTag[]): void {
   }
 }
 
+/** The destination PATHNAME of a CTA link, normalized: lowercased, no query/hash, no trailing slash,
+ *  no file extension. Returns '' for the homepage or a path with no usable segment (→ keep the
+ *  per-text CTA identity). */
+function ctaDestPath(href: string): string {
+  let path: string;
+  try {
+    path = new URL(href, 'https://x.invalid').pathname;
+  } catch {
+    path = href.split(/[?#]/)[0];
+  }
+  path = path.toLowerCase().replace(/\/+$/, '').replace(/\.[a-z0-9]{1,5}$/, '');
+  return /[a-z0-9]/.test(path.replace(/^\//, '')) ? path : '';
+}
+
+/** A human label from a destination path's last segment ("/services/free-audit" → "free audit"). */
+function pathToLabel(path: string): string {
+  const tail = path.split('/').filter(Boolean).slice(-1)[0] ?? '';
+  return tail.replace(/[-_]+/g, ' ').trim();
+}
+
+/**
+ * Collapse "the same audit reached by different button wordings" into ONE tag. When 2+ recognized-intent
+ * LINK CTAs go to the SAME destination path but carry DIFFERENT visible text ("Get a Free Audit" /
+ * "Get Free Audit" / "Free Audit" all → /free-audit), the per-text builder would emit a separate tag for
+ * each — the "duplicate" users see. This groups them by (intent + destination) and emits ONE tag that
+ * fires on {{Click URL}} (so every wording is captured), named from the destination. Only fires for a
+ * genuine cluster (2+ DISTINCT wordings to one destination); a single wording — even across pages — and
+ * every button/hrefless/generic CTA fall through to the unchanged per-text path (so descriptive names
+ * like "View Size Chart" are never replaced by an uninformative path).
+ */
+function extractSameDestinationCtaGroups(
+  elements: DetectedElement[],
+): { ctaDestTags: SuggestedTag[]; consumed: Set<DetectedElement> } {
+  const consumed = new Set<DetectedElement>();
+  const ctaDestTags: SuggestedTag[] = [];
+  const groups = new Map<string, DetectedElement[]>();
+  for (const el of elements) {
+    if (el.kind !== 'cta') continue;
+    if (typeof el.href !== 'string' || el.href.length === 0) continue; // LINK CTAs only (buttons have no destination)
+    const intent = el.intent ?? 'generic';
+    if (intent === 'generic') continue; // recognized intents only — never group unrecognized "prominent buttons"
+    const dest = ctaDestPath(el.href);
+    if (!dest) continue; // needs a usable destination path
+    const key = `${intent}|${dest}`;
+    const arr = groups.get(key);
+    if (arr) arr.push(el);
+    else groups.set(key, [el]);
+  }
+  const normText = (t: string): string => t.replace(/\s+/g, ' ').trim();
+  for (const [key, els] of groups) {
+    const wordings = [...new Set(els.map((e) => normText(e.text)).filter(Boolean))];
+    if (wordings.length < 2) continue; // a single wording is not a duplicate — leave it per-text
+    els.forEach((e) => consumed.add(e));
+    const dest = key.slice(key.indexOf('|') + 1);
+    const pathLabel = pathToLabel(dest);
+    // Name from the destination when its last segment is descriptive; else the shortest wording
+    // (a short path like "/p" is a poor name; the button text reads better).
+    const shortest = [...wordings].sort((a, b) => a.length - b.length)[0];
+    const label = (pathLabel.replace(/[^a-z0-9]/gi, '').length >= 3 ? pathLabel : shortest).slice(0, 60);
+    const ev = eventFromLabel(label, 'click');
+    const pages = new Set(els.map((e) => e.page));
+    ctaDestTags.push({
+      id: hashId('cta-dest|' + key),
+      page: pages.size > 1 ? 'site-wide' : (els[0].page || 'site-wide'),
+      confidence: 'medium',
+      enhancedMeasurementOverlap: false,
+      platform: 'ga4_event',
+      tagName: tagNameOf(label, 'link_click'),
+      measurementId: GA4_VAR,
+      eventName: ev,
+      label: `Any click to ${dest} → GA4 "${ev}" (one tag for ${wordings.length} button wordings)`,
+      evidence: `${wordings.length} CTAs to ${dest}: ${wordings.map((w) => `"${w}"`).join(', ')} (intent: ${els[0].intent})`,
+      ctaIntent: els[0].intent ?? 'generic',
+      eventParameters: CLICK_PARAMS,
+      trigger: {
+        name: trigNameOf(label, 'link_click'),
+        kind: 'link_click',
+        clickUrlValue: dest,
+        clickUrlOperator: 'contains',
+      },
+    });
+  }
+  return { ctaDestTags, consumed };
+}
+
 export function buildSuggestions(
   input: SuggestInput,
   opts: { full?: boolean; platforms?: SuggestPlatform[] } = {},
@@ -1522,10 +1607,16 @@ export function buildSuggestions(
   // FAQ accordion rows (>=2 question CTAs sharing a class on a page) become ONE tag each; the consumed
   // question elements are NOT also emitted as individual per-question CTAs.
   const { faqTags, consumed } = extractFaqGroups(input.elements);
+  // Same-destination CTA collapse: 2+ recognized-intent link CTAs to the SAME destination but with
+  // DIFFERENT wording ("Get a Free Audit" / "Get Free Audit" / "Free Audit" → /free-audit) become ONE
+  // tag that fires on {{Click URL}}. The consumed elements are not also emitted per-text.
+  const { ctaDestTags, consumed: ctaConsumed } = extractSameDestinationCtaGroups(input.elements);
+  const skip = (e: DetectedElement): boolean => consumed.has(e) || ctaConsumed.has(e);
   const raw: SuggestedTag[] = [
     ...input.forms.map((f) => formSuggestion(f, scopeCtx)),
     ...faqTags,
-    ...input.elements.filter((e) => !consumed.has(e)).map((e) => elementSuggestion(e, socialPattern)),
+    ...ctaDestTags,
+    ...input.elements.filter((e) => !skip(e)).map((e) => elementSuggestion(e, socialPattern)),
     videoSuggestion(input.videoEmbeds ?? []),
     // eCommerce funnel event tags — only for a detected store. They flow through the SAME dedup/rank
     // AND the SAME Meta derivation (toMetaSuggestion) below, so their Meta counterparts come for free.
