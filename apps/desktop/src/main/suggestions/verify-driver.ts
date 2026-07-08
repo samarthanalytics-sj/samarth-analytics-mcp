@@ -648,6 +648,10 @@ export async function runVerifyDriver(
 
       await page.evaluate(installGuardsInPage);
       await page.evaluate(grantConsentInPage); // grant Consent Mode so gated tags fire
+      // Drop the cookie-consent banner so a ringed FOOTER control (a footer CTA / mailto tag) isn't
+      // obscured in the per-tag proof shot — same benefit as the suggestion pass. display:none persists
+      // for every tag driven on this page, so once per page load is enough. Best-effort.
+      try { await page.evaluate(hideCookieOverlaysInPage); } catch { /* best-effort */ }
       armed = true; // from here every cross-site beacon is a tag firing → capture+abort it
       const loadHits = captured.slice(loadStart);
       const settleQuiet = 400;
@@ -846,10 +850,17 @@ function hideCookieOverlaysInPage(): void {
     const sel = [
       '[id*="cookie" i]', '[class*="cookie" i]', '[id*="consent" i]', '[class*="consent" i]',
       '[id*="gdpr" i]', '[class*="gdpr" i]', '[aria-label*="cookie" i]', '[aria-label*="consent" i]',
-      '[class*="cky-" i]', '#onetrust-banner-sdk', '#onetrust-consent-sdk', '[id*="usercentrics" i]', '[id*="cookiebot" i]',
+      // CookieYes classes all begin with "cky-": anchor to a class-token boundary (start of the attr, or
+      // after a space) so a "sticky-*" UTILITY class — Bootstrap .sticky-top, .sticky-cta, .sticky-footer,
+      // whose substring "cky-" would otherwise match — is NOT hidden (that would blank a legit footer/CTA).
+      '[class^="cky-" i]', '[class*=" cky-" i]',
+      '#onetrust-banner-sdk', '#onetrust-consent-sdk', '[id*="usercentrics" i]', '[id*="cookiebot" i]',
+      // Other mainstream CMPs — named hosts only (a generic [id*="cmp"] would hit component/campaign).
+      '[id*="iubenda" i]', '[class*="osano" i]', '[id*="termly" i]', '[id*="qc-cmp" i]', '[class*="qc-cmp" i]',
     ].join(',');
     Array.prototype.slice.call(document.querySelectorAll(sel)).forEach((e: Element) => {
       const el = e as HTMLElement;
+      // Only hide a fixed/sticky OVERLAY — never a normal (static) footer that holds the target link.
       const cs = window.getComputedStyle(el);
       if (cs.position === 'fixed' || cs.position === 'sticky') el.style.setProperty('display', 'none', 'important');
     });
@@ -949,6 +960,11 @@ export async function runSuggestionScreenshots(
           }
         } catch {
           found = false;
+        }
+        // Re-hide right before the shot: a CMP that injects its banner LATE (after the settle above —
+        // OneTrust/Cookiebot/Usercentrics load async) would otherwise still cover the ringed footer.
+        if (found) {
+          try { await page.evaluate(hideCookieOverlaysInPage); } catch { /* best-effort */ }
         }
         const screenshot = found ? await captureShot(page, shotState) : undefined;
         shots.push({ tagId: t.id, page: pageUrl, ...(screenshot ? { screenshot } : {}) });
