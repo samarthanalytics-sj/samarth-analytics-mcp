@@ -1,3 +1,9 @@
+## [1.260.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.2...v1.260.3) (2026-07-08)
+
+### Bug Fixes
+
+* **auth:** require numeric JWT exp + bound the per-member token cache ([8b1c3c0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8b1c3c0803df35313a1573f89788b4e0fafc273a))
+
 ## [1.260.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.1...v1.260.2) (2026-07-08)
 
 ### Bug Fixes
