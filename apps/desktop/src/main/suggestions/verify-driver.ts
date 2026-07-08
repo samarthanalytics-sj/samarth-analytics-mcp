@@ -334,7 +334,9 @@ function driveInPage(spec: DriveSpec): DriveOutcome {
       h.setAttribute('data-sx-hl', '1');
       h.style.setProperty('outline', '3px solid #ff2d55', 'important');
       h.style.setProperty('outline-offset', '2px', 'important');
-      h.style.setProperty('box-shadow', '0 0 0 4px rgba(255,45,85,0.35)', 'important');
+      // A red halo PLUS a huge dark spread (spotlight): dims the rest of the page so the ringed control
+      // is unmistakable — a thin outline alone is easy to misread next to a dominant filled button.
+      h.style.setProperty('box-shadow', '0 0 0 5px rgba(255,45,85,0.55), 0 0 0 9999px rgba(0,0,0,0.38)', 'important');
       h.scrollIntoView({ block: 'center', inline: 'center' });
     } catch { /* best-effort — never let highlighting break the drive */ }
   };
@@ -349,7 +351,10 @@ function driveInPage(spec: DriveSpec): DriveOutcome {
       case 'startsWith':
         return hl.indexOf(vl) === 0;
       case 'endsWith':
-        return vl.length > 0 && hl.lastIndexOf(vl) === hl.length - vl.length;
+        // `hl.length >= vl.length` guards the empty/short-haystack case: without it, hay='' + val='?'
+        // gives lastIndexOf=-1 === (0-1)=-1 → TRUE, so every TEXT-LESS <a>/<button> (logo, icon, FAB)
+        // "ends with ?" and the shortest-text ranking rings an icon instead of a real FAQ question row.
+        return vl.length > 0 && hl.length >= vl.length && hl.lastIndexOf(vl) === hl.length - vl.length;
       case 'matchRegex':
         try {
           return new RegExp(val, 'i').test(h);
@@ -471,7 +476,9 @@ function locateFormInPage(loc: { formId?: string; tokens?: string[] }): { found:
       h.setAttribute('data-sx-hl', '1');
       h.style.setProperty('outline', '3px solid #ff2d55', 'important');
       h.style.setProperty('outline-offset', '2px', 'important');
-      h.style.setProperty('box-shadow', '0 0 0 4px rgba(255,45,85,0.35)', 'important');
+      // A red halo PLUS a huge dark spread (spotlight): dims the rest of the page so the ringed control
+      // is unmistakable — a thin outline alone is easy to misread next to a dominant filled button.
+      h.style.setProperty('box-shadow', '0 0 0 5px rgba(255,45,85,0.55), 0 0 0 9999px rgba(0,0,0,0.38)', 'important');
       h.scrollIntoView({ block: 'center', inline: 'center' });
     } catch { /* best-effort — never let ringing break the run */ }
   };
@@ -842,6 +849,18 @@ export function specForShot(t: SuggestionShotTrigger): DriveSpec {
   };
 }
 
+/** Re-scroll the currently-ringed element ([data-sx-hl]) back to center. Called right before the shot:
+ *  the initial locate scrolls the target into view, but that scroll can trigger LAZY content that grows
+ *  the page BELOW the target (a footer newsletter/email area), pushing it off-screen by capture time. */
+function rescrollRingedInPage(): void {
+  try {
+    const el = document.querySelector('[data-sx-hl]');
+    if (el) (el as HTMLElement).scrollIntoView({ block: 'center', inline: 'center' });
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** Hide fixed/sticky cookie-consent + similar overlays so a ringed FOOTER element (email/phone/footer
  *  CTA — the usual site-wide mailto) isn't obscured behind the banner in the proof screenshot. Only
  *  hides fixed/sticky consent-style containers; best-effort and read-only-ish (a discarded page). */
@@ -961,10 +980,18 @@ export async function runSuggestionScreenshots(
         } catch {
           found = false;
         }
-        // Re-hide right before the shot: a CMP that injects its banner LATE (after the settle above —
-        // OneTrust/Cookiebot/Usercentrics load async) would otherwise still cover the ringed footer.
         if (found) {
-          try { await page.evaluate(hideCookieOverlaysInPage); } catch { /* best-effort */ }
+          try {
+            // Re-hide right before the shot: a CMP that injects its banner LATE (OneTrust/Cookiebot/
+            // Usercentrics load async) would otherwise still cover the ringed footer.
+            await page.evaluate(hideCookieOverlaysInPage);
+            // Scrolling to the target can trigger lazy content that grows the page BELOW it, leaving it
+            // off-screen by capture time (repro'd on the homepage footer email). Let layout settle, then
+            // re-scroll the ringed element into view right before the shot.
+            await page.waitForTimeout(350);
+            await page.evaluate(rescrollRingedInPage);
+            await page.waitForTimeout(120);
+          } catch { /* best-effort */ }
         }
         const screenshot = found ? await captureShot(page, shotState) : undefined;
         shots.push({ tagId: t.id, page: pageUrl, ...(screenshot ? { screenshot } : {}) });
