@@ -73,7 +73,7 @@ export interface DetectedForm {
   hidden?: boolean;
 }
 
-export type ElementKind = 'email' | 'phone' | 'download' | 'outbound' | 'social' | 'cta';
+export type ElementKind = 'email' | 'phone' | 'download' | 'outbound' | 'social' | 'share' | 'cta';
 
 /** For kind==='cta': the inferred purpose of the call-to-action, so each one is
  *  named + triggered by what it actually does ("Subscribe", "Add to Cart", …)
@@ -102,6 +102,10 @@ export interface DetectedElement {
   /** Set when kind==='social' — the EXACT domain scraped (e.g. "facebook.com"),
    *  so the trigger matches only the domains the site actually links to. */
   socialDomain?: string;
+  /** Set when kind==='share' — the GA4 `share` method this control invokes
+   *  (twitter/linkedin/facebook/whatsapp/… for a network SHARE link, 'copy_link'
+   *  for a "Copy link" clipboard button). Distinct from a `social` FOLLOW link. */
+  shareMethod?: string;
 }
 
 /** An embedded video player detected on a page (drives a video-tracking tag).

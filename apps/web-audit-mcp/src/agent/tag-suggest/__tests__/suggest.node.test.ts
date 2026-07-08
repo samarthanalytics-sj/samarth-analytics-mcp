@@ -3,9 +3,9 @@
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/suggest.node.test.ts
  */
 import { detectFormProvider, detectEmbeddedForm } from '../providers.js';
-import { buildSuggestions, eventFromLabel, flagOverlappingClickTexts } from '../suggest.js';
+import { buildSuggestions, eventFromLabel, flagOverlappingClickTexts, extractShareControls } from '../suggest.js';
 import { isYouTubeEmbed } from '../video.js';
-import type { PageSignals, SuggestInput, DetectedForm, SuggestedTag } from '../types.js';
+import type { PageSignals, SuggestInput, DetectedForm, SuggestedTag, DetectedElement } from '../types.js';
 
 let passed = 0;
 let failed = 0;
@@ -1012,6 +1012,44 @@ check('meta: an "Add to Cart" CTA → Meta "AddToCart"; a generic outbound click
   check('install: form custom_event plan is NOT downgraded (listener-tag preserved)',
     !!formTag?.install?.requires.some((r) => r.kind === 'listener-tag'),
     JSON.stringify(formTag?.install?.requires.map((r) => r.kind)));
+}
+
+// ── Social-share widget → ONE GA4 `share` tag ────────────────────────────────
+{
+  const shareEl = (text: string, method: string, page = '/blog/post'): DetectedElement => ({ page, kind: 'share', text, shareMethod: method });
+  const controls: DetectedElement[] = [
+    shareEl('Twitter', 'twitter'),
+    shareEl('LinkedIn', 'linkedin'),
+    shareEl('Facebook', 'facebook'),
+    shareEl('Copy Link', 'copy_link'),
+  ];
+  const { shareTags, consumed } = extractShareControls(controls);
+  check('share: a 4-control widget → exactly ONE share tag', shareTags.length === 1);
+  const t = shareTags[0];
+  check('share: event is GA4 "share"', t?.eventName === 'share');
+  check('share: trigger is all_clicks with a Click-Text lookup over every control', t?.trigger.kind === 'all_clicks' && JSON.stringify(t?.trigger.lookupTable?.texts) === JSON.stringify(['Twitter', 'LinkedIn', 'Facebook', 'Copy Link']));
+  check('share: the Copy Link control IS covered (method lookup maps it to copy_link)',
+    !!t?.eventParamLookups?.[0]?.rows.some((r) => r.key === 'Copy Link' && r.value === 'copy_link'));
+  check('share: method parameter reads the method lookup variable', !!t?.eventParameters?.some((p) => p.name === 'method' && p.value === '{{Lookup - Share Method}}'));
+  check('share: screenshot page is the article (a page that HAS the widget), not site-wide', t?.page === '/blog/post');
+  check('share: all 4 controls consumed (not also emitted individually)', consumed.size === 4);
+}
+{
+  // A LONE share control is not a widget → no share tag (and it isn't emitted as a stray element tag).
+  const lone: DetectedElement[] = [{ page: '/p', kind: 'share', text: 'Twitter', shareMethod: 'twitter' }];
+  check('share: a single control → no share tag (needs 2+)', extractShareControls(lone).shareTags.length === 0);
+  const out = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: lone });
+  check('share: a lone unconsumed share control produces NO suggestion', !out.some((s) => s.eventName === 'share'));
+}
+{
+  // End-to-end through buildSuggestions: the widget collapses to one share tag among the suggestions.
+  const els: DetectedElement[] = [
+    { page: '/blog/post', kind: 'share', text: 'Twitter', shareMethod: 'twitter' },
+    { page: '/blog/post', kind: 'share', text: 'Facebook', shareMethod: 'facebook' },
+  ];
+  const out = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: els });
+  const shareTag = out.find((s) => s.eventName === 'share');
+  check('share: buildSuggestions emits one share tag for the widget', !!shareTag && shareTag.trigger.kind === 'all_clicks');
 }
 
 console.log(`\nTag-suggest: ${passed} passed, ${failed} failed`);

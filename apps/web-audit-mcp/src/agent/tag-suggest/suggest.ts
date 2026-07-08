@@ -765,6 +765,11 @@ function elementSuggestion(el: DetectedElement, socialPattern: string): Suggeste
         // Fires ONLY on the social networks actually found on the site.
         trigger: { name: trigNameOf('Social Media', 'link_click'), kind: 'link_click', clickUrlValue: socialPattern, clickUrlOperator: 'matchRegex' },
       };
+    case 'share':
+      // Share controls are aggregated into ONE `share` tag by extractShareControls (a widget needs 2+
+      // controls to be a share widget), and those elements are consumed before reaching here. A lone,
+      // unconsumed share control is not a widget → no per-element tag.
+      return null;
     case 'cta': {
       const def = CTA_BY_INTENT[el.intent ?? 'generic'];
       const isSpecific = def.intent !== 'generic';
@@ -1599,6 +1604,56 @@ function extractSameDestinationCtaGroups(
   return { ctaDestTags, consumed };
 }
 
+/** A "Share this article" widget → ONE GA4 `share` tag. A share cluster mixes network SHARE links
+ *  (twitter/intent, facebook/sharer, linkedin/share-offsite) with a "Copy link" clipboard BUTTON. A
+ *  single {{Click Text}} Lookup Table fires one tag for every control, and a companion method Lookup maps
+ *  each control's visible text → the GA4 `share` `method` (twitter/linkedin/facebook/copy_link). Needs 2+
+ *  controls (a lone share/copy button isn't a widget). The consumed elements are not also emitted
+ *  per-element. Text-based, so an ICON-ONLY share bar (no visible label) is out of scope — noted on the
+ *  tag. PURE. */
+export function extractShareControls(elements: DetectedElement[]): { shareTags: SuggestedTag[]; consumed: Set<DetectedElement> } {
+  const consumed = new Set<DetectedElement>();
+  const shareEls = elements.filter((e) => e.kind === 'share' && (e.text ?? '').trim());
+  if (shareEls.length < 2) return { shareTags: [], consumed };
+  // Distinct control texts (case-insensitive), keeping the first-seen casing → the Lookup rows. Two
+  // controls with the same label collapse to one row (one method).
+  const byText = new Map<string, { text: string; method: string }>();
+  for (const e of shareEls) {
+    const text = e.text.replace(/\s+/g, ' ').trim().slice(0, 60);
+    const key = text.toLowerCase();
+    if (!byText.has(key)) byText.set(key, { text, method: e.shareMethod || 'other' });
+    consumed.add(e);
+  }
+  const controls = [...byText.values()];
+  if (controls.length < 2) return { shareTags: [], consumed: new Set() }; // all one label → not a real widget
+  const texts = controls.map((c) => c.text);
+  // Screenshot on a page that ACTUALLY has the widget (a blog post), not "site-wide" → homepage, which
+  // usually has no share bar. The tag itself is click-text scoped, so it fires on every page regardless.
+  const pages = [...new Set(shareEls.map((e) => e.page).filter(Boolean))];
+  const page = pages[0] || 'site-wide';
+  const tag: SuggestedTag = {
+    id: hashId('share|' + texts.slice().sort().join('|')),
+    page,
+    confidence: 'medium',
+    enhancedMeasurementOverlap: false,
+    platform: 'ga4_event',
+    tagName: tagNameOf('Social Share', 'all_clicks'),
+    measurementId: GA4_VAR,
+    eventName: 'share',
+    label: `Share buttons (${texts.join(', ')}) → GA4 "share"`,
+    evidence: `social-share widget with ${controls.length} controls (${texts.join(', ')}) → one GA4 "share" event; the "method" parameter is set to the control clicked`,
+    note: 'Fires on the visible TEXT of each share control (incl. "Copy link"). An icon-only share bar with no text label would instead need a {{Click URL}} share-endpoint trigger.',
+    eventParameters: [{ name: 'method', value: '{{Lookup - Share Method}}' }, ...PAGE_PARAMS],
+    eventParamLookups: [{ variableName: 'Lookup - Share Method', input: CLICK_TEXT, rows: controls.map((c) => ({ key: c.text, value: c.method })), defaultValue: 'other' }],
+    trigger: {
+      name: trigNameOf('Social Share', 'all_clicks'),
+      kind: 'all_clicks',
+      lookupTable: { name: 'Lookup - Share Control', texts },
+    },
+  };
+  return { shareTags: [tag], consumed };
+}
+
 export function buildSuggestions(
   input: SuggestInput,
   opts: { full?: boolean; platforms?: SuggestPlatform[] } = {},
@@ -1616,11 +1671,15 @@ export function buildSuggestions(
   // DIFFERENT wording ("Get a Free Audit" / "Get Free Audit" / "Free Audit" → /free-audit) become ONE
   // tag that fires on {{Click URL}}. The consumed elements are not also emitted per-text.
   const { ctaDestTags, consumed: ctaConsumed } = extractSameDestinationCtaGroups(input.elements);
-  const skip = (e: DetectedElement): boolean => consumed.has(e) || ctaConsumed.has(e);
+  // "Share this article" widget → ONE GA4 `share` tag (twitter/linkedin/facebook/copy_link); the share
+  // controls are consumed so they aren't also emitted individually.
+  const { shareTags, consumed: shareConsumed } = extractShareControls(input.elements);
+  const skip = (e: DetectedElement): boolean => consumed.has(e) || ctaConsumed.has(e) || shareConsumed.has(e);
   const raw: SuggestedTag[] = [
     ...input.forms.map((f) => formSuggestion(f, scopeCtx)),
     ...faqTags,
     ...ctaDestTags,
+    ...shareTags,
     ...input.elements.filter((e) => !skip(e)).map((e) => elementSuggestion(e, socialPattern)),
     videoSuggestion(input.videoEmbeds ?? []),
     // eCommerce funnel event tags — only for a detected store. They flow through the SAME dedup/rank
