@@ -1,3 +1,9 @@
+## [1.269.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.2...v1.269.3) (2026-07-08)
+
+### Bug Fixes
+
+* **suggest:** proof shots ring the right element — FAQ selector, endsWith, email re-scroll, spotlight ([c93687e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c93687e3b8690fb680d2b71ef50a2bab19bdc4fa))
+
 ## [1.269.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.1...v1.269.2) (2026-07-08)
 
 ### Bug Fixes
