@@ -831,6 +831,10 @@ export interface SuggestionShotTrigger {
   clickUrlOperator?: string;
   clickElementValue?: string;
   clickElementOperator?: string;
+  /** For an all_clicks tag that fires on several exact click texts via a companion Lookup Table (e.g. a
+   *  social-share widget: Twitter/LinkedIn/Facebook/Copy Link). The locate-only pass rings the FIRST
+   *  listed text as visual proof of where the tag fires. */
+  lookupTable?: { name: string; texts: string[] };
   formIdValue?: string;
   formIdOperator?: string;
   formClassesValue?: string;
@@ -864,11 +868,15 @@ export function specForShot(t: SuggestionShotTrigger): DriveSpec {
   // id / className, so strip the leading #/. (a dotted multi-class becomes space-separated).
   const formId = t.formIdValue ? t.formIdValue.replace(/^#/, '') : undefined;
   const formClasses = t.formClassesValue ? t.formClassesValue.replace(/^\./, '').replace(/\./g, ' ') : undefined;
+  // An all_clicks tag scoped by a {{Click Text}} Lookup Table (e.g. a share widget) carries no single
+  // clickTextValue — ring the FIRST listed text so the tag still gets a proof shot.
+  const lookupText = !t.clickTextValue && t.lookupTable?.texts?.length ? t.lookupTable.texts[0] : undefined;
   return {
     kind: t.kind,
     locateOnly: true,
     ...(cssSelector ? { cssSelector } : {}),
-    ...(t.clickTextValue ? { clickText: t.clickTextValue, clickTextOp: t.clickTextOperator } : {}),
+    ...(t.clickTextValue ? { clickText: t.clickTextValue, clickTextOp: t.clickTextOperator }
+      : lookupText ? { clickText: lookupText, clickTextOp: 'equals' } : {}),
     ...(t.clickUrlValue && t.clickUrlOperator !== 'cssSelector' ? { clickUrl: t.clickUrlValue, clickUrlOp: t.clickUrlOperator } : {}),
     ...(formId ? { formId, formIdOp: t.formIdOperator } : {}),
     ...(formClasses ? { formClasses, formClassesOp: t.formClassesOperator } : {}),

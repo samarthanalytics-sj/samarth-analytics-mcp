@@ -117,6 +117,15 @@ function check(name: string, ok: boolean, detail?: string): void {
   check('specForShot: clickUrl cssSelector → cssSelector', s.cssSelector === 'a.download');
   check('specForShot: clickUrl cssSelector not re-sent as clickUrl', s.clickUrl === undefined);
 }
+{
+  // A share-widget tag fires via a {{Click Text}} Lookup Table (no single clickTextValue) — the locate
+  // pass rings the FIRST listed control ("Twitter") so the tag still gets a proof screenshot.
+  const s = specForShot({ kind: 'all_clicks', lookupTable: { name: 'Lookup - Share Control', texts: ['Twitter', 'LinkedIn', 'Copy Link'] } });
+  check('specForShot: lookupTable → clickText is the first listed control', s.clickText === 'Twitter' && s.clickTextOp === 'equals');
+  // An explicit clickTextValue still wins over the lookup table.
+  const s2 = specForShot({ kind: 'all_clicks', clickTextValue: 'Get a Quote', clickTextOperator: 'equals', lookupTable: { name: 'X', texts: ['Twitter'] } });
+  check('specForShot: explicit clickText wins over lookupTable', s2.clickText === 'Get a Quote');
+}
 
 // ── formLocatorForSubmit: locate the <form> for a NATIVE form_submit tag (page-path-scoped, no form id) ─
 {
@@ -170,5 +179,5 @@ async function waitForLocateChecks(): Promise<void> {
 void waitForLocateChecks().then(() => {
   console.log(`\nverify-driver-payload: ${passed} passed, ${failed} failed`);
   if (failed) { console.error(failures.join('\n')); process.exit(1); }
-  if (passed < 35) { console.error(`expected >= 35 checks, got ${passed}`); process.exit(1); }
+  if (passed < 37) { console.error(`expected >= 37 checks, got ${passed}`); process.exit(1); }
 });

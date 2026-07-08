@@ -160,6 +160,18 @@ check('social: spoof "facebook.com.evil.com" → outbound (not social)', classif
 // The site's OWN social-named subdomain is internal nav, not a social click.
 check('social: internal "discord.acme.com" subdomain → null (internal nav)', classifyElement(a('https://discord.acme.com/x'), 'acme.com') === null);
 
+// ── share widgets: a SHARE link (share the current page) vs a FOLLOW link (visit the profile) ──
+check('share: twitter intent → share/twitter', (() => { const d = classifyElement(a('https://twitter.com/intent/tweet?url=https://acme.com/blog/p&text=Hi', { text: 'Twitter' }), 'acme.com'); return d?.kind === 'share' && d?.shareMethod === 'twitter'; })());
+check('share: facebook sharer → share/facebook', (() => { const d = classifyElement(a('https://www.facebook.com/sharer/sharer.php?u=https://acme.com/blog/p', { text: 'Facebook' }), 'acme.com'); return d?.kind === 'share' && d?.shareMethod === 'facebook'; })());
+check('share: linkedin share-offsite → share/linkedin', (() => { const d = classifyElement(a('https://www.linkedin.com/sharing/share-offsite/?url=https://acme.com/blog/p', { text: 'LinkedIn' }), 'acme.com'); return d?.kind === 'share' && d?.shareMethod === 'linkedin'; })());
+check('share: x.com intent/post → share/twitter (x mapped to twitter)', classifyElement(a('https://x.com/intent/post?url=https://acme.com/p', { text: 'Post' }), 'acme.com')?.kind === 'share');
+check('share: whatsapp send → share/whatsapp', (() => { const d = classifyElement(a('https://api.whatsapp.com/send?text=https://acme.com/p', { text: 'WhatsApp' }), 'acme.com'); return d?.kind === 'share' && d?.shareMethod === 'whatsapp'; })());
+// A plain FOLLOW link to the profile (no share endpoint / payload) stays a social click, NOT a share.
+check('share: plain facebook.com/AcmePage → social (a FOLLOW link, not a share)', classifyElement(a('https://facebook.com/AcmePage', { text: 'Facebook' }), 'acme.com')?.kind === 'social');
+// "Copy link" clipboard button (no social URL) → the copy_link method.
+check('share: "Copy link" button → share/copy_link', (() => { const d = classifyElement({ tag: 'button', href: '', text: 'Copy Link', hasDownload: false, region: 'main' }, 'acme.com'); return d?.kind === 'share' && d?.shareMethod === 'copy_link'; })());
+check('share: "Copy" alone (no "link") → NOT share (avoids copy-code buttons)', classifyElement({ tag: 'button', href: '', text: 'Copy', hasDownload: false, region: 'main' }, 'acme.com')?.kind !== 'share');
+
 // ── embedded cross-origin form → synthesized suggestion ──────────────────────
 {
   const embedPage: PageScan = {
