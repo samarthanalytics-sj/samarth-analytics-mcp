@@ -14,6 +14,7 @@ import {
 import { registerAllTools } from './tools/index.js';
 import { registerServerSidePrompts } from './prompts/serverSide.js';
 import { registerEcommerceFunnelPrompts } from './prompts/ecommerceFunnel.js';
+import { registerCommandPrompts } from './prompts/commands.js';
 import { getGuardrailConfig } from './utils/guardrails.js';
 import { resolveAuth } from './auth/identityContext.js';
 
@@ -51,6 +52,8 @@ export function createGtmMcpServer(auth: OAuth2Client): McpServer {
   // MCP prompts (prompts/list) — user-selectable templates shown in the client's "prompts" tab.
   registerServerSidePrompts(server);
   registerEcommerceFunnelPrompts(server);
+  // Short verb-style slash commands: /audit, /report, /create-tag, /debug, /explain.
+  registerCommandPrompts(server);
 
   return server;
 }
