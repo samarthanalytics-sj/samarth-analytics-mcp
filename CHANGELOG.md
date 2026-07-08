@@ -1,3 +1,9 @@
+## [1.267.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.266.0...v1.267.0) (2026-07-08)
+
+### Features
+
+* **suggest:** 2nd trigger condition + collapse punctuation-dup rows + poll for late elements ([cf3c229](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cf3c2294dd8f5c1cbfd42e0665c72ee49357e7b1))
+
 ## [1.266.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.265.0...v1.266.0) (2026-07-08)
 
 ### Features
