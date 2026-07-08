@@ -8,6 +8,7 @@
 
 import { parseGa4CollectHit, classifyCollector, beaconPlatform, beaconHost, isKnownAdPlatform } from '../../shared/runtime-capture';
 import { ctaTriggerFiresOn } from './scan-core';
+import { isFormEventName } from './form-tag-match';
 import type { SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import type {
   VerifyTagInput,
@@ -221,10 +222,16 @@ function evaluateOne(tag: VerifyTagInput, byId: Map<string, PerTagCapture>, elem
       if (cap.kind === 'custom_event') {
         // We pushed a synthetic dataLayer event (e.g. `form_submission`) plus any form-specific data
         // we could resolve from the trigger's conditions (form_name/form_id/…). If it STILL didn't
-        // fire, a further condition we can't synthesize applies — a specific page, a Custom JS
-        // variable, a matchRegex/negated condition, or a blocking trigger. Not proof it's broken —
-        // inconclusive; verify with a real submit in GTM Preview.
-        return withBeacons({ ...base, inconclusive: true, reason: `we pushed a synthetic "${tag.trigger.eventName ?? 'custom'}" dataLayer event (with any resolvable form data), but this tag still didn't fire — it likely needs a further condition we can't synthesize (a specific page, a Custom JS variable, or a blocking trigger); verify it with a real submit in GTM Preview`, interaction });
+        // fire, a further condition we can't synthesize applies. For a FORM tag that's expected — a
+        // synthetic push can't reproduce the real form's own data/values, so it's verified by a REAL
+        // submit (the "Forms — verified by a real submit" section, or GTM Preview), not here. For a
+        // non-form custom event it likely needs a specific page / Custom JS variable / blocking
+        // trigger. Either way it's inconclusive, NOT proof it's broken.
+        const formTag = isFormEventName(tag.trigger.eventName ?? '');
+        const how = formTag
+          ? `this is a FORM tag — a synthetic push can't reproduce the real form's own data, so it's verified by a REAL submit: use the "Forms — verified by a real submit" section below (it submits each matched form for real and re-checks this tag), or submit the form in GTM Preview. If the tag is still a DRAFT, paste your GTM Preview snippet above so it loads`
+          : `it likely needs a further condition we can't synthesize (a specific page, a Custom JS variable, or a blocking trigger); verify it with a real submit in GTM Preview`;
+        return withBeacons({ ...base, inconclusive: true, reason: `we pushed a synthetic "${tag.trigger.eventName ?? 'custom'}" dataLayer event (with any resolvable form data), but this tag still didn't fire — ${how}`, interaction });
       }
       return withBeacons({ ...base, reason: 'the interaction ran but no GA4 hit fired — the tag/trigger may not be in the loaded container, or its condition does not match', interaction });
     }

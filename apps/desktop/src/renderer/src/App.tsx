@@ -3814,7 +3814,7 @@ function verdictHowToTest(v: VerifyTagsResult['verdicts'][number]): string {
   const k = v.interaction?.kind;
   const found = v.interaction?.targetFound;
   if (k === 'custom_event') {
-    return 'This tag fires on a shared dataLayer event but keys off a specific form. Open GTM Preview and submit the matching form for real — the tag will fire when its form-specific condition is met. A synthetic push can’t supply that data.';
+    return 'This tag fires on a dataLayer event a synthetic push can’t fully reproduce (a form’s own data, or a page / Custom-JS condition). If it’s a FORM tag, verify it in the “Forms — verified by a real submit” section below — it submits each matched form for real and re-checks this tag. Otherwise trigger the event in GTM Preview. If the tag is still a DRAFT, paste your GTM Preview snippet above so it loads.';
   }
   // Element WAS found + interacted, but no beacon we recognise fired → an undecodable Custom Template /
   // Custom HTML (pixel) tag, not a wrong-page problem.

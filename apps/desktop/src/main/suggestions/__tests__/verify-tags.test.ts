@@ -106,6 +106,22 @@ const els: DetectedElementView[] = [{ page: '/', kind: 'cta', text: 'Get a Free 
   check('custom_event fired via dataLayer → fired true', v[0].fired === true);
 }
 
+// ── custom_event FORM tag that didn't fire → inconclusive, points at the real-submit Forms section ──
+{
+  const t = tag({ id: 'gf', eventName: 'get_in_touch_form', platform: 'ga4_event', trigger: { name: 'Get In Touch', kind: 'custom_event', eventName: 'get_in_touch_form' } });
+  const v = evaluateVerify([t], [cap({ tagId: 'gf', kind: 'custom_event', hits: [] })], els)[0];
+  check('form custom_event no-hit → inconclusive (not "broken")', v.inconclusive === true && v.fired === false);
+  check('form custom_event → points at the real-submit Forms section below', /section below/.test(v.reason ?? '') && /FORM tag/.test(v.reason ?? ''));
+}
+
+// ── non-form custom_event that didn't fire → inconclusive, generic guidance (not the Forms section) ─
+{
+  const t = tag({ id: 'sd', eventName: 'scroll_depth', platform: 'ga4_event', trigger: { name: 'Scroll', kind: 'custom_event', eventName: 'scroll_depth' } });
+  const v = evaluateVerify([t], [cap({ tagId: 'sd', kind: 'custom_event', hits: [] })], els)[0];
+  check('non-form custom_event no-hit → inconclusive', v.inconclusive === true);
+  check('non-form custom_event → no Forms-section pointer', !/section below/.test(v.reason ?? ''));
+}
+
 // ── not exercised ────────────────────────────────────────────────────────────────
 {
   const v = evaluateVerify([tag()], [], els);
