@@ -1,3 +1,9 @@
+## [1.262.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.261.1...v1.262.0) (2026-07-08)
+
+### Features
+
+* **mcp:** slash-command prompts — /audit /report /create-tag /debug /explain ([f2a14c6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f2a14c679ca941fb19c1808169152962d153176c))
+
 ## [1.261.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.261.0...v1.261.1) (2026-07-08)
 
 ### Bug Fixes
