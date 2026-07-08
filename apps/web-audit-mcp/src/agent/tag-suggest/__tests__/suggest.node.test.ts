@@ -510,6 +510,34 @@ check('cta: search button event (search_click) is DISTINCT from the site-search 
 const iosCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Download for iOS', intent: 'generic' }] });
 check('naming: title-case keeps intercaps ("Download For iOS", not "Ios")', iosCta.some((s) => s.tagName === 'GA4 - Event - Download For iOS Click Tag' && s.trigger.name === 'Download For iOS Click Trigger'));
 
+// ── Same-destination CTA collapse: 2+ recognized-intent link CTAs to ONE destination but with DIFFERENT
+//    wording ("Get a Free Audit" / "Get Free Audit" / "Free Audit" → /free-audit) become ONE tag firing
+//    on {{Click URL}} — the user's "duplicate free-audit tags" case. ──
+const sameDest = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [
+  { page: '/', kind: 'cta', text: 'Get a Free Audit', intent: 'get_started', href: 'https://acme.com/free-audit' },
+  { page: '/services', kind: 'cta', text: 'Get Free Audit', intent: 'get_started', href: 'https://acme.com/free-audit?ref=nav' },
+  { page: '/pricing', kind: 'cta', text: 'Free Audit', intent: 'get_started', href: '/free-audit' },
+] });
+const faDest = sameDest.filter((s) => s.platform === 'ga4_event' && /free audit/i.test(s.tagName));
+check('same-dest CTA: 3 wordings to /free-audit collapse to ONE tag', faDest.length === 1);
+check('same-dest CTA: fires on {{Click URL}} contains the path (not per-text {{Click Text}})',
+  faDest[0]?.trigger.kind === 'link_click' && faDest[0]?.trigger.clickUrlValue === '/free-audit' && faDest[0]?.trigger.clickUrlOperator === 'contains' && faDest[0]?.trigger.clickTextValue === undefined);
+check('same-dest CTA: named from the destination + marked site-wide', faDest[0]?.tagName === 'GA4 - Event - Free Audit Click Tag' && faDest[0]?.eventName === 'free_audit_click' && faDest[0]?.page === 'site-wide');
+
+// Different destinations (even same intent + "audit" wording) STAY separate — genuinely different CTAs.
+const diffDest = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [
+  { page: '/', kind: 'cta', text: 'Schedule Free Audit', intent: 'get_started', href: 'https://acme.com/schedule' },
+  { page: '/', kind: 'cta', text: 'Start Free Audit', intent: 'get_started', href: 'https://acme.com/ga4-audit' },
+] });
+check('diff-dest CTA: different destinations stay separate', diffDest.filter((s) => s.platform === 'ga4_event' && s.trigger.kind === 'link_click').length === 2);
+
+// A SINGLE wording to a destination is NOT collapsed — it keeps its descriptive per-text name (so a
+// short/uninformative path like "/p" never replaces "View Size Chart").
+const singleDest = buildSuggestions({ siteHost: 'shop.example', forms: [], elements: [
+  { page: '/p', kind: 'cta', text: 'View size chart', intent: 'learn_more', href: 'https://shop.example/p#size-chart' },
+] });
+check('single-wording CTA: not collapsed, keeps its text-derived name + {{Click Text}}', singleDest.some((s) => s.tagName === 'GA4 - Event - View Size Chart Click Tag' && s.trigger.clickTextValue === 'View size chart'));
+
 // ── YouTube video → GA4 video tag (built-in YouTube Video trigger) ───────────
 check('video: isYouTubeEmbed matches /embed/ players, not watch/share/vimeo',
   isYouTubeEmbed('https://www.youtube.com/embed/abc123') && isYouTubeEmbed('https://www.youtube-nocookie.com/embed/xyz') &&
