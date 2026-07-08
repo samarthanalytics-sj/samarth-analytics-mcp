@@ -11,6 +11,7 @@
 //
 // Playwright is OPTIONAL (loaded lazily); if absent the caller gets a clear error.
 
+import os from 'node:os';
 import { requestAllowed } from './ssrf';
 import { classifyCollector, syntheticDataLayerEvent, buildNetworkLog, summarizeDataLayer, type Collector, type DescribedHit, type DataLayerEventView } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
@@ -27,10 +28,12 @@ interface PwPage {
   evaluate<T = unknown>(fn: unknown, arg?: unknown): Promise<T>;
   waitForTimeout(ms: number): Promise<void>;
   screenshot(opts?: { type?: 'jpeg' | 'png'; quality?: number; fullPage?: boolean; timeout?: number }): Promise<Buffer>;
+  close(): Promise<void>;
 }
 interface PwContext {
   route(pattern: string, handler: (route: PwRoute) => unknown): Promise<void>;
   newPage(): Promise<PwPage>;
+  close(): Promise<void>;
 }
 interface PwBrowser { newContext(opts?: Record<string, unknown>): Promise<PwContext>; close(): Promise<void> }
 interface Playwright { chromium: { launch(opts?: { headless?: boolean }): Promise<PwBrowser> } }
@@ -82,8 +85,55 @@ export interface VerifyDriverTag {
 
 // Distinct pages the driver will navigate to drive tags on. Raised for sitemap-driven verification so a
 // container whose click tags spread across many landing pages is covered (the driver only visits pages
-// that actually have a routed tag, so this self-limits — it's a ceiling, not a fixed cost).
-const MAX_VERIFY_PAGES = 40;
+// that actually have a routed tag, so this self-limits — it's a ceiling, not a fixed cost). Pages are now
+// processed by a bounded worker POOL (runPagePool), so a bigger ceiling no longer means a linearly longer
+// run — the wall-clock scales with ceil(pages / concurrency).
+const MAX_VERIFY_PAGES = 120;
+
+// Page-level parallelism. Each worker is a full, ISOLATED browser context + page (own request-route
+// handler, own capture buffer) — the only safe way to attribute captured beacons to the right page — so
+// the cap keeps memory/CPU sane rather than opening a tab per page. Concurrency is min(cap, cores-1,
+// pages): it never exceeds the work available, and leaves a core for the app/UI thread.
+export const PAGE_CONCURRENCY_CAP = 5;
+export function defaultPageConcurrency(pages: number): number {
+  let cores = 4;
+  try { cores = os.cpus()?.length || 4; } catch { /* os probe failed — assume 4 */ }
+  return Math.max(1, Math.min(PAGE_CONCURRENCY_CAP, cores - 1, Math.max(1, pages)));
+}
+/** Resolve the effective page concurrency: an explicit request (clamped) else the machine default,
+ *  never above the cap and never more workers than there are pages. */
+export function clampConcurrency(requested: number | undefined, pages: number): number {
+  const want = requested && requested > 0 ? requested : defaultPageConcurrency(pages);
+  return Math.max(1, Math.min(want, PAGE_CONCURRENCY_CAP, Math.max(1, pages)));
+}
+
+/** Run `handle` over every page group with BOUNDED concurrency. A single shared cursor hands each group
+ *  to exactly ONE worker: the claim (`cursor < len ? groups[cursor++] : undefined`) is a single
+ *  synchronous expression, and JS runs it to completion with no interleaving, so no group is ever taken
+ *  twice and the loop drains the queue so none is left behind. Up to `concurrency` workers run at once,
+ *  each owning isolated resources from `makeWorker` (torn down by `closeWorker` when the queue empties).
+ *  `handle` must not throw (record per-page failures itself); a fatal makeWorker error rejects the run. */
+export async function runPagePool<G, W>(
+  groups: G[],
+  concurrency: number,
+  makeWorker: (workerId: number) => Promise<W>,
+  handle: (worker: W, group: G) => Promise<void>,
+  closeWorker: (worker: W) => Promise<void>,
+): Promise<void> {
+  if (groups.length === 0) return; // nothing to do — spawn no workers (no idle context)
+  let cursor = 0;
+  const claim = (): G | undefined => (cursor < groups.length ? groups[cursor++] : undefined);
+  const worker = async (id: number): Promise<void> => {
+    const w = await makeWorker(id);
+    try {
+      for (let g = claim(); g !== undefined; g = claim()) await handle(w, g);
+    } finally {
+      try { await closeWorker(w); } catch { /* best-effort teardown */ }
+    }
+  };
+  const n = Math.max(1, Math.min(concurrency, groups.length));
+  await Promise.all(Array.from({ length: n }, (_, i) => worker(i)));
+}
 
 /** Resolve a tag's page ("/contact" | "site-wide" | undefined) to a full URL against the base. */
 function resolvePageUrl(baseUrl: string, page: string | undefined): string {
@@ -116,6 +166,10 @@ export interface VerifyDriverOptions {
    *  actually loaded + the dataLayer event stream) so a "0 fired" result can distinguish
    *  "container didn't load" from "loaded but the tag/condition didn't match". Off by default. */
   gtmDebug?: boolean;
+  /** Page-level parallelism: how many pages to drive at once, each in its own isolated context.
+   *  Defaults to the machine's cores-1 (capped) when omitted; clamped to [1, cap] and never more than
+   *  the page count. Set 1 to force the old sequential behaviour. */
+  concurrency?: number;
 }
 /** GTM's on-page debug signal (Phase B). Best-effort + observable — NOT the full Tag-Assistant
  *  per-tag protocol (that is undocumented and needs live-GTM validation). */
@@ -549,12 +603,15 @@ const MAX_SCREENSHOTS = 80;
 /** A compact JPEG screenshot of the current page as a data URI — visual proof of the interaction the
  *  driver just performed (for click/form tags the driven element is ringed). Best-effort + bounded. */
 async function captureShot(page: PwPage, state: { n: number }): Promise<string | undefined> {
+  // Reserve the slot SYNCHRONOUSLY (before the awaited screenshot) so concurrent page workers sharing
+  // this counter can't both pass the cap and overshoot MAX_SCREENSHOTS; release it back on failure.
   if (state.n >= MAX_SCREENSHOTS) return undefined;
+  state.n += 1;
   try {
     const buf = await page.screenshot({ type: 'jpeg', quality: 55, timeout: 4000 });
-    state.n += 1;
     return `data:image/jpeg;base64,${buf.toString('base64')}`;
   } catch {
+    state.n -= 1;
     return undefined; // never fail verification over a screenshot
   }
 }
@@ -610,55 +667,87 @@ export async function runVerifyDriver(
   const pw = await loadPlaywright();
   if (!pw) throw new PlaywrightUnavailableError();
 
-  const captured: { url: string; body: string | null; collector: Collector }[] = [];
-  let armed = false; // after the container has loaded, kill every beacon (capture+abort)
+  // Shared, ORDER-INDEPENDENT aggregation across all page workers (appends are safe on JS's single
+  // thread; perTag is keyed by tagId downstream, so its order never matters).
+  let injected = false;
+  const pagesDriven: string[] = [];
+  const debugContainerIds = new Set<string>();
+  const debugEvents = new Set<string>();
+  // Real dataLayer pushes captured across pages + the event names WE pushed synthetically (so those
+  // are labelled and not mistaken for the site's own emissions).
+  const debugDataLayer: Array<{ event: string; params: Record<string, string> }> = [];
+  const syntheticEvents = new Set<string>();
+  const shotState = { n: 0 }; // screenshots embedded so far (bounded by MAX_SCREENSHOTS, shared cap)
+  // Each worker's own capture buffer, collected on teardown → merged into the one network log.
+  const capturedByWorker: { url: string; body: string | null; collector: Collector }[][] = [];
+
+  // A page worker owns an ISOLATED browser context: its own request-route handler, its own capture
+  // buffer, and its own `armed` flag. Isolation is REQUIRED for correctness — a shared context-level
+  // route handler couldn't attribute a captured beacon to the page that fired it (attribution is
+  // captured.slice(before), which assumes one page at a time), and one page's "armed" would abort
+  // another page's pre-container requests.
+  interface VerifyWorker {
+    context: PwContext;
+    page: PwPage;
+    captured: { url: string; body: string | null; collector: Collector }[];
+    armed: { on: boolean };
+  }
 
   let browser: PwBrowser | null = null;
   try {
-    browser = await pw.chromium.launch({ headless: true });
-    const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+    const launched = await pw.chromium.launch({ headless: true });
+    browser = launched;
 
-    await context.route('**/*', (route) => {
-      const req = route.request();
-      const reqUrl = req.url();
-      const collector = classifyCollector(reqUrl);
-      if (collector) {
-        captured.push({ url: reqUrl, body: safePostData(req), collector });
-        void route.abort();
-        return;
-      }
-      if (armed && isBeaconType(req.resourceType())) {
-        captured.push({ url: reqUrl, body: safePostData(req), collector: 'ad' });
-        void route.abort();
-        return;
-      }
-      void requestAllowed(reqUrl).then(
-        (ok) => (ok ? route.continue() : route.abort()),
-        () => route.abort(),
-      );
-    });
+    const makeWorker = async (): Promise<VerifyWorker> => {
+      const context = await launched.newContext({ viewport: { width: 1366, height: 900 } });
+      const captured: VerifyWorker['captured'] = [];
+      const armed = { on: false }; // after THIS worker's container loads, kill every beacon (capture+abort)
+      await context.route('**/*', (route) => {
+        const req = route.request();
+        const reqUrl = req.url();
+        const collector = classifyCollector(reqUrl);
+        if (collector) {
+          captured.push({ url: reqUrl, body: safePostData(req), collector });
+          void route.abort();
+          return;
+        }
+        if (armed.on && isBeaconType(req.resourceType())) {
+          captured.push({ url: reqUrl, body: safePostData(req), collector: 'ad' });
+          void route.abort();
+          return;
+        }
+        void requestAllowed(reqUrl).then(
+          (ok) => (ok ? route.continue() : route.abort()),
+          () => route.abort(),
+        );
+      });
+      const page = await context.newPage();
+      return { context, page, captured, armed };
+    };
+    const closeWorker = async (w: VerifyWorker): Promise<void> => {
+      capturedByWorker.push(w.captured);
+      await w.context.close();
+    };
 
-    const page = await context.newPage();
-    let injected = false;
-    const pagesDriven: string[] = [];
-    const debugContainerIds = new Set<string>();
-    const debugEvents = new Set<string>();
-    // Real dataLayer pushes captured across pages + the event names WE pushed synthetically (so those
-    // are labelled and not mistaken for the site's own emissions).
-    const debugDataLayer: Array<{ event: string; params: Record<string, string> }> = [];
-    const syntheticEvents = new Set<string>();
-    const shotState = { n: 0 }; // screenshots embedded so far (bounded by MAX_SCREENSHOTS)
-
-    // Drive each tag on ITS page: group by page, navigate to each, inject the
-    // (preview) container so DRAFT tags load, then drive the group's triggers.
-    for (const [pageUrl, groupTags] of groupByPage(url, tags)) {
+    // Drive every tag on ITS page: navigate, inject the (preview) container so DRAFT tags load, then
+    // drive the group's triggers. One call per page; runPagePool fans these across the worker pool.
+    const driveOnePage = async (w: VerifyWorker, [pageUrl, groupTags]: [string, VerifyDriverTag[]]): Promise<void> => {
+      const { page, captured } = w;
+      // Disarm BEFORE this page's own load. The page must load with its beacons flowing so client-rendered
+      // CTAs/images actually render (classified analytics collectors are still captured+aborted regardless
+      // of armed); we RE-arm only after injecting the container below, so a beacon fired during the page's
+      // own load isn't mistaken for a tag firing. A worker drives several pages in turn, so without this
+      // reset every page after its first would load already-armed (arming leaks across pages) — its load
+      // subresources would be aborted, breaking element location and polluting loadHits, with results that
+      // depend on which pages a worker happened to claim.
+      w.armed.on = false;
       const loadStart = captured.length;
       try {
         await page.goto(pageUrl, { waitUntil: 'networkidle', timeout: navTimeoutMs });
       } catch (e) {
         const note = `could not load ${pageUrl}: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`;
         for (const t of groupTags) perTag.push({ tagId: t.id, kind: 'navigate', targetFound: false, performed: false, note, hits: [] });
-        continue;
+        return; // this page failed to load — the pool moves on to the next queued page
       }
       pagesDriven.push(pageUrl);
 
@@ -682,7 +771,7 @@ export async function runVerifyDriver(
       // obscured in the per-tag proof shot — same benefit as the suggestion pass. display:none persists
       // for every tag driven on this page, so once per page load is enough. Best-effort.
       try { await page.evaluate(hideCookieOverlaysInPage); } catch { /* best-effort */ }
-      armed = true; // from here every cross-site beacon is a tag firing → capture+abort it
+      w.armed.on = true; // from here every cross-site beacon is a tag firing → capture+abort it
       const loadHits = captured.slice(loadStart);
       const settleQuiet = 400;
       const settleMax = Math.min(Math.max(settleMs, 900) * 3, 5000);
@@ -796,13 +885,18 @@ export async function runVerifyDriver(
       } catch {
         /* best-effort — never fail verification over the debug read */
       }
-    }
+    };
+
+    // Fan the per-page drive across a bounded worker pool (each page handled exactly once, none skipped).
+    const pageGroups = [...groupByPage(url, tags)];
+    const concurrency = clampConcurrency(opts.concurrency, pageGroups.length);
+    await runPagePool(pageGroups, concurrency, makeWorker, driveOnePage, closeWorker);
 
     const gtmDebug: GtmDebugCapture | undefined = opts.gtmDebug
       ? { containerLoaded: debugContainerIds.size > 0, containerIds: [...debugContainerIds], dataLayerEvents: [...debugEvents] }
       : undefined;
     const dataLayer = summarizeDataLayer(debugDataLayer.map((p) => ({ ...p, synthetic: syntheticEvents.has(p.event) })));
-    const networkLog = buildNetworkLog(captured);
+    const networkLog = buildNetworkLog(capturedByWorker.flat());
     return { pagesOk: true, injected, previewAuth, perTag, ...(pagesDriven.length ? { pagesDriven } : {}), ...(networkLog.length ? { networkLog } : {}), ...(dataLayer.length ? { dataLayer } : {}), ...(gtmDebug ? { gtmDebug } : {}) };
   } catch (e) {
     return { pagesOk: false, injected: Boolean(loaderSrc), previewAuth, perTag, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
@@ -983,6 +1077,8 @@ export async function runSuggestionScreenshots(
     /** Called before EACH tag's capture with how many are done, the total, and which tag/page is
      *  being shot right now — drives the live progress card in the suggestions panel. */
     onProgress?: (done: number, total: number, tagId: string, page: string) => void;
+    /** Page-level parallelism (pages shot at once, each in its own tab). Defaults to cores-1 (capped). */
+    concurrency?: number;
   } = {},
 ): Promise<{ pagesOk: boolean; error?: string; shots: SuggestionShot[] }> {
   const navTimeoutMs = opts.navTimeoutMs ?? 20_000;
@@ -998,15 +1094,17 @@ export async function runSuggestionScreenshots(
   let browser: PwBrowser | null = null;
   try {
     browser = await pw.chromium.launch({ headless: true });
+    // No request-capture here (locate-only), so pages can share ONE context; each worker just owns its
+    // own tab. The screenshot cap (shotState) is shared so the total stays bounded across workers.
     const context = await browser.newContext({ viewport: { width: 1366, height: 900 } });
-    const page = await context.newPage();
     const shotState = { n: 0 };
-    for (const [pageUrl, groupTags] of groupByPage(url, tags)) {
+
+    const shotOnePage = async (page: PwPage, [pageUrl, groupTags]: [string, SuggestionShotTag[]]): Promise<void> => {
       try {
         await page.goto(pageUrl, { waitUntil: 'networkidle', timeout: navTimeoutMs });
       } catch {
         for (const t of groupTags) shots.push({ tagId: t.id, page: pageUrl });
-        continue;
+        return; // this page failed to load — the pool moves on to the next queued page
       }
       // A short head-start settle; the per-tag poll below covers anything that renders later.
       await page.waitForTimeout(Math.min(Math.max(settleMs, 400), 1200));
@@ -1051,7 +1149,18 @@ export async function runSuggestionScreenshots(
         const screenshot = found ? await captureShot(page, shotState) : undefined;
         shots.push({ tagId: t.id, page: pageUrl, ...(screenshot ? { screenshot } : {}) });
       }
-    }
+    };
+
+    // Shoot pages in parallel across a bounded pool of tabs (each page handled exactly once, none skipped).
+    const pageGroups = [...groupByPage(url, tags)];
+    const concurrency = clampConcurrency(opts.concurrency, pageGroups.length);
+    await runPagePool(
+      pageGroups,
+      concurrency,
+      () => context.newPage(),
+      shotOnePage,
+      (page) => page.close(),
+    );
     return { pagesOk: true, shots };
   } catch (e) {
     return { pagesOk: false, error: (e instanceof Error ? e.message : String(e)).slice(0, 300), shots };
