@@ -2427,8 +2427,8 @@ function TagReviewPanel({
 }): JSX.Element {
   const [url, setUrl] = useState('');
   const [scanning, setScanning] = useState(false);
-  // Live crawl progress — suggestions stream in one-by-one as each page is scanned.
-  const [scanProgress, setScanProgress] = useState<{ scanned: number; found: number } | null>(null);
+  // Crawl progress shown WHILE scanning (the list itself is rendered once, deduplicated, on completion).
+  const [scanProgress, setScanProgress] = useState<{ scanned: number; found: number; queued: number } | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [suggestions, setSuggestions] = useState<SuggestedTagView[]>([]);
@@ -2616,14 +2616,13 @@ function TagReviewPanel({
     setDiscoverMode(m);
   }
 
-  // "Single page" mode: scan ONLY the entered URL directly — no discovery, no page
-  // list, straight to the tag results.
-  // Suggestions stream in as each page is scanned, so the list fills one-by-one.
+  // Progress-ONLY while scanning: we do NOT render a partial list mid-scan. Streaming a not-yet-complete
+  // list can flash the SAME tag several times before every page is collapsed (a page scanned twice, the
+  // same CTA seen on several pages, etc.). Instead we show live progress and render the ONE final,
+  // deduplicated list when the scan finishes (applyScanResult → loadSuggestions). `found` counts unique
+  // tags so far (deduped) so the number is honest and never shows the transient duplicates.
   const onScanProgress = (p: ScanProgressView): void => {
-    // Same name-dedup on the LIVE streamed list, so a transient same-name pair never flashes mid-scan.
-    const streamed = dedupeViewsByGtmName(p.suggestions);
-    setSuggestions(streamed);
-    setScanProgress({ scanned: p.scanned, found: streamed.length });
+    setScanProgress({ scanned: p.scanned, queued: p.queued, found: dedupeViewsByGtmName(p.suggestions).length });
   };
 
   async function doSinglePageScan(): Promise<void> {
@@ -3618,10 +3617,13 @@ function TagReviewPanel({
         )}
 
 
-        {/* Live crawl progress — the list below fills in as each page is read. */}
-        {scanning && scanProgress && (
+        {/* Crawl progress — the FULL de-duplicated list appears when the scan finishes (not streamed). */}
+        {scanning && (
           <div style={styles.scanBanner}>
-            ⏳ Scanning… {scanProgress.scanned} page(s) read · {scanProgress.found} tag(s) so far — they stream in below as each page is scanned.
+            ⏳ Scanning all pages…{scanProgress ? ` ${scanProgress.scanned} read` : ' starting'}
+            {scanProgress && scanProgress.queued > 0 ? ` · ${scanProgress.queued} queued` : ''}
+            {scanProgress ? ` · ${scanProgress.found} unique tag(s) found` : ''}
+            {' '}— the full, de-duplicated list appears when the scan finishes.
           </div>
         )}
 
@@ -3630,7 +3632,7 @@ function TagReviewPanel({
           <div style={styles.empty}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>🏷</div>
             {scanning
-              ? 'Reading the first page…'
+              ? 'Scanning all pages… the de-duplicated tag list appears here when the scan finishes (progress above).'
               : scanLog
               ? 'No trackable forms or clicks were found on the scanned pages. Try increasing pages/depth, or open the scan log above to see what was covered.'
               : 'Scan a website to see the GA4 event tags worth creating — form submissions (with the form provider), email & phone clicks, file downloads, outbound links and CTAs.'}
