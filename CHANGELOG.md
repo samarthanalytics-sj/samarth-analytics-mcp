@@ -1,3 +1,9 @@
+## [1.267.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.267.0...v1.267.1) (2026-07-08)
+
+### Bug Fixes
+
+* **desktop:** tag-suggestions table — reachable horizontal scroll + sticky header ([84ea637](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/84ea63789b96f707bb1861cd4b5560f9132df87c))
+
 ## [1.267.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.266.0...v1.267.0) (2026-07-08)
 
 ### Features
