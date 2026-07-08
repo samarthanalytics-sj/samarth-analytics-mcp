@@ -1,3 +1,9 @@
+## [1.268.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.267.1...v1.268.0) (2026-07-08)
+
+### Features
+
+* **suggest:** per-condition remove (×) button to undo an added trigger condition ([0648c7c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0648c7c43bff9a82f5296cbb9245cda68b4bd047))
+
 ## [1.267.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.267.0...v1.267.1) (2026-07-08)
 
 ### Bug Fixes
