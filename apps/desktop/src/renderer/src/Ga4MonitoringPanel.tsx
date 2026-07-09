@@ -79,9 +79,6 @@ function CheckTypeIcon({ id, size = 18 }: { id: string; size?: number }): JSX.El
   );
 }
 
-/** Scoped hover polish for the tiles — a subtle lift, no fake click affordance (the tile is not a link). */
-const TILE_HOVER_CSS = `.ga4mon-tile{transition:box-shadow .13s ease, transform .13s ease}.ga4mon-tile:hover{box-shadow:0 4px 14px rgba(0,0,0,.18);transform:translateY(-1px)}`;
-
 const box: React.CSSProperties = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 };
 const card: React.CSSProperties = { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 14, padding: 18 };
 const sectionTitle: React.CSSProperties = { fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)', margin: '0 0 10px' };
@@ -206,29 +203,25 @@ function HeroCard({ run, isRunning, disabled, onRun }: { run: Ga4MonitorRun; isR
     );
   }
 
-  const col = SEV_COLOR[top.severity] ?? 'var(--c-red)';
   const solid = SEV_SOLID[top.severity] ?? '#dc2626';
   return (
-    <div style={{ ...card, padding: 0, overflow: 'hidden', borderColor: col, display: 'flex' }}>
-      <div style={{ width: 6, background: solid, flexShrink: 0 }} />
-      <div style={{ padding: 18, flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: '#fff', background: solid, borderRadius: 6, padding: '3px 10px' }}>{top.severity}</span>
-          <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>Most urgent finding</span>
-          {isNew && <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--c-blue)', background: 'var(--c-blue-bg, rgba(59,130,246,.15))', borderRadius: 999, padding: '1px 8px' }}>NEW</span>}
+    <div style={{ ...card, padding: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', color: '#fff', background: solid, borderRadius: 6, padding: '3px 10px' }}>{top.severity}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>Most urgent finding</span>
+        {isNew && <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--c-blue)', background: 'var(--c-blue-bg, rgba(59,130,246,.15))', borderRadius: 999, padding: '1px 8px' }}>NEW</span>}
+      </div>
+      <div style={{ fontSize: 16, fontWeight: 700, marginTop: 10, lineHeight: 1.3 }}>{top.title}</div>
+      <div style={{ fontSize: 14, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.55 }}>{emphasize(top.detail)}</div>
+      {top.recommendation && (
+        <div style={{ marginTop: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', marginBottom: 3 }}>Recommended fix</div>
+          <div style={{ fontSize: 13.5, color: 'var(--text)', lineHeight: 1.5 }}>{top.recommendation}</div>
         </div>
-        <div style={{ fontSize: 16, fontWeight: 700, marginTop: 10, lineHeight: 1.3 }}>{top.title}</div>
-        <div style={{ fontSize: 14, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.55 }}>{top.detail}</div>
-        {top.recommendation && (
-          <div style={{ marginTop: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', marginBottom: 3 }}>Recommended fix</div>
-            <div style={{ fontSize: 13.5, color: 'var(--text)', lineHeight: 1.5 }}>{top.recommendation}</div>
-          </div>
-        )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 14 }}>
-          <button style={{ ...primaryBtn, background: solid }} disabled={disabled} onClick={onRun}>{isRunning ? 'Checking…' : '↻ Run check again'}</button>
-          {run.alerts.length > 1 && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>+{run.alerts.length - 1} more {run.alerts.length - 1 === 1 ? 'alert' : 'alerts'} below</span>}
-        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 14 }}>
+        <button style={{ ...primaryBtn, background: solid }} disabled={disabled} onClick={onRun}>{isRunning ? 'Checking…' : '↻ Run check again'}</button>
+        {run.alerts.length > 1 && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>+{run.alerts.length - 1} more {run.alerts.length - 1 === 1 ? 'alert' : 'alerts'} below</span>}
       </div>
     </div>
   );
@@ -241,7 +234,7 @@ function AiSummary({ run }: { run: Ga4MonitorRun }): JSX.Element {
   const nextStep = top?.recommendation || (top ? `Investigate: ${top.title}.` : 'No action needed — keep the background monitor running so a new issue pages you the moment it appears.');
   const h = HEALTH[run.health] ?? HEALTH.healthy;
   return (
-    <div style={{ ...card, padding: 20, borderLeft: '3px solid var(--c-blue, #2563eb)' }}>
+    <div style={{ ...card, padding: 20 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <span style={{ display: 'inline-flex', color: 'var(--c-blue, #2563eb)', fontSize: 16 }}>✨</span>
         <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: 0.3 }}>AI summary</span>
@@ -291,46 +284,42 @@ function emphasize(text: string): React.ReactNode {
   );
 }
 
-/** One health check as a PLAIN, EXPANDABLE tile: a neutral category icon, the label and a status pill.
- *  The insight is trimmed to a few lines with its key percentages emphasised; click (or Enter/Space on
- *  the Details button) to reveal the full insight plus a plain-language explainer of what the check does.
- *  The only colour on the card is the status pill. */
-function CheckCard({ c }: { c: Ga4MonitorCheckView }): JSX.Element {
+/** One health check as a TABLE ROW: a status pill, the neutral category icon + label, and the insight
+ *  (key figures emphasised, long ones clamped to three lines). "Details" un-clamps the insight and
+ *  reveals a plain-language explainer of what the check verifies. The only colour is the status pill. */
+function CheckRow({ c, last }: { c: Ga4MonitorCheckView; last: boolean }): JSX.Element {
   const [open, setOpen] = useState(false);
   const p = CHECK_PILL[c.status] ?? CHECK_PILL.skip;
   const explain = CHECK_EXPLAIN[c.id] ?? 'An additional health signal for this property.';
   const regionId = `ga4-check-${c.id}`;
-  const toggle = (): void => setOpen((o) => !o);
-  // Collapsed: clamp a long insight to 4 lines so the grid stays tidy; expanded shows it in full.
-  const clamp: React.CSSProperties = open ? {} : { display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
-  // The card body is a mouse convenience (click anywhere to expand); the real, keyboard-focusable and
-  // screen-reader-named control is the inner <button>, so AT announces a concise name + expanded state.
+  const cell: React.CSSProperties = { padding: '11px 16px', borderBottom: last ? 'none' : '1px solid var(--border)', verticalAlign: 'top' };
+  const clamp: React.CSSProperties = open ? {} : { display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
   return (
-    <div
-      className="ga4mon-tile"
-      onClick={toggle}
-      style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px', cursor: 'pointer' }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-        <span style={{ color: 'var(--text-muted)', display: 'inline-flex', flexShrink: 0 }}><CheckTypeIcon id={c.id} /></span>
-        <span style={{ fontWeight: 700, fontSize: 13.5 }}>{c.label}</span>
-        <span style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 700, color: p.color, background: 'var(--surface-2)', border: `1px solid ${p.color}`, borderRadius: 999, padding: '1px 8px' }}>{p.label}</span>
-      </div>
-      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.5, ...clamp }}>{emphasize(c.detail)}</div>
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={regionId}
-        onClick={(e) => { e.stopPropagation(); toggle(); }}
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 8, padding: 0, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, color: 'var(--c-blue)' }}
-      >
-        <span aria-hidden="true" style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s ease' }}>▸</span>
-        {open ? 'Hide details' : 'Details'}
-      </button>
-      {open && (
-        <div id={regionId} style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed var(--border)', fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>{explain}</div>
-      )}
-    </div>
+    <tr>
+      <td style={{ ...cell, width: 96, whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: p.color, background: 'var(--surface-2)', border: `1px solid ${p.color}`, borderRadius: 999, padding: '2px 9px' }}>{p.label}</span>
+      </td>
+      <td style={{ ...cell, whiteSpace: 'nowrap' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: 'var(--text-muted)', display: 'inline-flex', flexShrink: 0 }}><CheckTypeIcon id={c.id} size={16} /></span>
+          <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text)' }}>{c.label}</span>
+        </span>
+      </td>
+      <td style={{ ...cell, color: 'var(--text-muted)', lineHeight: 1.5, minWidth: 240 }}>
+        <div style={{ ...clamp }}>{emphasize(c.detail)}</div>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={regionId}
+          onClick={() => setOpen((o) => !o)}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 6, padding: 0, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, color: 'var(--c-blue)' }}
+        >
+          <span aria-hidden="true" style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s ease' }}>▸</span>
+          {open ? 'Hide details' : 'Details'}
+        </button>
+        {open && <div id={regionId} style={{ marginTop: 6, paddingTop: 6, borderTop: '1px dashed var(--border)', fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>{explain}</div>}
+      </td>
+    </tr>
   );
 }
 
@@ -446,11 +435,22 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
           {/* ── Why? ── */}
           <AiSummary run={run} />
 
-          {/* ── What next? ── */}
+          {/* ── What next? — the checks as a table ── */}
           <div>
             <div style={sectionTitle}>Health checks</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
-              {run.checks.map((c) => <CheckCard key={c.id} c={c} />)}
+            <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead>
+                  <tr>
+                    {['Status', 'Check', 'What we found'].map((hh) => (
+                      <th key={hh} scope="col" style={{ textAlign: 'left', padding: '10px 16px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>{hh}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {run.checks.map((c, i) => <CheckRow key={c.id} c={c} last={i === run.checks.length - 1} />)}
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -674,7 +674,6 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
 
   return (
     <div style={{ padding: 24, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <style>{TILE_HOVER_CSS}</style>
       {/* ── Header: identity + overall health + background status ── */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 260 }}>
