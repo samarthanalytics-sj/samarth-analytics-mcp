@@ -40,11 +40,50 @@ const els: DetectedElementView[] = [{ page: '/', kind: 'cta', text: 'Get a Free 
   check('GA4 no-hit → reason present', typeof v[0].reason === 'string' && v[0].reason!.length > 0);
 }
 
-// ── wrong event fired ────────────────────────────────────────────────────────────
+// ── wrong event fired (a NON-baseline sibling event) → surfaced for alignment ─────
+{
+  const v = evaluateVerify([tag()], [cap({ hits: [ga4Hit('some_other_event')] })], els);
+  check('wrong-event → fired false', v[0].fired === false);
+  check('wrong-event → reason names the seen event', /some_other_event/.test(v[0].reason ?? ''));
+  check('wrong-event → observedEvents lists it for align', (v[0].observedEvents ?? []).includes('some_other_event'));
+}
+
+// ── QW3: base-config page_view / EM auto-events are NOT charged to a specific event tag ───────────
+// (the dual-container / consent-grant bug: page_view fired in a cta_click tag's window must NOT read
+//  as "cta_click fired the wrong event" — that made EVERY event tag on a GA4 site a false failure).
 {
   const v = evaluateVerify([tag()], [cap({ hits: [ga4Hit('page_view')] })], els);
-  check('wrong-event → fired false', v[0].fired === false);
-  check('wrong-event → reason names the seen event', /page_view/.test(v[0].reason ?? ''));
+  check('QW3: page_view-only → fired false', v[0].fired === false);
+  check('QW3: page_view is NOT reported as "the wrong event"', !/but none for/.test(v[0].reason ?? ''));
+  check('QW3: a page_view auto-event is not listed as an alignable observed event', !(v[0].observedEvents ?? []).includes('page_view'));
+}
+{
+  // An EM auto-event (user_engagement) in the window is likewise ignored, but a real sibling still shows.
+  const v = evaluateVerify([tag()], [cap({ hits: [ga4Hit('user_engagement'), ga4Hit('newsletter_signup')] })], els);
+  check('QW3: EM noise ignored but a real sibling event still surfaces', /newsletter_signup/.test(v[0].reason ?? '') && !(v[0].observedEvents ?? []).includes('user_engagement'));
+}
+
+// ── QW2: a hit to a FOREIGN GA4 property (the site's own live GA4) is not charged to a draft tag ──
+{
+  const cfg = tag({ id: 'cfg', tagName: 'GA4 Config', platform: 'google_tag', measurementId: 'G-OWN', eventName: 'page_view' });
+  const evt = tag({ id: 'evt', measurementId: '{{GA4 Measurement ID}}', eventName: 'cta_click' });
+  // The captured hit is the SITE'S live GA4 (G-SITE), event book_demo — a different property + event.
+  const v = evaluateVerify([cfg, evt], [cap({ tagId: 'evt', hits: [ga4Hit('book_demo', 'G-SITE')] })], els);
+  const evd = v.find((x) => x.tagId === 'evt')!;
+  check('QW2: foreign-property hit → not a false "wrong event" for the draft tag', evd.fired === false && !/but none for/.test(evd.reason ?? ''));
+  // Same event to the container's OWN property WOULD count (control): here the draft's own event fires.
+  const v2 = evaluateVerify([cfg, evt], [cap({ tagId: 'evt', hits: [ga4Hit('cta_click', 'G-OWN')] })], els);
+  check('QW2: own-property hit for the tag event → fired', v2.find((x) => x.tagId === 'evt')!.fired === true);
+}
+
+// ── QW1: a {{variable}} / empty Event Name can't be matched literally → inconclusive, not "wrong" ──
+{
+  const v = evaluateVerify([tag({ eventName: '{{Event}}' })], [cap({ hits: [ga4Hit('purchase')] })], els);
+  check('QW1: variable event name → inconclusive (not "not firing")', v[0].inconclusive === true && v[0].fired === false);
+  check('QW1: surfaces what fired for alignment', (v[0].observedEvents ?? []).includes('purchase'));
+  check('QW1: does not falsely claim "the wrong event"', !/but none for/.test(v[0].reason ?? ''));
+  const ve = evaluateVerify([tag({ eventName: '' })], [cap({ hits: [] })], els);
+  check('QW1: empty event name is also inconclusive', ve[0].inconclusive === true);
 }
 
 // ── target not found → repair proposed ──────────────────────────────────────────
