@@ -1,3 +1,9 @@
+## [1.276.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.275.0...v1.276.0) (2026-07-09)
+
+### Features
+
+* **desktop:** Tier 2 complete - live Consent Mode signal probe in monitoring ([6eba71e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6eba71ed83488220f67d4bd9f769d523b975d652)), closes [#458](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/458) [#300](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/300) [#458](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/458)
+
 ## [1.275.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.274.0...v1.275.0) (2026-07-09)
 
 ### Features
