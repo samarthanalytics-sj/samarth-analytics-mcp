@@ -1,3 +1,9 @@
+## [1.285.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.284.0...v1.285.0) (2026-07-09)
+
+### Features
+
+* **verify:** GTM Monitor Phase 3 — driver captures the monitor signal → authoritative verdicts ([e0fe8a5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e0fe8a599e946ef46385a9f6697e9a687de3601b))
+
 ## [1.284.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.283.0...v1.284.0) (2026-07-09)
 
 ### Features
