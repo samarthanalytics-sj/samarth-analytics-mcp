@@ -87,6 +87,13 @@ export interface Ga4MonitorAlert {
   title: string;
   detail: string;
   recommendation?: string;
+  /** Structured metric lines for the Slack "Summary" section (e.g. "\u{1F4C8} Sessions: +344% (10,158 \u2192 45,140)");
+   *  renderers fall back to `detail` when absent. */
+  summaryLines?: string[];
+  /** One-line business impact (the Slack "Impact" section); omitted when unknown. */
+  impact?: string;
+  /** Bullet list for the Slack "Recommended Actions" section; falls back to `recommendation`. */
+  actions?: string[];
 }
 
 export interface Ga4MonitorCheck {
@@ -193,13 +200,14 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
     if (SEV_RANK[a.severity] <= minRank) alerts.push(a);
   };
   // Map a pure-engine finding to an alert with a stable id derived from its kind + a key.
-  const fromFinding = (kind: string, key: string, f: ScorecardFinding, title: string): Ga4MonitorAlert => ({
+  const fromFinding = (kind: string, key: string, f: ScorecardFinding & { businessRisk?: string }, title: string): Ga4MonitorAlert => ({
     id: `${kind}:${slug(key)}`,
     kind,
     severity: f.severity,
     title,
     detail: clean(f.message) ?? f.message,
     recommendation: clean(f.recommendation),
+    impact: clean(f.businessRisk),
   });
 
   const b = input.baseline;
@@ -343,7 +351,25 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
     } else if (!actionable.length) {
       checks.push({ id: 'growth', label: 'Conversions vs traffic', status: 'pass', detail: 'Conversions and revenue moved in step with sessions.' });
     } else {
-      for (const f of actionable) pushAlert(fromFinding('conversion_break', f.category + ':' + f.message.slice(0, 24), f, 'Traffic changed but conversions did not keep pace'));
+      // Structured Slack fields: the metric deltas as scannable lines, plus curated action bullets -
+      // the prose finding message stays in `detail` for the desktop UI.
+      const pctLine = (emoji: string, metric: string, cur: number, prior: number): string =>
+        prior > 0
+          ? `${emoji} ${metric}: ${cur >= prior ? '+' : ''}${Math.round(((cur - prior) / prior) * 100)}% (${n(prior)} \u2192 ${n(cur)})`
+          : `${emoji} ${metric}: ${n(cur)} (prior period ${n(prior)})`;
+      const gLines = [
+        pctLine('\u{1F4C8}', 'Sessions', b.sessions, b.priorSessions),
+        pctLine('\u{1F4CA}', 'Key Events', b.keyEvents, b.priorKeyEvents),
+      ];
+      if (b.revenue > 0 || b.priorRevenue > 0) gLines.push(pctLine('\u{1F4B0}', 'Revenue', b.revenue, b.priorRevenue));
+      const topSource = b.channelPerformance?.slice().sort((x, z) => z.sessions - x.sessions)[0]?.channel;
+      const gActions = [
+        'Verify Purchase and Key Event tracking in GA4 DebugView/Realtime',
+        'Check for duplicate event firing',
+        'Review recent GTM/GA4 changes',
+        ...(topSource ? [`Investigate the primary traffic source (${topSource})`] : []),
+      ];
+      for (const f of actionable) pushAlert({ ...fromFinding('conversion_break', f.category + ':' + f.message.slice(0, 24), f, 'Traffic changed but conversions did not keep pace'), summaryLines: gLines, actions: gActions });
       const worst: MonitorCheckStatus = actionable.some((f) => f.severity === 'high' || f.severity === 'critical') ? 'fail' : 'warn';
       checks.push({ id: 'growth', label: 'Conversions vs traffic', status: worst, detail: clean(actionable[0].message) ?? actionable[0].message });
     }
@@ -412,9 +438,9 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
   {
     const anti = antiLieFindings(b ?? null, dq ?? null, input.campaigns ?? null, input.snapshot ?? null);
     const firstOf = (cat: string) => anti.find((f) => f.category === cat);
-    const raise = (kind: string, title: string, f: { severity: string; message: string; recommendation?: string } | undefined): boolean => {
+    const raise = (kind: string, title: string, f: { severity: string; message: string; recommendation?: string; businessRisk?: string } | undefined): boolean => {
       if (!f) return false;
-      pushAlert({ id: kind, kind, severity: f.severity as Severity, title, detail: clean(f.message) ?? f.message, recommendation: clean(f.recommendation) });
+      pushAlert({ id: kind, kind, severity: f.severity as Severity, title, detail: clean(f.message) ?? f.message, recommendation: clean(f.recommendation), impact: clean(f.businessRisk) });
       return true;
     };
 

@@ -432,5 +432,19 @@ test('data-collection copy labels the daily figure (yesterday / last complete da
   assert.ok(/on Jun 17, 2026 - the last complete day GA4 has/.test(d3), d3);
 });
 
+test('conversion-break alert carries structured Slack fields (metric lines, impact, curated actions)', () => {
+  // Sessions x4 while key events and revenue stay flat - the classic spike-without-conversions break.
+  const b = baseline({ sessions: 40000, priorSessions: 10000, keyEvents: 310, priorKeyEvents: 300, revenue: 101000, priorRevenue: 100000 });
+  const r = monitorGa4(input({ baseline: b }));
+  const a = r.alerts.find((x) => x.kind === 'conversion_break');
+  assert.ok(a, 'conversion break fires: ' + JSON.stringify(r.alerts.map((x) => x.kind)));
+  assert.ok(a!.summaryLines && a!.summaryLines.some((l) => /Sessions: \+300% \(10,000 \u2192 40,000\)/.test(l)), JSON.stringify(a!.summaryLines));
+  assert.ok(a!.summaryLines!.some((l) => /Key Events: \+3%/.test(l)), 'key-event delta line');
+  assert.ok(a!.summaryLines!.some((l) => /Revenue: \+1%/.test(l)), 'revenue delta line');
+  assert.ok(a!.actions && a!.actions.some((x) => /DebugView\/Realtime/.test(x)), 'curated action bullets');
+  assert.ok(a!.actions!.some((x) => /primary traffic source \(Organic Search\)/.test(x)), 'top source named in the actions');
+  assert.ok(a!.impact, 'impact carried from the growth finding businessRisk');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

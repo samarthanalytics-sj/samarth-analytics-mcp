@@ -24,23 +24,51 @@ export function isValidSlackWebhook(url: string): boolean {
 
 const truncate = (s: string, max: number): string => (s.length > max ? s.slice(0, max - 1).trimEnd() + '…' : s);
 
+const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+
 /** Build the Slack message for a monitor run. `alerts` is the set to announce (usually only the NEW
- *  ones the scheduler hasn't sent yet); pass `result.alerts` for an on-demand full report. */
+ *  ones the scheduler hasn't sent yet); pass `result.alerts` for an on-demand full report.
+ *
+ *  Format (user-specified template):
+ *    \u{1F6A8} GA4 Monitoring Alert
+ *    Severity / Property / Property ID
+ *    per alert: Issue -> Summary (structured metric lines when the engine provides them, else the
+ *    prose detail) -> Impact (when known) -> Recommended Actions as bullets. */
 export function buildSlackPayload(propertyLabel: string, result: Ga4MonitorResult, alerts: Ga4MonitorAlert[]): SlackPayload {
-  const headline = `${HEALTH_EMOJI[result.health]} GA4 monitoring — ${propertyLabel}`;
+  const label = propertyLabel || 'your GA4 property';
+  const propertyId = result.property.replace(/^properties\//, '');
+  const worst = alerts.reduce<string | null>((w, a) => (w == null || (SEV_ORDER[a.severity] ?? 9) < (SEV_ORDER[w] ?? 9) ? a.severity : w), null);
+  const headEmoji = worst === 'critical' || worst === 'high' ? '\u{1F6A8}' : worst ? '\u26A0\uFE0F' : '\u2705';
+
   const text = alerts.length
-    ? `${headline}: ${alerts.length} issue(s) — ${alerts.map((a) => a.title).join('; ')}`
-    : `${headline}: all checks healthy`;
+    ? `${headEmoji} GA4 Monitoring Alert - ${label}: ${alerts.map((a) => a.title).join('; ')}`
+    : `\u2705 GA4 monitoring - ${label}: all checks healthy`;
 
   const blocks: unknown[] = [
-    { type: 'header', text: { type: 'plain_text', text: truncate(`GA4 monitoring: ${propertyLabel}`, 150), emoji: true } },
-    { type: 'section', text: { type: 'mrkdwn', text: `${HEALTH_EMOJI[result.health]} *${result.health.toUpperCase()}* — ${truncate(result.summary, 280)}` } },
+    { type: 'header', text: { type: 'plain_text', text: truncate(`${headEmoji} GA4 Monitoring Alert`, 150), emoji: true } },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: [`*Severity:* ${worst ? cap(worst) : 'None'}`, `*Property:* ${truncate(label, 200)}`, `*Property ID:* ${propertyId}`].join('\n'),
+      },
+    },
   ];
+  if (!alerts.length) {
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `:white_check_mark: ${truncate(result.summary, 280)}` } });
+  }
 
   for (const a of alerts.slice(0, 10)) {
-    const lines = [`${SEV_EMOJI[a.severity] ?? ''} *${a.title}* _(${a.severity})_`, truncate(a.detail, 700)];
-    if (a.recommendation) lines.push(`*Fix:* ${truncate(a.recommendation, 400)}`);
-    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } });
+    blocks.push({ type: 'divider' });
+    const seg: string[] = [];
+    // With several alerts in one message the per-alert severity is shown beside its Issue.
+    seg.push(`*Issue*${alerts.length > 1 ? ` ${SEV_EMOJI[a.severity] ?? ''} _(${cap(a.severity)})_` : ''}\n${truncate(a.title, 200)}`);
+    seg.push(`*Summary*\n${a.summaryLines?.length ? a.summaryLines.map((l) => truncate(l, 200)).join('\n') : truncate(a.detail, 700)}`);
+    if (a.impact) seg.push(`*Impact*\n${truncate(a.impact, 300)}`);
+    const actions = a.actions?.length ? a.actions : a.recommendation ? [a.recommendation] : [];
+    if (actions.length) seg.push(`*Recommended Actions*\n${actions.map((x) => `\u2022 ${truncate(x, 300)}`).join('\n')}`);
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: seg.join('\n\n') } });
   }
   if (alerts.length > 10) {
     blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `…and ${alerts.length - 10} more issue(s).` }] });
