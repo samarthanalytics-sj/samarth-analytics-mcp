@@ -64,6 +64,13 @@ const CHECK_ICON: Record<string, JSX.Element> = {
   consent_drift: <><path d="M12 2l8 3v6c0 5-3.4 8-8 10-4.6-2-8-5-8-10V5z" /><path d="M9 12l2 2 4-4" /></>,
   transactions: <><path d="M12 2v20" /><path d="M17 6H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" /></>,
   access: <><circle cx="7.5" cy="15.5" r="4.5" /><path d="M10.7 12.3L20 3" /><path d="M16 7l3 3" /></>,
+  reconciliation: <><path d="M12 3v18" /><path d="M6 7h12" /><path d="M4 7l-2 5a3 3 0 006 0z" /><path d="M20 7l-2 5a3 3 0 006 0z" /></>,
+  concentration: <><path d="M21.2 15.9A10 10 0 1 1 8 2.8" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></>,
+  untagged: <><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z" /><circle cx="7" cy="7" r="1.3" /></>,
+  invalid_traffic: <><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h16.9a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4" /><path d="M12 17h.01" /></>,
+  referral_hygiene: <><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5" /><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5" /></>,
+  pii: <><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
+  channel_shift: <><path d="M16 3h5v5" /><path d="M21 3l-8 8" /><path d="M8 21H3v-5" /><path d="M3 21l8-8" /></>,
 };
 function CheckTypeIcon({ id, size = 18 }: { id: string; size?: number }): JSX.Element {
   const inner = CHECK_ICON[id] ?? (<><circle cx="12" cy="12" r="9" /><path d="M9 12l2 2 4-4" /></>);
@@ -263,31 +270,53 @@ const CHECK_EXPLAIN: Record<string, string> = {
   consent_drift: 'Tracks the share of sessions with no source; a rise often signals a Consent Mode v2 or cookie-banner change suppressing attribution.',
   transactions: 'Looks for duplicate or unlabelled purchase transactions that would inflate or distort reported revenue.',
   access: 'Verifies the monitor can still read this property’s reporting data (permissions, API access, quota).',
+  reconciliation: 'Cross-checks campaign-reported revenue against channel-reported revenue; a big gap usually means paid traffic is landing in the wrong bucket (untagged) or being double-counted.',
+  concentration: 'Flags when a single day, week or month dominates the totals — a sign of a spike, a backfill or a tracking glitch rather than steady traffic.',
+  untagged: 'Measures the share of sessions with no campaign tags; a high share means paid or email traffic is being misattributed to organic or direct.',
+  invalid_traffic: 'Looks for bot / invalid-traffic signatures (engagement patterns that do not look human) inflating your session counts.',
+  referral_hygiene: 'Checks referral sources for self-referrals and payment-gateway domains that break attribution and pad referral traffic.',
+  pii: 'Scans page paths for personal data (emails, names, ids) in URLs — a privacy risk that also fragments your reports.',
+  channel_shift: 'Watches for a large shift in the channel mix versus the prior window, which can signal a tagging change rather than a real audience shift.',
 };
 
-/** One health check as a NEUTRAL, EXPANDABLE tile: a category icon in the status colour, the label and
- *  status pill; click (or Enter/Space) to reveal a plain-language explainer of what the check verifies.
- *  Colour is reserved for the small indicators + the thin left edge. */
+// Bold the key figure in an insight — a percentage ("55% higher", "down 12%") or a currency amount
+// ("INR 378,400", "$1,204") — so it jumps out of the sentence. Purely presentational; wording is untouched.
+const FIGURE = /((?:INR|Rs\.?|₹|\$|€|£)\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?%)/g;
+const FIGURE_ONE = /^(?:(?:INR|Rs\.?|₹|\$|€|£)\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?%)$/;
+function emphasize(text: string): React.ReactNode {
+  return text.split(FIGURE).map((part, i) =>
+    FIGURE_ONE.test(part)
+      ? <b key={i} style={{ fontWeight: 700, color: 'var(--text)' }}>{part}</b>
+      : <span key={i}>{part}</span>,
+  );
+}
+
+/** One health check as a PLAIN, EXPANDABLE tile: a neutral category icon, the label and a status pill.
+ *  The insight is trimmed to a few lines with its key percentages emphasised; click (or Enter/Space on
+ *  the Details button) to reveal the full insight plus a plain-language explainer of what the check does.
+ *  The only colour on the card is the status pill. */
 function CheckCard({ c }: { c: Ga4MonitorCheckView }): JSX.Element {
   const [open, setOpen] = useState(false);
   const p = CHECK_PILL[c.status] ?? CHECK_PILL.skip;
   const explain = CHECK_EXPLAIN[c.id] ?? 'An additional health signal for this property.';
   const regionId = `ga4-check-${c.id}`;
   const toggle = (): void => setOpen((o) => !o);
+  // Collapsed: clamp a long insight to 4 lines so the grid stays tidy; expanded shows it in full.
+  const clamp: React.CSSProperties = open ? {} : { display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
   // The card body is a mouse convenience (click anywhere to expand); the real, keyboard-focusable and
   // screen-reader-named control is the inner <button>, so AT announces a concise name + expanded state.
   return (
     <div
       className="ga4mon-tile"
       onClick={toggle}
-      style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${p.color}`, borderRadius: 10, padding: '16px', cursor: 'pointer' }}
+      style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px', cursor: 'pointer' }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-        <span style={{ color: p.color, display: 'inline-flex', flexShrink: 0 }}><CheckTypeIcon id={c.id} /></span>
+        <span style={{ color: 'var(--text-muted)', display: 'inline-flex', flexShrink: 0 }}><CheckTypeIcon id={c.id} /></span>
         <span style={{ fontWeight: 700, fontSize: 13.5 }}>{c.label}</span>
         <span style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 700, color: p.color, background: 'var(--surface-2)', border: `1px solid ${p.color}`, borderRadius: 999, padding: '1px 8px' }}>{p.label}</span>
       </div>
-      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.5 }}>{c.detail}</div>
+      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.5, ...clamp }}>{emphasize(c.detail)}</div>
       <button
         type="button"
         aria-expanded={open}
@@ -296,7 +325,7 @@ function CheckCard({ c }: { c: Ga4MonitorCheckView }): JSX.Element {
         style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 8, padding: 0, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11.5, fontWeight: 600, color: 'var(--c-blue)' }}
       >
         <span aria-hidden="true" style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s ease' }}>▸</span>
-        {open ? 'Hide details' : 'What this checks'}
+        {open ? 'Hide details' : 'Details'}
       </button>
       {open && (
         <div id={regionId} style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed var(--border)', fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>{explain}</div>
