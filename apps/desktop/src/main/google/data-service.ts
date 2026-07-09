@@ -793,9 +793,13 @@ export class GoogleDataService {
       const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${temp.workspaceId}`;
       // A Custom Event trigger matching EVERY event ({{_event}} matches `.*`) so addEventCallback sees
       // every event's tags. buildServerAllEventsTrigger with no client filter is a plain web trigger.
+      // UNIQUE per-run names: a throwaway workspace forks from the LATEST version, which — because our
+      // own preview mints a version each run — may already carry a prior run's monitor trigger/tag. Fixed
+      // (unpublished) names would then 400 "Found entity with duplicate name". The stamp guarantees no
+      // collision regardless of what the fork base contains.
       const trg = await this.q(() => gtm.accounts.containers.workspaces.triggers.create({
         parent,
-        requestBody: buildServerAllEventsTrigger('Samarth Verify - All Events') as unknown as Record<string, unknown>,
+        requestBody: buildServerAllEventsTrigger(`Samarth Verify - All Events ${stamp}`) as unknown as Record<string, unknown>,
       }));
       const triggerId = trg.data.triggerId ?? '';
       // The monitor tag: the imported template's tag type, GET-pixelling each event to our sentinel
@@ -803,7 +807,7 @@ export class GoogleDataService {
       await this.q(() => gtm.accounts.containers.workspaces.tags.create({
         parent,
         requestBody: {
-          name: 'Samarth Verify - GTM Monitor',
+          name: `Samarth Verify - GTM Monitor ${stamp}`,
           type: tpl.type,
           parameter: [{ type: 'template', key: 'endPoint', value: monitor.endPoint }],
           ...(triggerId ? { firingTriggerId: [triggerId] } : {}),
