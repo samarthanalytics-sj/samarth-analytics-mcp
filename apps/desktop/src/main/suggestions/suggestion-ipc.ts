@@ -13,46 +13,29 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
-import type { ProviderKeyStore } from '../storage/provider-keys';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
-import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult } from '../../shared/ipc';
-import { crawlAndSuggest, scanUrls, type ScanProgress } from './scan-core';
-import { runVerifyDriver } from './verify-driver';
+import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult, SuggestionScreenshotResult } from '../../shared/ipc';
+import { crawlAndSuggest, scanUrls, urlPriority, type ScanProgress } from './scan-core';
+import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify } from './verify-tags';
 import { routeTagsToPages } from './verify-routing';
-import { toFormFillViews, localeOptions, matchFiredContainerTags } from './form-fill-plan';
-import { matchFormsToTags, dedupeSharedFields, type PagedForm, type FormTagIdentity } from './form-tag-match';
+import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
+import { matchFormsToTags, dedupeSharedFields, isFormEventName, type PagedForm, type FormTagIdentity } from './form-tag-match';
 import { snapshotToVerifyInputs } from './container-verify';
 import { localeById } from '../../../../web-audit-mcp/src/agent/form-fill.js';
 import type { RawForm } from '../../../../web-audit-mcp/src/agent/forms.js';
 import { discoverSite } from './discover';
-import { createElectronDriver } from './electron-driver';
 // The merged page-driver builder (Electron + optional Cheerio/Playwright) lives in scan-url.ts,
 // shared with the `suggest_tags_from_url` chat tool so both scan paths render pages identically.
-import { makeDriver, clampSettle } from './scan-url';
+import { makeDriver, makeDrivers, scanConcurrency, clampSettle } from './scan-url';
 import { parseSuggestions, createSuggestedTags, planGoogleTagVars, provisionVariables } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 
-export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: ProviderKeyStore): void {
+export function registerSuggestionsIpc(data: GoogleDataService): void {
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
-
-  // EXPERIMENTAL: single-page AI scan — screenshot the page + let OpenAI vision pick
-  // the GA4 tags, wired to the real scraped elements. Uses the stored OpenAI key.
-  // Sends the page screenshot to OpenAI (opt-in, the user picked this mode).
-  ipcMain.handle('suggestions:aiScan', async (_e, url: unknown, opts?: TagScanOptions) => {
-    const target = String(url ?? '').trim();
-    const verdict = urlAllowed(target, []);
-    if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
-    const apiKey = providerKeys.getKey('openai');
-    if (!apiKey) throw new Error('No OpenAI API key found — add one in Settings → Providers to use the AI scan.');
-    const settleMs = clampSettle((opts ?? {}).settleMs);
-    const driver = createElectronDriver(settleMs !== undefined ? { settleMs } : {});
-    const { aiScanPage } = await import('./ai-scan');
-    return aiScanPage({ url: target, apiKey, model: 'gpt-4o', driver, platforms: (opts ?? {}).platforms ?? ['ga4'] });
-  });
 
   // Read-only: the container's existing tag names + whether a GA4 base/config tag is
   // present, so the review panel can mark suggestions that ALREADY EXIST (don't
@@ -121,8 +104,39 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     const verdict = urlAllowed(target, []);
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
     const o = opts ?? {};
-    const driver = await makeDriver(o);
-    return crawlAndSuggest(driver, target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'] });
+    // Parallel crawl: a pool of drivers scans pages concurrently (bounded by the page budget).
+    const n = Math.min(scanConcurrency(o.scanConcurrency), o.maxPages ?? 25);
+    const pool = await makeDrivers(n, o);
+    return crawlAndSuggest(pool[0], target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) });
+  });
+
+  // Locate-only PROOF screenshots for suggested (creatable) tags: open each page a tag lives on, ring
+  // the element/form it would track, and return a JPEG data-URI per tag. Read-only — reuses the verify
+  // driver's ring + capture but NEVER clicks/submits/injects a container (the tag doesn't exist yet).
+  ipcMain.handle('suggestions:screenshotTags', async (e, url: unknown, tags: unknown): Promise<SuggestionScreenshotResult> => {
+    const target = String(url ?? '').trim();
+    const verdict = urlAllowed(target, []);
+    if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
+    const list = (Array.isArray(tags) ? tags : []) as SuggestionShotTag[];
+    if (list.length === 0) return { url: target, shots: [] };
+    // Human label per tag for the live progress card (the shot list is a structural subset of the
+    // full suggestion rows, which carry name/eventName).
+    const labelOf = new Map(
+      list.map((t) => {
+        const raw = t as unknown as { name?: string; eventName?: string };
+        return [t.id, String(raw.name ?? raw.eventName ?? t.id)] as const;
+      }),
+    );
+    const { shots, error } = await runSuggestionScreenshots(target, list, {
+      onProgress: (done, total, tagId, page) => {
+        try {
+          if (!e.sender.isDestroyed()) e.sender.send('suggestions:shotProgress', { done, total, label: labelOf.get(tagId) ?? tagId, page });
+        } catch {
+          /* window gone mid-capture — progress is a nicety */
+        }
+      },
+    });
+    return { url: target, shots, ...(error ? { error } : {}) };
   });
 
   // Enumerate same-site pages (sitemap/crawl) so the user can pick which to scan.
@@ -138,14 +152,15 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     const list = Array.isArray(urls) ? urls.map((u) => String(u)).filter(Boolean) : [];
     if (list.length === 0) throw new Error('No pages selected to scan.');
     const o = opts ?? {};
-    const driver = await makeDriver(o);
+    // Parallel deep-scan: never more drivers than selected pages.
+    const pool = await makeDrivers(Math.min(scanConcurrency(o.scanConcurrency), list.length), o);
     let siteHost: string | undefined;
     try {
       siteHost = new URL(list[0]).hostname;
     } catch {
       /* per-URL admission still applies in scanUrls */
     }
-    return scanUrls(driver, list, siteHost, undefined, { platforms: o.platforms ?? ['ga4'] });
+    return scanUrls(pool[0], list, siteHost, undefined, { platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) });
   });
 
   // Auto-mint a workspace-PREVIEW snippet so Verify firing can load DRAFT tags with
@@ -177,13 +192,34 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
       // didn't supply a scan inventory, crawl the site to locate each CTA's page, then route each
       // click tag there. Best-effort — any crawl failure falls back to single-page driving.
       let pagesCrawled = 0;
+      let pagesTotal = 0;
       const hasClickTags = tagList.some((t) => t.trigger.kind === 'link_click' || t.trigger.kind === 'all_clicks');
       if (els.length === 0 && hasClickTags && o.crawlForPages !== false) {
         try {
-          const crawlDriver = await makeDriver({ maxPages: o.crawlMaxPages, maxDepth: o.crawlMaxDepth });
-          const scan = await crawlAndSuggest(crawlDriver, target, { maxPages: o.crawlMaxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'] });
+          // SITEMAP-DRIVEN coverage: enumerate EVERY page the site lists (its sitemap, else a
+          // rendered-link crawl) and scan them so a click CTA on ANY page is inventoried — not just the
+          // homepage + its rendered links. discoverSite returns the pages already prioritized (home →
+          // form-likely → content hub → the rest); crawlAndSuggest seeds them at top priority and scans
+          // up to the budget. A tag whose CTA is on a page beyond the budget stays "untested here" —
+          // surfaced via pagesCrawled / pagesTotal so the coverage is honest. No sitemap (an SPA/landing
+          // page) → few URLs, so it falls back to the plain rendered-link BFS from the start URL.
+          let seedUrls: string[] = [];
+          try {
+            const disc = await discoverSite(target);
+            seedUrls = disc.urls.filter((u) => u !== target);
+            pagesTotal = disc.urls.length;
+          } catch { /* discovery best-effort — plain BFS below */ }
+          // Scan every discovered page, capped by the budget (crawlAndSuggest clamps to 50). With the
+          // full prioritized page set seeded, the budget is spent on the pages most likely to carry CTAs.
+          const maxPages = o.crawlMaxPages ?? (seedUrls.length ? 50 : undefined);
+          // cachePages: share rendered pages with the form-plan crawl that auto-runs on the same verify,
+          // so each page renders ONCE across both crawls (not twice). The cache dedupes in-flight renders
+          // by URL, so it stays correct with a PARALLEL driver pool.
+          const crawlPool = await makeDrivers(Math.min(scanConcurrency(), maxPages ?? 25), { maxPages, maxDepth: o.crawlMaxDepth, cachePages: true });
+          const scan = await crawlAndSuggest(crawlPool[0], target, { maxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'], drivers: crawlPool.slice(1), ...(seedUrls.length ? { seedUrls } : {}) });
           els = scan.inventory.elements as DetectedElementView[];
           pagesCrawled = scan.pages.length;
+          if (!pagesTotal) pagesTotal = pagesCrawled;
         } catch {
           /* crawl is best-effort — fall back to single-page driving */
         }
@@ -196,7 +232,7 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
         { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}), settleMs: clampSettle(o.settleMs), navTimeoutMs: o.navTimeoutMs, ...(o.gtmDebug ? { gtmDebug: true } : {}) },
       );
       const verdicts = evaluateVerify(tagList, driven.perTag, els);
-      return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
+      return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
     },
   );
 
@@ -245,10 +281,13 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
       if (o.accountId && o.containerId && o.workspaceId) {
         const snap = await data.getGtmContainerSnapshot(o.accountId, o.containerId, o.workspaceId);
         tags = snapshotToVerifyInputs(snap).tags
-          .filter((t) => t.trigger.kind === 'custom_event')
+          // FORM tags only: a custom-event tag whose trigger event denotes a form submit. Excludes
+          // scroll-depth / CTA-click custom-event tags, which otherwise get matched to a form and
+          // wrongly reported as failing to fire on submit.
+          .filter((t) => t.trigger.kind === 'custom_event' && isFormEventName(t.trigger.eventName ?? ''))
           .map((t) => {
             const cd = t.trigger.customEventData;
-            return { tagName: t.tagName, eventName: t.eventName, ...(cd ? { formName: Object.values(cd)[0] } : {}) };
+            return { tagName: t.tagName, eventName: t.eventName, platform: t.platform, ...(cd ? { formName: Object.values(cd)[0] } : {}) };
           });
       }
     } catch (e) {
@@ -263,8 +302,16 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     let pagesCrawled = 0;
     try {
       const disc = await discoverSite(target);
-      const pages = [target, ...disc.urls.filter((u) => u !== target)].slice(0, Math.max(1, Math.min(o.maxPages ?? 15, 25)));
-      const driver = await makeDriver({});
+      // Visit the homepage + every FORM-LIKELY page (contact/careers/services/solutions/audit/
+      // consultation/demo…), skipping blog posts & guides — those carry only the shared footer form we
+      // already capture on the homepage. On a large site (many /services/* + /solutions/* landing forms)
+      // a low fixed cap found only the first couple; form-likely-first + a bigger budget covers them all.
+      const formLikely = disc.urls.filter((u) => u !== target && urlPriority(u) === 1);
+      const pages = [target, ...formLikely].slice(0, Math.max(1, Math.min(o.maxPages ?? 40, 60)));
+      // cachePages: reuse pages already rendered by the click-tag verify crawl (which auto-runs on the
+      // same verify and covers the whole sitemap) — these form-likely pages are a subset, so with the
+      // cache this crawl adds ~no extra browser work.
+      const driver = await makeDriver({ cachePages: true });
       try {
         for (const page of pages) {
           if (!urlAllowed(page, []).ok) continue;
@@ -305,13 +352,17 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
       { formId: String(inp.formId ?? ''), formClasses: String(inp.formClasses ?? ''), method: String(inp.method ?? ''), fields: list },
       { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}) },
     );
-    // Pair the fired GA4 events to the container's ACTUAL tags (best-effort — needs container context).
-    if (res.events.length > 0 && o.accountId && o.containerId && o.workspaceId) {
+    // Pair what fired to the container's ACTUAL tags — GA4 by event name, PIXEL/AD (Meta/LinkedIn/
+    // Pinterest/…) by the observed beacon vendor. Run when EITHER an event OR a beacon fired (a Meta
+    // tag fires a beacon but no GA4 event). Best-effort — needs container context.
+    if ((res.events.length > 0 || (res.beaconPlatforms ?? []).length > 0) && o.accountId && o.containerId && o.workspaceId) {
       try {
         const snap = await data.getGtmContainerSnapshot(o.accountId, o.containerId, o.workspaceId);
         const { tags } = snapshotToVerifyInputs(snap);
-        const firedTags = matchFiredContainerTags(res.events, tags.map((t) => ({ tagName: t.tagName, eventName: t.eventName })));
-        if (firedTags.length > 0) return { ...res, firedTags };
+        const { firedTags, serverRelayTags } = classifyFiredContainerTags(res.events, res.beaconPlatforms ?? [], tags.map((t) => ({ tagName: t.tagName, eventName: t.eventName, platform: t.platform })));
+        if (firedTags.length > 0 || serverRelayTags.length > 0) {
+          return { ...res, ...(firedTags.length ? { firedTags } : {}), ...(serverRelayTags.length ? { serverRelayTags } : {}) };
+        }
       } catch {
         /* pairing is best-effort — return the raw events without it */
       }
@@ -332,22 +383,23 @@ export function registerSuggestionsIpc(data: GoogleDataService, providerKeys: Pr
     const verdict = urlAllowed(target, []);
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
     const o = opts ?? {};
-    const driver = await makeDriver(o);
-    return crawlAndSuggest(driver, target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'] }, streamSink(event, String(requestId ?? '')));
+    const n = Math.min(scanConcurrency(o.scanConcurrency), o.maxPages ?? 25);
+    const pool = await makeDrivers(n, o);
+    return crawlAndSuggest(pool[0], target, { maxPages: o.maxPages, maxDepth: o.maxDepth, platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) }, streamSink(event, String(requestId ?? '')));
   });
 
   ipcMain.handle('suggestions:scanUrlsStream', async (event, requestId: unknown, urls: unknown, opts?: TagScanOptions) => {
     const list = Array.isArray(urls) ? urls.map((u) => String(u)).filter(Boolean) : [];
     if (list.length === 0) throw new Error('No pages selected to scan.');
     const o = opts ?? {};
-    const driver = await makeDriver(o);
+    const pool = await makeDrivers(Math.min(scanConcurrency(o.scanConcurrency), list.length), o);
     let siteHost: string | undefined;
     try {
       siteHost = new URL(list[0]).hostname;
     } catch {
       /* per-URL admission still applies */
     }
-    return scanUrls(driver, list, siteHost, streamSink(event, String(requestId ?? '')), { platforms: o.platforms ?? ['ga4'] });
+    return scanUrls(pool[0], list, siteHost, streamSink(event, String(requestId ?? '')), { platforms: o.platforms ?? ['ga4'], drivers: pool.slice(1) });
   });
 
   ipcMain.handle(

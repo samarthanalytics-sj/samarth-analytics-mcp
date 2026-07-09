@@ -122,7 +122,7 @@ export interface Ga4EventInput {
  *  previous_page, bound to the default-enabled {{Page URL}} / {{Referrer}} built-in variables. These are
  *  CUSTOM names (not GA4's auto-collected page_location/page_referrer), so they add reportable data
  *  without clashing with automatic collection, and their variables need no setup. Mirrors the
- *  measurement-plan scan (ai-scan.ts PAGE_PARAMS). GA4 auto-collects session/engagement/geo/device, so
+ *  measurement-plan scan's default page params. GA4 auto-collects session/engagement/geo/device, so
  *  those are intentionally not re-added; context params (click_text, form_id) are added per-event by
  *  the scan / passed explicitly. */
 export const DEFAULT_GA4_EVENT_PARAMS: Array<{ name: string; value: string }> = [
@@ -856,8 +856,10 @@ export function buildTrigger(o: TriggerInput): GtmTriggerResource {
       const filters: Param[] = [];
       if (o.formIdValue) filters.push(condition('{{Form ID}}', o.formIdOperator ?? 'equals', o.formIdValue));
       if (o.formClassesValue) filters.push(condition('{{Form Classes}}', o.formClassesOperator ?? 'contains', o.formClassesValue));
-      // No id/class scope → scope to the form's page via the built-in {{Page Path}}.
-      if (!filters.length && o.pagePathValue) filters.push(condition('{{Page Path}}', o.pagePathOperator ?? 'equals', o.pagePathValue));
+      // {{Page Path}} is ANDed whenever set — so "Form ID equals X AND Page Path equals /contact"
+      // scopes a shared-form-name tag to ONE page (not only when no id/class scope exists). GTM filters
+      // are ANDed, so this narrows firing to the intended form+page.
+      if (o.pagePathValue) filters.push(condition('{{Page Path}}', o.pagePathOperator ?? 'equals', o.pagePathValue));
       if (filters.length) t.filter = filters;
       return t;
     }
@@ -1072,7 +1074,7 @@ export function triggerBuiltInVars(o: TriggerInput): string[] {
   if (o.kind === 'form_submit') {
     if (o.formIdValue) vars.push('formId');
     if (o.formClassesValue) vars.push('formClasses');
-    if (!o.formIdValue && !o.formClassesValue && o.pagePathValue) vars.push('pagePath');
+    if (o.pagePathValue) vars.push('pagePath'); // ANDed alongside Form ID/Classes (page-scoped form tag)
   }
   if (o.kind === 'custom_event') {
     if (o.formIdValue) vars.push('formId');

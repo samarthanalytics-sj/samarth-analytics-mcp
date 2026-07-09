@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ThemeToggle, useTheme } from './ThemeToggle';
+import { ShortcutsOverlay, EmptyState } from './ui';
 import type { AppInfo } from '../../preload';
 import type {
   AccountView,
@@ -29,9 +30,10 @@ import type {
   FormTagVerifyPlanResult,
   SubmitFormVerifyResult,
 } from '../../shared/ipc';
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen } from '../../shared/tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanProgress, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, TAG_TYPE_OPTIONS, STANDARD_TRIGGER_VARIABLES, CONDITION_LABELS, type TagEdit, type TriggerWhen, type InstallProgress } from '../../shared/tag-template';
 import { findMergeGroups, mergeGroup, mergeLabel, type MergeGroup } from '../../shared/tag-merge';
 import { parseCsvUrls, parseCsvUrlStats, CSV_URL_CAP } from '../../shared/csv-urls';
+import { resolveChatInput, slashMenuMatches, type SlashCommand } from '../../shared/chat-commands';
 import { execSummaryHtml } from '../../shared/ga4-exec-html';
 import { stripDuplicateCharts } from '../../shared/ga4-visuals-html';
 import { ga4SectionsHtml } from '../../shared/ga4-sections-html';
@@ -617,6 +619,8 @@ export function App(): JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [selfTest, setSelfTest] = useState<SecretSelfTest | null>(null);
   const [view, setView] = useState<View>('chat');
+  // Keyboard-shortcuts help overlay (opened with ?).
+  const [showShortcuts, setShowShortcuts] = useState(false);
   // GA4 Tools sub-tab is lifted to App (unlike GTM Tools' local state) so the cross-tab monitor
   // alert banner can deep-link straight to the Monitoring sub-tab.
   const [ga4Tab, setGa4Tab] = useState<Ga4Tab>('audit');
@@ -631,7 +635,6 @@ export function App(): JSX.Element {
   // successful reconnect auto-hides its banner and a cancelled one keeps it (no premature clear).
   const [reauthIds, setReauthIds] = useState<string[]>([]);
   // Inline rename of an account's sidebar label (pencil → input; Enter saves, Escape cancels).
-  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
 
   const active = accounts.find((a) => a.isActive);
 
@@ -694,6 +697,27 @@ export function App(): JSX.Element {
     }
   }
 
+  // Global keyboard shortcuts: Ctrl/Cmd+1..5 switch the primary view (even while typing); "?" toggles
+  // the shortcuts overlay (ignored while typing so "?" still types into inputs).
+  useEffect(() => {
+    const VIEWS: View[] = ['chat', 'gtm', 'ga4', 'prompts', 'settings'];
+    const isTyping = (el: EventTarget | null): boolean => {
+      const t = el as HTMLElement | null;
+      return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key >= '1' && e.key <= '5') {
+        const v = VIEWS[Number(e.key) - 1];
+        if (v) { e.preventDefault(); setView(v); }
+        return;
+      }
+      if (isTyping(e.target)) return;
+      if (e.key === '?') { e.preventDefault(); setShowShortcuts((s) => !s); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
     <div style={styles.app}>
       <ThemeToggle />
@@ -706,99 +730,47 @@ export function App(): JSX.Element {
           </div>
         </div>
 
-        <div style={styles.sideLabel}>Accounts</div>
-        <div style={styles.accountList}>
-          {accounts.length === 0 && <div style={styles.sideMuted}>No accounts yet</div>}
-          {accounts.map((a) => (
-            <div
-              key={a.id}
-              style={{ ...styles.acctBtn, ...(a.isActive ? styles.acctBtnActive : {}) }}
-              onClick={() => { if (renaming?.id !== a.id) void run(() => window.desktop.accounts.setActive(a.id)); }}
-              title={a.email}
-            >
-              <span style={{ ...styles.dot, background: a.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
-              {renaming?.id === a.id ? (
-                <input
-                  autoFocus
-                  style={styles.acctRenameInput}
-                  value={renaming.value}
-                  placeholder={a.email}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => setRenaming({ id: a.id, value: e.target.value })}
-                  onKeyDown={(e) => {
-                    // Enter saves; Escape cancels; an empty name restores the Google name/email.
-                    if (e.key === 'Enter') { const v = renaming.value; setRenaming(null); void run(() => window.desktop.accounts.rename(a.id, v)); }
-                    else if (e.key === 'Escape') setRenaming(null);
-                  }}
-                  onBlur={() => { const v = renaming.value; setRenaming(null); void run(() => window.desktop.accounts.rename(a.id, v)); }}
-                />
-              ) : (
-                <>
-                  <span style={styles.acctEmail}>{a.displayName || a.email}</span>
-                  <span
-                    role="button"
-                    aria-label="Rename account"
-                    title="Rename this account"
-                    style={styles.acctEditBtn}
-                    onClick={(e) => { e.stopPropagation(); setRenaming({ id: a.id, value: a.displayName ?? '' }); }}
-                  >
-                    ✏
-                  </span>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {connecting ? (
-          <div style={styles.connectRow}>
-            <button style={{ ...styles.connectBtn, flex: 1, marginTop: 0 }} disabled>
-              Signing in…
-            </button>
-            <button style={styles.cancelBtn} onClick={cancelConnect} title="Cancel sign-in">
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <button style={styles.connectBtn} onClick={connect} disabled={!google?.configured}>
-            + Connect account
-          </button>
-        )}
+        {/* Active account (read-only). Switching, connect, rename and remove all live in Settings →
+            Accounts now, so the sidebar stays a clean shell. Clicking the chip jumps to Settings. */}
+        <button
+          style={styles.activeAcct}
+          onClick={() => setView('settings')}
+          title={active ? `${active.email} — manage accounts in Settings` : 'Add an account in Settings'}
+        >
+          {active ? (
+            <>
+              <span style={{ ...styles.dot, background: active.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
+              <span style={styles.activeAcctName}>{active.displayName || active.email}</span>
+              <span style={styles.activeAcctManage}>Manage ›</span>
+            </>
+          ) : (
+            <span style={styles.sideMuted}>No account · add in Settings</span>
+          )}
+        </button>
         {google && !google.configured && (
           <div style={styles.sideWarn}>OAuth client not set — see Settings.</div>
         )}
 
+        <div style={{ flex: 1 }} />
+
         <div style={styles.sideNav}>
-          <button
-            style={{ ...styles.navItem, ...(view === 'chat' ? styles.navActive : {}) }}
-            onClick={() => setView('chat')}
-          >
-            💬 Chat
-          </button>
-          <button
-            style={{ ...styles.navItem, ...(view === 'gtm' ? styles.navActive : {}) }}
-            onClick={() => setView('gtm')}
-          >
-            🗂 GTM Tools
-          </button>
-          <button
-            style={{ ...styles.navItem, ...(view === 'ga4' ? styles.navActive : {}) }}
-            onClick={() => setView('ga4')}
-          >
-            📊 GA4 Tools
-          </button>
-          <button
-            style={{ ...styles.navItem, ...(view === 'prompts' ? styles.navActive : {}) }}
-            onClick={() => setView('prompts')}
-          >
-            📖 Prompts
-          </button>
-          <button
-            style={{ ...styles.navItem, ...(view === 'settings' ? styles.navActive : {}) }}
-            onClick={() => setView('settings')}
-          >
-            ⚙ Settings
-          </button>
+          {([
+            ['chat', '💬 Chat'],
+            ['gtm', '🗂 GTM Tools'],
+            ['ga4', '📊 GA4 Tools'],
+            ['prompts', '📖 Prompts'],
+            ['settings', '⚙ Settings'],
+          ] as Array<[View, string]>).map(([v, label]) => (
+            <button
+              key={v}
+              className="nav-item"
+              data-active={view === v ? 'true' : 'false'}
+              style={{ ...styles.navItem, ...(view === v ? styles.navActive : {}) }}
+              onClick={() => setView(v)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <div style={styles.sideVersion}>v{info?.version ?? '0.0.0'}</div>
       </aside>
@@ -847,6 +819,10 @@ export function App(): JSX.Element {
         <div style={{ display: view === 'chat' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           <ChatView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} seed={chatSeed} />
         </div>
+        {/* Keyed by view so each switch replays the fade+lift entrance (smooth page transition). Chat is
+            excluded — it lives in the always-mounted div above so its stream survives tab switches. */}
+        {view !== 'chat' && (
+          <div key={view} className="view-enter" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
         {view === 'gtm' ? (
           <GtmToolsView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} />
         ) : view === 'ga4' ? (
@@ -861,6 +837,10 @@ export function App(): JSX.Element {
         ) : view === 'settings' ? (
           <SettingsView
             active={active}
+            accounts={accounts}
+            connect={connect}
+            connecting={connecting}
+            cancelConnect={cancelConnect}
             google={google}
             info={info}
             selfTest={selfTest}
@@ -869,7 +849,23 @@ export function App(): JSX.Element {
             refresh={refresh}
           />
         ) : null}
+          </div>
+        )}
       </main>
+      {showShortcuts && (
+        <ShortcutsOverlay
+          onClose={() => setShowShortcuts(false)}
+          shortcuts={[
+            { keys: ['Ctrl', '1'], label: 'Go to Chat' },
+            { keys: ['Ctrl', '2'], label: 'Go to GTM Tools' },
+            { keys: ['Ctrl', '3'], label: 'Go to GA4 Tools' },
+            { keys: ['Ctrl', '4'], label: 'Go to Prompts' },
+            { keys: ['Ctrl', '5'], label: 'Go to Settings' },
+            { keys: ['?'], label: 'Show / hide this help' },
+            { keys: ['Esc'], label: 'Close dialogs' },
+          ]}
+        />
+      )}
     </div>
   );
 }
@@ -936,6 +932,8 @@ function ChatView({
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [product, setProduct] = useState<'gtm' | 'ga4'>('gtm');
+  // Slash-command autocomplete: highlighted index in the menu; reset whenever the input text changes.
+  const [slashIdx, setSlashIdx] = useState(0);
   // One stored conversation per account + product + container; survives tab switches + restarts.
   const threadKey = chatThreadKey(active?.id, product, active?.gtmContext?.containerId);
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadChatThread(threadKey));
@@ -973,6 +971,16 @@ function ChatView({
       ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
     }
   }, [input]);
+  // Reset the slash-menu highlight when the query text changes (typing narrows/refills the menu).
+  useEffect(() => { setSlashIdx(0); }, [input]);
+
+  // Accept a slash command from the menu: fill the box with "/name " and, if it needs a different
+  // toolset (e.g. /report → GA4), flip the product NOW so the thread is settled before the user sends.
+  const acceptSlash = (cmd: SlashCommand): void => {
+    setInput(`/${cmd.name} `);
+    if (cmd.product && cmd.product !== product) setProduct(cmd.product);
+    taRef.current?.focus();
+  };
 
   // A prompt picked from the Prompts tab seeds the input (nonce makes re-picks re-apply). A GA4
   // prompt also flips the chat to its GA4 toggle so it runs against the GA4 API, not GTM.
@@ -996,18 +1004,27 @@ function ChatView({
           ? 'Add an API key for this account (Settings).'
           : '';
 
+  // Slash-command autocomplete: which commands to offer for the current input, and the clamped highlight.
+  const slashMatches = ready && !busy ? slashMenuMatches(input) : [];
+  const slashActive = Math.min(slashIdx, Math.max(0, slashMatches.length - 1));
+
   async function send(): Promise<void> {
     const text = input.trim();
     if (!text || busy) return;
+    // Expand a slash command (/audit, /report, …) into the full instruction, and DISPLAY the short
+    // command while SENDING the expansion. A command whose toolset lives in the other product flips it
+    // first (keep the command in the box; the user presses Enter again once the thread has settled).
+    const resolved = resolveChatInput(text, product);
+    if (resolved.product !== product) { setProduct(resolved.product); return; }
     onError('');
     const history: ChatTurn[] = messages.map((m) => ({ role: m.role, text: m.text }));
     const now = Date.now();
-    setMessages((m) => [...m, { role: 'user', text, ts: now }, { role: 'assistant', text: '', tools: [], ts: now }]);
+    setMessages((m) => [...m, { role: 'user', text: resolved.display, ts: now }, { role: 'assistant', text: '', tools: [], ts: now }]);
     setInput('');
     setBusy(true);
     setRevertable(null);
     try {
-      await window.desktop.llm.chatStream(history, text, product, (ev) => {
+      await window.desktop.llm.chatStream(history, resolved.sent, product, (ev) => {
         setMessages((m) => {
           const copy = [...m];
           const last = copy[copy.length - 1];
@@ -1101,11 +1118,11 @@ function ChatView({
 
       <div style={styles.chatLog}>
         {messages.length === 0 && (
-          <div style={styles.empty}>
-            <div style={{ fontSize: 32, marginBottom: 8 }}>💬</div>
-            Ask about your GTM &amp; GA4 — “list my GTM accounts”, “run a GA4 report for last 28
-            days”, or “create an email-click event tag”.
-          </div>
+          <EmptyState
+            icon="💬"
+            title="Ask about your GTM & GA4"
+            hint={'Try “list my GTM accounts”, “run a GA4 report for last 28 days”, or “create an email-click event tag”.'}
+          />
         )}
         {messages.map((m, i) => (
           <div
@@ -1172,16 +1189,43 @@ function ChatView({
         </div>
       )}
 
-      <div style={styles.composer}>
+      <div style={{ ...styles.composer, position: 'relative' }}>
+        {slashMatches.length > 0 && (
+          <div className="sheet-in" style={styles.slashMenu} role="listbox" aria-label="Slash commands">
+            <div style={styles.slashMenuHead}>Commands</div>
+            {slashMatches.map((c, i) => (
+              <button
+                key={c.name}
+                type="button"
+                role="option"
+                aria-selected={i === slashActive}
+                style={{ ...styles.slashItem, ...(i === slashActive ? styles.slashItemActive : {}) }}
+                onMouseEnter={() => setSlashIdx(i)}
+                onMouseDown={(e) => { e.preventDefault(); acceptSlash(c); }}
+              >
+                <span style={styles.slashName}>/{c.name} <span style={styles.slashHint}>{c.hint}</span></span>
+                <span style={styles.slashDesc}>{c.desc}</span>
+              </button>
+            ))}
+            <div style={styles.slashMenuFoot}>↑↓ navigate · Enter select · Esc dismiss</div>
+          </div>
+        )}
         <textarea
           ref={taRef}
           style={styles.composerInput}
-          placeholder={ready ? 'Message…  (Enter to send, Shift+Enter for a new line)' : hint}
+          placeholder={ready ? 'Message, or / for commands…  (Enter to send, Shift+Enter for a new line)' : hint}
           value={input}
           disabled={!ready || busy}
           rows={1}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
+            // When the slash menu is open, the arrow/Enter/Tab/Esc keys drive it instead of the textarea.
+            if (slashMatches.length > 0) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((slashActive + 1) % slashMatches.length); return; }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((slashActive - 1 + slashMatches.length) % slashMatches.length); return; }
+              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptSlash(slashMatches[slashActive]); return; }
+              if (e.key === 'Escape') { e.preventDefault(); setInput(''); return; }
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
               void send();
@@ -1232,35 +1276,69 @@ function GtmContextBar({
     }
   }, [editing]);
 
-  async function pickAccount(accountId: string): Promise<void> {
+  const loadContainers = async (accountId: string): Promise<void> => {
+    if (!accountId) return;
+    setLoading('containers');
+    try {
+      const list = await window.desktop.data.listGtmContainers(accountId);
+      setContainers(list);
+      // A silent empty dropdown looks broken — tell the user WHY nothing populated.
+      if (list.length === 0) {
+        onError('No GTM containers found for this account. This Google sign-in may not have access to its containers — check you picked the right account, or re-connect Google in Settings.');
+      }
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading('');
+    }
+  };
+  const loadWorkspaces = async (accountId: string, containerId: string): Promise<void> => {
+    if (!accountId || !containerId) return;
+    setLoading('workspaces');
+    try {
+      setWorkspaces(await window.desktop.data.listGtmWorkspaces(accountId, containerId));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading('');
+    }
+  };
+
+  // THE FIX: load containers whenever an account is selected — a MANUAL pick OR an account carried over
+  // from the saved context (the dropdown shows it, but NO onChange fires, so the fetch never ran → the
+  // container dropdown stayed empty). Ref-guarded so each account fetches once (also dedupes React
+  // StrictMode's double-mount). Same for workspaces once a container is selected.
+  const loadedForAccount = useRef<string>('');
+  const loadedForContainer = useRef<string>('');
+  useEffect(() => {
+    if (editing && sel.accountId && loadedForAccount.current !== sel.accountId) {
+      loadedForAccount.current = sel.accountId;
+      void loadContainers(sel.accountId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, sel.accountId]);
+  useEffect(() => {
+    const key = sel.accountId && sel.containerId ? `${sel.accountId}/${sel.containerId}` : '';
+    if (editing && key && loadedForContainer.current !== key) {
+      loadedForContainer.current = key;
+      void loadWorkspaces(sel.accountId!, sel.containerId!);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, sel.accountId, sel.containerId]);
+
+  function pickAccount(accountId: string): void {
     const acc = accounts.find((a) => a.accountId === accountId);
     setSel({ accountId, accountName: acc?.name });
     setContainers([]);
     setWorkspaces([]);
-    if (!accountId) return;
-    setLoading('containers');
-    try {
-      setContainers(await window.desktop.data.listGtmContainers(accountId));
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading('');
-    }
+    // containers load via the effect above — the single fetch path (also covers a pre-selected account)
   }
 
-  async function pickContainer(containerId: string): Promise<void> {
+  function pickContainer(containerId: string): void {
     const c = containers.find((x) => x.containerId === containerId);
     setSel((s) => ({ ...s, containerId, containerName: c?.name, containerPublicId: c?.publicId, workspaceId: undefined, workspaceName: undefined }));
     setWorkspaces([]);
-    if (!containerId || !sel.accountId) return;
-    setLoading('workspaces');
-    try {
-      setWorkspaces(await window.desktop.data.listGtmWorkspaces(sel.accountId, containerId));
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading('');
-    }
+    // workspaces load via the effect above
   }
 
   function pickWorkspace(workspaceId: string): void {
@@ -1281,14 +1359,19 @@ function GtmContextBar({
   if (!editing && ctx?.containerId) {
     return (
       <div style={styles.ctxBar}>
-        <span>
-          <span style={{ color: 'var(--text-muted)' }}>Working in: </span>
-          📁 {ctx.accountName} › <b style={{ color: 'var(--text)' }}>{ctx.containerName}</b>
-          {ctx.containerPublicId ? <span style={{ color: 'var(--text-faint)' }}> ({ctx.containerPublicId})</span> : null} ›{' '}
-          <b style={{ color: 'var(--c-blue)' }}>{ctx.workspaceName ?? 'workspace?'}</b>
+        <span style={styles.ctxBreadcrumb}>
+          <span style={styles.ctxMutedLabel}>Working in</span>
+          <span style={styles.ctxCrumb}>📁 {ctx.accountName}</span>
+          <span style={styles.ctxSep}>›</span>
+          {/* The selected container is highlighted in a blue pill so it reads as the active target. */}
+          <span style={styles.ctxContainerPill} title={ctx.containerPublicId ? `${ctx.containerName} (${ctx.containerPublicId})` : ctx.containerName}>
+            {ctx.containerName}{ctx.containerPublicId ? <span style={styles.ctxPillId}> {ctx.containerPublicId}</span> : null}
+          </span>
+          <span style={styles.ctxSep}>›</span>
+          <span style={styles.ctxWorkspacePill}>{ctx.workspaceName ?? 'workspace?'}</span>
         </span>
-        <button style={styles.linkBtn} onClick={() => { setSel(ctx); setEditing(true); }}>
-          change
+        <button style={styles.ctxChangeBtn} onClick={() => { setSel(ctx); setEditing(true); }}>
+          ✎ Change
         </button>
       </div>
     );
@@ -1296,27 +1379,38 @@ function GtmContextBar({
 
   return (
     <div style={styles.ctxBarEdit}>
-      <span style={styles.muted}>Working in:</span>
-      <select style={styles.ctxSelect} value={sel.accountId ?? ''} onChange={(e) => void pickAccount(e.target.value)}>
-        <option value="">Account…</option>
-        {accounts.map((a) => (
-          <option key={a.accountId} value={a.accountId}>{a.name}</option>
-        ))}
-      </select>
-      <select style={styles.ctxSelect} value={sel.containerId ?? ''} disabled={!sel.accountId || loading === 'containers'} onChange={(e) => void pickContainer(e.target.value)}>
-        <option value="">{loading === 'containers' ? 'Loading…' : 'Container…'}</option>
-        {containers.map((c) => (
-          <option key={c.containerId} value={c.containerId}>{c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
-        ))}
-      </select>
-      <select style={styles.ctxSelect} value={sel.workspaceId ?? ''} disabled={!sel.containerId || loading === 'workspaces'} onChange={(e) => pickWorkspace(e.target.value)}>
-        <option value="">{loading === 'workspaces' ? 'Loading…' : 'Workspace…'}</option>
-        {workspaces.map((w) => (
-          <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
-        ))}
-      </select>
-      <button style={styles.ghostBtn} onClick={save} disabled={!sel.containerId}>
-        Use
+      <span style={styles.ctxMutedLabel}>Working in</span>
+      {/* Each dropdown is labelled so it's clear which level you're picking; the container gets a blue
+          "chosen" highlight the moment it's selected, and Workspace unlocks only after a container. */}
+      <label style={styles.ctxField}>
+        <span style={styles.ctxFieldLabel}>Account</span>
+        <select style={{ ...styles.ctxSelect, ...(sel.accountId ? styles.ctxSelectChosen : {}) }} value={sel.accountId ?? ''} onChange={(e) => void pickAccount(e.target.value)}>
+          <option value="">Select account…</option>
+          {accounts.map((a) => (
+            <option key={a.accountId} value={a.accountId}>{a.name}</option>
+          ))}
+        </select>
+      </label>
+      <label style={styles.ctxField}>
+        <span style={styles.ctxFieldLabel}>Container</span>
+        <select style={{ ...styles.ctxSelect, ...(sel.containerId ? styles.ctxSelectChosen : {}) }} value={sel.containerId ?? ''} disabled={!sel.accountId || loading === 'containers'} onChange={(e) => void pickContainer(e.target.value)}>
+          <option value="">{loading === 'containers' ? 'Loading…' : !sel.accountId ? 'Pick an account first' : 'Select container…'}</option>
+          {containers.map((c) => (
+            <option key={c.containerId} value={c.containerId}>{c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
+          ))}
+        </select>
+      </label>
+      <label style={styles.ctxField}>
+        <span style={styles.ctxFieldLabel}>Workspace</span>
+        <select style={{ ...styles.ctxSelect, ...(sel.workspaceId ? styles.ctxSelectChosen : {}) }} value={sel.workspaceId ?? ''} disabled={!sel.containerId || loading === 'workspaces'} onChange={(e) => pickWorkspace(e.target.value)}>
+          <option value="">{loading === 'workspaces' ? 'Loading…' : !sel.containerId ? 'Pick a container first' : 'Select workspace…'}</option>
+          {workspaces.map((w) => (
+            <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
+          ))}
+        </select>
+      </label>
+      <button style={{ ...styles.ctxUseBtn, ...(!sel.containerId ? styles.ctxUseBtnDisabled : {}) }} onClick={save} disabled={!sel.containerId}>
+        ✓ Use this container
       </button>
       {ctx?.containerId && (
         <button style={styles.linkBtn} onClick={() => setEditing(false)}>cancel</button>
@@ -1353,14 +1447,16 @@ function triggerCondition(s: SuggestedTagView): string {
 // one block per tag (tag + trigger on the first row; one row per event parameter /
 // trigger condition). Same data the CSV download writes — via suggestionToGroup.
 const tplStyles: Record<string, React.CSSProperties> = {
-  // flexShrink:0 + maxWidth:100% so the table keeps its full height inside the scrolling flex column
-  // (otherwise it gets compressed and rows are clipped) and scrolls horizontally instead of overflowing.
-  wrap: { overflowX: 'auto', maxWidth: '100%', border: '1px solid var(--border)', borderRadius: 12, flexShrink: 0 },
+  // The table is its OWN scroll viewport in BOTH axes: maxWidth:100% keeps it inside the flex column,
+  // maxHeight caps it so the horizontal scrollbar sits at the bottom of the VISIBLE table (always
+  // reachable) instead of stranded below a tall table; flexShrink:0 stops the flex column from
+  // compressing it; and the sticky header (th/selTh) keeps the column labels in view while rows scroll.
+  wrap: { overflow: 'auto', maxWidth: '100%', maxHeight: 'calc(100vh - 300px)', border: '1px solid var(--border)', borderRadius: 12, flexShrink: 0 },
   table: { borderCollapse: 'collapse', width: '100%', fontSize: 12, color: 'var(--text-dim)' },
-  th: { textAlign: 'left', padding: '8px 10px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' },
+  th: { position: 'sticky', top: 0, zIndex: 2, textAlign: 'left', padding: '8px 10px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' },
   td: { padding: '6px 10px', borderBottom: '1px solid var(--border)', verticalAlign: 'top', whiteSpace: 'normal', wordBreak: 'break-word' },
   tdTag: { padding: '6px 10px', borderBottom: '1px solid var(--border)', borderLeft: '2px solid var(--c-blue-bg)', verticalAlign: 'top', background: 'var(--surface-2)' },
-  selTh: { width: 56, textAlign: 'center', padding: '8px 8px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)' },
+  selTh: { position: 'sticky', top: 0, zIndex: 3, width: 56, textAlign: 'center', padding: '8px 8px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)' },
   selTd: { padding: '6px 8px', textAlign: 'center', verticalAlign: 'top', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', whiteSpace: 'nowrap' },
   // Editable cells are auto-growing WRAPPING textareas (see GrowCell) so a long tag name / regex
   // value wraps to multiple lines and stays fully visible instead of being clipped in a 1-line input.
@@ -1369,11 +1465,12 @@ const tplStyles: Record<string, React.CSSProperties> = {
   pager: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 13, color: 'var(--text-muted)' },
   pagerBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 7, padding: '4px 12px', fontSize: 13, cursor: 'pointer' },
   // ── "How to install" panel (the site-side requirements a suggestion's trigger needs to fire) ──
-  installToggle: { background: 'transparent', border: 'none', color: 'var(--c-blue)', cursor: 'pointer', fontSize: 11, padding: '2px 0', marginTop: 4, textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: 4 },
+  // A status chip (colour-coded by install status) doubles as the expand toggle — background/border/
+  // colour are set inline per status so it reads at a glance without opening the panel.
+  installChip: { display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 4, fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20, border: '1px solid transparent', cursor: 'pointer', lineHeight: 1.3 },
   installTd: { padding: 0, borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' },
   // The panel is capped + scrolls internally so a long <script> never widens the table.
   installPanel: { maxWidth: '100%', overflowX: 'auto', padding: '10px 14px', boxSizing: 'border-box' },
-  installSummary: { fontSize: 12, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' },
   installReq: { border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: 'var(--surface)' },
   installReqOk: { border: '1px solid var(--c-green-border)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: 'var(--c-green-bg)' },
   installReqLabel: { fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', marginBottom: 4 },
@@ -1383,6 +1480,18 @@ const tplStyles: Record<string, React.CSSProperties> = {
   installActions: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' },
   installCreateBtn: { background: 'var(--c-blue)', color: '#fff', border: 'none', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' },
   installCreateBtnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
+  // An OPTIONAL improvement (html-attribute) — a quiet muted row, NOT a mandatory-looking box, so it
+  // never contradicts a "fires natively" line above it.
+  installOptional: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', marginBottom: 8, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 },
+  optionalPill: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', background: 'var(--surface-3)', border: '1px solid var(--border)', borderRadius: 20, padding: '1px 8px', flexShrink: 0 },
+  installOptionalText: { fontSize: 12, color: 'var(--text-dim)', flex: 1, lineHeight: 1.4 },
+  installInfo: { fontSize: 13, color: 'var(--text-muted)', cursor: 'help', flexShrink: 0 },
+  // "Show code" disclosure — collapses a listener/site-code snippet so the panel stays short.
+  installDisclosure: { background: 'transparent', border: 'none', color: 'var(--c-blue)', cursor: 'pointer', fontSize: 11, padding: '2px 0', marginTop: 4 },
+  // "Mark done" check-off on site-code / optional rows — a manual toggle the user ticks once the work is
+  // done on their site (the app can't verify site-side code), turning the row + the row chip green.
+  installCheck: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-dim)', cursor: 'pointer', marginTop: 8, userSelect: 'none' },
+  installDoneText: { color: 'var(--c-green)', fontWeight: 600 },
 };
 
 // Fixed option lists for the editable Trigger-when Variable / Condition selects.
@@ -1442,12 +1551,71 @@ const FIRES_LABEL: Record<Extract<InstallReqView, { kind: 'listener-tag' }>['tag
   window_loaded: 'Window Loaded',
 };
 
-/** Render one install requirement, styled by kind. For a 'listener-tag' requirement, a "Create listener
- *  tag" button (wired by InstallPanel) creates it in the active DRAFT workspace on explicit click. */
+/** A "Show code" disclosure — keeps a listener/site-code snippet collapsed by default so the panel stays
+ *  short; the CodeBlock (with its own copy button) appears only on demand. */
+function CollapsibleCode({ code, ariaLabel }: { code: string; ariaLabel: string }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button type="button" style={tplStyles.installDisclosure} onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        {open ? '▾ Hide code' : '▸ Show code'}
+      </button>
+      {open && <CodeBlock code={code} ariaLabel={ariaLabel} />}
+    </div>
+  );
+}
+
+/** Colour + label for the install-status chip, computed against the plan's live "done" progress. Tones
+ *  map to the theme's status ramps: green = ready / done, blue = a 1-click listener, amber = site code.
+ *  Once every REQUIRED step is checked off, the chip flips to a green "✓ Done" regardless of kind. */
+function installChipView(p: InstallProgress): { label: string; bg: string; border: string; color: string } {
+  const GREEN = { bg: 'var(--c-green-bg)', border: 'var(--c-green-border)', color: 'var(--c-green)' };
+  const BLUE = { bg: 'var(--c-blue-bg)', border: 'var(--c-blue-border)', color: 'var(--c-blue)' };
+  const AMBER = { bg: 'var(--c-amber-bg)', border: 'var(--c-amber-border)', color: 'var(--c-amber)' };
+  const optLeft = p.optionalTotal - p.optionalDone;
+  // Nothing actionable (defensive — the chip isn't rendered for a pure-ready plan).
+  if (p.requiredTotal === 0 && p.optionalTotal === 0) return { label: 'Ready to fire', ...GREEN };
+  // Required steps still outstanding → the demanding chip (amber site code beats blue listener).
+  if (p.requiredTotal > 0 && !p.allRequiredDone) {
+    if (p.kind === 'code') return { label: 'Needs site code', ...AMBER };
+    const left = p.requiredTotal - p.requiredDone;
+    return { label: `${left} listener tag${left === 1 ? '' : 's'} to create`, ...BLUE };
+  }
+  // Required done (or none). If there were required steps, that's a green "✓ Done"; a form that only
+  // fires natively with optional tips stays "Ready" until the tips are applied too.
+  if (p.requiredTotal > 0) return { label: optLeft > 0 ? `✓ Done · ${optLeft} optional left` : '✓ Done', ...GREEN };
+  return optLeft > 0 ? { label: `Ready · ${optLeft} optional tip${optLeft === 1 ? '' : 's'}`, ...GREEN } : { label: '✓ Done', ...GREEN };
+}
+
+/** The row-cell status chip that doubles as the "How to install" expand toggle. Its colour + label
+ *  summarise the whole plan (against the live "done" check-offs) so the user can triage without opening
+ *  the panel — and it turns green "✓ Done" once every required step is checked off. */
+function InstallChip({ install, done, open, onClick, tagName }: { install: InstallPlanView; done: Record<number, boolean>; open: boolean; onClick: () => void; tagName: string }): JSX.Element {
+  const view = installChipView(installPlanProgress(install, done));
+  return (
+    <button
+      type="button"
+      style={{ ...tplStyles.installChip, background: view.bg, borderColor: view.border, color: view.color }}
+      onClick={onClick}
+      aria-expanded={open}
+      aria-label={`How to install ${tagName}: ${view.label}`}
+      title="Show what this tag needs to fire"
+    >
+      {view.label} {open ? '▾' : '▸'}
+    </button>
+  );
+}
+
+/** Render one install requirement, styled by kind. A 'listener-tag' gets a "Create listener tag" button
+ *  (wired by InstallPanel) that creates it in the active DRAFT workspace on explicit click; 'site-code'
+ *  and the optional 'html-attribute' get a manual "mark done" check-off (the app can't verify site-side
+ *  work) that turns the row — and the row's status chip — green. */
 function InstallRequirementRow({
   req,
   targetReady,
   status,
+  done,
+  onToggleDone,
   onCreate,
 }: {
   req: InstallReqView;
@@ -1455,6 +1623,10 @@ function InstallRequirementRow({
   targetReady: boolean;
   /** This requirement's create status (idle unless a listener-tag create was attempted). */
   status: ListenerCreateStatus;
+  /** Whether the user has checked this requirement off (persisted in the parent, survives collapse). */
+  done: boolean;
+  /** Toggle the done check-off (site-code / optional rows). */
+  onToggleDone?: (value: boolean) => void;
   /** Create handler (present only for a 'listener-tag' requirement). */
   onCreate?: () => void;
 }): JSX.Element {
@@ -1473,9 +1645,12 @@ function InstallRequirementRow({
           <span style={{ fontSize: 12, color: 'var(--text)' }}>{req.detail}</span>
         </div>
       );
-    case 'listener-tag':
+    case 'listener-tag': {
+      // Satisfied = created/exists this session, OR marked done in the parent (survives a collapse that
+      // resets the transient create status). A satisfied listener counts toward the chip's "done".
+      const satisfied = done || status.state === 'created' || status.state === 'exists';
       return (
-        <div style={tplStyles.installReq}>
+        <div style={{ ...tplStyles.installReq, ...(satisfied ? { borderColor: 'var(--c-green-border)' } : {}) }}>
           <div style={tplStyles.installReqLabel}>Create a Custom HTML listener tag</div>
           <div style={tplStyles.installMeta}>
             <strong style={{ color: 'var(--text)' }}>{req.tag.name}</strong>
@@ -1483,7 +1658,7 @@ function InstallRequirementRow({
           <div style={tplStyles.installMeta}>
             fires on: <code style={mdStyles.code}>{FIRES_LABEL[req.tag.fires]}</code>
           </div>
-          <CodeBlock code={req.tag.html} ariaLabel={`Custom HTML listener tag "${req.tag.name}"`} />
+          <CollapsibleCode code={req.tag.html} ariaLabel={`Custom HTML listener tag "${req.tag.name}"`} />
           {req.dlvScope && (
             <div style={tplStyles.installMeta}>
               Scopes the trigger via <code style={mdStyles.code}>{`{{dlv - ${req.dlvScope.key}}}`}</code> = <code style={mdStyles.code}>{req.dlvScope.value}</code>
@@ -1495,37 +1670,51 @@ function InstallRequirementRow({
           <div style={tplStyles.installActions}>
             <button
               type="button"
-              style={{ ...tplStyles.installCreateBtn, ...(!targetReady || status.state !== 'idle' && status.state !== 'err' ? tplStyles.installCreateBtnDisabled : {}) }}
+              style={{ ...tplStyles.installCreateBtn, ...(!targetReady || status.state === 'creating' || satisfied ? tplStyles.installCreateBtnDisabled : {}) }}
               onClick={onCreate}
-              disabled={!targetReady || status.state === 'creating' || status.state === 'created' || status.state === 'exists'}
+              disabled={!targetReady || status.state === 'creating' || satisfied}
               title={targetReady ? `Create the "${req.tag.name}" Custom HTML listener on All Pages in the draft workspace` : 'Select a GTM account, container and workspace first'}
               aria-label={`Create the listener tag "${req.tag.name}" in the draft workspace`}
             >
               {status.state === 'creating' ? 'Creating…' : 'Create listener tag'}
             </button>
-            {status.state === 'created' && <span style={{ color: 'var(--c-green)', fontSize: 12 }}>✓ Created{status.reused ? ' · trigger reused' : ''}</span>}
-            {status.state === 'exists' && <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Already exists</span>}
+            {status.state === 'created' && <span style={tplStyles.installDoneText}>✓ Created{status.reused ? ' · trigger reused' : ''}</span>}
+            {status.state === 'exists' && <span style={tplStyles.installDoneText}>✓ Already exists</span>}
+            {status.state === 'idle' && done && <span style={tplStyles.installDoneText}>✓ Done</span>}
             {status.state === 'err' && <span style={{ color: 'var(--c-red)', fontSize: 12 }} title={status.msg}>✗ {status.msg}</span>}
           </div>
         </div>
       );
+    }
     case 'html-attribute':
+      // OPTIONAL improvement — the tag already fires; this only sharpens scoping. A quiet muted row (not
+      // a mandatory-looking box), with the long "why" tucked into the ⓘ tooltip and a "mark applied" tick.
       return (
-        <div style={tplStyles.installReq}>
-          <div style={tplStyles.installReqLabel}>Add an HTML attribute on your site</div>
-          <div style={tplStyles.installMeta}>
-            On your site: add <code style={mdStyles.code}>{`${req.attribute}="${req.value}"`}</code> to <code style={mdStyles.code}>{req.selector}</code>
-          </div>
-          <div style={tplStyles.installDetail}>{req.detail}</div>
+        <div style={{ ...tplStyles.installOptional, ...(done ? { borderColor: 'var(--c-green-border)' } : {}) }}>
+          <span style={tplStyles.optionalPill}>Optional</span>
+          <span style={{ ...tplStyles.installOptionalText, ...(done ? { textDecoration: 'line-through', color: 'var(--text-muted)' } : {}) }}>
+            Add <code style={mdStyles.code}>{`${req.attribute}="${req.value}"`}</code> to <code style={mdStyles.code}>{req.selector}</code> for precise scoping
+          </span>
+          <span style={tplStyles.installInfo} title={req.detail} aria-label={req.detail}>ⓘ</span>
+          <label style={{ ...tplStyles.installCheck, marginTop: 0 }} title="Mark this optional tip as applied">
+            <input type="checkbox" checked={done} onChange={(e) => onToggleDone?.(e.target.checked)} />
+            {done ? <span style={tplStyles.installDoneText}>✓ Applied</span> : 'Applied'}
+          </label>
         </div>
       );
     case 'site-code':
       return (
-        <div style={tplStyles.installReq}>
+        <div style={{ ...tplStyles.installReq, ...(done ? { borderColor: 'var(--c-green-border)' } : {}) }}>
           <div style={tplStyles.installReqLabel}>Add code to your site</div>
           <div style={tplStyles.installMeta}>Add this to your site ({req.where}):</div>
-          <CodeBlock code={req.snippet} ariaLabel={`Site code snippet for ${req.where}`} />
+          <CollapsibleCode code={req.snippet} ariaLabel={`Site code snippet for ${req.where}`} />
           <div style={tplStyles.installDetail}>{req.detail}</div>
+          <div>
+            <label style={tplStyles.installCheck} title="Tick once your developer has added this to the site">
+              <input type="checkbox" checked={done} onChange={(e) => onToggleDone?.(e.target.checked)} />
+              {done ? <span style={tplStyles.installDoneText}>✓ Added to my site</span> : "I've added this to my site"}
+            </label>
+          </div>
         </div>
       );
     default: {
@@ -1546,8 +1735,9 @@ type ListenerCreateStatus =
 
 /** The expandable panel body for one suggestion's install plan. Threads the active GTM target down so a
  *  'listener-tag' requirement can offer a "Create listener tag" button that creates it in the DRAFT
- *  workspace. Per-requirement create status is kept here (keyed by requirement index). */
-function InstallPanel({ plan, gtmTarget }: { plan: InstallPlanView; gtmTarget: { accountId?: string; containerId?: string; workspaceId?: string } }): JSX.Element {
+ *  workspace. Per-requirement create status is kept here (keyed by requirement index); the "done"
+ *  check-off state is owned by the parent (so it survives a collapse and feeds the row's status chip). */
+function InstallPanel({ plan, gtmTarget, done, onToggleDone }: { plan: InstallPlanView; gtmTarget: { accountId?: string; containerId?: string; workspaceId?: string }; done: Record<number, boolean>; onToggleDone: (index: number, value: boolean) => void }): JSX.Element {
   const [statuses, setStatuses] = useState<Record<number, ListenerCreateStatus>>({});
   const acct = gtmTarget.accountId ?? '';
   const cont = gtmTarget.containerId ?? '';
@@ -1567,6 +1757,9 @@ function InstallPanel({ plan, gtmTarget }: { plan: InstallPlanView; gtmTarget: {
             ? { state: 'exists' }
             : { state: 'err', msg: o.error ?? 'failed' },
       }));
+      // A created OR already-existing listener is "done" — record it in the parent so the row's chip
+      // turns green even after the panel is collapsed (which resets the transient status above).
+      if (o.ok || o.existing) onToggleDone(index, true);
     } catch (e) {
       setStatuses((s) => ({ ...s, [index]: { state: 'err', msg: e instanceof Error ? e.message : String(e) } }));
     }
@@ -1574,13 +1767,16 @@ function InstallPanel({ plan, gtmTarget }: { plan: InstallPlanView; gtmTarget: {
 
   return (
     <div style={tplStyles.installPanel}>
-      <p style={tplStyles.installSummary}>{plan.summary}</p>
+      {/* The status chip in the row already carries the summary, so the panel goes straight to the
+          per-requirement rows — no duplicated summary line. */}
       {plan.requires.map((req, i) => (
         <InstallRequirementRow
           key={i}
           req={req}
           targetReady={targetReady}
           status={statuses[i] ?? { state: 'idle' }}
+          done={done[i] === true}
+          onToggleDone={(v) => onToggleDone(i, v)}
           onCreate={req.kind === 'listener-tag' ? () => createListener(i, req.tag) : undefined}
         />
       ))}
@@ -1602,6 +1798,8 @@ function SuggestionTemplateTable({
   onToggle,
   onEdit,
   gtmTarget,
+  screenshots,
+  onShot,
 }: {
   suggestions: SuggestedTagView[];
   /** Raw inline-edit overlay (keyed by suggestion id). The editable Parameter/When ROWS render from these
@@ -1617,10 +1815,21 @@ function SuggestionTemplateTable({
   /** The active GTM account/container/workspace, so the install panel's "Create listener tag" button
    *  can create the listener in the right DRAFT workspace. Any field empty → the button is disabled. */
   gtmTarget: { accountId?: string; containerId?: string; workspaceId?: string };
+  /** tagId → proof-screenshot data-URI: the element/location this suggested tag would track, ringed.
+   *  Captured by the locate-only screenshot pass; shown as a thumbnail under the Page cell. */
+  screenshots?: Record<string, string>;
+  /** Open a suggestion's proof screenshot full-screen. */
+  onShot?: (shot: { src: string; name: string }) => void;
 }): JSX.Element {
   // Which suggestions have their "How to install" panel expanded (keyed by id).
   const [installOpen, setInstallOpen] = useState<Record<string, boolean>>({});
   const toggleInstall = (id: string): void => setInstallOpen((o) => ({ ...o, [id]: !o[id] }));
+  // Per-suggestion "done" check-offs for its install requirements (keyed by suggestion id → requirement
+  // index). Owned here (not in InstallPanel) so a mark survives the panel collapsing AND feeds the row's
+  // status chip. Session-scoped — a manual acknowledgement that site-side work is done, not persisted.
+  const [installDone, setInstallDone] = useState<Record<string, Record<number, boolean>>>({});
+  const setReqDone = (sid: string, index: number, value: boolean): void =>
+    setInstallDone((m) => ({ ...m, [sid]: { ...(m[sid] ?? {}), [index]: value } }));
   // The install panel row spans every column: ✓ + Page + the 10 template headers.
   const totalCols = 2 + TEMPLATE_HEADERS.length;
   return (
@@ -1658,6 +1867,18 @@ function SuggestionTemplateTable({
               onEdit(s.id, { params: paramRows.map((row, j) => (j === idx ? { ...row, ...patch } : row)) });
             const editWhen = (idx: number, patch: Partial<TriggerWhen>): void =>
               onEdit(s.id, { whens: whenRows.map((row, j) => (j === idx ? { ...row, ...patch } : row)) });
+            // Add a SECOND trigger condition (ANDed) — e.g. scope a form/click tag to a specific
+            // {{Page Path}} when several forms share a name. Pre-fills the first unused variable; a
+            // blank-value row is dropped on create (applyWhensToTrigger), so an unfilled row is harmless.
+            const usedWhenVars = new Set(whenRows.map((r) => r.variable));
+            const freeWhenVar = VARIABLE_OPTIONS.find((o) => !usedWhenVars.has(o.value))?.value;
+            const addWhen = (): void => {
+              if (freeWhenVar) onEdit(s.id, { whens: [...whenRows, { variable: freeWhenVar, condition: 'equals', value: '' }] });
+            };
+            // Remove a condition — lets the user undo an added "when" (or drop any condition they don't
+            // want) if they change their mind. Writes the reduced list as the edit overlay; on create,
+            // applyWhensToTrigger rebuilds the trigger from exactly the remaining rows.
+            const removeWhen = (idx: number): void => onEdit(s.id, { whens: whenRows.filter((_, j) => j !== idx) });
             const groupRows = Array.from({ length: rowCount }, (_, i) => {
               const first = i === 0;
               const p = paramRows[i];
@@ -1692,21 +1913,23 @@ function SuggestionTemplateTable({
                   {first && (
                     <td rowSpan={rowCount} style={{ ...tplStyles.td, whiteSpace: 'nowrap' }}>
                       {editable ? <GrowCell value={s.page} disabled={creating} onChange={(v) => onEdit(s.id, { page: v })} ariaLabel="Page" /> : <span style={{ color: 'var(--text-dim)' }}>{s.page}</span>}
-                      {/* "How to install" affordance — only when the plan asks the user to add something
-                          site-side (a listener tag / HTML attribute / site code). Hidden for native GTM
-                          triggers (clicks, pageviews) and already-tracked events, where nothing installs. */}
-                      {installPlanNeedsAction(s.install) && (
+                      {/* Install-status chip — only when the plan asks the user to add something site-side
+                          (a listener tag / HTML attribute / site code). Hidden for native GTM triggers
+                          (clicks, pageviews) and already-tracked events, where nothing installs. The chip's
+                          colour + label triage the plan at a glance; click to expand the detail. */}
+                      {s.install && installPlanNeedsAction(s.install) && (
                         <div>
-                          <button
-                            type="button"
-                            style={tplStyles.installToggle}
-                            onClick={() => toggleInstall(s.id)}
-                            aria-expanded={!!installOpen[s.id]}
-                            aria-label={`How to install ${g.tagName}`}
-                            title="Show the site-side requirements this tag's trigger needs to fire"
-                          >
-                            ⓘ How to install {installOpen[s.id] ? '▾' : '▸'}
-                          </button>
+                          <InstallChip install={s.install} done={installDone[s.id] ?? {}} open={!!installOpen[s.id]} onClick={() => toggleInstall(s.id)} tagName={g.tagName} />
+                        </div>
+                      )}
+                      {/* Proof screenshot: the element/location this tag would track, ringed on its page. */}
+                      {screenshots?.[s.id] && (
+                        <div style={{ marginTop: 6 }}>
+                          <ProofThumb
+                            screenshot={screenshots[s.id]}
+                            name={`${g.tagName} · ${s.page}`}
+                            onOpen={() => onShot?.({ src: screenshots[s.id], name: `${g.tagName} · ${s.page}` })}
+                          />
                         </div>
                       )}
                     </td>
@@ -1740,7 +1963,39 @@ function SuggestionTemplateTable({
                   {first && <td rowSpan={rowCount} style={tplStyles.td} title="Trigger type is structural — change it in GTM, or pick a suggestion of the right type">{g.triggerType}</td>}
                   <td style={tplStyles.td}>{w ? (whensEditable ? <CellSelect value={w.variable} options={varOptions} disabled={creating} onChange={(v) => editWhen(i, { variable: v })} ariaLabel="Trigger when variable" /> : <code style={mdStyles.code}>{w.variable}</code>) : ''}</td>
                   <td style={tplStyles.td}>{w ? (whensEditable ? <CellSelect value={w.condition} options={CONDITION_OPTIONS} disabled={creating} onChange={(v) => editWhen(i, { condition: v })} ariaLabel="Trigger when condition" /> : w.condition) : ''}</td>
-                  <td style={tplStyles.td}>{w ? (whensEditable ? <GrowCell value={w.value} disabled={creating} onChange={(v) => editWhen(i, { value: v })} ariaLabel="Trigger when value" /> : w.value) : ''}</td>
+                  <td style={tplStyles.td}>
+                    {w ? (
+                      whensEditable ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <GrowCell value={w.value} disabled={creating} onChange={(v) => editWhen(i, { value: v })} ariaLabel="Trigger when value" />
+                          {/* Remove THIS condition — undo an added "when" or drop one that's not wanted. */}
+                          <button
+                            type="button"
+                            onClick={() => removeWhen(i)}
+                            disabled={creating}
+                            title="Remove this condition"
+                            aria-label="Remove this trigger condition"
+                            style={{ flexShrink: 0, width: 18, height: 18, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0, fontSize: 13, lineHeight: 1, color: 'var(--text-muted)', background: 'none', border: '1px solid var(--border-2)', borderRadius: 4, cursor: 'pointer' }}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ) : w.value
+                    ) : ''}
+                    {/* "+ condition" appears once, on the last when-row (or row 0 when there are none):
+                        append another ANDed condition such as {{Page Path}} equals "/contact". */}
+                    {whensEditable && freeWhenVar && i === Math.max(whenRows.length - 1, 0) && (
+                      <button
+                        type="button"
+                        onClick={addWhen}
+                        disabled={creating}
+                        title="Add another trigger condition (ANDed) — e.g. scope this tag to a specific Page Path"
+                        style={{ marginTop: 4, padding: '1px 7px', fontSize: 11, lineHeight: 1.6, color: 'var(--c-blue)', background: 'none', border: '1px dashed var(--border-2)', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                      >
+                        + condition
+                      </button>
+                    )}
+                  </td>
                 </tr>
               );
             });
@@ -1749,7 +2004,7 @@ function SuggestionTemplateTable({
               groupRows.push(
                 <tr key={s.id + ':install'}>
                   <td colSpan={totalCols} style={tplStyles.installTd}>
-                    <InstallPanel plan={s.install} gtmTarget={gtmTarget} />
+                    <InstallPanel plan={s.install} gtmTarget={gtmTarget} done={installDone[s.id] ?? {}} onToggleDone={(index, value) => setReqDone(s.id, index, value)} />
                   </td>
                 </tr>,
               );
@@ -2173,8 +2428,8 @@ function TagReviewPanel({
 }): JSX.Element {
   const [url, setUrl] = useState('');
   const [scanning, setScanning] = useState(false);
-  // Live crawl progress — suggestions stream in one-by-one as each page is scanned.
-  const [scanProgress, setScanProgress] = useState<{ scanned: number; found: number } | null>(null);
+  // Crawl progress shown WHILE scanning (the list itself is rendered once, deduplicated, on completion).
+  const [scanProgress, setScanProgress] = useState<{ scanned: number; found: number; queued: number } | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [suggestions, setSuggestions] = useState<SuggestedTagView[]>([]);
@@ -2184,6 +2439,23 @@ function TagReviewPanel({
   const [warnings, setWarnings] = useState<string[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [edits, setEdits] = useState<Record<string, TagEdit>>({});
+  // Locate-only PROOF screenshots for the creatable suggestions (tagId → JPEG data-URI), captured
+  // after each scan by reusing the verify driver (ring the element + shot). `shotStatus` drives the
+  // "capturing…" line; `sLightbox` is the image shown full-screen. Best-effort — never blocks the panel.
+  const [sShots, setSShots] = useState<Record<string, string>>({});
+  const [shotStatus, setShotStatus] = useState<{ loading: boolean; done: number; total?: number; current?: string } | null>(null);
+  // Live per-tag capture progress pushed from main. Only applied while a capture is actually
+  // loading (a late event from a cancelled run must not resurrect the banner).
+  useEffect(
+    () =>
+      window.desktop.tags.onShotProgress((prog) => {
+        let path = prog.page;
+        try { path = new URL(prog.page).pathname || prog.page; } catch { /* keep raw */ }
+        setShotStatus((st) => (st && st.loading ? { loading: true, done: prog.done, total: prog.total, current: `${prog.label} · ${path}` } : st));
+      }),
+    [],
+  );
+  const [sLightbox, setSLightbox] = useState<{ src: string; name: string } | null>(null);
   // Suggestion-list filters (search text + type). Display-only: they narrow which rows are SHOWN,
   // never which ids are selected/created.
   const [search, setSearch] = useState('');
@@ -2237,15 +2509,10 @@ function TagReviewPanel({
   const [showDebug, setShowDebug] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoverResult | null>(null);
-  const [discoverMode, setDiscoverMode] = useState<'site' | 'single' | 'ai' | 'csv'>('site');
+  const [discoverMode, setDiscoverMode] = useState<'site' | 'single' | 'csv'>('site');
   // CSV mode: paste / load a list of landing-page URLs and scan them all directly (no discovery).
   const [csvText, setCsvText] = useState('');
   const csvFileRef = useRef<HTMLInputElement>(null);
-  // OpenAI key presence — gates the experimental AI (screenshot + vision) mode.
-  const [hasOpenAi, setHasOpenAi] = useState(false);
-  useEffect(() => {
-    window.desktop.providers.status().then((s) => setHasOpenAi(!!s.openai)).catch(() => setHasOpenAi(false));
-  }, []);
   const [selectedPages, setSelectedPages] = useState<Record<string, boolean>>({});
   // Optional crawl filter (opt-in): hide /blog|/news|/article pages from the discovered list and skip
   // them in the scan. Off by default.
@@ -2283,6 +2550,9 @@ function TagReviewPanel({
   const containerLabel = (id: string): string => containerNames[id.toUpperCase()] ?? id;
 
   function loadSuggestions(rawList: SuggestedTagView[]): void {
+    // A new suggestion set invalidates any prior scan's proof screenshots.
+    setSShots({});
+    setShotStatus(null);
     // Guarantee "each GTM tag shown once": collapse any same-name duplicates before they reach the
     // list, the selection map, the CSV, or the create flow (belt-and-suspenders over the pipeline dedup).
     const list = dedupeViewsByGtmName(rawList);
@@ -2304,7 +2574,32 @@ function TagReviewPanel({
     setScanLog({ pages: res.pages, notScanned: res.notScanned, inventory: res.inventory, installed: res.installed });
     setScanDebug(res.debug ?? null);
     resetHeal(); // a new scan invalidates any prior heal verdicts
-    loadSuggestions(res.suggestions);
+    // Dedupe ONCE and feed BOTH the render and the screenshot pass. Capturing over the RAW list wastes
+    // the bounded shot budget (MAX_SCREENSHOTS) on rows that were deduped away, which can starve later
+    // (form) tags of a screenshot even though they were locatable.
+    const deduped = dedupeViewsByGtmName(res.suggestions);
+    loadSuggestions(deduped);
+    // Fill in a proof screenshot per creatable tag (the element it would track, ringed) — async +
+    // best-effort so the suggestion list is usable immediately and screenshots appear as they arrive.
+    void captureSuggestionShots(deduped, res.site || res.siteHost || url);
+  }
+
+  // Reuse the verify driver's ring + capture (locate-only) to grab a proof screenshot of WHERE each
+  // suggested tag would fire. Never blocks the panel — screenshots are a nicety layered onto the list.
+  async function captureSuggestionShots(list: SuggestedTagView[], base: string): Promise<void> {
+    const target = (base || url || '').trim();
+    setSShots({});
+    if (!target || list.length === 0) { setShotStatus(null); return; }
+    setShotStatus({ loading: true, done: 0 });
+    try {
+      const res = await window.desktop.tags.screenshotTags(target, list);
+      const map: Record<string, string> = {};
+      for (const shot of res.shots) if (shot.screenshot) map[shot.tagId] = shot.screenshot;
+      setSShots(map);
+      setShotStatus({ loading: false, done: Object.keys(map).length });
+    } catch {
+      setShotStatus(null); // best-effort — a screenshot failure never breaks the suggestions
+    }
   }
 
   // Clear the whole review state so switching source mode starts a fresh, clean
@@ -2312,6 +2607,9 @@ function TagReviewPanel({
   function resetScanState(): void {
     resetHeal();
     setSuggestions([]);
+    setSShots({});
+    setShotStatus(null);
+    setSLightbox(null);
     setMeta(null);
     setScanMeta({});
     setWarnings([]);
@@ -2327,21 +2625,20 @@ function TagReviewPanel({
     setExportNote('');
   }
 
-  // Switch the source mode (Main website / Single page / AI / CSV) → clean slate.
-  function changeMode(m: 'site' | 'single' | 'ai' | 'csv'): void {
+  // Switch the source mode (Main website / Single page / CSV) → clean slate.
+  function changeMode(m: 'site' | 'single' | 'csv'): void {
     if (m === discoverMode) return;
     resetScanState();
     setDiscoverMode(m);
   }
 
-  // "Single page" mode: scan ONLY the entered URL directly — no discovery, no page
-  // list, straight to the tag results.
-  // Suggestions stream in as each page is scanned, so the list fills one-by-one.
+  // Progress-ONLY while scanning: we do NOT render a partial list mid-scan. Streaming a not-yet-complete
+  // list can flash the SAME tag several times before every page is collapsed (a page scanned twice, the
+  // same CTA seen on several pages, etc.). Instead we show live progress and render the ONE final,
+  // deduplicated list when the scan finishes (applyScanResult → loadSuggestions). `found` counts unique
+  // tags so far (deduped) so the number is honest and never shows the transient duplicates.
   const onScanProgress = (p: ScanProgressView): void => {
-    // Same name-dedup on the LIVE streamed list, so a transient same-name pair never flashes mid-scan.
-    const streamed = dedupeViewsByGtmName(p.suggestions);
-    setSuggestions(streamed);
-    setScanProgress({ scanned: p.scanned, found: streamed.length });
+    setScanProgress({ scanned: p.scanned, queued: p.queued, found: dedupeViewsByGtmName(p.suggestions).length });
   };
 
   async function doSinglePageScan(): Promise<void> {
@@ -2364,34 +2661,11 @@ function TagReviewPanel({
 
   // Step 1 (Main website mode): enumerate the site's pages (sitemap/crawl), then
   // the user picks which to scan. In Single-page mode, scan the one URL directly.
-  // EXPERIMENTAL: screenshot the single page + let OpenAI vision pick the tags,
-  // wired to the real scraped elements. Non-streaming (one page, one LLM call).
-  async function doAiScan(): Promise<void> {
-    const target = url.trim();
-    if (!target || scanning || discovering) return;
-    onError('');
-    setScanning(true);
-    setScanProgress(null);
-    setDiscovered(null);
-    loadSuggestions([]);
-    try {
-      applyScanResult(await window.desktop.tags.aiScan(target, { settleMs: effSettleMs(), platforms }));
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setScanning(false);
-    }
-  }
-
   async function doDiscover(): Promise<void> {
     const target = url.trim();
     if (!target || discovering || scanning) return;
     if (discoverMode === 'single') {
       await doSinglePageScan();
-      return;
-    }
-    if (discoverMode === 'ai') {
-      await doAiScan();
       return;
     }
     onError('');
@@ -2892,18 +3166,16 @@ function TagReviewPanel({
         {/* Source */}
         <div style={styles.card}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
-            {(['site', 'single', 'ai', 'csv'] as const).map((m) => (
+            {(['site', 'single', 'csv'] as const).map((m) => (
               <button
                 key={m}
                 style={discoverMode === m ? styles.toggleOn : styles.toggleOff}
                 onClick={() => changeMode(m)}
-                disabled={scanning || discovering || (m === 'ai' && !hasOpenAi)}
-                title={m === 'ai' && !hasOpenAi ? 'Add an OpenAI API key in Settings → Providers to use this' : undefined}
+                disabled={scanning || discovering}
               >
-                {m === 'site' ? 'Main website' : m === 'single' ? 'Single page' : m === 'ai' ? '🤖 AI (single page)' : '📄 Landing pages (CSV)'}
+                {m === 'site' ? 'Main website' : m === 'single' ? 'Single page' : '📄 Landing pages (CSV)'}
               </button>
             ))}
-            {discoverMode === 'ai' && <span style={styles.muted}>experimental · screenshots the page + reads it with OpenAI vision</span>}
             {discoverMode === 'csv' && <span style={styles.muted}>scan a list of landing-page URLs directly (no crawl)</span>}
           </div>
           {/* Pre-scan platform choice: a MULTI-SELECT — toggle any subset of ad platforms. Each selected
@@ -2988,25 +3260,19 @@ function TagReviewPanel({
                   )}
                 </label>
                 <button style={styles.primaryBtn} onClick={doDiscover} disabled={!url.trim() || discovering || scanning}>
-                  {discoverMode === 'ai'
+                  {discoverMode === 'single'
                     ? scanning
-                      ? 'Analyzing…'
-                      : '🤖 Analyze with AI'
-                    : discoverMode === 'single'
-                      ? scanning
-                        ? 'Scanning…'
-                        : 'Scan page'
-                      : discovering
-                        ? 'Discovering…'
-                        : 'Discover pages'}
+                      ? 'Scanning…'
+                      : 'Scan page'
+                    : discovering
+                      ? 'Discovering…'
+                      : 'Discover pages'}
                 </button>
               </div>
               <div style={styles.muted}>
-                {discoverMode === 'ai'
-                  ? 'Screenshots this page and asks OpenAI vision which tags to create, wired to the page’s real elements (the screenshot is sent to OpenAI). Experimental.'
-                  : discoverMode === 'single'
-                    ? 'Scans ONLY this page (no crawl, no sitemap) and shows its tags directly'
-                    : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan (up to 50 pages per scan)'}
+                {discoverMode === 'single'
+                  ? 'Scans ONLY this page (no crawl, no sitemap) and shows its tags directly'
+                  : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan (up to 50 pages per scan)'}
                 {' '}— merging Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
                 approve.{' '}
                 <button style={styles.linkBtn} onClick={doQuickScan} disabled={!url.trim() || scanning || discovering}>
@@ -3367,10 +3633,13 @@ function TagReviewPanel({
         )}
 
 
-        {/* Live crawl progress — the list below fills in as each page is read. */}
-        {scanning && scanProgress && (
+        {/* Crawl progress — the FULL de-duplicated list appears when the scan finishes (not streamed). */}
+        {scanning && (
           <div style={styles.scanBanner}>
-            ⏳ Scanning… {scanProgress.scanned} page(s) read · {scanProgress.found} tag(s) so far — they stream in below as each page is scanned.
+            ⏳ Scanning all pages…{scanProgress ? ` ${scanProgress.scanned} read` : ' starting'}
+            {scanProgress && scanProgress.queued > 0 ? ` · ${scanProgress.queued} queued` : ''}
+            {scanProgress ? ` · ${scanProgress.found} unique tag(s) found` : ''}
+            {' '}— the full, de-duplicated list appears when the scan finishes.
           </div>
         )}
 
@@ -3379,7 +3648,7 @@ function TagReviewPanel({
           <div style={styles.empty}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>🏷</div>
             {scanning
-              ? 'Reading the first page…'
+              ? 'Scanning all pages… the de-duplicated tag list appears here when the scan finishes (progress above).'
               : scanLog
               ? 'No trackable forms or clicks were found on the scanned pages. Try increasing pages/depth, or open the scan log above to see what was covered.'
               : 'Scan a website to see the GA4 event tags worth creating — form submissions (with the form provider), email & phone clicks, file downloads, outbound links and CTAs.'}
@@ -3497,6 +3766,26 @@ function TagReviewPanel({
                 <div style={{ ...styles.muted, marginTop: -4 }}>
                   Tick a row to create it in GTM; edit fields inline (trigger type is fixed). Showing {curPage * PAGE_SIZE + 1}–{Math.min(visible.length, curPage * PAGE_SIZE + PAGE_SIZE)} of {visible.length} ({PAGE_SIZE} per page).
                 </div>
+                {shotStatus?.loading ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 13px', background: 'var(--c-blue-bg, rgba(59,130,246,.12))', border: '1px solid var(--c-blue-bg, rgba(59,130,246,.25))', borderRadius: 8 }}>
+                    <span style={{ fontSize: 16 }}>📸</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>
+                        Capturing proof screenshots{shotStatus.total ? ` — ${Math.min(shotStatus.done + 1, shotStatus.total)} of ${shotStatus.total}` : '…'}
+                      </div>
+                      {shotStatus.current && (
+                        <div style={{ fontSize: 11.5, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          now: {shotStatus.current}
+                        </div>
+                      )}
+                      <div style={{ height: 4, background: 'var(--surface-3)', borderRadius: 2, marginTop: 6, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', borderRadius: 2, background: 'var(--c-blue)', transition: 'width .3s ease', width: shotStatus.total ? `${Math.round((shotStatus.done / Math.max(1, shotStatus.total)) * 100)}%` : '8%' }} />
+                      </div>
+                    </div>
+                  </div>
+                ) : shotStatus && shotStatus.done > 0 ? (
+                  <div style={{ ...styles.muted, fontSize: 12 }}>📸 Captured {shotStatus.done} location screenshot(s) — click a thumbnail under “Page” to view.</div>
+                ) : null}
                 <SuggestionTemplateTable
                   suggestions={pageItems.map(effective)}
                   edits={edits}
@@ -3507,6 +3796,8 @@ function TagReviewPanel({
                   onToggle={(id, v) => setSelected((sel) => ({ ...sel, [id]: v }))}
                   onEdit={(id, patch) => setEdits((m) => ({ ...m, [id]: { ...m[id], ...patch } }))}
                   gtmTarget={{ accountId: ctx?.accountId, containerId: ctx?.containerId, workspaceId: ctx?.workspaceId }}
+                  screenshots={sShots}
+                  onShot={setSLightbox}
                 />
                 {pageCount > 1 && (
                   <div style={tplStyles.pager}>
@@ -3517,6 +3808,8 @@ function TagReviewPanel({
                 )}
               </>
             )}
+
+            {sLightbox && <ProofLightbox shot={sLightbox} onClose={() => setSLightbox(null)} />}
 
             {confirming ? (
               <div style={styles.confirm}>
@@ -3708,7 +4001,7 @@ function verdictHowToTest(v: VerifyTagsResult['verdicts'][number]): string {
   const k = v.interaction?.kind;
   const found = v.interaction?.targetFound;
   if (k === 'custom_event') {
-    return 'This tag fires on a shared dataLayer event but keys off a specific form. Open GTM Preview and submit the matching form for real — the tag will fire when its form-specific condition is met. A synthetic push can’t supply that data.';
+    return 'This tag fires on a dataLayer event a synthetic push can’t fully reproduce (a form’s own data, or a page / Custom-JS condition). If it’s a FORM tag, verify it in the “Forms — verified by a real submit” section below — it submits each matched form for real and re-checks this tag. Otherwise trigger the event in GTM Preview. If the tag is still a DRAFT, paste your GTM Preview snippet above so it loads.';
   }
   // Element WAS found + interacted, but no beacon we recognise fired → an undecodable Custom Template /
   // Custom HTML (pixel) tag, not a wrong-page problem.
@@ -3749,6 +4042,159 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
   return 'Confirm the container is injected (Auto / Preview snippet) and the trigger’s conditions match this page.';
 }
 
+// ── Tag-verification results: scorecard + one results table (replaces the old wall-of-text lists) ──
+type VVerdict = VerifyTagsResult['verdicts'][number];
+type VStatus = 'fired' | 'config' | 'server' | 'untested' | 'issue';
+/** Bucket a verdict into a single status the scorecard + table share. */
+function verdictStatus(v: VVerdict): VStatus {
+  if (v.fired) return v.synthetic ? 'config' : 'fired';
+  if (v.serverRelay) return 'server';
+  if (v.inconclusive) return 'untested';
+  return 'issue';
+}
+// Semantic colour per status — green success, amber caveat, blue server, gray neutral, red error.
+const V_STATUS: Record<VStatus, { short: string; icon: string; color: string; bg: string; border: string }> = {
+  fired: { short: 'Fired', icon: '✅', color: 'var(--c-green)', bg: 'var(--c-green-bg)', border: 'var(--c-green-border)' },
+  config: { short: 'Config OK', icon: '⚙', color: 'var(--c-amber)', bg: 'var(--c-amber-bg)', border: 'var(--c-amber-border)' },
+  server: { short: 'Server-side', icon: '🛰', color: 'var(--c-blue)', bg: 'var(--c-blue-bg)', border: 'var(--c-blue-border)' },
+  untested: { short: 'Untested', icon: '⏭', color: 'var(--text-muted)', bg: 'var(--surface-3)', border: 'var(--border-2)' },
+  issue: { short: 'Issue', icon: '⚠', color: 'var(--c-red)', bg: 'var(--c-red-bg)', border: 'var(--c-red-border)' },
+};
+
+/** The result scorecard — big-number stat cards, one per meaningful outcome. */
+function VerifyScorecard({ fired, config, server, untested, issues }: { fired: number; config: number; server: number; untested: number; issues: number }): JSX.Element {
+  const cards: Array<{ label: string; n: number; s: VStatus }> = [
+    { label: 'Fired', n: fired, s: 'fired' },
+    ...(config ? [{ label: 'Config-verified', n: config, s: 'config' as const }] : []),
+    ...(server ? [{ label: 'Server-side', n: server, s: 'server' as const }] : []),
+    { label: 'Issues', n: issues, s: (issues ? 'issue' : 'fired') as VStatus },
+    ...(untested ? [{ label: 'Untested here', n: untested, s: 'untested' as const }] : []),
+  ];
+  return (
+    <div style={vStyles.scoreGrid}>
+      {cards.map((c, i) => {
+        const m = V_STATUS[c.s];
+        return (
+          <div key={c.label} className="hover-lift rise-in" style={{ ...vStyles.scoreCard, background: m.bg, borderColor: m.border, '--d': `${i * 0.05}s` } as React.CSSProperties}>
+            <div style={{ ...vStyles.scoreNum, color: m.color }}>{c.n}</div>
+            <div style={vStyles.scoreLabel}>{c.label}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A clickable screenshot thumbnail (opens the full image in a lightbox) — the visual proof cell.
+ *  Shared by tag verification AND the tag-suggestion panel (both pass a JPEG data-URI + a name). */
+function ProofThumb({ screenshot, name, onOpen }: { screenshot?: string; name: string; onOpen: () => void }): JSX.Element {
+  if (!screenshot) return <span style={styles.muted}>—</span>;
+  return (
+    <button
+      onClick={onOpen}
+      title="View the full screenshot"
+      style={{ padding: 0, border: '1px solid var(--border-2)', borderRadius: 5, cursor: 'zoom-in', lineHeight: 0, background: 'none' }}
+    >
+      <img src={screenshot} alt={`Screenshot for ${name}`} style={{ width: 72, height: 46, objectFit: 'cover', objectPosition: 'top', borderRadius: 4, display: 'block' }} />
+    </button>
+  );
+}
+
+/** One table for every informational verdict (fired / config-verified / server-side / untested). */
+function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: VVerdict) => void }): JSX.Element {
+  const anyProof = rows.some((v) => v.screenshot);
+  return (
+    <div style={{ overflowX: 'auto', borderRadius: 10, border: '1px solid var(--border)' }}>
+      <table style={vStyles.table}>
+        <thead>
+          <tr>
+            {['Status', 'Tag', 'Event', 'Fired via', 'Signal', ...(anyProof ? ['Proof'] : [])].map((h) => (
+              <th key={h} style={vStyles.th}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((v) => {
+            const st = verdictStatus(v);
+            const m = V_STATUS[st];
+            const via = verdictKindLabel(v);
+            const signal = v.observedBeacons?.length ? v.observedBeacons.join(', ') : v.fired ? 'GA4 hit' : '—';
+            // Keep the per-tag "why / how to verify" guidance on hover so the compact table doesn't lose it.
+            const hint = st === 'untested' ? verdictHowToTest(v) : v.reason ?? '';
+            return (
+              <tr key={v.tagId} title={hint || undefined}>
+                <td style={vStyles.td}><span style={{ ...vStyles.statusPill, color: m.color, background: m.bg, borderColor: m.border }}>{m.icon} {m.short}</span></td>
+                <td style={{ ...vStyles.td, color: 'var(--text)', fontWeight: 500 }}>{v.tagName}</td>
+                <td style={vStyles.td}>{v.event ? <code style={mdStyles.code}>{v.event}</code> : <span style={styles.muted}>—</span>}</td>
+                <td style={{ ...vStyles.td, whiteSpace: 'nowrap' }}><span title={via.label} aria-hidden>{via.icon}</span> {via.label}</td>
+                <td style={{ ...vStyles.td, color: 'var(--text-muted)', fontSize: 12 }}>{signal}</td>
+                {anyProof ? <td style={vStyles.td}><ProofThumb screenshot={v.screenshot} name={v.tagName} onOpen={() => onProof(v)} /></td> : null}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Full-screen overlay showing one verification screenshot. Close via the ✕ button, clicking the backdrop, or Esc. */
+function ProofLightbox({ shot, onClose }: { shot: { src: string; name: string }; onClose: () => void }): JSX.Element {
+  const [hoverClose, setHoverClose] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, cursor: 'zoom-out' }}
+    >
+      {/* Explicit close button (top-right) — some users don't discover click-anywhere/Esc. */}
+      <button
+        type="button"
+        aria-label="Close screenshot"
+        title="Close (Esc)"
+        onClick={(e) => { e.stopPropagation(); onClose(); }}
+        onMouseEnter={() => setHoverClose(true)}
+        onMouseLeave={() => setHoverClose(false)}
+        style={{
+          position: 'fixed', top: 16, right: 20, zIndex: 1001,
+          width: 40, height: 40, borderRadius: '50%', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 22, lineHeight: 1, color: '#fff',
+          background: hoverClose ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.12)',
+          border: '1px solid rgba(255,255,255,0.35)',
+          transition: 'background 0.12s ease',
+        }}
+      >
+        ✕
+      </button>
+      <div style={{ color: '#fff', fontSize: 13, marginBottom: 8, fontWeight: 600, maxWidth: '92vw', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        📸 {shot.name} <span style={{ opacity: 0.6, fontWeight: 400 }}>· click ✕, the backdrop, or press Esc to close</span>
+      </div>
+      <img
+        src={shot.src}
+        alt={`Verification screenshot for ${shot.name}`}
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: '92vw', maxHeight: '84vh', objectFit: 'contain', borderRadius: 8, boxShadow: '0 8px 40px rgba(0,0,0,0.5)', cursor: 'default' }}
+      />
+    </div>
+  );
+}
+
+const vStyles: Record<string, React.CSSProperties> = {
+  scoreGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(128px, 1fr))', gap: 10, margin: '12px 0 4px' },
+  scoreCard: { border: '1px solid var(--border)', borderRadius: 12, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 3 },
+  scoreNum: { fontSize: 28, fontWeight: 700, lineHeight: 1.05 },
+  scoreLabel: { fontSize: 13, color: 'var(--text-dim)', fontWeight: 500 },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
+  th: { textAlign: 'left', padding: '9px 12px', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', background: 'var(--surface-2)', borderBottom: '1px solid var(--border-2)', fontWeight: 600, whiteSpace: 'nowrap' },
+  td: { padding: '9px 12px', borderTop: '1px solid var(--border)', color: 'var(--text-dim)', verticalAlign: 'middle' },
+  statusPill: { display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid transparent', borderRadius: 20, padding: '2px 9px', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' },
+};
+
 // Real-submit form review (Phase 1b): fetch a page's forms + their OWN fields (Option 2) and show
 // each with a locale-appropriate, EDITABLE test value + a Location picker. READ-ONLY — nothing is
 // submitted here; the actual submit + tag-firing check is Phase 2.
@@ -3758,7 +4204,7 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
 // a fix suggestion when it doesn't fire). Real submits — an explicit warning + confirm gate them.
 // Rendered INSIDE VerifyPanel — shares the same URL + Preview snippet as tag verification (one panel,
 // one URL). This subsection does the container-tag-driven REAL-submit form check.
-function FormFillReview({ url, snippet, active, onError }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void }): JSX.Element {
+function FormFillReview({ url, snippet, active, onError, runSignal, onStatus }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number; onStatus?: (s: { loading: boolean; count: number | null }) => void }): JSX.Element {
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [localeId, setLocaleId] = useState('us');
@@ -3772,18 +4218,29 @@ function FormFillReview({ url, snippet, active, onError }: { url: string; snippe
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [results, setResults] = useState<Record<number, SubmitFormVerifyResult>>({});
+  // The real-submit screenshot currently shown full-screen (visual proof), or null.
+  const [fLightbox, setFLightbox] = useState<{ src: string; name: string } | null>(null);
 
   const dedupKey = (role: string, label: string): string => (role === 'select' ? `select|${(label || '').toLowerCase().trim()}` : role);
   const isCheckbox = (t: string): boolean => t === 'checkbox' || t === 'radio';
   const setShrd = (k: string, v: string): void => { setTouched(true); setShared((s) => ({ ...s, [k]: v })); };
 
-  async function fetchPlan(): Promise<void> {
+  // Auto-discover forms-with-tags whenever a tag-verify runs above (parent bumps runSignal). This is
+  // what replaces a separate "Find forms with tags" button — one verify action does both. Skips the
+  // initial mount (runSignal 0); fetchPlan itself no-ops with a note if the URL / GTM target isn't ready.
+  useEffect(() => {
+    if (runSignal > 0) void fetchPlan();
+  }, [runSignal]); // intentionally only on the verify signal — not on url/locale edits
+
+  async function fetchPlan(loc: string = localeId): Promise<void> {
     const target = url.trim();
     if (!target) { setNote('Enter your site’s main URL.'); return; }
     if (!ready || !ctx) { setNote('Pick a GTM account, container and workspace in the GTM bar above first — that’s the container whose form tags we verify.'); return; }
     setLoading(true); setNote(null); onError(''); setResults({}); setPlan(null); setTouched(false);
+    onStatus?.({ loading: true, count: null }); // this run's form-discovery is now in flight
+    let count: number | null = null;
     try {
-      const res = await window.desktop.tags.formTagVerifyPlan(target, { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!, localeId });
+      const res = await window.desktop.tags.formTagVerifyPlan(target, { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!, localeId: loc });
       setPlan(res);
       const sv: Record<string, string> = {};
       for (const f of res.sharedFields) sv[f.key] = f.value;
@@ -3791,9 +4248,10 @@ function FormFillReview({ url, snippet, active, onError }: { url: string; snippe
       if (res.locales?.length) setLocales(res.locales);
       if (res.error) setNote(res.error);
       else if (res.matched.length === 0) setNote(`Crawled ${res.pagesCrawled} page(s) but found no site form matching your container’s form tags — the forms may be on pages we didn’t reach, render late, or their names differ from the tags.`);
+      count = res.error ? null : res.matched.length;
     } catch (e) {
       setNote(e instanceof Error ? e.message : String(e));
-    } finally { setLoading(false); }
+    } finally { setLoading(false); onStatus?.({ loading: false, count }); }
   }
 
   async function submitAll(): Promise<void> {
@@ -3815,29 +4273,44 @@ function FormFillReview({ url, snippet, active, onError }: { url: string; snippe
   }
 
   // For a NOT-fired tag on a submitted form: what to change.
-  const fixFor = (r: SubmitFormVerifyResult, eventName: string): string => {
+  const fixFor = (r: SubmitFormVerifyResult, tag: { eventName: string; platform: string }): string => {
     if (!r.submitted) return `The form couldn’t be submitted (${r.note ?? 'no form/submit control found'}). Check the form’s fields/selectors, then retry.`;
+    const isPixel = !(tag.platform === 'ga4_event' || tag.platform === 'google_tag');
+    if (isPixel) {
+      if (r.beacons.length === 0) return `The form submitted but this ${tag.platform.replace(/_/g, ' ')} tag sent NO beacon — check it isn’t paused / blocked by an exception, its Consent Mode gate (ad_storage) isn’t denying it, and its pixel/conversion id is set. For DRAFT tags, paste a Preview snippet above.`;
+      return `The form beaconed to [${r.beacons.join(', ')}] but not this tag’s vendor — the tag’s trigger/condition may not match this form, or it’s configured for a different pixel.`;
+    }
     if (r.events.length === 0) return `The form submitted but pushed NO GA4 event — the site isn’t emitting its form_submission dataLayer event. Add the form’s listener (a Custom HTML tag that pushes the event on submit-success), or, for DRAFT tags, paste a GTM Preview snippet above. Confirm in GTM Preview.`;
-    return `The form fired [${r.events.join(', ')}] but not “${eventName}”. Either this tag’s trigger condition (form name / id / page) doesn’t match this form, or its GA4 Event Name differs — align the tag’s Event Name to one of the fired events, or fix its form-name condition.`;
+    return `The form fired [${r.events.join(', ')}] but not “${tag.eventName}”. Either this tag’s trigger condition (form name / id / page) doesn’t match this form, or its GA4 Event Name differs — align the tag’s Event Name to one of the fired events, or fix its form-name condition.`;
   };
 
   const matched = plan?.matched ?? [];
 
   return (
     <>
-      <div style={{ ...styles.h2, marginTop: 20 }}>Form tag verification — real submit</div>
-      <div style={{ ...styles.muted, fontSize: 12.5, marginBottom: 6 }}>
-        Using the URL above: find the forms that HAVE a tracking tag, fill the data once, then submit each for real and verify its tag (with a fix when it doesn’t fire). Real submits create a real lead per form.
+      <div style={{ borderTop: '1px solid rgba(128,128,128,0.22)', marginTop: 14, paddingTop: 12 }}>
+        <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--text)' }}>Forms — verified by a real submit</div>
+        <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 2, marginBottom: 6 }}>
+          Runs automatically with the verify above: we find the forms that HAVE a tracking tag, you fill the data once, then submit each for real and verify its tag (with a fix when it doesn’t fire). Real submits create a real lead per form.
+        </div>
       </div>
       <div style={styles.card}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <label style={{ ...styles.muted, fontSize: 13 }}>Location</label>
-          <select value={localeId} onChange={(e) => setLocaleId(e.target.value)} style={{ ...styles.input, width: 'auto', minWidth: 160 }}>
+          {/* No separate "find forms" button — the tag-verify above triggers discovery. Changing the
+              location re-discovers if we've already found forms once. */}
+          <select value={localeId} disabled={loading} onChange={(e) => { const v = e.target.value; setLocaleId(v); if (plan) void fetchPlan(v); }} style={{ ...styles.input, width: 'auto', minWidth: 160 }}>
             {locales.map((l) => (<option key={l.id} value={l.id}>{l.label}</option>))}
           </select>
-          <button style={styles.primaryBtn} onClick={() => void fetchPlan()} disabled={loading || !url.trim() || !ready}>
-            {loading ? 'Crawling & matching…' : 'Find forms with tags'}
-          </button>
+          {loading ? (
+            <span style={{ ...styles.muted, fontSize: 12.5 }}>Crawling &amp; matching forms…</span>
+          ) : plan ? (
+            <span style={{ fontSize: 12.5, color: matched.length ? 'var(--c-green)' : 'var(--text-muted)' }}>
+              {matched.length ? `✓ ${matched.length} form(s) with tags` : 'No forms with tags found'}
+            </span>
+          ) : (
+            <span style={{ ...styles.muted, fontSize: 12.5 }}>Runs when you verify above</span>
+          )}
         </div>
         <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
             US only for now; UK / AUS come later. The test email uses a traceable gtm-verify+…@example.com alias so your CRM can filter these.
@@ -3918,16 +4391,35 @@ function FormFillReview({ url, snippet, active, onError }: { url: string; snippe
                             {r.events.length > 0 ? ` Fired: ${r.events.join(', ')}.` : ''}
                             {r.injected && !r.previewAuth ? ' (snippet had no preview auth — published container loaded)' : ''}
                           </div>
+                          {r.screenshot ? (
+                            <button
+                              onClick={() => setFLightbox({ src: r.screenshot!, name: form.formTitle || 'form' })}
+                              title="View the screenshot of the real submit (the form is ringed)"
+                              style={{ padding: 0, border: '1px solid var(--border-2)', borderRadius: 6, cursor: 'zoom-in', lineHeight: 0, background: 'none', marginTop: 6 }}
+                            >
+                              <img src={r.screenshot} alt={`Submit screenshot for ${form.formTitle}`} style={{ width: 132, height: 82, objectFit: 'cover', objectPosition: 'top', borderRadius: 5, display: 'block' }} />
+                            </button>
+                          ) : null}
                           {form.expectedTags.map((t) => {
                             const fired = (r.firedTags ?? []).some((ft) => ft.tagName === t.tagName);
+                            // A pixel tag fed server-side (CAPI): no browser beacon, but the form relayed
+                            // to the first-party sGTM. Expected, not a failure — same rule as the synthetic path.
+                            const serverSide = !fired && (r.serverRelayTags ?? []).some((n) => n === t.tagName);
                             return (
                               <div key={t.tagName} style={{ marginTop: 4 }}>
                                 {fired ? (
                                   <span style={{ color: 'var(--c-green)', fontWeight: 600 }}>✓ FIRED — {t.tagName}</span>
+                                ) : serverSide ? (
+                                  <>
+                                    <span style={{ color: 'var(--c-blue)', fontWeight: 600 }}>🛰 SERVER-SIDE — {t.tagName}</span>
+                                    <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>
+                                      No browser beacon, but the form relayed to your first-party server container (sGTM). If this pixel is sent server-side via the Conversion API that’s expected — confirm it in the vendor’s Events Manager → Test Events.
+                                    </div>
+                                  </>
                                 ) : (
                                   <>
                                     <span style={{ color: 'var(--c-red)', fontWeight: 600 }}>✗ NOT FIRED — {t.tagName}</span>
-                                    <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)' }}>Fix: {fixFor(r, t.eventName)}</div>
+                                    <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)' }}>Fix: {fixFor(r, t)}</div>
                                   </>
                                 )}
                               </div>
@@ -3952,6 +4444,7 @@ function FormFillReview({ url, snippet, active, onError }: { url: string; snippe
             </ul>
           </div>
         )}
+      {fLightbox && <ProofLightbox shot={fLightbox} onClose={() => setFLightbox(null)} />}
     </>
   );
 }
@@ -3971,11 +4464,21 @@ function VerifyPanel({
   const [vUrl, setVUrl] = useState('');
   const [vSnippet, setVSnippet] = useState('');
   const [vVerifying, setVVerifying] = useState(false);
-  const [vMinting, setVMinting] = useState(false);
   const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
   const [vShowSkipped, setVShowSkipped] = useState(false);
+  const [vShowNet, setVShowNet] = useState(false);
+  const [vShowDl, setVShowDl] = useState(false);
+  // The verification screenshot currently shown full-screen (visual proof), or null.
+  const [vLightbox, setVLightbox] = useState<{ src: string; name: string } | null>(null);
+  const showProof = (v: VVerdict): void => { if (v.screenshot) setVLightbox({ src: v.screenshot, name: v.tagName }); };
+  // The embedded form-discovery's status (bubbled up) so this ONE Verify run shows a single combined
+  // state — tags + forms — instead of two independent-looking passes.
+  const [vFormStatus, setVFormStatus] = useState<{ loading: boolean; count: number | null }>({ loading: false, count: null });
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
+  // Bumped whenever a tag-verify runs; the embedded Forms subsection watches it and auto-discovers the
+  // site's forms-with-tags in the same pass — so there's ONE action, not a separate "find forms" button.
+  const [vRunSignal, setVRunSignal] = useState(0);
   // Event-name aligns applied this session (tagId → new event name), so the row shows "✓ aligned".
   const [aligned, setAligned] = useState<Record<string, string>>({});
   const [aligning, setAligning] = useState<string | null>(null);
@@ -4003,6 +4506,8 @@ function VerifyPanel({
     setVVerifying(true);
     setVNote(null);
     onError('');
+    // Kick the embedded Forms subsection to discover forms-with-tags for the same URL in parallel.
+    setVRunSignal((n) => n + 1);
     try {
       const { tags, skipped } = await window.desktop.gtm.verifiableTags(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
       setVSkipped(skipped);
@@ -4024,28 +4529,6 @@ function VerifyPanel({
       setVNote({ kind: 'error', text: verifyErrorText(e) });
     } finally {
       setVVerifying(false);
-    }
-  }
-
-  async function autoMintAndVerify(): Promise<void> {
-    if (!ready || !ctx || vMinting || vVerifying) return;
-    if (!vUrl.trim()) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against.' }); return; }
-    setVMinting(true);
-    setVNote(null);
-    onError('');
-    try {
-      const { snippet, newWorkspaceId } = await window.desktop.tags.mintPreview(ctx.accountId!, ctx.containerId!, vWsRef.current || ctx.workspaceId!);
-      // Minting SUBMITTED the workspace (now read-only) — follow GTM to the fresh editable one it
-      // created, so the user's next edit (align/chat/panel) targets THAT, not the submitted one.
-      if (newWorkspaceId && newWorkspaceId !== (vWsRef.current || ctx.workspaceId)) {
-        vWsRef.current = newWorkspaceId; // used immediately by alignEventName, before the prop catches up
-        if (active) { try { await window.desktop.accounts.setGtmContext(active.id, { ...ctx, workspaceId: newWorkspaceId, workspaceName: 'Workspace (auto)' }); } catch { /* best-effort */ } }
-      }
-      await runVerify(snippet);
-    } catch (e) {
-      setVNote({ kind: 'error', text: verifyErrorText(e) });
-    } finally {
-      setVMinting(false);
     }
   }
 
@@ -4075,7 +4558,11 @@ function VerifyPanel({
   // A tag we couldn't actually exercise on this run (CTA/form on another page, or a shared
   // dataLayer event that needs form-specific data) is NOT a failure — separate it from genuine
   // "not firing" so a working tag is never mislabelled broken.
-  const inconclusive = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive) ?? [];
+  // Server-side pixels (Meta/TikTok/… fed via the Conversion API) relay to the first-party sGTM and
+  // send NO browser beacon — that's expected, not broken. Give them their own group so they never sit
+  // under ❌ "not firing" NOR the "couldn't reach it" note (which would misdescribe why).
+  const serverRelayed = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive && v.serverRelay) ?? [];
+  const inconclusive = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive && !v.serverRelay) ?? [];
   const notFired = vResult?.verdicts.filter((v) => !v.fired && !v.inconclusive) ?? [];
 
   return (
@@ -4104,9 +4591,11 @@ function VerifyPanel({
             </div>
           )}
           <div style={{ ...styles.muted, marginTop: 8 }}>
-            <b>Auto</b> snapshots the workspace to a version and previews it from the container (never publishes; needs the
-            account re-connected with the “edit container versions” permission). Or paste a GTM <b>Preview / Environment</b>{' '}
-            snippet so DRAFT tags load. Leave the snippet blank to test whatever is already published on the live site.
+            <b>One Verify run</b> drives every tag’s trigger on the live site AND discovers the forms that
+            have a tracking tag — with a screenshot of each. It tests the tags as they’re <b>published</b> on
+            this URL; <b>nothing is created in your container</b> (no version, no preview). The real form
+            submit stays a separate, confirmed step below. To test UNPUBLISHED <b>draft</b> tags, paste a GTM
+            <b> Preview</b> snippet (Tag Assistant) below — that loads your drafts and still creates nothing.
           </div>
           <input
             value={vUrl}
@@ -4125,16 +4614,30 @@ function VerifyPanel({
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
             <button
               style={styles.primaryBtn}
-              onClick={() => void autoMintAndVerify()}
-              disabled={!ready || vMinting || vVerifying || !vUrl.trim()}
-              title="Snapshot the workspace to a version + preview it (never publishes), then verify each tag"
+              onClick={() => void runVerify()}
+              disabled={!ready || vVerifying || !vUrl.trim()}
+              title="Load the live site and verify each tag — nothing is created in your container (no version, no preview)"
             >
-              {vMinting ? 'Preparing preview…' : 'Auto: create preview & verify'}
-            </button>
-            <button style={styles.toggleOff} onClick={() => void runVerify()} disabled={!ready || vVerifying || vMinting || !vUrl.trim()}>
-              {vVerifying && !vMinting ? 'Verifying…' : 'Verify (pasted / live)'}
+              {vVerifying ? 'Verifying…' : 'Verify firing'}
             </button>
           </div>
+          {/* ONE run, two parts: this single action verifies the tags AND discovers the forms-with-tags.
+              A single combined status so it reads as one verification, not two. */}
+          {(vVerifying || vFormStatus.loading) ? (
+            <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span aria-hidden>⏳</span>
+              <span>
+                One verification running —{' '}
+                {vVerifying ? <b>checking tags</b> : <span style={{ color: 'var(--c-green)' }}>tags ✓</span>}
+                {' · '}
+                {vFormStatus.loading ? <b>discovering forms</b> : vFormStatus.count !== null ? <span style={{ color: 'var(--c-green)' }}>{vFormStatus.count} form(s) with tags ✓</span> : <span>forms</span>}
+              </span>
+            </div>
+          ) : (vResult && !vResult.error && vFormStatus.count !== null && vFormStatus.count > 0) ? (
+            <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--text-dim)' }}>
+              This run also found <b>{vFormStatus.count}</b> form(s) with a tracking tag — fill the data once and submit below to verify them by a real submit (gated).
+            </div>
+          ) : null}
           {vNote && (
             <div
               style={{
@@ -4167,76 +4670,94 @@ function VerifyPanel({
                 ⚠ GTM debug: no GTM-XXXX container was detected on the page — the container didn’t load, so nothing could fire. Check the preview snippet / auth, or that the site isn’t blocking googletagmanager.com.
               </div>
             )}
-            <div style={{ fontWeight: 600 }}>
-              {vResult.error
-                ? `Error: ${vResult.error}`
-                : `${firedReal.length} fired${firedSynthetic.length ? ` · ${firedSynthetic.length} config-verified (synthetic, not a real submit)` : ''}${notFired.length ? ` · ${notFired.length} need attention` : ''}${inconclusive.length ? ` · ${inconclusive.length} couldn't be auto-tested here` : ''}`}
-            </div>
+            {vResult.error ? (
+              <div style={{ fontWeight: 600, color: 'var(--c-red)' }}>Error: {vResult.error}</div>
+            ) : (
+              <VerifyScorecard fired={firedReal.length} config={firedSynthetic.length} server={serverRelayed.length} untested={inconclusive.length} issues={notFired.length} />
+            )}
             {vResult.pagesDriven?.length && !vResult.error ? (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
                 Drove across {vResult.pagesDriven.length} page(s)
-                {vResult.pagesCrawled ? ` (crawled ${vResult.pagesCrawled} to locate each CTA)` : ''} — each click tag is
+                {vResult.pagesCrawled ? ` (scanned ${vResult.pagesCrawled}${vResult.pagesTotal && vResult.pagesTotal > vResult.pagesCrawled ? ` of ${vResult.pagesTotal}` : ''} site page(s) from the sitemap to locate each CTA)` : ''} — each click tag is
                 driven on the page its CTA actually lives on.
+                {vResult.pagesTotal && vResult.pagesCrawled && vResult.pagesTotal > vResult.pagesCrawled
+                  ? ` The site has ${vResult.pagesTotal} pages; we scanned the ${vResult.pagesCrawled} highest-priority ones (forms/CTAs first) — a tag whose CTA lives only on an un-scanned page shows “untested here”.`
+                  : ''}
               </div>
             ) : null}
-            {inconclusive.length > 0 && !vResult.error && (
-              <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
-                “Couldn’t auto-test here” ≠ broken. Even after crawling, some CTAs weren’t found on any scanned
-                page (behind login, rendered late, or exact label differs), and form tags that key off a specific
-                form can’t be proven by a synthetic event. Those need the CTA’s own page or a real submit in GTM
-                Preview — they may well fire for a real user.
-              </div>
-            )}
             {vResult.gtmDebug && vResult.gtmDebug.containerLoaded && (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
                 GTM debug: container {vResult.gtmDebug.containerIds.join(', ') || 'loaded'} · events seen: {vResult.gtmDebug.dataLayerEvents.slice(0, 12).join(', ') || '—'}
               </div>
             )}
 
-            {firedReal.length > 0 && (
-              <div style={{ marginTop: 10 }}>
-                <div style={{ ...styles.h2, color: 'var(--c-green)' }}>✅ Firing ({firedReal.length})</div>
-                <ul style={styles.resultList}>
-                  {firedReal.map((v) => {
-                    const k = verdictKindLabel(v);
-                    return (
-                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
-                        <span style={{ fontWeight: 600, color: 'var(--c-green)' }}>FIRED</span>{' '}
-                        <span title={k.label}>{k.icon}</span> {v.tagName}
-                        {v.event ? <span style={styles.muted}> — {v.event}</span> : null}
-                        {v.observedBeacons && v.observedBeacons.length > 0 && (
-                          <span style={{ ...styles.muted, marginLeft: 6, fontSize: 12 }}>→ {v.observedBeacons.join(', ')}</span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
-
-            {firedSynthetic.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <div style={{ ...styles.h2, color: 'var(--c-amber)' }}>⚙ Config-verified — synthetic event, not a real submit ({firedSynthetic.length})</div>
-                <div style={{ ...styles.muted, fontSize: 12, marginBottom: 4 }}>
-                  The tag + trigger are wired correctly: it fired when we pushed its dataLayer event. But we did
-                  NOT submit the form — so this doesn’t prove the site actually emits that event on a real
-                  submit. Confirm each with a real submit in GTM Preview (real-submit testing is coming here).
+            {vResult.networkLog && vResult.networkLog.length > 0 && (() => {
+              const log = vResult.networkLog!;
+              const hasMeta = log.some((h) => h.vendor === 'meta');
+              const hasSgtm = log.some((h) => h.vendor === 'sgtm' || h.vendor === 'ga4');
+              return (
+                <div style={{ marginTop: 6 }}>
+                  <button style={styles.linkBtn} onClick={() => setVShowNet((o) => !o)}>
+                    {vShowNet ? 'hide' : 'show'} network log ({log.length} call{log.length === 1 ? '' : 's'} captured{hasMeta ? ' · Meta pixel seen' : ''})
+                  </button>
+                  {vShowNet && (
+                    <div style={{ marginTop: 4 }}>
+                      <ul style={{ ...styles.resultList, fontFamily: 'monospace', fontSize: 11.5 }}>
+                        {log.map((h, i) => (
+                          <li key={i} style={{ ...styles.resultRow, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                            <span style={{ minWidth: 74, fontWeight: 700, color: h.vendor === 'meta' ? '#993556' : h.vendor === 'ga4' || h.vendor === 'sgtm' ? '#185FA5' : 'var(--text)' }}>{h.vendor}</span>
+                            <span style={{ color: 'var(--text)' }}>{h.endpoint}</span>
+                            {h.params ? <span style={styles.muted}>{h.params}</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                      <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 2 }}>
+                        Browser-side only (captured then aborted — nothing was delivered). {hasSgtm ? 'A /g/collect to your sGTM means the web→server relay fired; ' : ''}the server-side Meta CAPI call (graph.facebook.com) is not visible here — confirm it in sGTM Preview / Events Manager → Test Events.
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <ul style={styles.resultList}>
-                  {firedSynthetic.map((v) => {
-                    const k = verdictKindLabel(v);
-                    return (
-                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
-                        <span style={{ fontWeight: 600, color: 'var(--c-amber)' }}>CONFIG OK</span>{' '}
-                        <span title={k.label}>{k.icon}</span> {v.tagName}
-                        {v.event ? <span style={styles.muted}> — {v.event}</span> : null}
-                        {v.observedBeacons && v.observedBeacons.length > 0 && (
-                          <span style={{ ...styles.muted, marginLeft: 6, fontSize: 12 }}>→ {v.observedBeacons.join(', ')}</span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
+              );
+            })()}
+
+            {vResult.dataLayer && vResult.dataLayer.length > 0 && (() => {
+              const dl = vResult.dataLayer!;
+              const real = dl.filter((e) => !e.synthetic);
+              return (
+                <div style={{ marginTop: 6 }}>
+                  <button style={styles.linkBtn} onClick={() => setVShowDl((o) => !o)}>
+                    {vShowDl ? 'hide' : 'show'} dataLayer ({real.length} real event{real.length === 1 ? '' : 's'} captured)
+                  </button>
+                  {vShowDl && (
+                    <div style={{ marginTop: 4 }}>
+                      <ul style={{ ...styles.resultList, fontFamily: 'monospace', fontSize: 11.5 }}>
+                        {dl.map((e, i) => (
+                          <li key={i} style={{ ...styles.resultRow, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                            <span style={{ minWidth: 150, fontWeight: 700, color: e.synthetic ? 'var(--c-amber)' : '#185FA5' }}>{e.event}</span>
+                            {e.params ? <span style={{ color: 'var(--text)' }}>{e.params}</span> : <span style={styles.muted}>(no params)</span>}
+                            {e.synthetic ? <span style={{ ...styles.muted, fontStyle: 'italic' }}>· pushed by verifier (test)</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                      <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 2 }}>
+                        What your site actually pushed to the dataLayer. Use the event name + params as the trigger condition (e.g. a tag that keys off <code>form_name</code> should match the exact value shown here). Amber rows were pushed by the verifier to test a custom-event tag — not proof the site fires them.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {(firedReal.length + firedSynthetic.length + serverRelayed.length + inconclusive.length) > 0 && !vResult.error && (
+              <div style={{ marginTop: 12 }}>
+                <VerifyResultsTable rows={[...firedReal, ...firedSynthetic, ...serverRelayed, ...inconclusive]} onProof={showProof} />
+                {(firedSynthetic.length > 0 || serverRelayed.length > 0 || inconclusive.length > 0) && (
+                  <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 8, lineHeight: 1.55, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {firedSynthetic.length > 0 && <span>⚙ <b style={{ color: 'var(--c-amber)' }}>Config-verified</b> — fired on a synthetic dataLayer push (trigger is wired right), NOT a real submit. Confirm with a real submit in GTM Preview.</span>}
+                    {serverRelayed.length > 0 && <span>🛰 <b style={{ color: 'var(--c-blue)' }}>Server-side</b> — no browser beacon, but relayed to your sGTM (normal for Conversion-API destinations).</span>}
+                    {inconclusive.length > 0 && <span>⏭ <b>Untested here</b> ≠ broken — needs the CTA’s own page or a real interaction in GTM Preview.</span>}
+                  </div>
+                )}
               </div>
             )}
 
@@ -4247,7 +4768,9 @@ function VerifyPanel({
                   {notFired.map((v) => {
                     const k = verdictKindLabel(v);
                     return (
-                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
+                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                        {v.screenshot ? <div style={{ flexShrink: 0, marginTop: 2 }}><ProofThumb screenshot={v.screenshot} name={v.tagName} onOpen={() => showProof(v)} /></div> : null}
+                        <div style={{ flex: 1, minWidth: 0 }}>
                         <div>
                           <span style={{ fontWeight: 600, color: 'var(--c-red)' }}>NOT FIRED</span>{' '}
                           <span title={k.label}>{k.icon}</span> {v.tagName}
@@ -4276,6 +4799,7 @@ function VerifyPanel({
                             )}
                           </div>
                         )}
+                        </div>
                       </li>
                     );
                   })}
@@ -4283,32 +4807,6 @@ function VerifyPanel({
               </div>
             )}
 
-            {inconclusive.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <div style={{ ...styles.h2, color: 'var(--c-amber)' }}>⏭ Couldn’t auto-test here ({inconclusive.length})</div>
-                <div style={{ ...styles.muted, fontSize: 12, marginBottom: 4 }}>
-                  These aren’t broken — the verifier just couldn’t reach them from one page + synthetic events.
-                </div>
-                <ul style={styles.resultList}>
-                  {inconclusive.map((v) => {
-                    const k = verdictKindLabel(v);
-                    return (
-                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
-                        <div>
-                          <span style={{ fontWeight: 600, color: 'var(--c-amber)' }}>UNTESTED HERE</span>{' '}
-                          <span title={k.label}>{k.icon}</span> {v.tagName}
-                        </div>
-                        {v.reason ? <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2 }}>Why: {v.reason}</div> : null}
-                        {v.observedBeacons && v.observedBeacons.length > 0 && (
-                          <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2, fontSize: 12 }}>Beacons seen: {v.observedBeacons.join(', ')}</div>
-                        )}
-                        <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>How to verify: {verdictHowToTest(v)}</div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
           </div>
         )}
 
@@ -4329,8 +4827,9 @@ function VerifyPanel({
           </div>
         )}
 
-        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} />
+        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} />
       </div>
+      {vLightbox && <ProofLightbox shot={vLightbox} onClose={() => setVLightbox(null)} />}
     </div>
   );
 }
@@ -5590,6 +6089,10 @@ function Ga4AuditPanel({
 
 function SettingsView({
   active,
+  accounts,
+  connect,
+  connecting,
+  cancelConnect,
   google,
   info,
   selfTest,
@@ -5598,6 +6101,10 @@ function SettingsView({
   refresh,
 }: {
   active: AccountView | undefined;
+  accounts: AccountView[];
+  connect: () => Promise<void>;
+  connecting: boolean;
+  cancelConnect: () => Promise<void>;
   google: GoogleClientStatus | null;
   info: AppInfo | null;
   selfTest: SecretSelfTest | null;
@@ -5612,6 +6119,9 @@ function SettingsView({
   // Inline rename of the active account's display name (null = viewing; a string = editing that draft).
   // Reuses the same accounts.rename IPC as the sidebar pencil; an empty name restores the Google name/email.
   const [nameDraft, setNameDraft] = useState<string | null>(null);
+  // Inline rename in the Accounts list (id being renamed → draft value); separate from the active-account
+  // Display-name field above so renaming a non-active account doesn't disturb it.
+  const [rowRename, setRowRename] = useState<{ id: string; value: string } | null>(null);
   useEffect(() => {
     window.desktop.providers.status().then(setProvStatus).catch((e) => onError(String(e)));
   }, []);
@@ -5637,6 +6147,64 @@ function SettingsView({
       <section style={styles.card}>
         <h2 style={styles.h2}>Google sign-in (OAuth client)</h2>
         <OAuthClientCard google={google} />
+      </section>
+
+      {/* Accounts — the full switcher + management that used to live in the sidebar. Switch the active
+          account, rename it, disconnect its Google token, remove it, or connect a new one. */}
+      <section style={styles.card}>
+        <h2 style={styles.h2}>Accounts</h2>
+        <p style={styles.settingsSub}>Switch which Google account is active, rename it, or connect another. The active account is used across GTM Tools, GA4 Tools and Chat.</p>
+        <div style={styles.acctRows}>
+          {accounts.length === 0 && <p style={styles.muted}>No accounts yet — connect one below.</p>}
+          {accounts.map((a) => (
+            <div key={a.id} style={{ ...styles.acctRow, ...(a.isActive ? styles.acctRowActive : {}) }}>
+              <span style={{ ...styles.dot, background: a.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
+              {rowRename?.id === a.id ? (
+                <input
+                  autoFocus
+                  style={{ ...styles.input, flex: 1, minWidth: 0 }}
+                  value={rowRename.value}
+                  placeholder={a.email}
+                  aria-label="Account display name"
+                  onChange={(e) => setRowRename({ id: a.id, value: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { const v = rowRename.value.trim(); setRowRename(null); void run(() => window.desktop.accounts.rename(a.id, v)); }
+                    else if (e.key === 'Escape') setRowRename(null);
+                  }}
+                  onBlur={() => { const v = rowRename.value.trim(); setRowRename(null); void run(() => window.desktop.accounts.rename(a.id, v)); }}
+                />
+              ) : (
+                <span style={styles.acctRowName} title={a.email}>
+                  {a.displayName || a.email}
+                  {a.displayName ? <span style={styles.acctRowEmail}> · {a.email}</span> : null}
+                </span>
+              )}
+              {a.isActive ? (
+                <span style={styles.acctActiveBadge}>Active</span>
+              ) : (
+                <button style={styles.acctRowBtn} onClick={() => void run(() => window.desktop.accounts.setActive(a.id))}>Switch</button>
+              )}
+              <button style={styles.acctRowBtn} onClick={() => setRowRename({ id: a.id, value: a.displayName ?? '' })}>Rename</button>
+              {a.hasGoogleToken && (
+                <button style={styles.acctRowBtn} onClick={() => run(() => window.desktop.google.disconnect(a.id))} title="Sign this account out of Google (keeps the account)">Disconnect</button>
+              )}
+              <button style={styles.acctRowBtnDanger} onClick={() => run(() => window.desktop.accounts.remove(a.id))} title="Remove this account entirely">Remove</button>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 12 }}>
+          {connecting ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={styles.connectBtn} disabled>Signing in…</button>
+              <button style={styles.cancelBtn} onClick={cancelConnect} title="Cancel sign-in">Cancel</button>
+            </div>
+          ) : (
+            <button style={styles.connectBtn} onClick={connect} disabled={!google?.configured} title={google?.configured ? 'Connect another Google account' : 'Set the OAuth client above first'}>
+              + Connect account
+            </button>
+          )}
+          {google && !google.configured && <p style={{ ...styles.settingsSub, color: 'var(--c-amber)', marginTop: 8 }}>Set the OAuth client above before connecting an account.</p>}
+        </div>
       </section>
 
       {active ? (
@@ -5948,8 +6516,9 @@ const styles: Record<string, React.CSSProperties> = {
   app: {
     display: 'flex',
     height: '100vh',
+    position: 'relative',
     margin: 0,
-    fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+    fontFamily: "'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
     color: 'var(--text)',
     background: 'var(--bg)',
   },
@@ -5974,6 +6543,19 @@ const styles: Record<string, React.CSSProperties> = {
   acctBtnActive: { background: 'var(--surface-3)', border: '1px solid var(--border-2)', color: 'var(--text)' },
   acctEmail: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 },
   acctEditBtn: { flexShrink: 0, fontSize: 12, color: 'var(--text-faint)', padding: '0 2px', cursor: 'pointer', lineHeight: 1 },
+  // Sidebar active-account chip (read-only; click → Settings). Replaces the old accounts list.
+  activeAcct: { display: 'flex', alignItems: 'center', gap: 8, width: '100%', background: 'var(--surface-3)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', color: 'var(--text)', cursor: 'pointer', textAlign: 'left', fontSize: 13 },
+  activeAcctName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 },
+  activeAcctManage: { fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 },
+  // Settings → Accounts list rows.
+  acctRows: { display: 'flex', flexDirection: 'column', gap: 6 },
+  acctRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', flexWrap: 'wrap' },
+  acctRowActive: { borderColor: 'var(--c-green-border)', background: 'var(--c-green-bg)' },
+  acctRowName: { flex: 1, minWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text)', fontWeight: 500 },
+  acctRowEmail: { color: 'var(--text-muted)', fontWeight: 400 },
+  acctActiveBadge: { fontSize: 11, fontWeight: 600, color: 'var(--c-green)', background: 'var(--surface)', border: '1px solid var(--c-green-border)', borderRadius: 20, padding: '2px 10px' },
+  acctRowBtn: { background: 'var(--surface-2)', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
+  acctRowBtnDanger: { background: 'transparent', color: 'var(--c-red)', border: '1px solid var(--c-red-border)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
   acctRenameInput: { flex: 1, minWidth: 0, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '3px 7px', fontSize: 13, fontFamily: 'inherit' },
   connectBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer', marginTop: 8 },
   connectRow: { display: 'flex', gap: 6, marginTop: 8, alignItems: 'stretch' },
@@ -6018,11 +6600,26 @@ const styles: Record<string, React.CSSProperties> = {
   toggle: { display: 'inline-flex', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 9, overflow: 'hidden', padding: 2, gap: 2 },
   toggleBtn: { background: 'transparent', color: 'var(--text-dim)', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', borderRadius: 7 },
   toggleActive: { background: '#2563eb', color: '#fff', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', borderRadius: 7, boxShadow: '0 1px 3px rgba(37,99,235,0.45)' },
-  chatTitle: { fontWeight: 600 },
-  chatSub: { fontSize: 12, color: 'var(--text-faint)', marginTop: 2 },
+  chatTitle: { fontWeight: 600, fontSize: 19, color: 'var(--text)', letterSpacing: -0.3 },
+  chatSub: { fontSize: 12.5, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.5 },
   ctxBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 20px', background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text-dim)' },
-  ctxBarEdit: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' },
-  ctxSelect: { background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '6px 8px', fontSize: 13, maxWidth: 200 },
+  ctxBarEdit: { display: 'flex', alignItems: 'flex-end', gap: 10, padding: '8px 20px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' },
+  ctxSelect: { background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '6px 8px', fontSize: 13, maxWidth: 220 },
+  // Collapsed breadcrumb: the active container reads as a highlighted blue pill; "Change" is a proper button.
+  ctxBreadcrumb: { display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 },
+  ctxMutedLabel: { color: 'var(--text-muted)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 600 },
+  ctxCrumb: { color: 'var(--text-dim)' },
+  ctxSep: { color: 'var(--text-faint)' },
+  ctxContainerPill: { display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--c-blue-bg)', color: 'var(--c-blue)', border: '1px solid var(--c-blue-border)', borderRadius: 20, padding: '2px 10px', fontWeight: 600, fontSize: 12.5 },
+  ctxPillId: { color: 'var(--text-muted)', fontWeight: 400 },
+  ctxWorkspacePill: { display: 'inline-flex', alignItems: 'center', background: 'var(--surface-3)', color: 'var(--text-dim)', border: '1px solid var(--border)', borderRadius: 20, padding: '2px 10px', fontSize: 12.5 },
+  ctxChangeBtn: { display: 'inline-flex', alignItems: 'center', gap: 5, background: 'var(--surface)', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 7, padding: '4px 12px', fontSize: 12.5, fontWeight: 500, cursor: 'pointer', flexShrink: 0 },
+  // Edit view: labelled fields; the chosen dropdown gets a blue border so progress is obvious.
+  ctxField: { display: 'flex', flexDirection: 'column', gap: 3 },
+  ctxFieldLabel: { fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', fontWeight: 600 },
+  ctxSelectChosen: { borderColor: 'var(--c-blue)', boxShadow: '0 0 0 1px var(--c-blue)' },
+  ctxUseBtn: { background: 'var(--c-blue)', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
+  ctxUseBtnDisabled: { opacity: 0.45, cursor: 'not-allowed' },
   chatLog: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 10 },
   empty: { color: 'var(--text-faint)', textAlign: 'center', maxWidth: 420, margin: '60px auto', lineHeight: 1.6, flexShrink: 0 },
   userMsg: { alignSelf: 'flex-end', background: '#2563eb', color: '#fff', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14 },
@@ -6032,6 +6629,15 @@ const styles: Record<string, React.CSSProperties> = {
   toolErrors: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 },
   toolErrorLine: { background: 'var(--c-red-bg)', border: '1px solid var(--c-red-border)', color: 'var(--c-red)', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
   composer: { display: 'flex', gap: 8, padding: 16, borderTop: '1px solid var(--border)', alignItems: 'flex-end' },
+  // Slash-command autocomplete menu — floats above the composer.
+  slashMenu: { position: 'absolute', bottom: 'calc(100% - 6px)', left: 16, right: 16, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 12, boxShadow: '0 12px 32px rgba(2,6,23,0.22)', padding: 6, zIndex: 30, maxHeight: 300, overflowY: 'auto' },
+  slashMenuHead: { fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text-faint)', padding: '4px 8px 6px' },
+  slashItem: { display: 'flex', flexDirection: 'column', gap: 1, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderRadius: 8, padding: '7px 9px', cursor: 'pointer', color: 'var(--text)' },
+  slashItemActive: { background: 'var(--c-blue-bg)' },
+  slashName: { fontSize: 13, fontWeight: 600, color: 'var(--text)', fontFamily: 'ui-monospace, monospace' },
+  slashHint: { color: 'var(--text-faint)', fontWeight: 400, fontSize: 12 },
+  slashDesc: { fontSize: 12, color: 'var(--text-muted)' },
+  slashMenuFoot: { fontSize: 10.5, color: 'var(--text-faint)', padding: '6px 8px 3px', borderTop: '1px solid var(--border)', marginTop: 4 },
   composerInput: {
     flex: 1,
     background: 'var(--surface)',
@@ -6069,9 +6675,10 @@ const styles: Record<string, React.CSSProperties> = {
 
   settings: { flex: 1, overflowY: 'auto', padding: 24, maxWidth: 720 },
   settingsTitle: { fontSize: 22, fontWeight: 700, margin: '0 0 16px' },
-  settingsSub: { color: 'var(--text-muted)', fontSize: 12.5, margin: '-4px 0 12px', lineHeight: 1.5 },
-  card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 18, marginBottom: 16, flexShrink: 0 },
-  h2: { fontSize: 13, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-muted)', margin: '0 0 12px' },
+  settingsSub: { color: 'var(--text-muted)', fontSize: 13, margin: '-2px 0 14px', lineHeight: 1.55 },
+  card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 16, flexShrink: 0 },
+  // Section heading — a real 15px/600 heading (design level) rather than the old tiny all-caps label.
+  h2: { fontSize: 15, fontWeight: 600, letterSpacing: -0.2, color: 'var(--text)', margin: '0 0 12px' },
   kv: { display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border)', fontSize: 14 },
   warn: { background: 'var(--c-amber-bg)', border: '1px solid var(--c-amber-border)', borderRadius: 10, padding: 14, marginBottom: 16, color: 'var(--c-amber)', lineHeight: 1.5 },
   diag: { background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px', marginBottom: 16, color: 'var(--text-muted)', fontSize: 12 },
@@ -6080,9 +6687,9 @@ const styles: Record<string, React.CSSProperties> = {
   select: { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
   input: { flex: 1, minWidth: 120, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
   primaryBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
-  ghostBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
-  toggleOn: { background: '#1d4ed8', color: '#fff', border: '1px solid #2563eb', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
-  toggleOff: { background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 12px', fontSize: 12.5, cursor: 'pointer' },
+  ghostBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 10, padding: '9px 14px', fontSize: 13, cursor: 'pointer' },
+  toggleOn: { background: '#1d4ed8', color: '#fff', border: '1px solid #2563eb', borderRadius: 10, padding: '8px 14px', fontSize: 13, cursor: 'pointer' },
+  toggleOff: { background: 'transparent', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 10, padding: '8px 14px', fontSize: 13, cursor: 'pointer' },
   dangerGhost: { background: 'transparent', color: 'var(--c-red)', border: '1px solid var(--c-red-border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
   dangerSolid: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
   resultList: { listStyle: 'none', margin: '12px 0 0', padding: 0 },

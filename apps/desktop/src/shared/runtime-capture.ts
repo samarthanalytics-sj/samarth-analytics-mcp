@@ -59,7 +59,7 @@ export interface CapturedHit {
  *  - ga4:    google-analytics.com / *.google-analytics.com / region1.google-analytics.com,
  *            path /g/collect or /collect (also analytics.google.com/g/collect).
  *  - meta:   facebook.com/tr (the Meta pixel/CAPI browser endpoint).
- *  - tiktok: analytics.tiktok.com/api (the TikTok pixel/Events API endpoint).
+ *  - tiktok: analytics.tiktok.com on any path (/api/v2/pixel, /i18n/pixel/…) + *.tiktok.com/api.
  *  - server: any other host, ONLY when it matches the optional serverUrl host (a first-party sGTM
  *            collector) — passed in so the driver aborts the user's own tagging server too.
  *  PURE. */
@@ -88,8 +88,14 @@ export function classifyCollector(url: string, serverHost?: string | null): Coll
     return 'meta';
   }
 
-  // TikTok pixel / Events API: analytics.tiktok.com/api/…
-  if ((host === 'analytics.tiktok.com' || host.endsWith('.tiktok.com')) && path.startsWith('/api')) {
+  // TikTok pixel / Events API. The dedicated tracking host (analytics.tiktok.com and regional
+  // analytics-sg./analytics-ipv6.) serves the web pixel on several paths: /api/v2/pixel,
+  // /i18n/pixel/events.js, /i18n/pixel/… — so match that host on ANY path, not just /api.
+  if (/^analytics(-[a-z0-9]+)?\.tiktok\.com$/.test(host)) {
+    return 'tiktok';
+  }
+  // Other *.tiktok.com collect endpoints (business-api.tiktok.com/open_api Events API, etc.).
+  if (host.endsWith('.tiktok.com') && (path.startsWith('/api') || path.startsWith('/open_api'))) {
     return 'tiktok';
   }
 
@@ -221,6 +227,127 @@ export function parseGa4CollectHit(input: { url: string; body?: string | null })
       const parsed = parseGroup(new URLSearchParams(trimmed));
       if (parsed) out.push(parsed);
     }
+  }
+  return out;
+}
+
+/** One captured network call, summarised for a DevTools-Network-style log. PURE. */
+export interface DescribedHit {
+  /** meta | ga4 | sgtm | tiktok | linkedin | pinterest | reddit | snapchat | google_ads | hotjar | clarity | bing | twitter | other */
+  vendor: string;
+  /** host + path, e.g. "www.facebook.com/tr" or "sgtm.example.com/g/collect". */
+  endpoint: string;
+  /** Short key params, e.g. "ev=PageView  id=123" or "en=form_submission  tid=G-1". */
+  params: string;
+}
+
+/** Describe a captured analytics call the way DevTools Network would — the vendor, its endpoint, and
+ *  the key params (Meta: ev/id/eid; GA4/sGTM: en/tid). Layer-1 (browser) only; the server-side Meta
+ *  CAPI call to graph.facebook.com never reaches the browser and so never appears here. PURE. */
+export function describeHit(url: string, body?: string | null): DescribedHit {
+  let u: URL;
+  try { u = new URL(url); } catch { return { vendor: 'other', endpoint: url.slice(0, 70), params: '' }; }
+  const host = u.hostname.toLowerCase();
+  const path = u.pathname;
+  const q = u.searchParams;
+  const endpoint = (host + (path && path !== '/' ? path : '')).slice(0, 72);
+
+  const isGaHost = host === 'google-analytics.com' || host.endsWith('.google-analytics.com') || host === 'analytics.google.com';
+  const c = classifyCollector(url);
+
+  let vendor: string;
+  if (c === 'meta' || ((host === 'facebook.com' || host.endsWith('.facebook.com')) && path.startsWith('/tr'))) vendor = 'meta';
+  else if (isGaHost && /\/(g\/)?collect$/.test(path)) vendor = 'ga4';
+  else {
+    // beaconPlatform returns 'server' for a first-party GA4 collect (sGTM), a NAMED pixel vendor, or
+    // 'other:<host>' for anything unrecognised. A named pixel (LinkedIn/Pinterest/…) wins before the
+    // sGTM fallback since several pixels also POST to a /collect path.
+    const bp = beaconPlatform(url);
+    if (bp === 'server') vendor = 'sgtm';
+    else if (bp && bp !== 'other' && !bp.startsWith('other:')) vendor = bp;
+    else if (/\/g\/collect$/.test(path) || (/\/collect$/.test(path) && (q.get('v') === '2' || q.has('tid') || q.has('en')))) vendor = 'sgtm';
+    else vendor = 'other';
+  }
+
+  let params = '';
+  if (vendor === 'meta') {
+    const p: string[] = [];
+    if (q.get('ev')) p.push('ev=' + q.get('ev'));
+    if (q.get('id')) p.push('id=' + q.get('id'));
+    if (q.get('eid')) p.push('eid=' + (q.get('eid') || '').slice(0, 12));
+    params = p.join('  ');
+  } else if (vendor === 'ga4' || vendor === 'sgtm') {
+    const evs = [...new Set(parseGa4CollectHit({ url, body: body ?? null }).map((e) => e.event).filter(Boolean))];
+    const p: string[] = [];
+    if (evs.length) p.push('en=' + evs.join(','));
+    if (q.get('tid')) p.push('tid=' + q.get('tid'));
+    params = p.join('  ');
+  } else {
+    const p: string[] = [];
+    for (const k of ['ev', 'event', 'id', 'pid', 'tid']) { const v = q.get(k); if (v) { p.push(k + '=' + v.slice(0, 18)); if (p.length >= 2) break; } }
+    params = p.join('  ');
+  }
+  return { vendor, endpoint, params };
+}
+
+/** De-duplicated network log from captured hits (one row per vendor+endpoint+params). PURE. */
+export function buildNetworkLog(hits: Array<{ url: string; body?: string | null }>): DescribedHit[] {
+  const seen = new Set<string>();
+  const out: DescribedHit[] = [];
+  for (const h of hits) {
+    const d = describeHit(h.url, h.body);
+    const key = `${d.vendor}|${d.endpoint}|${d.params}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(d);
+  }
+  return out;
+}
+
+// ── dataLayer inspector (Tag-Assistant-style view of the site's REAL pushes) ─────
+//
+// The driver reads window.dataLayer in-page and hands each push here as { event, params } where params
+// is already a JSON-safe flat string map (the in-page reader sanitises DOM nodes/functions and
+// summarises nested objects). This layer FORMATS + de-dups them into the operator-facing rows and,
+// crucially, exposes the exact parameters a tag's trigger can key off (form_name, link_url, …).
+
+/** One real dataLayer event, ready to show: its `event` name + a compact one-line parameter summary. */
+export interface DataLayerEventView {
+  event: string;
+  /** "form_name=contact  form_id=gform_1" — the params the site actually pushed (trigger-condition fuel). */
+  params: string;
+  /** true = this event was PUSHED BY THE VERIFIER (a synthetic custom_event drive), not emitted by the
+   *  site itself — so a form/custom event here isn't proof the real site fires it. */
+  synthetic?: boolean;
+}
+
+/** GTM's own bookkeeping keys — never useful as a trigger condition, so drop them from the summary. */
+const DL_NOISE_KEY = /^(event|eventCallback|eventTimeout|eventModel|gtm\.|_clear$)/;
+
+/** Format + de-dup raw dataLayer pushes into operator rows. Each raw push is { event, params } with a
+ *  flat string param map (already sanitised in-page). Drops pushes with no `event`, strips GTM noise
+ *  keys, caps to the first 8 params, and de-dups by event+params (+synthetic). PURE. */
+export function summarizeDataLayer(
+  raw: Array<{ event?: unknown; params?: Record<string, unknown> | null; synthetic?: boolean }>,
+): DataLayerEventView[] {
+  const seen = new Set<string>();
+  const out: DataLayerEventView[] = [];
+  for (const push of Array.isArray(raw) ? raw : []) {
+    const event = typeof push?.event === 'string' ? push.event.trim() : '';
+    if (!event) continue; // config/set pushes (no event) aren't trigger-able — skip
+    const parts: string[] = [];
+    const params = push.params && typeof push.params === 'object' ? push.params : {};
+    for (const [k, v] of Object.entries(params)) {
+      if (DL_NOISE_KEY.test(k) || v == null || v === '') continue;
+      parts.push(`${k}=${String(v).slice(0, 48)}`);
+      if (parts.length >= 8) break;
+    }
+    const paramStr = parts.join('  ');
+    const synthetic = push.synthetic === true;
+    const key = `${event}|${paramStr}|${synthetic ? 's' : ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ event, params: paramStr, ...(synthetic ? { synthetic: true } : {}) });
   }
   return out;
 }

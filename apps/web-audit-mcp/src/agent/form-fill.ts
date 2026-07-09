@@ -20,6 +20,7 @@ export type FieldRole =
   | 'subject' | 'message'
   | 'consent' | 'marketing_opt_in'
   | 'select' | 'number' | 'date'
+  | 'honeypot'
   | 'other';
 
 /** One field's fill instruction — the row the review UI shows and the driver later applies. */
@@ -67,6 +68,7 @@ const US_DATA: Record<FieldRole, string> = {
   select: '', // pick a real option at fill time
   number: '1',
   date: '2025-01-01',
+  honeypot: '', // anti-spam trap — MUST stay empty or the submit is silently rejected
   other: 'test',
 };
 
@@ -90,6 +92,14 @@ export function classifyFieldRole(field: RawFormField): FieldRole {
   const ac = (field.autocomplete || '').toLowerCase();
   const hay = `${field.name} ${field.id} ${field.label} ${field.placeholder}`.toLowerCase();
   const has = (re: RegExp): boolean => re.test(hay);
+
+  // Honeypot (anti-spam) fields must be left EMPTY — filling one makes the site's spam guard silently
+  // reject the submit, so the form fires form_start but never form_submission (its tags never fire).
+  // Detect by well-known honeypot names OR by a text-style field that's hidden from real users
+  // (display:none / visibility:hidden / off-screen — a text box a human can't see is a trap).
+  const nameHoneypot = /honey.?pot|(^|[^a-z0-9])hp([^a-z0-9]|$)|gotcha|bot[-_]?field|botcheck/.test(`${field.name} ${field.id} ${field.label}`.toLowerCase());
+  const textish = field.tag === 'textarea' || ['', 'text', 'email', 'tel', 'url', 'search', 'number', 'password'].includes(type);
+  if (nameHoneypot || (field.hidden === true && textish)) return 'honeypot';
 
   if (type === 'checkbox') {
     return has(/newsletter|marketing|subscribe|offers?|promo|updates|mailing/) ? 'marketing_opt_in' : 'consent';
@@ -133,6 +143,7 @@ function chooseOption(options: string[], want: string): string {
 }
 
 function valueForRole(role: FieldRole, field: RawFormField, locale: LocaleProfile, email: string): string {
+  if (role === 'honeypot') return ''; // never fill an anti-spam trap
   if (role === 'consent') return 'true'; // tick required privacy/terms boxes
   if (role === 'marketing_opt_in') return ''; // leave promo opt-ins unchecked
   const base = role === 'email' ? email : (locale.data[role] ?? '');
@@ -160,17 +171,20 @@ export function buildFillPlan(
 ): FillPlanItem[] {
   const tag = (opts.emailTag || 'test').replace(/[^a-z0-9._-]/gi, '').slice(0, 40) || 'test';
   const email = `gtm-verify+${tag}@example.com`;
-  return fields.map((f) => {
-    const role = classifyFieldRole(f);
-    return {
-      selector: selectorFor(f),
-      name: f.name,
-      label: (f.label || f.placeholder || f.name || f.type).slice(0, 120),
-      type: f.type,
-      role,
-      required: f.required === true,
-      value: valueForRole(role, f, locale, email),
-      ...(f.options && f.options.length ? { options: f.options } : {}),
-    };
-  });
+  return fields
+    .map((f) => {
+      const role = classifyFieldRole(f);
+      return {
+        selector: selectorFor(f),
+        name: f.name,
+        label: (f.label || f.placeholder || f.name || f.type).slice(0, 120),
+        type: f.type,
+        role,
+        required: f.required === true,
+        value: valueForRole(role, f, locale, email),
+        ...(f.options && f.options.length ? { options: f.options } : {}),
+      };
+    })
+    // Drop honeypots from the plan: not shown, not filled → they submit empty and the spam guard passes.
+    .filter((item) => item.role !== 'honeypot');
 }

@@ -223,6 +223,22 @@ export function collectPageInBrowser(): PageScanRaw {
 // Built from the engine's shared extension list so detection ⇔ the suggested
 // tag's trigger filter can never diverge.
 const DOWNLOAD_RE = new RegExp(`\\.(${DOWNLOAD_EXT})(\\?|#|$)`, 'i');
+// A social-network URL that SHARES the current page (vs a FOLLOW link to the brand's profile). The
+// canonical share endpoints: twitter/x intent, facebook sharer/dialog, linkedin share-offsite/shareArticle,
+// pinterest pin/create, reddit submit, tumblr share, whatsapp/telegram share, plus the fallback of any
+// social URL carrying a url=/u=/text= share payload. A share button gets the GA4 `share` event; a plain
+// profile link stays a `social` (follow) click.
+const SHARE_URL_RE = /(\/intent\/(tweet|post|share)|\/sharer\/|\/sharer\.php|\/dialog\/(share|feed)|\/sharing\/share-offsite|\/shareArticle|\/cws\/share|\/pin\/create|\/submit\b|\/widgets\/share|api\.whatsapp\.com\/send|wa\.me\/\?|t\.me\/share|telegram\.me\/share)/i;
+export function isShareUrl(href: string): boolean {
+  if (SHARE_URL_RE.test(href)) return true;
+  // Fallback: a social host with a share payload query (the page URL / text being shared).
+  return /[?&](url|u|text|body|link)=/i.test(href);
+}
+/** A "Copy link" clipboard control (no social URL) — the copy_link method of a share widget. Requires
+ *  the word "link" so a bare "Copy" (copy code/coupon) is NOT mistaken for a page share. */
+export function isCopyLinkControl(text: string): boolean {
+  return /\bcopy\s*(the\s+)?link\b/i.test(text) || /\bcopy\s*url\b/i.test(text);
+}
 // Social-link detection (which network a host belongs to) lives in social.ts —
 // shared with the GTM trigger builder so the two can't diverge.
 const normHost = (h: string): string => h.replace(/^www\./i, '').toLowerCase();
@@ -268,9 +284,19 @@ export function classifyElement(raw: RawElement, siteHost: string): DetectedElem
     // outbound, but we want it named) — and we record WHICH network it is.
     if (!internal) {
       const net = socialNetworkOf(host);
-      if (net) return { ...make('social'), socialNetwork: net, socialDomain: socialDomainOf(host) ?? undefined };
+      if (net) {
+        // A SHARE link (twitter/intent, facebook/sharer, linkedin/share-offsite, …) → the GA4 `share`
+        // event with this network as the method; a plain FOLLOW link to the profile → a `social` click.
+        if (isShareUrl(href)) return { ...make('share'), shareMethod: net };
+        return { ...make('social'), socialNetwork: net, socialDomain: socialDomainOf(host) ?? undefined };
+      }
       return make('outbound');
     }
+  }
+  // A "Copy link" clipboard control (a <button>/JS <a> with no social URL) is part of a share widget →
+  // the copy_link method. Checked before the CTA branch so it isn't mis-read as a generic CTA.
+  if ((raw.tag === 'button' || raw.tag === 'a') && isCopyLinkControl(raw.text || '')) {
+    return { ...make('share'), shareMethod: 'copy_link' };
   }
   // CTA: a known-intent button/link, OR (low confidence) any prominent button / CTA-styled control
   // whose label reads like an action — so a styled CTA ("Talk to our experts") surfaces instead of
@@ -426,7 +452,13 @@ export function detectEcommerceSignals(
     }
   }
 
-  const isEcommerce = strong || medium.size >= 2;
+  // ecommerce = a STRONG signal alone, OR 2+ medium categories WHERE at least one is genuinely
+  // CART-related (a store path like /cart|/shop|/products, or a purchase-action text like "add to
+  // cart"/"buy now"). Price + a payment script are BOTH common on NON-stores — an analytics/consulting
+  // site that lists service prices and books via Stripe, a donation page, a SaaS pricing page — so those
+  // two alone must NOT classify a site as ecommerce (the false positive on samarthanalytics.com).
+  const cartish = medium.has('path') || medium.has('text');
+  const isEcommerce = strong || (cartish && medium.size >= 2);
   return { isEcommerce, evidence: isEcommerce ? evidence : [] };
 }
 

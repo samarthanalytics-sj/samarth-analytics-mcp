@@ -3,9 +3,9 @@
  * Run: tsx apps/web-audit-mcp/src/agent/tag-suggest/__tests__/suggest.node.test.ts
  */
 import { detectFormProvider, detectEmbeddedForm } from '../providers.js';
-import { buildSuggestions, eventFromLabel, flagOverlappingClickTexts } from '../suggest.js';
+import { buildSuggestions, eventFromLabel, flagOverlappingClickTexts, extractShareControls } from '../suggest.js';
 import { isYouTubeEmbed } from '../video.js';
-import type { PageSignals, SuggestInput, DetectedForm, SuggestedTag } from '../types.js';
+import type { PageSignals, SuggestInput, DetectedForm, SuggestedTag, DetectedElement } from '../types.js';
 
 let passed = 0;
 let failed = 0;
@@ -510,6 +510,34 @@ check('cta: search button event (search_click) is DISTINCT from the site-search 
 const iosCta = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [{ page: '/', kind: 'cta', text: 'Download for iOS', intent: 'generic' }] });
 check('naming: title-case keeps intercaps ("Download For iOS", not "Ios")', iosCta.some((s) => s.tagName === 'GA4 - Event - Download For iOS Click Tag' && s.trigger.name === 'Download For iOS Click Trigger'));
 
+// ── Same-destination CTA collapse: 2+ recognized-intent link CTAs to ONE destination but with DIFFERENT
+//    wording ("Get a Free Audit" / "Get Free Audit" / "Free Audit" → /free-audit) become ONE tag firing
+//    on {{Click URL}} — the user's "duplicate free-audit tags" case. ──
+const sameDest = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [
+  { page: '/', kind: 'cta', text: 'Get a Free Audit', intent: 'get_started', href: 'https://acme.com/free-audit' },
+  { page: '/services', kind: 'cta', text: 'Get Free Audit', intent: 'get_started', href: 'https://acme.com/free-audit?ref=nav' },
+  { page: '/pricing', kind: 'cta', text: 'Free Audit', intent: 'get_started', href: '/free-audit' },
+] });
+const faDest = sameDest.filter((s) => s.platform === 'ga4_event' && /free audit/i.test(s.tagName));
+check('same-dest CTA: 3 wordings to /free-audit collapse to ONE tag', faDest.length === 1);
+check('same-dest CTA: fires on {{Click URL}} contains the path (not per-text {{Click Text}})',
+  faDest[0]?.trigger.kind === 'link_click' && faDest[0]?.trigger.clickUrlValue === '/free-audit' && faDest[0]?.trigger.clickUrlOperator === 'contains' && faDest[0]?.trigger.clickTextValue === undefined);
+check('same-dest CTA: named from the destination + marked site-wide', faDest[0]?.tagName === 'GA4 - Event - Free Audit Click Tag' && faDest[0]?.eventName === 'free_audit_click' && faDest[0]?.page === 'site-wide');
+
+// Different destinations (even same intent + "audit" wording) STAY separate — genuinely different CTAs.
+const diffDest = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: [
+  { page: '/', kind: 'cta', text: 'Schedule Free Audit', intent: 'get_started', href: 'https://acme.com/schedule' },
+  { page: '/', kind: 'cta', text: 'Start Free Audit', intent: 'get_started', href: 'https://acme.com/ga4-audit' },
+] });
+check('diff-dest CTA: different destinations stay separate', diffDest.filter((s) => s.platform === 'ga4_event' && s.trigger.kind === 'link_click').length === 2);
+
+// A SINGLE wording to a destination is NOT collapsed — it keeps its descriptive per-text name (so a
+// short/uninformative path like "/p" never replaces "View Size Chart").
+const singleDest = buildSuggestions({ siteHost: 'shop.example', forms: [], elements: [
+  { page: '/p', kind: 'cta', text: 'View size chart', intent: 'learn_more', href: 'https://shop.example/p#size-chart' },
+] });
+check('single-wording CTA: not collapsed, keeps its text-derived name + {{Click Text}}', singleDest.some((s) => s.tagName === 'GA4 - Event - View Size Chart Click Tag' && s.trigger.clickTextValue === 'View size chart'));
+
 // ── YouTube video → GA4 video tag (built-in YouTube Video trigger) ───────────
 check('video: isYouTubeEmbed matches /embed/ players, not watch/share/vimeo',
   isYouTubeEmbed('https://www.youtube.com/embed/abc123') && isYouTubeEmbed('https://www.youtube-nocookie.com/embed/xyz') &&
@@ -624,6 +652,16 @@ const noShared = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
 const noSharedFaq = noShared.find((s) => s.eventName === 'faq_click');
 check('faq: no shared class → ONE text-route tag ({{Click Text}} ends with "?" + {{Page Path}}), no per-question tags',
   !!noSharedFaq && noSharedFaq.trigger.clickTextValue === '?' && noSharedFaq.trigger.clickTextOperator === 'endsWith' && noSharedFaq.trigger.pagePathValue === '/x' && !noShared.some((s) => s.trigger.clickTextOperator === 'equals' && /\?$/.test(s.trigger.clickTextValue ?? '')));
+
+// A Tailwind ARBITRARY-VARIANT shared class (Radix/shadcn accordion, e.g. `[&[data-state=open]>svg]:rotate-180`)
+// is NOT a usable `.class` selector — `.[&…]` throws in querySelector, breaking the proof-shot locate AND
+// the created GTM tag's {{Click Element}}. It must be rejected → the tag falls back to Click-Text-"?" only.
+const twFaq = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
+  { page: '/faq', kind: 'cta', text: 'Is it valid enough?', intent: 'generic', className: 'flex [&[data-state=open]>svg]:rotate-180' },
+  { page: '/faq', kind: 'cta', text: 'Does it fall back?', intent: 'generic', className: 'grid [&[data-state=open]>svg]:rotate-180' },
+] }).find((s) => s.eventName === 'faq_click');
+check('faq: a Tailwind arbitrary-variant class is NOT used as a CSS selector (falls back to Click-Text-"?" only)',
+  !!twFaq && twFaq.trigger.clickTextValue === '?' && twFaq.trigger.clickTextOperator === 'endsWith' && twFaq.trigger.clickElementValue === undefined && twFaq.trigger.clickElementOperator === undefined);
 // A generic component class (.btn) never scopes the selector — these group via the TEXT route instead
 // (no ".btn, .btn *" page-wide selector).
 const btnQ = buildSuggestions({ siteHost: 'a.com', forms: [], elements: [
@@ -974,6 +1012,44 @@ check('meta: an "Add to Cart" CTA → Meta "AddToCart"; a generic outbound click
   check('install: form custom_event plan is NOT downgraded (listener-tag preserved)',
     !!formTag?.install?.requires.some((r) => r.kind === 'listener-tag'),
     JSON.stringify(formTag?.install?.requires.map((r) => r.kind)));
+}
+
+// ── Social-share widget → ONE GA4 `share` tag ────────────────────────────────
+{
+  const shareEl = (text: string, method: string, page = '/blog/post'): DetectedElement => ({ page, kind: 'share', text, shareMethod: method });
+  const controls: DetectedElement[] = [
+    shareEl('Twitter', 'twitter'),
+    shareEl('LinkedIn', 'linkedin'),
+    shareEl('Facebook', 'facebook'),
+    shareEl('Copy Link', 'copy_link'),
+  ];
+  const { shareTags, consumed } = extractShareControls(controls);
+  check('share: a 4-control widget → exactly ONE share tag', shareTags.length === 1);
+  const t = shareTags[0];
+  check('share: event is GA4 "share"', t?.eventName === 'share');
+  check('share: trigger is all_clicks with a Click-Text lookup over every control', t?.trigger.kind === 'all_clicks' && JSON.stringify(t?.trigger.lookupTable?.texts) === JSON.stringify(['Twitter', 'LinkedIn', 'Facebook', 'Copy Link']));
+  check('share: the Copy Link control IS covered (method lookup maps it to copy_link)',
+    !!t?.eventParamLookups?.[0]?.rows.some((r) => r.key === 'Copy Link' && r.value === 'copy_link'));
+  check('share: method parameter reads the method lookup variable', !!t?.eventParameters?.some((p) => p.name === 'method' && p.value === '{{Lookup - Share Method}}'));
+  check('share: screenshot page is the article (a page that HAS the widget), not site-wide', t?.page === '/blog/post');
+  check('share: all 4 controls consumed (not also emitted individually)', consumed.size === 4);
+}
+{
+  // A LONE share control is not a widget → no share tag (and it isn't emitted as a stray element tag).
+  const lone: DetectedElement[] = [{ page: '/p', kind: 'share', text: 'Twitter', shareMethod: 'twitter' }];
+  check('share: a single control → no share tag (needs 2+)', extractShareControls(lone).shareTags.length === 0);
+  const out = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: lone });
+  check('share: a lone unconsumed share control produces NO suggestion', !out.some((s) => s.eventName === 'share'));
+}
+{
+  // End-to-end through buildSuggestions: the widget collapses to one share tag among the suggestions.
+  const els: DetectedElement[] = [
+    { page: '/blog/post', kind: 'share', text: 'Twitter', shareMethod: 'twitter' },
+    { page: '/blog/post', kind: 'share', text: 'Facebook', shareMethod: 'facebook' },
+  ];
+  const out = buildSuggestions({ siteHost: 'acme.com', forms: [], elements: els });
+  const shareTag = out.find((s) => s.eventName === 'share');
+  check('share: buildSuggestions emits one share tag for the widget', !!shareTag && shareTag.trigger.kind === 'all_clicks');
 }
 
 console.log(`\nTag-suggest: ${passed} passed, ${failed} failed`);

@@ -250,11 +250,23 @@ export function applyTagEdit(s: SuggestedTagView, e: TagEdit | undefined): Sugge
  *  live-streamed running list is only key-deduped; applying the same name-dedup at every point the
  *  review list is set guarantees the table, the CSV export, and the create flow never show a visual
  *  duplicate — including mid-scan. Pure + idempotent. */
+/** Collapse-key for "show each GTM tag once". The tag NAME is normalized to alphanumeric words, so
+ *  punctuation/whitespace variants of the SAME CTA — "Free Audit" / "Free-Audit" / "Free  Audit" /
+ *  "Free—Audit" — collapse to ONE row (their names differ only by separators, but `.toLowerCase()`
+ *  alone left those distinct). platform + eventName stay in the key so genuinely-different tags keep
+ *  their own row ("Get a Free Audit" get_a_free_audit_click vs "Get Free Audit" get_free_audit_click).
+ *  Used by BOTH the renderer net (below) and the main-process net (scan-core `dedupSuggestions`) — the
+ *  two MUST agree or the mid-scan streamed list and the final list disagree and rows flicker. */
+export function suggestionDedupKey(s: { platform: string; eventName?: string; tagName: string }): string {
+  const alnum = (v: string): string => v.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return `${s.platform}|${(s.eventName ?? '').trim().toLowerCase()}|${alnum(s.tagName)}`;
+}
+
 export function dedupeViewsByGtmName(list: SuggestedTagView[]): SuggestedTagView[] {
   const seen = new Set<string>();
   const out: SuggestedTagView[] = [];
   for (const s of list) {
-    const k = `${s.platform}|${s.tagName.trim().toLowerCase()}`;
+    const k = suggestionDedupKey(s);
     if (seen.has(k)) continue;
     seen.add(k);
     out.push(s);
@@ -357,14 +369,88 @@ function requirementMarkdown(r: NonNullable<SuggestedTagView['install']>['requir
   }
 }
 
+/** The one-glance status of an install plan, driving the review table's status chip.
+ *  - `ready`     : nothing to install (all native / provider-native).
+ *  - `ready-tip` : fires natively, but has ONE-OR-MORE optional improvements (an html-attribute, e.g.
+ *                  "add a form id for precise scoping"). The tag still fires without them.
+ *  - `listener`  : needs at least one Custom HTML listener tag created (1-click).
+ *  - `code`      : needs site code the user's developer must add.
+ *  Precedence for a mixed plan: code > listener > ready-tip > ready (the most-demanding ask wins the
+ *  chip; the panel still lists every requirement). Counts let the chip say "2 listener tags", etc. */
+export type InstallStatusKind = 'ready' | 'ready-tip' | 'listener' | 'code';
+export interface InstallStatus {
+  kind: InstallStatusKind;
+  listenerCount: number;
+  siteCodeCount: number;
+  /** html-attribute requirements — always optional (the tag fires without them). */
+  optionalCount: number;
+}
+export function installPlanStatus(install: SuggestedTagView['install'] | undefined): InstallStatus {
+  let listenerCount = 0;
+  let siteCodeCount = 0;
+  let optionalCount = 0;
+  for (const r of install?.requires ?? []) {
+    if (r.kind === 'listener-tag') listenerCount += 1;
+    else if (r.kind === 'site-code') siteCodeCount += 1;
+    else if (r.kind === 'html-attribute') optionalCount += 1;
+  }
+  const kind: InstallStatusKind =
+    siteCodeCount > 0 ? 'code' : listenerCount > 0 ? 'listener' : optionalCount > 0 ? 'ready-tip' : 'ready';
+  return { kind, listenerCount, siteCodeCount, optionalCount };
+}
+
 /** Does this install plan ask the user to actually add or create something on their SITE?
- *  True only when a requirement is a `listener-tag`, `html-attribute`, or `site-code`. A plan that is
- *  absent, empty, or entirely `native` / `provider-native` ("nothing to install") returns false.
+ *  True for every status except `ready` (all native / provider-native → nothing to install).
  *  Single source of truth shared by the runbook's native-only categorisation and the desktop review
  *  table, which hides its "How to install" affordance when this is false. */
 export function installPlanNeedsAction(install: SuggestedTagView['install'] | undefined): boolean {
-  const reqs = install?.requires ?? [];
-  return reqs.some((r) => r.kind === 'listener-tag' || r.kind === 'html-attribute' || r.kind === 'site-code');
+  return installPlanStatus(install).kind !== 'ready';
+}
+
+/** Progress of an install plan against a per-requirement "done" set (keyed by the requirement's index in
+ *  `requires`). A listener-tag is marked done when it is created/exists; site-code + optional (html-
+ *  attribute) steps are checked off by the user. `required` = listener-tag + site-code (the steps that
+ *  gate "done"); `optional` = html-attribute (nice-to-have, never blocks). Drives the review table's
+ *  chip: it flips to a green "✓ Done" once every required step is done (and every optional too). Pure. */
+export interface InstallProgress {
+  kind: InstallStatusKind;
+  requiredTotal: number;
+  requiredDone: number;
+  optionalTotal: number;
+  optionalDone: number;
+  /** requiredDone >= requiredTotal (vacuously true when there are no required steps). */
+  allRequiredDone: boolean;
+  /** every actionable step — required AND optional — is done. */
+  fullyDone: boolean;
+}
+export function installPlanProgress(
+  install: SuggestedTagView['install'] | undefined,
+  done?: Record<number, boolean>,
+): InstallProgress {
+  let requiredTotal = 0;
+  let requiredDone = 0;
+  let optionalTotal = 0;
+  let optionalDone = 0;
+  (install?.requires ?? []).forEach((r, i) => {
+    const isDone = done?.[i] === true;
+    if (r.kind === 'listener-tag' || r.kind === 'site-code') {
+      requiredTotal += 1;
+      if (isDone) requiredDone += 1;
+    } else if (r.kind === 'html-attribute') {
+      optionalTotal += 1;
+      if (isDone) optionalDone += 1;
+    }
+  });
+  const allRequiredDone = requiredDone >= requiredTotal;
+  return {
+    kind: installPlanStatus(install).kind,
+    requiredTotal,
+    requiredDone,
+    optionalTotal,
+    optionalDone,
+    allRequiredDone,
+    fullyDone: allRequiredDone && optionalDone >= optionalTotal,
+  };
 }
 
 /**

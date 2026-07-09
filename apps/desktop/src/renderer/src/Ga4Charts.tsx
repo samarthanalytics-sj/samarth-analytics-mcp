@@ -80,7 +80,7 @@ function InteractiveChart({ series, area, peakLabel }: { series: Series[]; area?
         </text>
         {area && series[0] && <path d={`M ${x(0)} ${t + ih} L ${series[0].points.map((p, i) => `${x(i)} ${y(p.value)}`).join(' L ')} L ${x(n - 1)} ${t + ih} Z`} fill="url(#ga4ReactArea)" />}
         {series.map((s, si) => (
-          <polyline key={si} points={s.points.map((p, i) => `${x(i)},${y(p.value)}`).join(' ')} fill="none" stroke={s.color} strokeWidth={area ? 2 : 1.8} strokeLinejoin="round" strokeLinecap="round" />
+          <polyline key={si} className="draw-line" style={{ '--dash': 2200, animationDelay: `${si * 0.12}s` } as CSSProperties} points={s.points.map((p, i) => `${x(i)},${y(p.value)}`).join(' ')} fill="none" stroke={s.color} strokeWidth={area ? 2 : 1.8} strokeLinejoin="round" strokeLinecap="round" />
         ))}
         {series.map((s, si) => s.points.map((p, i) => <circle key={`${si}-${i}`} cx={x(i)} cy={y(p.value)} r={i === peakIdx && si === 0 ? 3.6 : 2.3} fill={i === peakIdx && si === 0 ? PEAK : s.color} stroke="var(--surface,#FFFFFF)" strokeWidth={1} />))}
         {peakIdx >= 0 && series[0]?.points[peakIdx] && (

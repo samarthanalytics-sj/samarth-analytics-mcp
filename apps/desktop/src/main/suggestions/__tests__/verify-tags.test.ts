@@ -40,11 +40,46 @@ const els: DetectedElementView[] = [{ page: '/', kind: 'cta', text: 'Get a Free 
   check('GA4 no-hit → reason present', typeof v[0].reason === 'string' && v[0].reason!.length > 0);
 }
 
-// ── wrong event fired ────────────────────────────────────────────────────────────
+// ── wrong event fired (a NON-baseline sibling event) → surfaced for alignment ─────
+{
+  const v = evaluateVerify([tag()], [cap({ hits: [ga4Hit('some_other_event')] })], els);
+  check('wrong-event → fired false', v[0].fired === false);
+  check('wrong-event → reason names the seen event', /some_other_event/.test(v[0].reason ?? ''));
+  check('wrong-event → observedEvents lists it for align', (v[0].observedEvents ?? []).includes('some_other_event'));
+}
+
+// ── QW3: base-config page_view / EM auto-events are NOT charged to a specific event tag ───────────
+// (the dual-container / consent-grant bug: page_view fired in a cta_click tag's window must NOT read
+//  as "cta_click fired the wrong event" — that made EVERY event tag on a GA4 site a false failure).
 {
   const v = evaluateVerify([tag()], [cap({ hits: [ga4Hit('page_view')] })], els);
-  check('wrong-event → fired false', v[0].fired === false);
-  check('wrong-event → reason names the seen event', /page_view/.test(v[0].reason ?? ''));
+  check('QW3: page_view-only → fired false', v[0].fired === false);
+  check('QW3: page_view is NOT reported as "the wrong event"', !/but none for/.test(v[0].reason ?? ''));
+  check('QW3: a page_view auto-event is not listed as an alignable observed event', !(v[0].observedEvents ?? []).includes('page_view'));
+}
+{
+  // An EM auto-event (user_engagement) in the window is likewise ignored, but a real sibling still shows.
+  const v = evaluateVerify([tag()], [cap({ hits: [ga4Hit('user_engagement'), ga4Hit('newsletter_signup')] })], els);
+  check('QW3: EM noise ignored but a real sibling event still surfaces', /newsletter_signup/.test(v[0].reason ?? '') && !(v[0].observedEvents ?? []).includes('user_engagement'));
+}
+
+// ── tid attribution: a LITERAL Measurement ID still requires an exact property match ──────────────
+// (a {{variable}}-id tag falls back to event-name matching; sound cross-property attribution for those
+//  is deferred to the reconcile pass, which has run-wide property evidence — see the follow-up.)
+{
+  const t = tag({ measurementId: 'G-OWN' });
+  check('literal id: own-property event → fired', evaluateVerify([t], [cap({ hits: [ga4Hit('cta_click', 'G-OWN')] })], els)[0].fired === true);
+  check('literal id: same event on a FOREIGN property → not credited', evaluateVerify([t], [cap({ hits: [ga4Hit('cta_click', 'G-SITE')] })], els)[0].fired === false);
+}
+
+// ── QW1: a {{variable}} / empty Event Name can't be matched literally → inconclusive, not "wrong" ──
+{
+  const v = evaluateVerify([tag({ eventName: '{{Event}}' })], [cap({ hits: [ga4Hit('purchase')] })], els);
+  check('QW1: variable event name → inconclusive (not "not firing")', v[0].inconclusive === true && v[0].fired === false);
+  check('QW1: surfaces what fired for alignment', (v[0].observedEvents ?? []).includes('purchase'));
+  check('QW1: does not falsely claim "the wrong event"', !/but none for/.test(v[0].reason ?? ''));
+  const ve = evaluateVerify([tag({ eventName: '' })], [cap({ hits: [] })], els);
+  check('QW1: empty event name is also inconclusive', ve[0].inconclusive === true);
 }
 
 // ── target not found → repair proposed ──────────────────────────────────────────
@@ -104,6 +139,22 @@ const els: DetectedElementView[] = [{ page: '/', kind: 'cta', text: 'Get a Free 
   const t = tag({ id: 'ce', eventName: 'newsletter_signup', trigger: { name: 'NL', kind: 'custom_event', eventName: 'newsletter_signup' } });
   const v = evaluateVerify([t], [cap({ tagId: 'ce', kind: 'custom_event', hits: [ga4Hit('newsletter_signup')] })], els);
   check('custom_event fired via dataLayer → fired true', v[0].fired === true);
+}
+
+// ── custom_event FORM tag that didn't fire → inconclusive, points at the real-submit Forms section ──
+{
+  const t = tag({ id: 'gf', eventName: 'get_in_touch_form', platform: 'ga4_event', trigger: { name: 'Get In Touch', kind: 'custom_event', eventName: 'get_in_touch_form' } });
+  const v = evaluateVerify([t], [cap({ tagId: 'gf', kind: 'custom_event', hits: [] })], els)[0];
+  check('form custom_event no-hit → inconclusive (not "broken")', v.inconclusive === true && v.fired === false);
+  check('form custom_event → points at the real-submit Forms section below', /section below/.test(v.reason ?? '') && /FORM tag/.test(v.reason ?? ''));
+}
+
+// ── non-form custom_event that didn't fire → inconclusive, generic guidance (not the Forms section) ─
+{
+  const t = tag({ id: 'sd', eventName: 'scroll_depth', platform: 'ga4_event', trigger: { name: 'Scroll', kind: 'custom_event', eventName: 'scroll_depth' } });
+  const v = evaluateVerify([t], [cap({ tagId: 'sd', kind: 'custom_event', hits: [] })], els)[0];
+  check('non-form custom_event no-hit → inconclusive', v.inconclusive === true);
+  check('non-form custom_event → no Forms-section pointer', !/section below/.test(v.reason ?? ''));
 }
 
 // ── not exercised ────────────────────────────────────────────────────────────────
@@ -181,6 +232,28 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   const v = evaluateVerify([meta], [cap({ tagId: 'me', hits: [] })], els)[0];
   check('specific pixel (meta) clicked, no beacon → genuine not-firing', v.fired === false && !v.inconclusive);
 }
+// ── server-side pixel: no browser beacon but a first-party sGTM relay fired → NOT "not firing" ──
+// The real-world false negative on a server-side (CAPI) setup: a Meta tag whose event relays to the
+// site's own sGTM (/g/collect on a first-party host) sends no facebook.com/tr beacon — that's the
+// expected shape of server-side, not a break. Must be inconclusive + serverRelay, never a red failure.
+{
+  const meta = tag({ id: 'mss', platform: 'meta_pixel', eventName: '' });
+  const v = evaluateVerify([meta], [cap({ tagId: 'mss', hits: [serverHit('email_click')] })], els)[0];
+  check('meta pixel + server relay, no fb beacon → serverRelay inconclusive (not a failure)', v.fired === false && v.inconclusive === true && v.serverRelay === true);
+  check('meta pixel + server relay → NOT counted as genuine not-firing', !(v.fired === false && !v.inconclusive));
+}
+{
+  // Guard: a real facebook beacon still wins (fired), even alongside a server relay.
+  const meta = tag({ id: 'mok', platform: 'meta_pixel', eventName: '' });
+  const v = evaluateVerify([meta], [cap({ tagId: 'mok', hits: [serverHit('email_click'), metaHit()] })], els)[0];
+  check('meta pixel + real fb beacon (with relay) → fired, not serverRelay', v.fired === true && !v.serverRelay);
+}
+{
+  // Guard: no beacon AND no server relay stays a genuine not-firing (nothing fired at all).
+  const meta = tag({ id: 'mno', platform: 'meta_pixel', eventName: '' });
+  const v = evaluateVerify([meta], [cap({ tagId: 'mno', hits: [] })], els)[0];
+  check('meta pixel, no beacon + no relay → genuine not-firing (no serverRelay excuse)', v.fired === false && !v.inconclusive && !v.serverRelay);
+}
 {
   // A generic 'ad' tag (an undecodable Custom Template we mapped by fallback) with no recognised
   // beacon is NOT provably broken → inconclusive, not a red failure.
@@ -211,6 +284,18 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   const li = tag({ id: 'lisyn', platform: 'linkedin_insight', eventName: 'Lead' });
   const v = evaluateVerify([li], [cap({ tagId: 'lisyn', hits: [linkedinHit()] })], els)[0];
   check('real pixel-beacon fire → not synthetic', v.fired === true && !v.synthetic);
+}
+
+// ── screenshot (visual proof) threads from the capture onto the verdict ───────────
+{
+  const shot = 'data:image/jpeg;base64,AAAA';
+  const withShot = evaluateVerify([tag()], [cap({ hits: [ga4Hit('cta_click')], screenshot: shot })], els)[0];
+  check('screenshot on the capture → attached to the verdict', withShot.screenshot === shot);
+  const noShot = evaluateVerify([tag()], [cap({ hits: [ga4Hit('cta_click')] })], els)[0];
+  check('no screenshot on the capture → none on the verdict', noShot.screenshot === undefined);
+  // A NOT-fired tag still carries its screenshot (proof the CTA/page was reached).
+  const missShot = evaluateVerify([tag()], [cap({ targetFound: true, performed: true, kind: 'click', hits: [], screenshot: shot })], els)[0];
+  check('not-fired verdict still carries the screenshot', missShot.fired === false && missShot.screenshot === shot);
 }
 
 console.log(`\nverify-tags: ${passed} passed, ${failed} failed`);

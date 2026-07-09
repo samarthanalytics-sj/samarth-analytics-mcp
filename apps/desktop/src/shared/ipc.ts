@@ -213,6 +213,10 @@ export interface Ga4ExecSummaryView {
   reliabilityConfidence: string;
   /** Critical metrics (conversions/revenue) that capped the reliability headline; empty = uncapped. */
   reliabilityCappedBy: string[];
+  /** Itemized receipt for the headline (biggest loss first): which metric is losing points, the
+   *  SPECIFIC gate responsible, and the action that recovers them - so a low number always reads as
+   *  the property's verification state, never as the tool's judgement. */
+  reliabilityWhy: Array<{ metric: string; weightPct: number; lostPts: number; verdict: string; cause: string; fix: string }>;
   verdict: string;
   biggestRisk: string;
   highestImpactFix: string;
@@ -468,6 +472,19 @@ export interface SuggestedTagView {
      *  from the trigger's extra conditions + the container's Data Layer Variables. */
     customEventData?: Record<string, string>;
   };
+  /** Best-effort JPEG data-URI of the page location this tag would track (its CTA/form ringed),
+   *  captured by a locate-only pass that reuses the verify driver's screenshot logic. Absent when the
+   *  element couldn't be located, the kind has no on-page element, or the screenshot cap was hit. */
+  screenshot?: string;
+}
+
+/** Result of suggestions:screenshotTags — one locate-only proof screenshot per suggested (creatable)
+ *  tag: the element/location it would track, ringed. Reuses the verify driver's ring + capture.
+ *  `screenshot` is absent when the element couldn't be located on its page. */
+export interface SuggestionScreenshotResult {
+  url: string;
+  shots: Array<{ tagId: string; page: string; screenshot?: string }>;
+  error?: string;
 }
 
 /** Streamed after each page during a scan — the running suggestion list (so the
@@ -489,6 +506,9 @@ export interface TagScanOptions {
   /** Which ad platforms to generate tags for (default ['ga4']). Any subset may be selected; each
    *  non-'ga4' platform adds tags derived from the GA4 ones (sharing each trigger). */
   platforms?: SuggestPlatform[];
+  /** How many pages to scan IN PARALLEL (a pool of independent browser drivers). Omitted → auto from
+   *  the machine's CPU (≈ cores/3, capped). Bounded by the page budget so it never over-provisions. */
+  scanConcurrency?: number;
 }
 
 /** One detected clickable element (before dedup) — the raw inventory. */
@@ -601,6 +621,12 @@ export interface VerifyTagVerdict {
    *  push can't supply). NOT a failure — the tag may well fire for a real user. The UI files these
    *  under "couldn't auto-test here" instead of "not firing" so a working tag isn't called broken. */
   inconclusive?: boolean;
+  /** true = a specific-vendor pixel/ads tag (Meta/TikTok/…) sent NO browser beacon, BUT the same
+   *  interaction relayed to a first-party server container (sGTM /g/collect). Strong sign the
+   *  destination is fed SERVER-SIDE via the Conversion API — the browser never calls the vendor, so a
+   *  missing browser beacon is expected, not proof it's broken. Filed under a distinct "relayed
+   *  server-side" group (always also `inconclusive`), never "not firing". */
+  serverRelay?: boolean;
   /** The event name observed on the firing hit (GA4). */
   event?: string;
   /** Why it did not fire (always set when fired=false). */
@@ -619,6 +645,9 @@ export interface VerifyTagVerdict {
   suggestedTrigger?: SuggestedTagView['trigger'];
   /** Human-readable description of the proposed fix. */
   fixNote?: string;
+  /** JPEG data-URI screenshot of the page right after this tag's interaction (the driven control
+   *  ringed) — visual proof of what was exercised. Best-effort; absent for un-driven/capped tags. */
+  screenshot?: string;
 }
 
 /** Result of verifying tag firing (suggestions:verifyTags). */
@@ -638,6 +667,19 @@ export interface VerifyTagsResult {
   /** How many pages the pre-verify crawl visited to locate each CTA's page (0 = no crawl / inventory
    *  was supplied by the caller). */
   pagesCrawled?: number;
+  /** How many pages the site actually has (from its sitemap/discovery). When pagesCrawled < pagesTotal,
+   *  some pages were beyond the scan budget, so a click tag whose CTA lives there stays "untested here"
+   *  — the UI surfaces this so the coverage is honest. */
+  pagesTotal?: number;
+  /** DevTools-Network-style log of the analytics calls captured during the run (browser layer-1):
+   *  Meta pixel (facebook.com/tr), GA4, the sGTM relay (/g/collect), and other pixels, with key params.
+   *  Server-side Meta CAPI (graph.facebook.com) is NOT here — it never reaches the browser. */
+  networkLog?: Array<{ vendor: string; endpoint: string; params: string }>;
+  /** The site's REAL dataLayer pushes captured during the run, each with its parameters — a
+   *  Tag-Assistant-style view of exactly what the site emits (page_view, form_start, cta_click, …) so
+   *  a trigger can be built/aligned to the real event + params. `synthetic` = a verifier-pushed event
+   *  (used to test a custom_event tag), NOT proof the site fires it. */
+  dataLayer?: Array<{ event: string; params: string; synthetic?: boolean }>;
   /** Phase B (best-effort): GTM's on-page debug signal — whether the container actually loaded +
    *  the dataLayer event stream. Present only when gtmDebug was requested. */
   gtmDebug?: { containerLoaded: boolean; containerIds: string[]; dataLayerEvents: string[] };
@@ -743,9 +785,18 @@ export interface SubmitFormVerifyResult {
   events: string[];
   /** Distinct analytics beacon hosts observed. */
   beacons: string[];
+  /** Distinct beacon VENDORS observed (meta/linkedin/pinterest/…) — used to pair pixel/ad tags. */
+  beaconPlatforms?: string[];
   /** The container's ACTUAL tags whose event name matches an observed event — paired when the caller
    *  passed container context. These fired on the REAL submit (a genuine FIRED, not synthetic). */
   firedTags?: Array<{ tagName: string; eventName: string }>;
+  /** Pixel/ad tags that sent NO browser beacon but whose form relayed to a first-party server
+   *  container (server-side / Conversion API) — expected, not a failure. Shown as "server-side", never
+   *  ❌ NOT FIRED. Mirrors VerifyTagVerdict.serverRelay on the synthetic path. */
+  serverRelayTags?: string[];
+  /** JPEG data-URI screenshot of the form after the real submit (the form ringed) — visual proof of
+   *  what was submitted. Best-effort. */
+  screenshot?: string;
 }
 
 /* ── Container-tag-driven form verification: crawl → keep only forms that HAVE a tag → one de-duped
@@ -769,8 +820,8 @@ export interface MatchedFormView {
   method: string;
   purpose: string;
   fields: Array<{ selector: string; type: string; role: string; label: string; value: string; options?: string[] }>;
-  /** Container form tags expected to fire when this form is submitted (name + GA4 event name). */
-  expectedTags: Array<{ tagName: string; eventName: string }>;
+  /** Container form tags expected to fire when this form is submitted (name + GA4 event name + platform). */
+  expectedTags: Array<{ tagName: string; eventName: string; platform: string }>;
 }
 export interface FormTagVerifyPlanOptions {
   accountId: string;

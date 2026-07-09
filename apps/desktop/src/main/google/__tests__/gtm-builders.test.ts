@@ -428,6 +428,28 @@ test('custom_event trigger: secondary ANDed scope conditions in filter (event AN
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'custom_event', eventName: 'form_submit', formIdValue: 'gform_2', pagePathValue: '/contact' }), ['formId', 'pagePath']);
 });
 
+test('form_submit trigger: {{Page Path}} is ANDed alongside {{Form ID}} (scope a shared-form-name tag to one page)', () => {
+  // The user scenario: several pages have a form with the same id/name, but the tag should fire only on
+  // /contact. Adding a {{Page Path}} condition must NOT be dropped just because a Form ID scope exists.
+  const tr = buildTrigger({ name: 'Contact Form Trigger', kind: 'form_submit', formIdValue: 'contact-form', pagePathValue: '/contact', pagePathOperator: 'equals' });
+  assert.equal(tr.type, 'formSubmission');
+  const filters = (tr.filter ?? []) as Array<{ type: string; parameter: Array<Record<string, unknown>> }>;
+  assert.equal(filters.length, 2); // Form ID equals contact-form AND Page Path equals /contact
+  assert.equal(filters[0].parameter.find((p) => p.key === 'arg0')?.value, '{{Form ID}}');
+  assert.equal(filters[1].parameter.find((p) => p.key === 'arg0')?.value, '{{Page Path}}');
+  assert.equal(filters[1].type, 'equals');
+  // The {{Page Path}} built-in must be enabled alongside {{Form ID}} (else the filter references an unset var).
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'form_submit', formIdValue: 'contact-form', pagePathValue: '/contact' }), ['formId', 'pagePath']);
+});
+
+test('form_submit trigger: {{Page Path}} still works as the SOLE scope (no id/class)', () => {
+  const tr = buildTrigger({ name: 'Page Form Trigger', kind: 'form_submit', pagePathValue: '/signup', pagePathOperator: 'equals' });
+  const filters = (tr.filter ?? []) as Array<{ parameter: Array<Record<string, unknown>> }>;
+  assert.equal(filters.length, 1);
+  assert.equal(filters[0].parameter.find((p) => p.key === 'arg0')?.value, '{{Page Path}}');
+  assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'form_submit', pagePathValue: '/signup' }), ['pagePath']);
+});
+
 test('custom_event trigger: dataLayerConditions scope on a pushed key via {{dlv - <key>}} (a manual push, where {{Form ID}} does not resolve)', () => {
   // AJAX/embed forms push {event, form_id}; {{Form ID}} is NOT populated by a manual push, so scope on
   // the pushed key via a {{dlv - form_id}} Data Layer Variable instead.
@@ -512,10 +534,12 @@ test('form_submit trigger: no id/class → scope to the page via {{Page Path}}, 
   assert.equal(f.parameter.find((p) => p.key === 'arg0')?.value, '{{Page Path}}');
   assert.equal(f.parameter.find((p) => p.key === 'arg1')?.value, '/contact');
   assert.deepEqual(triggerBuiltInVars({ name: 'x', kind: 'form_submit', pagePathValue: '/contact' }), ['pagePath']);
-  // An id/class scope takes precedence — the page filter is only the no-id/class fallback.
+  // A Page Path scope is now ANDed alongside an id/class scope (Form ID AND Page Path) so a
+  // shared-form-name tag can be pinned to one page — see the dedicated test above. Both narrow firing.
   const scoped = buildTrigger({ name: 'x', kind: 'form_submit', formIdValue: 'c', pagePathValue: '/contact' });
-  assert.equal((scoped.filter ?? []).length, 1);
+  assert.equal((scoped.filter ?? []).length, 2);
   assert.equal(((scoped.filter ?? [])[0] as { parameter: Array<Record<string, unknown>> }).parameter.find((p) => p.key === 'arg0')?.value, '{{Form ID}}');
+  assert.equal(((scoped.filter ?? [])[1] as { parameter: Array<Record<string, unknown>> }).parameter.find((p) => p.key === 'arg0')?.value, '{{Page Path}}');
 });
 
 test('pageview trigger: pageUrlValue → fires on Some pages via {{Page URL}} contains, enables pageUrl', () => {

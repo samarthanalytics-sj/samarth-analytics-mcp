@@ -19,6 +19,10 @@ export interface RawFormField {
   autocomplete: string;
   required: boolean;
   checked?: boolean;
+  /** True when the field is not visible to a real user (display:none / visibility:hidden / off-screen).
+   *  A hidden text-style input is almost always an anti-spam HONEYPOT — the fill layer must NOT fill it
+   *  (filling one makes the site silently reject the submit). */
+  hidden?: boolean;
   /** For a <select> (and later radio groups): the visible option labels, so a "Category"-style field
    *  can be filled with a REAL option value instead of a made-up string. Capped. Placeholder options
    *  ("Please select…") are kept as-is; the fill layer skips them when choosing a value. */
@@ -91,6 +95,21 @@ export function extractFormsInPage(): RawForm[] {
       required: input.required === true,
       ...(type === 'checkbox' || type === 'radio' ? { checked: input.checked === true } : {}),
     };
+    // Honeypot signal: hidden from a real user (display:none / visibility:hidden / opacity:0 / 0-size /
+    // positioned off-screen). A 0x0 rect also catches a field inside a display:none ancestor.
+    try {
+      const view = doc.defaultView;
+      if (view) {
+        const cs = view.getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        const offscreen = r.right < -1 || r.left > (view.innerWidth || 9999) + 1000;
+        if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0 || (r.width === 0 && r.height === 0) || offscreen) {
+          field.hidden = true;
+        }
+      }
+    } catch {
+      /* best-effort visibility probe */
+    }
     if (el.tagName === 'SELECT') {
       const opts = Array.from((el as unknown as HTMLSelectElement).options)
         .map((o) => (o.textContent || (o as HTMLOptionElement).value || '').replace(/\s+/g, ' ').trim())

@@ -20,6 +20,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GtmClient } from '../utils/gtmClient.js';
 import { jsonResult, errorResult } from '../utils/toolResponse.js';
+import { paginate } from '../utils/pagination.js';
+import type { tagmanager_v2 } from 'googleapis';
 
 export interface AuditFinding {
   severity: 'error' | 'warning' | 'info';
@@ -54,20 +56,26 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
         const client = getClient();
         const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
 
-        // Fetch all workspace data in parallel
-        const [tagsRes, triggersRes, variablesRes, foldersRes, bivRes] = await Promise.all([
-          client.accounts.containers.workspaces.tags.list({ parent }),
-          client.accounts.containers.workspaces.triggers.list({ parent }),
-          client.accounts.containers.workspaces.variables.list({ parent }),
-          client.accounts.containers.workspaces.folders.list({ parent }),
-          client.accounts.containers.workspaces.built_in_variables.list({ parent }),
+        // Fetch ALL workspace data, following pagination on every list so a large container isn't
+        // truncated — otherwise a tag on page 1 whose trigger lives on page 2 is falsely flagged as a
+        // broken_reference, and entities beyond page 1 are silently omitted from the audit entirely.
+        const ws = client.accounts.containers.workspaces;
+        const [tagsP, triggersP, variablesP, foldersP, bivP] = await Promise.all([
+          paginate((t) => ws.tags.list({ parent, pageToken: t }).then((r) => r.data), (d) => d.tag),
+          paginate((t) => ws.triggers.list({ parent, pageToken: t }).then((r) => r.data), (d) => d.trigger),
+          paginate((t) => ws.variables.list({ parent, pageToken: t }).then((r) => r.data), (d) => d.variable),
+          paginate((t) => ws.folders.list({ parent, pageToken: t }).then((r) => r.data), (d) => d.folder),
+          paginate((t) => ws.built_in_variables.list({ parent, pageToken: t }).then((r) => r.data), (d) => d.builtInVariable),
         ]);
 
-        const tags = tagsRes.data.tag ?? [];
-        const triggers = triggersRes.data.trigger ?? [];
-        const variables = variablesRes.data.variable ?? [];
-        const folders = foldersRes.data.folder ?? [];
-        const builtInVars = bivRes.data.builtInVariable ?? [];
+        const tags = tagsP.items;
+        const triggers = triggersP.items;
+        const variables = variablesP.items;
+        const folders = foldersP.items;
+        const builtInVars = bivP.items;
+        // If the DEFAULT_MAX_PAGES ceiling was hit on any list, cross-reference checks may under-report;
+        // surface it so the caller doesn't trust a partial audit as complete.
+        const truncated = tagsP.truncated || triggersP.truncated || variablesP.truncated || foldersP.truncated || bivP.truncated;
 
         const findings: AuditFinding[] = [];
 
@@ -79,15 +87,23 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
         // ── Tag checks ───────────────────────────────────────────────────────
         const tagNames = new Map<string, number>();
         let ga4ConfigCount = 0;
+        const paramValue = (tag: tagmanager_v2.Schema$Tag, key: string): string =>
+          (tag.parameter ?? []).find((p) => p.key === key)?.value ?? '';
 
         for (const tag of tags) {
           const id = tag.tagId ?? 'unknown';
           const name = tag.name ?? 'Unnamed';
           const type = tag.type ?? '';
 
-          // Count GA4 config tags
-          if (type === 'googtag' || type === 'gaawc') {
+          // Count GA4 config tags. `gaawc` is GA4-specific. A `googtag` (Google tag) is GA4 ONLY when its
+          // tagId/measurementId is a G- id — an AW- googtag is Google Ads and a GT-/DC- id is a generic
+          // Google tag, none of which is a GA4 config. Counting those caused a false "multiple GA4 config
+          // → duplicate sessions" error for the common GA4 + Google Ads pairing.
+          if (type === 'gaawc') {
             ga4ConfigCount++;
+          } else if (type === 'googtag') {
+            const tid = paramValue(tag, 'tagId') || paramValue(tag, 'measurementId');
+            if (/^G-/i.test(tid)) ga4ConfigCount++;
           }
 
           // Duplicate names
@@ -305,6 +321,8 @@ export function registerAuditTools(server: McpServer, getClient: () => GtmClient
             folders: folders.length,
             builtInVariables: builtInVars.length,
           },
+          // True only if a list hit the page ceiling — cross-reference findings may then under-report.
+          ...(truncated ? { truncated: true } : {}),
           findingCount: {
             total: filteredFindings.length,
             errors: filteredFindings.filter((f) => f.severity === 'error').length,

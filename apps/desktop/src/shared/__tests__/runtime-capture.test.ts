@@ -9,6 +9,9 @@ import {
   isKnownAdPlatform,
   evaluateRuntimeCapture,
   syntheticDataLayerEvent,
+  describeHit,
+  buildNetworkLog,
+  summarizeDataLayer,
 } from '../runtime-capture';
 
 let passed = 0;
@@ -55,6 +58,12 @@ check('classify: region1.google-analytics.com /g/collect → ga4', classifyColle
 check('classify: google-analytics.com /collect (MP) → ga4', classifyCollector('https://www.google-analytics.com/collect?v=1') === 'ga4');
 check('classify: facebook.com/tr → meta', classifyCollector('https://www.facebook.com/tr?id=1&ev=Purchase') === 'meta');
 check('classify: analytics.tiktok.com/api → tiktok', classifyCollector('https://analytics.tiktok.com/api/v2/pixel') === 'tiktok');
+// TikTok's WEB pixel uses the /i18n/pixel path, not /api — must still classify as tiktok so it is
+// aborted on a real submit AND named in the network log (was falling through to 'other' before).
+check('classify: analytics.tiktok.com/i18n/pixel → tiktok', classifyCollector('https://analytics.tiktok.com/i18n/pixel/events.js?sdkid=abc&event=CompleteRegistration') === 'tiktok');
+check('classify: analytics-sg.tiktok.com (regional) → tiktok', classifyCollector('https://analytics-sg.tiktok.com/i18n/pixel/track') === 'tiktok');
+check('classify: business-api.tiktok.com/open_api → tiktok', classifyCollector('https://business-api.tiktok.com/open_api/v1.3/event/track/') === 'tiktok');
+check('classify: www.tiktok.com content page (not tracking) → null', classifyCollector('https://www.tiktok.com/@user/video/123') === null);
 check('classify: unrelated host → null', classifyCollector('https://example.com/page') === null);
 check('classify: GA host but wrong path → null', classifyCollector('https://www.google-analytics.com/analytics.js') === null);
 check('classify: serverUrl host → server', classifyCollector('https://sgtm.example.com/g/collect?en=purchase', 'sgtm.example.com') === 'server');
@@ -153,6 +162,7 @@ check('beacon: LinkedIn → linkedin', beaconPlatform('https://px.ads.linkedin.c
 check('beacon: Pinterest → pinterest', beaconPlatform('https://ct.pinterest.com/v3/?tid=1') === 'pinterest');
 check('beacon: Reddit → reddit', beaconPlatform('https://alb.reddit.com/rp.gif?id=1') === 'reddit');
 check('beacon: Snap → snapchat', beaconPlatform('https://tr.snapchat.com/p?pid=1') === 'snapchat');
+check('beacon: TikTok web pixel (/i18n/pixel) → tiktok', beaconPlatform('https://analytics.tiktok.com/i18n/pixel/events.js?event=Purchase') === 'tiktok');
 check('beacon: Bing → bing', beaconPlatform('https://bat.bing.com/action/0?ti=1') === 'bing');
 check('beacon: DoubleClick → google_ads', beaconPlatform('https://ad.doubleclick.net/ddm/activity/src=1') === 'google_ads');
 check('beacon: google.com/pagead → google_ads', beaconPlatform('https://www.google.com/pagead/1p-conversion/123') === 'google_ads');
@@ -163,6 +173,64 @@ check('beaconHost: extracts the host', beaconHost('https://ct.pinterest.com/v3/?
 check('isKnownAdPlatform: linkedin yes, ga4/other no', isKnownAdPlatform('linkedin') && !isKnownAdPlatform('ga4') && !isKnownAdPlatform('other:x'));
 // Distinct platforms → distinct labels: two ad tags on one interaction are attributable, not both "ad".
 check('beacon: LinkedIn ≠ Reddit (per-platform attribution)', beaconPlatform('https://px.ads.linkedin.com/collect') !== beaconPlatform('https://alb.reddit.com/rp.gif'));
+
+// ── describeHit: DevTools-Network-style summary of a captured call ───────────────
+{
+  const meta = describeHit('https://www.facebook.com/tr?id=123&ev=PageView&eid=abc123def456');
+  check('describe: Meta pixel vendor', meta.vendor === 'meta');
+  check('describe: Meta endpoint', meta.endpoint === 'www.facebook.com/tr');
+  check('describe: Meta params (ev + id)', /ev=PageView/.test(meta.params) && /id=123/.test(meta.params));
+}
+{
+  const ga4 = describeHit('https://www.google-analytics.com/g/collect?v=2&tid=G-1&en=form_submission');
+  check('describe: GA4 vendor', ga4.vendor === 'ga4');
+  check('describe: GA4 params (en + tid)', /en=form_submission/.test(ga4.params) && /tid=G-1/.test(ga4.params));
+}
+{
+  // First-party sGTM relay — a /g/collect on a NON-Google host.
+  const s = describeHit('https://sgtm.samarthanalytics.com/g/collect?v=2&tid=G-1&en=form_submission');
+  check('describe: first-party sGTM → vendor sgtm', s.vendor === 'sgtm');
+  check('describe: sGTM endpoint keeps host+path', s.endpoint === 'sgtm.samarthanalytics.com/g/collect');
+}
+{
+  const li = describeHit('https://px.ads.linkedin.com/collect?pid=99');
+  check('describe: LinkedIn vendor', li.vendor === 'linkedin');
+  const tt = describeHit('https://analytics.tiktok.com/i18n/pixel/events.js?sdkid=C1&event=Purchase');
+  check('describe: TikTok web pixel vendor', tt.vendor === 'tiktok');
+  check('describe: TikTok params show event', /event=Purchase/.test(tt.params));
+  const other = describeHit('https://site.com/api/leads');
+  check('describe: non-analytics → other', other.vendor === 'other');
+}
+{
+  // buildNetworkLog de-dups identical calls.
+  const log = buildNetworkLog([
+    { url: 'https://www.facebook.com/tr?id=1&ev=Lead' },
+    { url: 'https://www.facebook.com/tr?id=1&ev=Lead' },
+    { url: 'https://sgtm.samarthanalytics.com/g/collect?v=2&tid=G-1&en=x' },
+  ]);
+  check('networkLog: de-dups identical hits', log.length === 2);
+  check('networkLog: keeps distinct vendors', log.some((h) => h.vendor === 'meta') && log.some((h) => h.vendor === 'sgtm'));
+}
+
+// ── summarizeDataLayer: the dataLayer inspector rows ────────────────────────────
+{
+  const rows = summarizeDataLayer([
+    { event: 'gtm.js', params: { 'gtm.start': 123, 'gtm.uniqueEventId': 1 } },
+    { event: 'form_submission', params: { form_name: 'get_in_touch', form_id: 'gform_1', 'gtm.elementId': 'x', eventCallback: 'fn' } },
+    { event: 'form_submission', params: { form_name: 'get_in_touch', form_id: 'gform_1' } }, // dup of the above (after noise stripped)
+    { event: '', params: { config: 'G-1' } }, // no event → skipped
+    { event: 'cta_click', params: { link_text: 'Get a Free Audit', link_url: 'https://x/audit' }, synthetic: true },
+  ]);
+  const names = rows.map((r) => r.event);
+  check('dataLayer: skips pushes with no event name', !names.includes(''));
+  check('dataLayer: keeps real event names', names.includes('gtm.js') && names.includes('form_submission') && names.includes('cta_click'));
+  const fs = rows.find((r) => r.event === 'form_submission');
+  check('dataLayer: surfaces trigger params (form_name/form_id)', /form_name=get_in_touch/.test(fs?.params ?? '') && /form_id=gform_1/.test(fs?.params ?? ''));
+  check('dataLayer: strips GTM-internal + callback noise keys', !/gtm\.|eventCallback/.test(fs?.params ?? ''));
+  check('dataLayer: de-dups identical event+params', rows.filter((r) => r.event === 'form_submission').length === 1);
+  check('dataLayer: gtm.js with only-noise params → empty params', rows.find((r) => r.event === 'gtm.js')?.params === '');
+  check('dataLayer: marks synthetic (verifier-pushed) events', rows.find((r) => r.event === 'cta_click')?.synthetic === true);
+}
 
 console.log(`\nruntime-capture: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

@@ -47,6 +47,7 @@ import type {
   SubmitFormVerifyOptions,
   SubmitFormVerifyResult,
   DetectedElementView,
+  SuggestionScreenshotResult,
 } from '../shared/ipc';
 
 // Tracks the in-flight streaming chat so llm.stop() can abort the right one.
@@ -173,6 +174,16 @@ const api = {
       ipcRenderer.invoke('suggestions:scanUrls', urls, opts),
     scan: (url: string, opts?: TagScanOptions): Promise<TagScanResult> =>
       ipcRenderer.invoke('suggestions:scan', url, opts),
+    // Locate-only proof screenshots for the creatable suggestions (each tag's CTA/form ringed on its
+    // page). Reuses the verify driver; never clicks/submits. Returns a JPEG data-URI per tag.
+    screenshotTags: (url: string, tags: SuggestedTagView[]): Promise<SuggestionScreenshotResult> =>
+      ipcRenderer.invoke('suggestions:screenshotTags', url, tags),
+    /** Live per-tag progress while proof screenshots are being captured; returns an unsubscribe. */
+    onShotProgress: (cb: (p: { done: number; total: number; label: string; page: string }) => void): (() => void) => {
+      const listener = (_e: unknown, p: { done: number; total: number; label: string; page: string }): void => cb(p);
+      ipcRenderer.on('suggestions:shotProgress', listener);
+      return () => ipcRenderer.removeListener('suggestions:shotProgress', listener);
+    },
     // Streaming scan: `onProgress` fires with the running suggestion list after each
     // page; the promise resolves with the final result. Mirrors llm.chatStream.
     scanStream: (
@@ -209,9 +220,6 @@ const api = {
     },
     fromJson: (json: string): Promise<ParsedSuggestionsResult> =>
       ipcRenderer.invoke('suggestions:fromJson', json),
-    // EXPERIMENTAL: single-page AI scan — screenshot + OpenAI vision picks the tags.
-    aiScan: (url: string, opts?: TagScanOptions): Promise<TagScanResult> =>
-      ipcRenderer.invoke('suggestions:aiScan', url, opts),
     // Save the (renderer-built) template CSV to a user-chosen file → saved path or null.
     exportCsv: (defaultName: string, csv: string): Promise<string | null> =>
       ipcRenderer.invoke('suggestions:exportCsv', defaultName, csv),

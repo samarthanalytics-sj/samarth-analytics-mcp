@@ -160,6 +160,18 @@ check('social: spoof "facebook.com.evil.com" → outbound (not social)', classif
 // The site's OWN social-named subdomain is internal nav, not a social click.
 check('social: internal "discord.acme.com" subdomain → null (internal nav)', classifyElement(a('https://discord.acme.com/x'), 'acme.com') === null);
 
+// ── share widgets: a SHARE link (share the current page) vs a FOLLOW link (visit the profile) ──
+check('share: twitter intent → share/twitter', (() => { const d = classifyElement(a('https://twitter.com/intent/tweet?url=https://acme.com/blog/p&text=Hi', { text: 'Twitter' }), 'acme.com'); return d?.kind === 'share' && d?.shareMethod === 'twitter'; })());
+check('share: facebook sharer → share/facebook', (() => { const d = classifyElement(a('https://www.facebook.com/sharer/sharer.php?u=https://acme.com/blog/p', { text: 'Facebook' }), 'acme.com'); return d?.kind === 'share' && d?.shareMethod === 'facebook'; })());
+check('share: linkedin share-offsite → share/linkedin', (() => { const d = classifyElement(a('https://www.linkedin.com/sharing/share-offsite/?url=https://acme.com/blog/p', { text: 'LinkedIn' }), 'acme.com'); return d?.kind === 'share' && d?.shareMethod === 'linkedin'; })());
+check('share: x.com intent/post → share/twitter (x mapped to twitter)', classifyElement(a('https://x.com/intent/post?url=https://acme.com/p', { text: 'Post' }), 'acme.com')?.kind === 'share');
+check('share: whatsapp send → share/whatsapp', (() => { const d = classifyElement(a('https://api.whatsapp.com/send?text=https://acme.com/p', { text: 'WhatsApp' }), 'acme.com'); return d?.kind === 'share' && d?.shareMethod === 'whatsapp'; })());
+// A plain FOLLOW link to the profile (no share endpoint / payload) stays a social click, NOT a share.
+check('share: plain facebook.com/AcmePage → social (a FOLLOW link, not a share)', classifyElement(a('https://facebook.com/AcmePage', { text: 'Facebook' }), 'acme.com')?.kind === 'social');
+// "Copy link" clipboard button (no social URL) → the copy_link method.
+check('share: "Copy link" button → share/copy_link', (() => { const d = classifyElement({ tag: 'button', href: '', text: 'Copy Link', hasDownload: false, region: 'main' }, 'acme.com'); return d?.kind === 'share' && d?.shareMethod === 'copy_link'; })());
+check('share: "Copy" alone (no "link") → NOT share (avoids copy-code buttons)', classifyElement({ tag: 'button', href: '', text: 'Copy', hasDownload: false, region: 'main' }, 'acme.com')?.kind !== 'share');
+
 // ── embedded cross-origin form → synthesized suggestion ──────────────────────
 {
   const embedPage: PageScan = {
@@ -222,6 +234,20 @@ check('social: internal "discord.acme.com" subdomain → null (internal nav)', c
   // A payment script alone (one medium) is NOT enough — a donation/booking page uses Stripe too.
   const stripeOnly: PageScan = shopPage({ signals: ecomSig({ scriptSrcs: ['https://js.stripe.com/v3/'] }) });
   check('ecom: a lone Stripe payment script (single medium) → non_ecommerce', buildSuggestInput([stripeOnly], 'donate.org').websiteType === 'non_ecommerce');
+
+  // PRICE + PAYMENT with NO cart-related signal (path/text) → NOT ecommerce. This is the analytics /
+  // consultancy false positive: it lists service prices ($X) and books via Stripe, but sells no products.
+  const priceAndPay: PageScan = {
+    page: '/pricing',
+    elements: [{ page: '/pricing', kind: 'cta', text: 'Starting at $499/mo', intent: 'generic' }],
+    forms: [],
+    signals: ecomSig({ scriptSrcs: ['https://js.stripe.com/v3/'] }),
+  };
+  const paRes = buildSuggestInput([priceAndPay], 'samarthanalytics.com');
+  check('ecom: price + payment WITHOUT a cart path/text → non_ecommerce (consultancy false positive)', paRes.websiteType === 'non_ecommerce' && !(paRes.ecommerceEvidence ?? []).length);
+  // But a real store: a purchase-action TEXT ("Buy now") + a price IS ecommerce (a cart-related signal is present).
+  const buyNowPrice: PageScan = { page: '/', elements: [{ page: '/', kind: 'cta', text: 'Buy now', intent: 'generic' }, { page: '/', kind: 'cta', text: 'Only $19', intent: 'generic' }], forms: [], signals: ecomSig({}) };
+  check('ecom: purchase-action text ("Buy now") + price ⇒ ecommerce', buildSuggestInput([buyNowPrice], 'shop.com').websiteType === 'ecommerce');
 
   // A single "Checkout" button (text "Checkout" + href "/checkout") must NOT self-satisfy two medium
   // categories — "checkout" is a destination word covered by the path category, not a purchase ACTION,

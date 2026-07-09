@@ -1,7 +1,7 @@
-// Shared GA4/GTM measurement methodology, used by BOTH LLM surfaces so they stay consistent with each
-// other AND with the deterministic tag-suggestion engine:
-//   - GA4_EVENT_SELECTION: what user intent maps to which GA4 event, and what to skip. Used by the
-//     AI-vision tag scan (which PICKS events) and included in the full creation methodology.
+// Shared GA4/GTM measurement methodology, used by the chat LLM surface so it stays consistent with the
+// deterministic tag-suggestion engine:
+//   - GA4_EVENT_SELECTION: what user intent maps to which GA4 event, and what to skip. Included in the
+//     full creation methodology below.
 //   - GTM_CREATION_METHODOLOGY: the above + how to actually BUILD tags/triggers/variables via the
 //     create_gtm_* tools. Used by the chat brain (which CREATES resources).
 // The deterministic scanner (buildSuggestions) already implements these rules in code; these strings

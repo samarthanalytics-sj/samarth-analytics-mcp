@@ -247,32 +247,46 @@ export class GoogleDataService {
     // types, so our OAuth2Client is a structural-but-not-nominal match.
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const accounts = await collectPages(
-      (pageToken) => gtm.accounts.list({ pageToken }),
-      (r) => r.data.account,
-      (r) => r.data.nextPageToken
-    );
-    return accounts.map((a) => ({
-      accountId: a.accountId ?? '',
-      name: a.name ?? '(unnamed)',
-      path: a.path ?? '',
-    }));
+    try {
+      const accounts = await collectPages(
+        (pageToken) => gtm.accounts.list({ pageToken }),
+        (r) => r.data.account,
+        (r) => r.data.nextPageToken
+      );
+      const views = accounts.map((a) => ({
+        accountId: a.accountId ?? '',
+        name: a.name ?? '(unnamed)',
+        path: a.path ?? '',
+      }));
+      console.log('[gtm-accounts] %d account(s): %s', views.length, views.map((a) => `${a.name}(${a.accountId})`).join(', ') || '—');
+      return views;
+    } catch (e) {
+      console.error('[gtm-accounts] FAILED: %s', e instanceof Error ? e.message : String(e));
+      throw e;
+    }
   }
 
   async listGtmContainers(accountId: string): Promise<GtmContainerView[]> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const containers = await collectPages(
-      (pageToken) => gtm.accounts.containers.list({ parent: `accounts/${accountId}`, pageToken }),
-      (r) => r.data.container,
-      (r) => r.data.nextPageToken
-    );
-    return containers.map((c) => ({
-      containerId: c.containerId ?? '',
-      name: c.name ?? '(unnamed)',
-      publicId: c.publicId ?? '',
-      path: c.path ?? '',
-    }));
+    try {
+      const containers = await collectPages(
+        (pageToken) => gtm.accounts.containers.list({ parent: `accounts/${accountId}`, pageToken }),
+        (r) => r.data.container,
+        (r) => r.data.nextPageToken
+      );
+      const views = containers.map((c) => ({
+        containerId: c.containerId ?? '',
+        name: c.name ?? '(unnamed)',
+        publicId: c.publicId ?? '',
+        path: c.path ?? '',
+      }));
+      console.log('[gtm-containers] account %s: %d container(s): %s', accountId, views.length, views.map((c) => `${c.name}${c.publicId ? ' ' + c.publicId : ''}`).join(', ') || '—');
+      return views;
+    } catch (e) {
+      console.error('[gtm-containers] account %s FAILED: %s', accountId, e instanceof Error ? e.message : String(e));
+      throw e;
+    }
   }
 
   async listGa4Accounts(): Promise<Ga4AccountView[]> {
@@ -331,16 +345,23 @@ export class GoogleDataService {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}`;
-    const workspaces = await collectPages(
-      (pageToken) => gtm.accounts.containers.workspaces.list({ parent, pageToken }),
-      (r) => r.data.workspace,
-      (r) => r.data.nextPageToken
-    );
-    return workspaces.map((w) => ({
-      workspaceId: w.workspaceId ?? '',
-      name: w.name ?? '(unnamed)',
-      path: w.path ?? '',
-    }));
+    try {
+      const workspaces = await collectPages(
+        (pageToken) => gtm.accounts.containers.workspaces.list({ parent, pageToken }),
+        (r) => r.data.workspace,
+        (r) => r.data.nextPageToken
+      );
+      const views = workspaces.map((w) => ({
+        workspaceId: w.workspaceId ?? '',
+        name: w.name ?? '(unnamed)',
+        path: w.path ?? '',
+      }));
+      console.log('[gtm-workspaces] account %s container %s: %d workspace(s): %s', accountId, containerId, views.length, views.map((w) => `${w.name}(${w.workspaceId})`).join(', ') || '—');
+      return views;
+    } catch (e) {
+      console.error('[gtm-workspaces] account %s container %s FAILED: %s', accountId, containerId, e instanceof Error ? e.message : String(e));
+      throw e;
+    }
   }
 
   /** List the folders in a workspace. (The GTM API DOES expose this — folders.list.) */

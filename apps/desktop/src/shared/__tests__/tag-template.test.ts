@@ -1,7 +1,7 @@
 // Pure tests for the "GTM Structure - GA4 Events" template mapping (the table view
 // + CSV download share this). Run: tsx src/shared/__tests__/tag-template.test.ts
 
-import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator, CONDITION_LABELS } from '../tag-template';
+import { suggestionToGroup, suggestionsToTemplateCsv, suggestionsToInstallRunbookMarkdown, installPlanNeedsAction, installPlanStatus, installPlanProgress, triggerWhens, dedupeViewsByGtmName, TEMPLATE_HEADERS, applyTagEdit, applyWhensToTrigger, conditionToOperator, CONDITION_LABELS } from '../tag-template';
 import type { SuggestedTagView } from '../ipc';
 
 let passed = 0;
@@ -123,6 +123,22 @@ const faMeta = base({ id: 'fam', platform: 'meta_pixel', tagName: 'GA4 - Event -
 check('dedupe: same name on a different platform is NOT collapsed', dedupeViewsByGtmName([fa1, faMeta]).length === 2);
 check('dedupe: idempotent (running twice is a no-op)', dedupeViewsByGtmName(dedupeViewsByGtmName([fa1, contact, fa2])).length === 2);
 
+// The REAL bug: punctuation/whitespace-only NAME variants of the SAME CTA (same event) must collapse.
+// The old key kept them because `.toLowerCase()` alone left "Free Audit" ≠ "Free  Audit" ≠ "Free-Audit".
+const faDbl = base({ id: 'fad', tagName: 'GA4 - Event - Free  Audit Click Tag', eventName: 'free_audit_click', trigger: { name: 'Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Free Audit', clickTextOperator: 'equals' } });
+const faHyphen = base({ id: 'fah', tagName: 'GA4 - Event - Free-Audit Click Tag', eventName: 'free_audit_click', trigger: { name: 'Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Free Audit', clickTextOperator: 'equals' } });
+check('dedupe: punctuation/whitespace name variants of the same CTA collapse to ONE', dedupeViewsByGtmName([fa1, faDbl, faHyphen]).length === 1);
+
+// Genuinely-different near-dupes (different event AND normalized name) STAY separate — the user's
+// "Get a Free Audit" (get_a_free_audit_click) vs "Get Free Audit" (get_free_audit_click).
+const getA = base({ id: 'ga', tagName: 'GA4 - Event - Get A Free Audit Click Tag', eventName: 'get_a_free_audit_click', trigger: { name: 'Get A Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Get a free audit', clickTextOperator: 'equals' } });
+const getF = base({ id: 'gf', tagName: 'GA4 - Event - Get Free Audit Click Tag', eventName: 'get_free_audit_click', trigger: { name: 'Get Free Audit Click Trigger', kind: 'all_clicks', clickTextValue: 'Get Free Audit', clickTextOperator: 'equals' } });
+check('dedupe: near-dupes with different events stay separate', dedupeViewsByGtmName([getA, getF]).length === 2);
+
+// The user's report: FOUR byte-identical "Contact Us Click Tag" rows on ONE page → ONE row.
+const cu = (id: string): SuggestedTagView => base({ id, page: '/services/server-side-tracking', tagName: 'GA4 - Event - Contact Us Click Tag', eventName: 'contact_us_click', trigger: { name: 'Contact Us Click Trigger', kind: 'link_click', clickTextValue: 'Contact Us', clickTextOperator: 'equals' } });
+check('dedupe: four byte-identical rows on one page collapse to ONE', dedupeViewsByGtmName([cu('a'), cu('b'), cu('c'), cu('d')]).length === 1);
+
 // ── inline editing: applyTagEdit / applyWhensToTrigger / conditionToOperator ──────────────────
 check('edit: no edit is identity', applyTagEdit(phone, undefined) === phone);
 
@@ -150,6 +166,15 @@ check('edit: a blank-value when row is dropped (no dangling filter)', triggerWhe
 // The "(ignore case)" suffix survives an untouched condition; a fresh base operator drops it.
 const e5 = applyTagEdit(faqTag, { whens: [{ variable: '{{Click Text}}', condition: 'contains (ignore case)', value: 'x' }] });
 check('edit: condition "(ignore case)" suffix maps to ignoreCase=true', e5.trigger.clickTextIgnoreCase === true && e5.trigger.clickTextOperator === 'contains');
+
+// Removing a condition (the row's "×" button) → apply the REDUCED whens: the dropped field is cleared,
+// the kept one stays. Mirrors a user undoing an extra condition they'd added to a two-condition tag.
+const twoCond = base({
+  id: 'tc', tagName: 'GA4 - Event - Contact Form Tag', eventName: 'contact_form',
+  trigger: { name: 'Contact Form Trigger', kind: 'custom_event', eventName: 'form_submit', pagePathValue: '/contact', pagePathOperator: 'contains', clickUrlValue: 'x', clickUrlOperator: 'equals' },
+});
+const removed = applyTagEdit(twoCond, { whens: triggerWhens(twoCond).filter((w) => w.variable !== '{{Click URL}}') });
+check('edit: removing a condition clears its field + keeps the other', removed.trigger.clickUrlValue === undefined && removed.trigger.pagePathValue === '/contact' && triggerWhens(removed).length === 1);
 
 // platform + triggerKind overrides.
 const e6 = applyTagEdit(phone, { platform: 'meta_pixel', triggerKind: 'all_clicks' });
@@ -270,6 +295,60 @@ check('needsAction: mixed native + html-attribute → true', installPlanNeedsAct
 check('needsAction: agrees with runbook native-only (nativeClick omitted from site-side work)',
   installPlanNeedsAction(nativeClick.install) === false &&
     suggestionsToInstallRunbookMarkdown([nativeClick], {}).includes("No site-side code needed"));
+
+// ── installPlanStatus — the one-glance status driving the review table's colour-coded chip ──────────
+check('status: native-only → ready', installPlanStatus(nativeClick.install).kind === 'ready');
+check('status: no plan → ready', installPlanStatus(noPlan.install).kind === 'ready');
+check('status: undefined → ready', installPlanStatus(undefined).kind === 'ready');
+const attrStatus = installPlanStatus(attrForm.install);
+check('status: native + optional html-attribute → ready-tip', attrStatus.kind === 'ready-tip');
+check('status: ready-tip counts the optional tips', attrStatus.optionalCount === 1);
+const listenerStatus = installPlanStatus(formA.install);
+check('status: listener-tag plan → listener', listenerStatus.kind === 'listener');
+check('status: listener count is 1', listenerStatus.listenerCount === 1);
+check('status: site-code plan → code', installPlanStatus(purchase.install).kind === 'code');
+// Precedence for a mixed plan: code beats listener beats ready-tip. A plan needing BOTH a listener tag
+// AND site code is a "code" status (the most-demanding ask wins the chip).
+const mixed = installPlanStatus({
+  requires: [
+    { kind: 'html-attribute', selector: 'form', attribute: 'id', value: '<id>', detail: 'x' },
+    { kind: 'listener-tag', event: 'form_submit', tag: { name: 'L', html: '<script></script>', fires: 'all_pages' }, detail: 'y' },
+    { kind: 'site-code', snippet: '<script></script>', where: 'z', detail: 'w' },
+  ],
+  summary: 's',
+});
+check('status: mixed listener+code+optional → code (most-demanding wins)', mixed.kind === 'code');
+check('status: mixed still counts every requirement kind', mixed.listenerCount === 1 && mixed.siteCodeCount === 1 && mixed.optionalCount === 1);
+// The chip is shown exactly when installPlanNeedsAction is true — i.e. any status except 'ready'.
+check('status: needsAction ⇔ status !== ready (ready)', installPlanNeedsAction(nativeClick.install) === (installPlanStatus(nativeClick.install).kind !== 'ready'));
+check('status: needsAction ⇔ status !== ready (listener)', installPlanNeedsAction(formA.install) === (installPlanStatus(formA.install).kind !== 'ready'));
+
+// ── installPlanProgress — the chip's "done" progress against a per-requirement check-off set ────────
+// A site-code plan (purchase, requires[0] is the site-code): not done → still required outstanding;
+// once index 0 is checked off → allRequiredDone + fullyDone.
+const codeUndone = installPlanProgress(purchase.install, {});
+check('progress: site-code not checked → 1 required, 0 done, not allRequiredDone', codeUndone.requiredTotal === 1 && codeUndone.requiredDone === 0 && codeUndone.allRequiredDone === false);
+const codeDone = installPlanProgress(purchase.install, { 0: true });
+check('progress: site-code checked → allRequiredDone + fullyDone', codeDone.allRequiredDone === true && codeDone.fullyDone === true);
+// A listener plan (formA, requires[0] is the listener): marking index 0 done → fully done.
+check('progress: listener not created → not done', installPlanProgress(formA.install, {}).allRequiredDone === false);
+check('progress: listener marked done → fully done', installPlanProgress(formA.install, { 0: true }).fullyDone === true);
+// attrForm = native (index 0) + OPTIONAL html-attribute (index 1). No required steps, so allRequiredDone
+// is vacuously true from the start; fullyDone only once the optional tip is checked off.
+const optUndone = installPlanProgress(attrForm.install, {});
+check('progress: optional-only → allRequiredDone true but not fullyDone until the tip is applied', optUndone.requiredTotal === 0 && optUndone.allRequiredDone === true && optUndone.fullyDone === false && optUndone.optionalTotal === 1);
+check('progress: optional checked off → fullyDone', installPlanProgress(attrForm.install, { 1: true }).fullyDone === true);
+// A native-only plan has no actionable steps → everything is vacuously done.
+check('progress: native-only → fullyDone (nothing to do)', installPlanProgress(nativeClick.install, {}).fullyDone === true && installPlanProgress(nativeClick.install, {}).requiredTotal === 0);
+// Mixed listener + site-code + optional: both required must be checked before allRequiredDone.
+const mixedPlan = { requires: [
+  { kind: 'listener-tag' as const, event: 'form_submit', tag: { name: 'L', html: '<script></script>', fires: 'all_pages' as const }, detail: 'y' },
+  { kind: 'site-code' as const, snippet: '<script></script>', where: 'z', detail: 'w' },
+  { kind: 'html-attribute' as const, selector: 'form', attribute: 'id', value: '<id>', detail: 'x' },
+], summary: 's' };
+check('progress: mixed, only listener done → not allRequiredDone', installPlanProgress(mixedPlan, { 0: true }).allRequiredDone === false);
+check('progress: mixed, both required done → allRequiredDone but not fullyDone (optional left)', (() => { const p = installPlanProgress(mixedPlan, { 0: true, 1: true }); return p.allRequiredDone === true && p.fullyDone === false; })());
+check('progress: mixed, all three done → fullyDone', installPlanProgress(mixedPlan, { 0: true, 1: true, 2: true }).fullyDone === true);
 
 console.log(`\ntag-template: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

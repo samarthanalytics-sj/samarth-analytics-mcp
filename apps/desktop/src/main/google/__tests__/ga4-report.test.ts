@@ -979,5 +979,19 @@ test('CONSISTENCY: a VERIFIED ecommerce property never claims "no purchase/add_t
   assert.ok(noEcom.notVerified.items.some((i) => /no purchase\/add_to_cart/.test(i.item)), 'non-ecommerce property keeps the line');
 });
 
+test('the reliability receipt attributes every missing point to a named gate + fix (never "our fault")', () => {
+  // Critical spike fixture: conversions/revenue fail the traffic-vs-conversion gate.
+  const b = baseline({ sessions: 32165, priorSessions: 8819, keyEvents: 210, priorKeyEvents: 200, revenue: 1000, priorRevenue: 950 });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b, 'Organic Social') }));
+  assert.ok(/\*\*Why not higher\*\*/.test(md), 'receipt section present');
+  assert.ok(/verification state, not the audit/.test(md), 'framing sentence present');
+  assert.ok(/\*\*Conversion counts\*\* \(-\d+(\.\d+)? pts of its 25\)/.test(md), 'conversions loss quantified against its weight');
+  assert.ok(/traffic-vs-conversion tracking FAILED/.test(md), 'the specific gate is named');
+  assert.ok(/Verify in GA4 DebugView\/Realtime/.test(md), 'the fix that recovers the points is named');
+  const exec = buildGa4ExecSummary(input({ baseline: b, growth: growthOf(b, 'Organic Social') }));
+  assert.ok(exec.reliabilityWhy.length >= 3, 'structured receipt present for the panel/PDF');
+  assert.ok(exec.reliabilityWhy[0].lostPts >= exec.reliabilityWhy[exec.reliabilityWhy.length - 1].lostPts, 'sorted biggest loss first');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

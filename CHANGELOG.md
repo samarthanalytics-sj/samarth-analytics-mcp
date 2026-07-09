@@ -1,3 +1,337 @@
+## [1.273.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.272.2...v1.273.0) (2026-07-09)
+
+### Features
+
+* **desktop:** the monitor runs the audit's anti-lie detectors - they can no longer disagree ([97c7b1a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/97c7b1a5cef13f90fa966fe2d7fed661816b7b6b))
+
+## [1.272.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.272.1...v1.272.2) (2026-07-09)
+
+### Bug Fixes
+
+* **verify:** drop the unsound own-property tid filter (adversarial review caught a false-negative) ([b9ac12a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b9ac12a61da744e8444d2bf44f00438296497219))
+* **verify:** stop crediting the site's live GA4 to draft tags ("fired the wrong event" for every tag) ([a39d1de](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a39d1de47de935bb6a935ea93f8d0173ecee1b1d))
+
+## [1.272.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.272.0...v1.272.1) (2026-07-09)
+
+### Bug Fixes
+
+* **desktop:** plainer GA4 monitor KPIs and a calmer type scale ([a3a80db](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a3a80db835f21302049409206dbd3fde4ec8f585))
+
+## [1.272.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.271.0...v1.272.0) (2026-07-08)
+
+### Features
+
+* **suggest:** scan crawler runs pages in parallel (driver pool), not one at a time ([1390dfb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1390dfb5f682e4c2cc0356c6813965220d44d07c))
+
+## [1.271.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.270.0...v1.271.0) (2026-07-08)
+
+### Features
+
+* **verify:** scan pages in parallel via a bounded worker pool (faster, exactly-once) ([5a166ad](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5a166ad5afd98cac00ba7bde3e7c794f95f27c94))
+
+## [1.270.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.4...v1.270.0) (2026-07-08)
+
+### Features
+
+* **suggest:** track "Share this article" widgets as one GA4 share tag (twitter/linkedin/facebook/copy_link) ([b01b36c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b01b36cc3866f3ed54610fb6bd0fc90a3e95418e))
+
+### Bug Fixes
+
+* **suggest:** native form_submit tags get a proof shot (route through the form locator) ([66f75cb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/66f75cb54b05d99e5488f2da2d8bb34b6d0832c9)), closes [#451](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/451) [#442](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/442) [#450](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/450)
+
+## [1.269.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.3...v1.269.4) (2026-07-08)
+
+### Bug Fixes
+
+* **suggest:** form tags get a proof shot; don't waste the shot budget on deduped rows ([3471870](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3471870e9af6172d37c917f97dd8f92cc0fd6947))
+
+## [1.269.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.2...v1.269.3) (2026-07-08)
+
+### Bug Fixes
+
+* **suggest:** proof shots ring the right element — FAQ selector, endsWith, email re-scroll, spotlight ([c93687e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c93687e3b8690fb680d2b71ef50a2bab19bdc4fa))
+
+## [1.269.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.1...v1.269.2) (2026-07-08)
+
+### Bug Fixes
+
+* **suggest:** stop hiding sticky-* bars in proof shots; re-hide late CMPs; verify parity ([9d7c214](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9d7c214960acbb5cf4a1771316c9675f2fd1afda))
+
+## [1.269.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.269.0...v1.269.1) (2026-07-08)
+
+### Bug Fixes
+
+* **suggest:** don't flag price+payment sites as ecommerce; reveal footer email in proof shot ([64b2290](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/64b2290643abb57bb90daffbfe97510aab229c6d))
+
+## [1.269.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.268.2...v1.269.0) (2026-07-08)
+
+### Features
+
+* **desktop:** live progress card for proof-screenshot capture (n of N + current tag + bar) ([8e2c813](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8e2c813540b598ac1d53c5ad49fb661aa8203c02))
+
+## [1.268.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.268.1...v1.268.2) (2026-07-08)
+
+### Bug Fixes
+
+* **suggest:** render the de-duplicated list only when the scan finishes; show live progress ([8755af5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8755af5b00dc6eed4e7e812dca124dc97dc955e1))
+
+## [1.268.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.268.0...v1.268.1) (2026-07-08)
+
+### Bug Fixes
+
+* **suggest:** collapse same-destination CTAs into one tag (kill perceived duplicates) ([4c8cd66](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4c8cd667534f5a9195b43e62f58025987c280717))
+
+## [1.268.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.267.1...v1.268.0) (2026-07-08)
+
+### Features
+
+* **suggest:** per-condition remove (×) button to undo an added trigger condition ([0648c7c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0648c7c43bff9a82f5296cbb9245cda68b4bd047))
+
+## [1.267.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.267.0...v1.267.1) (2026-07-08)
+
+### Bug Fixes
+
+* **desktop:** tag-suggestions table — reachable horizontal scroll + sticky header ([84ea637](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/84ea63789b96f707bb1861cd4b5560f9132df87c))
+
+## [1.267.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.266.0...v1.267.0) (2026-07-08)
+
+### Features
+
+* **suggest:** 2nd trigger condition + collapse punctuation-dup rows + poll for late elements ([cf3c229](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cf3c2294dd8f5c1cbfd42e0665c72ee49357e7b1))
+
+## [1.266.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.265.0...v1.266.0) (2026-07-08)
+
+### Features
+
+* **desktop:** slash commands in the chat — /audit /report /create-tag /debug /explain ([ed728e3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ed728e3f44c95a8bddb478388c907928d3f05c9d)), closes [#438](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/438)
+
+## [1.265.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.264.0...v1.265.0) (2026-07-08)
+
+### Features
+
+* **desktop:** readable accent buttons + expandable GA4 monitor checks ([5507e41](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5507e41f7b2234b72635adddb70e5157ef63f2c0))
+
+## [1.264.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.263.0...v1.264.0) (2026-07-08)
+
+### Features
+
+* **desktop:** neutral surfaces for the GA4 monitor, color for indicators only ([e50fd07](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e50fd0714e771f1aab20226b3537054f0e52ce9f))
+
+## [1.263.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.262.0...v1.263.0) (2026-07-08)
+
+### Features
+
+* **suggest:** proof screenshot + page path for each creatable tag ([6769f60](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6769f60d45fbeecc67080c6dc44c07a3439449c4))
+
+## [1.262.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.261.1...v1.262.0) (2026-07-08)
+
+### Features
+
+* **mcp:** slash-command prompts — /audit /report /create-tag /debug /explain ([f2a14c6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f2a14c679ca941fb19c1808169152962d153176c))
+
+## [1.261.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.261.0...v1.261.1) (2026-07-08)
+
+### Bug Fixes
+
+* **verify:** honest handling of un-implemented click targets + clearer form-tag "Untested" ([478b653](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/478b653517b3dce01b22f978c4bd49b05a289609))
+
+## [1.261.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.4...v1.261.0) (2026-07-08)
+
+### Features
+
+* **desktop:** premium polish — animations, page transitions, skeletons, empty states, shortcuts ([4bcf8ac](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4bcf8ac746cab78681b16a2618e30854068a1ed5))
+
+### Bug Fixes
+
+* **verify:** ring the real element for proof shots + add lightbox close button ([7927a2b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7927a2b4967b5d73a6f64a4cc66fac0d226a02a3))
+
+## [1.260.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.3...v1.260.4) (2026-07-08)
+
+### Bug Fixes
+
+* **gtm:** resolve_conflict must send an Entity envelope; correct GA4 role example ([ea8853b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ea8853bc25fe738daf39b24e2d2eb9abcb824d79))
+
+## [1.260.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.2...v1.260.3) (2026-07-08)
+
+### Bug Fixes
+
+* **auth:** require numeric JWT exp + bound the per-member token cache ([8b1c3c0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8b1c3c0803df35313a1573f89788b4e0fafc273a))
+
+## [1.260.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.1...v1.260.2) (2026-07-08)
+
+### Bug Fixes
+
+* **audit:** paginate every list + only count G- googtags as GA4 config ([229aab1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/229aab136458be41551c0b2104a394dc63dcd7e6))
+* **ga4:** surface truncation on run_report / run_realtime_report ([4e5fe13](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4e5fe13bcf60fe926114f9df6ff7d7e88f2ed0d0))
+
+## [1.260.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.260.0...v1.260.1) (2026-07-08)
+
+### Bug Fixes
+
+* **gtm:** timer trigger interval/limit are top-level fields, not parameter[] ([d0a8609](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d0a8609acf989b2240d9c782c6f26fd7e8f5ecb3))
+
+## [1.260.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.259.0...v1.260.0) (2026-07-07)
+
+### Features
+
+* **verify:** present tag-verify + form-discovery as ONE verify run ([98ebce7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/98ebce74daf5a8d993626f765a2c0446f1cdfbe6)), closes [#425](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/425)
+
+## [1.259.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.258.0...v1.259.0) (2026-07-07)
+
+### Features
+
+* **verify:** screenshot the real-submit form section too (visual proof) ([2b6b163](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2b6b1632d2031c4efe1e24e9a8dbe51e79cd8cb3)), closes [#426](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/426)
+
+## [1.258.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.257.1...v1.258.0) (2026-07-07)
+
+### Features
+
+* **verify:** capture a screenshot of each tag's interaction (visual proof) ([6d55410](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6d5541021962cf3ab0d1eb585fa283816cd1b2c7))
+
+## [1.257.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.257.0...v1.257.1) (2026-07-07)
+
+### Bug Fixes
+
+* **test:** move makePageCache to an electron-free module so CI doesn't load electron ([a79aabf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a79aabfcfc2d00fa83de0ec979134ded107b61fa))
+
+### Performance Improvements
+
+* **verify:** render each page once across the two verify crawls (shared page cache) ([ec31214](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ec31214061f84325b045a1f518f0d22e1150415c))
+
+## [1.257.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.256.2...v1.257.0) (2026-07-07)
+
+### Features
+
+* **verify:** sitemap-driven coverage — scan every site page to locate all CTAs ([2bb90ce](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2bb90cecf69a1e5d869d41ee37cee0eba66387a8)), closes [#414](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/414)
+
+## [1.256.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.256.1...v1.256.2) (2026-07-07)
+
+### Bug Fixes
+
+* **gtm-bar:** load containers for a pre-selected account (empty dropdown bug) ([683f9af](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/683f9af03a63ff017e021b90bb09fee30bbc08de))
+
+## [1.256.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.256.0...v1.256.1) (2026-07-07)
+
+### Bug Fixes
+
+* **gtm-bar:** log the account→container→workspace fetch + surface an empty result ([6ef85fa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6ef85fad91a3995635a6b44883002f8215bf288d))
+
+## [1.256.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.255.0...v1.256.0) (2026-07-07)
+
+### Features
+
+* **desktop:** tint GA4 monitor cards by status and use the real Slack logo ([2bc0d89](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2bc0d898a448239475957ee534603425fd91fc0c))
+
+### Bug Fixes
+
+* **verify:** don't auto-create a container version to verify tags ([d57342a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d57342a15a53d5a2e3aca94e095210044169090b))
+
+## [1.255.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.254.1...v1.255.0) (2026-07-07)
+
+### Features
+
+* **verify:** crawl content-hub pages so content-page click tags get tested ([b0e56a7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b0e56a7e9c22e70fc6ba05dfb0c98120d89b8eee))
+* **verify:** dataLayer inspector — capture the site's real pushes + their params ([d745b16](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d745b1621204dacf239ec568ee7d7c064ef8f075))
+
+### Bug Fixes
+
+* **verify:** fill React/controlled inputs so the real submit actually fires ([8ea38d7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8ea38d781b5ab478e6bec6e4cedd3a43c9c87cac))
+
+## [1.254.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.254.0...v1.254.1) (2026-07-07)
+
+### Bug Fixes
+
+* **desktop:** move GA4 monitor add-property to the top and fix the next-step icon ([97a380d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/97a380da5b47fd97c5f45aa5bfddb4964ba0c5e0))
+
+## [1.254.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.253.1...v1.254.0) (2026-07-07)
+
+### Features
+
+* **desktop:** redesign GA4 Monitoring tab into an alert-first dashboard ([3a22ccd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3a22ccded1de7c01eb000cdd46d0de385e699fc8))
+
+## [1.253.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.253.0...v1.253.1) (2026-07-07)
+
+### Bug Fixes
+
+* **verify:** find the site's form pages (visit form-likely pages, not just the first 15) ([74fc5f3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/74fc5f30d52bf07af900c5c94cbf061227de66d9))
+* **verify:** never fill honeypot fields (they silently block the real submit) ([e922b59](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e922b59b65a17590f37d692b1056f87c3f155b57))
+
+## [1.253.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.252.2...v1.253.0) (2026-07-07)
+
+### Features
+
+* **desktop:** tag-verification results — scorecard + table, semantic colours, button hover ([0f36e14](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0f36e14c0634cfbbe02661f7b81d9cdeb9e00086))
+
+## [1.252.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.252.1...v1.252.2) (2026-07-07)
+
+### Bug Fixes
+
+* **verify:** stop the form check over-matching tags + mark server-side pixels honestly ([133e0fb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/133e0fb27cb7cea667f8315ed6bd2218930cb5af)), closes [#411](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/411)
+
+## [1.252.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.252.0...v1.252.1) (2026-07-07)
+
+### Bug Fixes
+
+* **verify:** don't call a server-side (CAPI) pixel "not firing" ([b9a3193](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b9a3193f3fd227a8ea2b5e5aa8d8261031f2eee6))
+
+## [1.252.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.251.0...v1.252.0) (2026-07-07)
+
+### Features
+
+* **desktop:** one verify action finds forms too — drop the separate "find forms" button ([9d5f677](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9d5f6773118b86e9962ea56c25ba6365ed811612))
+
+## [1.251.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.250.0...v1.251.0) (2026-07-07)
+
+### Features
+
+* **verify:** show the captured network log (Meta pixel · GA4 · sGTM relay) in results ([d002520](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d0025203e1d3e3b9b38803aa1f81a0c7817b4669))
+
+### Bug Fixes
+
+* **verify:** recognise TikTok's web pixel path (/i18n/pixel), not just /api ([a520b3a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a520b3a22395f4589278126a6abe0a5eab85b5e6))
+
+## [1.250.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.249.0...v1.250.0) (2026-07-07)
+
+### Features
+
+* **desktop:** shell refresh — accounts in Settings, clearer container picker, Inter font ([9fb71a6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9fb71a69c94f0b56167a3f4c0b01c472d109e16c))
+
+## [1.249.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.248.0...v1.249.0) (2026-07-07)
+
+### Features
+
+* **desktop:** check off site-code / optional install steps → chip turns green ([6ee05b2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6ee05b266ab5a05731823125344a2d832035afa6))
+
+## [1.248.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.247.0...v1.248.0) (2026-07-07)
+
+### Features
+
+* **verify:** pair pixel form tags (Meta/LinkedIn/Pinterest) by beacon; tighter panel merge ([d1da6dc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d1da6dc265de03e8307d9123325758f25f99713b))
+
+## [1.247.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.246.0...v1.247.0) (2026-07-07)
+
+### Features
+
+* **desktop:** simpler "how to install" — status chip + decluttered panel ([0dad061](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0dad061d06e3aaeb7ceb682674b7a3f57949d516))
+
+## [1.246.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.245.0...v1.246.0) (2026-07-07)
+
+### Features
+
+* **desktop:** remove the experimental AI (single-page vision) scan option ([2746387](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/274638723d70f279f20ad4fff4beb206a09d9d55))
+
+## [1.245.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.244.3...v1.245.0) (2026-07-07)
+
+### Features
+
+* **desktop:** reliability receipt - every missing point attributed to a named check with its fix ([b16300e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b16300ea3c8860583b0887838c46edc630eaa8c3))
+
+## [1.244.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.244.2...v1.244.3) (2026-07-07)
+
+### Bug Fixes
+
+* **desktop:** align TikTok/Ads/Pinterest server builders with current templates ([22fdf47](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/22fdf473969308602156da9bfb66f653cd36ea22))
+
 ## [1.244.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.244.1...v1.244.2) (2026-07-07)
 
 ### Bug Fixes

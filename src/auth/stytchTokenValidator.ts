@@ -169,7 +169,13 @@ export function createStytchTokenValidator(cfg: ValidatorConfig): StytchTokenVal
 
       const nowSec = now() / 1000;
       const skewSec = skew / 1000;
-      if (typeof payload.exp === 'number' && payload.exp + skewSec < nowSec) {
+      // Require a numeric exp: a validly-signed token that OMITS exp (or encodes it as a string) must be
+      // REJECTED, not accepted with an unbounded lifetime — otherwise it would authenticate forever,
+      // defeating the short-lived-token model. (The signature is already pinned to RS256 above.)
+      if (typeof payload.exp !== 'number') {
+        throw new TokenValidationError('token missing a numeric exp claim');
+      }
+      if (payload.exp + skewSec < nowSec) {
         throw new TokenValidationError('token expired');
       }
       if (typeof payload.nbf === 'number' && payload.nbf - skewSec > nowSec) {
