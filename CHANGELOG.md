@@ -1,3 +1,9 @@
+## [1.272.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.272.0...v1.272.1) (2026-07-09)
+
+### Bug Fixes
+
+* **desktop:** plainer GA4 monitor KPIs and a calmer type scale ([a3a80db](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a3a80db835f21302049409206dbd3fde4ec8f585))
+
 ## [1.272.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.271.0...v1.272.0) (2026-07-08)
 
 ### Features
