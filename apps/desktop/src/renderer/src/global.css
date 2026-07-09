@@ -61,6 +61,13 @@ button {
 @keyframes drawLine { from { stroke-dashoffset: var(--dash, 1200); } to { stroke-dashoffset: 0; } }
 @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes sheetIn { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes vfIndeterminate { 0% { left: -35%; width: 35%; } 60% { width: 55%; } 100% { left: 100%; width: 35%; } }
+
+/* Indeterminate progress bar (no % known) — a moving sliver over a track. Used by the running
+   verification so the user sees it's working. Respects reduced-motion (falls back to a static fill). */
+.vf-progress { position: relative; height: 4px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.vf-progress::after { content: ''; position: absolute; top: 0; bottom: 0; left: -35%; width: 35%; border-radius: 999px; background: #2563eb; animation: vfIndeterminate 1.15s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .vf-progress::after { left: 0; width: 100%; opacity: 0.5; animation: none; } }
 
 /* Page/view transition — the switched-in view fades + lifts into place. */
 .view-enter { animation: viewEnter 0.24s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
