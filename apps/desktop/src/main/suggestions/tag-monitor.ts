@@ -17,6 +17,9 @@ export type MonitorStatus = 'success' | 'failure' | 'exception' | 'timeout' | 'u
 export interface MonitorTagResult {
   /** The container tag id (matches AuditTag.tagId from the snapshot → resolvable to a name). */
   id: string;
+  /** The tag's display name (Simo's monitor sends it when "Include tag name" is on); we also resolve
+   *  id → name from the inventory, so this is a convenience/cross-check. */
+  name?: string;
   status: MonitorStatus;
   /** Tag execution time in ms, when the monitor reports it. */
   executionTime?: number;
@@ -29,64 +32,53 @@ export interface MonitorEvent {
 }
 
 // Any request to this host is a monitor report — the verify driver captures + aborts it, so it never
-// leaves the machine. A .invalid TLD guarantees it can never resolve to a real server.
+// leaves the machine. A .invalid TLD guarantees it can never resolve to a real server, and the GTM
+// Monitor tag's endpoint field accepts it (its only validation is /^https:\/\/.+/).
 export const MONITOR_SENTINEL_HOST = 'samarth-verify-monitor.invalid';
 const SENTINEL_MARK = 'samarth-verify-monitor';
-
-/** The sandboxed-JS body for the GTM Custom Template that reports per-tag firing. Runs in GTM's template
- *  sandbox (require()'d APIs only — no page globals). It registers addEventCallback and, after each
- *  event's tags run, sends the fired tags (id + status + executionTime) to the sentinel. PURE. */
-export function buildMonitorTemplateJs(sentinel = `https://${MONITOR_SENTINEL_HOST}/m`): string {
-  return [
-    "const addEventCallback = require('addEventCallback');",
-    "const sendPixel = require('sendPixel');",
-    "const encodeUriComponent = require('encodeUriComponent');",
-    "const JSON = require('JSON');",
-    'addEventCallback((ctid, eventData) => {',
-    '  const src = eventData.tags || [];',
-    '  const tags = [];',
-    '  for (let i = 0; i < src.length; i++) {',
-    '    tags.push({ id: src[i].id, status: src[i].status, executionTime: src[i].executionTime });',
-    '  }',
-    "  const payload = { event: eventData.event, ueid: eventData['gtm.uniqueEventId'], tags: tags };",
-    `  sendPixel('${sentinel}?e=' + encodeUriComponent(JSON.stringify(payload)), () => {}, () => {});`,
-    '});',
-    'data.gtmOnSuccess();',
-  ].join('\n');
-}
+/** The HTTPS endpoint we configure the imported GTM Monitor tag to GET-pixel each event to. */
+export const MONITOR_ENDPOINT = `https://${MONITOR_SENTINEL_HOST}/collect`;
+/** Simo Ahava's published "GTM Monitor" community template — imported via import_from_gallery so its
+ *  sandbox permissions come vetted (we never hand-roll a template). It fires addEventCallback and GET-
+ *  pixels each event's fired tags to `endPoint`. Source: github.com/gtm-templates-simo-ahava. */
+export const MONITOR_GALLERY = { owner: 'gtm-templates-simo-ahava', repository: 'google-tag-manager-monitor' } as const;
 
 /** True when a captured request is one of our monitor reports (host match, tolerant of scheme/path). */
 export function isMonitorHit(url: string): boolean {
   return url.includes(SENTINEL_MARK);
 }
 
-/** Parse a monitor sentinel pixel URL back into a MonitorEvent — null when it isn't ours or is malformed
- *  (a monitor report must never break verification). */
+/** Parse a GTM Monitor pixel URL back into a MonitorEvent. The imported template GET-pixels
+ *  `<endPoint>?eventName=<e>&eventTimestamp=<ts>&tag1id=<id>&tag1nm=<name>&tag1st=<status>&tag1et=<ms>&
+ *  tag2id=…` — one indexed group (1-based) per FIRED tag. Returns null when it isn't ours; never throws
+ *  (a monitor report must not be able to break verification). */
 export function parseMonitorHit(url: string): MonitorEvent | null {
   if (!isMonitorHit(url)) return null;
   try {
-    const raw = new URL(url).searchParams.get('e');
-    if (!raw) return null;
-    const obj = JSON.parse(raw) as { event?: unknown; ueid?: unknown; tags?: unknown };
-    const rawTags = Array.isArray(obj.tags) ? obj.tags : [];
-    const tags: MonitorTagResult[] = rawTags
-      .map((t): MonitorTagResult => {
-        const o = (t ?? {}) as { id?: unknown; status?: unknown; executionTime?: unknown };
-        return {
-          id: o.id === undefined || o.id === null ? '' : String(o.id),
-          status: normStatus(typeof o.status === 'string' ? o.status : undefined),
-          executionTime: typeof o.executionTime === 'number' ? o.executionTime : undefined,
-        };
-      })
-      .filter((t) => t.id !== '');
-    return {
-      event: typeof obj.event === 'string' ? obj.event : '',
-      uniqueEventId: typeof obj.ueid === 'number' ? obj.ueid : undefined,
-      tags,
-    };
+    const q = new URL(url).searchParams;
+    const event = q.get('eventName') ?? '';
+    const tags: MonitorTagResult[] = [];
+    for (let n = 1; ; n += 1) {
+      const id = q.get(`tag${n}id`);
+      if (id === null) break; // groups are contiguous from 1; the first gap ends the list
+      if (id === '') continue;
+      tags.push({
+        id: String(id),
+        name: q.get(`tag${n}nm`) || undefined,
+        status: normStatus(q.get(`tag${n}st`) ?? undefined),
+        executionTime: numOrUndef(q.get(`tag${n}et`)),
+      });
+    }
+    if (event === '' && tags.length === 0) return null;
+    return { event, tags };
   } catch {
     return null;
   }
+}
+function numOrUndef(s: string | null): number | undefined {
+  if (s === null || s.trim() === '') return undefined;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function normStatus(s: string | undefined): MonitorStatus {

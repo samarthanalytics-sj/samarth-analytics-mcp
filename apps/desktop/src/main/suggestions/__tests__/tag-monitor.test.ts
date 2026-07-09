@@ -1,8 +1,8 @@
-// Pure tests for the GTM Monitor (addEventCallback) data layer — template source, sentinel parse, and
-// the authoritative per-tag verdict mapping. No browser, no GTM API.
+// Pure tests for the GTM Monitor data layer — sentinel parse (Simo Ahava's GTM Monitor GET-pixel
+// format) + the authoritative per-tag verdict mapping. No browser, no GTM API.
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/tag-monitor.test.ts
 
-import { buildMonitorTemplateJs, isMonitorHit, parseMonitorHit, monitorVerdicts, MONITOR_SENTINEL_HOST, type MonitorEvent } from '../tag-monitor';
+import { isMonitorHit, parseMonitorHit, monitorVerdicts, MONITOR_SENTINEL_HOST, MONITOR_ENDPOINT, MONITOR_GALLERY, type MonitorEvent } from '../tag-monitor';
 
 let passed = 0;
 let failed = 0;
@@ -12,17 +12,27 @@ function check(name: string, ok: boolean, detail?: string): void {
   else { failed += 1; failures.push(`✗ ${name}${detail ? ' — ' + detail : ''}`); }
 }
 
-// A monitor report URL as our template would emit it (sendPixel with the JSON payload).
-const hit = (event: string, tags: Array<{ id: string; status?: string; executionTime?: number }>, ueid = 1): string =>
-  `https://${MONITOR_SENTINEL_HOST}/m?e=${encodeURIComponent(JSON.stringify({ event, ueid, tags }))}`;
+// A monitor report URL exactly as Simo's imported GTM Monitor template GET-pixels it:
+// <endPoint>?eventName=<e>&eventTimestamp=<ts>&tag1id=..&tag1nm=..&tag1st=..&tag1et=..&tag2id=..
+const hit = (event: string, tags: Array<{ id: string; nm?: string; st?: string; et?: number }>): string => {
+  const p = new URLSearchParams();
+  p.set('eventName', event);
+  p.set('eventTimestamp', '1700000000000');
+  tags.forEach((t, i) => {
+    const n = i + 1;
+    p.set(`tag${n}id`, t.id);
+    if (t.nm !== undefined) p.set(`tag${n}nm`, t.nm);
+    if (t.st !== undefined) p.set(`tag${n}st`, t.st);
+    if (t.et !== undefined) p.set(`tag${n}et`, String(t.et));
+  });
+  return `${MONITOR_ENDPOINT}?${p.toString()}`;
+};
 
-// ── template source ──────────────────────────────────────────────────────────────
+// ── config constants ──────────────────────────────────────────────────────────────
 {
-  const js = buildMonitorTemplateJs();
-  check('template: registers addEventCallback', js.includes("require('addEventCallback')") && js.includes('addEventCallback('));
-  check('template: reports per-tag id + status + executionTime', js.includes('src[i].id') && js.includes('src[i].status') && js.includes('src[i].executionTime'));
-  check('template: sends to the sentinel host', js.includes(MONITOR_SENTINEL_HOST));
-  check('template: signals gtmOnSuccess (template contract)', js.includes('data.gtmOnSuccess()'));
+  check('config: endpoint is on the .invalid sentinel host (never resolves; route-aborted)', MONITOR_ENDPOINT.startsWith('https://') && MONITOR_ENDPOINT.includes(MONITOR_SENTINEL_HOST));
+  check('config: endpoint passes the GTM Monitor tag validation (^https://.+)', /^https:\/\/.+/.test(MONITOR_ENDPOINT));
+  check('config: gallery owner/repo is Simo Ahava\'s GTM Monitor', MONITOR_GALLERY.owner === 'gtm-templates-simo-ahava' && MONITOR_GALLERY.repository === 'google-tag-manager-monitor');
 }
 
 // ── isMonitorHit / parseMonitorHit ────────────────────────────────────────────────
@@ -30,22 +40,24 @@ const hit = (event: string, tags: Array<{ id: string; status?: string; execution
   check('isMonitorHit: our sentinel matches', isMonitorHit(hit('gtm.load', [])));
   check('isMonitorHit: a GA4 collect hit does not', !isMonitorHit('https://www.google-analytics.com/g/collect?en=page_view'));
 
-  const ev = parseMonitorHit(hit('gtm.load', [{ id: '12', status: 'success', executionTime: 3 }, { id: '7', status: 'failure' }], 5))!;
-  check('parse: event + ueid', ev.event === 'gtm.load' && ev.uniqueEventId === 5);
-  check('parse: tags with id/status/time', ev.tags.length === 2 && ev.tags[0].id === '12' && ev.tags[0].status === 'success' && ev.tags[0].executionTime === 3);
-  check('parse: unknown status normalises', parseMonitorHit(hit('x', [{ id: '1', status: 'weird' }]))!.tags[0].status === 'unknown');
-  check('parse: numeric ids are stringified', parseMonitorHit(`https://${MONITOR_SENTINEL_HOST}/m?e=${encodeURIComponent(JSON.stringify({ event: 'e', tags: [{ id: 9, status: 'success' }] }))}`)!.tags[0].id === '9');
-  check('parse: non-monitor URL → null', parseMonitorHit('https://example.com/x') === null);
-  check('parse: malformed payload → null, no throw', parseMonitorHit(`https://${MONITOR_SENTINEL_HOST}/m?e=not-json`) === null);
-  check('parse: tags without ids are dropped', parseMonitorHit(hit('e', [{ id: '', status: 'success' }, { id: '3', status: 'success' }]))!.tags.length === 1);
+  const ev = parseMonitorHit(hit('gtm.load', [{ id: '12', nm: 'GA4 Config', st: 'success', et: 3 }, { id: '7', nm: 'Lead', st: 'failure' }]))!;
+  check('parse: event name', ev.event === 'gtm.load');
+  check('parse: indexed tag groups → id/name/status/time', ev.tags.length === 2 && ev.tags[0].id === '12' && ev.tags[0].name === 'GA4 Config' && ev.tags[0].status === 'success' && ev.tags[0].executionTime === 3);
+  check('parse: second group parsed, missing et → undefined', ev.tags[1].id === '7' && ev.tags[1].status === 'failure' && ev.tags[1].executionTime === undefined);
+  check('parse: unknown status normalises', parseMonitorHit(hit('x', [{ id: '1', st: 'weird' }]))!.tags[0].status === 'unknown');
+  check('parse: an event with NO fired tags → empty tags (not null)', parseMonitorHit(hit('some_event', []))!.tags.length === 0);
+  check('parse: contiguous groups stop at the first gap', parseMonitorHit(hit('e', [{ id: 'a', st: 'success' }, { id: 'b', st: 'success' }]))!.tags.length === 2);
+  check('parse: non-monitor URL → null', parseMonitorHit('https://example.com/x?eventName=e&tag1id=1') === null);
+  check('parse: empty (no event, no tags) → null', parseMonitorHit(`${MONITOR_ENDPOINT}?foo=bar`) === null);
+  check('parse: malformed URL → null, no throw', parseMonitorHit('samarth-verify-monitor::::') === null);
 }
 
 // ── monitorVerdicts: authoritative fired / not-fired / status ─────────────────────
 {
   const events: MonitorEvent[] = [
-    parseMonitorHit(hit('gtm.load', [{ id: 'cfg', status: 'success', executionTime: 2 }]))!,
-    parseMonitorHit(hit('form_submit', [{ id: 'cfg', status: 'success' }, { id: 'lead', status: 'success', executionTime: 8 }]))!,
-    parseMonitorHit(hit('cta_click', [{ id: 'cta', status: 'failure', executionTime: 40 }]))!,
+    parseMonitorHit(hit('gtm.load', [{ id: 'cfg', st: 'success', et: 2 }]))!,
+    parseMonitorHit(hit('form_submit', [{ id: 'cfg', st: 'success' }, { id: 'lead', st: 'success', et: 8 }]))!,
+    parseMonitorHit(hit('cta_click', [{ id: 'cta', st: 'failure', et: 40 }]))!,
   ];
   const v = monitorVerdicts(['cfg', 'lead', 'cta', 'never'], events);
 
@@ -54,20 +66,19 @@ const hit = (event: string, tags: Array<{ id: string; status?: string; execution
   check('verdict: a failed tag → fired but status failure', v.get('cta')!.fired === true && v.get('cta')!.status === 'failure');
   check('verdict: a tag NEVER reported → did NOT fire', v.get('never')!.fired === false && v.get('never')!.status === 'unknown');
   check('verdict: executionTime tracked (max)', v.get('cta')!.maxExecutionMs === 40 && v.get('lead')!.maxExecutionMs === 8);
-  check('verdict: only inventory tag ids are tracked (site-live tags never appear)', v.size === 4 && !v.has('site_live_tag'));
+  check('verdict: only inventory tag ids are tracked (site-live/monitor tags never appear)', v.size === 4 && !v.has('site_live_tag'));
 }
 {
-  // Worst-status-wins: a tag that succeeds once and fails once surfaces the failure.
   const events: MonitorEvent[] = [
-    parseMonitorHit(hit('e1', [{ id: 't', status: 'success' }]))!,
-    parseMonitorHit(hit('e2', [{ id: 't', status: 'exception' }]))!,
+    parseMonitorHit(hit('e1', [{ id: 't', st: 'success' }]))!,
+    parseMonitorHit(hit('e2', [{ id: 't', st: 'exception' }]))!,
   ];
   check('verdict: worst status wins across events (exception > success)', monitorVerdicts(['t'], events).get('t')!.status === 'exception');
 }
 {
-  // A fired tag with no status reported is treated as a clean success (defensive).
   const ev = parseMonitorHit(hit('e', [{ id: 't' }]))!;
-  check('verdict: fired with no status → success', monitorVerdicts(['t'], [ev]).get('t')!.status === 'success' && monitorVerdicts(['t'], [ev]).get('t')!.fired === true);
+  const v = monitorVerdicts(['t'], [ev]).get('t')!;
+  check('verdict: fired with no status → success', v.status === 'success' && v.fired === true);
 }
 
 console.log(`\ntag-monitor: ${passed} passed, ${failed} failed`);
