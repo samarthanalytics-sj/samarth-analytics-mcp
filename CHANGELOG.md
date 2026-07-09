@@ -1,3 +1,9 @@
+## [1.280.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.280.0...v1.280.1) (2026-07-09)
+
+### Bug Fixes
+
+* **desktop:** monitor window is live + property-timezone anchored; label the daily figure's day ([6e503ee](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6e503eee7a558a0bc2c60d5fcfb8392b944e7e20))
+
 ## [1.280.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.279.0...v1.280.0) (2026-07-09)
 
 ### Features
