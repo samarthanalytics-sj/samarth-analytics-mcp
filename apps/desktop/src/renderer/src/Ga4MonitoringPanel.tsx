@@ -166,14 +166,16 @@ function tallyChecks(checks: Ga4MonitorCheckView[]): Record<'pass' | 'warn' | 'f
   return c;
 }
 
-/** One overview metric tile — big number + label + one line of context, tinted by status tone. */
-function Kpi({ heading, value, sub, tone = 'neutral' }: { heading: string; value: React.ReactNode; sub?: string; tone?: 'red' | 'amber' | 'green' | 'neutral' }): JSX.Element {
+/** One overview metric — label + number + one line of context, in a plain (box-less) column. A thin
+ *  vertical rule separates it from the previous metric (skip on the first). Colour lives only on the
+ *  number (status tone). */
+function Kpi({ heading, value, sub, tone = 'neutral', divider = false }: { heading: string; value: React.ReactNode; sub?: string; tone?: 'red' | 'amber' | 'green' | 'neutral'; divider?: boolean }): JSX.Element {
   const t = TONE[tone];
   return (
-    <div className="ga4mon-tile" style={{ flex: '1 1 150px', minWidth: 140, background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${tone === 'neutral' ? 'var(--border)' : t.color}`, borderRadius: 14, padding: '18px 18px' }}>
-      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-muted)' }}>{heading}</div>
-      <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1.15, marginTop: 8, color: t.color }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 5, lineHeight: 1.4 }}>{sub}</div>}
+    <div style={{ flex: '1 1 160px', minWidth: 140, padding: divider ? '2px 0 2px 22px' : '2px 0', borderLeft: divider ? '1px solid var(--border)' : undefined }}>
+      <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text-muted)' }}>{heading}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.2, marginTop: 6, color: t.color }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.4 }}>{sub}</div>}
     </div>
   );
 }
@@ -187,9 +189,9 @@ function HeroCard({ run, isRunning, disabled, onRun }: { run: Ga4MonitorRun; isR
   if (!top) {
     return (
       <div style={{ ...card, borderColor: 'var(--c-green)', background: 'var(--c-green-bg, rgba(34,197,94,.08))', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 34, lineHeight: 1 }}>🟢</div>
+        <div style={{ fontSize: 26, lineHeight: 1 }}>🟢</div>
         <div style={{ flex: 1, minWidth: 220 }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--c-green)' }}>All clear — no issues detected</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-green)' }}>All clear — no issues detected</div>
           <div style={{ fontSize: 13.5, color: 'var(--text-dim)', marginTop: 4, lineHeight: 1.5 }}>{run.summary}</div>
         </div>
         <button style={{ ...ghostBtn, color: 'var(--c-blue)', alignSelf: 'flex-start' }} disabled={disabled} onClick={onRun}>{isRunning ? 'Checking…' : '↻ Run check again'}</button>
@@ -208,7 +210,7 @@ function HeroCard({ run, isRunning, disabled, onRun }: { run: Ga4MonitorRun; isR
           <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}>Most urgent finding</span>
           {isNew && <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--c-blue)', background: 'var(--c-blue-bg, rgba(59,130,246,.15))', borderRadius: 999, padding: '1px 8px' }}>NEW</span>}
         </div>
-        <div style={{ fontSize: 20, fontWeight: 800, marginTop: 10, lineHeight: 1.25 }}>{top.title}</div>
+        <div style={{ fontSize: 16, fontWeight: 700, marginTop: 10, lineHeight: 1.3 }}>{top.title}</div>
         <div style={{ fontSize: 14, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.55 }}>{top.detail}</div>
         {top.recommendation && (
           <div style={{ marginTop: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px' }}>
@@ -235,7 +237,7 @@ function AiSummary({ run }: { run: Ga4MonitorRun }): JSX.Element {
     <div style={{ ...card, padding: 20, borderLeft: '3px solid var(--c-blue, #2563eb)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <span style={{ display: 'inline-flex', color: 'var(--c-blue, #2563eb)', fontSize: 16 }}>✨</span>
-        <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.3 }}>AI summary</span>
+        <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: 0.3 }}>AI summary</span>
         <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: h.color, background: h.bg, borderRadius: 999, padding: '2px 10px' }}>{h.icon} {h.label}</span>
       </div>
       <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.6 }}>{run.summary}</div>
@@ -357,7 +359,7 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 800, fontSize: 22 }}>{t.propertyLabel || t.propertyId}</span>
+            <span style={{ fontWeight: 700, fontSize: 18 }}>{t.propertyLabel || t.propertyId}</span>
             {h ? (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: h.color, background: h.bg, borderRadius: 999, padding: '2px 10px' }}>
                 {h.icon} {h.label}
@@ -387,8 +389,8 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
           {/* ── What is the problem? ── */}
           <HeroCard run={run} isRunning={isRunning} disabled={runDisabled} onRun={onRun} />
 
-          {/* ── How serious / how much? ── */}
-          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          {/* ── How serious / how much? — a plain, box-less metric row ── */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 0, rowGap: 12, padding: '4px 0' }}>
             <Kpi
               heading="Open issues"
               value={run.alerts.length}
@@ -396,18 +398,20 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
               sub={run.alerts.length ? `${run.alerts.filter((a) => a.severity === 'critical' || a.severity === 'high').length} high-priority` : 'none open'}
             />
             <Kpi
+              divider
               heading="Checks passing"
               value={`${counts.pass}/${run.checks.length}`}
               tone={counts.fail === 0 && counts.warn === 0 ? 'green' : 'amber'}
               sub={counts.skip ? `${counts.skip} not run` : 'all checks ran'}
             />
             <Kpi
+              divider
               heading="Needs attention"
               value={attention}
               tone={counts.fail ? 'red' : attention ? 'amber' : 'green'}
               sub={attention ? `${counts.fail} failing · ${counts.warn} warning` : 'nothing flagged'}
             />
-            <Kpi heading="Last checked" value={fmtAgo(run.at)} sub={fmtTime(run.at)} />
+            <Kpi divider heading="Last checked" value={fmtAgo(run.at)} sub={fmtTime(run.at)} />
           </div>
 
           {/* ── Why? ── */}
@@ -645,7 +649,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       {/* ── Header: identity + overall health + background status ── */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 260 }}>
-          <h2 style={{ margin: '0 0 4px', fontSize: 26, fontWeight: 800 }}>🔔 GA4 Monitoring</h2>
+          <h2 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 700 }}>🔔 GA4 Monitoring</h2>
           <div style={{ color: 'var(--text-muted)', fontSize: 13.5 }}>
             {targets.length
               ? <>Watching <b>{targets.length}</b> propert{targets.length === 1 ? 'y' : 'ies'} · <b style={{ color: openIssues ? 'var(--c-red)' : 'var(--c-green)' }}>{openIssues}</b> open issue{openIssues === 1 ? '' : 's'} across all.</>
