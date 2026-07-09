@@ -126,6 +126,9 @@ export interface Ga4MonitoringDeps {
   /** Run the FULL audit pipeline for a property (wired to runGa4AuditPipeline in main). Optional so
    *  tests and older callers work; without it the weekly-audit toggle is inert. */
   runAudit?: (property: string, days: number) => Promise<Ga4ExecSummaryView>;
+  /** Probe the property's site for a live Consent Mode signal (wired to probeConsentSignal in main;
+   *  injectable for tests). Optional; without it the consent-signal check never renders. */
+  probeConsent?: (url: string) => Promise<{ observedHit: boolean; gcsPresent: boolean; gcs: string | null } | null>;
 }
 
 /** Per-target runtime state — the alert-dedup memory and latest run live PER PROPERTY so one
@@ -136,6 +139,11 @@ interface TargetState {
   lastRun: Ga4MonitorRun | null;
   /** When this property's alerts last actually POSTED to Slack (not tests). */
   lastSlackAt: number | null;
+  /** Consent-signal probe cache: a headless page load is heavy, so at most once per 24h per target;
+   *  the cached result (and the previous one, for regression detection) feed the sweeps in between. */
+  consentProbeAt: number | null;
+  consentProbe: { observedHit: boolean; gcsPresent: boolean; gcs: string | null } | null;
+  priorGcsPresent: boolean | null;
   seenIds: Set<string>;
 }
 
@@ -291,7 +299,7 @@ export class Ga4MonitoringService {
     const key = `${owner ?? '?'}:${propertyId}`;
     let s = this.state.get(key);
     if (!s) {
-      s = { lastRunAt: null, lastError: null, lastRun: null, lastSlackAt: null, seenIds: new Set() };
+      s = { lastRunAt: null, lastError: null, lastRun: null, lastSlackAt: null, consentProbeAt: null, consentProbe: null, priorGcsPresent: null, seenIds: new Set() };
       this.state.set(key, s);
     }
     return s;
@@ -457,6 +465,24 @@ export class Ga4MonitoringService {
       const st = this.stateFor(active.id, target.propertyId);
       try {
         const input = await gatherGa4MonitorInput(this.deps.data, target.propertyId, this.config.days, () => this.now());
+        // Consent-signal probe (Tier 2): a real page load of the property's own site, so throttled to
+        // once per target per 24h; between probes the cached verdict keeps feeding the check.
+        if (this.deps.probeConsent) {
+          const uri = input.snapshot?.dataStreams?.find((d) => d.defaultUri)?.defaultUri ?? null;
+          if (uri) {
+            const probeDue = !st.consentProbeAt || this.now() - st.consentProbeAt >= 24 * 60 * 60 * 1000;
+            if (probeDue) {
+              const prev = st.consentProbe;
+              const res = await this.deps.probeConsent(uri).catch(() => null);
+              st.consentProbeAt = this.now();
+              // Only remember a DEFINITE previous verdict (a failed probe must not fake a regression).
+              if (prev && prev.observedHit) st.priorGcsPresent = prev.gcsPresent;
+              st.consentProbe = res;
+            }
+            input.consentProbe = st.consentProbe;
+            input.priorConsentGcsPresent = st.priorGcsPresent;
+          }
+        }
         // The desktop tab shows ALL alert types (no severity gate); the minSeverity knob stays on the
         // monitor_ga4_property MCP tool for headless callers that want to filter.
         const result = monitorGa4(input, { minSeverity: 'info' });

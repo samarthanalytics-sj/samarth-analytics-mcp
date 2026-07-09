@@ -198,6 +198,44 @@ test('weekly scheduled audit: runs once per property per 7 days, posts the exec 
   assert.ok(st.lastRun, 'the health check itself still completed');
 });
 
+test('consent probe: runs at most once per target per 24h, caches between sweeps, remembers the prior verdict', async () => {
+  const secrets = makeSecrets();
+  let nowMs = Date.parse('2026-07-02T09:00:00Z');
+  let probeCalls = 0;
+  let probeResult: { observedHit: boolean; gcsPresent: boolean; gcs: string | null } | null = { observedHit: true, gcsPresent: true, gcs: 'G111' };
+  const data = fakeData();
+  (data as { getGa4PropertySnapshot: unknown }).getGa4PropertySnapshot = async () => ({
+    displayName: 'Acme', keyEvents: [{ eventName: 'purchase' }],
+    dataStreams: [{ name: 'p/1/ds/9', displayName: 'Web', type: 'WEB_DATA_STREAM', defaultUri: 'https://acme.example', enhancedMeasurementEnabled: true }],
+  });
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account },
+    data, secrets, emit: () => {},
+    now: () => nowMs,
+    probeConsent: async () => { probeCalls++; return probeResult; },
+  });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], enabled: false });
+
+  const [run1] = await svc.runOnce();
+  assert.equal(probeCalls, 1, 'probe ran on the first sweep');
+  assert.equal(run1.checks.find((c) => c.id === 'consent_signal')!.status, 'pass', 'signal present');
+
+  // Same day: cached verdict feeds the check, no second page load.
+  nowMs += 60 * 60 * 1000;
+  const [run2] = await svc.runOnce();
+  assert.equal(probeCalls, 1, 'throttled within 24h');
+  assert.equal(run2.checks.find((c) => c.id === 'consent_signal')!.status, 'pass', 'cached verdict still feeds the check');
+
+  // Next day the signal is GONE: the service passes the prior verdict so the engine grades MEDIUM.
+  nowMs += 24 * 60 * 60 * 1000;
+  probeResult = { observedHit: true, gcsPresent: false, gcs: null };
+  const [run3] = await svc.runOnce();
+  assert.equal(probeCalls, 2, 'probe re-ran after 24h');
+  const alert = run3.alerts.find((a) => a.kind === 'consent_signal');
+  assert.ok(alert && alert.severity === 'medium', 'regression graded MEDIUM: ' + JSON.stringify(alert));
+  assert.ok(/LOST/.test(alert!.title));
+});
+
 test('a new issue Slacks once; the same ongoing issue does not re-Slack on the next run', async () => {
   const secrets = makeSecrets();
   const posts: string[] = [];

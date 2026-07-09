@@ -22,6 +22,7 @@ import { registerMonitorIpc } from './ipc/monitor-ipc';
 import { registerSuggestionsIpc } from './suggestions/suggestion-ipc';
 import { registerGtmAuditIpc } from './suggestions/gtm-audit-ipc';
 import { registerGa4AuditIpc, runGa4AuditPipeline } from './google/ga4-audit-ipc';
+import { probeConsentSignal } from './suggestions/consent-probe';
 import { Ga4MonitoringService } from './services/ga4-monitoring-service';
 import { registerGa4MonitoringIpc } from './ipc/ga4-monitoring-ipc';
 import type { MonitorAlert, Ga4MonitorRun } from '../shared/ipc';
@@ -207,6 +208,8 @@ app.whenReady().then(() => {
     configPath: join(dataDir, 'ga4-monitor-config.json'),
     // Weekly scheduled audits reuse the EXACT panel pipeline; the scheduler posts the exec summary.
     runAudit: (property, days) => runGa4AuditPipeline(dataService, property, days).then((r) => r.exec),
+    // Live Consent Mode signal probe (headless, SSRF-guarded, throttled to 24h/target in the service).
+    probeConsent: (url) => probeConsentSignal(url),
   });
 
   registerIpcHandlers();

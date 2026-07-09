@@ -316,5 +316,31 @@ test('correctness checks SKIP (never false-pass) when their inputs were not fetc
   assert.equal(r.health, 'healthy', 'skipped correctness checks alone never alarm');
 });
 
+test('consent-signal check: pass with gcs, warn+LOW without, MEDIUM on regression, honest SKIP otherwise', () => {
+  const withSignal = monitorGa4(input({ consentProbe: { observedHit: true, gcsPresent: true, gcs: 'G111' } }));
+  const row = (r: ReturnType<typeof monitorGa4>) => r.checks.find((c) => c.id === 'consent_signal')!;
+  assert.equal(row(withSignal).status, 'pass');
+  assert.ok(/gcs=G111/.test(row(withSignal).detail), 'raw gcs shown');
+
+  // minSeverity 'info' = what the desktop tab uses; the default 'medium' would filter the LOW alert.
+  const missing = monitorGa4(input({ consentProbe: { observedHit: true, gcsPresent: false, gcs: null } }), { minSeverity: 'info' });
+  assert.equal(row(missing).status, 'warn');
+  const a1 = missing.alerts.find((x) => x.kind === 'consent_signal');
+  assert.ok(a1 && a1.severity === 'low', 'never-present is LOW (no over-alarm)');
+
+  const regressed = monitorGa4(input({ consentProbe: { observedHit: true, gcsPresent: false, gcs: null }, priorConsentGcsPresent: true }));
+  const a2 = regressed.alerts.find((x) => x.kind === 'consent_signal');
+  assert.ok(a2 && a2.severity === 'medium', 'present->absent is the silent-deploy regression, MEDIUM');
+  assert.ok(/LOST/.test(a2!.title), 'regression title says lost');
+
+  const gated = monitorGa4(input({ consentProbe: { observedHit: false, gcsPresent: false, gcs: null } }));
+  assert.equal(row(gated).status, 'skip', 'no hit observed -> SKIP, never a guess');
+  assert.ok(/consent banner may be gating/.test(row(gated).detail));
+  assert.ok(!gated.alerts.some((x) => x.kind === 'consent_signal'), 'no alert when nothing can be judged');
+
+  const noProbe = monitorGa4(input());
+  assert.ok(!noProbe.checks.some((c) => c.id === 'consent_signal'), 'no probe attempted -> no check row at all');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
