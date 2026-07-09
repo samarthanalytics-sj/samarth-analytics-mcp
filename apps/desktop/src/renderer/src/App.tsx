@@ -4623,14 +4623,25 @@ function VerifyPanel({
           {/* ONE run, two parts: this single action verifies the tags AND discovers the forms-with-tags.
               A single combined status so it reads as one verification, not two. */}
           {(vVerifying || vFormStatus.loading) ? (
-            <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span aria-hidden>⏳</span>
-              <span>
-                One verification running —{' '}
-                {vVerifying ? <b>checking tags</b> : <span style={{ color: 'var(--c-green)' }}>tags ✓</span>}
-                {' · '}
-                {vFormStatus.loading ? <b>discovering forms</b> : vFormStatus.count !== null ? <span style={{ color: 'var(--c-green)' }}>{vFormStatus.count} form(s) with tags ✓</span> : <span>forms</span>}
-              </span>
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 12.5, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span aria-hidden>⏳</span>
+                <span>
+                  One verification running —{' '}
+                  {vVerifying ? <b>checking tags</b> : <span style={{ color: 'var(--c-green)' }}>tags ✓</span>}
+                  {' · '}
+                  {vFormStatus.loading ? <b>discovering forms</b> : vFormStatus.count !== null ? <span style={{ color: 'var(--c-green)' }}>{vFormStatus.count} form(s) with tags ✓</span> : <span>forms</span>}
+                </span>
+              </div>
+              {/* Indeterminate bar — no % is known (the driver loads + drives every page), so an animated
+                  sliver signals "working" without a false percentage. */}
+              <div className="vf-progress" role="progressbar" aria-label="Verification in progress" aria-busy="true" style={{ marginTop: 8 }} />
+              {/* Switching tabs UNMOUNTS this panel (it is conditionally rendered), which drops the in-flight
+                  run's result — warn so the user doesn't lose a minute-long verification. */}
+              <div style={{ marginTop: 8, padding: '7px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                <span aria-hidden>⚠️</span>
+                <span>Keep this tab open until it finishes — it loads and drives every page, which can take a minute on a larger site. Leaving or switching tabs cancels the run and you'll have to start over.</span>
+              </div>
             </div>
           ) : (vResult && !vResult.error && vFormStatus.count !== null && vFormStatus.count > 0) ? (
             <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--text-dim)' }}>
