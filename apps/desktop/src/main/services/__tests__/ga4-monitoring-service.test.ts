@@ -261,6 +261,28 @@ test('bigquery-link memory: a link seen on one sweep and gone on the next raises
   assert.equal(run2.checks.find((c) => c.id === 'bigquery')!.status, 'fail');
 });
 
+test('monitor window is LIVE and property-timezone anchored: ends on the dq todayYmd, not a UTC date', async () => {
+  const secrets = makeSecrets();
+  const data = fakeData();
+  const captured: Array<{ s: string; e: string }> = [];
+  const orig = data.getGa4Baseline.bind(data);
+  (data as { getGa4Baseline: typeof data.getGa4Baseline }).getGa4Baseline = async (p: string, s: string, e: string) => { captured.push({ s, e }); return orig(p, s, e); };
+  (data as { getGa4PropertySnapshot: unknown }).getGa4PropertySnapshot = async () => ({
+    displayName: 'Acme', keyEvents: [{ eventName: 'purchase' }], timeZone: 'Asia/Kolkata',
+  });
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account }, data, secrets, emit: () => {},
+    // The machine's UTC clock still reads Jul 1 evening; the property's day (per dq todayYmd) is Jul 2.
+    now: () => Date.parse('2026-07-01T20:30:00Z'),
+  });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], enabled: false });
+
+  const [run] = await svc.runOnce();
+  assert.equal(captured[0].e, '2026-07-02', "baseline ends TODAY in the property's timezone (live, unlike the audit's today-1)");
+  assert.equal(captured[0].s, '2026-06-04', 'same day-span, anchored to the property day');
+  assert.equal(run.timeZone, 'Asia/Kolkata', "the run carries the property's reporting timezone for the UI");
+});
+
 test('a new issue Slacks once; the same ongoing issue does not re-Slack on the next run', async () => {
   const secrets = makeSecrets();
   const posts: string[] = [];
