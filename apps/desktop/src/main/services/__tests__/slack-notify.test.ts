@@ -30,14 +30,35 @@ wrap('isValidSlackWebhook accepts only Slack Incoming Webhook URLs', () => {
   assert.ok(!isValidSlackWebhook('  '), 'empty rejected');
 });
 
-wrap('buildSlackPayload renders a header, health line, and one section per alert', () => {
+wrap('buildSlackPayload renders the labeled alert template (Severity/Property/Issue/Summary/Actions)', () => {
   const p = buildSlackPayload('Acme (123)', result(), result().alerts);
   assert.ok(p.text.includes('Acme (123)') && p.text.includes('No data is being received'), 'fallback text summarises');
   const types = (p.blocks as Array<{ type: string }>).map((b) => b.type);
   assert.ok(types[0] === 'header', 'starts with a header block');
-  assert.ok(types.includes('section'), 'has section blocks');
   const json = JSON.stringify(p.blocks);
-  assert.ok(json.includes('CRITICAL') && json.includes('*Fix:*'), 'health + fix rendered');
+  assert.ok(json.includes('GA4 Monitoring Alert'), 'header title');
+  assert.ok(json.includes('*Severity:* Critical'), 'worst severity stated up top');
+  assert.ok(json.includes('*Property:* Acme (123)') && json.includes('*Property ID:* 123'), 'property + bare numeric id');
+  assert.ok(json.includes('*Issue*') && json.includes('*Summary*') && json.includes('*Recommended Actions*'), 'labeled sections');
+  assert.ok(json.includes('\u2022 Check the tag.'), 'recommendation falls back to a single action bullet');
+  assert.ok(!json.includes('*Impact*'), 'no Impact section when the alert has none');
+});
+
+wrap('structured alert fields render as Summary metric lines, Impact, and curated action bullets', () => {
+  const a = alert({
+    kind: 'conversion_break',
+    title: 'Traffic changed but conversions did not keep pace',
+    summaryLines: ['\u{1F4C8} Sessions: +344% (10,158 \u2192 45,140)', '\u{1F4CA} Key Events: +167% (300 \u2192 800)', '\u{1F4B0} Revenue: +61%'],
+    impact: 'Revenue & ROAS unreliable today; campaign spend decisions at risk.',
+    actions: ['Verify Purchase and Key Event tracking in GA4 DebugView/Realtime', 'Check for duplicate event firing'],
+  });
+  const p = buildSlackPayload('Purple Tresor Property - GA4', result({ alerts: [a], property: 'properties/353451709' }), [a]);
+  const json = JSON.stringify(p.blocks);
+  assert.ok(json.includes('Sessions: +344%'), 'metric summary lines used instead of prose');
+  assert.ok(!json.includes('0 active users'), 'prose detail not duplicated when structured lines exist');
+  assert.ok(json.includes('*Impact*') && json.includes('ROAS unreliable'), 'impact section rendered');
+  assert.ok(json.includes('\u2022 Verify Purchase and Key Event tracking'), 'curated bullets rendered');
+  assert.ok(json.includes('*Property ID:* 353451709'), 'numeric property id');
 });
 
 wrap('buildSlackTestPayload names the property and reads as a connection confirmation', () => {

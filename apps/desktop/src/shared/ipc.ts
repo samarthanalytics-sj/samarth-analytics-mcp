@@ -1001,6 +1001,10 @@ export interface Ga4MonitorAlertView {
   title: string;
   detail: string;
   recommendation?: string;
+  /** Structured Slack-format extras (see Ga4MonitorAlert in ga4-monitor.ts). */
+  summaryLines?: string[];
+  impact?: string;
+  actions?: string[];
 }
 
 export interface Ga4MonitorCheckView {
