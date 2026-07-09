@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AccountRepository, StoredAccount } from '../storage/account-repository';
 import type { SecretStore } from '../storage/secret-store';
 import type { ProviderKeyStore } from '../storage/provider-keys';
-import type { AccountView, GtmContext, LlmProvider, SecretSelfTest } from '../../shared/ipc';
+import type { AccountView, Ga4Context, GtmContext, LlmProvider, SecretSelfTest } from '../../shared/ipc';
 
 // Facade the IPC layer talks to. Combines the account registry (metadata) with
 // the secret store (encrypted bytes), and is the ONLY place that converts an
@@ -26,6 +26,7 @@ export class RegistryService {
       hasGoogleToken: Boolean(a.googleTokenRef && this.secrets.has(a.googleTokenRef)),
       lastProduct: a.lastProduct,
       gtmContext: a.gtmContext,
+      ga4Context: a.ga4Context,
       llm: a.llm
         ? {
             provider: a.llm.provider,
@@ -78,6 +79,13 @@ export class RegistryService {
     const a = this.repo.get(id);
     if (!a) throw new Error(`account not found: ${id}`);
     return this.toView(this.repo.update(id, { gtmContext }));
+  }
+
+  /** Remember the GA4 property the user is working in (the GA4 chat's target). */
+  setGa4Context(id: string, ga4Context: Ga4Context): AccountView {
+    const a = this.repo.get(id);
+    if (!a) throw new Error(`account not found: ${id}`);
+    return this.toView(this.repo.update(id, { ga4Context }));
   }
 
   /** Set the account's LLM provider + model. The API key is app-level (per provider). */

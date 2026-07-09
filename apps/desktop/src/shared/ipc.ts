@@ -44,6 +44,7 @@ export interface AccountView {
   llm?: LlmConfigView;
   /** Remembered GTM account/container/workspace selection. */
   gtmContext?: GtmContext;
+  ga4Context?: Ga4Context;
 }
 
 export interface AddAccountInput {
@@ -112,6 +113,15 @@ export interface GtmWorkspaceView {
 }
 
 /** The GTM account/container/workspace the user is currently working in. */
+/** Which GA4 property the GA4 chat works against (the GA4 mirror of GtmContext). */
+export interface Ga4Context {
+  /** "properties/123456" */
+  property?: string;
+  propertyName?: string;
+  /** Display name of the parent GA4 account (for the breadcrumb). */
+  accountName?: string;
+}
+
 export interface GtmContext {
   accountId?: string;
   accountName?: string;
