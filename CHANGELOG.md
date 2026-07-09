@@ -1,3 +1,10 @@
+## [1.272.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.272.1...v1.272.2) (2026-07-09)
+
+### Bug Fixes
+
+* **verify:** drop the unsound own-property tid filter (adversarial review caught a false-negative) ([b9ac12a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b9ac12a61da744e8444d2bf44f00438296497219))
+* **verify:** stop crediting the site's live GA4 to draft tags ("fired the wrong event" for every tag) ([a39d1de](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a39d1de47de935bb6a935ea93f8d0173ecee1b1d))
+
 ## [1.272.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.272.0...v1.272.1) (2026-07-09)
 
 ### Bug Fixes
