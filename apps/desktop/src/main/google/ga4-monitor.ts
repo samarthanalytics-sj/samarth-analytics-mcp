@@ -46,6 +46,13 @@ export interface Ga4MonitorInput {
   snapshot?: Ga4PropertySnapshot | null;
   /** PRIOR-window channel groups (name+sessions) for the channel-mix-shift check. */
   priorChannelGroups?: Array<{ name: string; sessions: number }> | null;
+  /** Live consent-signal probe of the property's OWN site (does a real GA4 hit carry gcs=?).
+   *  undefined = probe not attempted (no web stream / feature off); null = attempted but could not
+   *  run (nav failed, Playwright unavailable) — treated as unknown, never as "no consent". */
+  consentProbe?: { observedHit: boolean; gcsPresent: boolean; gcs: string | null } | null;
+  /** Whether the PREVIOUS probe saw consent signals — present→absent is the silent-deploy regression
+   *  that deserves a louder alert than never-present. */
+  priorConsentGcsPresent?: boolean | null;
 }
 
 /** Tunable thresholds for a monitor run. Omitted fields use the defaults below. `minSeverity` filters
@@ -414,6 +421,39 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
       const hit = firstOf('pii');
       const fired = raise('pii', 'PII is being sent to GA4 in page URLs', hit);
       checks.push({ id: 'pii', label: 'PII in URLs', status: fired ? 'fail' : 'pass', detail: fired ? clean(hit!.message) ?? hit!.message : 'No emails or personal-data query params in the top landing pages.' });
+    }
+
+    // Consent Mode SIGNAL — observed from the live site's own GA4 hits (the gcs= parameter), the one
+    // thing the Admin/Data APIs cannot see and the audit lists as blocked-by-verification. A firing
+    // hit WITHOUT gcs is direct evidence Consent Mode v2 is absent; no hit at all is honestly
+    // SKIPPED (a consent banner gating hits pre-interaction is normal, so absence proves nothing).
+    if (input.consentProbe !== undefined) {
+      const cp = input.consentProbe;
+      if (cp && cp.observedHit && cp.gcsPresent) {
+        checks.push({ id: 'consent_signal', label: 'Consent Mode signal', status: 'pass', detail: `Live GA4 hits carry Consent Mode signals (gcs=${cp.gcs ?? '?'}).` });
+      } else if (cp && cp.observedHit) {
+        const regressed = input.priorConsentGcsPresent === true;
+        pushAlert({
+          id: 'consent_signal_missing',
+          kind: 'consent_signal',
+          severity: regressed ? 'medium' : 'low',
+          title: regressed ? 'Consent Mode signal LOST (was present before)' : 'Consent Mode v2 not detected on the site',
+          detail: regressed
+            ? 'The previous probe saw gcs= consent signals on this site\u2019s GA4 hits; the latest hits carry none - a site or tag deploy likely removed Consent Mode. Modeling and ad personalization silently degrade from here.'
+            : 'The site fires GA4 hits WITHOUT the gcs= consent parameter - Consent Mode v2 is not implemented. In consent-regulated markets that risks unmodeled data loss and compliance exposure.',
+          recommendation: 'Set Consent Mode v2 defaults BEFORE the Google tag loads (gtag consent default) and have the CMP update them; verify a hit shows gcs= in DevTools or DebugView after the fix.',
+        });
+        checks.push({ id: 'consent_signal', label: 'Consent Mode signal', status: 'warn', detail: 'GA4 hits fire WITHOUT gcs= consent signals - Consent Mode v2 not detected.' });
+      } else {
+        checks.push({
+          id: 'consent_signal',
+          label: 'Consent Mode signal',
+          status: 'skip',
+          detail: cp
+            ? 'No GA4 hit observed on first load (a consent banner may be gating hits) - cannot judge Consent Mode from outside; verify in DebugView.'
+            : 'Site probe could not run this sweep.',
+        });
+      }
     }
 
     // Channel-mix shift — a channel's session share jumping >= 15 points week-over-window is usually
