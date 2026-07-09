@@ -1,3 +1,10 @@
+## [1.284.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.283.0...v1.284.0) (2026-07-09)
+
+### Features
+
+* **desktop:** Slack alerts in the labeled template (Severity/Property/Issue/Summary/Impact/Actions) ([fa52609](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fa5260937c0db960d328b5c35dbed7d99d892525))
+* **verify:** GTM Monitor Phase 2 — throwaway-workspace injection, built to Simo Ahava's real spec ([9e2b33c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9e2b33cb5c37aa0caa34af020462c334b6af100e)), closes [#471](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/471)
+
 ## [1.283.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.282.1...v1.283.0) (2026-07-09)
 
 ### Features
