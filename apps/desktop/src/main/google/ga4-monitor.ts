@@ -15,6 +15,9 @@ import { auditGa4EventDeltas, auditGa4Transactions } from './ga4-integrity';
 import { auditGa4Growth } from './ga4-growth';
 import { analyzeGa4Trend } from './ga4-trend';
 import { auditGa4DataQuality } from './ga4-data-quality';
+import { antiLieFindings } from './ga4-anti-lie';
+import type { Ga4CampaignReport } from './ga4-campaigns';
+import type { Ga4PropertySnapshot } from './ga4-audit';
 
 /** Everything the monitor needs, fetched best-effort by the data layer. Any field may be null when its
  *  query failed or isn't applicable — the engine degrades a missing input to a "skipped" check, never a
@@ -36,6 +39,13 @@ export interface Ga4MonitorInput {
   /** The FIRST underlying error message when queries failed (expired session, lost access, quota).
    *  When EVERY check ends up skipped, the engine surfaces this instead of reporting "healthy". */
   fetchError?: string | null;
+  /** Ranked campaign performance (same engine as the audit) — feeds the revenue-reconciliation and
+   *  untagged-share checks. null = query failed/not fetched → those checks skip. */
+  campaigns?: Ga4CampaignReport | null;
+  /** Property snapshot (own domains for self-referrals, Signals for thresholding). */
+  snapshot?: Ga4PropertySnapshot | null;
+  /** PRIOR-window channel groups (name+sessions) for the channel-mix-shift check. */
+  priorChannelGroups?: Array<{ name: string; sessions: number }> | null;
 }
 
 /** Tunable thresholds for a monitor run. Omitted fields use the defaults below. `minSeverity` filters
@@ -322,6 +332,122 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
     }
   } else if (input.hasEcommerce) {
     checks.push({ id: 'transactions', label: 'Revenue integrity', status: 'skip', detail: 'No purchase data available on this run.' });
+  }
+
+  // ── 6 · Data CORRECTNESS — the SAME anti-lie detectors the audit runs, on a schedule. The monitor
+  // must never read "all healthy" on a property the audit grades broken: shared code (ga4-anti-lie)
+  // makes disagreement structurally impossible — same inputs, same detectors, same verdict.
+  {
+    const anti = antiLieFindings(b ?? null, dq ?? null, input.campaigns ?? null, input.snapshot ?? null);
+    const firstOf = (cat: string) => anti.find((f) => f.category === cat);
+    const raise = (kind: string, title: string, f: { severity: string; message: string; recommendation?: string } | undefined): boolean => {
+      if (!f) return false;
+      pushAlert({ id: kind, kind, severity: f.severity as Severity, title, detail: clean(f.message) ?? f.message, recommendation: clean(f.recommendation) });
+      return true;
+    };
+
+    // Campaign vs channel revenue reconciliation — the audit's HIGH finding, weekly-scale value.
+    if (input.campaigns && b?.channelPerformance?.length) {
+      const hit = firstOf('attribution_mismatch');
+      const fired = raise('attribution_mismatch', 'Campaign and channel revenue do not reconcile', hit);
+      checks.push({ id: 'reconciliation', label: 'Revenue reconciliation', status: fired ? 'fail' : 'pass', detail: fired ? clean(hit!.message) ?? hit!.message : 'Paid-campaign revenue reconciles with the paid channels.' });
+    } else {
+      checks.push({ id: 'reconciliation', label: 'Revenue reconciliation', status: 'skip', detail: 'No campaign/channel revenue data on this run.' });
+    }
+
+    // Traffic concentration — the Direct-spike detector (same series/grouping as the audit chart).
+    if (b?.channelDaily?.length) {
+      const hit = firstOf('concentration');
+      const fired = raise('concentration', 'Traffic concentration: one burst dominates a channel', hit);
+      checks.push({ id: 'concentration', label: 'Traffic concentration', status: fired ? 'fail' : 'pass', detail: fired ? clean(hit!.message) ?? hit!.message : 'No single day/week/month dominates any channel.' });
+    } else {
+      checks.push({ id: 'concentration', label: 'Traffic concentration', status: 'skip', detail: 'No per-channel daily series on this run.' });
+    }
+
+    // Untagged-traffic share — rising untagged traffic breaks attribution silently.
+    if (input.campaigns) {
+      const share = input.campaigns.untaggedSharePct;
+      if (share >= 40) {
+        pushAlert({
+          id: 'untagged_share',
+          kind: 'untagged_share',
+          severity: share >= 60 ? 'high' : 'medium',
+          title: 'Untagged traffic is breaking attribution',
+          detail: `${share.toFixed(1)}% of sessions carry no utm_campaign (${input.campaigns.untaggedSessions.toLocaleString('en-US')} of ${input.campaigns.totalSessions.toLocaleString('en-US')}) - that share of results cannot be tied to any campaign, and untagged paid traffic lands mislabeled in Direct/organic buckets.`,
+          recommendation: 'Add utm_campaign/utm_source/utm_medium to marketing links (ads, email, social) and verify Google Ads auto-tagging so paid sessions leave the untagged buckets.',
+        });
+        checks.push({ id: 'untagged', label: 'Untagged traffic share', status: 'warn', detail: `${share.toFixed(1)}% of sessions are untagged (threshold 40%).` });
+      } else {
+        checks.push({ id: 'untagged', label: 'Untagged traffic share', status: 'pass', detail: `${share.toFixed(1)}% of sessions are untagged - below the 40% threshold.` });
+      }
+    } else {
+      checks.push({ id: 'untagged', label: 'Untagged traffic share', status: 'skip', detail: 'No campaign data on this run.' });
+    }
+
+    // Invalid-traffic signature — engagement bimodality across markets (Vietnam-pattern).
+    if (b?.geoPerformance && b.geoPerformance.length >= 4) {
+      const hit = firstOf('invalid_traffic');
+      const fired = raise('invalid_traffic', 'Suspected invalid traffic in low-engagement markets', hit);
+      checks.push({ id: 'invalid_traffic', label: 'Invalid-traffic signature', status: fired ? 'fail' : 'pass', detail: fired ? clean(hit!.message) ?? hit!.message : 'Market engagement forms one population - no bot-like low cluster.' });
+    } else {
+      checks.push({ id: 'invalid_traffic', label: 'Invalid-traffic signature', status: 'skip', detail: 'Not enough market data on this run.' });
+    }
+
+    // Referral hygiene — self-referrals (broken cross-domain) + payment-gateway leakage.
+    if (dq?.sourceMediums?.length && input.snapshot) {
+      const selfRef = firstOf('self_referral');
+      const gateway = firstOf('referral_leakage');
+      const f1 = raise('self_referral', 'Your own site appears as a referral source', selfRef);
+      const f2 = raise('referral_leakage', 'Payment-gateway referral leakage', gateway);
+      checks.push({
+        id: 'referral_hygiene',
+        label: 'Referral hygiene',
+        status: f1 || f2 ? 'fail' : 'pass',
+        detail: f1 || f2 ? [selfRef?.message, gateway?.message].filter(Boolean).map((m) => clean(m as string) ?? m).join(' ') : 'No self-referrals or payment-gateway referrals.',
+      });
+    } else {
+      checks.push({ id: 'referral_hygiene', label: 'Referral hygiene', status: 'skip', detail: 'No source/medium data on this run.' });
+    }
+
+    // PII in page URLs (masked by the shared detector; the alert never re-leaks the value).
+    if (b?.landingPages?.length) {
+      const hit = firstOf('pii');
+      const fired = raise('pii', 'PII is being sent to GA4 in page URLs', hit);
+      checks.push({ id: 'pii', label: 'PII in URLs', status: fired ? 'fail' : 'pass', detail: fired ? clean(hit!.message) ?? hit!.message : 'No emails or personal-data query params in the top landing pages.' });
+    }
+
+    // Channel-mix shift — a channel's session share jumping >= 15 points week-over-window is usually
+    // a tagging regression (deterministic, current vs prior channel groups).
+    if (dq?.channelGroups?.length && input.priorChannelGroups?.length) {
+      const total = dq.channelGroups.reduce((sum, c) => sum + c.sessions, 0);
+      const priorTotal = input.priorChannelGroups.reduce((sum, c) => sum + c.sessions, 0);
+      let worst: { name: string; from: number; to: number } | null = null;
+      if (total > 0 && priorTotal > 0) {
+        const priorShare = new Map(input.priorChannelGroups.map((c) => [c.name, (c.sessions / priorTotal) * 100]));
+        for (const c of dq.channelGroups) {
+          const now = (c.sessions / total) * 100;
+          const before = priorShare.get(c.name) ?? 0;
+          if (Math.abs(now - before) >= 15 && Math.max(now, before) >= 10 && (!worst || Math.abs(now - before) > Math.abs(worst.to - worst.from))) {
+            worst = { name: c.name, from: before, to: now };
+          }
+        }
+      }
+      if (worst) {
+        pushAlert({
+          id: `channel_shift:${slug(worst.name)}`,
+          kind: 'channel_shift',
+          severity: 'medium',
+          title: `Channel mix shifted: ${worst.name}`,
+          detail: `${worst.name} moved from ${worst.from.toFixed(1)}% to ${worst.to.toFixed(1)}% of sessions vs the prior window (${Math.abs(worst.to - worst.from).toFixed(1)} points) - a jump this size is usually a tagging regression or an untagged burst, not organic drift.`,
+          recommendation: `Check what changed for ${worst.name}: recent site/tag deploys, UTM changes, or an untagged campaign landing there.`,
+        });
+        checks.push({ id: 'channel_shift', label: 'Channel-mix stability', status: 'warn', detail: `${worst.name}: ${worst.from.toFixed(1)}% -> ${worst.to.toFixed(1)}% of sessions vs the prior window.` });
+      } else {
+        checks.push({ id: 'channel_shift', label: 'Channel-mix stability', status: 'pass', detail: 'No channel moved more than 15 share points vs the prior window.' });
+      }
+    } else {
+      checks.push({ id: 'channel_shift', label: 'Channel-mix stability', status: 'skip', detail: 'Need both current and prior channel mix on this run.' });
+    }
   }
 
   // ── Access guard: when EVERY check skipped, the property is not "healthy" — it is UNREADABLE.

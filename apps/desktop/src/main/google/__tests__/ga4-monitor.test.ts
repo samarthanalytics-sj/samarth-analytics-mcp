@@ -231,5 +231,90 @@ test('firstMetric reads a scalar realtime metric, null when absent', () => {
   assert.equal(firstMetric(null), null);
 });
 
+test('AGREEMENT: the monitor fires the SAME verdicts as the audit on the broken-property fixture', () => {
+  // The advisor's exact scenario: the audit graded this shape broken (revenue mismatch HIGH,
+  // Direct burst HIGH, 36% untagged, bot-market bimodality) while the monitor read 7/7 Pass.
+  // Same shared detectors now: the monitor must fire on every one of them.
+  const brokenBaseline = baseline({
+    channelDaily: [
+      { channel: 'Direct', series: [
+        { date: '20260610', sessions: 300 }, { date: '20260611', sessions: 22362 }, { date: '20260612', sessions: 310 },
+        { date: '20260613', sessions: 305 }, { date: '20260614', sessions: 300 },
+      ] },
+      { channel: 'Organic Search', series: [
+        { date: '20260610', sessions: 700 }, { date: '20260611', sessions: 750 }, { date: '20260612', sessions: 720 },
+        { date: '20260613', sessions: 730 }, { date: '20260614', sessions: 705 },
+      ] },
+    ],
+    channelPerformance: [
+      { channel: 'Organic Shopping', sessions: 30000, keyEvents: 2000, convRate: 0.04, revenue: 845315, engagementRate: 0.6 },
+      { channel: 'Paid Shopping', sessions: 900, keyEvents: 40, convRate: 0.03, revenue: 13200, engagementRate: 0.5 },
+    ],
+    geoPerformance: [
+      { country: 'India', sessions: 50000, keyEvents: 1500, convRate: 0.03, revenue: 400000, engagementRate: 0.9 },
+      { country: 'United States', sessions: 12000, keyEvents: 900, convRate: 0.075, revenue: 250000, engagementRate: 0.92 },
+      { country: 'United Kingdom', sessions: 6000, keyEvents: 300, convRate: 0.05, revenue: 90000, engagementRate: 0.88 },
+      { country: 'Vietnam', sessions: 9000, keyEvents: 2, convRate: 0.0002, revenue: 0, engagementRate: 0.12 },
+    ],
+  });
+  const campaigns = {
+    windowDays: 28, dateRange: 'Jun 3 - Jun 30, 2026', totalSessions: 50000, primaryMetric: 'conversions' as const,
+    taggedCampaigns: [
+      { campaign: 'Adv+ Shopping - All products', sessions: 8000, keyEvents: 23933, revenue: 532085, engagementRate: 0.6 },
+      { campaign: '20574896341', sessions: 4000, keyEvents: 9000, revenue: 227350, engagementRate: 0.55 },
+    ],
+    bestCampaign: null, untaggedSessions: 18000, untaggedSharePct: 36, summary: '', findings: [],
+  };
+  const r = monitorGa4(input({ baseline: brokenBaseline, campaigns }));
+
+  const kinds = new Set(r.alerts.map((a) => a.kind));
+  assert.ok(kinds.has('attribution_mismatch'), 'revenue reconciliation fires: ' + [...kinds].join(','));
+  assert.ok(kinds.has('concentration'), 'the Direct burst fires');
+  assert.ok(kinds.has('invalid_traffic'), 'the bot-market bimodality fires');
+  assert.ok(r.health === 'critical', 'a property the audit grades broken is NOT healthy: ' + r.health);
+  const byId = (id: string) => r.checks.find((c) => c.id === id)!;
+  assert.equal(byId('reconciliation').status, 'fail', 'reconciliation check fails');
+  assert.equal(byId('concentration').status, 'fail', 'concentration check fails');
+  assert.equal(byId('invalid_traffic').status, 'fail', 'invalid-traffic check fails');
+  // Untagged at 36% is below the 40% alert bar -> pass with the share stated (not silent).
+  assert.equal(byId('untagged').status, 'pass');
+  assert.ok(/36.0% of sessions are untagged/.test(byId('untagged').detail), byId('untagged').detail);
+});
+
+test('correctness checks: untagged share alerts at >=40%, channel-mix shift alerts on a 15-point jump', () => {
+  const campaigns = {
+    windowDays: 28, dateRange: null, totalSessions: 50000, primaryMetric: 'sessions' as const,
+    taggedCampaigns: [], bestCampaign: null, untaggedSessions: 24000, untaggedSharePct: 48, summary: '', findings: [],
+  };
+  const r = monitorGa4(input({ campaigns }));
+  const untagged = r.alerts.find((a) => a.kind === 'untagged_share');
+  assert.ok(untagged, 'untagged alert fires at 48%');
+  assert.equal(untagged!.severity, 'medium');
+  assert.ok(/48.0% of sessions carry no utm_campaign/.test(untagged!.detail), untagged!.detail);
+
+  // Channel shift: Direct 10% -> 44% of sessions vs the prior window (the biggest mover among 3).
+  const shifted = monitorGa4(input({
+    dqCounts: dq({ totalSessions: 45000, channelGroups: [{ name: 'Organic Search', sessions: 20000 }, { name: 'Direct', sessions: 20000 }, { name: 'Referral', sessions: 5000 }] }),
+    priorChannelGroups: [{ name: 'Organic Search', sessions: 6000 }, { name: 'Direct', sessions: 1000 }, { name: 'Referral', sessions: 3000 }],
+  }));
+  const shift = shifted.alerts.find((a) => a.kind === 'channel_shift');
+  assert.ok(shift, 'channel-shift alert fires');
+  assert.ok(/Direct moved from 10.0% to 44.4%/.test(shift!.detail), shift!.detail);
+  // Stable mix -> pass.
+  const stable = monitorGa4(input({ priorChannelGroups: [{ name: 'Organic Search', sessions: 6100 }, { name: 'Direct', sessions: 3900 }] }));
+  assert.equal(stable.checks.find((c) => c.id === 'channel_shift')!.status, 'pass');
+});
+
+test('correctness checks SKIP (never false-pass) when their inputs were not fetched', () => {
+  const r = monitorGa4(input({ campaigns: null }));
+  const byId = (id: string) => r.checks.find((c) => c.id === id)!;
+  assert.equal(byId('reconciliation').status, 'skip', 'no campaigns -> reconciliation skips');
+  assert.equal(byId('untagged').status, 'skip', 'no campaigns -> untagged skips');
+  assert.equal(byId('concentration').status, 'skip', 'no channelDaily -> concentration skips');
+  assert.equal(byId('invalid_traffic').status, 'skip', 'thin geo data -> invalid-traffic skips');
+  assert.equal(byId('channel_shift').status, 'skip', 'no prior mix -> shift check skips');
+  assert.equal(r.health, 'healthy', 'skipped correctness checks alone never alarm');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
