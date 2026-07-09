@@ -1,3 +1,9 @@
+## [1.278.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.277.0...v1.278.0) (2026-07-09)
+
+### Features
+
+* **desktop:** tier-3 monitor checks - data-freshness lag, BigQuery export health, PII in campaign/source values ([56d8432](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/56d8432c9ce4d3f49809fae16d392f2a2d147028))
+
 ## [1.277.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.276.0...v1.277.0) (2026-07-09)
 
 ### Features
