@@ -53,6 +53,13 @@ export interface Ga4MonitorInput {
   /** Whether the PREVIOUS probe saw consent signals — present→absent is the silent-deploy regression
    *  that deserves a louder alert than never-present. */
   priorConsentGcsPresent?: boolean | null;
+  /** How many days GA4's PROCESSED daily data lags behind today. Computed by the DATA layer from the
+   *  last date the Data API returned a row for (ga4DataLagDays) — the engine never infers it from a
+   *  possibly-sparse series. null/undefined = unknown → the freshness check skips. */
+  dataLagDays?: number | null;
+  /** Whether the PREVIOUS sweep saw a BigQuery link on this property — a link disappearing is a
+   *  louder signal than one never existing. */
+  priorBqLinked?: boolean | null;
 }
 
 /** Tunable thresholds for a monitor run. Omitted fields use the defaults below. `minSeverity` filters
@@ -127,6 +134,25 @@ export function noSourceSharePct(dq: DataQualityCounts): number | null {
   const unassigned = dq.channelGroups.filter((c) => /unassigned/i.test(c.name)).reduce((a, c) => a + c.sessions, 0);
   const notSet = dq.sourceMediums.filter((c) => /\(not set\)/i.test(c.name)).reduce((a, c) => a + c.sessions, 0);
   return Math.min(100, (Math.max(unassigned, notSet) / total) * 100);
+}
+
+/** How many days GA4's PROCESSED daily data lags behind "today": the distance from the last date the
+ *  Data API returned a row for to todayYmd. 0-1 = current (yesterday is the freshest complete day),
+ *  2 = still inside Google's documented 24-48h processing window, 3+ = stale. null = not computable.
+ *  Lives here (pure, exported) but is CALLED by the data layer, which knows the real dates — synthetic
+ *  test fixtures with sparse series then skip the check instead of false-alarming. */
+export function ga4DataLagDays(baseline: Ga4Baseline | null, todayYmd?: string | null): number | null {
+  const days = baseline?.dailySessions ?? [];
+  const t = norm(todayYmd ?? undefined);
+  if (!days.length || !/^\d{8}$/.test(t)) return null;
+  let last = '';
+  for (const d of days) {
+    const x = norm(d.date);
+    if (/^\d{8}$/.test(x) && x > last) last = x;
+  }
+  if (!last) return null;
+  const utc = (ymd: string): number => Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(4, 6)) - 1, Number(ymd.slice(6, 8)));
+  return Math.max(0, Math.round((utc(t) - utc(last)) / 86_400_000));
 }
 
 /** The most recent COMPLETE day's sessions from the baseline series (the trailing in-progress day is
@@ -206,6 +232,30 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
     if (rt != null) parts.push(`${plural(rt, 'active user', 'active users')} right now`);
     if (latest != null) parts.push(`${plural(latest.sessions, 'session', 'sessions')} on ${fmtDate(latest.date)}`);
     checks.push({ id: 'data_flow', label: 'Data collection', status: 'pass', detail: parts.join(' · ') || 'Data is being collected.' });
+  }
+
+  // ── 1b · Data freshness: how far behind is GA4's PROCESSED data? Distinct from the outage check
+  // above: an outage shows zero-session days, a processing lag shows the trailing days MISSING from
+  // the Data API entirely. Google's own processing window is 24-48h, so a 2-day lag is normal; beyond
+  // that, every day-level number (here and in reports) silently reads stale. Skips when the data
+  // layer could not determine the lag - it never guesses.
+  if (input.dataLagDays != null) {
+    const lag = input.dataLagDays;
+    if (lag <= 2) {
+      checks.push({ id: 'freshness', label: 'Data freshness', status: 'pass', detail: `Processed data is ${lag <= 1 ? 'current' : '2 days behind'} - within GA4's normal 24-48h processing window.` });
+    } else {
+      pushAlert({
+        id: 'data_freshness',
+        kind: 'data_freshness',
+        severity: lag >= 7 ? 'high' : 'medium',
+        title: `GA4's processed data is ${lag} days behind`,
+        detail: `The newest day the GA4 Data API returns rows for is ${plural(lag, 'day', 'days')} old. Normal processing lag is 24-48 hours; beyond that, daily reports and window comparisons are reading stale numbers${lag >= 7 ? ' - and a gap this long usually means processing or collection is genuinely broken, not just slow' : ''}.`,
+        recommendation: 'Compare Realtime (which is live) against a daily report in the GA4 UI to confirm the lag, review recent property changes (internal-traffic filters, quotas, consent settings), and hold off on day-level decisions until processing catches up.',
+      });
+      checks.push({ id: 'freshness', label: 'Data freshness', status: lag >= 7 ? 'fail' : 'warn', detail: `Latest processed day is ${plural(lag, 'day', 'days')} old (normal is 1-2).` });
+    }
+  } else {
+    checks.push({ id: 'freshness', label: 'Data freshness', status: 'skip', detail: 'Could not determine the processed-data lag on this run.' });
   }
 
   // ── 2 · Key events still firing? (per-event drop-to-zero / plunge) ──
@@ -416,11 +466,14 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
       checks.push({ id: 'referral_hygiene', label: 'Referral hygiene', status: 'skip', detail: 'No source/medium data on this run.' });
     }
 
-    // PII in page URLs (masked by the shared detector; the alert never re-leaks the value).
-    if (b?.landingPages?.length) {
+    // PII reaching GA4 (masked by the shared detector; the alert never re-leaks the value). Scans the
+    // same vectors as the audit: landing-page URLs, campaign names, and source strings.
+    if (b?.landingPages?.length || input.campaigns?.taggedCampaigns?.length || dq?.sourceMediums?.length) {
       const hit = firstOf('pii');
-      const fired = raise('pii', 'PII is being sent to GA4 in page URLs', hit);
-      checks.push({ id: 'pii', label: 'PII in URLs', status: fired ? 'fail' : 'pass', detail: fired ? clean(hit!.message) ?? hit!.message : 'No emails or personal-data query params in the top landing pages.' });
+      const fired = raise('pii', 'PII is being sent to GA4', hit);
+      checks.push({ id: 'pii', label: 'PII in collected values', status: fired ? 'fail' : 'pass', detail: fired ? clean(hit!.message) ?? hit!.message : 'No emails or personal-data params in landing pages, campaign names, or traffic sources.' });
+    } else {
+      checks.push({ id: 'pii', label: 'PII in collected values', status: 'skip', detail: 'No landing-page, campaign, or source data on this run.' });
     }
 
     // Consent Mode SIGNAL — observed from the live site's own GA4 hits (the gcs= parameter), the one
@@ -487,6 +540,44 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
       }
     } else {
       checks.push({ id: 'channel_shift', label: 'Channel-mix stability', status: 'skip', detail: 'Need both current and prior channel mix on this run.' });
+    }
+  }
+
+  // ── 7 · BigQuery export health. The Admin API exposes the LINK, not the BQ dataset, so the honest
+  // checks are: a link whose export types are all disabled ships nothing, and a link that DISAPPEARED
+  // since the previous sweep (deliberate unlink, permissions change, accidental delete) silently
+  // starves every downstream pipeline - GA4 never backfills the gap. A property that never had a
+  // link gets NO row: BigQuery is optional infrastructure, not a health failure.
+  {
+    const links = input.snapshot?.bigQueryLinks;
+    if (Array.isArray(links)) {
+      if (links.length > 0) {
+        const live = links.filter((l) => l.dailyExportEnabled || l.streamingExportEnabled);
+        if (live.length === 0) {
+          pushAlert({
+            id: 'bigquery_dead',
+            kind: 'bigquery_export',
+            severity: 'low',
+            title: 'BigQuery link configured but no export is enabled',
+            detail: `This property is linked to BigQuery (${links.map((l) => l.project).filter(Boolean).join(', ') || 'project unknown'}) but neither daily nor streaming export is enabled - the link ships no data, and anything reading the export dataset is reading history.`,
+            recommendation: 'Enable daily (and/or streaming) export on the link (Admin > Product links > BigQuery links), or remove the link if the export was retired on purpose.',
+          });
+          checks.push({ id: 'bigquery', label: 'BigQuery export', status: 'warn', detail: 'Link configured but no export type is enabled - nothing ships.' });
+        } else {
+          const modes = live.map((l) => [l.dailyExportEnabled ? 'daily' : '', l.streamingExportEnabled ? 'streaming' : ''].filter(Boolean).join('+')).join(', ');
+          checks.push({ id: 'bigquery', label: 'BigQuery export', status: 'pass', detail: `${plural(live.length, 'BigQuery link', 'BigQuery links')} exporting (${modes}).` });
+        }
+      } else if (input.priorBqLinked === true) {
+        pushAlert({
+          id: 'bigquery_removed',
+          kind: 'bigquery_export',
+          severity: 'medium',
+          title: 'BigQuery export link removed',
+          detail: 'The BigQuery link this property had on the previous sweep is GONE - a deliberate unlink, a permissions change, or an accidental deletion. Downstream pipelines reading the export dataset stop receiving new rows from the unlink date, and GA4 does not backfill the gap.',
+          recommendation: 'If the unlink was not intentional, re-create the link quickly (Admin > Product links > BigQuery links) - every day unlinked is a permanent hole in the export dataset.',
+        });
+        checks.push({ id: 'bigquery', label: 'BigQuery export', status: 'fail', detail: 'The BigQuery link present on the previous sweep is gone.' });
+      }
     }
   }
 

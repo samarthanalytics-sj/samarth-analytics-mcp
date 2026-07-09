@@ -55,8 +55,9 @@ export const maskPii = (page: string): string =>
  *  4. Invalid-traffic signature — market engagement splitting into two clean populations (the same
  *     bimodality detector the Section-6 evidence chart uses): the low cluster is where bot/proxy/junk
  *     traffic concentrates, and when it carries a material session share it inflates the totals.
- *  5. PII in page URLs — email addresses or personal-data query params reaching GA4 violate Google's
- *     terms and create GDPR/DPDP exposure; the report shows MASKED examples, never the PII itself.
+ *  5. PII reaching GA4 — email addresses or personal-data query params in page URLs, campaign
+ *     names, or source strings violate Google's terms and create GDPR/DPDP exposure; the report
+ *     shows MASKED examples, never the PII itself.
  *  6. Self-referrals — the site's OWN domain as a referral source: sessions are being split
  *     mid-visit (broken cross-domain linking / missing referral exclusion) and re-attributed.
  *  7. Data-thresholding exposure — Google Signals + small daily traffic means GA4 silently withholds
@@ -127,20 +128,28 @@ export function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQual
     }
   }
 
-  // 5. PII in page URLs. Deterministic regex over the top landing pages the audit already fetched.
-  // Google's GA terms PROHIBIT sending PII; beyond the ToS risk this is GDPR/DPDP exposure and may
-  // require a data-deletion request. Examples are MASKED - the report must not repeat the PII.
-  if (baseline?.landingPages?.length) {
-    const hits = baseline.landingPages.filter((lp) => PII_EMAIL_RE.test(lp.page) || PII_PARAM_RE.test(lp.page));
-    if (hits.length) {
-      const sessions = hits.reduce((sum, h) => sum + h.sessions, 0);
-      const examples = hits.slice(0, 3).map((h) => `"${maskPii(h.page)}"`).join(', ');
+  // 5. PII reaching GA4 - in page URLs, campaign names, or traffic sources. Deterministic regex over
+  // data the audit already fetched. Google's GA terms PROHIBIT sending PII; beyond the ToS risk this
+  // is GDPR/DPDP exposure and may require a data-deletion request. Campaign/source strings matter as
+  // much as URLs: email tools that interpolate the recipient address into utm_campaign/utm_source
+  // send one PII row per recipient. Examples are MASKED - the report must not repeat the PII.
+  {
+    const pageHits = (baseline?.landingPages ?? []).filter((lp) => PII_EMAIL_RE.test(lp.page) || PII_PARAM_RE.test(lp.page));
+    const campHits = (campaigns?.taggedCampaigns ?? []).filter((c) => PII_EMAIL_RE.test(c.campaign));
+    const srcHits = (dqCounts?.sourceMediums ?? []).filter((r) => PII_EMAIL_RE.test(r.name));
+    if (pageHits.length || campHits.length || srcHits.length) {
+      const sessions = [...pageHits, ...campHits, ...srcHits].reduce((sum, h) => sum + h.sessions, 0);
+      const vectors = [pageHits.length ? 'page URLs' : '', campHits.length ? 'campaign names' : '', srcHits.length ? 'traffic sources' : ''].filter(Boolean).join(' and ');
+      const parts: string[] = [];
+      if (pageHits.length) parts.push(`${pageHits.length} of your top landing pages carry an email address or a personal-data query parameter (masked examples: ${pageHits.slice(0, 3).map((h) => `"${maskPii(h.page)}"`).join(', ')})`);
+      if (campHits.length) parts.push(`${campHits.length === 1 ? 'a campaign name contains an email address' : `${campHits.length} campaign names contain email addresses`} (masked: ${campHits.slice(0, 3).map((h) => `"${maskPii(h.campaign)}"`).join(', ')})`);
+      if (srcHits.length) parts.push(`${srcHits.length === 1 ? 'a traffic source carries an email address' : `${srcHits.length} traffic sources carry email addresses`} (masked: ${srcHits.slice(0, 3).map((h) => `"${maskPii(h.name)}"`).join(', ')})`);
       out.push({
         severity: 'high',
         category: 'pii',
         area: 'Privacy',
-        message: `PII is being sent to GA4 in page URLs: ${hits.length} of your top landing pages carry an email address or a personal-data query parameter (masked examples: ${examples}; ${sessions.toLocaleString('en-US')} sessions). Google's Analytics terms prohibit sending PII, and this is GDPR/DPDP exposure - the collected values may need a data-deletion request.`,
-        recommendation: 'Redact PII before the hit is sent: strip or hash these query parameters in the tag (GTM URL-scrubbing variable or a redact rule), fix the site flows that put emails/phones in URLs, then submit a GA4 data-deletion request for the affected ranges.',
+        message: `PII is being sent to GA4 in ${vectors}: ${parts.join('; ')}; ${sessions.toLocaleString('en-US')} sessions affected. Google's Analytics terms prohibit sending PII, and this is GDPR/DPDP exposure - the collected values may need a data-deletion request.`,
+        recommendation: `Redact PII before the hit is sent: strip or hash personal-data query parameters in the tag (GTM URL-scrubbing variable or a redact rule), fix the site flows that put emails/phones in URLs${campHits.length || srcHits.length ? ', and rename campaigns/sources so a recipient address is never interpolated into UTM values (use a list or campaign id instead)' : ''}, then submit a GA4 data-deletion request for the affected ranges.`,
         state: 'confirmed',
         businessRisk: 'Google ToS violation + GDPR/DPDP exposure; historical data may need deletion',
       });

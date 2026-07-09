@@ -7,7 +7,7 @@
 // one-entry targets list on load.
 
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
-import { monitorGa4, firstMetric, noSourceSharePct, type Ga4MonitorInput } from '../google/ga4-monitor';
+import { monitorGa4, firstMetric, noSourceSharePct, ga4DataLagDays, type Ga4MonitorInput } from '../google/ga4-monitor';
 import { buildSlackPayload, buildSlackDigestPayload, buildSlackAuditPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
 import { withQuotaRetry } from '../google/quota-retry';
 import { rankGa4Campaigns } from '../google/ga4-campaigns';
@@ -99,6 +99,9 @@ export async function gatherGa4MonitorInput(
     campaigns,
     snapshot: snap,
     priorChannelGroups: priorDq?.channelGroups ?? null,
+    // Freshness: how far the processed daily data lags behind today. The dq engine's todayYmd is the
+    // authoritative "today"; the request end date is the fallback when that query failed.
+    dataLagDays: ga4DataLagDays(baseline, dqCounts?.todayYmd ?? endDate),
   };
 }
 
@@ -144,6 +147,9 @@ interface TargetState {
   consentProbeAt: number | null;
   consentProbe: { observedHit: boolean; gcsPresent: boolean; gcs: string | null } | null;
   priorGcsPresent: boolean | null;
+  /** Whether the previous sweep saw a BigQuery link — a link disappearing raises a louder alert than
+   *  one never existing. In-memory only (re-learned on the first sweep after a restart). */
+  priorBqLinked: boolean | null;
   seenIds: Set<string>;
 }
 
@@ -299,7 +305,7 @@ export class Ga4MonitoringService {
     const key = `${owner ?? '?'}:${propertyId}`;
     let s = this.state.get(key);
     if (!s) {
-      s = { lastRunAt: null, lastError: null, lastRun: null, lastSlackAt: null, consentProbeAt: null, consentProbe: null, priorGcsPresent: null, seenIds: new Set() };
+      s = { lastRunAt: null, lastError: null, lastRun: null, lastSlackAt: null, consentProbeAt: null, consentProbe: null, priorGcsPresent: null, priorBqLinked: null, seenIds: new Set() };
       this.state.set(key, s);
     }
     return s;
@@ -483,6 +489,14 @@ export class Ga4MonitoringService {
             input.priorConsentGcsPresent = st.priorGcsPresent;
           }
         }
+        // BigQuery-link memory: a link DISAPPEARING is a louder signal than one never existing, so
+        // the input gets the PREVIOUS sweep's observation before the memory is updated.
+        input.priorBqLinked = st.priorBqLinked;
+        {
+          const links = input.snapshot?.bigQueryLinks;
+          if (Array.isArray(links)) st.priorBqLinked = links.length > 0;
+        }
+
         // The desktop tab shows ALL alert types (no severity gate); the minSeverity knob stays on the
         // monitor_ga4_property MCP tool for headless callers that want to filter.
         const result = monitorGa4(input, { minSeverity: 'info' });
