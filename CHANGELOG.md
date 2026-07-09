@@ -1,3 +1,9 @@
+## [1.280.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.280.1...v1.280.2) (2026-07-09)
+
+### Bug Fixes
+
+* **desktop:** Settings masonry — no empty gap under short cards ([4e587ae](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4e587ae70cf8692d3b7c65249309c79d57ead97f)), closes [#465](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/465)
+
 ## [1.280.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.280.0...v1.280.1) (2026-07-09)
 
 ### Bug Fixes
