@@ -232,12 +232,14 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // workspace(s) are always cleaned up. Draft-only + never published.
       let snippet = o.containerSnippet;
       let cleanupWorkspaceIds: string[] = [];
+      let cleanupVersionId = '';
       if (o.monitor) {
         const preview = await data.mintMonitorPreview(o.monitor.accountId, o.monitor.containerId, o.monitor.workspaceId, {
           endPoint: MONITOR_ENDPOINT, galleryOwner: MONITOR_GALLERY.owner, galleryRepository: MONITOR_GALLERY.repository,
         });
         snippet = preview.snippet;
         cleanupWorkspaceIds = preview.cleanupWorkspaceIds;
+        cleanupVersionId = preview.versionId;
       }
       try {
         const driven = await runVerifyDriver(
@@ -249,7 +251,9 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         const verdicts = o.monitor ? verdictsFromMonitor(tagList, driven.monitorEvents ?? []) : evaluateVerify(tagList, driven.perTag, els);
         return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(o.monitor ? { verifiedByMonitor: true } : {}), ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
       } finally {
-        // Always discard the throwaway monitor workspace(s) — never leave a trace in the user's container.
+        // Always discard the throwaway monitor workspace(s) AND the preview version it minted — never
+        // leave a trace (no piled-up "Samarth Verify (auto)" versions) in the user's container.
+        if (o.monitor && cleanupVersionId) await data.deleteGtmVersion(o.monitor.accountId, o.monitor.containerId, cleanupVersionId).catch(() => undefined);
         for (const id of cleanupWorkspaceIds) await data.deleteGtmWorkspace(o.monitor!.accountId, o.monitor!.containerId, id).catch(() => undefined);
       }
     },
