@@ -1,3 +1,9 @@
+## [1.286.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.2...v1.286.3) (2026-07-09)
+
+### Bug Fixes
+
+* **verify:** unique per-run names for GTM Monitor trigger + tag ([#480](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/480)) ([a945f27](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a945f27228bef9d34eb3480a86bf508fa8e86cb2))
+
 ## [1.286.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.1...v1.286.2) (2026-07-09)
 
 ### Bug Fixes
