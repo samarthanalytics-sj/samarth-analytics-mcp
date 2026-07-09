@@ -86,26 +86,27 @@ export function addEventParameters(
 /* ── Server GA4 (sgtmgaaw) "Parameters / Properties to Add / Edit" ── */
 
 /** The map key for a server GA4 (`sgtmgaaw`) "Parameters/Properties to Add / Edit" row's NAME column.
- *  This is the documented GA4 server-tag shape but is NOT corpus-validated — the training corpus is
- *  WEB containers only, so no server export shows this list. The sibling `epToExclude` list stores its
- *  name under `fieldName`, so if a server-container Preview shows added rows being DROPPED, change this
- *  to 'fieldName': it is the single place the shape is defined for both create and edit. */
-export const SERVER_PARAM_NAME_KEY = 'name';
+ *  Verified against a real server-container export: the native sgtmgaaw tag keys each add/edit row (AND
+ *  each `epToExclude`/`upToExclude` row) by `fieldName` + `value` — NOT `name`. Using `name` here left
+ *  the parameter name unread, so GTM silently dropped the row. */
+export const SERVER_PARAM_NAME_KEY = 'fieldName';
 
 function serverParamRow(name: string, value: string): GtmParam {
   return { type: 'map', map: [{ type: 'template', key: SERVER_PARAM_NAME_KEY, value: name }, { type: 'template', key: 'value', value }] };
 }
 const serverRowName = (m: GtmParam): string | undefined => (m.map ?? []).find((x) => x.key === SERVER_PARAM_NAME_KEY)?.value;
 
-/** Build a fresh server GA4 add-list Param (`epToAdd` = event parameters, `upToAdd` = user
- *  properties) from name/value rows (empty-name rows dropped). PURE. */
-export function serverGa4ParamList(listKey: 'epToAdd' | 'upToAdd', rows: Array<{ name: string; value: string }>): GtmParam {
+/** Build a fresh server GA4 add-list Param — `eventParameters` = "Event Parameters to Add / Edit",
+ *  `userProperties` = "User Properties to Add / Edit" — from name/value rows (empty-name rows dropped).
+ *  List keys verified against a real sgtmgaaw export (the earlier `epToAdd`/`upToAdd` keys did not exist
+ *  on the native tag, so GTM ignored the whole list). PURE. */
+export function serverGa4ParamList(listKey: 'eventParameters' | 'userProperties', rows: Array<{ name: string; value: string }>): GtmParam {
   return { type: 'list', key: listKey, list: rows.filter((r) => r.name && r.name.trim() !== '').map((r) => serverParamRow(r.name, r.value)) };
 }
 
-/** Add event parameters (`epToAdd`) and/or user properties (`upToAdd`) to a server GA4 (`sgtmgaaw`)
- *  tag, read-modify-write: an existing NAME has its value updated (not duplicated), a new name is
- *  appended, and every other field (measurementId, eventName, epToIncludeDropdown, epToExclude,
+/** Add event parameters (`eventParameters`) and/or user properties (`userProperties`) to a server GA4
+ *  (`sgtmgaaw`) tag, read-modify-write: an existing NAME has its value updated (not duplicated), a new
+ *  name is appended, and every other field (measurementId, eventName, epToIncludeDropdown, epToExclude,
  *  triggers) is preserved. PURE — returns a NEW tag object the caller PUTs back. */
 export function addServerGa4Params(
   tag: Record<string, unknown>,
@@ -125,7 +126,7 @@ export function addServerGa4Params(
     const table: GtmParam = { type: 'list', key: listKey, list };
     parameter = idx >= 0 ? parameter.map((p, i) => (i === idx ? table : p)) : [...parameter, table];
   };
-  upsert('epToAdd', opts.eventParameters ?? []);
-  upsert('upToAdd', opts.userProperties ?? []);
+  upsert('eventParameters', opts.eventParameters ?? []);
+  upsert('userProperties', opts.userProperties ?? []);
   return { ...tag, parameter };
 }

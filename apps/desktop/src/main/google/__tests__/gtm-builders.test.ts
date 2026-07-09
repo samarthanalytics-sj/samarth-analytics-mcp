@@ -1276,21 +1276,24 @@ test('buildGa4ServerTag builds an sgtmgaaw tag relaying to the Measurement ID', 
   // a per-event tag uses a literal event name
   const purchase = buildGa4ServerTag('GA4 - Purchase', 'G-ABC123', 'purchase');
   assert.equal(((purchase.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'eventName')?.value, 'purchase');
-  // no epToAdd/upToAdd unless explicitly requested (the plain relay forwards everything via "All")
-  assert.equal(p.find((x) => x.key === 'epToAdd'), undefined, 'no add-parameters list on a plain relay');
+  // no eventParameters/userProperties list unless explicitly requested (the plain relay forwards everything via "All")
+  assert.equal(p.find((x) => x.key === 'eventParameters'), undefined, 'no add-parameters list on a plain relay');
 });
 
-test('buildGa4ServerTag: optional eventParameters/userProperties → epToAdd/upToAdd (name/value rows)', () => {
+test('buildGa4ServerTag: optional eventParameters/userProperties → eventParameters/userProperties lists (fieldName/value rows, real sgtmgaaw shape)', () => {
   const t = buildGa4ServerTag('GA4 - Enriched', 'G-1', 'purchase', ['9'], {
     eventParameters: [{ name: 'page_type', value: 'checkout' }, { name: '', value: 'dropped' }],
     userProperties: [{ name: 'membership', value: '{{User Tier}}' }],
   });
   const rowsOf = (key: string): Array<[string, string]> => {
     const p = ((t.parameter as Array<{ key?: string; list?: Array<{ map: Array<{ key?: string; value?: string }> }> }>) ?? []).find((x) => x.key === key);
-    return (p?.list ?? []).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
+    return (p?.list ?? []).map((r) => [r.map.find((m) => m.key === 'fieldName')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
   };
-  assert.deepEqual(rowsOf('epToAdd'), [['page_type', 'checkout']], 'empty-name row dropped');
-  assert.deepEqual(rowsOf('upToAdd'), [['membership', '{{User Tier}}']]);
+  assert.deepEqual(rowsOf('eventParameters'), [['page_type', 'checkout']], 'empty-name row dropped');
+  assert.deepEqual(rowsOf('userProperties'), [['membership', '{{User Tier}}']]);
+  // Regression guard: the old broken keys must never come back.
+  const keySet = (t.parameter as Array<{ key?: string }>).map((x) => x.key);
+  assert.ok(!keySet.includes('epToAdd') && !keySet.includes('upToAdd'), 'no epToAdd/upToAdd (unrecognized by sgtmgaaw)');
   // the relay still keeps its base config
   const keys = (t.parameter as Array<{ key?: string }>).map((x) => x.key);
   assert.ok(keys.includes('measurementId') && keys.includes('epToIncludeDropdown'), 'base relay config preserved');
@@ -1588,50 +1591,62 @@ test('auditServerContainer (1): DOES flag two same-id relays on the same trigger
   assert.ok(rep.findings.some((f) => f.severity === 'critical' && /counted 2× in GA4/i.test(f.message)), 'same event on same trigger IS a duplicate');
 });
 
-test('auditServerContainer (2): flags URL-ENCODED trigger filter values on BOTH camelCase (live API) and UPPER_SNAKE (export) operators, not decoded or regex values', () => {
+test('auditServerContainer (2): flags URL-encoded EVENT-NAME ({{_event}}) filters (both operator casings), NOT decoded/regex values, and NOT page_location/URL filters where +/%XX are legitimate', () => {
   const rep = auditServerContainer({
     taggingServerUrls: ['https://sgtm.example.com'],
     clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
     transformations: [],
     triggers: [
-      // camelCase operator — the shape the LIVE tagmanager API returns (the runtime audit path).
-      { triggerId: '93', name: 'Sign Petition Click Trigger', type: 'ALWAYS', filter: [
+      // camelCase operator on the EVENT NAME — dead (GTM matches the DECODED {{_event}}).
+      { triggerId: '93', name: 'Sign Petition Click Trigger', type: 'customEvent', customEventFilter: [
         { type: 'contains', parameter: [
-          { type: 'template', key: 'arg0', value: '{{Event Name}}' },
+          { type: 'template', key: 'arg0', value: '{{_event}}' },
           { type: 'template', key: 'arg1', value: 'Sign+Petition+Click' },
         ] },
       ] },
-      // UPPER_SNAKE operator — the shape a container EXPORT uses; must also be caught.
-      { triggerId: '129', name: 'Form Submit Trigger', type: 'ALWAYS', filter: [
+      // UPPER_SNAKE operator (export shape) on the event name — must also be caught.
+      { triggerId: '129', name: 'Encoded Event Export', type: 'customEvent', customEventFilter: [
         { type: 'EQUALS', parameter: [
-          { type: 'template', key: 'arg0', value: '{{Page URL Variable}}' },
-          { type: 'template', key: 'arg1', value: '/petition%2Frefugee-rights/' },
+          { type: 'template', key: 'arg0', value: '{{_event}}' },
+          { type: 'template', key: 'arg1', value: 'sign%2Fpetition' },
         ] },
       ] },
       // Decoded event name — must NOT be flagged.
-      { triggerId: '153', name: 'Decoded Form Submit', type: 'ALWAYS', filter: [
+      { triggerId: '153', name: 'Decoded Event', type: 'customEvent', customEventFilter: [
         { type: 'contains', parameter: [
-          { type: 'template', key: 'arg0', value: '{{Event Name}}' },
+          { type: 'template', key: 'arg0', value: '{{_event}}' },
           { type: 'template', key: 'arg1', value: 'Sign Petition Form Submission' },
         ] },
       ] },
-      // A regex quantifier '+' is legal — matchRegex/MATCH_REGEX must NOT be flagged (both casings).
-      { triggerId: '114', name: 'Regex URL', type: 'ALWAYS', filter: [
+      // A regex quantifier '+' is legal — matchRegex must NOT be flagged.
+      { triggerId: '114', name: 'Regex Event', type: 'customEvent', customEventFilter: [
         { type: 'matchRegex', parameter: [
-          { type: 'template', key: 'arg0', value: '{{Page URL Variable}}' },
-          { type: 'template', key: 'arg1', value: '/expose-plastic/|/protect-turtles/a+b' },
+          { type: 'template', key: 'arg0', value: '{{_event}}' },
+          { type: 'template', key: 'arg1', value: 'sign_.+_click' },
         ] },
       ] },
+      // FALSE-POSITIVE GUARD: a page_location/URL filter legitimately holds '+'/%XX (the URL retains them
+      // and DOES match) — it must NOT be flagged as dead. This is exactly the shape buildServerEventTrigger's
+      // pageUrlContains produces ({{ed - page_location}} contains "…").
+      { triggerId: '200', name: 'Campaign Page Filter', type: 'customEvent',
+        customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'purchase' }] }],
+        filter: [
+          { type: 'contains', parameter: [
+            { type: 'template', key: 'arg0', value: '{{ed - page_location}}' },
+            { type: 'template', key: 'arg1', value: '/checkout?utm_campaign=summer+sale' },
+          ] },
+        ] },
     ],
     tags: [gaawTag('7', 'GA4 Tag', 'G-1', ['6'])],
   });
   const encoded = rep.findings.filter((f) => f.category === 'firing' && /URL-encoded/i.test(f.message));
   const names = encoded.map((f) => f.resource?.name).sort();
-  assert.deepEqual(names, ['Form Submit Trigger', 'Sign Petition Click Trigger'], 'flags the encoded triggers regardless of operator casing');
+  assert.deepEqual(names, ['Encoded Event Export', 'Sign Petition Click Trigger'], 'flags encoded EVENT-NAME filters regardless of operator casing');
   assert.ok(encoded.every((f) => f.severity === 'high'));
   assert.ok(encoded.some((f) => /"Sign\+Petition\+Click"/.test(f.message)), 'echoes the offending value');
-  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Decoded Form Submit'), 'decoded value not flagged');
-  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Regex URL'), 'regex quantifier not flagged');
+  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Decoded Event'), 'decoded event name not flagged');
+  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Regex Event'), 'regex quantifier not flagged');
+  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Campaign Page Filter' && /URL-encoded/i.test(f.message)), 'a page_location contains "…+…" filter is NOT falsely flagged as dead');
 });
 
 test('auditServerContainer (3): flags SWAPPED Pixel ID / Access Token (never echoing the token), not correct or variable-backed tags', () => {
@@ -1927,24 +1942,27 @@ test('buildMetaCapiServerTag maps EMQ user_data (em/ph ONLY) + EVENT-AWARE ecomm
   const extDefault = (extVar?.parameter ?? []).find((p) => (p as { key?: string }).key === 'defaultValue') as { value?: string } | undefined;
   assert.equal(extDefault?.value, '{{ed - user_id}}', 'external_id ed variable falls back to user_id');
   assert.ok(emq.some((v) => v.name === 'ed - user_id'), 'ed - user_id is created');
-  // custom_data is the AddToCart recommended set (content_ids/contents/value/currency/num_items), NOT a
-  // fixed list — no order_id (AddToCart has none). content_type is deliberately OMITTED so the template's
-  // own product/product_group auto-detection is not clobbered by a hard-coded literal.
+  // custom_data holds only the SCALAR ecommerce fields that resolve from a flat GA4 key (value, currency,
+  // and order_id for events that carry it). content_ids / contents / num_items / content_type are
+  // deliberately NOT emitted: the Stape template's addEcommerceData BUILDS custom_data.contents from the
+  // event's `items` and auto-detects content_type BEFORE the (unconditional) customDataList override, so a
+  // row binding them to an {{ed - …}} that resolves undefined would ERASE the template's product data
+  // (cleanupData then drops it) — the exact contents-loss bug. AddToCart has no order_id.
   assert.deepEqual(rows('customDataList'), [
-    ['content_ids', '{{ed - content_ids}}'],
-    ['contents', '{{ed - contents}}'],
     ['value', '{{ed - value}}'],
     ['currency', '{{ed - currency}}'],
-    ['num_items', '{{ed - num_items}}'],
   ]);
-  // content_type is never emitted as a custom_data row (the template auto-detects it).
-  assert.ok(!rows('customDataList').some(([n]) => n === 'content_type'), 'content_type is left to the template');
+  // Regression guard: the product/aggregate fields the template reshapes must never be overridden.
+  for (const left of ['content_type', 'contents', 'content_ids', 'num_items']) {
+    assert.ok(!rows('customDataList').some(([n]) => n === left), `${left} is left to the template, not overridden`);
+  }
   assert.deepEqual(rows('serverEventDataList'), [['event_id', '{{ed - event_id}}']]);
-  // Purchase pulls in order_id (from transaction_id); a custom event falls back to the core set.
+  // Purchase pulls in order_id (from transaction_id) but still leaves contents/content_ids to the template.
   const purchase = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - Purchase Tag', 'P', 'T', 'Purchase');
   assert.ok(rowsOf(purchase, 'customDataList').some(([n, v]) => n === 'order_id' && v === '{{ed - transaction_id}}'), 'Purchase maps order_id');
+  assert.ok(!rowsOf(purchase, 'customDataList').some(([n]) => n === 'contents' || n === 'content_ids'), 'Purchase leaves contents/content_ids to the template');
   const custom = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - Custom Tag', 'P', 'T', 'my_custom_event');
-  assert.deepEqual(rowsOf(custom, 'customDataList').map(([n]) => n), ['content_ids', 'value', 'currency', 'order_id'], 'custom event → core ecommerce set');
+  assert.deepEqual(rowsOf(custom, 'customDataList').map(([n]) => n), ['value', 'currency', 'order_id'], 'custom event → scalar set only');
   // Every referenced {{ed - …}} variable is provided by buildMetaEmqVariables (literals like "product" are skipped).
   const provided = new Set(buildMetaEmqVariables().map((v) => v.name));
   const referenced = [...rows('userDataList'), ...rows('customDataList'), ...rows('serverEventDataList')]

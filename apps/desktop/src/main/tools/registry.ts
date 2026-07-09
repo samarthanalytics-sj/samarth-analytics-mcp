@@ -3249,7 +3249,7 @@ export function buildToolRegistry(
     {
       name: 'add_ga4_server_parameters',
       description:
-        'Add event parameters ("Parameters to Add / Edit" → epToAdd) and/or user properties ("Properties to Add / Edit" → upToAdd) to a GA4 SERVER tag (type "sgtmgaaw") in a server container — the server-side counterpart of add_ga4_event_parameters. Read-modify-write: preserves measurementId / eventName / "Include: All" / excludes / triggers, and a repeated name updates its value instead of duplicating. NOTE: a straight GA4 server relay already forwards every parameter of the incoming event (Default Parameters to Include: All) — including client_id, user_id, and the ecommerce fields — so use this only for ENRICHMENT: server-derived values NOT already on the incoming event (e.g. a country from a request-header {{rh - ...}} variable, a hashed id, a corrected page_location) or to override a value. Values may be {{variables}}. Requires accountId, containerId (SERVER), workspaceId, tagId, and at least one of eventParameters / userProperties.',
+        'Add event parameters ("Event Parameters to Add / Edit") and/or user properties ("User Properties to Add / Edit") to a GA4 SERVER tag (type "sgtmgaaw") in a server container — the server-side counterpart of add_ga4_event_parameters. Read-modify-write: preserves measurementId / eventName / "Include: All" / excludes / triggers, and a repeated name updates its value instead of duplicating. NOTE: a straight GA4 server relay already forwards every parameter of the incoming event (Default Parameters to Include: All) — including client_id, user_id, and the ecommerce fields — so use this only for ENRICHMENT: server-derived values NOT already on the incoming event (e.g. a country from a request-header {{rh - ...}} variable, a hashed id, a corrected page_location) or to override a value. Values may be {{variables}}. Requires accountId, containerId (SERVER), workspaceId, tagId, and at least one of eventParameters / userProperties.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -3259,12 +3259,12 @@ export function buildToolRegistry(
           tagId: { type: 'string', description: 'The GA4 SERVER (sgtmgaaw) tag ID.' },
           eventParameters: {
             type: 'array',
-            description: 'Event parameters to add/edit (epToAdd): {name, value} rows.',
+            description: 'Event parameters to add/edit (the sgtmgaaw "eventParameters" table): {name, value} rows.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
           userProperties: {
             type: 'array',
-            description: 'User properties to add/edit (upToAdd): {name, value} rows.',
+            description: 'User properties to add/edit (the sgtmgaaw "userProperties" table): {name, value} rows.',
             items: { type: 'object', properties: { name: { type: 'string' }, value: { type: 'string' } }, required: ['name', 'value'], additionalProperties: false },
           },
         },

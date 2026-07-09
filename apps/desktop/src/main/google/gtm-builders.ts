@@ -493,13 +493,13 @@ export function buildGa4ServerTag(
   const parameter: Param[] = [];
   if (eventName && eventName.trim() !== '') parameter.push(tpl('eventName', eventName));
   parameter.push(tpl('measurementId', measurementId), tpl('epToIncludeDropdown', 'all'), tpl('upToIncludeDropdown', 'all'));
-  // Optional "Parameters to Add / Edit" (epToAdd) + "User Properties to Add / Edit" (upToAdd) — for
-  // ENRICHMENT (server-derived values not already on the incoming event; the event's own params flow
-  // via epToIncludeDropdown='all'). Row shape via serverGa4ParamList — see its Preview-verify note.
+  // Optional "Event Parameters to Add / Edit" (eventParameters) + "User Properties to Add / Edit"
+  // (userProperties) — for ENRICHMENT (server-derived values not already on the incoming event; the
+  // event's own params flow via epToIncludeDropdown='all'). Row shape via serverGa4ParamList.
   const eps = (opts?.eventParameters ?? []).filter((p) => p.name && p.name.trim() !== '');
   const ups = (opts?.userProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
-  if (eps.length) parameter.push(serverGa4ParamList('epToAdd', eps) as Param);
-  if (ups.length) parameter.push(serverGa4ParamList('upToAdd', ups) as Param);
+  if (eps.length) parameter.push(serverGa4ParamList('eventParameters', eps) as Param);
+  if (ups.length) parameter.push(serverGa4ParamList('userProperties', ups) as Param);
   return {
     name: sanitizeName(name),
     type: 'sgtmgaaw',
@@ -2724,20 +2724,27 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     });
   }
 
-  // (2) URL-ENCODED TRIGGER VALUES — a literal (non-regex) condition whose value carries
-  //     URL-encoding ("Sign+Petition+Click", %20, %2F) can never equal/contain a DECODED
-  //     dataLayer event name, so the trigger is dead. Variable refs + regex ops are skipped.
+  // (2) URL-ENCODED EVENT-NAME VALUES — a literal (non-regex) condition on the EVENT NAME ({{_event}})
+  //     whose value carries URL-encoding ("Sign+Petition+Click", %20, %2F) can never equal/contain a
+  //     DECODED dataLayer event name, so the trigger is dead. Scoped to {{_event}} conditions ONLY:
+  //     on a URL / page_location variable, '+' and %XX are LEGITIMATE URL characters that the value
+  //     genuinely retains and matches (this codebase's own buildServerEventTrigger pageUrlContains makes
+  //     `{{ed - page_location}} contains "…"` conditions), so flagging those would be a false positive.
+  //     Variable-ref match values + regex ops are also skipped.
   for (const tr of triggers) {
     const bad: string[] = [];
     const scan = (arr?: Array<Record<string, unknown>>): void => {
       for (const f of arr ?? []) {
         const op = String((f as { type?: unknown }).type ?? '');
         if (!LITERAL_MATCH_OPS.has(normOp(op))) continue;
-        for (const p of ((f as { parameter?: Array<{ key?: string; value?: unknown }> }).parameter) ?? []) {
-          const v = typeof p.value === 'string' ? p.value : '';
-          if (!v || isVariableRef(v)) continue;
-          if (looksUrlEncoded(v)) bad.push(v);
-        }
+        const cparams = ((f as { parameter?: Array<{ key?: string; value?: unknown }> }).parameter) ?? [];
+        // Only the event-name input makes URL-encoding "dead": GTM matches the DECODED {{_event}}.
+        const arg0 = cparams.find((p) => p.key === 'arg0');
+        if (String((arg0 as { value?: unknown } | undefined)?.value ?? '') !== '{{_event}}') continue;
+        const arg1 = cparams.find((p) => p.key === 'arg1');
+        const v = typeof (arg1 as { value?: unknown } | undefined)?.value === 'string' ? String((arg1 as { value?: string }).value) : '';
+        if (!v || isVariableRef(v)) continue;
+        if (looksUrlEncoded(v)) bad.push(v);
       }
     };
     scan(tr.filter);
@@ -3111,23 +3118,24 @@ const canonMetaUserDataKey = (name: string): string => {
  *  has no clean event key → "product"). Only keys with a binding are auto-mapped; an event's other
  *  recommended object properties (content_name, registration_method, …) are left for the user. */
 const META_CUSTOM_DATA_BINDING: Record<string, { ed: string } | { literal: string }> = {
-  content_ids: { ed: 'content_ids' },
-  contents: { ed: 'contents' },
-  // content_type is intentionally NOT bound: the Stape template's addEcommerceData auto-detects it
-  // ('product' for a single item, 'product_group' for a view_item_list / collection), and it runs
-  // BEFORE the tag's customDataList override — so a hard-coded literal 'product' here would OVERWRITE
-  // the template's correctly-detected 'product_group' for catalog product-set advertisers. Leaving it
-  // unbound lets the template's detection stand.
+  // contents / content_ids / num_items / content_type are intentionally NOT bound. The Stape template's
+  // addEcommerceData BUILDS custom_data.contents (an array of {id,quantity,item_price,…}) from the event's
+  // `items` and auto-detects content_type ('product' vs 'product_group'), BEFORE the tag's customDataList
+  // override runs — and that override is applied UNCONDITIONALLY (mappedData.custom_data[name] = value with
+  // no validity check). A GA4-sourced event has no FLAT `contents` key, so {{ed - contents}} resolves
+  // undefined; binding it would overwrite the template's product array with undefined, and cleanupData
+  // (isValidValue) then drops it — shipping every ecommerce tag with NO contents and breaking catalog/DPA
+  // matching. So we leave these to the template. (content_ids/num_items aren't built by the template and
+  // {{ed - …}} resolve undefined for GA4 events too, so binding them only risked the same erase for no gain.)
   value: { ed: 'value' },
   currency: { ed: 'currency' },
-  num_items: { ed: 'num_items' },
   order_id: { ed: 'transaction_id' },
 };
 /** Event-aware custom_data rows: the recommended object properties for `std` (minus event_id, which
  *  is sent via serverEventDataList) that have a binding, in a stable order. For a custom event
  *  (std null) fall back to the core ecommerce set. value + currency are always included. */
 function metaCustomDataRows(std: string | null): Param[] {
-  const keys = std ? (META_EVENT_OBJECT_PROPERTIES[std] ?? []) : ['content_ids', 'value', 'currency', 'order_id'];
+  const keys = std ? (META_EVENT_OBJECT_PROPERTIES[std] ?? []) : ['value', 'currency', 'order_id'];
   const rows: Param[] = [];
   const seen = new Set<string>();
   const add = (k: string): void => {
@@ -3799,10 +3807,14 @@ export const PINTEREST_USER_DATA_KEYS: string[] = [
   'hashed_maids', 'client_ip_address', 'client_user_agent', 'external_id', 'click_id',
 ];
 export const PINTEREST_CUSTOM_DATA_KEYS: string[] = [
-  'value', 'currency', 'content_ids', 'contents', 'content_name', 'content_category', 'content_brand',
-  'num_items', 'order_id', 'search_string', 'opt_out', 'np',
+  'currency', 'value', 'content_name', 'content_category', 'content_brand', 'content_ids', 'contents',
+  'num_items', 'order_id', 'search_string', 'opt_out_type', 'predicted_ltv', 'line_items',
 ];
-export const PINTEREST_SERVER_EVENT_DATA_KEYS: string[] = ['event_id', 'event_source_url', 'action_source', 'opt_out', 'partner_name'];
+export const PINTEREST_SERVER_EVENT_DATA_KEYS: string[] = [
+  'action_source', 'event_time', 'event_id', 'event_source_url', 'opt_out', 'partner_name',
+  'app_id', 'app_name', 'app_version', 'device_brand', 'device_carrier', 'device_model', 'device_type',
+  'os_version', 'wifi', 'language',
+];
 /** Common GA4 / plain-name aliases → the canonical Pinterest key. Applied only when the alias resolves
  *  to a key in the target table's SELECT set, so it can never turn a valid key into an invalid one. */
 const PINTEREST_KEY_ALIAS: Record<string, string> = {

@@ -62,7 +62,7 @@ check('setTemplateParam: eventName + measurementId tagReference + event table pr
 check('setTemplateParam: adds the key when absent (googtag tagId)', (() => { const g = setTemplateParam({ type: 'googtag', parameter: [] }, 'tagId', '{{GA4 Variable}}'); return (g.parameter as GtmParam[])[0]?.key === 'tagId' && (g.parameter as GtmParam[])[0]?.value === '{{GA4 Variable}}'; })());
 check('setTemplateParam: input not mutated (pure)', params(ga4).find((p) => p.key === 'measurementIdOverride')?.value === '{{GA4 Measurement ID}}');
 
-// ── addServerGa4Params: epToAdd / upToAdd on a server GA4 (sgtmgaaw) tag ──
+// ── addServerGa4Params: eventParameters / userProperties on a server GA4 (sgtmgaaw) tag ──
 const srv: Record<string, unknown> = {
   name: 'GA4 - Add Payment Info (Server)', type: 'sgtmgaaw', firingTriggerId: ['5'],
   parameter: [
@@ -79,13 +79,16 @@ const srvRows = (t: Record<string, unknown>, key: string): Array<[string | undef
     (m.map ?? []).find((x) => x.key === 'value')?.value,
   ]);
 const so = addServerGa4Params(srv, { eventParameters: [{ name: 'country', value: '{{rh - x-geo-country}}' }, { name: '', value: 'drop' }], userProperties: [{ name: 'tier', value: '{{User Tier}}' }] });
-check('server: epToAdd created with name/value rows (empty-name dropped)', JSON.stringify(srvRows(so, 'epToAdd')) === JSON.stringify([['country', '{{rh - x-geo-country}}']]));
-check('server: upToAdd created', JSON.stringify(srvRows(so, 'upToAdd')) === JSON.stringify([['tier', '{{User Tier}}']]));
+check('server: eventParameters created with fieldName/value rows (empty-name dropped)', JSON.stringify(srvRows(so, 'eventParameters')) === JSON.stringify([['country', '{{rh - x-geo-country}}']]));
+check('server: userProperties created', JSON.stringify(srvRows(so, 'userProperties')) === JSON.stringify([['tier', '{{User Tier}}']]));
 check('server: base config + epToExclude preserved (RMW)', params(so).some((p) => p.key === 'measurementId') && params(so).some((p) => p.key === 'epToIncludeDropdown') && params(so).some((p) => p.key === 'epToExclude'));
-check('server: name column uses SERVER_PARAM_NAME_KEY', (serverGa4ParamList('epToAdd', [{ name: 'a', value: 'b' }]).list?.[0]?.map ?? []).some((x) => x.key === SERVER_PARAM_NAME_KEY && x.value === 'a'));
+// Regression guard: the real sgtmgaaw shape (verified against a live server export) is the list keys
+// eventParameters/userProperties with a `fieldName` name column — NOT epToAdd/upToAdd or a `name` column.
+check('server: row name column is fieldName, not name', SERVER_PARAM_NAME_KEY === 'fieldName' && (serverGa4ParamList('eventParameters', [{ name: 'a', value: 'b' }]).list?.[0]?.map ?? []).some((x) => x.key === 'fieldName' && x.value === 'a'));
+check('server: the old broken epToAdd/upToAdd keys are never emitted', params(so).find((p) => p.key === 'epToAdd') === undefined && params(so).find((p) => p.key === 'upToAdd') === undefined);
 const so2 = addServerGa4Params(so, { eventParameters: [{ name: 'country', value: '{{New Country}}' }] });
-check('server: existing epToAdd name updates value, not duplicated', srvRows(so2, 'epToAdd').filter(([n]) => n === 'country').length === 1 && srvRows(so2, 'epToAdd')[0][1] === '{{New Country}}');
-check('server: input tag not mutated (pure)', params(srv).find((p) => p.key === 'epToAdd') === undefined);
+check('server: existing eventParameters name updates value, not duplicated', srvRows(so2, 'eventParameters').filter(([n]) => n === 'country').length === 1 && srvRows(so2, 'eventParameters')[0][1] === '{{New Country}}');
+check('server: input tag not mutated (pure)', params(srv).find((p) => p.key === 'eventParameters') === undefined);
 
 console.log(`\ndesktop tag-params: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
