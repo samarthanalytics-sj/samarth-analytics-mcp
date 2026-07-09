@@ -2,7 +2,7 @@
 // format) + the authoritative per-tag verdict mapping. No browser, no GTM API.
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/tag-monitor.test.ts
 
-import { isMonitorHit, parseMonitorHit, monitorVerdicts, MONITOR_SENTINEL_HOST, MONITOR_ENDPOINT, MONITOR_GALLERY, type MonitorEvent } from '../tag-monitor';
+import { isMonitorHit, parseMonitorHit, monitorVerdicts, MONITOR_ENDPOINT, MONITOR_GALLERY, type MonitorEvent } from '../tag-monitor';
 
 let passed = 0;
 let failed = 0;
@@ -30,7 +30,7 @@ const hit = (event: string, tags: Array<{ id: string; nm?: string; st?: string; 
 
 // ── config constants ──────────────────────────────────────────────────────────────
 {
-  check('config: endpoint is on the .invalid sentinel host (never resolves; route-aborted)', MONITOR_ENDPOINT.startsWith('https://') && MONITOR_ENDPOINT.includes(MONITOR_SENTINEL_HOST));
+  check('config: endpoint matches Simo template send_pixel permission (https://placeholder.com/collect*)', MONITOR_ENDPOINT.startsWith('https://placeholder.com/collect'));
   check('config: endpoint passes the GTM Monitor tag validation (^https://.+)', /^https:\/\/.+/.test(MONITOR_ENDPOINT));
   check('config: gallery owner/repo is Simo Ahava\'s GTM Monitor', MONITOR_GALLERY.owner === 'gtm-templates-simo-ahava' && MONITOR_GALLERY.repository === 'google-tag-manager-monitor');
 }

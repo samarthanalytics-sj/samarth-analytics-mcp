@@ -749,6 +749,16 @@ export class GoogleDataService {
     return { deleted: true };
   }
 
+  /** Delete an UNPUBLISHED container version — cleans up the throwaway "Samarth Verify (auto)" version a
+   *  monitor-preview run mints, so it doesn't pile up in version history. Only ever called on a version we
+   *  just created for preview and never published (a published/live version can't be deleted anyway). */
+  async deleteGtmVersion(accountId: string, containerId: string, versionId: string): Promise<{ deleted: boolean }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    await gtm.accounts.containers.versions.delete({ path: `accounts/${accountId}/containers/${containerId}/versions/${versionId}` });
+    return { deleted: true };
+  }
+
   /**
    * Mint a PREVIEW that carries the user's draft tags PLUS an injected GTM Monitor tag (Simo Ahava's
    * community template), so verification can read GTM's OWN per-tag firing (addEventCallback) instead of

@@ -31,13 +31,13 @@ export interface MonitorEvent {
   tags: MonitorTagResult[];
 }
 
-// Any request to this host is a monitor report — the verify driver captures + aborts it, so it never
-// leaves the machine. A .invalid TLD guarantees it can never resolve to a real server, and the GTM
-// Monitor tag's endpoint field accepts it (its only validation is /^https:\/\/.+/).
-export const MONITOR_SENTINEL_HOST = 'samarth-verify-monitor.invalid';
-const SENTINEL_MARK = 'samarth-verify-monitor';
-/** The HTTPS endpoint we configure the imported GTM Monitor tag to GET-pixel each event to. */
-export const MONITOR_ENDPOINT = `https://${MONITOR_SENTINEL_HOST}/collect`;
+// The endpoint the imported GTM Monitor tag GET-pixels each event to. It MUST be
+// https://placeholder.com/collect*: Simo's template restricts its send_pixel permission to exactly that
+// pattern (verified in its template.tpl), and a gallery-imported template's permissions can't be edited —
+// any other URL makes the sandbox BLOCK sendPixel and the monitor tag FAILS (the "0 fired" first run).
+// The request is captured + ABORTED by the verify driver's route, so nothing ever reaches placeholder.com.
+export const MONITOR_ENDPOINT = 'https://placeholder.com/collect';
+const SENTINEL_MARK = 'placeholder.com/collect';
 /** Simo Ahava's published "GTM Monitor" community template — imported via import_from_gallery so its
  *  sandbox permissions come vetted (we never hand-roll a template). It fires addEventCallback and GET-
  *  pixels each event's fired tags to `endPoint`. Source: github.com/gtm-templates-simo-ahava. */
