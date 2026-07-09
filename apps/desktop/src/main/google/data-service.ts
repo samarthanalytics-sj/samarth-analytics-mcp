@@ -893,8 +893,8 @@ export class GoogleDataService {
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
-  /** Add event parameters (`epToAdd`) and/or user properties (`upToAdd`) to a SERVER GA4 tag
-   *  (`sgtmgaaw`) — the "Parameters/Properties to Add / Edit" sections. Read-modify-write, so the
+  /** Add event parameters (`eventParameters`) and/or user properties (`userProperties`) to a SERVER
+   *  GA4 tag (`sgtmgaaw`) — the "Parameters/Properties to Add / Edit" sections. Read-modify-write, so the
    *  measurementId / eventName / include-all dropdowns / triggers are preserved and a repeated name
    *  updates its value rather than duplicating. Rejects non-sgtmgaaw tags. (For a straight relay the
    *  incoming event's own params already flow via "Include: All" — use this for ENRICHMENT.) */
