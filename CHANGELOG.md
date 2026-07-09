@@ -1,3 +1,9 @@
+## [1.281.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.280.2...v1.281.0) (2026-07-09)
+
+### Features
+
+* **desktop:** GA4 chat property selector - visible working-property bar like the GTM one ([4c6dec9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4c6dec95d17fb108e9efd14ed15222e57b86fcec)), closes [#id](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/id)
+
 ## [1.280.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.280.1...v1.280.2) (2026-07-09)
 
 ### Bug Fixes
