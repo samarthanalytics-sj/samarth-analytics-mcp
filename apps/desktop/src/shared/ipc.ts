@@ -966,11 +966,20 @@ export interface Ga4MonitorTarget {
   /** WHAT this property posts to its Slack channel — chosen when connecting/editing the channel.
    *  alerts = new issues the moment they appear; digest = weekly health summary even when healthy;
    *  audit = weekly full-audit executive summary. Seeded from the old global toggles on migration. */
-  notify?: { alerts: boolean; digest: boolean; audit: boolean };
+  notify?: { alerts: boolean; digest: boolean; audit: boolean; monthly?: boolean };
   /** When this property's weekly health digest last posted (persisted so restarts don't re-send). */
   lastDigestAt?: number;
   /** When this property's weekly scheduled audit last ran (persisted so restarts don't re-run). */
   lastAuditAt?: number;
+  /** When this property's MONTHLY tracking report last posted. Seeded (without sending) on the first
+   *  sweep so the first report tells a real month's story, not an empty one. */
+  lastMonthlyAt?: number;
+  /** Reliability % from the two most recent weekly audits - the monthly report's trust TREND. */
+  lastAuditScore?: number;
+  prevAuditScore?: number;
+  /** Rolling issue history (capped at 50): when each alert opened and closed. Powers the monthly
+   *  report's "caught and resolved" story; persisted so restarts don't lose the month. */
+  issueLog?: Array<{ id: string; title: string; severity: string; openedAt: number; closedAt?: number }>;
 }
 
 /** Persisted config for the GA4 monitor (multi-property; mirrors the GTM MonitorConfig in shape). */
@@ -1005,6 +1014,7 @@ export interface Ga4MonitorAlertView {
   summaryLines?: string[];
   impact?: string;
   actions?: string[];
+  plain?: string;
 }
 
 export interface Ga4MonitorCheckView {

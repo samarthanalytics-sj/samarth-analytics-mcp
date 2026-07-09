@@ -20,6 +20,10 @@ export interface AntiLieFinding {
   area: string;
   message: string;
   recommendation?: string;
+  /** Consequence-first one-liner for the ALERT reader (a store owner): leads with the money or the
+   *  decision at stake, no GA4 jargon. The analyst `message` stays for the report; renderers fall
+   *  back to it when this is absent. */
+  plain?: string;
   state: 'confirmed';
   businessRisk?: string;
 }
@@ -83,6 +87,7 @@ export function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQual
         area: 'Data quality',
         message: `${spike.peakSharePct}% of ${spike.channel} sessions arrived in ${span} (${spike.peakLabel}: ${spike.peakValue.toLocaleString('en-US')} vs ${spike.restValue.toLocaleString('en-US')} across every other ${period}), and ${spike.channel} is ${spike.channelSharePct}% of all sessions - that is an event (a bot burst, a scrape, or an untagged campaign), not a channel baseline, and it distorts the headline session count and the prior-period comparison.`,
         recommendation: `Identify what drove ${spike.channel} in ${spike.peakLabel} (source/medium + landing pages for that traffic); segment or exclude it before quoting ${spike.channel} numbers or window totals.`,
+        plain: `Most of your ${spike.channel} traffic (${spike.peakSharePct}%) arrived in ${span}: the headline visitor numbers describe a one-off event, not your normal business.`,
         state: 'confirmed',
         businessRisk: 'Headline sessions and trend comparisons describe a one-off event, not the business',
       });
@@ -97,6 +102,7 @@ export function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQual
       area: 'Data quality',
       message: `Payment-gateway referral leakage: ${gateways.map((g) => `${g.name} (${g.sessions.toLocaleString('en-US')} sessions)`).join(', ')} - buyers bouncing back from the payment page start a NEW session attributed to the gateway, so purchases are re-attributed away from the real channel and referral/Direct inflate (${total.toLocaleString('en-US')} sessions affected).`,
       recommendation: 'Add the gateway domains to "List unwanted referrals" (Admin > Data streams > Configure tag settings) so the purchase keeps its original attribution.',
+      plain: 'Some of your sales are being credited to your payment provider instead of the marketing that earned them, so your best channels look weaker than they really are.',
       state: 'confirmed',
       businessRisk: 'Purchases credited to the payment gateway instead of the channel that earned them',
     });
@@ -121,6 +127,7 @@ export function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQual
           area: 'Data quality',
           message: `Suspected invalid traffic: ${clusters.low.map((r) => `${r.name} (${r.pct}% engagement)`).join(', ')} sit ${clusters.gap} points below your other markets (${highMin}%+) - a split this clean separates real users from bot/proxy/junk traffic, and those markets carry ${lowSessions.toLocaleString('en-US')} sessions (${sharePct.toFixed(1)}% of the listed markets' total).`,
           recommendation: `Check the source/medium and hostnames behind ${clusters.low.map((r) => r.name).join(', ')}; if it is bot or proxy traffic, exclude it (internal-traffic rules or a segment) before quoting session totals or market comparisons.`,
+          plain: `About ${lowSessions.toLocaleString('en-US')} visits (${sharePct.toFixed(1)}% of your listed markets) look like bot or junk traffic that cannot buy: your visitor totals are inflated by traffic that is not customers.`,
           state: 'confirmed',
           businessRisk: 'Session totals and market comparisons inflated by traffic that cannot buy',
         });
@@ -150,6 +157,7 @@ export function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQual
         area: 'Privacy',
         message: `PII is being sent to GA4 in ${vectors}: ${parts.join('; ')}; ${sessions.toLocaleString('en-US')} sessions affected. Google's Analytics terms prohibit sending PII, and this is GDPR/DPDP exposure - the collected values may need a data-deletion request.`,
         recommendation: `Redact PII before the hit is sent: strip or hash personal-data query parameters in the tag (GTM URL-scrubbing variable or a redact rule), fix the site flows that put emails/phones in URLs${campHits.length || srcHits.length ? ', and rename campaigns/sources so a recipient address is never interpolated into UTM values (use a list or campaign id instead)' : ''}, then submit a GA4 data-deletion request for the affected ranges.`,
+        plain: 'Customer emails or personal details are leaking into your analytics: that is a privacy and Google-terms problem, and the leaked history may need to be deleted.',
         state: 'confirmed',
         businessRisk: 'Google ToS violation + GDPR/DPDP exposure; historical data may need deletion',
       });
@@ -184,6 +192,7 @@ export function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQual
           area: 'Data quality',
           message: `Self-referrals: ${selfRefs.map((g) => `${g.name} (${g.sessions.toLocaleString('en-US')} sessions)`).join(', ')} - your own site is showing up as a traffic source, which means sessions are being SPLIT mid-visit (broken cross-domain linking or a missing referral exclusion) and the second half of each visit is re-attributed to yourself (${total.toLocaleString('en-US')} sessions, ${sharePct.toFixed(1)}% of the window).`,
           recommendation: 'Add your own domain(s) to "List unwanted referrals" (Admin > Data streams > Configure tag settings), and if the journey crosses subdomains/domains (checkout, account, payment), configure cross-domain measurement in "Configure your domains" so the session survives the hop.',
+          plain: 'Your own website is showing up as a traffic source: customer visits are being split in two mid-journey, so the marketing that actually brought the sale loses the credit.',
           state: 'confirmed',
           businessRisk: 'Sessions double-counted and conversions re-attributed to your own site instead of the real channel',
         });
@@ -220,6 +229,9 @@ export function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQual
     if (campRev > 0 && paidChanRev < campRev / 2) {
       const cur = campaigns.currencyCode ? `${campaigns.currencyCode} ` : '';
       const m = (x: number): string => `${cur}${Math.round(x).toLocaleString('en-US')}`;
+      // For the plain line: "your ads look Nx less profitable" - the one number an owner repeats.
+      const ratio = paidChanRev > 0 ? campRev / paidChanRev : null;
+      const ratioTxt = ratio && ratio >= 2 ? `about ${Math.round(ratio)}x` : 'far';
       // Auditable numerator: name the counted campaigns (top 3 + a count of the rest) so a reader can
       // re-add the total; zero-revenue campaigns (e.g. traffic-only campaigns) are never counted.
       const names = paidCamps.slice(0, 3).map((c) => `"${c.campaign}"`).join(', ') + (paidCamps.length > 3 ? ` + ${paidCamps.length - 3} more` : '');
@@ -238,6 +250,7 @@ export function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQual
         area: 'Data quality',
         message: `Campaign and channel revenue do not reconcile: ${paidCamps.length} paid-format campaign(s) with recorded revenue (${names}) claim ${m(campRev)}, but all paid channels combined show only ${m(paidChanRev)}.${landing} Either way this report contains two revenue pictures that cannot both be true as stated.${spikeLink}`,
         recommendation: 'Verify Google Ads auto-tagging (gclid) and the GA4-Google Ads link, add utm_medium=cpc/paid to ad links so paid sessions leave the organic/direct buckets, and quote revenue from ONE attribution view until the two reconcile.',
+        plain: `Your ads look ${ratioTxt} less profitable than they are: campaigns brought in about ${m(campRev)}, but only ${m(paidChanRev)} of it is credited to paid ads. The rest is filed as free traffic, so your ad reports understate what the ads actually earned.`,
         state: 'confirmed',
         businessRisk: 'Paid-media budget and ROAS decisions made on revenue attributed to the wrong channel',
       });

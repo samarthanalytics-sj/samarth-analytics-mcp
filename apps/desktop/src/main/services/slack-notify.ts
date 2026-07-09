@@ -63,11 +63,15 @@ export function buildSlackPayload(propertyLabel: string, result: Ga4MonitorResul
     blocks.push({ type: 'divider' });
     const seg: string[] = [];
     // With several alerts in one message the per-alert severity is shown beside its Issue.
-    seg.push(`*Issue*${alerts.length > 1 ? ` ${SEV_EMOJI[a.severity] ?? ''} _(${cap(a.severity)})_` : ''}\n${truncate(a.title, 200)}`);
+    // The Issue line leads with the CONSEQUENCE (`plain`, written for the owner); the analyst
+    // title/detail stay underneath for whoever investigates.
+    seg.push(`*Issue*${alerts.length > 1 ? ` ${SEV_EMOJI[a.severity] ?? ''} _(${cap(a.severity)})_` : ''}\n${truncate(a.plain ?? a.title, 400)}`);
     seg.push(`*Summary*\n${a.summaryLines?.length ? a.summaryLines.map((l) => truncate(l, 200)).join('\n') : truncate(a.detail, 700)}`);
     if (a.impact) seg.push(`*Impact*\n${truncate(a.impact, 300)}`);
     const actions = a.actions?.length ? a.actions : a.recommendation ? [a.recommendation] : [];
     if (actions.length) seg.push(`*Recommended Actions*\n${actions.map((x) => `\u2022 ${truncate(x, 300)}`).join('\n')}`);
+    // When the reader's action is "forward this", the technical fix rides along for the recipient.
+    if (a.actions?.length && a.recommendation) seg.push(`*For whoever fixes it*\n${truncate(a.recommendation, 400)}`);
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text: seg.join('\n\n') } });
   }
   if (alerts.length > 10) {
@@ -101,6 +105,18 @@ export function buildSlackDigestPayload(
   const label = propertyLabel || 'your GA4 property';
   const text = `${HEALTH_EMOJI[result.health]} Weekly health digest — ${label}: ${result.summary}`;
   const cadence = meta.intervalMinutes >= 60 ? `${Math.round(meta.intervalMinutes / 60)} hr` : `${meta.intervalMinutes} min`;
+  // Healthy week = a ONE-LINE all-clear a client skims in two seconds. A full digest of green checks
+  // every week becomes wallpaper, and wallpaper trains the reader to ignore the week that matters.
+  if (result.health === 'healthy' && meta.openAlerts === 0) {
+    const line = `\u2705 All clear this week on ${label}: every check passed. You will only hear from us the moment something breaks.`;
+    return {
+      text: truncate(line, 500),
+      blocks: [
+        { type: 'section', text: { type: 'mrkdwn', text: truncate(line, 500) } },
+        { type: 'context', elements: [{ type: 'mrkdwn', text: `Checked every ${cadence} · Samarth Analytics GA4 monitoring` }] },
+      ],
+    };
+  }
   return {
     text,
     blocks: [
@@ -116,6 +132,70 @@ export function buildSlackDigestPayload(
       { type: 'context', elements: [{ type: 'mrkdwn', text: `Checked every ${cadence} · next digest in 7 days · Samarth Analytics GA4 monitoring` }] },
     ],
   };
+}
+
+/** The MONTHLY tracking report: always sends - that is the point. Weekly alerts protect the client
+ *  (silence until something breaks); the monthly proves the watching: verdict, the trust number and
+ *  how it moved, what was caught and resolved, what is still open, the month's numbers with a trust
+ *  flag, and ONE recommendation. */
+export interface MonthlyReportData {
+  verdict: string;
+  /** Reliability % from the latest weekly audit; null = not measured yet. */
+  reliabilityPct: number | null;
+  prevReliabilityPct: number | null;
+  /** Issues that OPENED inside the month, with whether they closed again. */
+  opened: Array<{ title: string; closed: boolean }>;
+  /** Currently-open issues, in the reader's language. */
+  openNow: Array<{ severity: string; text: string }>;
+  recommendation: string;
+  metrics: { sessions: number; priorSessions: number; keyEvents: number; priorKeyEvents: number; revenue: number; priorRevenue: number } | null;
+  /** One-line caution when attribution-affecting issues are open ("Revenue up 12%, but..."). */
+  trustCaveat: string | null;
+}
+
+export function buildSlackMonthlyPayload(propertyLabel: string, r: MonthlyReportData): SlackPayload {
+  const label = propertyLabel || 'your GA4 property';
+  const mom = (name: string, cur: number, prior: number): string =>
+    prior > 0
+      ? `${name}: ${cur >= prior ? '+' : ''}${Math.round(((cur - prior) / prior) * 100)}% (${prior.toLocaleString('en-US')} \u2192 ${cur.toLocaleString('en-US')})`
+      : `${name}: ${cur.toLocaleString('en-US')}`;
+  const trust =
+    r.reliabilityPct == null
+      ? 'Not yet measured - turn on the weekly audit to track it.'
+      : r.prevReliabilityPct == null
+        ? `${r.reliabilityPct}%`
+        : r.reliabilityPct > r.prevReliabilityPct
+          ? `${r.reliabilityPct}%, up from ${r.prevReliabilityPct}%`
+          : r.reliabilityPct < r.prevReliabilityPct
+            ? `${r.reliabilityPct}%, down from ${r.prevReliabilityPct}%`
+            : `${r.reliabilityPct}%, unchanged`;
+  const openedLines = r.opened.length
+    ? r.opened.slice(0, 5).map((o) => `\u2022 ${o.closed ? 'Caught and resolved' : 'Caught, still open'}: ${truncate(o.title, 150)}`).join('\n') +
+      (r.opened.length > 5 ? `\n\u2022 …and ${r.opened.length - 5} more` : '')
+    : 'No new issues appeared this month.';
+  const openLines = r.openNow.length
+    ? r.openNow.slice(0, 5).map((o) => `\u2022 ${cap(o.severity)}: ${truncate(o.text, 250)}`).join('\n') +
+      (r.openNow.length > 5 ? `\n\u2022 …and ${r.openNow.length - 5} more` : '')
+    : 'Nothing is open right now.';
+  const blocks: unknown[] = [
+    { type: 'header', text: { type: 'plain_text', text: truncate(`\u{1F4C5} Monthly tracking report: ${label}`, 150), emoji: true } },
+    { type: 'section', text: { type: 'mrkdwn', text: `*${truncate(r.verdict, 280)}*` } },
+    { type: 'section', text: { type: 'mrkdwn', text: `*Quotable data:* ${trust}` } },
+    { type: 'section', text: { type: 'mrkdwn', text: `*This month*\n${openedLines}` } },
+    { type: 'section', text: { type: 'mrkdwn', text: `*Still open*\n${openLines}` } },
+  ];
+  if (r.metrics) {
+    const m = r.metrics;
+    const lines = [mom('\u{1F4C8} Sessions', m.sessions, m.priorSessions), mom('\u{1F4CA} Key Events', m.keyEvents, m.priorKeyEvents)];
+    if (m.revenue > 0 || m.priorRevenue > 0) lines.push(mom('\u{1F4B0} Revenue', m.revenue, m.priorRevenue));
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `*Your numbers (vs the prior period)*\n${lines.join('\n')}${r.trustCaveat ? `\n_${truncate(r.trustCaveat, 200)}_` : ''}` },
+    });
+  }
+  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*One recommendation for next month*\n${truncate(r.recommendation, 400)}` } });
+  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Next report in 30 days · Samarth Analytics GA4 monitoring' }] });
+  return { text: truncate(`\u{1F4C5} Monthly tracking report - ${label}: ${r.verdict}`, 3000), blocks };
 }
 
 /** Weekly scheduled-audit summary: the executive verdict a client would pay to see, one message per

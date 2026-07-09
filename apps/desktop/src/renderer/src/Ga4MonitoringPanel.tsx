@@ -91,7 +91,7 @@ const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
 /** The three things a property can post to its Slack channel, with WHAT-YOU-GET copy shown in the
  *  channel add/edit forms so the choice is informed, not a mystery toggle. */
-const NOTIFY_OPTS: Array<{ key: 'alerts' | 'digest' | 'audit'; label: string; desc: string; example: string }> = [
+const NOTIFY_OPTS: Array<{ key: 'alerts' | 'digest' | 'audit' | 'monthly'; label: string; desc: string; example: string }> = [
   {
     key: 'alerts',
     label: 'New issue alerts',
@@ -100,9 +100,15 @@ const NOTIFY_OPTS: Array<{ key: 'alerts' | 'digest' | 'audit'; label: string; de
   },
   {
     key: 'digest',
-    label: 'Weekly health digest',
-    desc: 'Every 7 days, even when everything is healthy - so a quiet channel proves the monitor is alive.',
-    example: '\u{1F7E2} HEALTHY - Everything looks healthy · Checks: 6 pass · Open alerts: 0',
+    label: 'Weekly all-clear',
+    desc: 'Every 7 days. When everything passed it is ONE line you skim in two seconds; it expands to the full digest only when issues are open. Alerts interrupt - this just proves the monitor is alive.',
+    example: '\u2705 All clear this week on Acme: every check passed.',
+  },
+  {
+    key: 'monthly',
+    label: 'Monthly tracking report',
+    desc: 'Every 30 days, always - the story of the month: verdict, the data-trust number and how it moved, what was caught and what got fixed, what is still open, your numbers with a trust flag, and one recommendation.',
+    example: '\u{1F4C5} Tracking held steady this month · Quotable data: 46%, up from 38%',
   },
   {
     key: 'audit',
@@ -111,7 +117,7 @@ const NOTIFY_OPTS: Array<{ key: 'alerts' | 'digest' | 'audit'; label: string; de
     example: 'Reporting reliability 58% · Setup completeness 76/100 (B) · Biggest risk + highest-impact fix',
   },
 ];
-type NotifyPrefs = { alerts: boolean; digest: boolean; audit: boolean };
+type NotifyPrefs = { alerts: boolean; digest: boolean; audit: boolean; monthly: boolean };
 
 /** The checkbox rows shared by the add-property flow and the channel editor. */
 function NotifyPicker({ value, onChange, disabled }: { value: NotifyPrefs; onChange: (v: NotifyPrefs) => void; disabled: boolean }): JSX.Element {
@@ -363,7 +369,7 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
   const [editingChan, setEditingChan] = useState(false);
   const [chanUrl, setChanUrl] = useState('');
   const [chanLbl, setChanLbl] = useState('');
-  const [chanNotify, setChanNotify] = useState<NotifyPrefs>({ alerts: true, digest: false, audit: false });
+  const [chanNotify, setChanNotify] = useState<NotifyPrefs>({ alerts: true, digest: false, audit: false, monthly: true });
   const h = t.lastRun ? HEALTH[t.lastRun.health] : null;
   const isRunning = runningId === t.propertyId || runningId === '*';
   const runDisabled = runningId !== null;
@@ -400,6 +406,76 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
           <button style={ghostBtn} disabled={busy} title={t.enabled ? 'Pause background checks for this property' : 'Resume background checks'} onClick={onTogglePause}>{t.enabled ? '⏸ Pause' : '⏵ Resume'}</button>
           <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} title="Stop monitoring this property" onClick={onRemove}>Remove</button>
         </div>
+      </div>
+
+      {/* ── This property's Slack channel ── */}
+      <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}><SlackMark size={14} /> Slack channel</span>
+          {t.hasWebhook ? (
+            <>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, background: 'var(--c-green-bg, rgba(34,197,94,.12))', color: 'var(--c-green)', borderRadius: 999, padding: '3px 12px', fontWeight: 600 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--c-green)', display: 'inline-block' }} />
+                {t.slackLabel || 'own channel connected'}
+              </span>
+              <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+                sends: {NOTIFY_OPTS.filter((o) => (o.key === 'alerts' || o.key === 'monthly' ? t.notify?.[o.key] !== false : Boolean(t.notify?.[o.key]))).map((o) => o.label.toLowerCase()).join(' · ') || 'nothing selected'}
+                {t.lastSlackAt ? ` · last posted ${fmtAgo(t.lastSlackAt)}` : ''}
+              </span>
+            </>
+          ) : (
+            <span style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>
+              no channel connected — this property will not alert Slack until you connect one
+            </span>
+          )}
+          <span style={{ flex: 1 }} />
+          {t.hasWebhook && <button style={ghostBtn} disabled={busy} onClick={onTestChannel}>Send test</button>}
+          <button
+            style={{ ...ghostBtn, color: 'var(--c-blue)' }}
+            disabled={busy}
+            onClick={() => { setEditingChan((v) => !v); setChanUrl(''); setChanLbl(t.slackLabel ?? ''); setChanNotify({ alerts: t.notify?.alerts !== false, digest: Boolean(t.notify?.digest), audit: Boolean(t.notify?.audit), monthly: t.notify?.monthly !== false }); }}
+          >
+            {editingChan ? 'Close' : t.hasWebhook ? '✎ Edit channel' : '＋ Connect channel'}
+          </button>
+        </div>
+        {editingChan && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--surface)', border: '1px dashed var(--border)', borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <input
+                style={{ ...input, flex: 2, minWidth: 240, fontSize: 12.5 }}
+                type="password"
+                placeholder={t.hasWebhook ? 'New webhook URL (leave empty to keep the current one)' : 'https://hooks.slack.com/services/…'}
+                value={chanUrl}
+                onChange={(e) => setChanUrl(e.target.value)}
+              />
+              <input
+                style={{ ...input, flex: 1, minWidth: 150, fontSize: 12.5 }}
+                type="text"
+                placeholder="#acme-alerts (channel name)"
+                value={chanLbl}
+                onChange={(e) => setChanLbl(e.target.value)}
+              />
+              <button
+                style={primaryBtn}
+                disabled={busy || (!chanUrl.trim() && !t.hasWebhook)}
+                onClick={() => { void onSaveChannel(chanUrl.trim(), chanLbl.trim(), chanNotify).then((ok) => { if (ok) { setEditingChan(false); setChanUrl(''); } }); }}
+              >
+                Save
+              </button>
+              {t.hasWebhook && (
+                <button style={{ ...ghostBtn, color: 'var(--c-red)', alignSelf: 'center' }} disabled={busy} onClick={() => { onRemoveChannel(); setEditingChan(false); setChanUrl(''); setChanLbl(''); }}>
+                  Remove channel
+                </button>
+              )}
+            </div>
+            <div style={{ borderTop: '1px dashed var(--border)', paddingTop: 8 }}>
+              <NotifyPicker value={chanNotify} onChange={setChanNotify} disabled={busy} />
+            </div>
+            <span style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.4 }}>
+              One property, one channel: everything selected above posts here. The URL is stored encrypted in your OS keychain. (How to get a webhook URL — see the Slack alerts card below.)
+            </span>
+          </div>
+        )}
       </div>
 
       {run && counts ? (
@@ -469,75 +545,6 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
         </div>
       )}
 
-      {/* ── This property's Slack channel ── */}
-      <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)' }}><SlackMark size={14} /> Slack channel</span>
-          {t.hasWebhook ? (
-            <>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, background: 'var(--c-green-bg, rgba(34,197,94,.12))', color: 'var(--c-green)', borderRadius: 999, padding: '3px 12px', fontWeight: 600 }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--c-green)', display: 'inline-block' }} />
-                {t.slackLabel || 'own channel connected'}
-              </span>
-              <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
-                sends: {NOTIFY_OPTS.filter((o) => (o.key === 'alerts' ? t.notify?.alerts !== false : Boolean(t.notify?.[o.key]))).map((o) => o.label.toLowerCase()).join(' · ') || 'nothing selected'}
-                {t.lastSlackAt ? ` · last posted ${fmtAgo(t.lastSlackAt)}` : ''}
-              </span>
-            </>
-          ) : (
-            <span style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>
-              no channel connected — this property will not alert Slack until you connect one
-            </span>
-          )}
-          <span style={{ flex: 1 }} />
-          {t.hasWebhook && <button style={ghostBtn} disabled={busy} onClick={onTestChannel}>Send test</button>}
-          <button
-            style={{ ...ghostBtn, color: 'var(--c-blue)' }}
-            disabled={busy}
-            onClick={() => { setEditingChan((v) => !v); setChanUrl(''); setChanLbl(t.slackLabel ?? ''); setChanNotify({ alerts: t.notify?.alerts !== false, digest: Boolean(t.notify?.digest), audit: Boolean(t.notify?.audit) }); }}
-          >
-            {editingChan ? 'Close' : t.hasWebhook ? '✎ Edit channel' : '＋ Connect channel'}
-          </button>
-        </div>
-        {editingChan && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--surface)', border: '1px dashed var(--border)', borderRadius: 8, padding: '10px 12px' }}>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <input
-                style={{ ...input, flex: 2, minWidth: 240, fontSize: 12.5 }}
-                type="password"
-                placeholder={t.hasWebhook ? 'New webhook URL (leave empty to keep the current one)' : 'https://hooks.slack.com/services/…'}
-                value={chanUrl}
-                onChange={(e) => setChanUrl(e.target.value)}
-              />
-              <input
-                style={{ ...input, flex: 1, minWidth: 150, fontSize: 12.5 }}
-                type="text"
-                placeholder="#acme-alerts (channel name)"
-                value={chanLbl}
-                onChange={(e) => setChanLbl(e.target.value)}
-              />
-              <button
-                style={primaryBtn}
-                disabled={busy || (!chanUrl.trim() && !t.hasWebhook)}
-                onClick={() => { void onSaveChannel(chanUrl.trim(), chanLbl.trim(), chanNotify).then((ok) => { if (ok) { setEditingChan(false); setChanUrl(''); } }); }}
-              >
-                Save
-              </button>
-              {t.hasWebhook && (
-                <button style={{ ...ghostBtn, color: 'var(--c-red)', alignSelf: 'center' }} disabled={busy} onClick={() => { onRemoveChannel(); setEditingChan(false); setChanUrl(''); setChanLbl(''); }}>
-                  Remove channel
-                </button>
-              )}
-            </div>
-            <div style={{ borderTop: '1px dashed var(--border)', paddingTop: 8 }}>
-              <NotifyPicker value={chanNotify} onChange={setChanNotify} disabled={busy} />
-            </div>
-            <span style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.4 }}>
-              One property, one channel: everything selected above posts here. The URL is stored encrypted in your OS keychain. (How to get a webhook URL — see the Slack alerts card below.)
-            </span>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -552,7 +559,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
   // Optional Slack channel captured WHILE adding a property (link + name + what to send, one step).
   const [addChanUrl, setAddChanUrl] = useState('');
   const [addChanLabel, setAddChanLabel] = useState('');
-  const [addNotify, setAddNotify] = useState<NotifyPrefs>({ alerts: true, digest: false, audit: false });
+  const [addNotify, setAddNotify] = useState<NotifyPrefs>({ alerts: true, digest: false, audit: false, monthly: true });
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
 
@@ -596,7 +603,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       setStatus(await window.desktop.ga4monitoring.configure({
         targets: [...status.targets, { propertyId: prop.property, propertyLabel: prop.displayName, enabled: true, slackLabel: lbl || undefined, notify: addNotify }],
       }));
-      setAddId(''); setAddChanUrl(''); setAddChanLabel(''); setAddNotify({ alerts: true, digest: false, audit: false });
+      setAddId(''); setAddChanUrl(''); setAddChanLabel(''); setAddNotify({ alerts: true, digest: false, audit: false, monthly: true });
       setSelectedId(prop.property);
       if (url) setNote(`Added ${prop.displayName} with its own Slack channel${lbl ? ` (${lbl})` : ''}.`);
     } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }

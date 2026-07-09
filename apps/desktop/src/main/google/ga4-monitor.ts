@@ -94,6 +94,10 @@ export interface Ga4MonitorAlert {
   impact?: string;
   /** Bullet list for the Slack "Recommended Actions" section; falls back to `recommendation`. */
   actions?: string[];
+  /** Consequence-first version of the issue for the reader (a store owner): the money or decision at
+   *  stake, no GA4 jargon. Renderers lead with this and keep title/detail underneath for whoever
+   *  investigates. */
+  plain?: string;
 }
 
 export interface Ga4MonitorCheck {
@@ -118,6 +122,11 @@ const SEV_RANK: Record<Severity, number> = { critical: 0, high: 1, medium: 2, lo
 const norm = (d?: string): string => (d ?? '').replace(/-/g, '');
 /** A slug safe for a stable alert id (used to dedup ongoing issues across runs). */
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+
+/** The one action the alert READER can actually perform (the technical fix lives in
+ *  `recommendation`, rendered separately as "For whoever fixes it"). An alert whose only instruction
+ *  is a task the reader cannot do creates anxiety, not resolution. */
+const FORWARD_FIX = 'This is a tracking fix your analytics person or agency can make in about an hour - forward them this alert.';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 /** GA4 "date" (YYYYMMDD) → a readable "Jul 3, 2026"; passes through anything that isn't a plain date. */
@@ -226,6 +235,8 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
       kind: 'no_data',
       severity: 'critical',
       title: 'GA4 has stopped receiving data',
+      plain: 'Your website has stopped reporting visitor data entirely: as of right now, nothing is being recorded.',
+      actions: [FORWARD_FIX],
       detail: `No active users right now, and no sessions were recorded on the last full day (${fmtDate(latest.date)}), on a property that normally has traffic. Data collection has most likely stopped - a removed or broken tag, or a disabled data stream.`,
       recommendation: 'Confirm the GA4 tag is firing (GA4 Realtime and DebugView), and check whether a recent website or tag release removed or broke it.',
     };
@@ -369,7 +380,8 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
         'Review recent GTM/GA4 changes',
         ...(topSource ? [`Investigate the primary traffic source (${topSource})`] : []),
       ];
-      for (const f of actionable) pushAlert({ ...fromFinding('conversion_break', f.category + ':' + f.message.slice(0, 24), f, 'Traffic changed but conversions did not keep pace'), summaryLines: gLines, actions: gActions });
+      const gPlain = 'Traffic and sales are out of step: either the extra visits are not real customers, or your sales tracking is missing purchases. Ad-spend decisions made on these numbers are at risk.';
+      for (const f of actionable) pushAlert({ ...fromFinding('conversion_break', f.category + ':' + f.message.slice(0, 24), f, 'Traffic changed but conversions did not keep pace'), summaryLines: gLines, actions: gActions, plain: gPlain });
       const worst: MonitorCheckStatus = actionable.some((f) => f.severity === 'high' || f.severity === 'critical') ? 'fail' : 'warn';
       checks.push({ id: 'growth', label: 'Conversions vs traffic', status: worst, detail: clean(actionable[0].message) ?? actionable[0].message });
     }
@@ -438,9 +450,9 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
   {
     const anti = antiLieFindings(b ?? null, dq ?? null, input.campaigns ?? null, input.snapshot ?? null);
     const firstOf = (cat: string) => anti.find((f) => f.category === cat);
-    const raise = (kind: string, title: string, f: { severity: string; message: string; recommendation?: string; businessRisk?: string } | undefined): boolean => {
+    const raise = (kind: string, title: string, f: { severity: string; message: string; recommendation?: string; businessRisk?: string; plain?: string } | undefined): boolean => {
       if (!f) return false;
-      pushAlert({ id: kind, kind, severity: f.severity as Severity, title, detail: clean(f.message) ?? f.message, recommendation: clean(f.recommendation), impact: clean(f.businessRisk) });
+      pushAlert({ id: kind, kind, severity: f.severity as Severity, title, detail: clean(f.message) ?? f.message, recommendation: clean(f.recommendation), impact: clean(f.businessRisk), plain: clean(f.plain), actions: [FORWARD_FIX] });
       return true;
     };
 
@@ -471,6 +483,8 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
           kind: 'untagged_share',
           severity: share >= 60 ? 'high' : 'medium',
           title: 'Untagged traffic is breaking attribution',
+          plain: `About 1 in ${Math.max(2, Math.round(100 / share))} of your visits cannot be tied to any campaign, so that share of your sales cannot be credited to the marketing that earned it.`,
+          actions: [FORWARD_FIX],
           detail: `${share.toFixed(1)}% of sessions carry no utm_campaign (${input.campaigns.untaggedSessions.toLocaleString('en-US')} of ${input.campaigns.totalSessions.toLocaleString('en-US')}) - that share of results cannot be tied to any campaign, and untagged paid traffic lands mislabeled in Direct/organic buckets.`,
           recommendation: 'Add utm_campaign/utm_source/utm_medium to marketing links (ads, email, social) and verify Google Ads auto-tagging so paid sessions leave the untagged buckets.',
         });
@@ -531,6 +545,10 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
           id: 'consent_signal_missing',
           kind: 'consent_signal',
           severity: regressed ? 'medium' : 'low',
+          plain: regressed
+            ? 'Your site stopped sending Google consent signals: ad performance and audience data will silently degrade until this is fixed.'
+            : 'Your site is not telling Google whether visitors gave consent: in consent-regulated markets that means lost data and compliance risk.',
+          actions: [FORWARD_FIX],
           title: regressed ? 'Consent Mode signal LOST (was present before)' : 'Consent Mode v2 not detected on the site',
           detail: regressed
             ? 'The previous probe saw gcs= consent signals on this site\u2019s GA4 hits; the latest hits carry none - a site or tag deploy likely removed Consent Mode. Modeling and ad personalization silently degrade from here.'
@@ -572,6 +590,8 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
           kind: 'channel_shift',
           severity: 'medium',
           title: `Channel mix shifted: ${worst.name}`,
+          plain: `Where your visitors come from just changed sharply: ${worst.name} went from ${worst.from.toFixed(1)}% to ${worst.to.toFixed(1)}% of visits. A jump like this is usually a tracking change, not a real audience shift.`,
+          actions: [FORWARD_FIX],
           detail: `${worst.name} moved from ${worst.from.toFixed(1)}% to ${worst.to.toFixed(1)}% of sessions vs the prior window (${Math.abs(worst.to - worst.from).toFixed(1)} points) - a jump this size is usually a tagging regression or an untagged burst, not organic drift.`,
           recommendation: `Check what changed for ${worst.name}: recent site/tag deploys, UTM changes, or an untagged campaign landing there.`,
         });
@@ -650,10 +670,15 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
   const hasCrit = alerts.some((a) => a.severity === 'critical' || a.severity === 'high');
   const hasWarn = alerts.some((a) => a.severity === 'medium' || a.severity === 'low');
   const health: MonitorHealth = hasCrit ? 'critical' : hasWarn ? 'warning' : 'healthy';
-  const serious = alerts.filter((a) => a.severity === 'critical' || a.severity === 'high').length;
+  // ONE severity vocabulary everywhere: alerts are labeled critical/high/medium/low, so the summary
+  // counts in the SAME words. A reader seeing "CRITICAL", "serious" and "HIGH" for one state does not
+  // know how alarmed to be.
+  const critN = alerts.filter((a) => a.severity === 'critical').length;
+  const highN = alerts.filter((a) => a.severity === 'high').length;
+  const sevBits = [critN ? `${critN} critical` : '', highN ? `${highN} high` : ''].filter(Boolean).join(', ');
   const summary =
     health === 'critical'
-      ? `${plural(alerts.length, 'issue needs', 'issues need')} attention (${serious} serious).`
+      ? `${plural(alerts.length, 'issue needs', 'issues need')} attention (${sevBits}).`
       : health === 'warning'
         ? `${plural(alerts.length, 'issue', 'issues')} to keep an eye on.`
         : 'Everything looks healthy.';

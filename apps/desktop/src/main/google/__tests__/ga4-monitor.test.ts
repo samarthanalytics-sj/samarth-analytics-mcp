@@ -446,5 +446,35 @@ test('conversion-break alert carries structured Slack fields (metric lines, impa
   assert.ok(a!.impact, 'impact carried from the growth finding businessRisk');
 });
 
+test('alerts speak to the owner: consequence-first plain voice, forwardable action, one severity vocabulary', () => {
+  const b = baseline({
+    channelPerformance: [
+      { channel: 'Organic Shopping', sessions: 30000, keyEvents: 2000, convRate: 0.04, revenue: 845315, engagementRate: 0.6 },
+      { channel: 'Paid Shopping', sessions: 900, keyEvents: 40, convRate: 0.03, revenue: 13200, engagementRate: 0.5 },
+    ],
+  });
+  const campaigns = {
+    windowDays: 28, dateRange: null, totalSessions: 50000, primaryMetric: 'conversions' as const,
+    taggedCampaigns: [
+      { campaign: 'Adv+ Shopping - All products', sessions: 8000, keyEvents: 23933, revenue: 532085, engagementRate: 0.6 },
+      { campaign: '20574896341', sessions: 4000, keyEvents: 9000, revenue: 227350, engagementRate: 0.55 },
+    ],
+    bestCampaign: null, untaggedSessions: 24000, untaggedSharePct: 48, summary: '', findings: [],
+  };
+  const r = monitorGa4(input({ baseline: b, campaigns }));
+
+  const mism = r.alerts.find((x) => x.kind === 'attribution_mismatch')!;
+  assert.ok(mism.plain && /less profitable than they are/.test(mism.plain), mism.plain);
+  assert.ok(!/reconcile/i.test(mism.plain!), 'no analyst jargon in the plain line');
+  assert.ok(mism.actions?.some((x) => /forward them this alert/i.test(x)), 'the reader action is forwardable');
+  assert.ok(mism.recommendation && /auto-tagging|utm/i.test(mism.recommendation), 'technical fix kept for whoever fixes it');
+
+  const untagged = r.alerts.find((x) => x.kind === 'untagged_share')!;
+  assert.ok(/About 1 in 2 of your visits/.test(untagged.plain ?? ''), 'percentage translated to a physical count: ' + untagged.plain);
+
+  assert.ok(!/serious/.test(r.summary), 'no third severity word: ' + r.summary);
+  assert.ok(/\d+ (critical|high)/.test(r.summary), 'summary counts in the alert vocabulary: ' + r.summary);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
