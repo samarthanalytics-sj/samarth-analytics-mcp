@@ -19,6 +19,7 @@ import type {
   GoogleProduct,
   GtmAccountView,
   GtmContainerView,
+  Ga4Context,
   GtmContext,
   GtmWorkspaceView,
   LlmProvider,
@@ -73,6 +74,8 @@ const api = {
       ipcRenderer.invoke('accounts:setLlmConfig', id, provider, model),
     setGtmContext: (id: string, ctx: GtmContext): Promise<AccountView> =>
       ipcRenderer.invoke('accounts:setGtmContext', id, ctx),
+    setGa4Context: (id: string, ctx: Ga4Context): Promise<AccountView> =>
+      ipcRenderer.invoke('accounts:setGa4Context', id, ctx),
     // Fired when the chat switches the active GTM context — re-fetch to update the bar.
     onChanged: (cb: () => void): (() => void) => {
       const listener = (): void => cb();

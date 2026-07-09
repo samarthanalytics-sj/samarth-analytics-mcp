@@ -278,6 +278,12 @@ export class ChatService {
           '. Use THESE ids for all GTM operations — do not ask which account/container/workspace and ' +
           'do not re-list them unless the user asks to switch. '
         : '') +
+      (product === 'ga4' && active.ga4Context?.property
+        ? `The user is working in GA4 property ${active.ga4Context.property} ` +
+          `("${active.ga4Context.propertyName ?? ''}"${active.ga4Context.accountName ? `, account "${active.ga4Context.accountName}"` : ''}). ` +
+          'Use THIS property id for every GA4 tool call (audits, reports, data quality) - do not ask ' +
+          'which property and do not re-list properties unless the user asks to switch. '
+        : '') +
       dateContextLine(new Date()) +
       'Call tools when asked; never invent ids. When the user asks to list or count ' +
       'tags, triggers, variables, accounts, containers, or workspaces, the tools already ' +

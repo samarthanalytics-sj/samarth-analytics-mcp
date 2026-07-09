@@ -898,8 +898,10 @@ function formatMsgTime(ts: number): string {
 // Per-account + per-container chat persistence (survives tab switches AND app restarts).
 const CHAT_THREADS_KEY = 'samarth.chatThreads.v1';
 /** Thread id: one conversation per account + product + (for GTM) container. */
-function chatThreadKey(accountId: string | undefined, product: 'gtm' | 'ga4', containerId: string | undefined): string {
-  return `${accountId ?? 'none'}|${product}|${product === 'gtm' ? containerId ?? 'na' : 'na'}`;
+function chatThreadKey(accountId: string | undefined, product: 'gtm' | 'ga4', scopeId: string | undefined): string {
+  // GTM threads key on the selected container, GA4 threads on the selected property - switching the
+  // working target switches to (or starts) that target's own conversation.
+  return `${accountId ?? 'none'}|${product}|${scopeId ?? 'na'}`;
 }
 function loadChatThread(key: string): ChatMessage[] {
   try {
@@ -937,7 +939,7 @@ function ChatView({
   // Slash-command autocomplete: highlighted index in the menu; reset whenever the input text changes.
   const [slashIdx, setSlashIdx] = useState(0);
   // One stored conversation per account + product + container; survives tab switches + restarts.
-  const threadKey = chatThreadKey(active?.id, product, active?.gtmContext?.containerId);
+  const threadKey = chatThreadKey(active?.id, product, product === 'gtm' ? active?.gtmContext?.containerId : active?.ga4Context?.property);
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadChatThread(threadKey));
   const threadKeyRef = useRef(threadKey);
   // Load the right thread whenever the account / product / container changes.
@@ -1117,6 +1119,7 @@ function ChatView({
       </div>
 
       {product === 'gtm' && active && <GtmContextBar active={active} refresh={refresh} onError={onError} />}
+      {product === 'ga4' && active && <Ga4ContextBar active={active} refresh={refresh} onError={onError} />}
 
       <div style={styles.chatLog}>
         {messages.length === 0 && (
@@ -1415,6 +1418,124 @@ function GtmContextBar({
         ✓ Use this container
       </button>
       {ctx?.containerId && (
+        <button style={styles.linkBtn} onClick={() => setEditing(false)}>cancel</button>
+      )}
+    </div>
+  );
+}
+
+/** Which GA4 property the GA4 chat works against — the GA4 mirror of GtmContextBar, so the active
+ *  target is always visible above the conversation. ONE dropdown (every reachable property, grouped
+ *  by GA4 account, name + numeric id) + the same summary-pill-with-Change pattern. Persisted on the
+ *  account (ga4Context) and injected into the chat system prompt so the model never asks "which
+ *  property?". */
+function Ga4ContextBar({
+  active,
+  refresh,
+  onError,
+}: {
+  active: AccountView;
+  refresh: () => Promise<void>;
+  onError: (m: string) => void;
+}): JSX.Element {
+  const ctx = active.ga4Context;
+  const [editing, setEditing] = useState(!ctx?.property);
+  const [props, setProps] = useState<Ga4PropertyListItem[]>([]);
+  const [sel, setSel] = useState<string>(ctx?.property ?? '');
+  const [loading, setLoading] = useState(false);
+
+  // Load the property list when the picker opens (ref-guarded per account, same pattern as the GTM
+  // bar: also covers React StrictMode's double-mount).
+  const loadedForAccount = useRef<string>('');
+  useEffect(() => {
+    if (editing && loadedForAccount.current !== active.id) {
+      loadedForAccount.current = active.id;
+      setLoading(true);
+      window.desktop.ga4
+        .listProperties()
+        .then((list) => {
+          setProps(list);
+          // A silent empty dropdown looks broken — tell the user WHY nothing populated.
+          if (list.length === 0) {
+            onError('No GA4 properties found for this account. This Google sign-in may not have access to any GA4 property — check you picked the right account, or re-connect Google in Settings.');
+          }
+        })
+        .catch((e) => onError(e instanceof Error ? e.message : String(e)))
+        .finally(() => setLoading(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, active.id]);
+
+  // Group by parent GA4 account so the dropdown reads like the GA4 UI's property switcher.
+  const groups = useMemo(() => {
+    const m = new Map<string, Ga4PropertyListItem[]>();
+    for (const p of props) {
+      const k = p.accountName || '(no account)';
+      const arr = m.get(k) ?? [];
+      arr.push(p);
+      m.set(k, arr);
+    }
+    return [...m.entries()];
+  }, [props]);
+
+  async function save(): Promise<void> {
+    const p = props.find((x) => x.property === sel);
+    if (!p) return;
+    try {
+      await window.desktop.accounts.setGa4Context(active.id, { property: p.property, propertyName: p.displayName, accountName: p.accountName });
+      await refresh();
+      setEditing(false);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  if (!editing && ctx?.property) {
+    return (
+      <div style={styles.ctxBar}>
+        <span style={styles.ctxBreadcrumb}>
+          <span style={styles.ctxMutedLabel}>Working in</span>
+          {ctx.accountName ? (
+            <>
+              <span style={styles.ctxCrumb}>📊 {ctx.accountName}</span>
+              <span style={styles.ctxSep}>›</span>
+            </>
+          ) : null}
+          {/* The selected property is highlighted in a blue pill so it reads as the active target. */}
+          <span style={styles.ctxContainerPill} title={`${ctx.propertyName ?? ''} (${ctx.property})`}>
+            {ctx.propertyName ?? ctx.property}
+            <span style={styles.ctxPillId}> #{(ctx.property ?? '').replace('properties/', '')}</span>
+          </span>
+        </span>
+        <button style={styles.ctxChangeBtn} onClick={() => { setSel(ctx.property ?? ''); setEditing(true); }}>
+          ✎ Change
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.ctxBarEdit}>
+      <span style={styles.ctxMutedLabel}>Working in</span>
+      <label style={styles.ctxField}>
+        <span style={styles.ctxFieldLabel}>GA4 property</span>
+        <select style={{ ...styles.ctxSelect, ...(sel ? styles.ctxSelectChosen : {}) }} value={sel} disabled={loading} onChange={(e) => setSel(e.target.value)}>
+          <option value="">{loading ? 'Loading…' : 'Select property…'}</option>
+          {groups.map(([acct, list]) => (
+            <optgroup key={acct} label={acct}>
+              {list.map((p) => (
+                <option key={p.property} value={p.property}>
+                  {p.displayName} (#{p.property.replace('properties/', '')})
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+      <button style={{ ...styles.ctxUseBtn, ...(!sel ? styles.ctxUseBtnDisabled : {}) }} onClick={() => void save()} disabled={!sel}>
+        ✓ Use this property
+      </button>
+      {ctx?.property && (
         <button style={styles.linkBtn} onClick={() => setEditing(false)}>cancel</button>
       )}
     </div>
