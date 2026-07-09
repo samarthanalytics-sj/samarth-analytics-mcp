@@ -6684,8 +6684,11 @@ const styles: Record<string, React.CSSProperties> = {
   viewToggleOn: { background: 'var(--c-blue-bg)', color: 'var(--text)', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
   viewToggleOff: { background: 'transparent', color: 'var(--c-blue)', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
 
-  settings: { flex: 1, overflowY: 'auto', padding: 24, maxWidth: 720 },
-  settingsTitle: { fontSize: 22, fontWeight: 700, margin: '0 0 16px' },
+  // Settings fills the available width as a responsive card grid (2–3 columns on wide screens, 1 on
+  // narrow) instead of a fixed 720px column that left half the window empty. rowGap:0 because each card
+  // already carries marginBottom:16; the title spans the full width above the grid (see settingsTitle).
+  settings: { flex: 1, overflowY: 'auto', padding: 24, maxWidth: 1400, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', columnGap: 16, rowGap: 0, alignItems: 'start' },
+  settingsTitle: { gridColumn: '1 / -1', fontSize: 22, fontWeight: 700, margin: '0 0 16px' },
   settingsSub: { color: 'var(--text-muted)', fontSize: 13, margin: '-2px 0 14px', lineHeight: 1.55 },
   card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 16, flexShrink: 0 },
   // Section heading — a real 15px/600 heading (design level) rather than the old tiny all-caps label.
