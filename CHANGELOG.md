@@ -1,3 +1,9 @@
+## [1.274.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.273.0...v1.274.0) (2026-07-09)
+
+### Features
+
+* **desktop:** fixed light/dark theme toggle in the top-right corner ([8797d41](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8797d4102487b9e5ca16cf5716b291c0bf9e5775))
+
 ## [1.273.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.272.2...v1.273.0) (2026-07-09)
 
 ### Features
