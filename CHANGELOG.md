@@ -1,3 +1,9 @@
+## [1.286.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.0...v1.286.1) (2026-07-09)
+
+### Bug Fixes
+
+* **verify:** GTM Monitor throwaway workspace name must not contain ':' (first in-app run) ([34b5f29](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/34b5f29e7cb24a693a93fabb65dad7a6f9c7e9e1))
+
 ## [1.286.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.285.0...v1.286.0) (2026-07-09)
 
 ### Features
