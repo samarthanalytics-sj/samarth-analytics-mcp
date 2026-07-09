@@ -1443,6 +1443,9 @@ function Ga4ContextBar({
   const [props, setProps] = useState<Ga4PropertyListItem[]>([]);
   const [sel, setSel] = useState<string>(ctx?.property ?? '');
   const [loading, setLoading] = useState(false);
+  // Free-text filter over the property list (name, account, or numeric id) — accounts with many
+  // properties make an unfiltered dropdown unusable.
+  const [query, setQuery] = useState('');
 
   // Load the property list when the picker opens (ref-guarded per account, same pattern as the GTM
   // bar: also covers React StrictMode's double-mount).
@@ -1466,17 +1469,33 @@ function Ga4ContextBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing, active.id]);
 
-  // Group by parent GA4 account so the dropdown reads like the GA4 UI's property switcher.
+  // Group by parent GA4 account so the dropdown reads like the GA4 UI's property switcher; the
+  // search box narrows it first (match on property name, account name, or the numeric id).
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return props;
+    return props.filter(
+      (p) =>
+        p.displayName.toLowerCase().includes(q) ||
+        (p.accountName ?? '').toLowerCase().includes(q) ||
+        p.property.replace('properties/', '').includes(q)
+    );
+  }, [props, query]);
   const groups = useMemo(() => {
     const m = new Map<string, Ga4PropertyListItem[]>();
-    for (const p of props) {
+    for (const p of filtered) {
       const k = p.accountName || '(no account)';
       const arr = m.get(k) ?? [];
       arr.push(p);
       m.set(k, arr);
     }
     return [...m.entries()];
-  }, [props]);
+  }, [filtered]);
+  // Typing down to exactly ONE match selects it — Enter/✓ then confirms without touching the dropdown.
+  useEffect(() => {
+    if (query.trim() && filtered.length === 1) setSel(filtered[0].property);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, filtered]);
 
   async function save(): Promise<void> {
     const p = props.find((x) => x.property === sel);
@@ -1518,9 +1537,23 @@ function Ga4ContextBar({
     <div style={styles.ctxBarEdit}>
       <span style={styles.ctxMutedLabel}>Working in</span>
       <label style={styles.ctxField}>
-        <span style={styles.ctxFieldLabel}>GA4 property</span>
+        <span style={styles.ctxFieldLabel}>Search</span>
+        <input
+          style={{ ...styles.ctxSelect, width: 170 }}
+          type="text"
+          placeholder="🔍 Name, account or id…"
+          value={query}
+          disabled={loading}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && sel && filtered.some((p) => p.property === sel)) void save();
+          }}
+        />
+      </label>
+      <label style={styles.ctxField}>
+        <span style={styles.ctxFieldLabel}>GA4 property{query.trim() ? ` (${filtered.length} match${filtered.length === 1 ? '' : 'es'})` : ''}</span>
         <select style={{ ...styles.ctxSelect, ...(sel ? styles.ctxSelectChosen : {}) }} value={sel} disabled={loading} onChange={(e) => setSel(e.target.value)}>
-          <option value="">{loading ? 'Loading…' : 'Select property…'}</option>
+          <option value="">{loading ? 'Loading…' : query.trim() && filtered.length === 0 ? 'No property matches the search' : 'Select property…'}</option>
           {groups.map(([acct, list]) => (
             <optgroup key={acct} label={acct}>
               {list.map((p) => (
