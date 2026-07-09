@@ -1,7 +1,8 @@
 // Pure tests for the "Verify tag firing" evaluator (no browser).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/verify-tags.test.ts
 
-import { evaluateVerify, type PerTagCapture } from '../verify-tags';
+import { evaluateVerify, verdictsFromMonitor, type PerTagCapture } from '../verify-tags';
+import type { MonitorEvent } from '../tag-monitor';
 import type { VerifyTagInput, CapturedHitView, DetectedElementView } from '../../../shared/ipc';
 
 let passed = 0;
@@ -296,6 +297,31 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   // A NOT-fired tag still carries its screenshot (proof the CTA/page was reached).
   const missShot = evaluateVerify([tag()], [cap({ targetFound: true, performed: true, kind: 'click', hits: [], screenshot: shot })], els)[0];
   check('not-fired verdict still carries the screenshot', missShot.fired === false && missShot.screenshot === shot);
+}
+
+// ── verdictsFromMonitor: AUTHORITATIVE verdicts from GTM's own Monitor stream ──────────────────────
+{
+  const tags: VerifyTagInput[] = [
+    tag({ id: 'cfg', tagName: 'GA4 Config', eventName: 'page_view' }),
+    tag({ id: 'lead', tagName: 'Lead Form', eventName: 'generate_lead' }),
+    tag({ id: 'cta', tagName: 'CTA Click', eventName: 'cta_click' }),
+    tag({ id: 'ghost', tagName: 'Never Fires', eventName: 'x' }),
+  ];
+  const events: MonitorEvent[] = [
+    { event: 'gtm.load', tags: [{ id: 'cfg', status: 'success', executionTime: 2 }] },
+    { event: 'form_submit', tags: [{ id: 'cfg', status: 'success' }, { id: 'lead', status: 'success', executionTime: 9 }] },
+    { event: 'cta_click', tags: [{ id: 'cta', status: 'failure', executionTime: 30 }] },
+  ];
+  const v = verdictsFromMonitor(tags, events);
+  const by = new Map(v.map((x) => [x.tagId, x]));
+
+  check('monitor: every verdict is flagged authoritative (verifiedByMonitor)', v.every((x) => x.verifiedByMonitor === true));
+  check('monitor: a GTM-fired tag → fired, with status + events', by.get('lead')!.fired === true && by.get('lead')!.monitorStatus === 'success' && (by.get('lead')!.monitorEvents ?? []).includes('form_submit'));
+  check('monitor: config tag fired on multiple events', JSON.stringify(by.get('cfg')!.monitorEvents) === JSON.stringify(['gtm.load', 'form_submit']));
+  check('monitor: a tag GTM fired with an ERROR status → fired but reason flags it', by.get('cta')!.fired === true && by.get('cta')!.monitorStatus === 'failure' && /error|failure/i.test(by.get('cta')!.reason ?? ''));
+  check('monitor: a tag GTM never fired → not fired (authoritative), reason says so', by.get('ghost')!.fired === false && /did not fire/i.test(by.get('ghost')!.reason ?? ''));
+  check('monitor: execution time carried', by.get('lead')!.monitorExecutionMs === 9);
+  check('monitor: no monitor events → all tags authoritatively not-fired', verdictsFromMonitor(tags, []).every((x) => x.fired === false && x.verifiedByMonitor === true));
 }
 
 console.log(`\nverify-tags: ${passed} passed, ${failed} failed`);

@@ -20,8 +20,9 @@ import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput
 import { crawlAndSuggest, scanUrls, urlPriority, type ScanProgress } from './scan-core';
 import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
-import { evaluateVerify } from './verify-tags';
+import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
 import { routeTagsToPages } from './verify-routing';
+import { MONITOR_ENDPOINT, MONITOR_GALLERY } from './tag-monitor';
 import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
 import { matchFormsToTags, dedupeSharedFields, isFormEventName, type PagedForm, type FormTagIdentity } from './form-tag-match';
 import { snapshotToVerifyInputs } from './container-verify';
@@ -226,13 +227,31 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       }
       const routed = routeTagsToPages(tagList, els, target);
 
-      const driven = await runVerifyDriver(
-        target,
-        routed.map((t) => ({ id: t.id, ...(t.page ? { page: t.page } : {}), trigger: t.trigger })),
-        { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}), settleMs: clampSettle(o.settleMs), navTimeoutMs: o.navTimeoutMs, ...(o.gtmDebug ? { gtmDebug: true } : {}) },
-      );
-      const verdicts = evaluateVerify(tagList, driven.perTag, els);
-      return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
+      // AUTHORITATIVE mode: mint a throwaway preview that injects a GTM Monitor tag, so verdicts come
+      // from GTM's OWN per-tag firing (addEventCallback) instead of beacon inference. The throwaway
+      // workspace(s) are always cleaned up. Draft-only + never published.
+      let snippet = o.containerSnippet;
+      let cleanupWorkspaceIds: string[] = [];
+      if (o.monitor) {
+        const preview = await data.mintMonitorPreview(o.monitor.accountId, o.monitor.containerId, o.monitor.workspaceId, {
+          endPoint: MONITOR_ENDPOINT, galleryOwner: MONITOR_GALLERY.owner, galleryRepository: MONITOR_GALLERY.repository,
+        });
+        snippet = preview.snippet;
+        cleanupWorkspaceIds = preview.cleanupWorkspaceIds;
+      }
+      try {
+        const driven = await runVerifyDriver(
+          target,
+          routed.map((t) => ({ id: t.id, ...(t.page ? { page: t.page } : {}), trigger: t.trigger })),
+          { ...(snippet ? { containerSnippet: snippet } : {}), settleMs: clampSettle(o.settleMs), navTimeoutMs: o.navTimeoutMs, ...(o.gtmDebug ? { gtmDebug: true } : {}) },
+        );
+        // Monitor mode → authoritative verdicts from GTM's own firing signal; else the beacon evaluator.
+        const verdicts = o.monitor ? verdictsFromMonitor(tagList, driven.monitorEvents ?? []) : evaluateVerify(tagList, driven.perTag, els);
+        return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(o.monitor ? { verifiedByMonitor: true } : {}), ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
+      } finally {
+        // Always discard the throwaway monitor workspace(s) — never leave a trace in the user's container.
+        for (const id of cleanupWorkspaceIds) await data.deleteGtmWorkspace(o.monitor!.accountId, o.monitor!.containerId, id).catch(() => undefined);
+      }
     },
   );
 

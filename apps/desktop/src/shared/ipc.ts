@@ -658,6 +658,17 @@ export interface VerifyTagVerdict {
   /** JPEG data-URI screenshot of the page right after this tag's interaction (the driven control
    *  ringed) — visual proof of what was exercised. Best-effort; absent for un-driven/capped tags. */
   screenshot?: string;
+  /** true = this verdict is AUTHORITATIVE — it comes from GTM's own Monitoring API (addEventCallback via
+   *  the injected GTM Monitor tag), not from beacon inference. `fired`/`monitorStatus`/`monitorEvents`
+   *  are then ground truth: exactly which tags GTM fired, like Tag Assistant. */
+  verifiedByMonitor?: boolean;
+  /** For a monitor verdict: the tag's worst reported status — 'success' | 'failure' | 'exception' |
+   *  'timeout'. Absent for non-monitor verdicts. */
+  monitorStatus?: string;
+  /** For a monitor verdict: the dataLayer events GTM fired this tag on. */
+  monitorEvents?: string[];
+  /** For a monitor verdict: the tag's execution time (ms), when reported. */
+  monitorExecutionMs?: number;
 }
 
 /** Result of verifying tag firing (suggestions:verifyTags). */
@@ -671,6 +682,9 @@ export interface VerifyTagsResult {
   pagesOk: boolean;
   error?: string;
   verdicts: VerifyTagVerdict[];
+  /** true = this run used AUTHORITATIVE mode: verdicts came from GTM's own Monitor (addEventCallback),
+   *  not beacon inference. The UI renders the Tag-Assistant-style fired/not-fired panel. */
+  verifiedByMonitor?: boolean;
   /** The distinct page URLs the driver actually navigated + drove tags on (multi-page drive). A
    *  click tag whose CTA lives off the homepage is driven on ITS page, so this is usually >1. */
   pagesDriven?: string[];
@@ -711,6 +725,12 @@ export interface VerifyTagsOptions {
   /** Page/depth budget for that pre-verify crawl (clamped by the scanner). */
   crawlMaxPages?: number;
   crawlMaxDepth?: number;
+  /** AUTHORITATIVE (Tag-Assistant-grade) mode: instead of a pasted snippet, mint a THROWAWAY preview
+   *  that injects a GTM Monitor tag, so verdicts come from GTM's OWN per-tag firing (addEventCallback),
+   *  not beacon inference. Requires the GTM account/container/workspace to mint from; draft-only, never
+   *  published, the throwaway workspace is discarded after. Opt-in (a container write) — the renderer
+   *  confirms first. */
+  monitor?: { accountId: string; containerId: string; workspaceId: string };
 }
 
 /* ── Real-submit form verification: fetch a form's OWN fields + a locale fill plan (review step) ── */

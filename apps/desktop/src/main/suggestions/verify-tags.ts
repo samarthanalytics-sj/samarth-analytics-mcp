@@ -9,6 +9,7 @@
 import { parseGa4CollectHit, classifyCollector, beaconPlatform, beaconHost, isKnownAdPlatform } from '../../shared/runtime-capture';
 import { ctaTriggerFiresOn } from './scan-core';
 import { isFormEventName } from './form-tag-match';
+import { monitorVerdicts, type MonitorEvent } from './tag-monitor';
 import type { SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import type {
   VerifyTagInput,
@@ -173,6 +174,32 @@ export function evaluateVerify(
     return shot ? { ...v, screenshot: shot } : v;
   };
   return tags.map((tag): VerifyTagVerdict => withShot(evaluateOne(tag, byId, elements)));
+}
+
+/** AUTHORITATIVE verdicts from GTM's own Monitor stream (addEventCallback via the injected GTM Monitor
+ *  tag): a tag GTM fired on any driven event is `fired` (status success = clean; failure/exception/
+ *  timeout = fired-but-errored); a tag GTM never fired did NOT fire. Ground truth from the container
+ *  itself — no beacon inference, no dual-container ambiguity — and it carries the exact events + status,
+ *  which is what the Tag-Assistant-style firing panel renders. PURE. */
+export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent[]): VerifyTagVerdict[] {
+  const byId = monitorVerdicts(tags.map((t) => t.id), events);
+  return tags.map((tag): VerifyTagVerdict => {
+    const m = byId.get(tag.id);
+    const base = { tagId: tag.id, tagName: tag.tagName, verifiedByMonitor: true } as const;
+    if (!m || !m.fired) {
+      return { ...base, fired: false, reason: 'GTM did not fire this tag on any driven event (authoritative — read from the container’s own monitor).', interaction: { kind: 'none', targetFound: false, performed: false } };
+    }
+    const clean = m.status === 'success';
+    return {
+      ...base,
+      fired: true,
+      monitorStatus: m.status,
+      ...(m.onEvents.length ? { monitorEvents: m.onEvents, event: m.onEvents[0] } : {}),
+      ...(m.maxExecutionMs != null ? { monitorExecutionMs: m.maxExecutionMs } : {}),
+      ...(clean ? {} : { reason: `GTM fired this tag but it reported "${m.status}" — the tag ran with an error; check its configuration.` }),
+      interaction: { kind: 'none', targetFound: true, performed: true },
+    };
+  });
 }
 
 function evaluateOne(tag: VerifyTagInput, byId: Map<string, PerTagCapture>, elements: DetectedElementView[]): VerifyTagVerdict {
