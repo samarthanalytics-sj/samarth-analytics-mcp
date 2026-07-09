@@ -1,3 +1,9 @@
+## [1.282.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.281.0...v1.282.0) (2026-07-09)
+
+### Features
+
+* **desktop:** search box in the GA4 chat property picker ([24ae306](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/24ae306b1a82711c1ecdaf0b9465c38a725dd081))
+
 ## [1.281.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.280.2...v1.281.0) (2026-07-09)
 
 ### Features
