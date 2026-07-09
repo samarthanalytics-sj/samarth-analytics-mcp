@@ -1,3 +1,9 @@
+## [1.283.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.282.1...v1.283.0) (2026-07-09)
+
+### Features
+
+* **verify:** GTM Monitor foundation — authoritative per-tag firing (addEventCallback) ([1294481](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1294481d9d68db477761f20180fe0094f4196c47))
+
 ## [1.282.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.282.0...v1.282.1) (2026-07-09)
 
 ### Bug Fixes
