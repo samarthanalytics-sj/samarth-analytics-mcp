@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ThemeToggle, useTheme } from './ThemeToggle';
 import { ShortcutsOverlay, EmptyState } from './ui';
+import { ChatIcon, GtmLogo, Ga4Logo, PromptsIcon, SettingsIcon } from './NavIcons';
 import type { AppInfo } from '../../preload';
 import type {
   AccountView,
@@ -755,12 +756,12 @@ export function App(): JSX.Element {
 
         <div style={styles.sideNav}>
           {([
-            ['chat', '💬 Chat'],
-            ['gtm', '🗂 GTM Tools'],
-            ['ga4', '📊 GA4 Tools'],
-            ['prompts', '📖 Prompts'],
-            ['settings', '⚙ Settings'],
-          ] as Array<[View, string]>).map(([v, label]) => (
+            ['chat', 'Chat', ChatIcon],
+            ['gtm', 'GTM Tools', GtmLogo],
+            ['ga4', 'GA4 Tools', Ga4Logo],
+            ['prompts', 'Prompts', PromptsIcon],
+            ['settings', 'Settings', SettingsIcon],
+          ] as Array<[View, string, () => JSX.Element]>).map(([v, label, Icon]) => (
             <button
               key={v}
               className="nav-item"
@@ -768,7 +769,8 @@ export function App(): JSX.Element {
               style={{ ...styles.navItem, ...(view === v ? styles.navActive : {}) }}
               onClick={() => setView(v)}
             >
-              {label}
+              <Icon />
+              <span>{label}</span>
             </button>
           ))}
         </div>
@@ -6562,8 +6564,8 @@ const styles: Record<string, React.CSSProperties> = {
   cancelBtn: { background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer' },
   sideWarn: { color: 'var(--c-amber)', fontSize: 11, marginTop: 8 },
   sideNav: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 },
-  navItem: { background: 'transparent', border: 'none', borderRadius: 8, padding: '8px 10px', color: 'var(--text-dim)', cursor: 'pointer', textAlign: 'left', fontSize: 14 },
-  navActive: { background: 'var(--surface-3)', color: 'var(--text)' },
+  navItem: { display: 'flex', alignItems: 'center', gap: 10, background: 'transparent', border: 'none', borderRadius: 8, padding: '8px 10px', color: 'var(--text-dim)', cursor: 'pointer', textAlign: 'left', fontSize: 14, fontWeight: 600 },
+  navActive: { background: 'var(--surface-3)', color: 'var(--text)', fontWeight: 700 },
   sideVersion: { color: 'var(--text-faint)', fontSize: 11, marginTop: 10 },
 
   main: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 },
