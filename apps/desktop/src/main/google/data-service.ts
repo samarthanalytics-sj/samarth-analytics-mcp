@@ -769,7 +769,10 @@ export class GoogleDataService {
   ): Promise<{ snippet: string; versionId: string; cleanupWorkspaceIds: string[] }> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
-    const temp = await this.createGtmWorkspace(accountId, containerId, `Samarth Verify Monitor ${new Date().toISOString().slice(0, 19)}`);
+    // GTM rejects ':' (and <>) in resource names, so a raw ISO timestamp (…T11:55:19) 400s — use a
+    // colon-free but still-unique suffix for the throwaway workspace name.
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-'); // 2026-07-09-11-55-19
+    const temp = await this.createGtmWorkspace(accountId, containerId, `Samarth Verify Monitor ${stamp}`);
     const cleanupWorkspaceIds = [temp.workspaceId];
     try {
       // Bring the source workspace's DRAFT tags into the throwaway, so they are what the preview serves.
