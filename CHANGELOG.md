@@ -1,3 +1,9 @@
+## [1.280.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.279.0...v1.280.0) (2026-07-09)
+
+### Features
+
+* **desktop:** brand logos and bold labels in the sidebar nav ([08532ec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/08532ecc4824c1e421dff1adf397bf4a99dcb619))
+
 ## [1.279.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.278.0...v1.279.0) (2026-07-09)
 
 ### Features
