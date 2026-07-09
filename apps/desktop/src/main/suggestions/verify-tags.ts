@@ -165,11 +165,6 @@ export function evaluateVerify(
   elements: DetectedElementView[],
 ): VerifyTagVerdict[] {
   const byId = new Map(captures.map((c) => [c.tagId, c]));
-  // The GA4 properties THIS container actually declares — the union of LITERAL G-/GT-/AW- ids across its
-  // tags (the base config tag carries the real id even when event tags use a {{variable}}). Used to
-  // reject hits to a FOREIGN property, i.e. the site's OWN live GA4 running alongside our injected
-  // preview, so a draft tag is neither credited nor blamed for the site's live-container hits.
-  const ownPropertyTids = new Set(tags.map((t) => literalTid(t.measurementId)).filter((t): t is string => Boolean(t)));
 
   // Attach the interaction screenshot (if any) to whatever verdict we produce, without threading it
   // through every return path below.
@@ -177,10 +172,10 @@ export function evaluateVerify(
     const shot = byId.get(v.tagId)?.screenshot;
     return shot ? { ...v, screenshot: shot } : v;
   };
-  return tags.map((tag): VerifyTagVerdict => withShot(evaluateOne(tag, byId, elements, ownPropertyTids)));
+  return tags.map((tag): VerifyTagVerdict => withShot(evaluateOne(tag, byId, elements)));
 }
 
-function evaluateOne(tag: VerifyTagInput, byId: Map<string, PerTagCapture>, elements: DetectedElementView[], ownPropertyTids: Set<string>): VerifyTagVerdict {
+function evaluateOne(tag: VerifyTagInput, byId: Map<string, PerTagCapture>, elements: DetectedElementView[]): VerifyTagVerdict {
   {
     const cap = byId.get(tag.id);
     const base: VerifyTagVerdict = { tagId: tag.id, tagName: tag.tagName, fired: false };
@@ -217,23 +212,15 @@ function evaluateOne(tag: VerifyTagInput, byId: Map<string, PerTagCapture>, elem
 
     // Interaction ran — did the tag's hit fire?
     if (isGa4Platform(tag.platform)) {
-      // PROPERTY ATTRIBUTION. Only credit/blame hits that belong to THIS container's GA4 property, so a
-      // page already running its OWN live GA4 (a second container we injected our preview alongside)
-      // can't have its hits mis-charged to a draft tag. When the tag's own Measurement ID is a literal
-      // G-XXXX, require an exact tid match. When it's a {{variable}} (created tags), we can't pin the
-      // exact property, but we still EXCLUDE hits to properties this container doesn't declare
-      // (ownPropertyTids) — the biggest source of false "fired the wrong event". A hit with no tid, or
-      // when the container declares no literal id at all, is kept (can't discriminate).
+      // When the tag has a literal Measurement ID, require the hit's tid= to match, so two GA4 tags
+      // firing the same event on DIFFERENT properties (incl. a page's own live GA4 running alongside our
+      // injected preview) are attributed correctly. A {{variable}} measurementId can't be pinned to a
+      // literal property here, so it falls back to event-name matching; sound cross-property attribution
+      // for variable-id tags needs run-wide property evidence and is handled by the reconcile pass.
       const wantTid = literalTid(tag.measurementId);
-      const ownTid = (url: string): boolean => {
-        const tid = hitTid(url);
-        if (wantTid) return tid === wantTid;
-        if (!ownPropertyTids.size) return true;
-        return !tid || ownPropertyTids.has(tid);
-      };
       const events = cap.hits
         .filter((h) => isGa4CollectorHit(h.url))
-        .filter((h) => ownTid(h.url))
+        .filter((h) => !wantTid || hitTid(h.url) === wantTid)
         .flatMap((h) => parseGa4CollectHit({ url: h.url, body: h.body }).map((ev) => ({ ev, hit: h })));
       const want = norm(tag.eventName);
       const hit = events.find(({ ev }) => norm(ev.event) === want);

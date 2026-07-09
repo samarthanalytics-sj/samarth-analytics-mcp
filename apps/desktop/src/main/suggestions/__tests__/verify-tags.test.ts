@@ -63,17 +63,13 @@ const els: DetectedElementView[] = [{ page: '/', kind: 'cta', text: 'Get a Free 
   check('QW3: EM noise ignored but a real sibling event still surfaces', /newsletter_signup/.test(v[0].reason ?? '') && !(v[0].observedEvents ?? []).includes('user_engagement'));
 }
 
-// ── QW2: a hit to a FOREIGN GA4 property (the site's own live GA4) is not charged to a draft tag ──
+// ── tid attribution: a LITERAL Measurement ID still requires an exact property match ──────────────
+// (a {{variable}}-id tag falls back to event-name matching; sound cross-property attribution for those
+//  is deferred to the reconcile pass, which has run-wide property evidence — see the follow-up.)
 {
-  const cfg = tag({ id: 'cfg', tagName: 'GA4 Config', platform: 'google_tag', measurementId: 'G-OWN', eventName: 'page_view' });
-  const evt = tag({ id: 'evt', measurementId: '{{GA4 Measurement ID}}', eventName: 'cta_click' });
-  // The captured hit is the SITE'S live GA4 (G-SITE), event book_demo — a different property + event.
-  const v = evaluateVerify([cfg, evt], [cap({ tagId: 'evt', hits: [ga4Hit('book_demo', 'G-SITE')] })], els);
-  const evd = v.find((x) => x.tagId === 'evt')!;
-  check('QW2: foreign-property hit → not a false "wrong event" for the draft tag', evd.fired === false && !/but none for/.test(evd.reason ?? ''));
-  // Same event to the container's OWN property WOULD count (control): here the draft's own event fires.
-  const v2 = evaluateVerify([cfg, evt], [cap({ tagId: 'evt', hits: [ga4Hit('cta_click', 'G-OWN')] })], els);
-  check('QW2: own-property hit for the tag event → fired', v2.find((x) => x.tagId === 'evt')!.fired === true);
+  const t = tag({ measurementId: 'G-OWN' });
+  check('literal id: own-property event → fired', evaluateVerify([t], [cap({ hits: [ga4Hit('cta_click', 'G-OWN')] })], els)[0].fired === true);
+  check('literal id: same event on a FOREIGN property → not credited', evaluateVerify([t], [cap({ hits: [ga4Hit('cta_click', 'G-SITE')] })], els)[0].fired === false);
 }
 
 // ── QW1: a {{variable}} / empty Event Name can't be matched literally → inconclusive, not "wrong" ──
