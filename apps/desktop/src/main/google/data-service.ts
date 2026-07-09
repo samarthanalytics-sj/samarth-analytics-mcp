@@ -739,6 +739,74 @@ export class GoogleDataService {
     };
   }
 
+  /** Delete a draft workspace — used to clean up the throwaway workspace(s) a monitor-preview run
+   *  creates. Draft-level ONLY: a workspace holds unpublished edits, so removing it never affects the
+   *  live/published container or any other workspace. */
+  async deleteGtmWorkspace(accountId: string, containerId: string, workspaceId: string): Promise<{ deleted: boolean }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    await gtm.accounts.containers.workspaces.delete({ path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}` });
+    return { deleted: true };
+  }
+
+  /**
+   * Mint a PREVIEW that carries the user's draft tags PLUS an injected GTM Monitor tag (Simo Ahava's
+   * community template), so verification can read GTM's OWN per-tag firing (addEventCallback) instead of
+   * inferring from beacons. Draft-only and NEVER published; the user's working workspace is untouched:
+   *   1. create a THROWAWAY workspace and copy the source workspace's tags/triggers/variables into it;
+   *   2. import the GTM Monitor template + add a tag firing on ALL events, GET-pixelling to `endPoint`;
+   *   3. mint the throwaway workspace's preview snippet.
+   * The caller drives the site with the snippet, captures the `endPoint` pixels, and MUST call
+   * deleteGtmWorkspace on every id in `cleanupWorkspaceIds` when done. On any failure the throwaway
+   * workspace is removed before rethrowing. (`endPoint`/`gallery*` are passed in — the monitor constants
+   * live in the suggestions layer, so data-service stays free of that import.)
+   */
+  async mintMonitorPreview(
+    accountId: string,
+    containerId: string,
+    sourceWorkspaceId: string,
+    monitor: { endPoint: string; galleryOwner: string; galleryRepository: string }
+  ): Promise<{ snippet: string; versionId: string; cleanupWorkspaceIds: string[] }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const temp = await this.createGtmWorkspace(accountId, containerId, `Samarth Verify Monitor ${new Date().toISOString().slice(0, 19)}`);
+    const cleanupWorkspaceIds = [temp.workspaceId];
+    try {
+      // Bring the source workspace's DRAFT tags into the throwaway, so they are what the preview serves.
+      await this.copyWorkspaceResources(accountId, containerId, sourceWorkspaceId, temp.workspaceId);
+      // Import Simo Ahava's GTM Monitor community template — its sandbox permissions come vetted, so we
+      // never hand-roll a template (and its compile can't be validated here).
+      const tpl = await this.importGalleryTemplate(accountId, containerId, temp.workspaceId, monitor.galleryOwner, monitor.galleryRepository);
+      const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${temp.workspaceId}`;
+      // A Custom Event trigger matching EVERY event ({{_event}} matches `.*`) so addEventCallback sees
+      // every event's tags. buildServerAllEventsTrigger with no client filter is a plain web trigger.
+      const trg = await this.q(() => gtm.accounts.containers.workspaces.triggers.create({
+        parent,
+        requestBody: buildServerAllEventsTrigger('Samarth Verify - All Events') as unknown as Record<string, unknown>,
+      }));
+      const triggerId = trg.data.triggerId ?? '';
+      // The monitor tag: the imported template's tag type, GET-pixelling each event to our sentinel
+      // endpoint. batchHits is left at the template default (batch-tolerant parser), so no extra params.
+      await this.q(() => gtm.accounts.containers.workspaces.tags.create({
+        parent,
+        requestBody: {
+          name: 'Samarth Verify - GTM Monitor',
+          type: tpl.type,
+          parameter: [{ type: 'template', key: 'endPoint', value: monitor.endPoint }],
+          ...(triggerId ? { firingTriggerId: [triggerId] } : {}),
+        },
+      }));
+      // Mint the throwaway workspace's preview. This SUBMITS the throwaway (it becomes read-only) and GTM
+      // auto-forks a fresh workspace — clean up both. The version it creates is never published.
+      const preview = await this.mintWorkspacePreview(accountId, containerId, temp.workspaceId);
+      if (preview.newWorkspaceId) cleanupWorkspaceIds.push(preview.newWorkspaceId);
+      return { snippet: preview.snippet, versionId: preview.versionId, cleanupWorkspaceIds };
+    } catch (e) {
+      for (const id of cleanupWorkspaceIds) await this.deleteGtmWorkspace(accountId, containerId, id).catch(() => undefined);
+      throw e;
+    }
+  }
+
   /** Create a folder in a draft workspace (organisational only — no effect on firing). */
   async createGtmFolder(
     accountId: string,
