@@ -1,3 +1,9 @@
+## [1.282.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.282.0...v1.282.1) (2026-07-09)
+
+### Bug Fixes
+
+* **desktop:** correct five sGTM server-tag builder + audit bugs ([d4b676d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d4b676d6aa02a47db7971bbd550c89c3a5b04468))
+
 ## [1.282.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.281.0...v1.282.0) (2026-07-09)
 
 ### Features
