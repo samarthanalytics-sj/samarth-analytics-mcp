@@ -1,3 +1,9 @@
+## [1.286.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.1...v1.286.2) (2026-07-09)
+
+### Bug Fixes
+
+* **verify:** monitor tag failed (0 fired) + version pile-up — endpoint must match Simo's send_pixel perm ([e2eb646](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e2eb646fcf1ed0e09bd671f5a8738c8591d16bf2))
+
 ## [1.286.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.0...v1.286.1) (2026-07-09)
 
 ### Bug Fixes
