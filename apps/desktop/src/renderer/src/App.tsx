@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { applyTheme, loadTheme, saveTheme, type Theme } from './theme';
+import { ThemeToggle, useTheme } from './ThemeToggle';
 import type { AppInfo } from '../../preload';
 import type {
   AccountView,
@@ -696,6 +696,7 @@ export function App(): JSX.Element {
 
   return (
     <div style={styles.app}>
+      <ThemeToggle />
       <aside style={styles.sidebar}>
         <div style={styles.brand}>
           <div style={styles.logo}>S</div>
@@ -5604,12 +5605,7 @@ function SettingsView({
   run: (fn: () => Promise<unknown>) => Promise<void>;
   refresh: () => Promise<void>;
 }): JSX.Element {
-  const [theme, setThemeState] = useState<Theme>(loadTheme());
-  const setTheme = (t: Theme): void => {
-    setThemeState(t);
-    saveTheme(t);
-    applyTheme(t);
-  };
+  const [theme, setTheme] = useTheme();
   // Single source of truth for app-level provider keys so the Language-model hint and the Providers editor
   // never disagree — a key change in one updates the other immediately, and a probe failure surfaces.
   const [provStatus, setProvStatus] = useState<ProviderStatus | null>(null);
@@ -6009,10 +6005,10 @@ const styles: Record<string, React.CSSProperties> = {
   promptActions: { display: 'flex', gap: 6, flexShrink: 0 },
   promptUse: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' },
   promptCopy: { background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer' },
-  errorBar: { background: 'var(--c-red-bg)', borderBottom: '1px solid var(--c-red-border)', color: 'var(--c-red)', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 },
+  errorBar: { background: 'var(--c-red-bg)', borderBottom: '1px solid var(--c-red-border)', color: 'var(--c-red)', padding: '10px 52px 10px 16px', display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 },
   errorClose: { background: 'transparent', border: 'none', color: 'var(--c-red)', cursor: 'pointer' },
-  monitorBarCrit: { background: 'var(--c-red-bg)', borderBottom: '1px solid var(--c-red-border)', color: 'var(--c-red)', padding: '9px 16px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 },
-  monitorBarWarn: { background: 'var(--c-amber-bg)', borderBottom: '1px solid var(--c-amber-border)', color: 'var(--c-amber)', padding: '9px 16px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 },
+  monitorBarCrit: { background: 'var(--c-red-bg)', borderBottom: '1px solid var(--c-red-border)', color: 'var(--c-red)', padding: '9px 52px 9px 16px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 },
+  monitorBarWarn: { background: 'var(--c-amber-bg)', borderBottom: '1px solid var(--c-amber-border)', color: 'var(--c-amber)', padding: '9px 52px 9px 16px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 },
   monitorBarBtn: { background: 'transparent', border: '1px solid currentColor', color: 'inherit', borderRadius: 7, padding: '3px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' },
 
   chatWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
