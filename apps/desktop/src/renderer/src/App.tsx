@@ -4274,7 +4274,11 @@ function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: 
             const st = verdictStatus(v);
             const m = V_STATUS[st];
             const via = verdictKindLabel(v);
-            const signal = v.observedBeacons?.length ? v.observedBeacons.join(', ') : v.fired ? 'GA4 hit' : '—';
+            // For an authoritative (monitor) verdict the "signal" is GTM's own report — its status +
+            // execution time — not a sniffed beacon. Otherwise fall back to the observed beacon host(s).
+            const signal = v.verifiedByMonitor
+              ? (v.fired ? `GTM monitor: ${v.monitorStatus ?? 'fired'}${typeof v.monitorExecutionMs === 'number' ? ` · ${v.monitorExecutionMs}ms` : ''}` : '—')
+              : v.observedBeacons?.length ? v.observedBeacons.join(', ') : v.fired ? 'GA4 hit' : '—';
             // Keep the per-tag "why / how to verify" guidance on hover so the compact table doesn't lose it.
             const hint = st === 'untested' ? verdictHowToTest(v) : v.reason ?? '';
             return (
@@ -4655,10 +4659,18 @@ function VerifyPanel({
     return m;
   }
 
-  async function runVerify(snippetOverride?: string): Promise<void> {
+  async function runVerify(snippetOverride?: string, useMonitor = false): Promise<void> {
     if (!ready || !ctx || vVerifying) return;
     const target = vUrl.trim();
     if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against.' }); return; }
+    // AUTHORITATIVE (Tag-Assistant-grade) mode writes a THROWAWAY workspace to read GTM's own per-tag
+    // firing — confirm the draft-only, auto-removed, never-published write before touching the container.
+    const canMonitor = Boolean(ctx.accountId && ctx.containerId && ctx.workspaceId);
+    if (useMonitor) {
+      if (!canMonitor) { setVNote({ kind: 'error', text: 'Pick a GTM account, container and workspace first — the monitor preview is minted from them.' }); return; }
+      const ok = window.confirm('Verify with GTM Monitor?\n\nThis creates a TEMPORARY workspace, adds a GTM Monitor tag, and mints its preview — so verification reads GTM’s OWN per-tag firing (like Tag Assistant), not inferred from network hits. It is draft-only, NEVER published, and the temporary workspace is deleted afterwards. Your working workspace is not touched.');
+      if (!ok) return;
+    }
     setVVerifying(true);
     setVNote(null);
     onError('');
@@ -4679,7 +4691,11 @@ function VerifyPanel({
         return;
       }
       const snippet = (snippetOverride ?? vSnippet).trim();
-      const res = await window.desktop.tags.verify(target, tags, [], { gtmDebug: true, ...(snippet ? { containerSnippet: snippet } : {}) });
+      const res = await window.desktop.tags.verify(target, tags, [], {
+        gtmDebug: true,
+        ...(snippet ? { containerSnippet: snippet } : {}),
+        ...(useMonitor ? { monitor: { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId! } } : {}),
+      });
       setVResult(res);
     } catch (e) {
       setVNote({ kind: 'error', text: verifyErrorText(e) });
@@ -4776,6 +4792,14 @@ function VerifyPanel({
             >
               {vVerifying ? 'Verifying…' : 'Verify firing'}
             </button>
+            <button
+              style={{ background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--c-blue)', borderRadius: 10, padding: '10px 16px', fontSize: 14, cursor: 'pointer', ...(!ready || vVerifying || !vUrl.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+              onClick={() => void runVerify(undefined, true)}
+              disabled={!ready || vVerifying || !vUrl.trim()}
+              title="Authoritative: mints a THROWAWAY preview with a GTM Monitor tag and reads GTM's OWN per-tag firing (like Tag Assistant). Draft-only, never published, the temp workspace is deleted after."
+            >
+              {vVerifying ? 'Verifying…' : 'Verify with GTM Monitor'}
+            </button>
           </div>
           {/* ONE run, two parts: this single action verifies the tags AND discovers the forms-with-tags.
               A single combined status so it reads as one verification, not two. */}
@@ -4835,6 +4859,14 @@ function VerifyPanel({
             {vResult.gtmDebug && !vResult.gtmDebug.containerLoaded && vResult.injected && (
               <div style={{ ...styles.muted, color: 'var(--c-red)', marginBottom: 6 }}>
                 ⚠ GTM debug: no GTM-XXXX container was detected on the page — the container didn’t load, so nothing could fire. Check the preview snippet / auth, or that the site isn’t blocking googletagmanager.com.
+              </div>
+            )}
+            {/* AUTHORITATIVE run: results came from GTM's OWN monitor (addEventCallback), like Tag
+                Assistant — the fired/not-fired below is exactly what GTM did, not beacon inference. */}
+            {vResult.verifiedByMonitor && !vResult.error && (
+              <div style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-green)', background: 'rgba(60,180,90,0.08)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                <span aria-hidden>✓</span>
+                <span><b>Authoritative</b> — read from GTM’s own Monitor (addEventCallback), like Tag Assistant. Each tag below is exactly what GTM fired on the driven events (with its status + timing), not inferred from network hits. The temporary monitor workspace has been deleted.</span>
               </div>
             )}
             {vResult.error ? (
