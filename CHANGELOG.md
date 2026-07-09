@@ -1,3 +1,9 @@
+## [1.275.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.274.0...v1.275.0) (2026-07-09)
+
+### Features
+
+* **verify:** progress bar + "keep this tab open" warning while a verification runs ([edbb6ed](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/edbb6eda8848d624bd04a2b04b40eb6cc4d9ef44))
+
 ## [1.274.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.273.0...v1.274.0) (2026-07-09)
 
 ### Features
