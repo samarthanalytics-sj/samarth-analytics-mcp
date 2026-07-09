@@ -10,6 +10,7 @@ import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
 import { monitorGa4, firstMetric, noSourceSharePct, type Ga4MonitorInput } from '../google/ga4-monitor';
 import { buildSlackPayload, buildSlackDigestPayload, buildSlackAuditPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
 import { withQuotaRetry } from '../google/quota-retry';
+import { rankGa4Campaigns } from '../google/ga4-campaigns';
 import type { GoogleDataService } from '../google/data-service';
 import type { AccountView, Ga4ExecSummaryView, Ga4MonitorConfig, Ga4MonitorRun, Ga4MonitorStatus, Ga4MonitorTarget, Ga4MonitorTargetStatus } from '../../shared/ipc';
 
@@ -75,10 +76,13 @@ export async function gatherGa4MonitorInput(
       ? grab(withQuotaRetry(() => data.getGa4DataQuality(property, { startDate: baseline.priorStartDate, endDate: baseline.priorEndDate })))
       : Promise.resolve(null);
 
-  const [eventDeltas, transactions, priorDq] = await Promise.all([
+  const [eventDeltas, transactions, priorDq, campaigns] = await Promise.all([
     grab(withQuotaRetry(() => data.getGa4EventDeltas(property, sd, ed))),
     ecom ? grab(withQuotaRetry(() => data.getGa4Transactions(property, sd, ed))) : Promise.resolve(null),
     priorDqP,
+    // Campaign performance feeds the revenue-reconciliation + untagged-share checks (the audit's
+    // HIGH finding, now watched on a schedule). Best-effort like everything else.
+    grab(withQuotaRetry(() => data.getGa4CampaignPerformance(property, days)).then(rankGa4Campaigns)),
   ]);
 
   return {
@@ -92,6 +96,9 @@ export async function gatherGa4MonitorInput(
     hasEcommerce: ecom,
     priorNoSourceShare: priorDq ? noSourceSharePct(priorDq) : null,
     fetchError: errors[0] ?? null,
+    campaigns,
+    snapshot: snap,
+    priorChannelGroups: priorDq?.channelGroups ?? null,
   };
 }
 
