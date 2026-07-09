@@ -1,3 +1,9 @@
+## [1.277.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.276.0...v1.277.0) (2026-07-09)
+
+### Features
+
+* **desktop:** plain GA4 monitor check cards with scannable insights ([c38dc9a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c38dc9a503f878e7dc6392743b8b405baea5e4c1))
+
 ## [1.276.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.275.0...v1.276.0) (2026-07-09)
 
 ### Features
