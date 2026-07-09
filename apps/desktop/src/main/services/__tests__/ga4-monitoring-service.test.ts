@@ -283,6 +283,40 @@ test('monitor window is LIVE and property-timezone anchored: ends on the dq toda
   assert.equal(run.timeZone, 'Asia/Kolkata', "the run carries the property's reporting timezone for the UI");
 });
 
+test('monthly report: first sweep only starts the clock; it posts after 30 days and records the issue history', async () => {
+  const secrets = makeSecrets();
+  let nowMs = Date.parse('2026-07-02T09:00:00Z');
+  const posts: string[] = [];
+  const svc = new Ga4MonitoringService({
+    registry: { getActiveView: () => account },
+    data: fakeData(),
+    secrets,
+    emit: () => {},
+    now: () => nowMs,
+    slackFetch: async (_url, init) => { posts.push(init.body); return { ok: true, status: 200, text: async () => 'ok' }; },
+  });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], slackEnabled: true, enabled: false });
+  svc.setWebhook('https://hooks.slack.com/services/T/B/x', 'properties/1');
+
+  await svc.runOnce();
+  assert.ok(!posts.some((b) => b.includes('Monthly tracking report')), 'first sweep starts the clock, does not send');
+  const t1 = svc.status().targets.find((t) => t.propertyId === 'properties/1')!;
+  assert.ok(t1.lastMonthlyAt, 'clock seeded');
+  assert.ok((t1.issueLog ?? []).some((e) => e.id === 'no_data' && !e.closedAt), 'issue history records the open no-data alert');
+
+  nowMs += 31 * 24 * 60 * 60 * 1000;
+  await svc.runOnce();
+  const monthly = posts.find((b) => b.includes('Monthly tracking report'));
+  assert.ok(monthly, 'monthly posted once due: ' + posts.length);
+  assert.ok(/still open/.test(monthly!), 'verdict counts the open issue');
+  assert.ok(monthly!.includes('One recommendation for next month'), 'exactly one recommendation');
+
+  // Not again on the next sweep.
+  const before = posts.filter((b) => b.includes('Monthly tracking report')).length;
+  await svc.runOnce();
+  assert.equal(posts.filter((b) => b.includes('Monthly tracking report')).length, before, 'no repeat inside 30 days');
+});
+
 test('a new issue Slacks once; the same ongoing issue does not re-Slack on the next run', async () => {
   const secrets = makeSecrets();
   const posts: string[] = [];

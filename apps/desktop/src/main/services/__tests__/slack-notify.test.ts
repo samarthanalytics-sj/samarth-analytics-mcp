@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildSlackPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from '../slack-notify';
+import { buildSlackPayload, buildSlackTestPayload, buildSlackDigestPayload, buildSlackMonthlyPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from '../slack-notify';
 import type { Ga4MonitorResult, Ga4MonitorAlert } from '../../google/ga4-monitor';
 
 let passed = 0;
@@ -59,6 +59,63 @@ wrap('structured alert fields render as Summary metric lines, Impact, and curate
   assert.ok(json.includes('*Impact*') && json.includes('ROAS unreliable'), 'impact section rendered');
   assert.ok(json.includes('\u2022 Verify Purchase and Key Event tracking'), 'curated bullets rendered');
   assert.ok(json.includes('*Property ID:* 353451709'), 'numeric property id');
+});
+
+wrap('a healthy weekly digest is a ONE-LINE all-clear, not a wall of green checks', () => {
+  const healthy = result({ health: 'healthy', summary: 'Everything looks healthy.', alerts: [] });
+  const p = buildSlackDigestPayload('Acme (123)', healthy, { checksPass: 9, checksWarn: 0, checksFail: 0, openAlerts: 0, intervalMinutes: 60 });
+  assert.ok(/All clear this week on Acme \(123\)/.test(p.text), p.text);
+  assert.ok(/only hear from us the moment something breaks/.test(p.text), 'says why silence is the norm');
+  assert.equal((p.blocks as unknown[]).length, 2, 'one line + footer, nothing else');
+  // With open issues the digest keeps its full structure.
+  const sick = result({ health: 'critical' });
+  const p2 = buildSlackDigestPayload('Acme (123)', sick, { checksPass: 5, checksWarn: 1, checksFail: 1, openAlerts: 1, intervalMinutes: 60 });
+  assert.ok((p2.blocks as unknown[]).length > 2, 'full digest when something is open');
+});
+
+wrap('the monthly report tells the story: verdict, trust trend, caught/resolved, still open, one recommendation', () => {
+  const p = buildSlackMonthlyPayload('Acme (123)', {
+    verdict: '2 issues this month: 1 resolved, 1 still open.',
+    reliabilityPct: 46,
+    prevReliabilityPct: 38,
+    opened: [
+      { title: 'Campaign and channel revenue do not reconcile', closed: false },
+      { title: 'A tracked event has stopped firing', closed: true },
+    ],
+    openNow: [{ severity: 'high', text: 'Your ads look about 10x less profitable than they are.' }],
+    recommendation: 'This is a tracking fix your analytics person or agency can make in about an hour - forward them this alert.',
+    metrics: { sessions: 45140, priorSessions: 40100, keyEvents: 800, priorKeyEvents: 780, revenue: 161000, priorRevenue: 144000 },
+    trustCaveat: 'Attribution is currently unverified - treat the channel and campaign splits with caution.',
+  });
+  const json = JSON.stringify(p.blocks);
+  assert.ok(json.includes('Monthly tracking report'), 'header');
+  assert.ok(json.includes('*Quotable data:* 46%, up from 38%'), 'trust number as a TREND');
+  assert.ok(json.includes('Caught and resolved: A tracked event has stopped firing'), 'resolved work shown');
+  assert.ok(json.includes('Caught, still open: Campaign and channel revenue'), 'open work shown');
+  assert.ok(json.includes('High: Your ads look about 10x less profitable'), 'still-open in reader language');
+  assert.ok(json.includes('Sessions: +13%'), 'month numbers with deltas');
+  assert.ok(json.includes('treat the channel and campaign splits with caution'), 'trust flag on the numbers');
+  assert.ok(json.includes('*One recommendation for next month*'), 'exactly one recommendation section');
+
+  const first = buildSlackMonthlyPayload('Acme', { verdict: 'Tracking held steady this month - nothing broke.', reliabilityPct: null, prevReliabilityPct: null, opened: [], openNow: [], recommendation: 'Nothing urgent.', metrics: null, trustCaveat: null });
+  const j2 = JSON.stringify(first.blocks);
+  assert.ok(j2.includes('Not yet measured'), 'honest when the audit has not run');
+  assert.ok(j2.includes('No new issues appeared this month.') && j2.includes('Nothing is open right now.'));
+});
+
+wrap('the alert Issue line leads with the plain consequence and keeps the technical fix for the fixer', () => {
+  const a = alert({
+    kind: 'attribution_mismatch',
+    title: 'Campaign and channel revenue do not reconcile',
+    plain: 'Your ads look about 10x less profitable than they are: campaigns brought in about INR 388,000, but only INR 37,000 of it is credited to paid ads.',
+    actions: ['This is a tracking fix your analytics person or agency can make in about an hour - forward them this alert.'],
+    recommendation: 'Verify Google Ads auto-tagging (gclid) and the GA4-Google Ads link.',
+  });
+  const p = buildSlackPayload('Acme', result({ alerts: [a] }), [a]);
+  const json = JSON.stringify(p.blocks);
+  assert.ok(json.includes('less profitable than they are'), 'Issue leads with the consequence');
+  assert.ok(json.includes('*For whoever fixes it*') && json.includes('auto-tagging'), 'technical fix rides along');
+  assert.ok(json.includes('\u2022 This is a tracking fix'), 'owner action is the bullet');
 });
 
 wrap('buildSlackTestPayload names the property and reads as a connection confirmation', () => {
