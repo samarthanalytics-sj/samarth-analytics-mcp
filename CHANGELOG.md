@@ -1,3 +1,13 @@
+## [1.279.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.278.0...v1.279.0) (2026-07-09)
+
+### Features
+
+* **desktop:** GA4 monitor health checks as a table, plainer hero + AI summary ([2ac5c82](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2ac5c823d3e8f48b40387800762b0094e1a38d96))
+
+### Bug Fixes
+
+* **desktop:** Settings uses the full width — responsive card grid ([653f6b3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/653f6b3df49a7ade7cc939ca0f02b971e3a27fbd))
+
 ## [1.278.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.277.0...v1.278.0) (2026-07-09)
 
 ### Features
