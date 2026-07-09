@@ -54,6 +54,19 @@ function isGa4CollectorHit(url: string): boolean {
   const c = classifyCollector(url);
   return c === 'ga4' || c === 'server';
 }
+/** GA4 events the BASE config tag + Enhanced Measurement emit on their own (not a specific event tag) —
+ *  page_view, session lifecycle, and the EM auto-events. When we're verifying a NON-matching event tag,
+ *  one of these appearing in its capture window is NOT that tag firing "the wrong event": it's the
+ *  container's baseline noise (amplified because we force-grant consent). We must not charge it to the
+ *  tag being checked, or every event tag on a GA4 site reads as "fired [page_view] but none for <event>". */
+const GA4_AUTO_EVENTS = new Set([
+  'page_view', 'session_start', 'first_visit', 'user_engagement', 'scroll', 'click',
+  'view_search_results', 'file_download', 'form_start', 'form_submit', 'video_start',
+  'video_progress', 'video_complete',
+]);
+/** A GA4 tag whose Event Name is a {{variable}} (or empty) — its runtime en= is resolved dynamically, so
+ *  a LITERAL name comparison can never match and must not be reported as "wrong event name". */
+const isDynamicEventName = (name: string | undefined): boolean => !name || /^\{\{.+\}\}$/.test(name.trim());
 
 /** The SPECIFIC beacon platform that proves a non-GA4 tag fired (Phase A: precise per-platform
  *  attribution). 'ad' = we don't know the exact destination for this tag type → any recognised
@@ -199,9 +212,11 @@ function evaluateOne(tag: VerifyTagInput, byId: Map<string, PerTagCapture>, elem
 
     // Interaction ran — did the tag's hit fire?
     if (isGa4Platform(tag.platform)) {
-      // When the tag has a literal Measurement ID, also require the hit's tid= to match, so two GA4
-      // tags firing the same event on different properties are attributed correctly. A {{variable}}
-      // measurementId can't be matched, so fall back to event-name only.
+      // When the tag has a literal Measurement ID, require the hit's tid= to match, so two GA4 tags
+      // firing the same event on DIFFERENT properties (incl. a page's own live GA4 running alongside our
+      // injected preview) are attributed correctly. A {{variable}} measurementId can't be pinned to a
+      // literal property here, so it falls back to event-name matching; sound cross-property attribution
+      // for variable-id tags needs run-wide property evidence and is handled by the reconcile pass.
       const wantTid = literalTid(tag.measurementId);
       const events = cap.hits
         .filter((h) => isGa4CollectorHit(h.url))
@@ -212,12 +227,25 @@ function evaluateOne(tag: VerifyTagInput, byId: Map<string, PerTagCapture>, elem
       if (hit) {
         return withBeacons({ ...base, fired: true, ...(cap.kind === 'custom_event' ? { synthetic: true } : {}), event: hit.ev.event, interaction, evidence: hit.hit });
       }
-      if (events.length > 0) {
-        const observedEvents = [...new Set(events.map(({ ev }) => ev.event).filter((e): e is string => Boolean(e)))];
+      // A {{variable}} / empty Event Name can never equal a resolved runtime en=, so a literal-name
+      // "wrong event" verdict is meaningless. Surface what DID fire (to this property) for alignment,
+      // but mark it inconclusive — not "firing the wrong event".
+      if (isDynamicEventName(tag.eventName)) {
+        const obs = [...new Set(events.map(({ ev }) => ev.event).filter((e): e is string => Boolean(e)))];
+        return withBeacons({ ...base, inconclusive: true, reason: `this tag's Event Name is ${tag.eventName ? 'a {{variable}}' : 'empty'}, so it can't be verified by a literal event-name match — ${obs.length ? `the interaction fired: [${obs.join(', ')}]; align the tag to the intended one` : 'no GA4 hit fired to this container’s property'}`, interaction, ...(obs.length ? { observedEvents: obs } : {}) });
+      }
+      // The tag's own event didn't fire. Only report "fired the WRONG event" when a NON-baseline event
+      // was seen (a sibling tag or a genuinely mis-named tag) — never for the base config's page_view or
+      // Enhanced-Measurement auto-events, which aren't this tag firing. Otherwise fall through to the
+      // honest "no hit for this tag" branch below (so a whole page of EM/page_view noise no longer reads
+      // as every tag "firing the wrong event").
+      const attributable = events.filter(({ ev }) => !GA4_AUTO_EVENTS.has(norm(ev.event)));
+      if (attributable.length > 0) {
+        const observedEvents = [...new Set(attributable.map(({ ev }) => ev.event).filter((e): e is string => Boolean(e)))];
         const seen = observedEvents.join(', ') || '(page-level)';
         // The trigger fired a GA4 hit, just not under this tag's event name — surface the observed
         // event name(s) so the UI can offer "align the tag's Event Name to <observed>".
-        return withBeacons({ ...base, reason: `the interaction fired GA4 hit(s) [${seen}] but none for "${tag.eventName}" — the tag or its event name may differ`, interaction, evidence: events[0].hit, ...(observedEvents.length ? { observedEvents } : {}) });
+        return withBeacons({ ...base, reason: `the interaction fired GA4 hit(s) [${seen}] but none for "${tag.eventName}" — the tag or its event name may differ`, interaction, evidence: attributable[0].hit, ...(observedEvents.length ? { observedEvents } : {}) });
       }
       if (cap.kind === 'custom_event') {
         // We pushed a synthetic dataLayer event (e.g. `form_submission`) plus any form-specific data
