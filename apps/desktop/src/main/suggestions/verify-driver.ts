@@ -14,6 +14,7 @@
 import os from 'node:os';
 import { requestAllowed } from './ssrf';
 import { classifyCollector, syntheticDataLayerEvent, buildNetworkLog, summarizeDataLayer, type Collector, type DescribedHit, type DataLayerEventView } from '../../shared/runtime-capture';
+import { isMonitorHit, parseMonitorHit, type MonitorEvent } from './tag-monitor';
 import { PlaywrightUnavailableError } from './playwright-driver';
 import type { PerTagCapture } from './verify-tags';
 
@@ -199,6 +200,10 @@ export interface VerifyDriverResult {
    *  cta_click, …) so a trigger can be built/aligned to the real event + params. Events the verifier
    *  pushed synthetically to test custom_event tags are flagged `synthetic`. */
   dataLayer?: DataLayerEventView[];
+  /** AUTHORITATIVE per-tag firing captured from an injected GTM Monitor tag (addEventCallback) — which
+   *  tags GTM fired on each event, with status. Present only when a monitor-preview snippet was used;
+   *  feeds verdictsFromMonitor for the Tag-Assistant-grade result. */
+  monitorEvents?: MonitorEvent[];
 }
 
 /** Read GTM's on-page debug signal + the real dataLayer pushes (serialized to page.evaluate — DOM
@@ -691,7 +696,11 @@ export async function runVerifyDriver(
     page: PwPage;
     captured: { url: string; body: string | null; collector: Collector }[];
     armed: { on: boolean };
+    /** GTM Monitor pixel URLs captured on this worker (authoritative per-tag firing) — parsed at the end. */
+    monitorHits: string[];
   }
+  // Monitor pixels, collected per worker → merged + parsed into MonitorEvent[] for authoritative verdicts.
+  const monitorHitsByWorker: string[][] = [];
 
   let browser: PwBrowser | null = null;
   try {
@@ -701,10 +710,18 @@ export async function runVerifyDriver(
     const makeWorker = async (): Promise<VerifyWorker> => {
       const context = await launched.newContext({ viewport: { width: 1366, height: 900 } });
       const captured: VerifyWorker['captured'] = [];
+      const monitorHits: string[] = [];
       const armed = { on: false }; // after THIS worker's container loads, kill every beacon (capture+abort)
       await context.route('**/*', (route) => {
         const req = route.request();
         const reqUrl = req.url();
+        // The injected GTM Monitor tag GET-pixels per-tag firing to our .invalid sentinel — capture +
+        // abort it (it can never resolve anyway) BEFORE the collector/armed checks so it isn't misread.
+        if (isMonitorHit(reqUrl)) {
+          monitorHits.push(reqUrl);
+          void route.abort();
+          return;
+        }
         const collector = classifyCollector(reqUrl);
         if (collector) {
           captured.push({ url: reqUrl, body: safePostData(req), collector });
@@ -722,10 +739,11 @@ export async function runVerifyDriver(
         );
       });
       const page = await context.newPage();
-      return { context, page, captured, armed };
+      return { context, page, captured, armed, monitorHits };
     };
     const closeWorker = async (w: VerifyWorker): Promise<void> => {
       capturedByWorker.push(w.captured);
+      monitorHitsByWorker.push(w.monitorHits);
       await w.context.close();
     };
 
@@ -897,7 +915,9 @@ export async function runVerifyDriver(
       : undefined;
     const dataLayer = summarizeDataLayer(debugDataLayer.map((p) => ({ ...p, synthetic: syntheticEvents.has(p.event) })));
     const networkLog = buildNetworkLog(capturedByWorker.flat());
-    return { pagesOk: true, injected, previewAuth, perTag, ...(pagesDriven.length ? { pagesDriven } : {}), ...(networkLog.length ? { networkLog } : {}), ...(dataLayer.length ? { dataLayer } : {}), ...(gtmDebug ? { gtmDebug } : {}) };
+    // Authoritative per-tag firing from the injected GTM Monitor (if any pixels were captured).
+    const monitorEvents = monitorHitsByWorker.flat().map(parseMonitorHit).filter((e): e is MonitorEvent => e !== null);
+    return { pagesOk: true, injected, previewAuth, perTag, ...(pagesDriven.length ? { pagesDriven } : {}), ...(networkLog.length ? { networkLog } : {}), ...(dataLayer.length ? { dataLayer } : {}), ...(gtmDebug ? { gtmDebug } : {}), ...(monitorEvents.length ? { monitorEvents } : {}) };
   } catch (e) {
     return { pagesOk: false, injected: Boolean(loaderSrc), previewAuth, perTag, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
   } finally {
