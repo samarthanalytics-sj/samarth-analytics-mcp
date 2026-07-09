@@ -6142,6 +6142,7 @@ function SettingsView({
     <div style={styles.settings}>
       <h1 style={styles.settingsTitle}>Settings</h1>
 
+      <div style={styles.settingsCols}>
       <section style={styles.card}>
         <h2 style={styles.h2}>Appearance</h2>
         <div style={{ ...styles.kv, borderBottom: 'none' }}>
@@ -6324,6 +6325,7 @@ function SettingsView({
           </>
         )}
       </section>
+      </div>
     </div>
   );
 }
@@ -6689,10 +6691,15 @@ const styles: Record<string, React.CSSProperties> = {
   // Settings fills the available width as a responsive card grid (2–3 columns on wide screens, 1 on
   // narrow) instead of a fixed 720px column that left half the window empty. rowGap:0 because each card
   // already carries marginBottom:16; the title spans the full width above the grid (see settingsTitle).
-  settings: { flex: 1, overflowY: 'auto', padding: 24, maxWidth: 1400, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', columnGap: 16, rowGap: 0, alignItems: 'start' },
-  settingsTitle: { gridColumn: '1 / -1', fontSize: 22, fontWeight: 700, margin: '0 0 16px' },
+  // Settings scrolls vertically; the CARDS live in an inner masonry (settingsCols) so short cards don't
+  // leave a gap under a tall one the way a grid row would. The title sits full-width above the columns.
+  settings: { flex: 1, overflowY: 'auto', padding: 24, maxWidth: 1400 },
+  settingsTitle: { fontSize: 22, fontWeight: 700, margin: '0 0 16px' },
+  // Masonry via CSS multi-column: cards pack tightly (each is breakInside:avoid). Auto height so the
+  // OUTER `settings` scrolls vertically instead of the columns spilling sideways on a fixed-height box.
+  settingsCols: { columnWidth: 340, columnGap: 16 },
   settingsSub: { color: 'var(--text-muted)', fontSize: 13, margin: '-2px 0 14px', lineHeight: 1.55 },
-  card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 16, flexShrink: 0 },
+  card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 16, flexShrink: 0, breakInside: 'avoid' },
   // Section heading — a real 15px/600 heading (design level) rather than the old tiny all-caps label.
   h2: { fontSize: 15, fontWeight: 600, letterSpacing: -0.2, color: 'var(--text)', margin: '0 0 12px' },
   kv: { display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border)', fontSize: 14 },
