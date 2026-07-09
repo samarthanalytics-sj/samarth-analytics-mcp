@@ -33,6 +33,12 @@ const YMD = (offsetDays: number, base: Date): string => {
   const d = new Date(base.getTime() - offsetDays * 86_400_000);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 };
+/** Shift a YYYY-MM-DD by whole days (UTC arithmetic on the date parts, so DST-immune). */
+const shiftYmd = (ymd: string, deltaDays: number): string => {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d) + deltaDays * 86_400_000);
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
+};
 
 const hasEcommerce = (eventNames: string[]): boolean =>
   eventNames.some((n) => /purchase|add_to_cart|begin_checkout|view_item|add_payment_info/i.test(n));
@@ -48,8 +54,6 @@ export async function gatherGa4MonitorInput(
   now: () => number = Date.now
 ): Promise<Ga4MonitorInput> {
   const base = new Date(now());
-  const startDate = YMD(days, base);
-  const endDate = YMD(0, base);
   const errors: string[] = [];
   const grab = <T>(p: Promise<T>): Promise<T | null> =>
     p.catch((e) => {
@@ -57,12 +61,22 @@ export async function gatherGa4MonitorInput(
       return null;
     });
 
-  const [snap, dqCounts, realtime, baseline] = await Promise.all([
+  const [snap, dqCounts, realtime] = await Promise.all([
     grab(withQuotaRetry(() => data.getGa4PropertySnapshot(property))),
     grab(withQuotaRetry(() => data.getGa4DataQuality(property, days))),
     grab(data.runGa4RealtimeReport({ property, dimensions: [], metrics: ['activeUsers'] })),
-    grab(withQuotaRetry(() => data.getGa4Baseline(property, startDate, endDate))),
   ]);
+
+  // The monitor is LIVE, unlike the audit (whose report window deliberately ends yesterday for
+  // like-for-like comparisons): its baseline window ends TODAY, resolved in the PROPERTY's reporting
+  // timezone (dq's todayYmd, from the Admin API) so day boundaries match what GA4 itself reports.
+  // The machine's UTC clock is only the fallback when the dq query failed - for a property ahead of
+  // UTC that fallback can sit a day behind between local midnight and the UTC date change, which is
+  // exactly why todayYmd wins whenever it is available.
+  const todayYmd = dqCounts?.todayYmd ?? YMD(0, base);
+  const startDate = shiftYmd(todayYmd, -days);
+  const endDate = todayYmd;
+  const baseline = await grab(withQuotaRetry(() => data.getGa4Baseline(property, startDate, endDate)));
 
   const keyEventNames = (snap?.keyEvents ?? []).map((k) => k.eventName);
   const ecom = hasEcommerce(keyEventNames);
@@ -99,9 +113,8 @@ export async function gatherGa4MonitorInput(
     campaigns,
     snapshot: snap,
     priorChannelGroups: priorDq?.channelGroups ?? null,
-    // Freshness: how far the processed daily data lags behind today. The dq engine's todayYmd is the
-    // authoritative "today"; the request end date is the fallback when that query failed.
-    dataLagDays: ga4DataLagDays(baseline, dqCounts?.todayYmd ?? endDate),
+    // Freshness: how far the processed daily data lags behind today (property-timezone today).
+    dataLagDays: ga4DataLagDays(baseline, todayYmd),
   };
 }
 
@@ -525,6 +538,7 @@ export class Ga4MonitoringService {
           at,
           property: target.propertyId,
           propertyLabel: target.propertyLabel || target.propertyId,
+          timeZone: input.snapshot?.timeZone || '',
           health: result.health,
           summary: result.summary,
           checks: result.checks,

@@ -1005,6 +1005,9 @@ export interface Ga4MonitorRun {
   at: number;
   property: string;
   propertyLabel: string;
+  /** The GA4 property's REPORTING timezone: every daily figure in this run is a complete day in this
+   *  timezone (realtime is live). '' when the property snapshot could not be read. */
+  timeZone?: string;
   health: 'healthy' | 'warning' | 'critical';
   summary: string;
   checks: Ga4MonitorCheckView[];

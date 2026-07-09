@@ -411,5 +411,26 @@ test('PII detector scans campaign names and traffic sources too, always masked',
   assert.ok(!JSON.stringify(srcOnly).includes('bob@corp.com'), 'source addresses masked too');
 });
 
+test('data-collection copy labels the daily figure (yesterday / last complete day) so it never reads stale', () => {
+  // Fresh property: last complete row is yesterday -> the copy SAYS yesterday.
+  const fresh = baseline({ dailySessions: [
+    { date: '20260628', sessions: 340 }, { date: '20260629', sessions: 345 }, { date: '20260630', sessions: 338 },
+  ] });
+  const r1 = monitorGa4(input({ baseline: fresh, dqCounts: dq({ todayYmd: '2026-07-01' }) }));
+  const d1 = r1.checks.find((c) => c.id === 'data_flow')!.detail;
+  assert.ok(/338 sessions yesterday \(Jun 30, 2026\)/.test(d1), d1);
+
+  // Trailing partial "today" is excluded, so the labeled day is still yesterday.
+  const partial = baseline({ dailySessions: [
+    { date: '20260629', sessions: 345 }, { date: '20260630', sessions: 338 }, { date: '20260701', sessions: 5 },
+  ] });
+  const r2 = monitorGa4(input({ baseline: partial, dqCounts: dq({ todayYmd: '2026-07-01' }) }));
+  assert.ok(/yesterday \(Jun 30, 2026\)/.test(r2.checks.find((c) => c.id === 'data_flow')!.detail));
+
+  // Series ending far in the past: the copy admits it is the last complete day GA4 has.
+  const d3 = monitorGa4(input()).checks.find((c) => c.id === 'data_flow')!.detail;
+  assert.ok(/on Jun 17, 2026 - the last complete day GA4 has/.test(d3), d3);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -438,6 +438,9 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
           {/* ── What next? — the checks as a table ── */}
           <div>
             <div style={sectionTitle}>Health checks</div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-muted)', margin: '2px 0 8px', lineHeight: 1.5 }}>
+              Realtime figures are live. Daily figures cover complete days in the property&apos;s reporting timezone{run.timeZone ? <> (<b>{run.timeZone}</b>)</> : null}; today is excluded until it completes.
+            </div>
             <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <thead>

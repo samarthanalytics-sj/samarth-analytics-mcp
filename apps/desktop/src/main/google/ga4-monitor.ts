@@ -119,6 +119,14 @@ const fmtDate = (ymd: string): string => {
   return m ? `${MONTHS[Number(m[2]) - 1] ?? '?'} ${Number(m[3])}, ${m[1]}` : ymd || '';
 };
 const n = (x: number): string => x.toLocaleString('en-US');
+/** Whole days from `fromYmd` back to `toYmd` (YYYYMMDD or YYYY-MM-DD); null when either is unusable. */
+const dayDiffYmd = (fromYmd?: string, toYmd?: string): number | null => {
+  const a = norm(fromYmd);
+  const b = norm(toYmd);
+  if (!/^\d{8}$/.test(a) || !/^\d{8}$/.test(b)) return null;
+  const utc = (ymd: string): number => Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(4, 6)) - 1, Number(ymd.slice(6, 8)));
+  return Math.round((utc(a) - utc(b)) / 86_400_000);
+};
 /** "1 session" / "2 sessions" — avoids the clunky "session(s)". */
 const plural = (x: number, one: string, many: string): string => `${n(x)} ${x === 1 ? one : many}`;
 /** House style: no em/en dashes in surfaced copy. The audit strips these on render; the monitor emits
@@ -230,7 +238,14 @@ export function monitorGa4(input: Ga4MonitorInput, opts: Ga4MonitorOptions = {})
   } else {
     const parts: string[] = [];
     if (rt != null) parts.push(`${plural(rt, 'active user', 'active users')} right now`);
-    if (latest != null) parts.push(`${plural(latest.sessions, 'session', 'sessions')} on ${fmtDate(latest.date)}`);
+    if (latest != null) {
+      // Label WHICH day the daily figure covers relative to today, or "Jul 8" on a Jul 9 screen reads
+      // like stale data. The last COMPLETE day is yesterday by definition: today is still in progress
+      // (and GA4's own processing lags 24-48h), so it is excluded rather than shown half-counted.
+      const diff = dayDiffYmd(dq?.todayYmd, latest.date);
+      const when = diff === 1 ? `yesterday (${fmtDate(latest.date)})` : diff != null && diff >= 2 ? `on ${fmtDate(latest.date)} - the last complete day GA4 has` : `on ${fmtDate(latest.date)}`;
+      parts.push(`${plural(latest.sessions, 'session', 'sessions')} ${when}`);
+    }
     checks.push({ id: 'data_flow', label: 'Data collection', status: 'pass', detail: parts.join(' · ') || 'Data is being collected.' });
   }
 
