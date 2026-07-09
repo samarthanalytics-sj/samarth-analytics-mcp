@@ -236,6 +236,31 @@ test('consent probe: runs at most once per target per 24h, caches between sweeps
   assert.ok(/LOST/.test(alert!.title));
 });
 
+test('bigquery-link memory: a link seen on one sweep and gone on the next raises the removal alert', async () => {
+  const secrets = makeSecrets();
+  let nowMs = Date.parse('2026-07-02T09:00:00Z');
+  let links: Array<{ project: string; dailyExportEnabled: boolean; streamingExportEnabled: boolean }> = [
+    { project: 'proj-a', dailyExportEnabled: true, streamingExportEnabled: false },
+  ];
+  const data = fakeData();
+  (data as { getGa4PropertySnapshot: unknown }).getGa4PropertySnapshot = async () => ({
+    displayName: 'Acme', keyEvents: [{ eventName: 'purchase' }], dataStreams: [], bigQueryLinks: links,
+  });
+  const svc = new Ga4MonitoringService({ registry: { getActiveView: () => account }, data, secrets, emit: () => {}, now: () => nowMs });
+  svc.configure({ targets: [{ propertyId: 'properties/1', propertyLabel: 'Acme', enabled: true }], enabled: false });
+
+  const [run1] = await svc.runOnce();
+  assert.equal(run1.checks.find((c) => c.id === 'bigquery')!.status, 'pass', 'link live on the first sweep');
+  assert.ok(!run1.alerts.some((a) => a.kind === 'bigquery_export'), 'no alert while the link is healthy');
+
+  nowMs += 60 * 60 * 1000;
+  links = [];
+  const [run2] = await svc.runOnce();
+  const alert = run2.alerts.find((a) => a.kind === 'bigquery_export');
+  assert.ok(alert && alert.severity === 'medium', 'removal alert fires: ' + JSON.stringify(run2.alerts.map((a) => a.id)));
+  assert.equal(run2.checks.find((c) => c.id === 'bigquery')!.status, 'fail');
+});
+
 test('a new issue Slacks once; the same ongoing issue does not re-Slack on the next run', async () => {
   const secrets = makeSecrets();
   const posts: string[] = [];

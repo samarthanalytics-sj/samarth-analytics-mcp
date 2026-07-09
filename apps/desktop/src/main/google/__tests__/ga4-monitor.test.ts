@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { monitorGa4, firstMetric, type Ga4MonitorInput } from '../ga4-monitor';
+import { ga4DataLagDays, monitorGa4, firstMetric, type Ga4MonitorInput } from '../ga4-monitor';
 import type { Ga4Baseline } from '../data-service';
 import type { DataQualityCounts } from '../ga4-data-quality';
 
@@ -340,6 +340,75 @@ test('consent-signal check: pass with gcs, warn+LOW without, MEDIUM on regressio
 
   const noProbe = monitorGa4(input());
   assert.ok(!noProbe.checks.some((c) => c.id === 'consent_signal'), 'no probe attempted -> no check row at all');
+});
+
+test('data freshness: pass when current, MEDIUM alert at 3+ days, HIGH at 7+, honest skip when unknown', () => {
+  const row = (r: ReturnType<typeof monitorGa4>) => r.checks.find((c) => c.id === 'freshness')!;
+  assert.equal(row(monitorGa4(input({ dataLagDays: 1 }))).status, 'pass');
+  assert.equal(row(monitorGa4(input({ dataLagDays: 2 }))).status, 'pass', '48h is inside GA4 processing window');
+
+  const lagged = monitorGa4(input({ dataLagDays: 4 }));
+  assert.equal(row(lagged).status, 'warn');
+  const a = lagged.alerts.find((x) => x.kind === 'data_freshness');
+  assert.ok(a && a.severity === 'medium', '3-6 day lag is MEDIUM');
+  assert.ok(/4 days behind/.test(a!.title), a!.title);
+
+  const broken = monitorGa4(input({ dataLagDays: 9 }));
+  assert.equal(row(broken).status, 'fail');
+  assert.equal(broken.alerts.find((x) => x.kind === 'data_freshness')!.severity, 'high', 'a week+ is HIGH');
+
+  assert.equal(row(monitorGa4(input())).status, 'skip', 'unknown lag -> skip, never a guess');
+});
+
+test('ga4DataLagDays: computed from the last date the Data API returned a row for', () => {
+  assert.equal(ga4DataLagDays(baseline(), '2026-06-18'), 1, 'last row 06-17, today 06-18 -> 1 day');
+  assert.equal(ga4DataLagDays(baseline(), '2026-07-01'), 14, 'stale series -> the real lag');
+  assert.equal(ga4DataLagDays(null, '2026-07-01'), null);
+  assert.equal(ga4DataLagDays(baseline({ dailySessions: [] }), '2026-07-01'), null);
+  assert.equal(ga4DataLagDays(baseline(), undefined), null);
+});
+
+test('BigQuery export: pass when live, LOW when all exports disabled, MEDIUM when the link disappears, no row when never linked', () => {
+  const snap = (links: Array<{ project: string; dailyExportEnabled: boolean; streamingExportEnabled: boolean }>) =>
+    ({ displayName: 'Acme', keyEvents: [], dataStreams: [], bigQueryLinks: links }) as unknown as NonNullable<Ga4MonitorInput['snapshot']>;
+  const row = (r: ReturnType<typeof monitorGa4>) => r.checks.find((c) => c.id === 'bigquery');
+
+  const live = monitorGa4(input({ snapshot: snap([{ project: 'proj-a', dailyExportEnabled: true, streamingExportEnabled: false }]) }));
+  assert.equal(row(live)!.status, 'pass');
+  assert.ok(/daily/.test(row(live)!.detail), row(live)!.detail);
+
+  const dead = monitorGa4(input({ snapshot: snap([{ project: 'proj-a', dailyExportEnabled: false, streamingExportEnabled: false }]) }), { minSeverity: 'info' });
+  assert.equal(row(dead)!.status, 'warn');
+  assert.equal(dead.alerts.find((a) => a.kind === 'bigquery_export')!.severity, 'low', 'a dead link is LOW (nothing broke, nothing ships)');
+
+  const removed = monitorGa4(input({ snapshot: snap([]), priorBqLinked: true }));
+  assert.equal(row(removed)!.status, 'fail');
+  const a = removed.alerts.find((x) => x.kind === 'bigquery_export');
+  assert.ok(a && a.severity === 'medium', 'a disappearing link is MEDIUM');
+  assert.ok(/does not backfill/.test(a!.detail), a!.detail);
+
+  assert.ok(!row(monitorGa4(input({ snapshot: snap([]) }))), 'never linked -> no row (optional infra, not a health failure)');
+  assert.ok(!row(monitorGa4(input())), 'links unread -> no row');
+});
+
+test('PII detector scans campaign names and traffic sources too, always masked', () => {
+  const campaigns = {
+    windowDays: 28, dateRange: null, totalSessions: 10000, primaryMetric: 'sessions' as const,
+    taggedCampaigns: [{ campaign: 'newsletter-june-jane.doe@example.com', sessions: 420, keyEvents: 3, revenue: 0, engagementRate: 0.5 }],
+    bestCampaign: null, untaggedSessions: 1000, untaggedSharePct: 10, summary: '', findings: [],
+  };
+  const r = monitorGa4(input({ campaigns }));
+  assert.equal(r.checks.find((c) => c.id === 'pii')!.status, 'fail');
+  const alert = r.alerts.find((a) => a.kind === 'pii')!;
+  assert.ok(/campaign name/.test(alert.detail), alert.detail);
+  const everything = JSON.stringify(r);
+  assert.ok(!everything.includes('jane.doe@example.com'), 'the raw address never appears anywhere in the run');
+  assert.ok(everything.includes('***@***'), 'the masked form is shown');
+
+  const srcOnly = monitorGa4(input({ dqCounts: dq({ sourceMediums: [{ name: 'bob@corp.com / email', sessions: 60 }] }) }));
+  const srcAlert = srcOnly.alerts.find((a) => a.kind === 'pii')!;
+  assert.ok(/traffic source/.test(srcAlert.detail), srcAlert.detail);
+  assert.ok(!JSON.stringify(srcOnly).includes('bob@corp.com'), 'source addresses masked too');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
