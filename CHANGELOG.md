@@ -1,3 +1,9 @@
+## [1.273.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.272.2...v1.273.0) (2026-07-09)
+
+### Features
+
+* **desktop:** the monitor runs the audit's anti-lie detectors - they can no longer disagree ([97c7b1a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/97c7b1a5cef13f90fa966fe2d7fed661816b7b6b))
+
 ## [1.272.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.272.1...v1.272.2) (2026-07-09)
 
 ### Bug Fixes
