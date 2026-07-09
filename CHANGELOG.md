@@ -1,3 +1,10 @@
+## [1.286.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.285.0...v1.286.0) (2026-07-09)
+
+### Features
+
+* **desktop:** weekly/monthly Slack cadence + owner-language alerts + Slack channel beside the property ([5623291](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/56232912f83413ffef3658dc728188cfcf4de1b6))
+* **verify:** GTM Monitor Phase 4 — "Verify with GTM Monitor" button + Tag-Assistant-style firing view ([ae41720](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ae41720390f2492e1d1dabb31bf0350ce4ddc4c9))
+
 ## [1.285.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.284.0...v1.285.0) (2026-07-09)
 
 ### Features
