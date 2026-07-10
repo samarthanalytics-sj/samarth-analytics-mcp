@@ -71,6 +71,15 @@ export const GA4_PROPERTY_AUDIT =
   '6) DECISION READINESS: for the key business questions (which campaigns generate revenue; abandonment by product/page; CAC by channel; lead quality; LTV; refund/return rate; repeat/churn within 90 days) mark each Answerable / Partial / Not answerable with the data required, then list what the property CANNOT measure at all and the missing input (e.g. LTV — no User-ID/server data). ' +
   '7) OUTPUT this fixed template, with NO free-form prose outside it: header (property + id, date window + comparison + retention, access level, data limitations) -> Executive summary -> Area-status table (Collection, Configuration, Events, Custom definitions, Ecommerce, Attribution, Audiences, Integrations, Consent, Identity, Marketing readiness, Reporting; each = Status + Confidence + evidence note) -> Property baseline (trend vs comparison, peak/low day, channel-mix shift, new vs returning, device split, geo flags) -> Decision-readiness table -> Parameter coverage (Unicode bars + JSON) -> Funnel if ecommerce is in scope (mark missing steps MISSING) -> Findings sorted by severity (each: evidence, observed-vs-inferred, cause + cause-confidence, business risk, data-loss bar + reports affected, fix) -> Not Verified list -> summary counts (Critical/High/Medium/Low + top 3 to fix). Only if the user demands a single headline number, compute it by rule (Pass=2, Partial=1, Fail=0 over SCORED areas only; score = points / (2 x scored areas) x 100, rounded) and ALWAYS print the count of Not Verified areas beside it; otherwise omit it. ';
 
+/** Guidance for "when did data last arrive / when was the last active session" freshness questions, so
+ *  the model finds the ACTUAL last active date instead of stopping at an empty 28-day aggregate and
+ *  over-alarming. Composed into the GA4 system prompt. Exported for testing. */
+export const GA4_DATA_FRESHNESS =
+  'DATA FRESHNESS / "WHEN WAS THE LAST …" — when the user asks WHEN data was last recorded, when the last active session / user / event was, whether data is STILL coming in, or "did tracking stop / when did it break", you MUST answer with a SPECIFIC DATE — never stop at a single empty 28-day aggregate and never conclude "no data" from that alone. Do this: ' +
+  '(1) FIND THE LAST ACTIVE DAY: call run_ga4_report with dimensions ["date"] and metrics ["sessions","activeUsers","eventCount"], endDate "today" and startDate as far back as the data allows — up to "365daysAgo", but NEVER earlier than the property\'s data-retention window (call get_ga4_data_retention first; a standard property keeps only 2 or 14 months of this data). Read the returned daily rows and report the MOST RECENT date whose metric is > 0 as the last active day, plus how many days ago that was. If EVERY day in the retention window is 0, say data appears to have stopped before <window start> (older than retention — the exact date is unknowable). ' +
+  '(2) REAL-TIME IS ONLY THE LAST 30 MINUTES: run_ga4_realtime_report shows current activity only — "0 active users right now" is NORMAL for a low-traffic site, off-hours, or a quiet moment, and is NOT evidence that data stopped. NEVER present an empty realtime result as "no data" or a collection problem; use step 1 for recency. ' +
+  '(3) INTERPRET HONESTLY, DO NOT OVER-ALARM: if the last active day is today or yesterday, data is flowing — say so plainly (allow for the normal 1–2 day processing lag on the most recent days). If it is several+ days ago after a healthy history, state that data appears to have stopped around <that date> and that a collection break is POSSIBLE (confidence Likely, runtime-required) — recommend confirming in GA4 DebugView / that the GA4 tag still fires — but do NOT assert "critical, tagging is broken" as fact from reporting numbers alone. Lead with the DATE and the plain finding first; the caveat and any fix come after. ';
+
 /**
  * A system-prompt line telling the model the ACTUAL current date. Without this
  * the model assumes its training-cutoff date (e.g. "October 2023"), which breaks
@@ -263,6 +272,7 @@ export class ChatService {
             '(today, yesterday, NdaysAgo) or explicit YYYY-MM-DD computed from the current date above — ' +
             'never assume the year. GA4 has NO data for dates after today, and the most recent 1–2 days ' +
             'may still be processing (partial); report dates resolve in the property\'s timezone. ' +
+            GA4_DATA_FRESHNESS +
             (confirm
               ? GA4_WRITE_GUIDANCE
               : 'GA4 is READ-ONLY — you cannot apply fixes; give the user ' +
