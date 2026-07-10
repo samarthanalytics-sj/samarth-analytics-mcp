@@ -181,10 +181,22 @@ export function extractFormsInPage(): RawForm[] {
     }
     const inside = headingIn(el);
     if (inside) return inside;
+    // Nearest heading ABOVE the form. A React/Tailwind form is often nested several levels below its
+    // section heading, so walk up to 6 ancestors and, at each level, take the LAST heading that PRECEDES
+    // the form in document order — its own card/section title (e.g. "Stay Updated", "Contact Information")
+    // — rather than the first heading in a large ancestor (which would grab the page hero). This is what
+    // lets an anonymous form (no id/name, empty title) be matched to its tag by name.
     let node: Element | null = el.parentElement;
-    for (let i = 0; node && i < 3; i++, node = node.parentElement) {
-      const h = headingIn(node);
-      if (h) return h;
+    for (let i = 0; node && i < 6; i++, node = node.parentElement) {
+      let best = '';
+      for (const h of Array.from(node.querySelectorAll('legend, h1, h2, h3, h4, h5, h6'))) {
+        // el follows h  ⟺  h precedes the form (DOCUMENT_POSITION_FOLLOWING = 4)
+        if ((h.compareDocumentPosition(el) & 4) !== 0) {
+          const t = (h.textContent || '').replace(/\s+/g, ' ').trim();
+          if (t) best = t;
+        }
+      }
+      if (best) return best.slice(0, 60);
     }
     return '';
   };
