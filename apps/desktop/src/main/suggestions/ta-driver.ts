@@ -127,51 +127,6 @@ function captureFramesInit(): void {
   }, true);
 }
 
-/** Quick signed-in check against the persistent profile (cookie read — fast, no page load). */
-export function taSignInStatus(profileDir: string): Promise<{ signedIn: boolean }> {
-  return serializeProfile(async () => {
-    const ctx = await launchProfile(profileDir, true);
-    try {
-      return { signedIn: await hasGoogleSession(ctx) };
-    } finally {
-      await ctx.close().catch(() => undefined);
-    }
-  });
-}
-
-/** ONE-TIME sign-in: open a HEADED window straight on the Google sign-in form (continuing to Tag
- *  Assistant) and wait until the account cookies land in the profile — reliable regardless of what the
- *  page shows. The session persists for every later headless run. Returns early if already signed in.
- *  `loginHint` (the connected account's email) pre-selects the right Gmail on the sign-in form so a
- *  multi-account user signs into the account that actually owns the container. */
-export function taSignIn(profileDir: string, opts: { timeoutMs?: number; loginHint?: string } = {}): Promise<{ signedIn: boolean }> {
-  const timeoutMs = opts.timeoutMs ?? 300_000;
-  return serializeProfile(async () => {
-    const ctx = await launchProfile(profileDir, false);
-    try {
-      if (await hasGoogleSession(ctx)) return { signedIn: true }; // already signed in — nothing to do
-      // Reuse the profile's initial page (launchPersistentContext already opened one) instead of adding
-      // a second — otherwise the user sees a stray blank window next to the sign-in one.
-      const page = ctx.pages()[0] ?? (await ctx.newPage());
-      const hint = opts.loginHint ? '&login_hint=' + encodeURIComponent(opts.loginHint) : '';
-      await page.goto(
-        'https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(TA_URL) + hint,
-        { waitUntil: 'domcontentloaded', timeout: 45_000 },
-      );
-      const deadline = Date.now() + timeoutMs;
-      for (;;) {
-        if (await hasGoogleSession(ctx)) {
-          await new Promise((r) => setTimeout(r, 1500)); // let the continue-redirect settle
-          return { signedIn: true };
-        }
-        if (page.isClosed() || Date.now() > deadline) return { signedIn: false };
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-    } finally {
-      await ctx.close().catch(() => undefined);
-    }
-  });
-}
 
 export interface TaVerifyResult {
   pagesOk: boolean;
@@ -196,7 +151,7 @@ export async function runTaVerify(
   url: string,
   tags: VerifyDriverTag[],
   containerPublicId: string,
-  opts: { settleMs?: number; navTimeoutMs?: number; onPageProgress?: (page: string, done: number, total: number) => void } = {},
+  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; onPageProgress?: (page: string, done: number, total: number) => void } = {},
 ): Promise<TaVerifyResult> {
   const settleMs = opts.settleMs ?? 900;
   const navTimeoutMs = opts.navTimeoutMs ?? 25_000;
@@ -205,9 +160,11 @@ export async function runTaVerify(
   if (!(await requestAllowed(url))) {
     return { pagesOk: false, perTag, pagesDriven, error: `Refusing to load ${url}: blocked by the SSRF guard.` };
   }
-  // Serialize with sign-in: both hold the exclusive ta-profile lock, so they must not run concurrently.
+  // Serialize with any other profile access: the exclusive ta-profile lock means one at a time.
   return serializeProfile(async () => {
-  const ctx = await launchProfile(profileDir, true);
+  // HEADED (visible): the user WATCHES Tag Assistant sign in (once), connect, and show tags firing — that
+  // real Tag Assistant tab IS the "show it in detail" view — and the one-time sign-in happens in context.
+  const ctx = await launchProfile(profileDir, false);
   try {
     await ctx.addInitScript(captureFramesInit);
     // Abort analytics collectors so driving tags never delivers a real hit (the TA stream, not beacons,
@@ -218,24 +175,42 @@ export async function runTaVerify(
       void route.continue();
     });
 
+    // Reuse the profile's initial page (launchPersistentContext opened one) — no stray blank window.
+    const ta = ctx.pages()[0] ?? (await ctx.newPage());
+
+    // ONE-TIME sign-in IN THIS SAME VISIBLE WINDOW. An isolated automated browser cannot reuse the user's
+    // normal Chrome session (a running Chrome locks its profile), so a first-time Google sign-in here is
+    // unavoidable; login_hint pre-fills the account email. Once done it persists for this account.
     if (!(await hasGoogleSession(ctx))) {
-      return {
-        pagesOk: false, perTag, pagesDriven, needSignIn: true,
-        error: 'Tag Assistant needs a one-time Google sign-in to debug a GTM container — a sign-in window opens automatically; complete it and verification continues.',
-      };
+      console.log('[tag-assistant] not signed in -> opening Google sign-in in the visible window (one-time)...');
+      const hint = opts.loginHint ? '&login_hint=' + encodeURIComponent(opts.loginHint) : '';
+      await ta.goto('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(TA_URL) + hint,
+        { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => undefined);
+      const signInDeadline = Date.now() + (opts.signInTimeoutMs ?? 300_000);
+      while (!(await hasGoogleSession(ctx))) {
+        if (ta.isClosed() || Date.now() > signInDeadline) {
+          return {
+            pagesOk: false, perTag, pagesDriven, needSignIn: true,
+            error: 'Tag Assistant sign-in was not completed. A Chrome window opened on the Google sign-in page - this is a SEPARATE, one-time sign-in (it cannot reuse your normal Chrome). Sign in with the account that has access to this GTM container, then click "Verify with Tag Assistant" again. After this once, it stays signed in.',
+          };
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      console.log('[tag-assistant] signed in.');
     }
-    const ta = await ctx.newPage();
+
+    // Connect: Add domain -> URL -> Connect -> the debugged popup.
+    console.log(`[tag-assistant] connecting to ${url} ...`);
     await ta.goto(TA_URL, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await ta.waitForTimeout(2500);
-
-    // Connect: Add domain → URL → Connect → the debugged popup.
     const addBtn = ta.locator('button:has-text("Add domain")').first();
     if (await addBtn.count()) { await addBtn.click({ timeout: 8_000 }); await ta.waitForTimeout(1200); }
     await ta.locator('input').first().fill(url, { timeout: 8_000 });
     const popupP = ctx.waitForEvent('page', { timeout: 30_000 }).catch(() => null);
     await ta.locator('button:has-text("Connect")').first().click({ timeout: 8_000 });
     const popup = await popupP;
-    if (!popup) return { pagesOk: false, perTag, pagesDriven, error: 'Tag Assistant did not open the debug window — reconnect and retry.' };
+    if (!popup) return { pagesOk: false, perTag, pagesDriven, error: 'Tag Assistant did not open the debug window - reconnect and retry.' };
+    console.log('[tag-assistant] debug window opened; waiting for the container to enter debug...');
     await popup.waitForLoadState('networkidle', { timeout: navTimeoutMs }).catch(() => undefined);
     await popup.waitForTimeout(Math.max(settleMs, 4000)); // debug handshake + container debug reload
 
@@ -248,9 +223,11 @@ export async function runTaVerify(
       byPage.set(page, arr);
     }
     const groups = [...byPage.entries()];
+    console.log(`[tag-assistant] driving ${tags.length} tag trigger(s) across ${groups.length} page(s)...`);
     let done = 0;
     for (const [pageUrl, groupTags] of groups) {
       done += 1;
+      console.log(`[tag-assistant]   page ${done}/${groups.length}: ${pageUrl} (${groupTags.length} trigger(s))`);
       try { opts.onPageProgress?.(pageUrl, done, groups.length); } catch { /* progress is a nicety */ }
       if (!(await requestAllowed(pageUrl))) continue;
       // First group often IS the connect URL — already loaded; skip the redundant navigation.
@@ -307,8 +284,11 @@ export async function runTaVerify(
     // Harvest + parse the stream from the TA page.
     const frames = await ta.evaluate<string[]>(() => (window as unknown as { __taFrames?: string[] }).__taFrames ?? []).catch(() => [] as string[]);
     const capture = parseTaFrames(frames);
-    const { containerDebugProblem } = await import('./ta-stream');
+    const { containerDebugProblem, eventsForContainer } = await import('./ta-stream');
     const problem = containerDebugProblem(capture, containerPublicId);
+    const evs = eventsForContainer(capture, containerPublicId);
+    const firedCount = evs.reduce((n, e) => n + e.tags.filter((t) => t.status === 'fired').length, 0);
+    console.log(`[tag-assistant] captured ${frames.length} debug frame(s) -> ${evs.length} event(s) for ${containerPublicId}, ${firedCount} tag-fire(s)${problem ? ` -- ${problem}` : ''}`);
     return { pagesOk: true, perTag, pagesDriven, capture, ...(problem ? { debugProblem: problem } : {}) };
   } catch (e) {
     return { pagesOk: false, perTag, pagesDriven, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
