@@ -8,6 +8,17 @@ import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders'
 import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
+
+/** Extract the FULL detail from a googleapis/Gaxios error — HTTP code + status + the whole error body —
+ *  so a delete failure surfaces GTM's exact reason (referenced-by / scope / …), never the opaque
+ *  "Returned an error response for your request." wrapper. */
+function gtmErrorDetail(e: unknown): string {
+  const x = e as { code?: unknown; status?: unknown; message?: string; response?: { status?: number; data?: unknown } };
+  const code = x.response?.status ?? x.code ?? x.status ?? '?';
+  let body = '';
+  try { body = x.response?.data ? JSON.stringify(x.response.data) : ''; } catch { body = ''; }
+  return `code=${code} ${(body || x.message || String(e)).slice(0, 300)}`;
+}
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
@@ -795,7 +806,7 @@ export class GoogleDataService {
         deleted += 1;
       } catch (err) {
         failed += 1;
-        if (!firstError) firstError = (err as { message?: string }).message ?? String(err);
+        if (!firstError) firstError = `env${e.environmentId}: ${gtmErrorDetail(err)}`;
       }
     }
     return { deleted, failed, ...(firstError ? { firstError } : {}) };
@@ -824,8 +835,7 @@ export class GoogleDataService {
         deleted += 1;
       } catch (e) {
         failed += 1;
-        const r = e as { response?: { data?: { error?: { message?: string } } }; message?: string };
-        if (!firstError) firstError = `ws${w.workspaceId}: ${r.response?.data?.error?.message ?? r.message ?? String(e)}`;
+        if (!firstError) firstError = `ws${w.workspaceId}: ${gtmErrorDetail(e)}`;
       }
     }
     return { deleted, failed, ...(firstError ? { firstError } : {}) };
@@ -856,11 +866,9 @@ export class GoogleDataService {
         deleted += 1;
       } catch (e) {
         failed += 1;
-        // Surface GTM's ACTUAL reason (referenced-by / permission / …), not the generic Gaxios wrapper —
-        // include the version id so we know WHICH ones GTM refuses.
-        const r = e as { response?: { data?: { error?: { message?: string; errors?: Array<{ message?: string }> } } }; message?: string };
-        const why = r.response?.data?.error?.message ?? r.response?.data?.error?.errors?.[0]?.message ?? r.message ?? String(e);
-        if (!firstError) firstError = `v${h.containerVersionId}: ${why}`;
+        // Dump the FULL GTM error (code + status + the whole error body) so the exact reason a version
+        // delete is refused is never hidden behind the generic Gaxios wrapper again.
+        if (!firstError) firstError = `v${h.containerVersionId}: ${gtmErrorDetail(e)}`;
       }
     }
     return { deleted, failed, ...(firstError ? { firstError } : {}) };
