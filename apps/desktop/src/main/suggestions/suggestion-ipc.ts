@@ -248,6 +248,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       let snippet = o.containerSnippet;
       let cleanupWorkspaceIds: string[] = [];
       let cleanupVersionId = '';
+      let cleanupEnvironmentId = '';
       if (o.monitor) {
         emit({ phase: 'monitor', message: 'Minting a temporary GTM Monitor preview (draft-only, never published)…' });
         const preview = await data.mintMonitorPreview(o.monitor.accountId, o.monitor.containerId, o.monitor.workspaceId, {
@@ -255,7 +256,8 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         });
         snippet = preview.snippet;
         cleanupWorkspaceIds = preview.cleanupWorkspaceIds;
-        cleanupVersionId = preview.versionId;
+        cleanupVersionId = preview.cleanupVersionId ?? '';
+        cleanupEnvironmentId = preview.cleanupEnvironmentId ?? '';
       }
       try {
         const driven = await runVerifyDriver(
@@ -293,8 +295,11 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         const verdicts = o.monitor ? verdictsFromMonitor(tagList, driven.monitorEvents ?? [], driven.perTag) : evaluateVerify(tagList, driven.perTag, els);
         return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(o.monitor ? { verifiedByMonitor: true } : {}), ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
       } finally {
-        // Always discard the throwaway monitor workspace(s) AND the preview version it minted — never
-        // leave a trace (no piled-up "Samarth Verify (auto)" versions) in the user's container.
+        // Discard everything the throwaway monitor preview created — leave NO trace. The normal path mints
+        // a workspace-linked ENVIRONMENT (no version) that deletes cleanly with edit.containers. The legacy
+        // fallback mints a version; deleting it needs a scope we don't request, so it silently no-ops (the
+        // user removes those "Samarth Verify (auto)" versions manually) — but the normal path avoids them.
+        if (o.monitor && cleanupEnvironmentId) await data.deleteGtmEnvironment(o.monitor.accountId, o.monitor.containerId, cleanupEnvironmentId).catch(() => undefined);
         if (o.monitor && cleanupVersionId) await data.deleteGtmVersion(o.monitor.accountId, o.monitor.containerId, cleanupVersionId).catch(() => undefined);
         for (const id of cleanupWorkspaceIds) await data.deleteGtmWorkspace(o.monitor!.accountId, o.monitor!.containerId, id).catch(() => undefined);
       }
