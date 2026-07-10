@@ -273,6 +273,43 @@ export function isPreviewLoader(src: string | null): boolean {
   return Boolean(src && /gtm_auth=/.test(src) && /gtm_preview=/.test(src));
 }
 
+/** The GTM environment-preview params (gtm_auth / gtm_preview / gtm_cookies_win) a preview loader
+ *  carries, or null for a plain published-container loader.
+ *
+ *  These MUST ride the NAVIGATION URL, not just an injected loader. A page that already embeds this
+ *  container loads its LIVE gtm.js during page.goto and claims window.google_tag_manager[id]; a second
+ *  loader we inject afterwards for the SAME id is deduped away, so our previewed version — the only
+ *  place a just-created draft/monitor tag exists — never initialises (the "0 fired" bug). Put the params
+ *  on the page URL instead and the site's OWN gtm.js reads them at its bootstrap and serves the previewed
+ *  environment's version, exactly like a GTM environment share-preview link overriding a live site. */
+export function previewParamsFromLoader(loaderSrc: string | null): Record<string, string> | null {
+  if (!loaderSrc) return null;
+  try {
+    const q = new URL(loaderSrc).searchParams;
+    const auth = q.get('gtm_auth');
+    const preview = q.get('gtm_preview');
+    if (!auth || !preview) return null;
+    return { gtm_auth: auth, gtm_preview: preview, gtm_cookies_win: q.get('gtm_cookies_win') || 'x' };
+  } catch {
+    return null;
+  }
+}
+
+/** Merge GTM preview params into a page URL (preserving any existing query) so page.goto lands in
+ *  environment-preview mode. Applied to EVERY page.goto, not just the first: each page runs in its own
+ *  isolated worker context, so the gtm_cookies_win preview cookie does not carry across pages. Falls back
+ *  to the raw url if it can't be parsed. */
+export function withPreviewParams(pageUrl: string, params: Record<string, string> | null): string {
+  if (!params) return pageUrl;
+  try {
+    const u = new URL(pageUrl);
+    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+    return u.href;
+  } catch {
+    return pageUrl;
+  }
+}
+
 // ── In-page helpers (serialized to page.evaluate — DOM globals only) ──────────
 
 /** Neutralise navigations + real submits so driving fires GTM's trigger without side effects. */
@@ -664,6 +701,9 @@ export async function runVerifyDriver(
   const settleMs = opts.settleMs ?? 900;
   const loaderSrc = buildLoaderSrc(opts.containerSnippet);
   const previewAuth = isPreviewLoader(loaderSrc);
+  // When the loader is a workspace/environment PREVIEW, its gtm_auth/gtm_preview params must ride the
+  // navigation URL so the site's own gtm.js serves our previewed version (see previewParamsFromLoader).
+  const previewParams = previewParamsFromLoader(loaderSrc);
   const perTag: PerTagCapture[] = [];
 
   if (!(await requestAllowed(url))) {
@@ -761,7 +801,10 @@ export async function runVerifyDriver(
       w.armed.on = false;
       const loadStart = captured.length;
       try {
-        await page.goto(pageUrl, { waitUntil: 'networkidle', timeout: navTimeoutMs });
+        // In preview mode, navigate WITH the env params so the site's own gtm.js serves our previewed
+        // version at its bootstrap (the injected loader below is deduped when the site already embeds this
+        // container). pagesDriven/notes keep the clean pageUrl; only the goto carries the params.
+        await page.goto(withPreviewParams(pageUrl, previewParams), { waitUntil: 'networkidle', timeout: navTimeoutMs });
       } catch (e) {
         const note = `could not load ${pageUrl}: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`;
         for (const t of groupTags) perTag.push({ tagId: t.id, kind: 'navigate', targetFound: false, performed: false, note, hits: [] });
@@ -769,6 +812,9 @@ export async function runVerifyDriver(
       }
       pagesDriven.push(pageUrl);
 
+      // FALLBACK loader injection: covers a target that does NOT already embed this container id (no site
+      // gtm.js to read the URL params). When the site DOES embed it, the preview version was already served
+      // via the navigation params above and this second loader for the same id is a harmless deduped no-op.
       if (loaderSrc) {
         await page.evaluate((src: string) => {
           const w = window as unknown as { dataLayer?: unknown[] };
