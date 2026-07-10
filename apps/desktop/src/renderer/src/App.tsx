@@ -4346,6 +4346,11 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
   if (k === 'navigate') {
     return 'The base/config tag didn’t fire on load. Make sure the container is actually injected (use “Auto” or a Preview snippet), and that Consent Mode isn’t denying analytics_storage.';
   }
+  // Monitor-verified runs read from GTM itself — the container is PROVEN to be on the page, so
+  // "confirm the container is injected" would be wrong advice (and contradicts the run's own evidence).
+  if (v.verifiedByMonitor) {
+    return 'The container IS on this page (GTM itself reported this run), so injection is not the problem. Open this tag’s trigger in GTM and compare each condition — event name, form name / id, page path — with what the page really sent (see the dataLayer log above). If the trigger looks right, check for a blocking exception trigger or a Consent Mode gate.';
+  }
   return 'Confirm the container is injected (Auto / Preview snippet) and the trigger’s conditions match this page.';
 }
 
