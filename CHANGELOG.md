@@ -1,3 +1,9 @@
+## [1.295.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.295.0...v1.295.1) (2026-07-10)
+
+### Bug Fixes
+
+* **auth:** revert unified sign-in — connect opens the user's real Chrome again (not a blank automated one) ([#506](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/506)) ([3ce8f15](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3ce8f154b533206e839bc9cc78d018256c05523c)), closes [#505](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/505)
+
 ## [1.295.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.294.2...v1.295.0) (2026-07-10)
 
 ### Features
