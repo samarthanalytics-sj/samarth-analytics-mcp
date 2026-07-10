@@ -2,9 +2,7 @@
 // launchPersistentContext calls from hitting the one ta-profile at once (which crashes Chromium and
 // surfaced as the "sign-in not completed" failure). Run: tsx …/__tests__/ta-serialize.test.ts
 
-import { serializeProfile, taProfileDirFor, taStagingDir, migrateProfileDir } from '../ta-driver';
-import { mkdir, writeFile, rm, readFile, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { serializeProfile, taProfileDirFor } from '../ta-driver';
 
 let passed = 0, failed = 0;
 const fails: string[] = [];
@@ -54,37 +52,8 @@ async function main(): Promise<void> {
   check('per-account: missing id falls back to a default bucket',
     taProfileDirFor(ud, null).endsWith('/ta-profiles/default') && taProfileDirFor(ud, undefined).endsWith('/ta-profiles/default'));
 
-  // 6) taStagingDir: a dedicated top-level dir that can NEVER collide with a per-account profile.
-  check('staging dir is not under ta-profiles/', taStagingDir(ud) === ud + '/ta-oauth-staging');
-  check('staging dir differs from every per-account dir', taStagingDir(ud) !== taProfileDirFor(ud, 'staging'));
-
-  // 7) migrateProfileDir: the risky part — moving a signed-in session onto its account slot. Real fs.
-  const root = `${tmpdir().replace(/[\\/]+$/, '')}/ta-mig-${passed}${failed}`;
-  await rm(root, { recursive: true, force: true }).catch(() => undefined);
-  const src = `${root}/staging`;
-  const dst = `${root}/ta-profiles/acc-9`;
-  await mkdir(src, { recursive: true });
-  await writeFile(`${src}/Cookies`, 'session-token'); // stand-in for the captured web session
-  await migrateProfileDir(src, dst);
-  const moved = await readFile(`${dst}/Cookies`, 'utf8').catch(() => '');
-  const srcGone = await stat(src).then(() => false, () => true);
-  check('migrate: session lands at the account profile path', moved === 'session-token');
-  check('migrate: staging dir no longer exists after the move', srcGone);
-
-  // Replace an EXISTING account profile (reconnect): the new session wins, no leftover from the old one.
-  const src2 = `${root}/staging2`;
-  await mkdir(src2, { recursive: true });
-  await writeFile(`${src2}/Cookies`, 'new-session');
-  await writeFile(`${dst}/StaleFile`, 'old'); // a file only the OLD profile had
-  await migrateProfileDir(src2, dst);
-  const replaced = await readFile(`${dst}/Cookies`, 'utf8').catch(() => '');
-  const staleGone = await stat(`${dst}/StaleFile`).then(() => false, () => true);
-  check('migrate: reconnect replaces the existing profile (new session)', replaced === 'new-session');
-  check('migrate: no stale files survive the replace', staleGone);
-  await rm(root, { recursive: true, force: true }).catch(() => undefined);
-
   console.log(`\nta-serialize: ${passed} passed, ${failed} failed`);
   if (failed) { console.error(fails.join('\n')); process.exit(1); }
-  if (passed < 16) { console.error(`expected >= 16 checks, got ${passed}`); process.exit(1); }
+  if (passed < 10) { console.error(`expected >= 10 checks, got ${passed}`); process.exit(1); }
 }
 void main();

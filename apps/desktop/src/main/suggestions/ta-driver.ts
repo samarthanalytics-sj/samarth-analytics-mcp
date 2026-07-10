@@ -14,8 +14,6 @@
 // window.opener link to the TA page (the debug channel), so all driving happens by NAVIGATING THE SAME
 // POPUP sequentially — never a fresh context.
 
-import { rm, rename, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
 import { requestAllowed } from './ssrf';
 import { classifyCollector } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
@@ -152,7 +150,9 @@ export function taSignIn(profileDir: string, opts: { timeoutMs?: number; loginHi
     const ctx = await launchProfile(profileDir, false);
     try {
       if (await hasGoogleSession(ctx)) return { signedIn: true }; // already signed in — nothing to do
-      const page = await ctx.newPage();
+      // Reuse the profile's initial page (launchPersistentContext already opened one) instead of adding
+      // a second — otherwise the user sees a stray blank window next to the sign-in one.
+      const page = ctx.pages()[0] ?? (await ctx.newPage());
       const hint = opts.loginHint ? '&login_hint=' + encodeURIComponent(opts.loginHint) : '';
       await page.goto(
         'https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(TA_URL) + hint,
@@ -171,72 +171,6 @@ export function taSignIn(profileDir: string, opts: { timeoutMs?: number; loginHi
       await ctx.close().catch(() => undefined);
     }
   });
-}
-
-// ── Unified sign-in: run the account-connect OAuth INSIDE the TA browser profile ────────────────────
-// The account-connect OAuth (loopback) normally opens the SYSTEM browser, so its Google web-session
-// cookies never reach our TA profile — that's why TA needed a separate sign-in. If we instead run the
-// consent inside a TA profile browser, ONE sign-in yields BOTH the API token (via the loopback redirect
-// to 127.0.0.1) AND the google.com web session (persisted in the profile). Chicken-and-egg: the profile
-// must exist before we know which account signed in, so consent runs in a STAGING dir that we migrate to
-// ta-profiles/<accountId> once the loopback returns the identity.
-
-/** Where consent runs before we know the account id. A dedicated top-level dir (NOT under ta-profiles/)
- *  so it can never collide with a real per-account profile. Exported for tests. */
-export function taStagingDir(userDataDir: string): string {
-  return `${userDataDir.replace(/[\\/]+$/, '')}/ta-oauth-staging`;
-}
-
-/** Move a freshly-signed-in staging profile onto its final per-account path, replacing any existing one.
- *  Retries the rename: on Windows the Chrome process releases the profile lock a beat after ctx.close().
- *  Exported for tests. */
-export async function migrateProfileDir(src: string, dst: string): Promise<void> {
-  await rm(dst, { recursive: true, force: true }).catch(() => undefined);
-  await mkdir(dirname(dst), { recursive: true }).catch(() => undefined);
-  for (let i = 0; i < 12; i += 1) {
-    try { await rename(src, dst); return; } catch { await new Promise((r) => setTimeout(r, 300)); }
-  }
-  // Rename never succeeded (lock never released) — leave staging; the next connect() clears it, and the
-  // inline verify sign-in is the safety net. Do not throw: OAuth itself already succeeded.
-}
-
-/** A live OAuth-in-TA-profile browser: navigate it to the consent URL, then either finalize (keep the
- *  captured session, migrated to the account) or dispose (discard on cancel/failure). */
-export interface TaOAuthSession {
-  /** Navigate the profile browser to the Google consent URL (fire-and-forget — the loopback server, not
-   *  this navigation, drives completion). */
-  openConsent(url: string): void;
-  /** Success path: close the browser and migrate the captured session to ta-profiles/<accountId>. */
-  finalize(accountId: string): Promise<void>;
-  /** Failure/cancel path: close the browser and delete the staging session. */
-  dispose(): Promise<void>;
-}
-
-/** Begin a unified sign-in: launch a headed TA profile (real Chrome, automation flag cleared) on a
- *  staging dir and hand back a session the auth service drives. Throws if Playwright is unavailable —
- *  the caller falls back to the system-browser OAuth (which just won't pre-capture the TA session). */
-export async function beginTaOAuthSession(userDataDir: string): Promise<TaOAuthSession> {
-  const staging = taStagingDir(userDataDir);
-  await rm(staging, { recursive: true, force: true }).catch(() => undefined); // clear an aborted prior run
-  const ctx = await launchProfile(staging, false); // headed: the user completes Google consent here
-  const page = await ctx.newPage();
-  let closed = false;
-  const close = async (): Promise<void> => { if (!closed) { closed = true; await ctx.close().catch(() => undefined); } };
-  return {
-    openConsent(url: string): void {
-      // 'commit' + swallow: Google's redirect to 127.0.0.1 interrupts the initial navigation, which is
-      // expected — not an error. The loopback server resolves the flow independently.
-      void page.goto(url, { waitUntil: 'commit', timeout: 120_000 }).catch(() => undefined);
-    },
-    async finalize(accountId: string): Promise<void> {
-      await close(); // release the profile lock BEFORE moving the directory
-      await migrateProfileDir(staging, taProfileDirFor(userDataDir, accountId));
-    },
-    async dispose(): Promise<void> {
-      await close();
-      await rm(staging, { recursive: true, force: true }).catch(() => undefined);
-    },
-  };
 }
 
 export interface TaVerifyResult {
