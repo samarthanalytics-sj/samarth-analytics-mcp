@@ -304,10 +304,13 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         for (const id of cleanupWorkspaceIds) await data.deleteGtmWorkspace(o.monitor!.accountId, o.monitor!.containerId, id).catch(() => undefined);
         if (o.monitor && cleanupEnvironmentId) await data.deleteGtmEnvironment(o.monitor.accountId, o.monitor.containerId, cleanupEnvironmentId).catch(() => undefined);
         if (o.monitor) {
-          const swept = await data.sweepMonitorVersions(o.monitor.accountId, o.monitor.containerId).catch(() => ({ deleted: 0, failed: 0, firstError: 'sweep threw' }));
-          // Logged to the dev console so we can confirm the pileup is actually being cleaned (or see the
-          // exact API error if a delete is refused — e.g. a missing permission).
-          console.log(`[monitor-cleanup] "Samarth Verify (auto)" versions — deleted ${swept.deleted}, failed ${swept.failed}${swept.firstError ? ` · ${swept.firstError}` : ''}`);
+          // Sweep leaked preview ENVIRONMENTS FIRST — a version an environment references can't be deleted,
+          // so a leaked env pins its version and blocks the version sweep — then sweep the versions. Both
+          // logged to the dev console so we can confirm the cleanup or see the exact API error.
+          const swEnv = await data.sweepMonitorEnvironments(o.monitor.accountId, o.monitor.containerId).catch(() => ({ deleted: 0, failed: 0, firstError: 'env sweep threw' }));
+          const swVer = await data.sweepMonitorVersions(o.monitor.accountId, o.monitor.containerId).catch(() => ({ deleted: 0, failed: 0, firstError: 'version sweep threw' }));
+          console.log(`[monitor-cleanup] envs — deleted ${swEnv.deleted}, failed ${swEnv.failed}${swEnv.firstError ? ` · ${swEnv.firstError}` : ''}`);
+          console.log(`[monitor-cleanup] "Samarth Verify (auto)" versions — deleted ${swVer.deleted}, failed ${swVer.failed}${swVer.firstError ? ` · ${swVer.firstError}` : ''}`);
         }
       }
     },
