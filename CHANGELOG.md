@@ -1,3 +1,9 @@
+## [1.288.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.288.0...v1.288.1) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** serve the monitor preview by REWRITING the gtm.js request; match consultation form tags ([#484](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/484)) ([debb5a2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/debb5a20d25ce05f5a30c93f0aaf1f715d9a312d))
+
 ## [1.288.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.287.0...v1.288.0) (2026-07-10)
 
 ### Features
