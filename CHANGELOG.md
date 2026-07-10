@@ -1,3 +1,9 @@
+## [1.289.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.0...v1.289.1) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** never-driven custom events are 'untested here', and monitor non-fires stop doubting injection ([3a6c442](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3a6c442f46f4818f0e0df3e9a822e174b9c3b9d3))
+
 ## [1.289.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.288.3...v1.289.0) (2026-07-10)
 
 ### Features
