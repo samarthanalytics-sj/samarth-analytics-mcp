@@ -771,6 +771,37 @@ export class GoogleDataService {
     return { deleted: true };
   }
 
+  /** Delete EVERY unpublished "Samarth Verify (auto)" container version — this run's + any that piled up
+   *  before. The old cleanup deleted the version FIRST, while the workspace GTM auto-forks from it still
+   *  referenced it, so GTM refused and it silently failed → the pileup. Callers MUST delete the throwaway
+   *  workspaces BEFORE calling this, so nothing references the versions. Filters strictly by name, so the
+   *  live/published version is never touched. Best-effort per version; returns counts + the first error so
+   *  the caller can log whether it actually worked (e.g. a missing delete permission). */
+  async sweepMonitorVersions(accountId: string, containerId: string): Promise<{ deleted: number; failed: number; firstError?: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}`;
+    let deleted = 0;
+    let failed = 0;
+    let firstError: string | undefined;
+    const heads = await collectPages(
+      (pageToken) => gtm.accounts.containers.version_headers.list({ parent, pageToken }),
+      (r) => r.data.containerVersionHeader,
+      (r) => r.data.nextPageToken
+    ).catch(() => [] as Array<{ name?: string | null; containerVersionId?: string | null; deleted?: boolean | null }>);
+    for (const h of heads) {
+      if (h.deleted || h.name !== 'Samarth Verify (auto)' || !h.containerVersionId) continue;
+      try {
+        await this.q(() => gtm.accounts.containers.versions.delete({ path: `${parent}/versions/${h.containerVersionId}` }));
+        deleted += 1;
+      } catch (e) {
+        failed += 1;
+        if (!firstError) firstError = (e as { message?: string }).message ?? String(e);
+      }
+    }
+    return { deleted, failed, ...(firstError ? { firstError } : {}) };
+  }
+
   /**
    * Preview a workspace's DRAFT via a workspace-linked ENVIRONMENT — the version-FREE alternative to
    * mintWorkspacePreview. GTM environments can carry a `workspaceId` (a "link to a quick preview of a
