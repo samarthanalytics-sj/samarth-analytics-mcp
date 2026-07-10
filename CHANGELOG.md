@@ -1,3 +1,9 @@
+## [1.289.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.4...v1.289.5) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** sweep all "Samarth Verify (auto)" versions after each monitor run ([#492](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/492)) ([f57fec8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f57fec873972082b0e5840c4967e5f568dd08771)), closes [#35](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/35) [#490](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/490)
+
 ## [1.289.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.3...v1.289.4) (2026-07-10)
 
 ### Bug Fixes
