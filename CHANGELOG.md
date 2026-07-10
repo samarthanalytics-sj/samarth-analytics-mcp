@@ -1,3 +1,9 @@
+## [1.291.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.290.3...v1.291.0) (2026-07-10)
+
+### Features
+
+* **verify:** zero-footprint GTM Monitor via a separate reusable container (no version in your container) ([#499](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/499)) ([a1590fa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a1590fa29257e842f26301db977f248d086f2a7f))
+
 ## [1.290.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.290.2...v1.290.3) (2026-07-10)
 
 ### Bug Fixes
