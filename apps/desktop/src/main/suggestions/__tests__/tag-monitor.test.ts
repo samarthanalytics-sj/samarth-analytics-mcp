@@ -80,6 +80,14 @@ const hit = (event: string, tags: Array<{ id: string; nm?: string; st?: string; 
   const v = monitorVerdicts(['t'], [ev]).get('t')!;
   check('verdict: fired with no status → success', v.status === 'success' && v.fired === true);
 }
+// CROSS-CONTAINER: the separate monitor container reports its OWN tag firing, whose id can collide with a
+// real user tag id — it must be dropped by name, never miscredited to the user's tag of the same id.
+{
+  const ev = parseMonitorHit(hit('gtm.js', [{ id: '1', nm: 'Samarth Verify - GTM Monitor', st: 'success' }, { id: '2', nm: 'GA4 Config', st: 'success' }]))!;
+  const v = monitorVerdicts(['1', '2'], [ev]);
+  check('verdict: the monitor\'s OWN tag (colliding id 1) is NOT credited to user tag id 1', v.get('1')!.fired === false);
+  check('verdict: a real user tag alongside it still fires', v.get('2')!.fired === true);
+}
 
 console.log(`\ntag-monitor: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }

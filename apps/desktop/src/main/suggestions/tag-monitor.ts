@@ -37,6 +37,10 @@ export interface MonitorEvent {
 // any other URL makes the sandbox BLOCK sendPixel and the monitor tag FAILS (the "0 fired" first run).
 // The request is captured + ABORTED by the verify driver's route, so nothing ever reaches placeholder.com.
 export const MONITOR_ENDPOINT = 'https://placeholder.com/collect';
+/** The name of the GTM Monitor tag we create in the separate monitor container. MUST match the name used
+ *  in data-service.mintCrossContainerMonitor — it's how the monitor's OWN firing is filtered out of the
+ *  cross-container report (its per-container-sequential id can otherwise collide with a real user tag). */
+export const MONITOR_TAG_NAME = 'Samarth Verify - GTM Monitor';
 const SENTINEL_MARK = 'placeholder.com/collect';
 /** Simo Ahava's published "GTM Monitor" community template — imported via import_from_gallery so its
  *  sandbox permissions come vetted (we never hand-roll a template). It fires addEventCallback and GET-
@@ -108,8 +112,12 @@ export function monitorVerdicts(tagIds: string[], events: MonitorEvent[]): Map<s
   for (const id of tagIds) byId.set(id, { tagId: id, fired: false, status: 'unknown', onEvents: [] });
   for (const ev of events) {
     for (const t of ev.tags) {
+      // CROSS-CONTAINER safety: the monitor now lives in a SEPARATE container and observes every container
+      // on the page, so it also reports its OWN tag firing — whose id (sequential per container) can
+      // collide with a real user tag id. Drop the monitor's own tag by name so it can never be miscredited.
+      if (t.name === MONITOR_TAG_NAME) continue;
       const v = byId.get(t.id);
-      if (!v) continue; // a fired tag not in our inventory (e.g. the monitor tag itself) — ignore
+      if (!v) continue; // a fired tag not in our inventory (e.g. another container's tag) — ignore
       v.fired = true;
       if (STATUS_RANK[t.status] > STATUS_RANK[v.status]) v.status = t.status;
       if (ev.event && !v.onEvents.includes(ev.event)) v.onEvents.push(ev.event);
