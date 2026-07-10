@@ -5,7 +5,7 @@
 // samarthanalytics.com (2026-07-10 probes): CONTAINER_STARTING/CONTAINER_DETAILS/PING wrappers and
 // MEMO.data.memo.sanitized frames (EVENT_STARTED / DATA_LAYER / MACRO_RESOLVED / TAG_STARTED / TAG_STATUS).
 
-import { parseTaFrames, eventsForContainer, containerDebugProblem, mapExecuteStatus } from '../ta-stream';
+import { parseTaFrames, eventsForContainer, containerDebugProblem, mapExecuteStatus, taEventsToMonitorEvents, type TaEventRecord } from '../ta-stream';
 
 let passed = 0;
 let failed = 0;
@@ -96,6 +96,29 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
 {
   const cap = parseTaFrames([null, 42, {}, { type: 'MEMO' }, { type: 'MEMO', data: { memo: {} } }, JSON.stringify({ type: 'MEMO', data: { memo: { sanitized: { messageType: 'DATA_LAYER' } } } })]);
   check('malformed frames → empty capture, no throw', cap.events.length === 0 && cap.containers.length === 0);
+}
+
+// ── taEventsToMonitorEvents: TA names → container tag IDs for the existing verdict pipeline ─────────
+{
+  const events: TaEventRecord[] = [
+    { container: 'GTM-X', eventId: 33, eventName: 'form_submission', tags: [
+      { name: 'GA4 - Event - Get In Touch Form Tag', status: 'fired' },
+      { name: 'Meta - Event - Get In Touch Form Tag', status: 'failed' },
+      { name: 'Some Other Container Tag', status: 'fired' }, // not in inventory — dropped
+    ] },
+    { container: 'GTM-X', eventId: 34, eventName: 'cta_click', tags: [{ name: 'CTA Tag', status: 'running' }] },
+  ];
+  const inventory = [
+    { id: '12', tagName: 'GA4 - Event - Get In Touch Form Tag' },
+    { id: '13', tagName: 'Meta - Event - Get In Touch Form Tag' },
+    { id: '20', tagName: 'CTA Tag' },
+  ];
+  const me = taEventsToMonitorEvents(events, inventory);
+  check('map: event names carried', me[0].event === 'form_submission' && me[1].event === 'cta_click');
+  check('map: fired → success with the container tag id', me[0].tags.some((t) => t.id === '12' && t.status === 'success'));
+  check('map: failed → failure', me[0].tags.some((t) => t.id === '13' && t.status === 'failure'));
+  check('map: running → unknown (still fired; treated clean by monitorVerdicts)', me[1].tags[0].status === 'unknown' && me[1].tags[0].id === '20');
+  check('map: a tag not in the inventory is DROPPED (no cross-container credit)', me[0].tags.length === 2);
 }
 
 console.log(`\nta-stream: ${passed} passed, ${failed} failed`);

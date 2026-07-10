@@ -10,8 +10,9 @@
 // is not a way to bypass approval — write tools still only exist because a
 // confirm fn is supplied, and nothing is ever published.
 
-import { ipcMain, dialog, BrowserWindow } from 'electron';
+import { ipcMain, dialog, BrowserWindow, app } from 'electron';
 import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { GoogleDataService } from '../google/data-service';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
@@ -22,7 +23,8 @@ import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } fro
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
 import { routeTagsToPages } from './verify-routing';
-import { MONITOR_ENDPOINT, MONITOR_GALLERY } from './tag-monitor';
+import { runTaVerify, taSignIn, taSignInStatus } from './ta-driver';
+import { eventsForContainer, taEventsToMonitorEvents } from './ta-stream';
 import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
 import { matchFormsToTags, dedupeSharedFields, isFormEventName, type PagedForm, type FormTagIdentity } from './form-tag-match';
 import { snapshotToVerifyInputs } from './container-verify';
@@ -35,8 +37,18 @@ import { makeDriver, makeDrivers, scanConcurrency, clampSettle } from './scan-ur
 import { parseSuggestions, createSuggestedTags, planGoogleTagVars, provisionVariables } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 
+/** The persistent browser profile that keeps the Tag Assistant Google session across runs. */
+function taProfileDir(): string {
+  return join(app.getPath('userData'), 'ta-profile');
+}
+
 export function registerSuggestionsIpc(data: GoogleDataService): void {
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
+
+  // Tag Assistant session: a quick signed-in check, and the ONE-TIME headed Google sign-in (the window
+  // opens on the user's screen; the session persists in the profile for every later headless verify run).
+  ipcMain.handle('suggestions:taStatus', async () => taSignInStatus(taProfileDir()).catch(() => ({ signedIn: false })));
+  ipcMain.handle('suggestions:taSignIn', async () => taSignIn(taProfileDir()).catch(() => ({ signedIn: false })));
 
   // Read-only: the container's existing tag names + whether a GA4 base/config tag is
   // present, so the review panel can mark suggestions that ALREADY EXIST (don't
@@ -241,81 +253,47 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         }
       }
       const routed = routeTagsToPages(tagList, els, target);
+      const routedTags = routed.map((t) => ({ id: t.id, ...(t.page ? { page: t.page } : {}), trigger: t.trigger }));
 
-      // AUTHORITATIVE mode: mint a throwaway preview that injects a GTM Monitor tag, so verdicts come
-      // from GTM's OWN per-tag firing (addEventCallback) instead of beacon inference. The throwaway
-      // workspace(s) are always cleaned up. Draft-only + never published.
-      let snippet = o.containerSnippet;
-      const cleanupWorkspaceIds: string[] = [];
-      const cleanupVersionId = '';
-      const cleanupEnvironmentId = '';
+      // AUTHORITATIVE mode: automate the REAL Tag Assistant. ZERO GTM writes — no version, no workspace,
+      // no extra container. TA connects to the live site; the debugged popup streams GTM's own per-event
+      // per-tag firing; we drive the pages and read that stream. Needs a one-time Google sign-in (the
+      // persistent TA browser profile keeps the session).
       if (o.monitor) {
-        // ZERO-FOOTPRINT monitor: a reusable SEPARATE "Samarth Verify Monitor" container carries the GTM
-        // Monitor tag and observes the site's live container cross-container (addEventCallback fires per
-        // container). The user's REAL container is never written to — no version, no workspace there. The
-        // monitor container is created + versioned ONCE and reused, so nothing new is minted per run.
-        emit({ phase: 'monitor', message: 'Preparing the reusable GTM Monitor container (nothing is written to your container)…' });
-        const preview = await data.mintCrossContainerMonitor(o.monitor.accountId, {
-          endPoint: MONITOR_ENDPOINT, galleryOwner: MONITOR_GALLERY.owner, galleryRepository: MONITOR_GALLERY.repository,
+        emit({ phase: 'monitor', message: 'Connecting Tag Assistant to the site (no GTM writes)…' });
+        const publicId = await data.getContainerPublicId(o.monitor.accountId, o.monitor.containerId);
+        const ta = await runTaVerify(taProfileDir(), target, routedTags, publicId, {
+          settleMs: clampSettle(o.settleMs),
+          navTimeoutMs: o.navTimeoutMs,
+          onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Driving tags in the Tag Assistant window', page, done, total }),
         });
-        snippet = preview.snippet;
-      }
-      try {
-        const driven = await runVerifyDriver(
-          target,
-          routed.map((t) => ({ id: t.id, ...(t.page ? { page: t.page } : {}), trigger: t.trigger })),
-          {
-            ...(snippet ? { containerSnippet: snippet } : {}),
-            settleMs: clampSettle(o.settleMs),
-            navTimeoutMs: o.navTimeoutMs,
-            ...(o.gtmDebug ? { gtmDebug: true } : {}),
-            onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Verifying tags on the page', page, done, total }),
-          },
-        );
-        // AUTHORITATIVE-MODE HONESTY GUARD: if the Monitor emitted ZERO addEventCallback pixels, our
-        // previewed container never initialised on the site (it serves gtm.js first-party, an SPA stripped
-        // the preview params, consent blocked everything, etc.). That is NOT "0 tags fired" — the signal
-        // simply never arrived. Reporting every tag as an authoritative "not fired" would be a false
-        // negative (exactly the misleading "0 Fired / N Issues" screen). Surface the real reason instead,
-        // keeping the network log + debug so the user can confirm no placeholder.com/collect hits landed.
-        if (o.monitor && (driven.monitorEvents?.length ?? 0) === 0) {
-          return {
-            url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk,
-            verdicts: [], verifiedByMonitor: true,
-            error:
-              'The GTM Monitor preview did not load, so no authoritative firing signal was captured — this is NOT “0 tags fired”. Likely causes: the preview auth was rejected (if you connected Google a while ago, re-connect in Settings and retry), or the site loads gtm.js from a first-party/custom path we can’t rewrite to the preview version. Open the network log below: no placeholder.com/collect hits means the monitor container never ran. Meanwhile use “Verify firing” (beacon mode), which reads the live container directly.',
-            ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}),
-            ...(driven.networkLog ? { networkLog: driven.networkLog } : {}),
-            ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}),
-            ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}),
-          };
+        const base = { url: target, injected: false, previewAuth: false, pagesOk: ta.pagesOk, verifiedByMonitor: true as const, ...(ta.pagesDriven.length ? { pagesDriven: ta.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}) };
+        if (ta.needSignIn || ta.error) return { ...base, verdicts: [], error: ta.error ?? 'Tag Assistant run failed.', ...(ta.needSignIn ? { needTaSignIn: true } : {}) };
+        if (ta.debugProblem) return { ...base, verdicts: [], error: ta.debugProblem };
+        const taEvents = eventsForContainer(ta.capture!, publicId);
+        // HONESTY GUARD: TA connected but streamed no events for the container → the run proved nothing;
+        // never report that as "0 tags fired".
+        if (taEvents.length === 0) {
+          return { ...base, verdicts: [], error: 'Tag Assistant connected but streamed no events for this container — the debug session may not have attached. Re-run; if it persists, sign in again via “Sign in for Tag Assistant”.' };
         }
-        // Monitor mode → authoritative verdicts from GTM's own firing signal (cross-referenced with what we
-        // actually drove, so an un-exercised trigger reads "untested here", not a false "not firing"); else
-        // the beacon evaluator.
-        const verdicts = o.monitor ? verdictsFromMonitor(tagList, driven.monitorEvents ?? [], driven.perTag) : evaluateVerify(tagList, driven.perTag, els);
-        return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(o.monitor ? { verifiedByMonitor: true } : {}), ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
-      } finally {
-        // Discard everything the throwaway monitor preview created — leave NO trace. ORDER MATTERS:
-        // delete the workspaces FIRST (so the version GTM auto-forks a workspace from is no longer
-        // referenced), then the preview environment, then SWEEP every "Samarth Verify (auto)" version —
-        // this run's AND any that piled up before. The old code deleted the version FIRST (while its
-        // forked workspace still referenced it), so GTM refused and versions accumulated.
-        void cleanupVersionId; // superseded by the name-based sweep below
-        for (const id of cleanupWorkspaceIds) await data.deleteGtmWorkspace(o.monitor!.accountId, o.monitor!.containerId, id).catch(() => undefined);
-        if (o.monitor && cleanupEnvironmentId) await data.deleteGtmEnvironment(o.monitor.accountId, o.monitor.containerId, cleanupEnvironmentId).catch(() => undefined);
-        if (o.monitor) {
-          // A container version can't be deleted while a WORKSPACE or ENVIRONMENT references it, so sweep
-          // both leaked throwaways FIRST, then the versions. All three logged (with the exact GTM error +
-          // the offending id) so we can see precisely what, if anything, still blocks a delete.
-          const swWs = await data.sweepMonitorWorkspaces(o.monitor.accountId, o.monitor.containerId).catch(() => ({ deleted: 0, failed: 0, firstError: 'workspace sweep threw' }));
-          const swEnv = await data.sweepMonitorEnvironments(o.monitor.accountId, o.monitor.containerId).catch(() => ({ deleted: 0, failed: 0, firstError: 'env sweep threw' }));
-          const swVer = await data.sweepMonitorVersions(o.monitor.accountId, o.monitor.containerId).catch(() => ({ deleted: 0, failed: 0, firstError: 'version sweep threw' }));
-          console.log(`[monitor-cleanup] workspaces — deleted ${swWs.deleted}, failed ${swWs.failed}${swWs.firstError ? ` · ${swWs.firstError}` : ''}`);
-          console.log(`[monitor-cleanup] envs — deleted ${swEnv.deleted}, failed ${swEnv.failed}${swEnv.firstError ? ` · ${swEnv.firstError}` : ''}`);
-          console.log(`[monitor-cleanup] "Samarth Verify (auto)" versions — deleted ${swVer.deleted}, failed ${swVer.failed}${swVer.firstError ? ` · ${swVer.firstError}` : ''}`);
-        }
+        const monitorEvents = taEventsToMonitorEvents(taEvents, tagList.map((t) => ({ id: t.id, tagName: t.tagName })));
+        const verdicts = verdictsFromMonitor(tagList, monitorEvents, ta.perTag);
+        return { ...base, verdicts };
       }
+
+      const driven = await runVerifyDriver(
+        target,
+        routedTags,
+        {
+          ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}),
+          settleMs: clampSettle(o.settleMs),
+          navTimeoutMs: o.navTimeoutMs,
+          ...(o.gtmDebug ? { gtmDebug: true } : {}),
+          onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Verifying tags on the page', page, done, total }),
+        },
+      );
+      const verdicts = evaluateVerify(tagList, driven.perTag, els);
+      return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
     },
   );
 
