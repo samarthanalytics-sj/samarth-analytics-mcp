@@ -1,3 +1,9 @@
+## [1.290.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.290.1...v1.290.2) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** sweep leaked preview environments so the version sweep can finish ([#495](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/495)) ([df163bd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/df163bd6c05e5b31ad7fa457ce152fcea659f762)), closes [#492](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/492)
+
 ## [1.290.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.290.0...v1.290.1) (2026-07-10)
 
 ### Bug Fixes
