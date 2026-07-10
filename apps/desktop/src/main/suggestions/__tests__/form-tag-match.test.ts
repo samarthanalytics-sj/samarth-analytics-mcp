@@ -106,6 +106,25 @@ const tag = (tagName: string, eventName: string, formName?: string): FormTagIden
   check('page path: a different-service (Store) tag stays unmatched', unmatchedTags.some((n) => /Store/.test(n)));
 }
 
+// ── partial-but-strong match: a MAJORITY of tokens (not all) is now enough ────────────────────────
+// The over-strict full-coverage rule dropped a "Server Side Tracking Consultation" tag whose form on
+// /services/server-side-tracking has a generic title ("Get Started") and shares {server,side,tracking}
+// (3 of 4 tokens; "consultation" absent). >=60% + >=2 tokens → a confident match, no longer a false gap.
+{
+  const forms = [form({ title: 'Get Started', formId: 'sf', page: 'https://site.com/services/server-side-tracking', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] })];
+  const tags = [tag('GA4 - Event - Server Side Tracking Consultation Form Tag', 'server_side_tracking_consultation_form', 'server_side_tracking_consultation')];
+  const { matched, unmatchedTags } = matchFormsToTags(forms, tags);
+  check('partial-strong: 3-of-4-token tag matches its page form', matched.length === 1 && /Server Side Tracking/.test(matched[0].expectedTags[0].tagName));
+  check('partial-strong: not left unmatched', unmatchedTags.length === 0);
+}
+// A single shared token is STILL not enough for a multi-token tag (pile-on regression guard).
+{
+  const forms = [form({ title: 'Get Started', formId: 'sf', page: 'https://site.com/services/server-side-tracking', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] })];
+  const tags = [tag('GA4 - Event - Ecommerce Analytics Tracking Form Tag', 'ecommerce_analytics_tracking_form', 'ecommerce_analytics_tracking')];
+  const { matched, unmatchedTags } = matchFormsToTags(forms, tags);
+  check('one-of-three shared token → unmatched (no pile-on)', matched.length === 0 && unmatchedTags.length === 1);
+}
+
 // ── isFormEventName: only true form-submit custom events count as form tags ───────────────────────
 check('isFormEventName: form_submission → true', isFormEventName('form_submission'));
 check('isFormEventName: submit_form → true', isFormEventName('submit_form'));

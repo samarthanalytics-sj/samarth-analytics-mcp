@@ -707,6 +707,9 @@ export async function runVerifyDriver(
   // When the loader is a workspace/environment PREVIEW, its gtm_auth/gtm_preview params must ride the
   // navigation URL so the site's own gtm.js serves our previewed version (see previewParamsFromLoader).
   const previewParams = previewParamsFromLoader(loaderSrc);
+  // The GTM-XXXX id our loader targets — used to skip the fallback injection when that container already
+  // loaded on the page (via the site's own gtm.js + our URL params), so we never add a redundant loader.
+  const loaderContainerId = loaderSrc?.match(/[?&]id=(GTM-[A-Z0-9]+)/i)?.[1] ?? null;
   const perTag: PerTagCapture[] = [];
 
   if (!(await requestAllowed(url))) {
@@ -821,21 +824,33 @@ export async function runVerifyDriver(
       }
       pagesDriven.push(pageUrl);
 
-      // FALLBACK loader injection: covers a target that does NOT already embed this container id (no site
-      // gtm.js to read the URL params). When the site DOES embed it, the preview version was already served
-      // via the navigation params above and this second loader for the same id is a harmless deduped no-op.
+      // FALLBACK loader injection — ONLY when the container isn't already on the page. If we navigated
+      // with env preview params and the site embeds this container, its own gtm.js already served our
+      // previewed version, so injecting a second loader for the same id would be a redundant deduped
+      // no-op (and an extra gtm.start push). Inject only when the container is absent (a target that does
+      // NOT embed it, e.g. a staging page) so DRAFT/monitor tags still load.
       if (loaderSrc) {
-        await page.evaluate((src: string) => {
-          const w = window as unknown as { dataLayer?: unknown[] };
-          w.dataLayer = w.dataLayer || [];
-          w.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
-          const s = document.createElement('script');
-          s.async = true;
-          s.src = src;
-          (document.head || document.documentElement).appendChild(s);
-        }, loaderSrc);
-        injected = true;
-        await page.waitForTimeout(Math.max(settleMs, 1200)); // container + tags load
+        const alreadyLoaded = loaderContainerId
+          ? await page
+              .evaluate(
+                (id: string) => Boolean((window as unknown as { google_tag_manager?: Record<string, unknown> }).google_tag_manager?.[id]),
+                loaderContainerId,
+              )
+              .catch(() => false)
+          : false;
+        if (!alreadyLoaded) {
+          await page.evaluate((src: string) => {
+            const w = window as unknown as { dataLayer?: unknown[] };
+            w.dataLayer = w.dataLayer || [];
+            w.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
+            const s = document.createElement('script');
+            s.async = true;
+            s.src = src;
+            (document.head || document.documentElement).appendChild(s);
+          }, loaderSrc);
+          injected = true;
+          await page.waitForTimeout(Math.max(settleMs, 1200)); // container + tags load
+        }
       }
 
       await page.evaluate(installGuardsInPage);
