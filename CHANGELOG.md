@@ -1,3 +1,9 @@
+## [1.289.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.1...v1.289.2) (2026-07-10)
+
+### Bug Fixes
+
+* **desktop:** teach the GA4 chat to answer "when was data last recorded" ([5791dbc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5791dbc3a38c9f284f19f2117d1f9b60595ce780))
+
 ## [1.289.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.0...v1.289.1) (2026-07-10)
 
 ### Bug Fixes
