@@ -1,3 +1,9 @@
+## [1.294.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.294.1...v1.294.2) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** key the Tag Assistant session per connected Google account (multi-Gmail) ([#504](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/504)) ([71046a6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/71046a60e30a2c4bbe537e392247316de18db07d))
+
 ## [1.294.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.294.0...v1.294.1) (2026-07-10)
 
 ### Bug Fixes
