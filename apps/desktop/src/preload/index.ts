@@ -405,6 +405,9 @@ const api = {
     clearWebhook: (propertyId?: string): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:clearWebhook', propertyId),
     /** Test the default channel, or (with propertyId) that property's effective channel. */
     sendTest: (propertyId?: string): Promise<{ ok: boolean; error: string | null }> => ipcRenderer.invoke('ga4monitoring:sendTest', propertyId),
+    // Save the property's latest run to disk; resolves with the path, or null when cancelled.
+    exportRun: (propertyId: string, format: 'pdf' | 'csv'): Promise<string | null> =>
+      ipcRenderer.invoke('ga4monitoring:exportRun', propertyId, format),
     // Subscribe to pushed runs (background + on-demand); returns an unsubscribe function.
     onRun: (cb: (run: Ga4MonitorRun) => void): (() => void) => {
       const listener = (_e: unknown, run: Ga4MonitorRun): void => cb(run);
