@@ -356,8 +356,14 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           // wrongly reported as failing to fire on submit.
           .filter((t) => t.trigger.kind === 'custom_event' && isFormEventName(t.trigger.eventName ?? ''))
           .map((t) => {
-            const cd = t.trigger.customEventData;
-            return { tagName: t.tagName, eventName: t.eventName, platform: t.platform, ...(cd ? { formName: Object.values(cd)[0] } : {}) };
+            const cd = t.trigger.customEventData ?? {};
+            // Use the tag's actual form-name / form-id CONDITION as its identity — NOT an arbitrary first
+            // customEventData value. A pixel tag can carry non-form fields (value / currency / content_name)
+            // or none; Object.values(cd)[0] would then hand every such tag the SAME junk token and pile them
+            // all onto one form. With no form-name condition we omit it, so matching falls to the tag name
+            // (whose service token pairs with the form's page path).
+            const formName = cd.form_name ?? cd.formName ?? cd.form_id ?? cd.formId;
+            return { tagName: t.tagName, eventName: t.eventName, platform: t.platform, ...(formName ? { formName: String(formName) } : {}) };
           });
       }
     } catch (e) {

@@ -187,14 +187,20 @@ export function evaluateVerify(
  *  itself — no beacon inference, no dual-container ambiguity — and it carries the exact events + status,
  *  which is what the Tag-Assistant-style firing panel renders. PURE. */
 export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent[], perTag: PerTagCapture[] = []): VerifyTagVerdict[] {
-  const byId = monitorVerdicts(tags.map((t) => t.id), events);
+  // FORM tags belong to the real-submit "Forms" section, NOT this table. Driving a form tag here via a
+  // SYNTHETIC form_submission push proves only that it fires on its OWN declared form_name — which can
+  // directly CONTRADICT the authoritative real submit (a tag can read "fired" here yet "not fired" on the
+  // real form, whose actual form_name differs). It also mixes forms in with the click/config tags. So drop
+  // them: every form tag is covered authoritatively by the Forms section (+ the "no matching form" list).
+  const reportable = tags.filter((t) => !(t.trigger.kind === 'custom_event' && isFormEventName(t.trigger.eventName ?? t.eventName ?? '')));
+  const byId = monitorVerdicts(reportable.map((t) => t.id), events);
   const capById = new Map(perTag.map((c) => [c.tagId, c] as const));
   // Every dataLayer event that ACTUALLY happened during the drive, per the monitor stream. A
   // custom-event tag whose event is not in this set was never really tested: GTM cannot fire a tag
   // whose event never happened (e.g. a form that announces itself with its OWN event name, which
   // only the real submit produces). Calling that "not firing" is a false alarm with wrong advice.
   const seenEvents = new Set(events.map((e) => e.event).filter(Boolean));
-  return tags.map((tag): VerifyTagVerdict => {
+  return reportable.map((tag): VerifyTagVerdict => {
     const m = byId.get(tag.id);
     const base = { tagId: tag.id, tagName: tag.tagName, verifiedByMonitor: true } as const;
     if (m && m.fired) {
