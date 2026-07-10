@@ -137,6 +137,25 @@ const tag = (tagName: string, eventName: string, formName?: string): FormTagIden
   check('implementation tag not on the conversion form', !matched.some((m) => /conversion-tracking/.test(m.page) && m.expectedTags.some((t) => /Implementation/.test(t.tagName))));
 }
 
+// ── a GENERIC/shared form_name condition doesn't hide the service token in the tag NAME ─────────────
+// Real site: every /services/* page has a DOM-identical ANONYMOUS form (no id/name/title), and the tags
+// all condition on ONE shared form_name ("solution_contact_form"). The only distinguishing token lives in
+// the tag NAME + the page path — so multi-identity matching (form_name → tag name → event) must pair them.
+{
+  const forms = [
+    form({ title: '', formId: '', page: 'https://site.com/services/ga4-implementation', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] }),
+    form({ title: '', formId: '', page: 'https://site.com/services/conversion-tracking', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] }),
+  ];
+  const tags = [
+    tag('GA4 - Event - Get Your Free GA4 Implementation Consultation Form Tag', 'form_submission', 'solution_contact_form'),
+    tag('GA4 - Event - Get Your Free Conversion Tracking Consultation Form Tag', 'form_submission', 'solution_contact_form'),
+  ];
+  const { matched, unmatchedTags } = matchFormsToTags(forms, tags);
+  check('generic form_name: implementation tag still pairs to its service-page form', matched.some((m) => /ga4-implementation/.test(m.page) && m.expectedTags.some((t) => /Implementation/.test(t.tagName))));
+  check('generic form_name: conversion tag pairs to its service-page form', matched.some((m) => /conversion-tracking/.test(m.page) && m.expectedTags.some((t) => /Conversion/.test(t.tagName))));
+  check('generic form_name: none left unmatched', unmatchedTags.length === 0);
+}
+
 // A single shared token is STILL not enough for a multi-token tag (pile-on regression guard).
 {
   const forms = [form({ title: 'Get Started', formId: 'sf', page: 'https://site.com/services/server-side-tracking', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] })];

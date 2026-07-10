@@ -35,15 +35,26 @@ function tokens(s: string): Set<string> {
   return new Set(norm.split(' ').filter((t) => t.length > 2 && !STOP.has(t)));
 }
 
-/** The tag's FORM identity: its resolved form_name if we have it, else the tag name with the GA4
- *  boilerplate ("GA4 - Event - … Form Tag") stripped by the STOP set. We deliberately do NOT fold in
- *  the GA4 event name — it carries generic action words (generate, lead, signup) that produce weak
- *  cross-form matches. Only fall back to the event name when neither form_name nor tag name yields a
- *  distinctive token. */
-function tagIdentity(tag: FormTagIdentity): Set<string> {
-  const primary = tag.formName && tag.formName.trim() ? tokens(tag.formName) : tokens(tag.tagName);
-  if (primary.size > 0) return primary;
-  return tokens(tag.eventName);
+/** The token-sets to try as a tag's FORM identity, most-specific first: its resolved form_name (the
+ *  trigger condition, when present), its tag NAME, then its event name. A tag matches a form if ANY of
+ *  these yields a confident overlap — because a site can bind many DOM-identical, ANONYMOUS forms (no
+ *  id/name/title) that differ only by page path, while giving them a shared/generic `form_name` condition
+ *  (e.g. one "solution_contact_form" across every /services/* page). In that case the SERVICE token that
+ *  actually distinguishes the form lives in the tag NAME ("… GA4 Implementation Consultation …") and in
+ *  the page path (/services/ga4-implementation), NOT in the generic form_name — so keying only off
+ *  form_name misses the match. Deduped; empty sets dropped. GA4 boilerplate is stripped by the STOP set. */
+function tagIdentities(tag: FormTagIdentity): Set<string>[] {
+  const out: Set<string>[] = [];
+  const seen = new Set<string>();
+  const add = (s: Set<string>): void => {
+    if (s.size === 0) return;
+    const k = [...s].sort().join(',');
+    if (!seen.has(k)) { seen.add(k); out.push(s); }
+  };
+  if (tag.formName && tag.formName.trim()) add(tokens(tag.formName));
+  add(tokens(tag.tagName));
+  add(tokens(tag.eventName));
+  return out;
 }
 
 /** True when a custom-event trigger's event name denotes a FORM submission (form_submission,
@@ -84,24 +95,19 @@ export function matchFormsToTags(
   const formTok = forms.map(formIdentity);
   const byKey = new Map<string, MatchedFormView>();
   const unmatched: string[] = [];
-  for (const tag of tags) {
-    const tt = tagIdentity(tag);
-    if (tt.size === 0) { unmatched.push(tag.tagName); continue; }
+  // Is a token->form match CONFIDENT? A strong MAJORITY of the identity's tokens must appear in the form
+  // (>=60%, and >=2 when the identity has that many), so a single generic shared token never matches a
+  // multi-token identity (the old "consultation" pile-on of ~18 Meta tags stays fixed). For a LONE-token
+  // identity the token must be DISTINCTIVE (present in only a few forms). This replaced the old
+  // full-coverage rule, which dropped e.g. a "Server Side Tracking Consultation" tag whose form shares
+  // {server,side,tracking} but not "consultation" (3 of 4). Anything short stays a coverage gap.
+  const scoreIdentity = (tt: Set<string>): { idx: number; score: number } => {
     let bestIdx = -1;
     let bestScore = 0;
     forms.forEach((_f, i) => {
       const sc = shared(tt, formTok[i]);
       if (sc > bestScore) { bestScore = sc; bestIdx = i; }
     });
-    // CONFIDENT match WITHOUT demanding full token coverage. Requiring EVERY tag token in the form was
-    // too strict — it dropped e.g. a "Server Side Tracking Consultation" tag whose form on
-    // /services/server-side-tracking shares {server,side,tracking} but not "consultation" (3 of 4 tokens),
-    // so real forms showed "no matching form". We now require a strong MAJORITY: >=60% of the tag's
-    // distinctive tokens, and at least 2 of them when the tag has that many — so a single generic shared
-    // token still never matches a multi-token tag (the old "consultation" pile-on of ~18 Meta tags stays
-    // fixed). For a LONE-token identity the token must be DISTINCTIVE (present in only a few forms), else a
-    // generic word could pile many tags onto one form. Anything short of that stays a coverage gap
-    // (unmatchedTags), never a false "expected to fire".
     const need = Math.max(tt.size >= 2 ? 2 : 1, Math.ceil(tt.size * 0.6));
     let confident = bestIdx >= 0 && bestScore >= need;
     if (confident && tt.size === 1) {
@@ -109,7 +115,19 @@ export function matchFormsToTags(
       const formsWithTok = formTok.reduce((n, ft) => n + (ft.has(only) ? 1 : 0), 0);
       confident = formsWithTok <= Math.max(2, Math.ceil(forms.length * 0.25));
     }
-    if (confident) {
+    return confident ? { idx: bestIdx, score: bestScore } : { idx: -1, score: 0 };
+  };
+  for (const tag of tags) {
+    // Try each of the tag's identities (form_name condition → tag name → event name) and keep the
+    // strongest confident match. So when the form_name condition is generic/shared, the SERVICE token in
+    // the tag name still pairs with the form's page-path token.
+    let bestIdx = -1;
+    let bestScore = -1;
+    for (const tt of tagIdentities(tag)) {
+      const r = scoreIdentity(tt);
+      if (r.idx >= 0 && r.score > bestScore) { bestIdx = r.idx; bestScore = r.score; }
+    }
+    if (bestIdx >= 0) {
       const f = forms[bestIdx];
       const key = `${f.page}|${f.formId}|${f.title}`;
       let mv = byKey.get(key);
