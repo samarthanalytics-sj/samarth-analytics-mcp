@@ -287,8 +287,10 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
             ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}),
           };
         }
-        // Monitor mode → authoritative verdicts from GTM's own firing signal; else the beacon evaluator.
-        const verdicts = o.monitor ? verdictsFromMonitor(tagList, driven.monitorEvents ?? []) : evaluateVerify(tagList, driven.perTag, els);
+        // Monitor mode → authoritative verdicts from GTM's own firing signal (cross-referenced with what we
+        // actually drove, so an un-exercised trigger reads "untested here", not a false "not firing"); else
+        // the beacon evaluator.
+        const verdicts = o.monitor ? verdictsFromMonitor(tagList, driven.monitorEvents ?? [], driven.perTag) : evaluateVerify(tagList, driven.perTag, els);
         return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(o.monitor ? { verifiedByMonitor: true } : {}), ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
       } finally {
         // Always discard the throwaway monitor workspace(s) AND the preview version it minted — never
