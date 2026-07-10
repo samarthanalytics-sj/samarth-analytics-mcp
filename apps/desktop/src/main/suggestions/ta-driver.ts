@@ -59,19 +59,41 @@ async function loadPw(): Promise<{ chromium: { launchPersistentContext(dir: stri
   }
 }
 
-/** Launch the persistent TA profile. Prefer the real Chrome channel (Google sign-in is friendlier to it);
- *  fall back to bundled Chromium. Headed for the one-time sign-in, headless for verify runs.
- *  ignoreDefaultArgs drops the "controlled by automated software" flag — Google's sign-in sometimes
- *  refuses browsers that advertise automation. */
+/** Launch the persistent TA profile. Prefer the real Chrome channel (Google sign-in trusts it far more
+ *  than bundled Chromium); fall back to bundled Chromium. Headed for the one-time sign-in, headless for
+ *  verify runs.
+ *
+ *  The two args are what make Google sign-in actually succeed (verified by probe): ignoreDefaultArgs
+ *  drops "--enable-automation" (the "controlled by automated software" infobar), and
+ *  "--disable-blink-features=AutomationControlled" flips navigator.webdriver from true→false — Google's
+ *  sign-in refuses browsers that report webdriver=true ("this browser or app may not be secure"). */
 async function launchProfile(profileDir: string, headless: boolean): Promise<PwContext> {
   const pw = await loadPw();
   if (!pw) throw new PlaywrightUnavailableError();
-  const base = { headless, viewport: { width: 1440, height: 900 }, ignoreDefaultArgs: ['--enable-automation'] };
+  const base = {
+    headless,
+    viewport: { width: 1440, height: 900 },
+    ignoreDefaultArgs: ['--enable-automation'],
+    args: ['--disable-blink-features=AutomationControlled'],
+  };
   try {
     return await pw.chromium.launchPersistentContext(profileDir, { ...base, channel: 'chrome' });
   } catch {
     return await pw.chromium.launchPersistentContext(profileDir, base);
   }
+}
+
+// A Chromium persistent profile takes an EXCLUSIVE lock on its user-data-dir: two launchPersistentContext
+// calls on the same dir at once → the second crashes. The sign-in (fired at account-connect AND inline in
+// verify) and the verify run itself all touch the ONE ta-profile, so serialize every profile access
+// through this gate — callers queue instead of colliding. (Verify is one-at-a-time anyway.)
+let profileGate: Promise<unknown> = Promise.resolve();
+/** Exported for tests. Runs `fn` after every previously-queued task settles (success OR failure), so
+ *  profile launches never overlap; a rejecting task doesn't wedge the queue. */
+export function serializeProfile<T>(fn: () => Promise<T>): Promise<T> {
+  const next = profileGate.then(fn, fn);
+  profileGate = next.then(() => undefined, () => undefined);
+  return next;
 }
 
 /** Signed-in check that can't be fooled by page copy: a Google web session leaves its account cookies
@@ -97,39 +119,43 @@ function captureFramesInit(): void {
 }
 
 /** Quick signed-in check against the persistent profile (cookie read — fast, no page load). */
-export async function taSignInStatus(profileDir: string): Promise<{ signedIn: boolean }> {
-  const ctx = await launchProfile(profileDir, true);
-  try {
-    return { signedIn: await hasGoogleSession(ctx) };
-  } finally {
-    await ctx.close().catch(() => undefined);
-  }
+export function taSignInStatus(profileDir: string): Promise<{ signedIn: boolean }> {
+  return serializeProfile(async () => {
+    const ctx = await launchProfile(profileDir, true);
+    try {
+      return { signedIn: await hasGoogleSession(ctx) };
+    } finally {
+      await ctx.close().catch(() => undefined);
+    }
+  });
 }
 
 /** ONE-TIME sign-in: open a HEADED window straight on the Google sign-in form (continuing to Tag
  *  Assistant) and wait until the account cookies land in the profile — reliable regardless of what the
- *  page shows. The session persists for every later headless run. */
-export async function taSignIn(profileDir: string, timeoutMs = 300_000): Promise<{ signedIn: boolean }> {
-  const ctx = await launchProfile(profileDir, false);
-  try {
-    if (await hasGoogleSession(ctx)) return { signedIn: true }; // already signed in — nothing to do
-    const page = await ctx.newPage();
-    await page.goto(
-      'https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(TA_URL),
-      { waitUntil: 'domcontentloaded', timeout: 45_000 },
-    );
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      if (await hasGoogleSession(ctx)) {
-        await new Promise((r) => setTimeout(r, 1500)); // let the continue-redirect settle
-        return { signedIn: true };
+ *  page shows. The session persists for every later headless run. Returns early if already signed in. */
+export function taSignIn(profileDir: string, timeoutMs = 300_000): Promise<{ signedIn: boolean }> {
+  return serializeProfile(async () => {
+    const ctx = await launchProfile(profileDir, false);
+    try {
+      if (await hasGoogleSession(ctx)) return { signedIn: true }; // already signed in — nothing to do
+      const page = await ctx.newPage();
+      await page.goto(
+        'https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(TA_URL),
+        { waitUntil: 'domcontentloaded', timeout: 45_000 },
+      );
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        if (await hasGoogleSession(ctx)) {
+          await new Promise((r) => setTimeout(r, 1500)); // let the continue-redirect settle
+          return { signedIn: true };
+        }
+        if (page.isClosed() || Date.now() > deadline) return { signedIn: false };
+        await new Promise((r) => setTimeout(r, 2000));
       }
-      if (page.isClosed() || Date.now() > deadline) return { signedIn: false };
-      await new Promise((r) => setTimeout(r, 2000));
+    } finally {
+      await ctx.close().catch(() => undefined);
     }
-  } finally {
-    await ctx.close().catch(() => undefined);
-  }
+  });
 }
 
 export interface TaVerifyResult {
@@ -164,6 +190,8 @@ export async function runTaVerify(
   if (!(await requestAllowed(url))) {
     return { pagesOk: false, perTag, pagesDriven, error: `Refusing to load ${url}: blocked by the SSRF guard.` };
   }
+  // Serialize with sign-in: both hold the exclusive ta-profile lock, so they must not run concurrently.
+  return serializeProfile(async () => {
   const ctx = await launchProfile(profileDir, true);
   try {
     await ctx.addInitScript(captureFramesInit);
@@ -272,4 +300,5 @@ export async function runTaVerify(
   } finally {
     await ctx.close().catch(() => undefined);
   }
+  });
 }

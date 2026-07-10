@@ -45,11 +45,6 @@ function taProfileDir(): string {
 export function registerSuggestionsIpc(data: GoogleDataService): void {
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
 
-  // Tag Assistant session: a quick signed-in check, and the ONE-TIME headed Google sign-in (the window
-  // opens on the user's screen; the session persists in the profile for every later headless verify run).
-  ipcMain.handle('suggestions:taStatus', async () => taSignInStatus(taProfileDir()).catch(() => ({ signedIn: false })));
-  ipcMain.handle('suggestions:taSignIn', async () => taSignIn(taProfileDir()).catch(() => ({ signedIn: false })));
-
   // Read-only: the container's existing tag names + whether a GA4 base/config tag is
   // present, so the review panel can mark suggestions that ALREADY EXIST (don't
   // re-create them — that just fails with "duplicate name" and wastes API quota).
