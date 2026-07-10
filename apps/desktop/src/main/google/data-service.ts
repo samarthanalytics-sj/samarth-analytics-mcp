@@ -969,19 +969,14 @@ export class GoogleDataService {
           ...(triggerId ? { firingTriggerId: [triggerId] } : {}),
         },
       }));
-      // Preview the throwaway workspace. PREFERRED: a workspace-linked ENVIRONMENT — NO container version
-      // is created, so nothing piles up in version history, and its cleanup (environments.delete) actually
-      // succeeds with the scopes we hold. If GTM rejects that shape, FALL BACK to the version-based preview
-      // so the monitor keeps working (that path leaves a "Samarth Verify (auto)" version the user can
-      // delete manually — versions.delete needs a scope we don't request).
-      try {
-        const env = await this.mintWorkspaceEnvironmentPreview(accountId, containerId, temp.workspaceId);
-        return { snippet: env.snippet, cleanupEnvironmentId: env.environmentId, cleanupWorkspaceIds };
-      } catch {
-        const preview = await this.mintWorkspacePreview(accountId, containerId, temp.workspaceId);
-        if (preview.newWorkspaceId) cleanupWorkspaceIds.push(preview.newWorkspaceId);
-        return { snippet: preview.snippet, cleanupVersionId: preview.versionId, cleanupWorkspaceIds };
-      }
+      // Preview the throwaway workspace via a container VERSION + the built-in "Latest" environment.
+      // (The version-FREE workspace-environment path needs the tagmanager.publish scope, which this app
+      // deliberately never requests — so we don't attempt it. That leaves a draft "Samarth Verify (auto)"
+      // version per run; the cleanup sweep removes what it can, and the rest are deleted manually. Never
+      // published; the user's Live version is untouched.)
+      const preview = await this.mintWorkspacePreview(accountId, containerId, temp.workspaceId);
+      if (preview.newWorkspaceId) cleanupWorkspaceIds.push(preview.newWorkspaceId);
+      return { snippet: preview.snippet, cleanupVersionId: preview.versionId, cleanupWorkspaceIds };
     } catch (e) {
       for (const id of cleanupWorkspaceIds) await this.deleteGtmWorkspace(accountId, containerId, id).catch(() => undefined);
       throw e;
