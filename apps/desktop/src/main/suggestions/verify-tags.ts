@@ -189,6 +189,11 @@ export function evaluateVerify(
 export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent[], perTag: PerTagCapture[] = []): VerifyTagVerdict[] {
   const byId = monitorVerdicts(tags.map((t) => t.id), events);
   const capById = new Map(perTag.map((c) => [c.tagId, c] as const));
+  // Every dataLayer event that ACTUALLY happened during the drive, per the monitor stream. A
+  // custom-event tag whose event is not in this set was never really tested: GTM cannot fire a tag
+  // whose event never happened (e.g. a form that announces itself with its OWN event name, which
+  // only the real submit produces). Calling that "not firing" is a false alarm with wrong advice.
+  const seenEvents = new Set(events.map((e) => e.event).filter(Boolean));
   return tags.map((tag): VerifyTagVerdict => {
     const m = byId.get(tag.id);
     const base = { tagId: tag.id, tagName: tag.tagName, verifiedByMonitor: true } as const;
@@ -215,25 +220,30 @@ export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent
     // conditionSupplied is undefined for interactions that need no condition (a click, a scroll/CTA custom
     // event, a pageview) → treat as supplied. Only a form tag we pushed with an EMPTY condition is false.
     const conditionOk = cap?.conditionSupplied ?? true;
-    const exercised = Boolean(cap?.targetFound && cap?.performed) && conditionOk;
+    const expectedEvent = tag.trigger.kind === 'custom_event' ? (tag.trigger.eventName ?? tag.eventName ?? '') : '';
+    const eventHappened = !expectedEvent || seenEvents.has(expectedEvent);
+    const exercised = Boolean(cap?.targetFound && cap?.performed) && conditionOk && eventHappened;
     if (!exercised) {
       const why = cap && cap.targetFound === false
-        ? 'we couldn’t find this tag’s trigger control on the pages we drove — its CTA may live on a page beyond the scan budget'
-        : isFormTag
-          ? 'we couldn’t reproduce this tag’s exact form-submit event here (its form wasn’t among the ones we found), so its condition was never met'
-          : 'we couldn’t exercise this tag’s trigger on the pages we drove';
+        ? 'we couldn’t find the button/link this tag listens to on the pages we drove — it may live on a page we didn’t scan'
+        : !eventHappened
+          ? `this tag waits for the event “${expectedEvent}”, and that event never happened during this run — the page only sends it on the real action${isFormTag ? ' (the real form submit)' : ''}`
+          : isFormTag
+            ? 'we couldn’t reproduce this tag’s exact form-submit event here (its form wasn’t among the ones we found), so its condition was never met'
+            : 'we couldn’t exercise this tag’s trigger on the pages we drove';
       return {
         ...base,
         fired: false,
         inconclusive: true,
-        reason: `${why} — that’s not evidence it’s broken. It will fire in GTM Preview / Tag Assistant when the real action runs (or in the “verify by real submit” step below).`,
+        reason: `${why} — that is NOT evidence it’s broken. The real test is the “verify by real submit” step below (for forms) or a real interaction in GTM Preview.`,
         interaction: { kind: 'none', targetFound: cap?.targetFound ?? false, performed: cap?.performed ?? false },
       };
     }
+    const sawWhat = expectedEvent ? `the event “${expectedEvent}” happened` : 'we drove its trigger';
     return {
       ...base,
       fired: false,
-      reason: 'we exercised this tag’s trigger but GTM did not fire it — check the trigger’s conditions match this page (authoritative — read from the container’s own monitor).',
+      reason: `GTM did not fire this tag even though ${sawWhat} — and GTM itself reported this run, so the container was definitely loaded. The problem is in the tag’s trigger conditions: a form name / id, page path, or other filter doesn’t match what the page actually sent. Open the trigger in GTM and compare it with the dataLayer log above.`,
       interaction: { kind: 'none', targetFound: true, performed: true },
     };
   });

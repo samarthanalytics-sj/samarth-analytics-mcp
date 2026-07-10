@@ -357,6 +357,31 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   check('monitor: no events + no perTag → inconclusive (not a hard not-firing)', verdictsFromMonitor(tags, []).every((x) => x.fired === false && x.inconclusive === true));
 }
 
+// ── verdictsFromMonitor: a custom-event tag whose EVENT never happened was never tested ────────────
+// (the CRO-consultation case: the page announces each form with its OWN event name, which only the
+//  real submit produces — the drive phase pushing generic form_submission must not report "not
+//  firing" + "confirm the container is injected" when the run itself proves the container loaded.)
+{
+  const tags: VerifyTagInput[] = [
+    tag({ id: 'cro', tagName: 'Get Your Free CRO Consultation Form Tag', eventName: 'get_your_free_cro_consultation_form', platform: 'ga4_event', trigger: { name: 'CRO', kind: 'custom_event', eventName: 'get_your_free_cro_consultation_form' } }),
+    tag({ id: 'gen', tagName: 'Generic Form Tag', eventName: 'form_submission', platform: 'ga4_event', trigger: { name: 'Gen', kind: 'custom_event', eventName: 'form_submission', customEventData: { form_name: 'x_form' } } }),
+  ];
+  // BOTH were "driven" per the capture layer — but only form_submission actually happened.
+  const perTag: PerTagCapture[] = [
+    cap({ tagId: 'cro', kind: 'custom_event', targetFound: true, performed: true, conditionSupplied: true }),
+    cap({ tagId: 'gen', kind: 'custom_event', targetFound: true, performed: true, conditionSupplied: true }),
+  ];
+  const events: MonitorEvent[] = [{ event: 'form_submission', tags: [] }];
+  const by = new Map(verdictsFromMonitor(tags, events, perTag).map((x) => [x.tagId, x]));
+
+  check('monitor: event never happened → inconclusive (untested), NOT a firing issue', by.get('cro')!.fired === false && by.get('cro')!.inconclusive === true);
+  check('monitor: never-happened reason names the awaited event in plain words', /waits for the event/.test(by.get('cro')!.reason ?? '') && /get_your_free_cro_consultation_form/.test(by.get('cro')!.reason ?? ''));
+  check('monitor: never-happened reason points at the real-submit step', /real submit/i.test(by.get('cro')!.reason ?? ''));
+  check('monitor: event DID happen but GTM skipped the tag → genuine not-fire', by.get('gen')!.fired === false && !by.get('gen')!.inconclusive);
+  check('monitor: genuine not-fire says the container WAS loaded and blames trigger conditions', /container was definitely loaded/.test(by.get('gen')!.reason ?? '') && /trigger/.test(by.get('gen')!.reason ?? ''));
+  check('monitor: genuine not-fire never doubts injection', !/injected|snippet/i.test(by.get('gen')!.reason ?? ''));
+}
+
 console.log(`\nverify-tags: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
 if (passed < 24) { console.error(`expected >= 24 checks, got ${passed}`); process.exit(1); }
