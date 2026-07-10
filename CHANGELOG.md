@@ -1,3 +1,9 @@
+## [1.286.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.3...v1.286.4) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** monitor preview must ride the navigation URL, not an injected loader ([#481](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/481)) ([2965015](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2965015a72b6bea0d201bc908e9df0b9a9d20d70))
+
 ## [1.286.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.2...v1.286.3) (2026-07-09)
 
 ### Bug Fixes
