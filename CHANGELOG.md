@@ -1,3 +1,9 @@
+## [1.292.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.291.0...v1.292.0) (2026-07-10)
+
+### Features
+
+* **verify:** Tag Assistant automation Phase 1 — debug-stream parser (pure core) ([#500](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/500)) ([83abc58](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/83abc58c1c233f9bd38fa68f90454b6d49cb770d))
+
 ## [1.291.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.290.3...v1.291.0) (2026-07-10)
 
 ### Features
