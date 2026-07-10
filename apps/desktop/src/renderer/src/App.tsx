@@ -4970,7 +4970,7 @@ function VerifyPanel({
               style={{ background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--c-blue)', borderRadius: 10, padding: '10px 16px', fontSize: 14, cursor: 'pointer', ...(!ready || vVerifying || !vUrl.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
               onClick={() => void runVerify(undefined, true)}
               disabled={!ready || vVerifying || !vUrl.trim()}
-              title="Authoritative: runs the REAL Tag Assistant in YOUR Chrome (your existing Google login — no separate sign-in), drives your tags, and reads GTM's own per-event firing. ZERO GTM writes. Fully close Google Chrome first (a running Chrome locks its profile)."
+              title="Authoritative: automates the REAL Tag Assistant — connects it to the site, drives your tags, and reads GTM's own per-event firing. ZERO GTM writes. Signs in to Tag Assistant ONCE (saved after that, so it never asks again) and your normal Chrome can stay open."
             >
               {vVerifying ? 'Verifying…' : 'Verify with Tag Assistant'}
             </button>
