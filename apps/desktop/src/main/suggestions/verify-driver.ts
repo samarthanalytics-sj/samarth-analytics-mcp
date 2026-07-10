@@ -15,6 +15,7 @@ import os from 'node:os';
 import { requestAllowed } from './ssrf';
 import { classifyCollector, syntheticDataLayerEvent, buildNetworkLog, summarizeDataLayer, type Collector, type DescribedHit, type DataLayerEventView } from '../../shared/runtime-capture';
 import { isMonitorHit, parseMonitorHit, type MonitorEvent } from './tag-monitor';
+import { isFormEventName } from './form-tag-match';
 import { PlaywrightUnavailableError } from './playwright-driver';
 import type { PerTagCapture } from './verify-tags';
 
@@ -945,11 +946,17 @@ export async function runVerifyDriver(
               /* best-effort — no shot on failure */
             }
           }
+          // A FORM tag keys off a form_name/id condition — we truly exercised it only if we could push
+          // that condition (customEventData). A bare push (no matching form → empty data) can't satisfy it,
+          // so its non-fire is "not reproduced here", not "broken". Non-form custom events (cta_click,
+          // scroll) need no condition, so a bare push fully exercises them.
+          const conditionSupplied = Object.keys(data).length > 0 || !isFormEventName(evName);
           perTag.push({
             tagId: tag.id,
             kind: 'custom_event',
             targetFound: true,
             performed: true,
+            conditionSupplied,
             hits: captured.slice(before).map((h) => ({ url: h.url, body: h.body, collector: h.collector })),
             ...(ceShot ? { screenshot: ceShot } : {}),
           });

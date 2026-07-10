@@ -312,16 +312,49 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
     { event: 'form_submit', tags: [{ id: 'cfg', status: 'success' }, { id: 'lead', status: 'success', executionTime: 9 }] },
     { event: 'cta_click', tags: [{ id: 'cta', status: 'failure', executionTime: 30 }] },
   ];
-  const v = verdictsFromMonitor(tags, events);
+  // perTag: what the driver actually exercised. 'lead'/'cta'/'cfg' were driven; 'ghost' was driven too
+  // (so its non-fire is a GENUINE not-firing, distinct from an un-exercised tag).
+  const perTag: PerTagCapture[] = [
+    cap({ tagId: 'cfg' }), cap({ tagId: 'lead' }), cap({ tagId: 'cta' }), cap({ tagId: 'ghost' }),
+  ];
+  const v = verdictsFromMonitor(tags, events, perTag);
   const by = new Map(v.map((x) => [x.tagId, x]));
 
   check('monitor: every verdict is flagged authoritative (verifiedByMonitor)', v.every((x) => x.verifiedByMonitor === true));
   check('monitor: a GTM-fired tag → fired, with status + events', by.get('lead')!.fired === true && by.get('lead')!.monitorStatus === 'success' && (by.get('lead')!.monitorEvents ?? []).includes('form_submit'));
   check('monitor: config tag fired on multiple events', JSON.stringify(by.get('cfg')!.monitorEvents) === JSON.stringify(['gtm.load', 'form_submit']));
   check('monitor: a tag GTM fired with an ERROR status → fired but reason flags it', by.get('cta')!.fired === true && by.get('cta')!.monitorStatus === 'failure' && /error|failure/i.test(by.get('cta')!.reason ?? ''));
-  check('monitor: a tag GTM never fired → not fired (authoritative), reason says so', by.get('ghost')!.fired === false && /did not fire/i.test(by.get('ghost')!.reason ?? ''));
+  check('monitor: a DRIVEN tag GTM never fired → genuine not-firing (not inconclusive)', by.get('ghost')!.fired === false && !by.get('ghost')!.inconclusive && /did not fire|exercised/i.test(by.get('ghost')!.reason ?? ''));
   check('monitor: execution time carried', by.get('lead')!.monitorExecutionMs === 9);
-  check('monitor: no monitor events → all tags authoritatively not-fired', verdictsFromMonitor(tags, []).every((x) => x.fired === false && x.verifiedByMonitor === true));
+}
+
+// ── verdictsFromMonitor: UN-EXERCISED tags are INCONCLUSIVE, not false "not firing" ────────────────
+{
+  const tags: VerifyTagInput[] = [
+    tag({ id: 'faq', tagName: 'FAQs Click', eventName: 'faqs_click', trigger: { name: 'FAQ', kind: 'link_click', clickTextValue: 'FAQs', clickTextOperator: 'equals' } }),
+    tag({ id: 'cons', tagName: 'Get Your Free GA4 Consultation Form Tag', eventName: 'form_submission', platform: 'ga4_event', trigger: { name: 'Cons', kind: 'custom_event', eventName: 'form_submission' } }),
+    tag({ id: 'realform', tagName: 'Contact Form Tag', eventName: 'form_submission', platform: 'ga4_event', trigger: { name: 'Contact', kind: 'custom_event', eventName: 'form_submission', customEventData: { form_name: 'contact_form' } } }),
+  ];
+  // Driver captures: the FAQ CTA wasn't found; the consultation form tag was pushed but with NO condition
+  // (empty customEventData → conditionSupplied false); the contact tag WAS pushed with its condition.
+  const perTag: PerTagCapture[] = [
+    cap({ tagId: 'faq', kind: 'click', targetFound: false, performed: false }),
+    cap({ tagId: 'cons', kind: 'custom_event', targetFound: true, performed: true, conditionSupplied: false }),
+    cap({ tagId: 'realform', kind: 'custom_event', targetFound: true, performed: true, conditionSupplied: true }),
+  ];
+  // Only the contact form's exact event was reproduced → only it appears in the monitor stream.
+  const events: MonitorEvent[] = [{ event: 'form_submission', tags: [{ id: 'realform', status: 'success' }] }];
+  const by = new Map(verdictsFromMonitor(tags, events, perTag).map((x) => [x.tagId, x]));
+
+  check('monitor: a click tag whose CTA was NOT found → inconclusive, not "not firing"', by.get('faq')!.fired === false && by.get('faq')!.inconclusive === true);
+  check('monitor: a form tag we could not supply a condition for → inconclusive', by.get('cons')!.fired === false && by.get('cons')!.inconclusive === true && /reproduce|form/i.test(by.get('cons')!.reason ?? ''));
+  check('monitor: the reproduced-condition form tag → fired', by.get('realform')!.fired === true);
+  // The whole point: an un-exercised tag must NOT land in the "Issues" (genuine not-firing) bucket, which
+  // the UI computes as !fired && !inconclusive.
+  const isIssue = (id: string): boolean => !by.get(id)!.fired && !by.get(id)!.inconclusive;
+  check('monitor: un-exercised tags are NOT counted as firing issues', !isIssue('faq') && !isIssue('cons'));
+  // With NO monitor events AND no drive info, tags default to inconclusive (never a false hard failure).
+  check('monitor: no events + no perTag → inconclusive (not a hard not-firing)', verdictsFromMonitor(tags, []).every((x) => x.fired === false && x.inconclusive === true));
 }
 
 console.log(`\nverify-tags: ${passed} passed, ${failed} failed`);
