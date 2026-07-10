@@ -1,3 +1,9 @@
+## [1.297.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.296.0...v1.297.0) (2026-07-10)
+
+### Features
+
+* **verify:** run Tag Assistant in the user's REAL Chrome profile (no separate sign-in) ([#508](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/508)) ([0c0ca8e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0c0ca8eba637345bc0abfe66be5e954734b3c774)), closes [post-#506](https://github.com/samarthanalytics-sj/post-/issues/506)
+
 ## [1.296.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.295.1...v1.296.0) (2026-07-10)
 
 ### Features
