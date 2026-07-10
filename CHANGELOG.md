@@ -1,3 +1,9 @@
+## [1.299.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.298.0...v1.299.0) (2026-07-10)
+
+### Features
+
+* **verify:** GTM Preview mode for Tag Assistant — debug the published GTM container's tags ([#510](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/510)) ([056c144](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/056c1448a050be87a68fa2500a4d5c236b7d2543))
+
 ## [1.298.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.297.0...v1.298.0) (2026-07-10)
 
 ### Features
