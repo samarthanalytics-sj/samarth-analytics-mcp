@@ -1,3 +1,9 @@
+## [1.290.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.5...v1.290.0) (2026-07-10)
+
+### Features
+
+* **verify:** render the real-submit form-tag results as a table (like the monitor) ([#493](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/493)) ([bfa5fb1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bfa5fb1779ccd67f08437fbb82bde5fa5e81869d))
+
 ## [1.289.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.4...v1.289.5) (2026-07-10)
 
 ### Bug Fixes
