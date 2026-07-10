@@ -20,9 +20,14 @@ export interface FormTagIdentity {
 }
 
 // Words that don't help tell one form from another (tag-name boilerplate + generic filler).
+// Includes generic OFFER words ("consultation", "audit", "mockup", …) that appear across many form-tag
+// names ("Get Your Free <service> Consultation Form Tag") but almost never in the form itself — leaving
+// them in inflated the tag's token count and, under the majority rule, kept the SERVICE token (ga4,
+// conversion, cro, …) from carrying the match. The service token is the real signal; these are noise.
 const STOP = new Set([
   'form', 'forms', 'tag', 'tags', 'the', 'ga4', 'event', 'events', 'get', 'your', 'a', 'an', 'to',
   'for', 'and', 'of', 'us', 'our', 'gtm', 'click', 'submit', 'submission', 'free', 'new',
+  'consultation', 'audit', 'audits', 'mockup',
 ]);
 
 function tokens(s: string): Set<string> {
