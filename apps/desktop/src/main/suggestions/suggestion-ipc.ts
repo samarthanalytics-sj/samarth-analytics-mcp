@@ -12,7 +12,6 @@
 
 import { ipcMain, dialog, BrowserWindow, app } from 'electron';
 import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import type { GoogleDataService } from '../google/data-service';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
@@ -23,7 +22,7 @@ import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } fro
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
 import { routeTagsToPages } from './verify-routing';
-import { runTaVerify, taSignIn, taSignInStatus } from './ta-driver';
+import { runTaVerify, taSignIn, taSignInStatus, taProfileDirFor } from './ta-driver';
 import { eventsForContainer, taEventsToMonitorEvents } from './ta-stream';
 import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
 import { matchFormsToTags, dedupeSharedFields, isFormEventName, type PagedForm, type FormTagIdentity } from './form-tag-match';
@@ -37,9 +36,10 @@ import { makeDriver, makeDrivers, scanConcurrency, clampSettle } from './scan-ur
 import { parseSuggestions, createSuggestedTags, planGoogleTagVars, provisionVariables } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 
-/** The persistent browser profile that keeps the Tag Assistant Google session across runs. */
-function taProfileDir(): string {
-  return join(app.getPath('userData'), 'ta-profile');
+/** The persistent browser profile that keeps the Tag Assistant Google session across runs — keyed PER
+ *  connected Google account, so switching the active Gmail uses that Gmail's own TA session. */
+function taProfileDir(accountId?: string | null): string {
+  return taProfileDirFor(app.getPath('userData'), accountId);
 }
 
 export function registerSuggestionsIpc(data: GoogleDataService): void {
@@ -257,11 +257,15 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       if (o.monitor) {
         // INLINE one-time sign-in: if the persistent profile has no Google session yet, open the headed
         // sign-in window NOW and wait — so a single "Verify with Tag Assistant" click covers everything
-        // (no separate sign-in button). The session persists; later runs skip straight through.
-        const status = await taSignInStatus(taProfileDir()).catch(() => ({ signedIn: false }));
+        // (no separate sign-in button). The session persists; later runs skip straight through. The
+        // profile is keyed to the ACTIVE connected Google account, and sign-in is steered to that same
+        // Gmail — so switching the app's account uses the right container-owning session.
+        const ident = data.activeAccountIdentity();
+        const profileDir = taProfileDir(ident?.id);
+        const status = await taSignInStatus(profileDir).catch(() => ({ signedIn: false }));
         if (!status.signedIn) {
           emit({ phase: 'monitor', message: 'One-time Google sign-in — complete it in the window that just opened…' });
-          const signedIn = await taSignIn(taProfileDir()).catch(() => ({ signedIn: false }));
+          const signedIn = await taSignIn(profileDir, ident?.email ? { loginHint: ident.email } : {}).catch(() => ({ signedIn: false }));
           if (!signedIn.signedIn) {
             return {
               url: target, injected: false, previewAuth: false, pagesOk: false, verdicts: [], verifiedByMonitor: true, needTaSignIn: true,
@@ -271,7 +275,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         }
         emit({ phase: 'monitor', message: 'Connecting Tag Assistant to the site (no GTM writes)…' });
         const publicId = await data.getContainerPublicId(o.monitor.accountId, o.monitor.containerId);
-        const ta = await runTaVerify(taProfileDir(), target, routedTags, publicId, {
+        const ta = await runTaVerify(profileDir, target, routedTags, publicId, {
           settleMs: clampSettle(o.settleMs),
           navTimeoutMs: o.navTimeoutMs,
           onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Driving tags in the Tag Assistant window', page, done, total }),

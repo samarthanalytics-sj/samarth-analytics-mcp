@@ -243,6 +243,14 @@ export class GoogleDataService {
     return this.clients.getClient(active.id);
   }
 
+  /** Identity of the currently-active connected Google account — used to key the per-account Tag
+   *  Assistant browser profile (so switching to a different Gmail uses that Gmail's own TA session, not
+   *  a shared one) and to steer its Google sign-in to the right account. Null if none is active. */
+  activeAccountIdentity(): { id: string; email: string } | null {
+    const active = this.registry.getActiveView();
+    return active ? { id: active.id, email: active.email } : null;
+  }
+
   async listGtmAccounts(): Promise<GtmAccountView[]> {
     // Cast at the boundary: @googleapis/* bundle their own google-auth-library
     // types, so our OAuth2Client is a structural-but-not-nominal match.

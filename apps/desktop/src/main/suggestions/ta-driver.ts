@@ -27,6 +27,15 @@ import type { PerTagCapture } from './verify-tags';
 
 const TA_URL = 'https://tagassistant.google.com/';
 
+/** Per-account Tag Assistant profile directory. Each connected Google account gets its OWN persistent
+ *  browser profile under <userData>/ta-profiles/<accountId>, so switching the app's active Gmail uses
+ *  that Gmail's own TA session instead of one shared (wrong-account) session. accountId is sanitized to
+ *  a safe path segment; a missing id falls back to a shared 'default' bucket. PURE (path join only). */
+export function taProfileDirFor(userDataDir: string, accountId?: string | null): string {
+  const safe = (accountId ?? '').replace(/[^a-zA-Z0-9_-]/g, '') || 'default';
+  return `${userDataDir.replace(/[\\/]+$/, '')}/ta-profiles/${safe}`;
+}
+
 // Minimal Playwright surface (mirrors verify-driver's local typing so we don't depend on @types).
 interface PwPage {
   goto(url: string, opts?: Record<string, unknown>): Promise<unknown>;
@@ -132,15 +141,19 @@ export function taSignInStatus(profileDir: string): Promise<{ signedIn: boolean 
 
 /** ONE-TIME sign-in: open a HEADED window straight on the Google sign-in form (continuing to Tag
  *  Assistant) and wait until the account cookies land in the profile — reliable regardless of what the
- *  page shows. The session persists for every later headless run. Returns early if already signed in. */
-export function taSignIn(profileDir: string, timeoutMs = 300_000): Promise<{ signedIn: boolean }> {
+ *  page shows. The session persists for every later headless run. Returns early if already signed in.
+ *  `loginHint` (the connected account's email) pre-selects the right Gmail on the sign-in form so a
+ *  multi-account user signs into the account that actually owns the container. */
+export function taSignIn(profileDir: string, opts: { timeoutMs?: number; loginHint?: string } = {}): Promise<{ signedIn: boolean }> {
+  const timeoutMs = opts.timeoutMs ?? 300_000;
   return serializeProfile(async () => {
     const ctx = await launchProfile(profileDir, false);
     try {
       if (await hasGoogleSession(ctx)) return { signedIn: true }; // already signed in — nothing to do
       const page = await ctx.newPage();
+      const hint = opts.loginHint ? '&login_hint=' + encodeURIComponent(opts.loginHint) : '';
       await page.goto(
-        'https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(TA_URL),
+        'https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(TA_URL) + hint,
         { waitUntil: 'domcontentloaded', timeout: 45_000 },
       );
       const deadline = Date.now() + timeoutMs;
