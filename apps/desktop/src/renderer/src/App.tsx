@@ -4953,7 +4953,7 @@ function VerifyPanel({
           <textarea
             value={vSnippet}
             onChange={(e) => setVSnippet(e.target.value)}
-            placeholder="Optional: paste a GTM PREVIEW / Environment snippet (with gtm_auth & gtm_preview) so DRAFT tags load."
+            placeholder="Paste your GTM PREVIEW snippet (with gtm_auth & gtm_preview). Required for 'Verify with Tag Assistant' to see your GTM container's tags — in GTM click Preview, then Share/Copy the snippet. Creates no version/environment."
             style={{ ...styles.input, width: '100%', minHeight: 52, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
             disabled={!ready}
           />

@@ -19,13 +19,27 @@ import { classifyCollector } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
 import {
   installGuardsInPage, grantConsentInPage, hideCookieOverlaysInPage, pushDataLayerInPage,
-  driveInPage, specFor, buildCustomEventPayload,
+  driveInPage, specFor, buildCustomEventPayload, withPreviewParams,
   type VerifyDriverTag, type DriveOutcome,
 } from './verify-driver';
 import { parseTaFrames, type TaCapture } from './ta-stream';
 import type { PerTagCapture } from './verify-tags';
 
 const TA_URL = 'https://tagassistant.google.com/';
+
+/** Extract GTM preview creds (gtm_auth / gtm_preview / gtm_cookies_win) from ANYTHING the user pastes:
+ *  the GTM Preview JS snippet (where they sit inside the container-id string, e.g.
+ *  `'GTM-XXX&gtm_auth=..&gtm_preview=env-5&gtm_cookies_win=x'`), a Preview/Tag-Assistant URL, or a bare
+ *  gtm.js loader URL. Regex-based (not URL parsing) so all three formats work. null if not a preview.
+ *  PURE. Exported for tests. */
+export function previewParamsFromAny(text?: string | null): { gtm_auth: string; gtm_preview: string; gtm_cookies_win: string } | null {
+  if (!text) return null;
+  const auth = text.match(/gtm_auth=([^&'"\s]+)/i);
+  const preview = text.match(/gtm_preview=([^&'"\s]+)/i);
+  if (!auth || !preview) return null;
+  const cw = text.match(/gtm_cookies_win=([^&'"\s]+)/i);
+  return { gtm_auth: auth[1], gtm_preview: preview[1], gtm_cookies_win: cw ? cw[1] : 'x' };
+}
 
 /** Per-account Tag Assistant profile directory. Each connected Google account gets its OWN persistent
  *  browser profile under <userData>/ta-profiles/<accountId>, so switching the app's active Gmail uses
@@ -49,7 +63,7 @@ interface PwPage {
 interface PwContext {
   addInitScript(fn: unknown): Promise<void>;
   newPage(): Promise<PwPage>;
-  route(pattern: string, handler: (route: { request(): { url(): string }; continue(): Promise<void>; abort(): Promise<void> }) => unknown): Promise<void>;
+  route(pattern: string, handler: (route: { request(): { url(): string }; continue(overrides?: { url?: string }): Promise<void>; abort(): Promise<void> }) => unknown): Promise<void>;
   waitForEvent(event: 'page', opts?: { timeout?: number }): Promise<PwPage>;
   close(): Promise<void>;
   pages(): PwPage[];
@@ -151,7 +165,7 @@ export async function runTaVerify(
   url: string,
   tags: VerifyDriverTag[],
   containerPublicId: string,
-  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; onSignInPrompt?: () => void; onPageProgress?: (page: string, done: number, total: number) => void } = {},
+  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; previewSnippet?: string; onSignInPrompt?: () => void; onPageProgress?: (page: string, done: number, total: number) => void } = {},
 ): Promise<TaVerifyResult> {
   const settleMs = opts.settleMs ?? 900;
   const navTimeoutMs = opts.navTimeoutMs ?? 25_000;
@@ -160,6 +174,13 @@ export async function runTaVerify(
   if (!(await requestAllowed(url))) {
     return { pagesOk: false, perTag, pagesDriven, error: `Refusing to load ${url}: blocked by the SSRF guard.` };
   }
+  // GTM PREVIEW mode: a published GTM container does NOT enter Tag Assistant debug via the plain connect
+  // flow (only Google tags do). Loading the container's gtm.js WITH the preview creds (gtm_auth /
+  // gtm_preview, parsed from the user's pasted GTM Preview snippet) makes Google serve the debug-
+  // instrumented preview build, which DOES stream its tag-firing frames. previewParams=null => connect
+  // only (Google-tag events, no GTM-container tags). Zero footprint (Quick Preview creates nothing).
+  const previewParams = previewParamsFromAny(opts.previewSnippet);
+  const withPreview = (u: string): string => withPreviewParams(u, previewParams);
   // Serialize with any other profile access: the exclusive ta-profile lock means one at a time.
   return serializeProfile(async () => {
   // HEADED (visible): the user WATCHES Tag Assistant sign in (once), connect, and show tags firing — that
@@ -168,10 +189,22 @@ export async function runTaVerify(
   try {
     await ctx.addInitScript(captureFramesInit);
     // Abort analytics collectors so driving tags never delivers a real hit (the TA stream, not beacons,
-    // is the verdict source). Everything else (gtm.js, TA channel, page assets) flows normally.
+    // is the verdict source). In PREVIEW mode, rewrite the container's gtm.js request to carry the preview
+    // creds (page-URL params are ignored by a normal loader, so the request itself must be rewritten) so
+    // Google serves the debug-instrumented preview build. Everything else flows normally.
     await ctx.route('**/*', (route) => {
-      const u = route.request().url();
-      if (classifyCollector(u)) { void route.abort(); return; }
+      const reqUrl = route.request().url();
+      if (classifyCollector(reqUrl)) { void route.abort(); return; }
+      if (
+        previewParams &&
+        /googletagmanager\.com\/gtm\.js/i.test(reqUrl) &&
+        reqUrl.includes(`id=${containerPublicId}`) &&
+        !/[?&]gtm_auth=/i.test(reqUrl)
+      ) {
+        const qp = `&gtm_auth=${previewParams.gtm_auth}&gtm_preview=${previewParams.gtm_preview}&gtm_cookies_win=${previewParams.gtm_cookies_win}`;
+        void route.continue({ url: reqUrl + qp });
+        return;
+      }
       void route.continue();
     });
 
@@ -204,7 +237,7 @@ export async function runTaVerify(
     }
 
     // Connect: Add domain -> URL -> Connect -> the debugged popup.
-    console.log(`[tag-assistant] connecting to ${url} ...`);
+    console.log(`[tag-assistant] connecting to ${url} ${previewParams ? '(GTM PREVIEW mode - your container will enter debug)' : '(connect mode - Google tags only; paste your GTM Preview snippet to debug the GTM container)'} ...`);
     await ta.goto(TA_URL, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await ta.waitForTimeout(2500);
     const addBtn = ta.locator('button:has-text("Add domain")').first();
@@ -236,7 +269,7 @@ export async function runTaVerify(
       if (!(await requestAllowed(pageUrl))) continue;
       // First group often IS the connect URL — already loaded; skip the redundant navigation.
       if (!(done === 1 && popup.url().split('?')[0].replace(/\/$/, '') === pageUrl.split('?')[0].replace(/\/$/, ''))) {
-        try { await popup.goto(pageUrl, { waitUntil: 'networkidle', timeout: navTimeoutMs }); } catch {
+        try { await popup.goto(withPreview(pageUrl), { waitUntil: 'networkidle', timeout: navTimeoutMs }); } catch {
           for (const t of groupTags) perTag.push({ tagId: t.id, kind: 'navigate', targetFound: false, performed: false, note: `could not load ${pageUrl}`, hits: [] });
           continue;
         }
@@ -289,7 +322,12 @@ export async function runTaVerify(
     const frames = await ta.evaluate<string[]>(() => (window as unknown as { __taFrames?: string[] }).__taFrames ?? []).catch(() => [] as string[]);
     const capture = parseTaFrames(frames);
     const { containerDebugProblem, eventsForContainer } = await import('./ta-stream');
-    const problem = containerDebugProblem(capture, containerPublicId);
+    let problem = containerDebugProblem(capture, containerPublicId);
+    // The #1 cause of "not in debug" is a PUBLISHED container without preview creds: Tag Assistant's
+    // connect flow only debugs Google tags. If we weren't given a Preview snippet, say exactly that.
+    if (problem && !previewParams) {
+      problem = `${containerPublicId} didn't enter debug mode. Tag Assistant's connect flow only debugs Google tags, not a published GTM container. To verify your GTM container's tags, open GTM, click Preview, copy your Preview snippet, and paste it into the "GTM Preview snippet" box here — then run this again. (Quick Preview creates no version or environment.)`;
+    }
     const evs = eventsForContainer(capture, containerPublicId);
     const firedCount = evs.reduce((n, e) => n + e.tags.filter((t) => t.status === 'fired').length, 0);
     console.log(`[tag-assistant] captured ${frames.length} debug frame(s) -> ${evs.length} event(s) for ${containerPublicId}, ${firedCount} tag-fire(s)${problem ? ` -- ${problem}` : ''}`);

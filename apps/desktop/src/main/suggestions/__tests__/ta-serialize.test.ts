@@ -2,7 +2,7 @@
 // launchPersistentContext calls from hitting the one ta-profile at once (which crashes Chromium and
 // surfaced as the "sign-in not completed" failure). Run: tsx …/__tests__/ta-serialize.test.ts
 
-import { serializeProfile, taProfileDirFor } from '../ta-driver';
+import { serializeProfile, taProfileDirFor, previewParamsFromAny } from '../ta-driver';
 
 let passed = 0, failed = 0;
 const fails: string[] = [];
@@ -52,8 +52,21 @@ async function main(): Promise<void> {
   check('per-account: missing id falls back to a default bucket',
     taProfileDirFor(ud, null).endsWith('/ta-profiles/default') && taProfileDirFor(ud, undefined).endsWith('/ta-profiles/default'));
 
+  // 6) previewParamsFromAny: extract GTM preview creds from whatever the user pastes — the JS snippet
+  //    (creds inside the container-id string), a Preview/Tag-Assistant URL, or a bare gtm.js URL.
+  const fromSnippet = previewParamsFromAny(
+    `<script>(function(w,d,s,l,i){})(window,document,'script','dataLayer','GTM-NKZD4BVB&gtm_auth=aBc123_x&gtm_preview=env-5&gtm_cookies_win=x');</script>`);
+  check('preview: parses the GTM JS snippet',
+    fromSnippet?.gtm_auth === 'aBc123_x' && fromSnippet?.gtm_preview === 'env-5' && fromSnippet?.gtm_cookies_win === 'x');
+  const fromUrl = previewParamsFromAny('https://www.googletagmanager.com/gtm.js?id=GTM-NKZD4BVB&gtm_auth=TOK99&gtm_preview=env-12&gtm_cookies_win=x');
+  check('preview: parses a gtm.js loader URL', fromUrl?.gtm_auth === 'TOK99' && fromUrl?.gtm_preview === 'env-12');
+  const fromTa = previewParamsFromAny('https://tagassistant.google.com/#/?source=TAG_MANAGER&id=GTM-NKZD4BVB&gtm_auth=zZ_9&gtm_preview=env-3');
+  check('preview: parses a Tag Assistant preview URL (defaults cookies_win to x)', fromTa?.gtm_auth === 'zZ_9' && fromTa?.gtm_preview === 'env-3' && fromTa?.gtm_cookies_win === 'x');
+  check('preview: null for plain text / no creds', previewParamsFromAny('just some notes') === null && previewParamsFromAny('') === null && previewParamsFromAny(null) === null);
+  check('preview: null when only one of the two creds is present', previewParamsFromAny('gtm_auth=only_this_one') === null);
+
   console.log(`\nta-serialize: ${passed} passed, ${failed} failed`);
   if (failed) { console.error(fails.join('\n')); process.exit(1); }
-  if (passed < 10) { console.error(`expected >= 10 checks, got ${passed}`); process.exit(1); }
+  if (passed < 15) { console.error(`expected >= 15 checks, got ${passed}`); process.exit(1); }
 }
 void main();
