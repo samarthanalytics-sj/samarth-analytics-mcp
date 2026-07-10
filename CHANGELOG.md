@@ -1,3 +1,9 @@
+## [1.287.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.4...v1.287.0) (2026-07-10)
+
+### Features
+
+* **verify:** live progress feed + honest "monitor didn't load" verdict ([#482](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/482)) ([3aeced8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3aeced85cd144f77bdc7f4336681caf3602be9a2))
+
 ## [1.286.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.3...v1.286.4) (2026-07-10)
 
 ### Bug Fixes
