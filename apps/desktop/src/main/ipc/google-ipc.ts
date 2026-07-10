@@ -1,24 +1,14 @@
-import { ipcMain, app } from 'electron';
+import { ipcMain } from 'electron';
 import type { GoogleAuthService } from '../services/google-auth-service';
-import { taSignIn, taSignInStatus, taProfileDirFor } from '../suggestions/ta-driver';
 
 // Google sign-in IPC. connect() resolves with the new/updated AccountView (or
-// rejects with an actionable message the renderer surfaces).
+// rejects with an actionable message the renderer surfaces). connect() runs the
+// consent inside the Tag Assistant browser profile (see GoogleAuthService), so a
+// single sign-in captures both the API token and the TA web session — no separate
+// Tag Assistant sign-in step.
 export function registerGoogleIpc(service: GoogleAuthService): void {
   ipcMain.handle('google:status', () => service.status());
-  ipcMain.handle('google:connect', async () => {
-    const account = await service.connect();
-    // Piggyback the ONE-TIME Tag Assistant browser sign-in onto account connect (fire-and-forget): the
-    // user is already in "connect Google" mode, so the extra sign-in window appears in context instead
-    // of surprising them mid-verify later. Best-effort — verify also self-heals with an inline sign-in.
-    // The TA profile is keyed to THIS account and the sign-in is steered to its Gmail, so every connected
-    // account keeps its own container-owning TA session.
-    const profileDir = taProfileDirFor(app.getPath('userData'), account.id);
-    void taSignInStatus(profileDir)
-      .then((s) => (s.signedIn ? undefined : taSignIn(profileDir, account.email ? { loginHint: account.email } : {}).then(() => undefined)))
-      .catch(() => undefined);
-    return account;
-  });
+  ipcMain.handle('google:connect', () => service.connect());
   ipcMain.handle('google:cancelConnect', () => {
     service.cancelConnect();
   });
