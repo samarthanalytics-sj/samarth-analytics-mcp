@@ -1,3 +1,9 @@
+## [1.295.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.294.2...v1.295.0) (2026-07-10)
+
+### Features
+
+* **auth:** unify sign-in — run OAuth consent inside the Tag Assistant browser profile ([#505](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/505)) ([d26dcd4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d26dcd46babd56f84ea27033fe989884f37d4650))
+
 ## [1.294.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.294.1...v1.294.2) (2026-07-10)
 
 ### Bug Fixes
