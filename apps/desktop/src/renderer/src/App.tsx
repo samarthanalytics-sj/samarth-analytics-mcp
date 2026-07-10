@@ -4716,31 +4716,41 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus }: 
                               <img src={r.screenshot} alt={`Submit screenshot for ${form.formTitle}`} style={{ width: 132, height: 82, objectFit: 'cover', objectPosition: 'top', borderRadius: 5, display: 'block' }} />
                             </button>
                           ) : null}
-                          {form.expectedTags.map((t) => {
-                            const fired = (r.firedTags ?? []).some((ft) => ft.tagName === t.tagName);
-                            // A pixel tag fed server-side (CAPI): no browser beacon, but the form relayed
-                            // to the first-party sGTM. Expected, not a failure — same rule as the synthetic path.
-                            const serverSide = !fired && (r.serverRelayTags ?? []).some((n) => n === t.tagName);
-                            return (
-                              <div key={t.tagName} style={{ marginTop: 4 }}>
-                                {fired ? (
-                                  <span style={{ color: 'var(--c-green)', fontWeight: 600 }}>✓ FIRED — {t.tagName}</span>
-                                ) : serverSide ? (
-                                  <>
-                                    <span style={{ color: 'var(--c-blue)', fontWeight: 600 }}>🛰 SERVER-SIDE — {t.tagName}</span>
-                                    <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>
-                                      No browser beacon, but the form relayed to your first-party server container (sGTM). If this pixel is sent server-side via the Conversion API that’s expected — confirm it in the vendor’s Events Manager → Test Events.
-                                    </div>
-                                  </>
-                                ) : (
-                                  <>
-                                    <span style={{ color: 'var(--c-red)', fontWeight: 600 }}>✗ NOT FIRED — {t.tagName}</span>
-                                    <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)' }}>Fix: {fixFor(r, t)}</div>
-                                  </>
-                                )}
-                              </div>
-                            );
-                          })}
+                          {/* Per-tag results as a TABLE (mirrors the monitor firing table) instead of a list. */}
+                          <div style={{ overflowX: 'auto', marginTop: 8 }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                              <thead>
+                                <tr>
+                                  {['Status', 'Tag', 'Result'].map((h) => (
+                                    <th key={h} style={{ textAlign: 'left', padding: '5px 8px', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {form.expectedTags.map((t) => {
+                                  const fired = (r.firedTags ?? []).some((ft) => ft.tagName === t.tagName);
+                                  // A pixel tag fed server-side (CAPI): no browser beacon, but the form relayed to
+                                  // the first-party sGTM. Expected, not a failure — same rule as the synthetic path.
+                                  const serverSide = !fired && (r.serverRelayTags ?? []).some((n) => n === t.tagName);
+                                  return (
+                                    <tr key={t.tagName} style={{ borderBottom: '1px solid var(--border)' }}>
+                                      <td style={{ padding: '5px 8px', verticalAlign: 'top', whiteSpace: 'nowrap' }}>
+                                        {fired ? <span style={{ color: 'var(--c-green)', fontWeight: 600 }}>✅ Fired</span>
+                                          : serverSide ? <span style={{ color: 'var(--c-blue)', fontWeight: 600 }}>🛰 Server-side</span>
+                                          : <span style={{ color: 'var(--c-red)', fontWeight: 600 }}>❌ Not fired</span>}
+                                      </td>
+                                      <td style={{ padding: '5px 8px', verticalAlign: 'top', fontWeight: 600 }}>{t.tagName}</td>
+                                      <td style={{ padding: '5px 8px', verticalAlign: 'top', color: 'var(--text-dim)' }}>
+                                        {fired ? 'Browser beacon captured on the real submit.'
+                                          : serverSide ? 'No browser beacon — relayed server-side to your sGTM (CAPI). Confirm in the vendor’s Events Manager → Test Events.'
+                                          : fixFor(r, t)}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
                         </>
                       )}
                     </div>
