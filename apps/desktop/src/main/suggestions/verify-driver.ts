@@ -171,6 +171,9 @@ export interface VerifyDriverOptions {
    *  Defaults to the machine's cores-1 (capped) when omitted; clamped to [1, cap] and never more than
    *  the page count. Set 1 to force the old sequential behaviour. */
   concurrency?: number;
+  /** Fired as each page's drive BEGINS (best-effort) so the caller can stream a live "verifying <url>"
+   *  progress feed. `done` counts pages started so far (1-based), `total` is the page count. */
+  onPageProgress?: (page: string, done: number, total: number) => void;
 }
 /** GTM's on-page debug signal (Phase B). Best-effort + observable — NOT the full Tag-Assistant
  *  per-tag protocol (that is undocumented and needs live-GTM validation). */
@@ -716,6 +719,8 @@ export async function runVerifyDriver(
   // thread; perTag is keyed by tagId downstream, so its order never matters).
   let injected = false;
   const pagesDriven: string[] = [];
+  let pagesToDrive = 0; // set right before the pool; the `total` for onPageProgress
+  let pagesStarted = 0; // incremented (synchronously) as each page's drive begins → the `done`
   const debugContainerIds = new Set<string>();
   const debugEvents = new Set<string>();
   // Real dataLayer pushes captured across pages + the event names WE pushed synthetically (so those
@@ -791,6 +796,10 @@ export async function runVerifyDriver(
     // drive the group's triggers. One call per page; runPagePool fans these across the worker pool.
     const driveOnePage = async (w: VerifyWorker, [pageUrl, groupTags]: [string, VerifyDriverTag[]]): Promise<void> => {
       const { page, captured } = w;
+      if (opts.onPageProgress) {
+        pagesStarted += 1; // single-threaded increment — safe across parallel workers
+        try { opts.onPageProgress(pageUrl, pagesStarted, pagesToDrive); } catch { /* progress is a nicety */ }
+      }
       // Disarm BEFORE this page's own load. The page must load with its beacons flowing so client-rendered
       // CTAs/images actually render (classified analytics collectors are still captured+aborted regardless
       // of armed); we RE-arm only after injecting the container below, so a beacon fired during the page's
@@ -953,6 +962,7 @@ export async function runVerifyDriver(
 
     // Fan the per-page drive across a bounded worker pool (each page handled exactly once, none skipped).
     const pageGroups = [...groupByPage(url, tags)];
+    pagesToDrive = pageGroups.length; // the `total` reported to onPageProgress
     const concurrency = clampConcurrency(opts.concurrency, pageGroups.length);
     await runPagePool(pageGroups, concurrency, makeWorker, driveOnePage, closeWorker);
 

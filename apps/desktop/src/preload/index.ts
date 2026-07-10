@@ -40,6 +40,7 @@ import type {
   VerifyTagInput,
   VerifyTagsOptions,
   VerifyTagsResult,
+  VerifyProgressView,
   FormsForFillOptions,
   FormsForFillResult,
   FormTagVerifyPlanOptions,
@@ -240,7 +241,20 @@ const api = {
       tags: VerifyTagInput[],
       elements: DetectedElementView[],
       opts?: VerifyTagsOptions,
-    ): Promise<VerifyTagsResult> => ipcRenderer.invoke('suggestions:verifyTags', url, tags, elements, opts),
+      onProgress?: (p: VerifyProgressView) => void,
+    ): Promise<VerifyTagsResult> => {
+      // Correlate the live progress stream (suggestions:verify:event) to THIS call, mirroring scanStream.
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const listener = (_e: unknown, payload: { requestId: string } & VerifyProgressView): void => {
+        if (payload?.requestId !== requestId) return;
+        const { requestId: _drop, ...p } = payload;
+        onProgress?.(p);
+      };
+      if (onProgress) ipcRenderer.on('suggestions:verify:event', listener);
+      return ipcRenderer
+        .invoke('suggestions:verifyTags', requestId, url, tags, elements, opts)
+        .finally(() => { if (onProgress) ipcRenderer.removeListener('suggestions:verify:event', listener); });
+    },
     // Real-submit form review: read a page's forms + their OWN fields, return a locale fill plan the
     // operator edits before Phase 2 submits. Read-only (fills/submits nothing).
     formsForFill: (url: string, opts?: FormsForFillOptions): Promise<FormsForFillResult> =>

@@ -16,7 +16,7 @@ import type { GoogleDataService } from '../google/data-service';
 import { findGa4BaseTag } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
-import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult, SuggestionScreenshotResult } from '../../shared/ipc';
+import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, VerifyProgressView, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult, SuggestionScreenshotResult } from '../../shared/ipc';
 import { crawlAndSuggest, scanUrls, urlPriority, type ScanProgress } from './scan-core';
 import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
@@ -178,7 +178,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
   // trigger when it didn't. Never delivers a real hit (abort-first capture).
   ipcMain.handle(
     'suggestions:verifyTags',
-    async (_e, url: unknown, tags: unknown, elements: unknown, opts?: VerifyTagsOptions): Promise<VerifyTagsResult> => {
+    async (event, requestId: unknown, url: unknown, tags: unknown, elements: unknown, opts?: VerifyTagsOptions): Promise<VerifyTagsResult> => {
       const target = String(url ?? '').trim();
       const verdict = urlAllowed(target, []);
       if (!verdict.ok) throw new Error(`Cannot verify that URL: ${verdict.reason}`);
@@ -186,6 +186,13 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       let els = (Array.isArray(elements) ? elements : []) as DetectedElementView[];
       if (tagList.length === 0) return { url: target, injected: false, previewAuth: false, pagesOk: false, error: 'No tags selected to verify.', verdicts: [] };
       const o = opts ?? {};
+      // Live progress: stream what the run is doing (crawl → drive, or the monitor mint) so the panel
+      // isn't a silent spinner through a 50-page crawl. Best-effort — a closed window never breaks verify.
+      const reqId = String(requestId ?? '');
+      const emit = (p: VerifyProgressView): void => {
+        try { if (reqId && !event.sender.isDestroyed()) event.sender.send('suggestions:verify:event', { requestId: reqId, ...p }); } catch { /* window gone */ }
+      };
+      emit({ phase: 'prepare', message: 'Preparing verification…' });
 
       // MULTI-PAGE DRIVE: a container's Click triggers are site-wide, so without knowing which page
       // each CTA lives on the driver would drive them all on the homepage and falsely report
@@ -217,7 +224,13 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           // so each page renders ONCE across both crawls (not twice). The cache dedupes in-flight renders
           // by URL, so it stays correct with a PARALLEL driver pool.
           const crawlPool = await makeDrivers(Math.min(scanConcurrency(), maxPages ?? 25), { maxPages, maxDepth: o.crawlMaxDepth, cachePages: true });
-          const scan = await crawlAndSuggest(crawlPool[0], target, { maxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'], drivers: crawlPool.slice(1), ...(seedUrls.length ? { seedUrls } : {}) });
+          const crawlTotal = Math.min(pagesTotal || maxPages || 50, maxPages ?? 50); // honest cap (budget)
+          const scan = await crawlAndSuggest(
+            crawlPool[0],
+            target,
+            { maxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'], drivers: crawlPool.slice(1), ...(seedUrls.length ? { seedUrls } : {}) },
+            (p) => emit({ phase: 'crawl', message: 'Scanning site pages to locate each tag’s trigger', ...(p.page ? { page: p.page } : {}), done: p.scanned, total: crawlTotal }),
+          );
           els = scan.inventory.elements as DetectedElementView[];
           pagesCrawled = scan.pages.length;
           if (!pagesTotal) pagesTotal = pagesCrawled;
@@ -234,6 +247,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       let cleanupWorkspaceIds: string[] = [];
       let cleanupVersionId = '';
       if (o.monitor) {
+        emit({ phase: 'monitor', message: 'Minting a temporary GTM Monitor preview (draft-only, never published)…' });
         const preview = await data.mintMonitorPreview(o.monitor.accountId, o.monitor.containerId, o.monitor.workspaceId, {
           endPoint: MONITOR_ENDPOINT, galleryOwner: MONITOR_GALLERY.owner, galleryRepository: MONITOR_GALLERY.repository,
         });
@@ -245,8 +259,32 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         const driven = await runVerifyDriver(
           target,
           routed.map((t) => ({ id: t.id, ...(t.page ? { page: t.page } : {}), trigger: t.trigger })),
-          { ...(snippet ? { containerSnippet: snippet } : {}), settleMs: clampSettle(o.settleMs), navTimeoutMs: o.navTimeoutMs, ...(o.gtmDebug ? { gtmDebug: true } : {}) },
+          {
+            ...(snippet ? { containerSnippet: snippet } : {}),
+            settleMs: clampSettle(o.settleMs),
+            navTimeoutMs: o.navTimeoutMs,
+            ...(o.gtmDebug ? { gtmDebug: true } : {}),
+            onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Verifying tags on the page', page, done, total }),
+          },
         );
+        // AUTHORITATIVE-MODE HONESTY GUARD: if the Monitor emitted ZERO addEventCallback pixels, our
+        // previewed container never initialised on the site (it serves gtm.js first-party, an SPA stripped
+        // the preview params, consent blocked everything, etc.). That is NOT "0 tags fired" — the signal
+        // simply never arrived. Reporting every tag as an authoritative "not fired" would be a false
+        // negative (exactly the misleading "0 Fired / N Issues" screen). Surface the real reason instead,
+        // keeping the network log + debug so the user can confirm no placeholder.com/collect hits landed.
+        if (o.monitor && (driven.monitorEvents?.length ?? 0) === 0) {
+          return {
+            url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk,
+            verdicts: [], verifiedByMonitor: true,
+            error:
+              'The GTM Monitor preview did not load on this site, so no authoritative firing signal was captured — this is NOT “0 tags fired”. The site most likely serves gtm.js first-party (server-side tagging) or its pages stripped the preview parameters. Open the network log below: if there are no placeholder.com/collect hits, the monitor container never ran. Meanwhile use “Verify firing” (beacon mode), which reads the live container directly.',
+            ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}),
+            ...(driven.networkLog ? { networkLog: driven.networkLog } : {}),
+            ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}),
+            ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}),
+          };
+        }
         // Monitor mode → authoritative verdicts from GTM's own firing signal; else the beacon evaluator.
         const verdicts = o.monitor ? verdictsFromMonitor(tagList, driven.monitorEvents ?? []) : evaluateVerify(tagList, driven.perTag, els);
         return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(o.monitor ? { verifiedByMonitor: true } : {}), ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };

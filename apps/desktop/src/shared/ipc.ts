@@ -709,6 +709,24 @@ export interface VerifyTagsResult {
   gtmDebug?: { containerLoaded: boolean; containerIds: string[]; dataLayerEvents: string[] };
 }
 
+/** A live progress tick streamed WHILE a verify run is in flight (suggestions:verify:event), so the UI
+ *  can show what's happening instead of a bare "Verifying…" spinner through a 50-page crawl + drive.
+ *  - prepare : minting/reading is about to start
+ *  - monitor : minting the throwaway GTM Monitor preview (authoritative mode only)
+ *  - crawl   : scanning site pages to locate each tag's trigger (the long phase)
+ *  - drive   : navigating each page and exercising its tags */
+export interface VerifyProgressView {
+  phase: 'prepare' | 'monitor' | 'crawl' | 'drive';
+  /** A short human label for the phase (e.g. "Scanning site pages to locate each tag"). */
+  message: string;
+  /** The page being scanned / driven right now, when applicable. */
+  page?: string;
+  /** Completed count so far in this phase (1-based), when known. */
+  done?: number;
+  /** Total for this phase (an estimate for the crawl, capped at the page budget), when known. */
+  total?: number;
+}
+
 /** Options for verifying tag firing. */
 export interface VerifyTagsOptions {
   /** The GTM Preview snippet / URL / GTM-XXXX id the user pasted, so DRAFT tags load. */
