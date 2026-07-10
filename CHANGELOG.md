@@ -1,3 +1,9 @@
+## [1.290.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.290.0...v1.290.1) (2026-07-10)
+
+### Bug Fixes
+
+* **forms:** derive an anonymous form's title from the nearest heading above it ([#494](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/494)) ([221902a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/221902a92a462deca1bf9b68f7b8a117e27d109a))
+
 ## [1.290.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.5...v1.290.0) (2026-07-10)
 
 ### Features
