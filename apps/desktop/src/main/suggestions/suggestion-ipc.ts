@@ -268,6 +268,9 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           settleMs: clampSettle(o.settleMs),
           navTimeoutMs: o.navTimeoutMs,
           ...(ident?.email ? { loginHint: ident.email } : {}),
+          // The GTM Preview snippet (gtm_auth/gtm_preview) makes the published GTM container enter Tag
+          // Assistant debug — without it, connect only debugs Google tags. Reuses the existing snippet box.
+          ...(o.containerSnippet ? { previewSnippet: o.containerSnippet } : {}),
           onSignInPrompt: () => emit({ phase: 'monitor', message: 'ONE-TIME Tag Assistant sign-in: complete it in the window that just opened (your email is pre-filled). It is saved after this, so verify never asks again.' }),
           onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Driving tags in the Tag Assistant window', page, done, total }),
         });
