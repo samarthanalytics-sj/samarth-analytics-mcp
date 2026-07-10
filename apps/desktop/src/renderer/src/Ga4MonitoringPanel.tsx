@@ -355,11 +355,12 @@ function AlertList({ run }: { run: Ga4MonitorRun }): JSX.Element {
 
 /** The selected property's dashboard: identity + controls, then (when a run exists) the hero,
  *  KPI cards, AI summary, health-check tiles and full alert list, then this property's Slack channel. */
-function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onSaveChannel, onTestChannel, onRemoveChannel }: {
+function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onSaveChannel, onTestChannel, onRemoveChannel, onExport }: {
   t: Ga4MonitorTargetStatus;
   runningId: string | null;
   busy: boolean;
   onRun: () => void;
+  onExport: (format: 'pdf' | 'csv') => void;
   onTogglePause: () => void;
   onRemove: () => void;
   onSaveChannel: (url: string, label: string, notify: NotifyPrefs) => Promise<boolean>;
@@ -403,6 +404,8 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
         <span style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 6 }}>
           <button style={{ ...ghostBtn, color: 'var(--c-blue)' }} disabled={runDisabled} onClick={onRun}>{isRunning ? 'Checking…' : '▶ Run check'}</button>
+          <button style={ghostBtn} disabled={busy || !run} title={run ? 'Download this report as a PDF' : 'Run a check first'} onClick={() => onExport('pdf')}>⬇ PDF</button>
+          <button style={ghostBtn} disabled={busy || !run} title={run ? 'Download this report as a CSV' : 'Run a check first'} onClick={() => onExport('csv')}>⬇ CSV</button>
           <button style={ghostBtn} disabled={busy} title={t.enabled ? 'Pause background checks for this property' : 'Resume background checks'} onClick={onTogglePause}>{t.enabled ? '⏸ Pause' : '⏵ Resume'}</button>
           <button style={{ ...ghostBtn, color: 'var(--c-red)' }} disabled={busy} title="Stop monitoring this property" onClick={onRemove}>Remove</button>
         </div>
@@ -617,6 +620,18 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
     void configure({ targets: status.targets.map((t) => (t.propertyId === propertyId ? { ...t, enabled: !t.enabled } : t)) });
   }
 
+  async function exportRun(propertyId: string, format: 'pdf' | 'csv'): Promise<void> {
+    setBusy(true); onError(''); setNote('');
+    try {
+      const saved = await window.desktop.ga4monitoring.exportRun(propertyId, format);
+      setNote(saved ? `✓ Saved to ${saved}` : 'Save cancelled.');
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function runNow(propertyId?: string): Promise<void> {
     if (runningId) return;
     setRunningId(propertyId ?? '*'); onError(''); setNote('');
@@ -815,6 +830,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
               onSaveChannel={(url, lbl, notify) => savePropertyChannel(selected.propertyId, url, lbl, notify)}
               onTestChannel={() => void testPropertyChannel(selected.propertyId)}
               onRemoveChannel={() => void removePropertyChannel(selected.propertyId)}
+              onExport={(format) => void exportRun(selected.propertyId, format)}
             />
           )}
         </div>
