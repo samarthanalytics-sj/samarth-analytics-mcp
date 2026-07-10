@@ -771,12 +771,42 @@ export class GoogleDataService {
     return { deleted: true };
   }
 
+  /** Delete every leaked "Samarth Verify …" PREVIEW ENVIRONMENT. A container version an environment
+   *  references CANNOT be deleted, so a leaked preview env (from a failed/older run) PINS its version and
+   *  blocks the version sweep — call this FIRST. Matches strictly by our name prefix, and never touches the
+   *  built-in Live/Latest or a user's real environment. Best-effort; returns counts + the first error. */
+  async sweepMonitorEnvironments(accountId: string, containerId: string): Promise<{ deleted: number; failed: number; firstError?: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}`;
+    let deleted = 0;
+    let failed = 0;
+    let firstError: string | undefined;
+    const envs = await collectPages(
+      (pageToken) => gtm.accounts.containers.environments.list({ parent, pageToken }),
+      (r) => r.data.environment,
+      (r) => r.data.nextPageToken
+    ).catch(() => [] as Array<{ name?: string | null; environmentId?: string | null; type?: string | null }>);
+    for (const e of envs) {
+      // ONLY our throwaway preview envs — never the built-in Live/Latest or the user's real environments.
+      if (e.type === 'live' || e.type === 'latest' || !e.environmentId || !(e.name ?? '').startsWith('Samarth Verify')) continue;
+      try {
+        await this.q(() => gtm.accounts.containers.environments.delete({ path: `${parent}/environments/${e.environmentId}` }));
+        deleted += 1;
+      } catch (err) {
+        failed += 1;
+        if (!firstError) firstError = (err as { message?: string }).message ?? String(err);
+      }
+    }
+    return { deleted, failed, ...(firstError ? { firstError } : {}) };
+  }
+
   /** Delete EVERY unpublished "Samarth Verify (auto)" container version — this run's + any that piled up
    *  before. The old cleanup deleted the version FIRST, while the workspace GTM auto-forks from it still
    *  referenced it, so GTM refused and it silently failed → the pileup. Callers MUST delete the throwaway
-   *  workspaces BEFORE calling this, so nothing references the versions. Filters strictly by name, so the
-   *  live/published version is never touched. Best-effort per version; returns counts + the first error so
-   *  the caller can log whether it actually worked (e.g. a missing delete permission). */
+   *  workspaces AND call sweepMonitorEnvironments BEFORE this, so nothing references the versions. Filters
+   *  strictly by name, so the live/published version is never touched. Best-effort per version; returns
+   *  counts + the first error so the caller can log whether it worked (e.g. a missing delete permission). */
   async sweepMonitorVersions(accountId: string, containerId: string): Promise<{ deleted: number; failed: number; firstError?: string }> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
