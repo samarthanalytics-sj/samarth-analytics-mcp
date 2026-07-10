@@ -1,3 +1,9 @@
+## [1.289.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.2...v1.289.3) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** GTM Monitor preview creates NO container version (workspace-linked environment) ([#490](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/490)) ([04485b2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/04485b23a2dce19e95051e385480a10ca72d1974))
+
 ## [1.289.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.1...v1.289.2) (2026-07-10)
 
 ### Bug Fixes
