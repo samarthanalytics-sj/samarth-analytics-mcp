@@ -10,6 +10,7 @@ import { RegistryService } from './services/registry-service';
 import { registerRegistryIpc } from './ipc/registry-ipc';
 import { registerProvidersIpc } from './ipc/providers-ipc';
 import { GoogleAuthService } from './services/google-auth-service';
+import { beginTaOAuthSession } from './suggestions/ta-driver';
 import { registerGoogleIpc } from './ipc/google-ipc';
 import { AccountClientManager } from './google/account-clients';
 import { GoogleDataService } from './google/data-service';
@@ -149,8 +150,14 @@ app.whenReady().then(() => {
       w.webContents.send('accounts:changed');
     }
   });
-  const googleAuth = new GoogleAuthService(registry, oauthConfigPath, (id) =>
-    clientManager.invalidate(id)
+  const googleAuth = new GoogleAuthService(
+    registry,
+    oauthConfigPath,
+    (id) => clientManager.invalidate(id),
+    // Unified sign-in: run consent in the TA browser profile so connecting an account also captures the
+    // Tag Assistant web session. Best-effort — beginTaOAuthSession throws if Playwright isn't installed,
+    // and connect() then falls back to the system browser.
+    () => beginTaOAuthSession(app.getPath('userData')).catch(() => null)
   );
   const dataService = new GoogleDataService(registry, clientManager);
   const auditHistory = new AuditHistoryStore(join(dataDir, 'audit-history.json'));
