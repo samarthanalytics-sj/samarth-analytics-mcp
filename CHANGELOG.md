@@ -1,3 +1,9 @@
+## [1.294.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.294.0...v1.294.1) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** make Tag Assistant Google sign-in actually succeed + serialize profile access ([#503](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/503)) ([cae6b67](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cae6b6772afe0de8abb62064e7d71b44be41e7a8)), closes [#502](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/502)
+
 ## [1.294.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.293.0...v1.294.0) (2026-07-10)
 
 ### Features
