@@ -983,6 +983,70 @@ export class GoogleDataService {
     }
   }
 
+  /**
+   * ZERO-FOOTPRINT monitor: instead of adding the GTM Monitor tag to the USER's container (which needs a
+   * throwaway version every run), create ONE reusable "Samarth Verify Monitor" CONTAINER and inject IT on
+   * the page. GTM's addEventCallback fires once per container on the page, so a monitor tag in this
+   * separate container observes the user's LIVE container's tag firings cross-container — the user's real
+   * container is never written to (no version, no workspace, ever). The monitor container is created +
+   * set up + versioned ONCE and reused on every later run (the built-in "Latest" env preview snippet is
+   * re-read, minting nothing new). Returns the monitor container's INJECT snippet + its public id (so the
+   * driver can drop its gtm.js alongside the site's own container).
+   */
+  async mintCrossContainerMonitor(
+    accountId: string,
+    monitor: { endPoint: string; galleryOwner: string; galleryRepository: string }
+  ): Promise<{ snippet: string; monitorPublicId: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const cParent = (cid: string): string => `accounts/${accountId}/containers/${cid}`;
+    // 1. Find-or-create the reusable monitor container (a WEB container named "Samarth Verify Monitor").
+    const containers = await this.listGtmContainers(accountId);
+    let monId = containers.find((c) => c.name === 'Samarth Verify Monitor')?.containerId ?? '';
+    if (!monId) {
+      const created = await this.q(() => gtm.accounts.containers.create({
+        parent: `accounts/${accountId}`,
+        requestBody: { name: 'Samarth Verify Monitor', usageContext: ['web'] } as unknown as Record<string, unknown>,
+      }));
+      monId = created.data.containerId ?? '';
+    }
+    if (!monId) throw new Error('Could not find or create the "Samarth Verify Monitor" container.');
+    const publicId = await this.getContainerPublicId(accountId, monId);
+    // 2. Already set up? Once a version exists, the built-in "Latest" env carries an auth code — reuse its
+    //    preview snippet and mint NOTHING new (the monitor tag is static, so one version serves forever).
+    const envs = await collectPages(
+      (pageToken) => gtm.accounts.containers.environments.list({ parent: cParent(monId), pageToken }),
+      (r) => r.data.environment,
+      (r) => r.data.nextPageToken
+    ).catch(() => [] as Array<{ type?: string | null; authorizationCode?: string | null; environmentId?: string | null }>);
+    const latest = envs.find((e) => e.type === 'latest' && e.authorizationCode && e.environmentId);
+    if (latest?.authorizationCode && latest.environmentId) {
+      return { snippet: buildEnvironmentSnippet(publicId, latest.authorizationCode, latest.environmentId).head, monitorPublicId: publicId };
+    }
+    // 3. First-time setup in the monitor container's default workspace: import Simo's Monitor template +
+    //    an all-events trigger + the monitor tag. (No user tags are copied — it observes them live.)
+    const wsId = (await this.listGtmWorkspaces(accountId, monId))[0]?.workspaceId ?? '';
+    if (!wsId) throw new Error('The monitor container has no workspace to set up.');
+    const tpl = await this.importGalleryTemplate(accountId, monId, wsId, monitor.galleryOwner, monitor.galleryRepository);
+    const wsParent = `${cParent(monId)}/workspaces/${wsId}`;
+    const trg = await this.q(() => gtm.accounts.containers.workspaces.triggers.create({
+      parent: wsParent,
+      requestBody: buildServerAllEventsTrigger('Samarth Verify - All Events') as unknown as Record<string, unknown>,
+    }));
+    await this.q(() => gtm.accounts.containers.workspaces.tags.create({
+      parent: wsParent,
+      requestBody: {
+        name: 'Samarth Verify - GTM Monitor',
+        type: tpl.type,
+        parameter: [{ type: 'template', key: 'endPoint', value: monitor.endPoint }],
+        ...(trg.data.triggerId ? { firingTriggerId: [trg.data.triggerId] } : {}),
+      },
+    }));
+    // 4. Version it ONCE + return the "Latest" env preview snippet (re-read, never re-minted, next time).
+    const preview = await this.mintWorkspacePreview(accountId, monId, wsId);
+    return { snippet: preview.snippet, monitorPublicId: publicId };
+  }
+
   /** Create a folder in a draft workspace (organisational only — no effect on firing). */
   async createGtmFolder(
     accountId: string,

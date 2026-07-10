@@ -246,18 +246,19 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // from GTM's OWN per-tag firing (addEventCallback) instead of beacon inference. The throwaway
       // workspace(s) are always cleaned up. Draft-only + never published.
       let snippet = o.containerSnippet;
-      let cleanupWorkspaceIds: string[] = [];
-      let cleanupVersionId = '';
-      let cleanupEnvironmentId = '';
+      const cleanupWorkspaceIds: string[] = [];
+      const cleanupVersionId = '';
+      const cleanupEnvironmentId = '';
       if (o.monitor) {
-        emit({ phase: 'monitor', message: 'Minting a temporary GTM Monitor preview (draft-only, never published)…' });
-        const preview = await data.mintMonitorPreview(o.monitor.accountId, o.monitor.containerId, o.monitor.workspaceId, {
+        // ZERO-FOOTPRINT monitor: a reusable SEPARATE "Samarth Verify Monitor" container carries the GTM
+        // Monitor tag and observes the site's live container cross-container (addEventCallback fires per
+        // container). The user's REAL container is never written to — no version, no workspace there. The
+        // monitor container is created + versioned ONCE and reused, so nothing new is minted per run.
+        emit({ phase: 'monitor', message: 'Preparing the reusable GTM Monitor container (nothing is written to your container)…' });
+        const preview = await data.mintCrossContainerMonitor(o.monitor.accountId, {
           endPoint: MONITOR_ENDPOINT, galleryOwner: MONITOR_GALLERY.owner, galleryRepository: MONITOR_GALLERY.repository,
         });
         snippet = preview.snippet;
-        cleanupWorkspaceIds = preview.cleanupWorkspaceIds;
-        cleanupVersionId = preview.cleanupVersionId ?? '';
-        cleanupEnvironmentId = preview.cleanupEnvironmentId ?? '';
       }
       try {
         const driven = await runVerifyDriver(
