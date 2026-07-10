@@ -217,14 +217,16 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
             seedUrls = disc.urls.filter((u) => u !== target);
             pagesTotal = disc.urls.length;
           } catch { /* discovery best-effort — plain BFS below */ }
-          // Scan every discovered page, capped by the budget (crawlAndSuggest clamps to 50). With the
-          // full prioritized page set seeded, the budget is spent on the pages most likely to carry CTAs.
-          const maxPages = o.crawlMaxPages ?? (seedUrls.length ? 50 : undefined);
+          // Scan every discovered page, capped by the budget (crawlAndSuggest clamps to 150). Default the
+          // budget to the FULL discovered set (up to the 150 cap) so CTAs on deeper pages of a large site
+          // are inventoried instead of stranded "untested here". With the prioritized page set seeded
+          // (home → form-likely → content), the budget is spent on the pages most likely to carry CTAs.
+          const maxPages = o.crawlMaxPages ?? (seedUrls.length ? Math.min(pagesTotal || seedUrls.length + 1, 150) : undefined);
           // cachePages: share rendered pages with the form-plan crawl that auto-runs on the same verify,
           // so each page renders ONCE across both crawls (not twice). The cache dedupes in-flight renders
           // by URL, so it stays correct with a PARALLEL driver pool.
           const crawlPool = await makeDrivers(Math.min(scanConcurrency(), maxPages ?? 25), { maxPages, maxDepth: o.crawlMaxDepth, cachePages: true });
-          const crawlTotal = Math.min(pagesTotal || maxPages || 50, maxPages ?? 50); // honest cap (budget)
+          const crawlTotal = maxPages ?? 10; // honest total for the progress feed (the effective budget)
           const scan = await crawlAndSuggest(
             crawlPool[0],
             target,

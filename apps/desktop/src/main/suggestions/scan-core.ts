@@ -497,7 +497,10 @@ export async function crawlAndSuggest(
   opts: ScanOptions = {},
   onProgress?: OnScanProgress,
 ): Promise<TagScanResult> {
-  const maxPages = clamp(opts.maxPages, 10, 50);
+  // Cap lifted 50 → 150: a larger site (200+ pages) left many CTAs "untested here" under the old budget.
+  // The default (when no budget is passed) stays 10 — only callers that explicitly request more (Verify)
+  // reach higher. Pages are prioritized (home → form-likely → content), so the budget is spent well.
+  const maxPages = clamp(opts.maxPages, 10, 150);
   const maxDepth = clamp(opts.maxDepth, 2, 4);
   const platforms = opts.platforms ?? ['ga4'];
 

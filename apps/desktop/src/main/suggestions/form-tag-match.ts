@@ -88,11 +88,23 @@ export function matchFormsToTags(
       const sc = shared(tt, formTok[i]);
       if (sc > bestScore) { bestScore = sc; bestIdx = i; }
     });
-    // Require FULL coverage of the tag's identity: EVERY distinctive word of the tag's form name must
-    // appear in the form. A single shared generic token ("consultation") is NOT enough — that's what
-    // piled ~18 unrelated Meta tags onto one "Custom Consultation" form. A tag whose form isn't among
-    // the crawled forms falls through to unmatchedTags (a coverage gap), never a false "expected to fire".
-    if (bestIdx >= 0 && bestScore >= tt.size) {
+    // CONFIDENT match WITHOUT demanding full token coverage. Requiring EVERY tag token in the form was
+    // too strict — it dropped e.g. a "Server Side Tracking Consultation" tag whose form on
+    // /services/server-side-tracking shares {server,side,tracking} but not "consultation" (3 of 4 tokens),
+    // so real forms showed "no matching form". We now require a strong MAJORITY: >=60% of the tag's
+    // distinctive tokens, and at least 2 of them when the tag has that many — so a single generic shared
+    // token still never matches a multi-token tag (the old "consultation" pile-on of ~18 Meta tags stays
+    // fixed). For a LONE-token identity the token must be DISTINCTIVE (present in only a few forms), else a
+    // generic word could pile many tags onto one form. Anything short of that stays a coverage gap
+    // (unmatchedTags), never a false "expected to fire".
+    const need = Math.max(tt.size >= 2 ? 2 : 1, Math.ceil(tt.size * 0.6));
+    let confident = bestIdx >= 0 && bestScore >= need;
+    if (confident && tt.size === 1) {
+      const only = [...tt][0];
+      const formsWithTok = formTok.reduce((n, ft) => n + (ft.has(only) ? 1 : 0), 0);
+      confident = formsWithTok <= Math.max(2, Math.ceil(forms.length * 0.25));
+    }
+    if (confident) {
       const f = forms[bestIdx];
       const key = `${f.page}|${f.formId}|${f.title}`;
       let mv = byKey.get(key);

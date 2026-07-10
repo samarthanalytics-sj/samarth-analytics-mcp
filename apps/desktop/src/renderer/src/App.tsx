@@ -1259,6 +1259,143 @@ function ChatView({
   );
 }
 
+/** One option in a SearchableSelect: a stable value, a display label, and an optional monospace hint
+ *  shown after the label (e.g. a container's GTM-XXXX public id) that is ALSO matched by the search. */
+interface SearchOption { value: string; label: string; hint?: string }
+
+/** A native-<select> replacement with a type-to-filter search box — so picking from dozens of GTM
+ *  accounts / containers / workspaces doesn't mean scrolling a long native list. Opens a popover with an
+ *  autofocused search input + a filtered, keyboard-navigable list (↑/↓/Enter, Esc/outside-click closes).
+ *  Purely presentational: value/onChange are controlled by the caller exactly like the <select> it
+ *  replaces, so the existing pick* handlers are unchanged. */
+function SearchableSelect({
+  value, options, onChange, placeholder, disabled, chosen, searchPlaceholder, minWidth = 200,
+}: {
+  value: string;
+  options: SearchOption[];
+  onChange: (v: string) => void;
+  placeholder: string;
+  disabled?: boolean;
+  chosen?: boolean;
+  searchPlaceholder?: string;
+  minWidth?: number;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  const selected = options.find((o) => o.value === value);
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? options.filter((o) => o.label.toLowerCase().includes(q) || (o.hint ?? '').toLowerCase().includes(q))
+    : options;
+
+  // Close on outside click / Escape (only while open, so we don't keep global listeners around).
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent): void => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  // On open: clear the query, reset the highlight, and focus the search box.
+  useEffect(() => {
+    if (!open) return;
+    setQuery('');
+    setActive(0);
+    const t = setTimeout(() => inputRef.current?.focus(), 0);
+    return () => clearTimeout(t);
+  }, [open]);
+
+  // Keep the highlighted row in view during keyboard navigation.
+  useEffect(() => {
+    if (!open) return;
+    const row = listRef.current?.children[active] as HTMLElement | undefined;
+    row?.scrollIntoView({ block: 'nearest' });
+  }, [active, open]);
+
+  const choose = (v: string): void => { onChange(v); setOpen(false); };
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => { if (!disabled) setOpen((o) => !o); }}
+        style={{
+          ...styles.ctxSelect,
+          ...(chosen ? styles.ctxSelectChosen : {}),
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+          cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1,
+          minWidth, width: '100%', maxWidth: 260, textAlign: 'left',
+        }}
+        title={selected?.label ?? placeholder}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: selected ? 'var(--text)' : 'var(--text-muted)' }}>
+          {selected ? selected.label : placeholder}{selected?.hint ? ` (${selected.hint})` : ''}
+        </span>
+        <span aria-hidden style={{ color: 'var(--text-muted)', fontSize: 10, flexShrink: 0 }}>▾</span>
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          style={{
+            position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 60,
+            minWidth: '100%', width: 'max-content', maxWidth: 360,
+            background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 8,
+            boxShadow: '0 10px 28px rgba(0,0,0,0.30)', overflow: 'hidden',
+          }}
+        >
+          <div style={{ padding: 6, borderBottom: '1px solid var(--border)' }}>
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(e) => { setQuery(e.target.value); setActive(0); }}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setActive((i) => Math.min(i + 1, filtered.length - 1)); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)); }
+                else if (e.key === 'Enter') { e.preventDefault(); const o = filtered[active]; if (o) choose(o.value); }
+              }}
+              placeholder={searchPlaceholder ?? 'Search…'}
+              style={{ ...styles.ctxSelect, width: '100%', maxWidth: 'none', boxSizing: 'border-box', background: 'var(--surface-2)' }}
+            />
+          </div>
+          <div ref={listRef} style={{ maxHeight: 280, overflowY: 'auto' }}>
+            {filtered.length === 0 ? (
+              <div style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--text-muted)' }}>No matches</div>
+            ) : (
+              filtered.map((o, i) => (
+                <div
+                  key={o.value}
+                  role="option"
+                  aria-selected={o.value === value}
+                  onMouseEnter={() => setActive(i)}
+                  onClick={() => choose(o.value)}
+                  style={{
+                    padding: '7px 10px', fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'baseline', gap: 6,
+                    background: i === active ? 'var(--surface-3)' : 'transparent',
+                    color: o.value === value ? 'var(--c-blue)' : 'var(--text)',
+                    fontWeight: o.value === value ? 600 : 400,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 260 }}>{o.label}</span>
+                  {o.hint && <span style={{ color: 'var(--text-muted)', fontSize: 11, fontFamily: 'ui-monospace, monospace', flexShrink: 0 }}>{o.hint}</span>}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GtmContextBar({
   active,
   refresh,
@@ -1388,33 +1525,41 @@ function GtmContextBar({
       <span style={styles.ctxMutedLabel}>Working in</span>
       {/* Each dropdown is labelled so it's clear which level you're picking; the container gets a blue
           "chosen" highlight the moment it's selected, and Workspace unlocks only after a container. */}
-      <label style={styles.ctxField}>
+      <div style={styles.ctxField}>
         <span style={styles.ctxFieldLabel}>Account</span>
-        <select style={{ ...styles.ctxSelect, ...(sel.accountId ? styles.ctxSelectChosen : {}) }} value={sel.accountId ?? ''} onChange={(e) => void pickAccount(e.target.value)}>
-          <option value="">Select account…</option>
-          {accounts.map((a) => (
-            <option key={a.accountId} value={a.accountId}>{a.name}</option>
-          ))}
-        </select>
-      </label>
-      <label style={styles.ctxField}>
+        <SearchableSelect
+          value={sel.accountId ?? ''}
+          chosen={!!sel.accountId}
+          onChange={(v) => void pickAccount(v)}
+          placeholder="Select account…"
+          searchPlaceholder="Search accounts…"
+          options={accounts.map((a) => ({ value: a.accountId, label: a.name }))}
+        />
+      </div>
+      <div style={styles.ctxField}>
         <span style={styles.ctxFieldLabel}>Container</span>
-        <select style={{ ...styles.ctxSelect, ...(sel.containerId ? styles.ctxSelectChosen : {}) }} value={sel.containerId ?? ''} disabled={!sel.accountId || loading === 'containers'} onChange={(e) => void pickContainer(e.target.value)}>
-          <option value="">{loading === 'containers' ? 'Loading…' : !sel.accountId ? 'Pick an account first' : 'Select container…'}</option>
-          {containers.map((c) => (
-            <option key={c.containerId} value={c.containerId}>{c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
-          ))}
-        </select>
-      </label>
-      <label style={styles.ctxField}>
+        <SearchableSelect
+          value={sel.containerId ?? ''}
+          chosen={!!sel.containerId}
+          disabled={!sel.accountId || loading === 'containers'}
+          onChange={(v) => void pickContainer(v)}
+          placeholder={loading === 'containers' ? 'Loading…' : !sel.accountId ? 'Pick an account first' : 'Select container…'}
+          searchPlaceholder="Search by name or GTM-ID…"
+          options={containers.map((c) => ({ value: c.containerId, label: c.name, ...(c.publicId ? { hint: c.publicId } : {}) }))}
+        />
+      </div>
+      <div style={styles.ctxField}>
         <span style={styles.ctxFieldLabel}>Workspace</span>
-        <select style={{ ...styles.ctxSelect, ...(sel.workspaceId ? styles.ctxSelectChosen : {}) }} value={sel.workspaceId ?? ''} disabled={!sel.containerId || loading === 'workspaces'} onChange={(e) => pickWorkspace(e.target.value)}>
-          <option value="">{loading === 'workspaces' ? 'Loading…' : !sel.containerId ? 'Pick a container first' : 'Select workspace…'}</option>
-          {workspaces.map((w) => (
-            <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
-          ))}
-        </select>
-      </label>
+        <SearchableSelect
+          value={sel.workspaceId ?? ''}
+          chosen={!!sel.workspaceId}
+          disabled={!sel.containerId || loading === 'workspaces'}
+          onChange={(v) => pickWorkspace(v)}
+          placeholder={loading === 'workspaces' ? 'Loading…' : !sel.containerId ? 'Pick a container first' : 'Select workspace…'}
+          searchPlaceholder="Search workspaces…"
+          options={workspaces.map((w) => ({ value: w.workspaceId, label: w.name }))}
+        />
+      </div>
       <button style={{ ...styles.ctxUseBtn, ...(!sel.containerId ? styles.ctxUseBtnDisabled : {}) }} onClick={save} disabled={!sel.containerId}>
         ✓ Use this container
       </button>
@@ -5187,7 +5332,12 @@ function ContainerAuditPanel({
           workspace: ctx?.workspaceName ?? undefined,
           generatedAt: new Date().toLocaleString(),
         });
-      const label = (ctx?.containerName ?? 'container').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'container';
+      // Filename carries BOTH container and workspace, so audits of different workspaces of the same
+      // container don't collide on disk (e.g. "GTM audit - www-samarthanalytics-com-Default-Workspace").
+      const slug = (s: string | undefined | null): string => (s ?? '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
+      const cLabel = slug(ctx?.containerName) || 'container';
+      const wLabel = slug(ctx?.workspaceName);
+      const label = wLabel ? `${cLabel}-${wLabel}` : cLabel;
       const saved =
         format === 'pdf'
           ? await window.desktop.gtm.exportAuditPdf(`GTM audit - ${label}`, report, {
