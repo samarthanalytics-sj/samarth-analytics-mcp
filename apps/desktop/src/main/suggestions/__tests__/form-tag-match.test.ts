@@ -117,6 +117,26 @@ const tag = (tagName: string, eventName: string, formName?: string): FormTagIden
   check('partial-strong: 3-of-4-token tag matches its page form', matched.length === 1 && /Server Side Tracking/.test(matched[0].expectedTags[0].tagName));
   check('partial-strong: not left unmatched', unmatchedTags.length === 0);
 }
+// ── generic OFFER words ("consultation"/"audit") don't block the service token from matching ──────────
+// The real "37 forms with no matching form": tags named "Get Your Free <service> Consultation Form Tag"
+// vs generic on-page forms. "consultation"/"audit" are stop-words, so the SERVICE token carries the match.
+{
+  const forms = [
+    form({ title: 'Get Started', formId: 'f1', page: 'https://site.com/services/ga4-implementation', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] }),
+    form({ title: 'Get Started', formId: 'f2', page: 'https://site.com/services/conversion-tracking', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] }),
+  ];
+  const tags = [
+    tag('GA4 - Event - Get Your Free GA4 Implementation Consultation Form Tag', 'get_your_free_ga4_implementation_consultation_form', 'get_your_free_ga4_implementation_consultation'),
+    tag('GA4 - Event - Get Your Free Conversion Tracking Consultation Form Tag', 'get_your_free_conversion_tracking_consultation_form', 'get_your_free_conversion_tracking_consultation'),
+  ];
+  const { matched, unmatchedTags } = matchFormsToTags(forms, tags);
+  check('consultation tag matches its service-page form (implementation)', matched.some((m) => /ga4-implementation/.test(m.page) && m.expectedTags.some((t) => /Implementation/.test(t.tagName))));
+  check('consultation tag matches its service-page form (conversion)', matched.some((m) => /conversion-tracking/.test(m.page) && m.expectedTags.some((t) => /Conversion/.test(t.tagName))));
+  check('each consultation tag matched (none left unmatched)', unmatchedTags.length === 0);
+  // ...and they do NOT cross-match onto the wrong service page.
+  check('implementation tag not on the conversion form', !matched.some((m) => /conversion-tracking/.test(m.page) && m.expectedTags.some((t) => /Implementation/.test(t.tagName))));
+}
+
 // A single shared token is STILL not enough for a multi-token tag (pile-on regression guard).
 {
   const forms = [form({ title: 'Get Started', formId: 'sf', page: 'https://site.com/services/server-side-tracking', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] })];

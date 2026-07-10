@@ -20,7 +20,9 @@ import type { PerTagCapture } from './verify-tags';
 
 interface PwRoute {
   request(): { url(): string; postData(): string | null; resourceType(): string };
-  continue(): Promise<void>;
+  /** `overrides.url` rewrites the request URL (same protocol) — used to append env-preview params to the
+   *  container's gtm.js request so Google serves our previewed version. */
+  continue(overrides?: { url?: string }): Promise<void>;
   abort(): Promise<void>;
 }
 interface PwResponse { status(): number }
@@ -763,8 +765,25 @@ export async function runVerifyDriver(
       await context.route('**/*', (route) => {
         const req = route.request();
         const reqUrl = req.url();
-        // The injected GTM Monitor tag GET-pixels per-tag firing to our .invalid sentinel — capture +
-        // abort it (it can never resolve anyway) BEFORE the collector/armed checks so it isn't misread.
+        // PREVIEW OVERRIDE (the reliable path): a normally-installed GTM snippet requests
+        // `googletagmanager.com/gtm.js?id=GTM-XXXX` with NO preview params, and its loader does NOT read
+        // gtm_auth/gtm_preview from the page URL — so a site that already publishes this container serves
+        // its LIVE version and our monitor/draft tags never load. Rewrite that request to carry the env
+        // preview params (exactly what the environment install snippet's src has), so Google serves OUR
+        // previewed version instead. Same origin + protocol, only added query params. Only the container's
+        // own loader is rewritten (not gtag/js), only when it lacks gtm_auth, so it runs at most once.
+        if (
+          previewParams && loaderContainerId &&
+          /googletagmanager\.com\/gtm\.js\?/i.test(reqUrl) &&
+          reqUrl.includes(`id=${loaderContainerId}`) &&
+          !/[?&]gtm_auth=/i.test(reqUrl)
+        ) {
+          const qp = `&gtm_auth=${previewParams.gtm_auth}&gtm_preview=${previewParams.gtm_preview}&gtm_cookies_win=${previewParams.gtm_cookies_win}`;
+          void route.continue({ url: reqUrl + qp });
+          return;
+        }
+        // The injected GTM Monitor tag GET-pixels per-tag firing to our sentinel endpoint — capture +
+        // abort it (it is route-aborted anyway) BEFORE the collector/armed checks so it isn't misread.
         if (isMonitorHit(reqUrl)) {
           monitorHits.push(reqUrl);
           void route.abort();

@@ -280,7 +280,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
             url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk,
             verdicts: [], verifiedByMonitor: true,
             error:
-              'The GTM Monitor preview did not load on this site, so no authoritative firing signal was captured — this is NOT “0 tags fired”. The site most likely serves gtm.js first-party (server-side tagging) or its pages stripped the preview parameters. Open the network log below: if there are no placeholder.com/collect hits, the monitor container never ran. Meanwhile use “Verify firing” (beacon mode), which reads the live container directly.',
+              'The GTM Monitor preview did not load, so no authoritative firing signal was captured — this is NOT “0 tags fired”. Likely causes: the preview auth was rejected (if you connected Google a while ago, re-connect in Settings and retry), or the site loads gtm.js from a first-party/custom path we can’t rewrite to the preview version. Open the network log below: no placeholder.com/collect hits means the monitor container never ran. Meanwhile use “Verify firing” (beacon mode), which reads the live container directly.',
             ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}),
             ...(driven.networkLog ? { networkLog: driven.networkLog } : {}),
             ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}),
