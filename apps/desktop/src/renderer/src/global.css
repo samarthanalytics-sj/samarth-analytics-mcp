@@ -69,6 +69,13 @@ button {
 .vf-progress::after { content: ''; position: absolute; top: 0; bottom: 0; left: -35%; width: 35%; border-radius: 999px; background: #2563eb; animation: vfIndeterminate 1.15s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .vf-progress::after { left: 0; width: 100%; opacity: 0.5; animation: none; } }
 
+/* Live verify feed — the page being scanned/driven, shown low-opacity so it reads as "in flight, don't
+   fixate on it". The url fades in on each change (React re-keys on the url), and a small dot pulses. */
+@keyframes vfPulse { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1); } }
+.vf-live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 999px; background: #2563eb; flex: none; animation: vfPulse 1.15s ease-in-out infinite; }
+.vf-live-url { animation: fadeIn 0.32s ease both; }
+@media (prefers-reduced-motion: reduce) { .vf-live-dot { animation: none; opacity: 0.7; } .vf-live-url { animation: none; } }
+
 /* Page/view transition — the switched-in view fades + lifts into place. */
 .view-enter { animation: viewEnter 0.24s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
 

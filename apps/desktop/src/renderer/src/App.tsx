@@ -28,6 +28,7 @@ import type {
   TagScanResult,
   VerifyTagInput,
   VerifyTagsResult,
+  VerifyProgressView,
   FormTagVerifyPlanResult,
   SubmitFormVerifyResult,
 } from '../../shared/ipc';
@@ -4140,6 +4141,11 @@ function TagReviewPanel({
 
 /* ───────────────────── Tag verification (does it fire?) ───────────────────── */
 
+// A compact label for the live-progress page url: its path (+ query), or the host for the homepage.
+function vProgressPageLabel(u: string): string {
+  try { const url = new URL(u); return url.pathname === '/' ? url.host : url.pathname + url.search; } catch { return u; }
+}
+
 // A verdict's interaction kind → a short human label + icon for the results list.
 function verdictKindLabel(v: VerifyTagsResult['verdicts'][number]): { label: string; icon: string } {
   switch (v.interaction?.kind) {
@@ -4624,6 +4630,7 @@ function VerifyPanel({
   const [vUrl, setVUrl] = useState('');
   const [vSnippet, setVSnippet] = useState('');
   const [vVerifying, setVVerifying] = useState(false);
+  const [vProgress, setVProgress] = useState<VerifyProgressView | null>(null);
   const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
   const [vShowSkipped, setVShowSkipped] = useState(false);
@@ -4672,6 +4679,7 @@ function VerifyPanel({
       if (!ok) return;
     }
     setVVerifying(true);
+    setVProgress({ phase: 'prepare', message: 'Preparing verification…' });
     setVNote(null);
     onError('');
     // Kick the embedded Forms subsection to discover forms-with-tags for the same URL in parallel.
@@ -4691,16 +4699,23 @@ function VerifyPanel({
         return;
       }
       const snippet = (snippetOverride ?? vSnippet).trim();
-      const res = await window.desktop.tags.verify(target, tags, [], {
-        gtmDebug: true,
-        ...(snippet ? { containerSnippet: snippet } : {}),
-        ...(useMonitor ? { monitor: { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId! } } : {}),
-      });
+      const res = await window.desktop.tags.verify(
+        target,
+        tags,
+        [],
+        {
+          gtmDebug: true,
+          ...(snippet ? { containerSnippet: snippet } : {}),
+          ...(useMonitor ? { monitor: { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId! } } : {}),
+        },
+        (p) => setVProgress(p), // live "scanning <url>" / "verifying <url>" feed
+      );
       setVResult(res);
     } catch (e) {
       setVNote({ kind: 'error', text: verifyErrorText(e) });
     } finally {
       setVVerifying(false);
+      setVProgress(null);
     }
   }
 
@@ -4817,6 +4832,34 @@ function VerifyPanel({
               {/* Indeterminate bar — no % is known (the driver loads + drives every page), so an animated
                   sliver signals "working" without a false percentage. */}
               <div className="vf-progress" role="progressbar" aria-label="Verification in progress" aria-busy="true" style={{ marginTop: 8 }} />
+              {/* Live feed: the page being scanned/driven right now — low-opacity + fading so it reads as
+                  "work in flight", with a phase label and (for the crawl/drive) an honest done/total. */}
+              {vProgress && (
+                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, minWidth: 0 }}>
+                  <span className="vf-live-dot" aria-hidden />
+                  <span style={{ fontWeight: 600, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
+                    {vProgress.phase === 'crawl' ? 'Scanning pages'
+                      : vProgress.phase === 'drive' ? 'Verifying tags'
+                      : vProgress.phase === 'monitor' ? 'Minting monitor preview'
+                      : 'Preparing'}
+                  </span>
+                  {vProgress.page && (
+                    <span
+                      key={vProgress.page}
+                      className="vf-live-url"
+                      title={vProgress.page}
+                      style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', fontSize: 11.5, opacity: 0.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-dim)' }}
+                    >
+                      {vProgressPageLabel(vProgress.page)}
+                    </span>
+                  )}
+                  {typeof vProgress.done === 'number' && (
+                    <span style={{ flex: 'none', fontVariantNumeric: 'tabular-nums', opacity: 0.7, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
+                      {vProgress.done}{vProgress.total ? ` / ${vProgress.total}` : ''}
+                    </span>
+                  )}
+                </div>
+              )}
               {/* Switching tabs UNMOUNTS this panel (it is conditionally rendered), which drops the in-flight
                   run's result — warn so the user doesn't lose a minute-long verification. */}
               <div style={{ marginTop: 8, padding: '7px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>

@@ -99,6 +99,8 @@ export interface ScanProgress {
   opened: number;
   /** Pages still queued (an estimate of what's left). */
   queued: number;
+  /** The page that was just scanned (drives the live "scanning <url>" progress feed). */
+  page?: string;
   /** The complete suggestion list built from everything scanned SO FAR. */
   suggestions: SuggestedTag[];
 }
@@ -584,7 +586,7 @@ export async function crawlAndSuggest(
           // Stream the running list so the review panel fills in as the crawl proceeds.
           if (onProgress) {
             try {
-              onProgress({ scanned: pageScans.length, opened, queued: queue.length, suggestions: runningSuggestions(pageScans, siteHost, platforms) });
+              onProgress({ scanned: pageScans.length, opened, queued: queue.length, page: item.url, suggestions: runningSuggestions(pageScans, siteHost, platforms) });
             } catch {
               /* a progress sink error must never abort the crawl */
             }
