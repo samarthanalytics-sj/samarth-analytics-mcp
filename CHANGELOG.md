@@ -1,3 +1,9 @@
+## [1.293.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.292.0...v1.293.0) (2026-07-10)
+
+### Features
+
+* **verify:** Tag Assistant automation Phase 2 — session driver; remove the monitor-container code path ([#501](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/501)) ([4248b49](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4248b49bc807f6f05739b0b841fefb205cb88ad8))
+
 ## [1.292.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.291.0...v1.292.0) (2026-07-10)
 
 ### Features
