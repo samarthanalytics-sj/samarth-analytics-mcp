@@ -1,3 +1,9 @@
+## [1.298.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.297.0...v1.298.0) (2026-07-10)
+
+### Features
+
+* **verify:** Tag Assistant signs in ONCE and saves it — never close Chrome (revert real-profile) ([#509](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/509)) ([1b1705e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1b1705eea7979934d9d4fe51c8b171ca1700ab6b)), closes [#508](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/508) [#507](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/507)
+
 ## [1.297.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.296.0...v1.297.0) (2026-07-10)
 
 ### Features
