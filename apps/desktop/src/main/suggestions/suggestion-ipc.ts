@@ -295,13 +295,20 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         const verdicts = o.monitor ? verdictsFromMonitor(tagList, driven.monitorEvents ?? [], driven.perTag) : evaluateVerify(tagList, driven.perTag, els);
         return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(o.monitor ? { verifiedByMonitor: true } : {}), ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
       } finally {
-        // Discard everything the throwaway monitor preview created — leave NO trace. The normal path mints
-        // a workspace-linked ENVIRONMENT (no version) that deletes cleanly with edit.containers. The legacy
-        // fallback mints a version; deleting it needs a scope we don't request, so it silently no-ops (the
-        // user removes those "Samarth Verify (auto)" versions manually) — but the normal path avoids them.
-        if (o.monitor && cleanupEnvironmentId) await data.deleteGtmEnvironment(o.monitor.accountId, o.monitor.containerId, cleanupEnvironmentId).catch(() => undefined);
-        if (o.monitor && cleanupVersionId) await data.deleteGtmVersion(o.monitor.accountId, o.monitor.containerId, cleanupVersionId).catch(() => undefined);
+        // Discard everything the throwaway monitor preview created — leave NO trace. ORDER MATTERS:
+        // delete the workspaces FIRST (so the version GTM auto-forks a workspace from is no longer
+        // referenced), then the preview environment, then SWEEP every "Samarth Verify (auto)" version —
+        // this run's AND any that piled up before. The old code deleted the version FIRST (while its
+        // forked workspace still referenced it), so GTM refused and versions accumulated.
+        void cleanupVersionId; // superseded by the name-based sweep below
         for (const id of cleanupWorkspaceIds) await data.deleteGtmWorkspace(o.monitor!.accountId, o.monitor!.containerId, id).catch(() => undefined);
+        if (o.monitor && cleanupEnvironmentId) await data.deleteGtmEnvironment(o.monitor.accountId, o.monitor.containerId, cleanupEnvironmentId).catch(() => undefined);
+        if (o.monitor) {
+          const swept = await data.sweepMonitorVersions(o.monitor.accountId, o.monitor.containerId).catch(() => ({ deleted: 0, failed: 0, firstError: 'sweep threw' }));
+          // Logged to the dev console so we can confirm the pileup is actually being cleaned (or see the
+          // exact API error if a delete is refused — e.g. a missing permission).
+          console.log(`[monitor-cleanup] "Samarth Verify (auto)" versions — deleted ${swept.deleted}, failed ${swept.failed}${swept.firstError ? ` · ${swept.firstError}` : ''}`);
+        }
       }
     },
   );
