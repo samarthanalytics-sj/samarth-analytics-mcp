@@ -1,3 +1,9 @@
+## [1.290.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.290.2...v1.290.3) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** sweep leaked throwaway workspaces + log GTM's real delete error ([#496](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/496)) ([2bb6f5d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2bb6f5d18d478d58c006f19c85318a0ae8a05c1e))
+
 ## [1.290.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.290.1...v1.290.2) (2026-07-10)
 
 ### Bug Fixes
