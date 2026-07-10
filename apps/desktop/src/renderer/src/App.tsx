@@ -4792,7 +4792,6 @@ function VerifyPanel({
   const [vVerifying, setVVerifying] = useState(false);
   const [vProgress, setVProgress] = useState<VerifyProgressView | null>(null);
   const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
-  const [taSigningIn, setTaSigningIn] = useState(false);
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
   const [vShowSkipped, setVShowSkipped] = useState(false);
   const [vShowNet, setVShowNet] = useState(false);
@@ -4876,28 +4875,6 @@ function VerifyPanel({
     } finally {
       setVVerifying(false);
       setVProgress(null);
-    }
-  }
-
-  // ONE-TIME Tag Assistant sign-in: opens a headed browser window on tagassistant.google.com and waits
-  // for the user to complete the Google sign-in (the session persists in a local profile). On success,
-  // automatically re-run the Tag Assistant verify that prompted it.
-  async function doTaSignIn(): Promise<void> {
-    if (taSigningIn) return;
-    setTaSigningIn(true);
-    setVNote({ kind: 'info', text: 'A browser window is opening — sign in with the Google account that has access to this GTM container, then leave the window open. Verification will re-run automatically.' });
-    try {
-      const r = await window.desktop.tags.taSignIn();
-      if (r.signedIn) {
-        setVNote(null);
-        await runVerify(undefined, true); // re-run the authoritative verify now that the session exists
-      } else {
-        setVNote({ kind: 'error', text: 'Google sign-in was not completed (window closed or timed out). Click “Sign in for Tag Assistant” to try again.' });
-      }
-    } catch (e) {
-      setVNote({ kind: 'error', text: verifyErrorText(e) });
-    } finally {
-      setTaSigningIn(false);
     }
   }
 
@@ -4997,16 +4974,6 @@ function VerifyPanel({
             >
               {vVerifying ? 'Verifying…' : 'Verify with Tag Assistant'}
             </button>
-            {vResult?.needTaSignIn && (
-              <button
-                style={{ background: 'var(--c-amber)', color: '#1a1a1a', border: 'none', borderRadius: 10, padding: '10px 16px', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...(taSigningIn ? { opacity: 0.6, cursor: 'wait' } : {}) }}
-                onClick={() => void doTaSignIn()}
-                disabled={taSigningIn}
-                title="One-time: a browser window opens on tagassistant.google.com — sign in with the Google account that has access to this GTM container. The session is saved locally; verify runs are automatic afterwards."
-              >
-                {taSigningIn ? 'Waiting for Google sign-in…' : '🔑 Sign in for Tag Assistant (one-time)'}
-              </button>
-            )}
           </div>
           {/* ONE run, two parts: this single action verifies the tags AND discovers the forms-with-tags.
               A single combined status so it reads as one verification, not two. */}

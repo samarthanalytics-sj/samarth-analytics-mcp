@@ -44,6 +44,7 @@ interface PwContext {
   waitForEvent(event: 'page', opts?: { timeout?: number }): Promise<PwPage>;
   close(): Promise<void>;
   pages(): PwPage[];
+  cookies(urls?: string | string[]): Promise<Array<{ name: string }>>;
 }
 
 async function loadPw(): Promise<{ chromium: { launchPersistentContext(dir: string, opts: Record<string, unknown>): Promise<PwContext> } } | null> {
@@ -59,15 +60,28 @@ async function loadPw(): Promise<{ chromium: { launchPersistentContext(dir: stri
 }
 
 /** Launch the persistent TA profile. Prefer the real Chrome channel (Google sign-in is friendlier to it);
- *  fall back to bundled Chromium. Headed for the one-time sign-in, headless for verify runs. */
+ *  fall back to bundled Chromium. Headed for the one-time sign-in, headless for verify runs.
+ *  ignoreDefaultArgs drops the "controlled by automated software" flag — Google's sign-in sometimes
+ *  refuses browsers that advertise automation. */
 async function launchProfile(profileDir: string, headless: boolean): Promise<PwContext> {
   const pw = await loadPw();
   if (!pw) throw new PlaywrightUnavailableError();
-  const base = { headless, viewport: { width: 1440, height: 900 } };
+  const base = { headless, viewport: { width: 1440, height: 900 }, ignoreDefaultArgs: ['--enable-automation'] };
   try {
     return await pw.chromium.launchPersistentContext(profileDir, { ...base, channel: 'chrome' });
   } catch {
     return await pw.chromium.launchPersistentContext(profileDir, base);
+  }
+}
+
+/** Signed-in check that can't be fooled by page copy: a Google web session leaves its account cookies
+ *  (SAPISID / __Secure-1PSID / SID) on accounts.google.com in the persistent profile. */
+async function hasGoogleSession(ctx: PwContext): Promise<boolean> {
+  try {
+    const cookies = await ctx.cookies('https://accounts.google.com');
+    return cookies.some((c) => c.name === 'SAPISID' || c.name === '__Secure-1PSID' || c.name === 'SID');
+  } catch {
+    return false;
   }
 }
 
@@ -82,41 +96,35 @@ function captureFramesInit(): void {
   }, true);
 }
 
-/** Is the TA page signed IN? The signed-out shell shows a "Sign in" control in its header. Best-effort
- *  text probe — refined as the live flow teaches us more. */
-function signedInProbe(): boolean {
-  const text = (document.body?.innerText || '').slice(0, 4000);
-  return !/\bSign in\b/.test(text);
-}
-
-/** Quick signed-in check against the persistent profile (headless, no side effects). */
+/** Quick signed-in check against the persistent profile (cookie read — fast, no page load). */
 export async function taSignInStatus(profileDir: string): Promise<{ signedIn: boolean }> {
   const ctx = await launchProfile(profileDir, true);
   try {
-    const page = await ctx.newPage();
-    await page.goto(TA_URL, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-    await page.waitForTimeout(2500);
-    const signedIn = await page.evaluate<boolean>(signedInProbe).catch(() => false);
-    return { signedIn };
+    return { signedIn: await hasGoogleSession(ctx) };
   } finally {
     await ctx.close().catch(() => undefined);
   }
 }
 
-/** ONE-TIME sign-in: open a HEADED window on tagassistant.google.com and wait (up to `timeoutMs`) for the
- *  user to complete Google sign-in. The session persists in the profile for every later headless run. */
+/** ONE-TIME sign-in: open a HEADED window straight on the Google sign-in form (continuing to Tag
+ *  Assistant) and wait until the account cookies land in the profile — reliable regardless of what the
+ *  page shows. The session persists for every later headless run. */
 export async function taSignIn(profileDir: string, timeoutMs = 300_000): Promise<{ signedIn: boolean }> {
   const ctx = await launchProfile(profileDir, false);
   try {
+    if (await hasGoogleSession(ctx)) return { signedIn: true }; // already signed in — nothing to do
     const page = await ctx.newPage();
-    await page.goto(TA_URL, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+    await page.goto(
+      'https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(TA_URL),
+      { waitUntil: 'domcontentloaded', timeout: 45_000 },
+    );
     const deadline = Date.now() + timeoutMs;
-    // Poll until the "Sign in" control disappears (the user signed in) or the window is closed / timeout.
     for (;;) {
-      if (page.isClosed()) return { signedIn: false };
-      const signedIn = await page.evaluate<boolean>(signedInProbe).catch(() => false);
-      if (signedIn) return { signedIn: true };
-      if (Date.now() > deadline) return { signedIn: false };
+      if (await hasGoogleSession(ctx)) {
+        await new Promise((r) => setTimeout(r, 1500)); // let the continue-redirect settle
+        return { signedIn: true };
+      }
+      if (page.isClosed() || Date.now() > deadline) return { signedIn: false };
       await new Promise((r) => setTimeout(r, 2000));
     }
   } finally {
@@ -167,16 +175,15 @@ export async function runTaVerify(
       void route.continue();
     });
 
+    if (!(await hasGoogleSession(ctx))) {
+      return {
+        pagesOk: false, perTag, pagesDriven, needSignIn: true,
+        error: 'Tag Assistant needs a one-time Google sign-in to debug a GTM container — a sign-in window opens automatically; complete it and verification continues.',
+      };
+    }
     const ta = await ctx.newPage();
     await ta.goto(TA_URL, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await ta.waitForTimeout(2500);
-    const signedIn = await ta.evaluate<boolean>(signedInProbe).catch(() => false);
-    if (!signedIn) {
-      return {
-        pagesOk: false, perTag, pagesDriven, needSignIn: true,
-        error: 'Tag Assistant needs a one-time Google sign-in to debug a GTM container. Click “Sign in for Tag Assistant”, complete the Google sign-in in the window that opens, then run verify again.',
-      };
-    }
 
     // Connect: Add domain → URL → Connect → the debugged popup.
     const addBtn = ta.locator('button:has-text("Add domain")').first();
