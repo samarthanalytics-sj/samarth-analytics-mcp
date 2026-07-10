@@ -801,6 +801,36 @@ export class GoogleDataService {
     return { deleted, failed, ...(firstError ? { firstError } : {}) };
   }
 
+  /** Delete every leaked throwaway WORKSPACE named "Samarth Verify …". A container version that a
+   *  workspace is based on cannot be deleted, so a lingering temp workspace (from an interrupted/older
+   *  run) pins its version and blocks the version sweep — call this FIRST too. Matches strictly by our
+   *  name prefix, so the user's own workspaces are never touched. Best-effort; returns counts + first error. */
+  async sweepMonitorWorkspaces(accountId: string, containerId: string): Promise<{ deleted: number; failed: number; firstError?: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}`;
+    let deleted = 0;
+    let failed = 0;
+    let firstError: string | undefined;
+    const wss = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.list({ parent, pageToken }),
+      (r) => r.data.workspace,
+      (r) => r.data.nextPageToken
+    ).catch(() => [] as Array<{ name?: string | null; workspaceId?: string | null }>);
+    for (const w of wss) {
+      if (!w.workspaceId || !(w.name ?? '').startsWith('Samarth Verify')) continue;
+      try {
+        await this.q(() => gtm.accounts.containers.workspaces.delete({ path: `${parent}/workspaces/${w.workspaceId}` }));
+        deleted += 1;
+      } catch (e) {
+        failed += 1;
+        const r = e as { response?: { data?: { error?: { message?: string } } }; message?: string };
+        if (!firstError) firstError = `ws${w.workspaceId}: ${r.response?.data?.error?.message ?? r.message ?? String(e)}`;
+      }
+    }
+    return { deleted, failed, ...(firstError ? { firstError } : {}) };
+  }
+
   /** Delete EVERY unpublished "Samarth Verify (auto)" container version — this run's + any that piled up
    *  before. The old cleanup deleted the version FIRST, while the workspace GTM auto-forks from it still
    *  referenced it, so GTM refused and it silently failed → the pileup. Callers MUST delete the throwaway
@@ -826,7 +856,11 @@ export class GoogleDataService {
         deleted += 1;
       } catch (e) {
         failed += 1;
-        if (!firstError) firstError = (e as { message?: string }).message ?? String(e);
+        // Surface GTM's ACTUAL reason (referenced-by / permission / …), not the generic Gaxios wrapper —
+        // include the version id so we know WHICH ones GTM refuses.
+        const r = e as { response?: { data?: { error?: { message?: string; errors?: Array<{ message?: string }> } } }; message?: string };
+        const why = r.response?.data?.error?.message ?? r.response?.data?.error?.errors?.[0]?.message ?? r.message ?? String(e);
+        if (!firstError) firstError = `v${h.containerVersionId}: ${why}`;
       }
     }
     return { deleted, failed, ...(firstError ? { firstError } : {}) };

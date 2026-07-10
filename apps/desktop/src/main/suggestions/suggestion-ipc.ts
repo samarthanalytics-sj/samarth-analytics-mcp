@@ -304,11 +304,13 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         for (const id of cleanupWorkspaceIds) await data.deleteGtmWorkspace(o.monitor!.accountId, o.monitor!.containerId, id).catch(() => undefined);
         if (o.monitor && cleanupEnvironmentId) await data.deleteGtmEnvironment(o.monitor.accountId, o.monitor.containerId, cleanupEnvironmentId).catch(() => undefined);
         if (o.monitor) {
-          // Sweep leaked preview ENVIRONMENTS FIRST — a version an environment references can't be deleted,
-          // so a leaked env pins its version and blocks the version sweep — then sweep the versions. Both
-          // logged to the dev console so we can confirm the cleanup or see the exact API error.
+          // A container version can't be deleted while a WORKSPACE or ENVIRONMENT references it, so sweep
+          // both leaked throwaways FIRST, then the versions. All three logged (with the exact GTM error +
+          // the offending id) so we can see precisely what, if anything, still blocks a delete.
+          const swWs = await data.sweepMonitorWorkspaces(o.monitor.accountId, o.monitor.containerId).catch(() => ({ deleted: 0, failed: 0, firstError: 'workspace sweep threw' }));
           const swEnv = await data.sweepMonitorEnvironments(o.monitor.accountId, o.monitor.containerId).catch(() => ({ deleted: 0, failed: 0, firstError: 'env sweep threw' }));
           const swVer = await data.sweepMonitorVersions(o.monitor.accountId, o.monitor.containerId).catch(() => ({ deleted: 0, failed: 0, firstError: 'version sweep threw' }));
+          console.log(`[monitor-cleanup] workspaces — deleted ${swWs.deleted}, failed ${swWs.failed}${swWs.firstError ? ` · ${swWs.firstError}` : ''}`);
           console.log(`[monitor-cleanup] envs — deleted ${swEnv.deleted}, failed ${swEnv.failed}${swEnv.firstError ? ` · ${swEnv.firstError}` : ''}`);
           console.log(`[monitor-cleanup] "Samarth Verify (auto)" versions — deleted ${swVer.deleted}, failed ${swVer.failed}${swVer.firstError ? ` · ${swVer.firstError}` : ''}`);
         }
