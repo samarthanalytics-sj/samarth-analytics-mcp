@@ -1,3 +1,9 @@
+## [1.289.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.288.3...v1.289.0) (2026-07-10)
+
+### Features
+
+* **desktop:** download the GA4 monitoring report as PDF or CSV ([87206fa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/87206fad7f9e4bbd280ccf20fdb9c7f780c9976f))
+
 ## [1.288.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.288.2...v1.288.3) (2026-07-10)
 
 ### Bug Fixes
