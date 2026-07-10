@@ -682,9 +682,12 @@ export interface VerifyTagsResult {
   pagesOk: boolean;
   error?: string;
   verdicts: VerifyTagVerdict[];
-  /** true = this run used AUTHORITATIVE mode: verdicts came from GTM's own Monitor (addEventCallback),
-   *  not beacon inference. The UI renders the Tag-Assistant-style fired/not-fired panel. */
+  /** true = this run used AUTHORITATIVE mode: verdicts came from the real Tag Assistant debug stream
+   *  (GTM's own per-event tag firing), not beacon inference. The UI renders the fired/not-fired panel. */
   verifiedByMonitor?: boolean;
+  /** Authoritative mode needs a ONE-TIME Google sign-in for Tag Assistant to debug a GTM container —
+   *  the UI shows the "Sign in for Tag Assistant" button when set. */
+  needTaSignIn?: boolean;
   /** The distinct page URLs the driver actually navigated + drove tags on (multi-page drive). A
    *  click tag whose CTA lives off the homepage is driven on ITS page, so this is usually >1. */
   pagesDriven?: string[];

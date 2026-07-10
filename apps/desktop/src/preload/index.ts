@@ -224,6 +224,10 @@ const api = {
     },
     fromJson: (json: string): Promise<ParsedSuggestionsResult> =>
       ipcRenderer.invoke('suggestions:fromJson', json),
+    // Tag Assistant session (authoritative verify): signed-in status + the one-time headed Google
+    // sign-in window. The session persists in a local browser profile; no GTM writes ever.
+    taStatus: (): Promise<{ signedIn: boolean }> => ipcRenderer.invoke('suggestions:taStatus'),
+    taSignIn: (): Promise<{ signedIn: boolean }> => ipcRenderer.invoke('suggestions:taSignIn'),
     // Save the (renderer-built) template CSV to a user-chosen file → saved path or null.
     exportCsv: (defaultName: string, csv: string): Promise<string | null> =>
       ipcRenderer.invoke('suggestions:exportCsv', defaultName, csv),

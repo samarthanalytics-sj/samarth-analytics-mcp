@@ -4792,6 +4792,7 @@ function VerifyPanel({
   const [vVerifying, setVVerifying] = useState(false);
   const [vProgress, setVProgress] = useState<VerifyProgressView | null>(null);
   const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
+  const [taSigningIn, setTaSigningIn] = useState(false);
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
   const [vShowSkipped, setVShowSkipped] = useState(false);
   const [vShowNet, setVShowNet] = useState(false);
@@ -4830,13 +4831,12 @@ function VerifyPanel({
     if (!ready || !ctx || vVerifying) return;
     const target = vUrl.trim();
     if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against.' }); return; }
-    // AUTHORITATIVE (Tag-Assistant-grade) mode writes a THROWAWAY workspace to read GTM's own per-tag
-    // firing — confirm the draft-only, auto-removed, never-published write before touching the container.
+    // AUTHORITATIVE mode automates the REAL Tag Assistant — ZERO GTM writes (no version, no workspace,
+    // no container). No confirm needed; it may require a one-time Google sign-in (surfaced below).
     const canMonitor = Boolean(ctx.accountId && ctx.containerId && ctx.workspaceId);
-    if (useMonitor) {
-      if (!canMonitor) { setVNote({ kind: 'error', text: 'Pick a GTM account, container and workspace first — the monitor preview is minted from them.' }); return; }
-      const ok = window.confirm('Verify with GTM Monitor?\n\nThis creates a TEMPORARY workspace, adds a GTM Monitor tag, and mints its preview — so verification reads GTM’s OWN per-tag firing (like Tag Assistant), not inferred from network hits. It is draft-only, NEVER published, and the temporary workspace is deleted afterwards. Your working workspace is not touched.');
-      if (!ok) return;
+    if (useMonitor && !canMonitor) {
+      setVNote({ kind: 'error', text: 'Pick a GTM account, container and workspace first — verification reads that container’s tags.' });
+      return;
     }
     setVVerifying(true);
     setVProgress({ phase: 'prepare', message: 'Preparing verification…' });
@@ -4876,6 +4876,28 @@ function VerifyPanel({
     } finally {
       setVVerifying(false);
       setVProgress(null);
+    }
+  }
+
+  // ONE-TIME Tag Assistant sign-in: opens a headed browser window on tagassistant.google.com and waits
+  // for the user to complete the Google sign-in (the session persists in a local profile). On success,
+  // automatically re-run the Tag Assistant verify that prompted it.
+  async function doTaSignIn(): Promise<void> {
+    if (taSigningIn) return;
+    setTaSigningIn(true);
+    setVNote({ kind: 'info', text: 'A browser window is opening — sign in with the Google account that has access to this GTM container, then leave the window open. Verification will re-run automatically.' });
+    try {
+      const r = await window.desktop.tags.taSignIn();
+      if (r.signedIn) {
+        setVNote(null);
+        await runVerify(undefined, true); // re-run the authoritative verify now that the session exists
+      } else {
+        setVNote({ kind: 'error', text: 'Google sign-in was not completed (window closed or timed out). Click “Sign in for Tag Assistant” to try again.' });
+      }
+    } catch (e) {
+      setVNote({ kind: 'error', text: verifyErrorText(e) });
+    } finally {
+      setTaSigningIn(false);
     }
   }
 
@@ -4971,10 +4993,20 @@ function VerifyPanel({
               style={{ background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--c-blue)', borderRadius: 10, padding: '10px 16px', fontSize: 14, cursor: 'pointer', ...(!ready || vVerifying || !vUrl.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
               onClick={() => void runVerify(undefined, true)}
               disabled={!ready || vVerifying || !vUrl.trim()}
-              title="Authoritative: mints a THROWAWAY preview with a GTM Monitor tag and reads GTM's OWN per-tag firing (like Tag Assistant). Draft-only, never published, the temp workspace is deleted after."
+              title="Authoritative: automates the REAL Tag Assistant — connects it to the site, drives your tags, and reads GTM's own per-event firing. ZERO GTM writes (no version, no workspace, no container). May need a one-time Google sign-in."
             >
-              {vVerifying ? 'Verifying…' : 'Verify with GTM Monitor'}
+              {vVerifying ? 'Verifying…' : 'Verify with Tag Assistant'}
             </button>
+            {vResult?.needTaSignIn && (
+              <button
+                style={{ background: 'var(--c-amber)', color: '#1a1a1a', border: 'none', borderRadius: 10, padding: '10px 16px', fontSize: 14, fontWeight: 600, cursor: 'pointer', ...(taSigningIn ? { opacity: 0.6, cursor: 'wait' } : {}) }}
+                onClick={() => void doTaSignIn()}
+                disabled={taSigningIn}
+                title="One-time: a browser window opens on tagassistant.google.com — sign in with the Google account that has access to this GTM container. The session is saved locally; verify runs are automatic afterwards."
+              >
+                {taSigningIn ? 'Waiting for Google sign-in…' : '🔑 Sign in for Tag Assistant (one-time)'}
+              </button>
+            )}
           </div>
           {/* ONE run, two parts: this single action verifies the tags AND discovers the forms-with-tags.
               A single combined status so it reads as one verification, not two. */}
@@ -5069,7 +5101,7 @@ function VerifyPanel({
             {vResult.verifiedByMonitor && !vResult.error && (
               <div style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-green)', background: 'rgba(60,180,90,0.08)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>
                 <span aria-hidden>✓</span>
-                <span><b>Authoritative</b> — read from GTM’s own Monitor (addEventCallback), like Tag Assistant. Each tag below is exactly what GTM fired on the driven events (with its status + timing), not inferred from network hits. The temporary monitor workspace has been deleted.</span>
+                <span><b>Authoritative</b> — read from the real Tag Assistant debug stream: each tag below is exactly what GTM fired on the driven events, not inferred from network hits. Nothing was created in your container (no version, no workspace).</span>
               </div>
             )}
             {vResult.error ? (

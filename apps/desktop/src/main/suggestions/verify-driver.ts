@@ -215,7 +215,7 @@ export interface VerifyDriverResult {
 /** Read GTM's on-page debug signal + the real dataLayer pushes (serialized to page.evaluate — DOM
  *  globals only). Each push is SANITISED to a JSON-safe { event, params } (DOM nodes/functions dropped,
  *  nested objects summarised) so it survives the evaluate boundary; summarizeDataLayer formats it. */
-function readGtmDebugInPage(): { containerIds: string[]; dataLayerEvents: string[]; dataLayer: Array<{ event: string; params: Record<string, string> }> } {
+export function readGtmDebugInPage(): { containerIds: string[]; dataLayerEvents: string[]; dataLayer: Array<{ event: string; params: Record<string, string> }> } {
   const w = window as unknown as { google_tag_manager?: Record<string, unknown>; dataLayer?: Array<Record<string, unknown>> };
   const containerIds = w.google_tag_manager ? Object.keys(w.google_tag_manager).filter((k) => /^GTM-/i.test(k)) : [];
   const rawDl = Array.isArray(w.dataLayer) ? w.dataLayer : [];
@@ -319,7 +319,7 @@ export function withPreviewParams(pageUrl: string, params: Record<string, string
 // ── In-page helpers (serialized to page.evaluate — DOM globals only) ──────────
 
 /** Neutralise navigations + real submits so driving fires GTM's trigger without side effects. */
-function installGuardsInPage(): void {
+export function installGuardsInPage(): void {
   const w = window as unknown as { __vf_guard?: boolean };
   if (w.__vf_guard) return;
   w.__vf_guard = true;
@@ -340,7 +340,7 @@ function installGuardsInPage(): void {
  * verification. Synthetic override — the question we answer is "does the tag fire when consent is
  * granted", not "what does the site's CMP do". Mirrors gtag('consent','update',{...granted}).
  */
-function grantConsentInPage(): void {
+export function grantConsentInPage(): void {
   const w = window as unknown as { dataLayer?: unknown[] };
   const dl = (w.dataLayer = w.dataLayer || []);
   const gtag = function (this: unknown): void {
@@ -373,7 +373,7 @@ export function buildCustomEventPayload(
 }
 
 /** Push a (synthetic) dataLayer event so a custom_event trigger fires. */
-function pushDataLayerInPage(payload: Record<string, unknown>): void {
+export function pushDataLayerInPage(payload: Record<string, unknown>): void {
   const w = window as unknown as { dataLayer?: unknown[] };
   w.dataLayer = w.dataLayer || [];
   w.dataLayer.push(payload);
@@ -414,14 +414,14 @@ export interface DriveSpec {
    *  pass, where the tag doesn't exist yet — we only want a proof image of WHERE it would fire. */
   locateOnly?: boolean;
 }
-interface DriveOutcome {
+export interface DriveOutcome {
   targetFound: boolean;
   performed: boolean;
   note?: string;
 }
 
 /** Locate the element/form the trigger targets and perform the interaction. */
-function driveInPage(spec: DriveSpec): DriveOutcome {
+export function driveInPage(spec: DriveSpec): DriveOutcome {
   // Ring the element we're about to drive + scroll it into view, so the screenshot the driver takes
   // right after is visual PROOF of exactly which control was clicked / which form was submitted.
   const highlight = (node: Element): void => {
@@ -664,7 +664,7 @@ async function captureShot(page: PwPage, state: { n: number }): Promise<string |
   }
 }
 
-function specFor(trigger: DriverTrigger): DriveSpec {
+export function specFor(trigger: DriverTrigger): DriveSpec {
   return {
     kind: trigger.kind,
     ...(trigger.clickTextValue ? { clickText: trigger.clickTextValue, clickTextOp: trigger.clickTextOperator } : {}),
@@ -1127,7 +1127,7 @@ function rescrollRingedInPage(): void {
 /** Hide fixed/sticky cookie-consent + similar overlays so a ringed FOOTER element (email/phone/footer
  *  CTA — the usual site-wide mailto) isn't obscured behind the banner in the proof screenshot. Only
  *  hides fixed/sticky consent-style containers; best-effort and read-only-ish (a discarded page). */
-function hideCookieOverlaysInPage(): void {
+export function hideCookieOverlaysInPage(): void {
   try {
     const sel = [
       '[id*="cookie" i]', '[class*="cookie" i]', '[id*="consent" i]', '[class*="consent" i]',

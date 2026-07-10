@@ -184,6 +184,29 @@ export function eventsForContainer(capture: TaCapture, publicId: string): TaEven
   return capture.events.filter((e) => e.container === publicId).sort((a, b) => a.eventId - b.eventId);
 }
 
+/** Convert one container's TA event records into the MonitorEvent shape the existing verdict pipeline
+ *  (verdictsFromMonitor → monitorVerdicts) consumes — TA names are mapped to container tag IDs via the
+ *  inventory (name → id). Tags TA reports that aren't in the inventory are dropped (another container's
+ *  tags can never be miscredited). Status mapping: fired→success, failed→failure, running/unknown→unknown
+ *  (a tag that appears at all DID fire; monitorVerdicts treats fired+unknown as clean success). PURE. */
+export function taEventsToMonitorEvents(
+  events: TaEventRecord[],
+  inventory: Array<{ id: string; tagName: string }>,
+): Array<{ event: string; tags: Array<{ id: string; name?: string; status: 'success' | 'failure' | 'unknown' }> }> {
+  const idByName = new Map(inventory.map((t) => [t.tagName, t.id] as const));
+  return events.map((ev) => ({
+    event: ev.eventName,
+    tags: ev.tags
+      .map((t) => {
+        const id = idByName.get(t.name);
+        if (!id) return null;
+        const status = t.status === 'fired' ? 'success' as const : t.status === 'failed' ? 'failure' as const : 'unknown' as const;
+        return { id, name: t.name, status };
+      })
+      .filter((t): t is { id: string; name: string; status: 'success' | 'failure' | 'unknown' } => t !== null),
+  }));
+}
+
 /** Why a GTM container has no per-tag data, in operator terms — drives the "sign in and retry" UX. */
 export function containerDebugProblem(capture: TaCapture, publicId: string): string | null {
   const c = capture.containers.find((x) => x.id === publicId);
