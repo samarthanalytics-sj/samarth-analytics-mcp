@@ -749,14 +749,67 @@ export class GoogleDataService {
     return { deleted: true };
   }
 
-  /** Delete an UNPUBLISHED container version — cleans up the throwaway "Samarth Verify (auto)" version a
-   *  monitor-preview run mints, so it doesn't pile up in version history. Only ever called on a version we
-   *  just created for preview and never published (a published/live version can't be deleted anyway). */
+  /** Delete an UNPUBLISHED container version — cleans up the throwaway "Samarth Verify (auto)" version an
+   *  OLD (version-based) monitor-preview run mints. NOTE: versions.delete needs a delete scope the app
+   *  deliberately does not request, so this silently 403s — which is exactly why those versions used to
+   *  pile up. The current monitor path avoids create_version entirely (mintWorkspaceEnvironmentPreview),
+   *  so this only runs in the legacy fallback. */
   async deleteGtmVersion(accountId: string, containerId: string, versionId: string): Promise<{ deleted: boolean }> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     await gtm.accounts.containers.versions.delete({ path: `accounts/${accountId}/containers/${containerId}/versions/${versionId}` });
     return { deleted: true };
+  }
+
+  /** Delete a preview ENVIRONMENT — cleans up the throwaway workspace-preview environment the monitor
+   *  mints. Uses tagmanager.edit.containers (which the app holds), so — unlike version delete — this
+   *  actually succeeds, leaving NOTHING behind in the container. */
+  async deleteGtmEnvironment(accountId: string, containerId: string, environmentId: string): Promise<{ deleted: boolean }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    await gtm.accounts.containers.environments.delete({ path: `accounts/${accountId}/containers/${containerId}/environments/${environmentId}` });
+    return { deleted: true };
+  }
+
+  /**
+   * Preview a workspace's DRAFT via a workspace-linked ENVIRONMENT — the version-FREE alternative to
+   * mintWorkspacePreview. GTM environments can carry a `workspaceId` (a "link to a quick preview of a
+   * workspace"), so `gtm_auth`/`gtm_preview=env-<id>` for such an environment serves the workspace's draft
+   * WITHOUT ever calling create_version. That matters because (a) create_version pollutes version history
+   * with "Samarth Verify (auto)" entries and (b) versions.delete needs a scope we don't request, so those
+   * entries can never be cleaned up — whereas environments.create/delete use edit.containers, which we
+   * have. Returns the env preview snippet + the environment id the caller MUST delete afterwards.
+   */
+  async mintWorkspaceEnvironmentPreview(
+    accountId: string,
+    containerId: string,
+    workspaceId: string
+  ): Promise<{ snippet: string; environmentId: string }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const containerParent = `accounts/${accountId}/containers/${containerId}`;
+    const [publicId, envRes] = await Promise.all([
+      this.getContainerPublicId(accountId, containerId),
+      this.q(() => gtm.accounts.containers.environments.create({
+        parent: containerParent,
+        // A WORKSPACE-type environment linked to the throwaway workspace. No name (the API allows a name
+        // only on USER-type environments); no containerVersionId (this previews the live DRAFT).
+        requestBody: { type: 'workspace', workspaceId } as unknown as Record<string, unknown>,
+      })),
+    ]);
+    let env = envRes.data;
+    // A fresh environment can come back without its gtm_auth token — reauthorize to generate it.
+    if (!env.authorizationCode && env.environmentId) {
+      const re = await this.q(() => gtm.accounts.containers.environments.reauthorize({
+        path: `${containerParent}/environments/${env.environmentId}`,
+        requestBody: {},
+      }));
+      env = re.data;
+    }
+    if (!env.authorizationCode || !env.environmentId) {
+      throw new Error('The workspace preview environment returned no authorization code.');
+    }
+    return { snippet: buildEnvironmentSnippet(publicId, env.authorizationCode, env.environmentId).head, environmentId: env.environmentId };
   }
 
   /**
@@ -776,7 +829,7 @@ export class GoogleDataService {
     containerId: string,
     sourceWorkspaceId: string,
     monitor: { endPoint: string; galleryOwner: string; galleryRepository: string }
-  ): Promise<{ snippet: string; versionId: string; cleanupWorkspaceIds: string[] }> {
+  ): Promise<{ snippet: string; cleanupWorkspaceIds: string[]; cleanupEnvironmentId?: string; cleanupVersionId?: string }> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     // GTM rejects ':' (and <>) in resource names, so a raw ISO timestamp (…T11:55:19) 400s — use a
@@ -813,11 +866,19 @@ export class GoogleDataService {
           ...(triggerId ? { firingTriggerId: [triggerId] } : {}),
         },
       }));
-      // Mint the throwaway workspace's preview. This SUBMITS the throwaway (it becomes read-only) and GTM
-      // auto-forks a fresh workspace — clean up both. The version it creates is never published.
-      const preview = await this.mintWorkspacePreview(accountId, containerId, temp.workspaceId);
-      if (preview.newWorkspaceId) cleanupWorkspaceIds.push(preview.newWorkspaceId);
-      return { snippet: preview.snippet, versionId: preview.versionId, cleanupWorkspaceIds };
+      // Preview the throwaway workspace. PREFERRED: a workspace-linked ENVIRONMENT — NO container version
+      // is created, so nothing piles up in version history, and its cleanup (environments.delete) actually
+      // succeeds with the scopes we hold. If GTM rejects that shape, FALL BACK to the version-based preview
+      // so the monitor keeps working (that path leaves a "Samarth Verify (auto)" version the user can
+      // delete manually — versions.delete needs a scope we don't request).
+      try {
+        const env = await this.mintWorkspaceEnvironmentPreview(accountId, containerId, temp.workspaceId);
+        return { snippet: env.snippet, cleanupEnvironmentId: env.environmentId, cleanupWorkspaceIds };
+      } catch {
+        const preview = await this.mintWorkspacePreview(accountId, containerId, temp.workspaceId);
+        if (preview.newWorkspaceId) cleanupWorkspaceIds.push(preview.newWorkspaceId);
+        return { snippet: preview.snippet, cleanupVersionId: preview.versionId, cleanupWorkspaceIds };
+      }
     } catch (e) {
       for (const id of cleanupWorkspaceIds) await this.deleteGtmWorkspace(accountId, containerId, id).catch(() => undefined);
       throw e;
