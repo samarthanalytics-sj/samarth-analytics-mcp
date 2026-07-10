@@ -1,3 +1,9 @@
+## [1.294.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.293.0...v1.294.0) (2026-07-10)
+
+### Features
+
+* **verify:** Tag Assistant sign-in happens at account connect / inline — sign-in button removed ([#502](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/502)) ([b2132e4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b2132e455a9956c62708d3406ef90a92ee665bb6))
+
 ## [1.293.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.292.0...v1.293.0) (2026-07-10)
 
 ### Features
