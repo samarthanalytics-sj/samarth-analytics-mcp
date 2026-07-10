@@ -1,3 +1,9 @@
+## [1.289.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.3...v1.289.4) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** keep form tags out of the monitor table + stop pixel-tag form pile-on ([#491](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/491)) ([7124c4a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7124c4a0712fad8fc63282f83bdc1744a1ad94e6))
+
 ## [1.289.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.2...v1.289.3) (2026-07-10)
 
 ### Bug Fixes
