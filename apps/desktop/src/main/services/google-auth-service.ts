@@ -3,18 +3,13 @@ import type { RegistryService } from './registry-service';
 import { runLoopbackOAuth } from '../google/loopback';
 import { loadGoogleOAuthClient, loadGoogleOAuthClientWithSource } from '../google/oauth-config';
 import type { AccountView, GoogleClientStatus } from '../../shared/ipc';
-import type { TaOAuthSession } from '../suggestions/ta-driver';
-
-/** Injected factory that runs the OAuth consent INSIDE the Tag Assistant browser profile, so one
- *  sign-in captures both the API token and the TA web session. Returns null / throws when unavailable
- *  (e.g. Playwright not installed) — connect() then falls back to the system browser. */
-export type BrowserOAuthFactory = () => Promise<TaOAuthSession | null>;
 
 // Orchestrates per-account Google sign-in: resolve the OAuth client, run the
-// loopback flow, then upsert the account + vault the token via the registry.
-// One flow at a time. When a browser-OAuth factory is provided, consent runs in
-// the TA profile browser so the Tag Assistant session is captured in the SAME
-// sign-in; otherwise it opens the system browser (the original behavior).
+// loopback flow (opens the SYSTEM browser → the user's real, already-signed-in
+// Chrome → account chooser), then upsert the account + vault the token via the
+// registry. One flow at a time. (Tag Assistant signs in separately, on demand —
+// it needs a session in its OWN automated browser, which can't reuse the user's
+// running Chrome; see ta-driver.)
 export class GoogleAuthService {
   /** The in-flight sign-in, if any. A new connect() cancels it (rather than
    *  refusing) so a blocked/denied consent screen that never redirected back
@@ -25,9 +20,7 @@ export class GoogleAuthService {
     private readonly registry: RegistryService,
     private readonly configPath: string,
     /** Called on disconnect so a cached per-account client is dropped. */
-    private readonly onDisconnect?: (accountId: string) => void,
-    /** Optional: run consent in the TA browser profile to unify the sign-in. */
-    private readonly browserOAuth?: BrowserOAuthFactory
+    private readonly onDisconnect?: (accountId: string) => void
   ) {}
 
   status(): GoogleClientStatus {
@@ -58,32 +51,17 @@ export class GoogleAuthService {
     this.current?.abort();
     const controller = new AbortController();
     this.current = controller;
-
-    // Try to run consent in the TA browser profile (unified sign-in). If that's
-    // unavailable (no Playwright, launch failed), session stays null and we open
-    // the system browser exactly as before — sign-in never depends on it.
-    let session: TaOAuthSession | null = null;
-    if (this.browserOAuth) {
-      try { session = await this.browserOAuth(); } catch { session = null; }
-    }
     try {
       const { token, userinfo } = await runLoopbackOAuth(client, {
-        openBrowser: session
-          ? (url) => { session!.openConsent(url); return Promise.resolve(); }
-          : (url) => shell.openExternal(url),
+        openBrowser: (url) => shell.openExternal(url),
         signal: controller.signal,
       });
-      const account = this.registry.upsertGoogleAccount(
+      return this.registry.upsertGoogleAccount(
         userinfo.email,
         userinfo.name,
         JSON.stringify(token)
       );
-      // Success: keep the captured web session, migrated to this account's profile.
-      if (session) { await session.finalize(account.id).catch(() => undefined); session = null; }
-      return account;
     } finally {
-      // Any non-finalized session (cancel/deny/error/abort) is torn down + discarded.
-      if (session) await session.dispose().catch(() => undefined);
       // Only clear if a later connect() hasn't already replaced us.
       if (this.current === controller) this.current = null;
     }
