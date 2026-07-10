@@ -334,7 +334,7 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
             submitish: number;
           };
           console.error(
-            `[form-probe] ${wc.getURL() || url}: <form>=${probe.forms} input=${probe.inputs} textarea=${probe.textareas} select=${probe.selects} submitish=${probe.submitish} → extracted ${extracted} form(s)`,
+            `[form-probe] ${wc.getURL() || url}: <form>=${probe.forms} input=${probe.inputs} textarea=${probe.textareas} select=${probe.selects} submitish=${probe.submitish} -> extracted ${extracted} form(s)`,
           );
         } catch {
           /* probe is best-effort diagnostics */

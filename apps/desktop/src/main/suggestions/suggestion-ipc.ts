@@ -22,7 +22,7 @@ import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } fro
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
 import { routeTagsToPages } from './verify-routing';
-import { runTaVerify, taSignIn, taSignInStatus, taProfileDirFor } from './ta-driver';
+import { runTaVerify, taProfileDirFor } from './ta-driver';
 import { eventsForContainer, taEventsToMonitorEvents } from './ta-stream';
 import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
 import { matchFormsToTags, dedupeSharedFields, isFormEventName, type PagedForm, type FormTagIdentity } from './form-tag-match';
@@ -255,29 +255,19 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // per-tag firing; we drive the pages and read that stream. Needs a one-time Google sign-in (the
       // persistent TA browser profile keeps the session).
       if (o.monitor) {
-        // INLINE one-time sign-in: if the persistent profile has no Google session yet, open the headed
-        // sign-in window NOW and wait — so a single "Verify with Tag Assistant" click covers everything
-        // (no separate sign-in button). The session persists; later runs skip straight through. The
-        // profile is keyed to the ACTIVE connected Google account, and sign-in is steered to that same
-        // Gmail — so switching the app's account uses the right container-owning session.
+        // Everything happens in ONE visible Tag Assistant window: it opens, does a one-time Google
+        // sign-in if needed (login_hint = the active account's email), connects to the site, drives the
+        // tags, and shows the real Tag Assistant panel while our stream capture runs. The profile is
+        // keyed to the ACTIVE connected Google account, so switching the app's account uses that Gmail's
+        // own container-owning session.
         const ident = data.activeAccountIdentity();
         const profileDir = taProfileDir(ident?.id);
-        const status = await taSignInStatus(profileDir).catch(() => ({ signedIn: false }));
-        if (!status.signedIn) {
-          emit({ phase: 'monitor', message: 'One-time Google sign-in — complete it in the window that just opened…' });
-          const signedIn = await taSignIn(profileDir, ident?.email ? { loginHint: ident.email } : {}).catch(() => ({ signedIn: false }));
-          if (!signedIn.signedIn) {
-            return {
-              url: target, injected: false, previewAuth: false, pagesOk: false, verdicts: [], verifiedByMonitor: true, needTaSignIn: true,
-              error: 'Google sign-in was not completed (the window was closed or timed out). Click “Verify with Tag Assistant” again — the sign-in window will re-open.',
-            };
-          }
-        }
-        emit({ phase: 'monitor', message: 'Connecting Tag Assistant to the site (no GTM writes)…' });
+        emit({ phase: 'monitor', message: 'Opening Tag Assistant (a Chrome window will appear - sign in once if asked)...' });
         const publicId = await data.getContainerPublicId(o.monitor.accountId, o.monitor.containerId);
         const ta = await runTaVerify(profileDir, target, routedTags, publicId, {
           settleMs: clampSettle(o.settleMs),
           navTimeoutMs: o.navTimeoutMs,
+          ...(ident?.email ? { loginHint: ident.email } : {}),
           onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Driving tags in the Tag Assistant window', page, done, total }),
         });
         const base = { url: target, injected: false, previewAuth: false, pagesOk: ta.pagesOk, verifiedByMonitor: true as const, ...(ta.pagesDriven.length ? { pagesDriven: ta.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}) };
