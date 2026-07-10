@@ -1,3 +1,9 @@
+## [1.288.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.288.1...v1.288.2) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** monitor mode marks un-exercised tags "untested here", not false "not firing" ([#485](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/485)) ([009bd01](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/009bd012a85651272ffe0ba6644d6cab53ac76b7))
+
 ## [1.288.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.288.0...v1.288.1) (2026-07-10)
 
 ### Bug Fixes
