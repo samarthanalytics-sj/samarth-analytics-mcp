@@ -14,6 +14,7 @@
 // window.opener link to the TA page (the debug channel), so all driving happens by NAVIGATING THE SAME
 // POPUP sequentially — never a fresh context.
 
+import { existsSync, readFileSync } from 'node:fs';
 import { requestAllowed } from './ssrf';
 import { classifyCollector } from '../../shared/runtime-capture';
 import { PlaywrightUnavailableError } from './playwright-driver';
@@ -26,6 +27,42 @@ import { parseTaFrames, type TaCapture } from './ta-stream';
 import type { PerTagCapture } from './verify-tags';
 
 const TA_URL = 'https://tagassistant.google.com/';
+
+// ── Use the user's REAL Chrome profile (their existing Google login) ──────────────────────────────
+// The user chose to run Tag Assistant in their actual Chrome profile, so it uses the account they are
+// already signed into ("last open account") with no separate sign-in and no blank isolated profile. The
+// one cost: their Chrome must be fully closed, because a running Chrome holds an exclusive lock on its
+// user-data-dir; if it is open, launching against that dir fails and we surface a clear "close Chrome".
+
+/** Locate the installed Chrome "User Data" directory for the current OS, or null if not found. */
+export function realChromeUserDataDir(env: NodeJS.ProcessEnv = process.env): string | null {
+  const candidates: string[] = [];
+  if (env.LOCALAPPDATA) candidates.push(`${env.LOCALAPPDATA}\\Google\\Chrome\\User Data`);
+  if (env.HOME) {
+    candidates.push(`${env.HOME}/Library/Application Support/Google/Chrome`); // macOS
+    candidates.push(`${env.HOME}/.config/google-chrome`); // Linux
+  }
+  return candidates.find((p) => existsSync(p)) ?? null;
+}
+
+/** The profile directory name Chrome last used (e.g. "Default", "Profile 1") — so we open the account the
+ *  user was actually on, not always Default. Falls back to "Default". PURE given the file contents. */
+export function lastUsedChromeProfile(userDataDir: string): string {
+  try {
+    const ls = JSON.parse(readFileSync(`${userDataDir}/Local State`, 'utf8')) as { profile?: { last_used?: string } };
+    const last = ls.profile?.last_used;
+    return last && typeof last === 'string' ? last : 'Default';
+  } catch {
+    return 'Default';
+  }
+}
+
+/** Thrown when the real Chrome profile can't be opened because Chrome is still running (profile locked).
+ *  Carries a flag so the caller returns the actionable "close Chrome" message instead of a raw error. */
+class ChromeProfileLockedError extends Error {
+  readonly chromeLocked = true;
+  constructor() { super('Chrome profile is locked (Chrome is running).'); }
+}
 
 /** Per-account Tag Assistant profile directory. Each connected Google account gets its OWN persistent
  *  browser profile under <userData>/ta-profiles/<accountId>, so switching the app's active Gmail uses
@@ -68,28 +105,34 @@ async function loadPw(): Promise<{ chromium: { launchPersistentContext(dir: stri
   }
 }
 
-/** Launch the persistent TA profile. Prefer the real Chrome channel (Google sign-in trusts it far more
- *  than bundled Chromium); fall back to bundled Chromium. Headed for the one-time sign-in, headless for
- *  verify runs.
- *
- *  The two args are what make Google sign-in actually succeed (verified by probe): ignoreDefaultArgs
- *  drops "--enable-automation" (the "controlled by automated software" infobar), and
- *  "--disable-blink-features=AutomationControlled" flips navigator.webdriver from true→false — Google's
- *  sign-in refuses browsers that report webdriver=true ("this browser or app may not be secure"). */
-async function launchProfile(profileDir: string, headless: boolean): Promise<PwContext> {
+/** Launch the user's REAL Chrome profile (their existing Google login). `--profile-directory` selects the
+ *  same profile Chrome last used. Real installed Chrome only (no bundled-Chromium fallback — that wouldn't
+ *  have their login). If Chrome is running the profile is locked: the launched process forwards to the
+ *  existing instance and exits, so the launch/first-page fails — we translate that to ChromeProfileLocked. */
+async function launchRealChrome(userDataDir: string, profileName: string): Promise<PwContext> {
   const pw = await loadPw();
   if (!pw) throw new PlaywrightUnavailableError();
-  const base = {
-    headless,
-    viewport: { width: 1440, height: 900 },
-    ignoreDefaultArgs: ['--enable-automation'],
-    args: ['--disable-blink-features=AutomationControlled'],
-  };
+  let ctx: PwContext;
   try {
-    return await pw.chromium.launchPersistentContext(profileDir, { ...base, channel: 'chrome' });
+    ctx = await pw.chromium.launchPersistentContext(userDataDir, {
+      headless: false,
+      channel: 'chrome',
+      viewport: null,
+      ignoreDefaultArgs: ['--enable-automation'],
+      args: ['--disable-blink-features=AutomationControlled', `--profile-directory=${profileName}`, '--no-first-run', '--no-default-browser-check'],
+    });
   } catch {
-    return await pw.chromium.launchPersistentContext(profileDir, base);
+    throw new ChromeProfileLockedError();
   }
+  // A locked profile can still "launch" but immediately lose the browser; probe with a page to be sure.
+  try {
+    const p = ctx.pages()[0] ?? (await ctx.newPage());
+    void p;
+  } catch {
+    await ctx.close().catch(() => undefined);
+    throw new ChromeProfileLockedError();
+  }
+  return ctx;
 }
 
 // A Chromium persistent profile takes an EXCLUSIVE lock on its user-data-dir: two launchPersistentContext
@@ -147,11 +190,10 @@ export interface TaVerifyResult {
  * timeline UI land in Phase 3.
  */
 export async function runTaVerify(
-  profileDir: string,
   url: string,
   tags: VerifyDriverTag[],
   containerPublicId: string,
-  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; onPageProgress?: (page: string, done: number, total: number) => void } = {},
+  opts: { settleMs?: number; navTimeoutMs?: number; onPageProgress?: (page: string, done: number, total: number) => void } = {},
 ): Promise<TaVerifyResult> {
   const settleMs = opts.settleMs ?? 900;
   const navTimeoutMs = opts.navTimeoutMs ?? 25_000;
@@ -160,11 +202,27 @@ export async function runTaVerify(
   if (!(await requestAllowed(url))) {
     return { pagesOk: false, perTag, pagesDriven, error: `Refusing to load ${url}: blocked by the SSRF guard.` };
   }
-  // Serialize with any other profile access: the exclusive ta-profile lock means one at a time.
+  const userDataDir = realChromeUserDataDir();
+  if (!userDataDir) {
+    return { pagesOk: false, perTag, pagesDriven, error: 'Could not find your Google Chrome profile. Tag Assistant verification runs in your real Chrome so it uses your existing Google login - please install/enable Google Chrome and try again.' };
+  }
+  const profileName = lastUsedChromeProfile(userDataDir);
+  // Serialize with any other profile access: one browser launch at a time.
   return serializeProfile(async () => {
-  // HEADED (visible): the user WATCHES Tag Assistant sign in (once), connect, and show tags firing — that
-  // real Tag Assistant tab IS the "show it in detail" view — and the one-time sign-in happens in context.
-  const ctx = await launchProfile(profileDir, false);
+  // Run Tag Assistant in the user's REAL Chrome profile (their existing Google login) - no separate
+  // sign-in, no blank profile. Requires Chrome to be closed (locked profile otherwise).
+  let ctx: PwContext;
+  try {
+    ctx = await launchRealChrome(userDataDir, profileName);
+  } catch (e) {
+    if (e instanceof ChromeProfileLockedError) {
+      return {
+        pagesOk: false, perTag, pagesDriven,
+        error: 'Google Chrome is open, so Tag Assistant can\'t use your Chrome profile (a running Chrome locks it). Please FULLY CLOSE Google Chrome - every window, and check the system tray / Task Manager for a background chrome.exe - then click "Verify with Tag Assistant" again. It will use the account you\'re already signed into, so there is no separate sign-in.',
+      };
+    }
+    return { pagesOk: false, perTag, pagesDriven, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
+  }
   try {
     await ctx.addInitScript(captureFramesInit);
     // Abort analytics collectors so driving tags never delivers a real hit (the TA stream, not beacons,
@@ -178,29 +236,18 @@ export async function runTaVerify(
     // Reuse the profile's initial page (launchPersistentContext opened one) — no stray blank window.
     const ta = ctx.pages()[0] ?? (await ctx.newPage());
 
-    // ONE-TIME sign-in IN THIS SAME VISIBLE WINDOW. An isolated automated browser cannot reuse the user's
-    // normal Chrome session (a running Chrome locks its profile), so a first-time Google sign-in here is
-    // unavoidable; login_hint pre-fills the account email. Once done it persists for this account.
+    // No sign-in step: the real profile already carries the user's Google login. If it somehow isn't
+    // signed in, TA can't debug a GTM container — surface that as a clear, actionable message.
     if (!(await hasGoogleSession(ctx))) {
-      console.log('[tag-assistant] not signed in -> opening Google sign-in in the visible window (one-time)...');
-      const hint = opts.loginHint ? '&login_hint=' + encodeURIComponent(opts.loginHint) : '';
-      await ta.goto('https://accounts.google.com/ServiceLogin?continue=' + encodeURIComponent(TA_URL) + hint,
-        { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => undefined);
-      const signInDeadline = Date.now() + (opts.signInTimeoutMs ?? 300_000);
-      while (!(await hasGoogleSession(ctx))) {
-        if (ta.isClosed() || Date.now() > signInDeadline) {
-          return {
-            pagesOk: false, perTag, pagesDriven, needSignIn: true,
-            error: 'Tag Assistant sign-in was not completed. A Chrome window opened on the Google sign-in page - this is a SEPARATE, one-time sign-in (it cannot reuse your normal Chrome). Sign in with the account that has access to this GTM container, then click "Verify with Tag Assistant" again. After this once, it stays signed in.',
-          };
-        }
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-      console.log('[tag-assistant] signed in.');
+      console.log('[tag-assistant] real Chrome profile is not signed into Google.');
+      return {
+        pagesOk: false, perTag, pagesDriven, needSignIn: true,
+        error: `Your Chrome profile "${profileName}" is not signed into Google. Open Chrome, sign into the Google account that has access to this GTM container, then FULLY close Chrome and run "Verify with Tag Assistant" again.`,
+      };
     }
+    console.log(`[tag-assistant] using your Chrome profile "${profileName}" (already signed in); connecting to ${url} ...`);
 
     // Connect: Add domain -> URL -> Connect -> the debugged popup.
-    console.log(`[tag-assistant] connecting to ${url} ...`);
     await ta.goto(TA_URL, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     await ta.waitForTimeout(2500);
     const addBtn = ta.locator('button:has-text("Add domain")').first();

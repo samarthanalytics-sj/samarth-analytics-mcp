@@ -10,7 +10,7 @@
 // is not a way to bypass approval — write tools still only exist because a
 // confirm fn is supplied, and nothing is ever published.
 
-import { ipcMain, dialog, BrowserWindow, app } from 'electron';
+import { ipcMain, dialog, BrowserWindow } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
 import { findGa4BaseTag } from '../google/gtm-builders';
@@ -22,7 +22,7 @@ import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } fro
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
 import { routeTagsToPages } from './verify-routing';
-import { runTaVerify, taProfileDirFor } from './ta-driver';
+import { runTaVerify } from './ta-driver';
 import { eventsForContainer, taEventsToMonitorEvents } from './ta-stream';
 import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
 import { matchFormsToTags, dedupeSharedFields, isFormEventName, type PagedForm, type FormTagIdentity } from './form-tag-match';
@@ -35,12 +35,6 @@ import { discoverSite } from './discover';
 import { makeDriver, makeDrivers, scanConcurrency, clampSettle } from './scan-url';
 import { parseSuggestions, createSuggestedTags, planGoogleTagVars, provisionVariables } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
-
-/** The persistent browser profile that keeps the Tag Assistant Google session across runs — keyed PER
- *  connected Google account, so switching the active Gmail uses that Gmail's own TA session. */
-function taProfileDir(accountId?: string | null): string {
-  return taProfileDirFor(app.getPath('userData'), accountId);
-}
 
 export function registerSuggestionsIpc(data: GoogleDataService): void {
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
@@ -255,19 +249,15 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // per-tag firing; we drive the pages and read that stream. Needs a one-time Google sign-in (the
       // persistent TA browser profile keeps the session).
       if (o.monitor) {
-        // Everything happens in ONE visible Tag Assistant window: it opens, does a one-time Google
-        // sign-in if needed (login_hint = the active account's email), connects to the site, drives the
-        // tags, and shows the real Tag Assistant panel while our stream capture runs. The profile is
-        // keyed to the ACTIVE connected Google account, so switching the app's account uses that Gmail's
-        // own container-owning session.
-        const ident = data.activeAccountIdentity();
-        const profileDir = taProfileDir(ident?.id);
-        emit({ phase: 'monitor', message: 'Opening Tag Assistant (a Chrome window will appear - sign in once if asked)...' });
+        // Everything happens in ONE visible Tag Assistant window running in the user's REAL Chrome
+        // profile (their existing Google login) - so there is no separate sign-in and no blank profile.
+        // It connects to the site, drives the tags, and shows the real Tag Assistant panel while our
+        // stream capture runs. Requires Chrome to be closed (runTaVerify surfaces a clear message if not).
+        emit({ phase: 'monitor', message: 'Opening Tag Assistant in your Chrome (fully close Chrome first if it is open)...' });
         const publicId = await data.getContainerPublicId(o.monitor.accountId, o.monitor.containerId);
-        const ta = await runTaVerify(profileDir, target, routedTags, publicId, {
+        const ta = await runTaVerify(target, routedTags, publicId, {
           settleMs: clampSettle(o.settleMs),
           navTimeoutMs: o.navTimeoutMs,
-          ...(ident?.email ? { loginHint: ident.email } : {}),
           onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Driving tags in the Tag Assistant window', page, done, total }),
         });
         const base = { url: target, injected: false, previewAuth: false, pagesOk: ta.pagesOk, verifiedByMonitor: true as const, ...(ta.pagesDriven.length ? { pagesDriven: ta.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}) };
@@ -277,7 +267,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         // HONESTY GUARD: TA connected but streamed no events for the container → the run proved nothing;
         // never report that as "0 tags fired".
         if (taEvents.length === 0) {
-          return { ...base, verdicts: [], error: 'Tag Assistant connected but streamed no events for this container — the debug session may not have attached. Re-run; if it persists, sign in again via “Sign in for Tag Assistant”.' };
+          return { ...base, verdicts: [], error: 'Tag Assistant connected but streamed no events for this container - the debug session may not have attached. Re-run; if it persists, confirm your Chrome is signed into the Google account with access to this container.' };
         }
         const monitorEvents = taEventsToMonitorEvents(taEvents, tagList.map((t) => ({ id: t.id, tagName: t.tagName })));
         const verdicts = verdictsFromMonitor(tagList, monitorEvents, ta.perTag);
