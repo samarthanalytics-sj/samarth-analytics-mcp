@@ -1,3 +1,9 @@
+## [1.288.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.288.2...v1.288.3) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** match form tags by tag-name/page-path when the form_name condition is generic ([#486](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/486)) ([52fada1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/52fada183618deb101b9a6040215f4f3f2e1c11e))
+
 ## [1.288.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.288.1...v1.288.2) (2026-07-10)
 
 ### Bug Fixes
