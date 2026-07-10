@@ -260,6 +260,20 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // per-tag firing; we drive the pages and read that stream. Needs a one-time Google sign-in (the
       // persistent TA browser profile keeps the session).
       if (o.monitor) {
+        // INLINE one-time sign-in: if the persistent profile has no Google session yet, open the headed
+        // sign-in window NOW and wait — so a single "Verify with Tag Assistant" click covers everything
+        // (no separate sign-in button). The session persists; later runs skip straight through.
+        const status = await taSignInStatus(taProfileDir()).catch(() => ({ signedIn: false }));
+        if (!status.signedIn) {
+          emit({ phase: 'monitor', message: 'One-time Google sign-in — complete it in the window that just opened…' });
+          const signedIn = await taSignIn(taProfileDir()).catch(() => ({ signedIn: false }));
+          if (!signedIn.signedIn) {
+            return {
+              url: target, injected: false, previewAuth: false, pagesOk: false, verdicts: [], verifiedByMonitor: true, needTaSignIn: true,
+              error: 'Google sign-in was not completed (the window was closed or timed out). Click “Verify with Tag Assistant” again — the sign-in window will re-open.',
+            };
+          }
+        }
         emit({ phase: 'monitor', message: 'Connecting Tag Assistant to the site (no GTM writes)…' });
         const publicId = await data.getContainerPublicId(o.monitor.accountId, o.monitor.containerId);
         const ta = await runTaVerify(taProfileDir(), target, routedTags, publicId, {
