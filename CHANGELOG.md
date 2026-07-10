@@ -1,3 +1,9 @@
+## [1.288.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.287.0...v1.288.0) (2026-07-10)
+
+### Features
+
+* **desktop:** searchable context picker, workspace in audit filename, wider verify coverage ([#483](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/483)) ([bca5ede](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bca5ede312037b63f4eb9b6c7b1e92e894452200))
+
 ## [1.287.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.4...v1.287.0) (2026-07-10)
 
 ### Features
