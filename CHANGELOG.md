@@ -1,3 +1,9 @@
+## [1.296.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.295.1...v1.296.0) (2026-07-10)
+
+### Features
+
+* **verify:** run Tag Assistant VISIBLY with one in-window sign-in; fix mojibake logs ([#507](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/507)) ([8637a63](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8637a6327dcda7656563e3eff7bdf149a9087c92))
+
 ## [1.295.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.295.0...v1.295.1) (2026-07-10)
 
 ### Bug Fixes
