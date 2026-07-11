@@ -119,6 +119,21 @@ export function serializeProfile<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
+// After a successful run we LEAVE the Tag Assistant window open so the user can inspect the live TA panel
+// (they asked for this). But an open window keeps the profile's exclusive lock, so the NEXT run must close
+// it first. We hold the context here and close it at the start of the next run (or on app quit).
+let openTaContext: { close(): Promise<void> } | null = null;
+/** Close a left-open Tag Assistant inspection window (releases the profile lock). Best-effort. Called at
+ *  the start of each run and wired to app quit so we don't leave an orphan Chrome behind. Returns whether
+ *  it actually closed a window (the caller waits out the Windows lock-release lag before relaunching). */
+export async function closeOpenTaWindow(): Promise<boolean> {
+  const c = openTaContext;
+  openTaContext = null;
+  if (!c) return false;
+  await c.close().catch(() => undefined);
+  return true;
+}
+
 /** Signed-in check that can't be fooled by page copy: a Google web session leaves its account cookies
  *  (SAPISID / __Secure-1PSID / SID) on accounts.google.com in the persistent profile. */
 async function hasGoogleSession(ctx: PwContext): Promise<boolean> {
@@ -183,9 +198,13 @@ export async function runTaVerify(
   const withPreview = (u: string): string => withPreviewParams(u, previewParams);
   // Serialize with any other profile access: the exclusive ta-profile lock means one at a time.
   return serializeProfile(async () => {
+  // Close a window left open from a PREVIOUS run first — it still holds the profile's exclusive lock.
+  // If we did close one, wait out the brief Windows lock-release lag before relaunching the same profile.
+  if (await closeOpenTaWindow()) await new Promise((r) => setTimeout(r, 1200));
   // HEADED (visible): the user WATCHES Tag Assistant sign in (once), connect, and show tags firing — that
   // real Tag Assistant tab IS the "show it in detail" view — and the one-time sign-in happens in context.
   const ctx = await launchProfile(profileDir, false);
+  let keepWindowOpen = false; // on success, leave the TA window open for the user to inspect
   try {
     await ctx.addInitScript(captureFramesInit);
     // Abort analytics collectors so driving tags never delivers a real hit (the TA stream, not beacons,
@@ -335,11 +354,15 @@ export async function runTaVerify(
     const evs = eventsForContainer(capture, containerPublicId);
     const firedCount = evs.reduce((n, e) => n + e.tags.filter((t) => t.status === 'fired').length, 0);
     console.log(`[tag-assistant] captured ${frames.length} debug frame(s) -> ${evs.length} event(s) for ${containerPublicId}, ${firedCount} tag-fire(s)${problem ? ` -- ${problem}` : ''}`);
+    console.log('[tag-assistant] leaving the Tag Assistant window OPEN so you can inspect it — it closes automatically when you run verify again or quit the app.');
+    keepWindowOpen = true; // reached a real result — keep the TA panel up for the user to review
     return { pagesOk: true, perTag, pagesDriven, capture, ...(problem ? { debugProblem: problem } : {}) };
   } catch (e) {
     return { pagesOk: false, perTag, pagesDriven, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
   } finally {
-    await ctx.close().catch(() => undefined);
+    // Keep the window open on success (user inspects it; closed at the next run's start); close on error.
+    if (keepWindowOpen) openTaContext = ctx;
+    else await ctx.close().catch(() => undefined);
   }
   });
 }
