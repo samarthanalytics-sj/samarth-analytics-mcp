@@ -1,3 +1,9 @@
+## [1.302.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.301.0...v1.302.0) (2026-07-11)
+
+### Features
+
+* **verify:** Phase 3 — in-app Tag Assistant results view (event timeline + DLV suggestions) ([#514](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/514)) ([1d5e7ec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1d5e7ecc9f3833a772233ca9d10369fd3ce32ee7))
+
 ## [1.301.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.300.0...v1.301.0) (2026-07-11)
 
 ### Features
