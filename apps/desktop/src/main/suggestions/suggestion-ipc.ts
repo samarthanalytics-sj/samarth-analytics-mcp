@@ -23,7 +23,7 @@ import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-dr
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
 import { routeTagsToPages, normalizeVerifyPages } from './verify-routing';
 import { runTaVerify, taProfileDirFor } from './ta-driver';
-import { eventsForContainer, taEventsToMonitorEvents } from './ta-stream';
+import { eventsForContainer, taEventsToMonitorEvents, toTaEventViews, buildTriggerSuggestions } from './ta-stream';
 import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
 import { matchFormsToTags, dedupeSharedFields, isFormEventName, type PagedForm, type FormTagIdentity } from './form-tag-match';
 import { snapshotToVerifyInputs } from './container-verify';
@@ -294,7 +294,29 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         }
         const monitorEvents = taEventsToMonitorEvents(taEvents, tagList.map((t) => ({ id: t.id, tagName: t.tagName })));
         const verdicts = verdictsFromMonitor(tagList, monitorEvents, ta.perTag);
-        return { ...base, verdicts };
+        // Phase 3: the in-app detail views. taEventViews = the TA-style timeline (event → API Call push +
+        // tags fired). taSuggestions = DLV-based triggers for tags that didn't fire, built from the tag's
+        // expected custom_event name + the REAL pushes we captured.
+        const allEventViews = toTaEventViews(taEvents);
+        // Timeline UI: show meaningful events only — those that fired a tag, or carry a real (non-internal)
+        // push. Hides the many empty gtm.init/gtm.dom/gtm.load ticks per page nav. (Suggestions still match
+        // against the FULL set below so an expected event is never missed.)
+        const taEventViews = allEventViews.filter(
+          (e) => e.tagsFired.length > 0 ||
+            (e.apiCall && Object.keys(e.apiCall).some((k) => k !== 'event' && k !== 'gtm.uniqueEventId' && !/^gtm\./i.test(k))),
+        );
+        const firedTagNames = new Set(verdicts.filter((v) => v.fired).map((v) => v.tagName));
+        // Suggest DLV triggers only for tags that GENUINELY didn't fire — exclude "couldn't auto-test
+        // here" (inconclusive) and server-relayed tags, which aren't real failures.
+        const unfired = verdicts
+          .filter((v) => !v.fired && !v.inconclusive && !v.serverRelay && !firedTagNames.has(v.tagName))
+          .map((v) => {
+            const tag = tagList.find((t) => t.tagName === v.tagName);
+            const expectedEvent = tag && tag.trigger.kind === 'custom_event' ? tag.trigger.eventName : undefined;
+            return { tagName: v.tagName, ...(expectedEvent ? { expectedEvent } : {}) };
+          });
+        const taSuggestions = buildTriggerSuggestions(unfired, allEventViews);
+        return { ...base, verdicts, ...(taEventViews.length ? { taEvents: taEventViews } : {}), ...(taSuggestions.length ? { taSuggestions } : {}) };
       }
 
       const driven = await runVerifyDriver(

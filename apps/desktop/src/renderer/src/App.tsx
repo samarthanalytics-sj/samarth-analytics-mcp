@@ -4397,6 +4397,104 @@ function VerifyScorecard({ fired, config, server, untested, issues }: { fired: n
   );
 }
 
+/** Phase 3: the Tag-Assistant-style EVENT TIMELINE — one card per dataLayer event GTM processed, with the
+ *  exact push (API Call), resolved variables, and the tags it fired. This is the "show it in detail" view,
+ *  rendered inside the app from the authoritative Tag Assistant debug stream. */
+function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taEvents']> }): JSX.Element {
+  const [open, setOpen] = useState<Set<number>>(new Set([events.find((e) => e.tagsFired.length)?.eventId ?? -1]));
+  const statusColor = (s: string): string => (s === 'fired' ? 'var(--c-green)' : s === 'failed' ? 'var(--c-red)' : 'var(--text-muted)');
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6, letterSpacing: 0.2 }}>Event timeline <span style={{ ...styles.muted, fontWeight: 400 }}>· what Tag Assistant saw, event by event</span></div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {events.map((ev) => {
+          const isOpen = open.has(ev.eventId);
+          const firedN = ev.tagsFired.filter((t) => t.status === 'fired').length;
+          const failedN = ev.tagsFired.filter((t) => t.status === 'failed').length;
+          const apiEntries = ev.apiCall ? Object.entries(ev.apiCall).filter(([k]) => k !== 'gtm.uniqueEventId') : [];
+          const varEntries = ev.variables ? Object.entries(ev.variables) : [];
+          return (
+            <div key={ev.eventId} style={{ border: '1px solid var(--border-2)', borderRadius: 8, background: 'var(--surface-2)', overflow: 'hidden' }}>
+              <button
+                onClick={() => setOpen((o) => { const n = new Set(o); n.has(ev.eventId) ? n.delete(ev.eventId) : n.add(ev.eventId); return n; })}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', color: 'var(--text)' }}
+              >
+                <span style={{ opacity: 0.6, fontSize: 11, width: 12 }}>{isOpen ? '▾' : '▸'}</span>
+                <code style={{ fontSize: 12.5, fontWeight: 600 }}>{ev.eventName || '(unnamed event)'}</code>
+                <span style={{ flex: 1 }} />
+                {firedN > 0 && <span style={{ fontSize: 11.5, color: 'var(--c-green)', fontWeight: 600 }}>{firedN} fired</span>}
+                {failedN > 0 && <span style={{ fontSize: 11.5, color: 'var(--c-red)', fontWeight: 600 }}>{failedN} failed</span>}
+                {ev.tagsFired.length === 0 && <span style={{ fontSize: 11.5, ...styles.muted }}>no tags</span>}
+              </button>
+              {isOpen && (
+                <div style={{ padding: '2px 10px 10px 30px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {apiEntries.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, ...styles.muted, marginBottom: 3 }}>API CALL — dataLayer.push</div>
+                      <div style={{ fontFamily: 'monospace', fontSize: 11.5, background: 'var(--surface-3)', borderRadius: 6, padding: '6px 8px', lineHeight: 1.6, overflowX: 'auto' }}>
+                        {apiEntries.map(([k, v]) => (
+                          <div key={k}><span style={{ color: 'var(--c-blue)' }}>{k}</span>: <span>{typeof v === 'string' ? v : JSON.stringify(v)}</span></div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {ev.tagsFired.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, ...styles.muted, marginBottom: 3 }}>TAGS ON THIS EVENT</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {ev.tagsFired.map((t) => (
+                          <div key={t.name} style={{ fontSize: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <span style={{ color: statusColor(t.status), fontWeight: 700 }}>{t.status === 'fired' ? '✓' : t.status === 'failed' ? '✕' : '•'}</span>
+                            <span>{t.name}</span>
+                            <span style={{ ...styles.muted, fontSize: 11 }}>{t.status}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {varEntries.length > 0 && (
+                    <details>
+                      <summary style={{ fontSize: 11, fontWeight: 700, ...styles.muted, cursor: 'pointer' }}>RESOLVED VARIABLES ({varEntries.length})</summary>
+                      <div style={{ fontFamily: 'monospace', fontSize: 11, marginTop: 4, lineHeight: 1.6, maxHeight: 160, overflowY: 'auto' }}>
+                        {varEntries.map(([k, v]) => (<div key={k}><span style={{ opacity: 0.7 }}>{k}</span>: {v}</div>))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Phase 3: DLV-based trigger suggestions for tags that did NOT fire — built from the real captured
+ *  pushes, so the user can create/align a trigger for anything not firing. */
+function TaTriggerSuggestions({ suggestions }: { suggestions: NonNullable<VerifyTagsResult['taSuggestions']> }): JSX.Element {
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>How to track the tags that didn’t fire <span style={{ ...styles.muted, fontWeight: 400 }}>· DLV-based trigger suggestions</span></div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {suggestions.map((s) => (
+          <div key={s.tagName} style={{ border: '1px solid var(--c-amber-border)', background: 'var(--c-amber-bg)', borderRadius: 8, padding: '8px 10px' }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 3 }}>{s.tagName}</div>
+            <div style={{ fontSize: 12, lineHeight: 1.5 }}>{s.how}</div>
+            {s.conditions.length > 0 && (
+              <div style={{ fontFamily: 'monospace', fontSize: 11, marginTop: 5, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {s.conditions.map((c) => (
+                  <span key={c.key} style={{ background: 'var(--surface-3)', borderRadius: 5, padding: '2px 6px' }}>{`{{dlv - ${c.key}}}`} = “{c.value}”</span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** A clickable screenshot thumbnail (opens the full image in a lightbox) — the visual proof cell.
  *  Shared by tag verification AND the tag-suggestion panel (both pass a JPEG data-URI + a name). */
 function ProofThumb({ screenshot, name, onOpen }: { screenshot?: string; name: string; onOpen: () => void }): JSX.Element {
@@ -5092,6 +5190,14 @@ function VerifyPanel({
               <div style={{ fontWeight: 600, color: 'var(--c-red)' }}>Error: {vResult.error}</div>
             ) : (
               <VerifyScorecard fired={firedReal.length} config={firedSynthetic.length} server={serverRelayed.length} untested={inconclusive.length} issues={notFired.length} />
+            )}
+            {/* Phase 3: the Tag-Assistant-style detail — the event timeline (API Call + tags fired per
+                event) and DLV trigger suggestions for anything that didn't fire. Authoritative runs only. */}
+            {!vResult.error && vResult.taEvents && vResult.taEvents.length > 0 && (
+              <TaEventTimeline events={vResult.taEvents} />
+            )}
+            {!vResult.error && vResult.taSuggestions && vResult.taSuggestions.length > 0 && (
+              <TaTriggerSuggestions suggestions={vResult.taSuggestions} />
             )}
             {vResult.pagesDriven?.length && !vResult.error ? (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>

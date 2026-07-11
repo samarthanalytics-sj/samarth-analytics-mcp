@@ -207,6 +207,74 @@ export function taEventsToMonitorEvents(
   }));
 }
 
+// ── Phase 3: the in-app "show it in detail" views ──────────────────────────────────────────────────
+
+/** One dataLayer event for the in-app timeline (mirrors shared/ipc TaEventView). */
+export interface TaEventView {
+  eventId: number;
+  eventName: string;
+  apiCall?: Record<string, unknown>;
+  variables?: Record<string, string>;
+  tagsFired: Array<{ name: string; status: TaTagStatus }>;
+}
+
+/** A DLV trigger suggestion for a not-fired tag (mirrors shared/ipc TaTriggerSuggestion). */
+export interface TaTriggerSuggestion {
+  tagName: string;
+  event: string;
+  conditions: Array<{ key: string; value: string }>;
+  how: string;
+}
+
+/** Map one container's parsed events into the timeline view the renderer shows (the API-Call push +
+ *  resolved variables + the tags that fired on each event). PURE. */
+export function toTaEventViews(events: TaEventRecord[]): TaEventView[] {
+  return events.map((e) => ({
+    eventId: e.eventId,
+    eventName: e.eventName,
+    ...(e.apiCall ? { apiCall: e.apiCall } : {}),
+    ...(e.variables ? { variables: e.variables } : {}),
+    tagsFired: e.tags.map((t) => ({ name: t.name, status: t.status })),
+  }));
+}
+
+const INTERNAL_EVENT = /^(gtm\.|page_view$|user_engagement$|scroll$)/i;
+
+/** Build DLV-based trigger suggestions for tags that did NOT fire, using the REAL pushes we captured.
+ *  For each unfired tag we look for the event it was meant to fire on (expectedEvent) among the captured
+ *  events; if found, we surface that event + up to 4 of its push params as Data Layer Variable conditions;
+ *  if the event never occurred, we say so. When the tag has no expected event, we point at the best
+ *  captured interaction event. PURE + unit-tested. */
+export function buildTriggerSuggestions(
+  unfired: Array<{ tagName: string; expectedEvent?: string }>,
+  events: TaEventView[],
+): TaTriggerSuggestion[] {
+  const realInteraction = events.find((e) => !INTERNAL_EVENT.test(e.eventName));
+  return unfired.map(({ tagName, expectedEvent }) => {
+    const match = expectedEvent ? events.find((e) => e.eventName === expectedEvent) : undefined;
+    const ev = match ?? (expectedEvent ? undefined : realInteraction);
+    if (!ev) {
+      const how = expectedEvent
+        ? `No "${expectedEvent}" event was seen during the test, so this tag never had a chance to fire. Make sure the site pushes { event: "${expectedEvent}" } to the dataLayer at the right moment, then trigger this tag on it.`
+        : `No custom dataLayer event was captured for this tag. Add a dataLayer.push({ event: "…" }) where it should fire and trigger this tag on that event.`;
+      return { tagName, event: expectedEvent ?? '', conditions: [], how };
+    }
+    const conditions = Object.entries(ev.apiCall ?? {})
+      .filter(([k]) => k !== 'event' && !/^gtm\./i.test(k))
+      .slice(0, 4)
+      .map(([key, value]) => ({ key, value: (typeof value === 'string' ? value : JSON.stringify(value)).slice(0, 60) }));
+    const cond = conditions.length
+      ? ', scoped with ' + conditions.map((c) => `{{dlv - ${c.key}}} = "${c.value}"`).join(' and ')
+      : '';
+    return {
+      tagName,
+      event: ev.eventName,
+      conditions,
+      how: `Create a Custom Event trigger on "${ev.eventName}"${cond}, then set this tag to fire on it. (These values come from the real push captured during the test.)`,
+    };
+  });
+}
+
 /** Why a GTM container has no per-tag data, in operator terms — drives the "sign in and retry" UX. */
 export function containerDebugProblem(capture: TaCapture, publicId: string): string | null {
   const c = capture.containers.find((x) => x.id === publicId);

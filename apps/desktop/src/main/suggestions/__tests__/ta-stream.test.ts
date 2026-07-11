@@ -5,7 +5,7 @@
 // samarthanalytics.com (2026-07-10 probes): CONTAINER_STARTING/CONTAINER_DETAILS/PING wrappers and
 // MEMO.data.memo.sanitized frames (EVENT_STARTED / DATA_LAYER / MACRO_RESOLVED / TAG_STARTED / TAG_STATUS).
 
-import { parseTaFrames, eventsForContainer, containerDebugProblem, mapExecuteStatus, taEventsToMonitorEvents, type TaEventRecord } from '../ta-stream';
+import { parseTaFrames, eventsForContainer, containerDebugProblem, mapExecuteStatus, taEventsToMonitorEvents, toTaEventViews, buildTriggerSuggestions, type TaEventRecord } from '../ta-stream';
 
 let passed = 0;
 let failed = 0;
@@ -121,6 +121,39 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
   check('map: a tag not in the inventory is DROPPED (no cross-container credit)', me[0].tags.length === 2);
 }
 
+// ── Phase 3: toTaEventViews (timeline) ──────────────────────────────────────────────────────────────
+{
+  const events: TaEventRecord[] = [
+    { container: 'GTM-X', eventId: 33, eventName: 'form_submission', apiCall: { event: 'form_submission', form_name: 'contact_form' }, variables: { 'dlv - form_name': 'contact_form' }, tags: [{ name: 'GA4 Form', status: 'fired' }, { name: 'Meta Form', status: 'failed' }] },
+    { container: 'GTM-X', eventId: 30, eventName: 'gtm.init', tags: [] },
+  ];
+  const views = toTaEventViews(events);
+  check('timeline: carries eventName + apiCall push', views[0].eventName === 'form_submission' && views[0].apiCall?.form_name === 'contact_form');
+  check('timeline: carries resolved variables', views[0].variables?.['dlv - form_name'] === 'contact_form');
+  check('timeline: tagsFired = name+status per tag', views[0].tagsFired.length === 2 && views[0].tagsFired[0].status === 'fired' && views[0].tagsFired[1].status === 'failed');
+  check('timeline: an event with no push/vars omits those keys', views[1].apiCall === undefined && views[1].variables === undefined && views[1].tagsFired.length === 0);
+}
+
+// ── Phase 3: buildTriggerSuggestions (DLV suggestions for not-fired tags) ────────────────────────────
+{
+  const views = toTaEventViews([
+    { container: 'GTM-X', eventId: 1, eventName: 'gtm.js', tags: [] },
+    { container: 'GTM-X', eventId: 2, eventName: 'form_submission', apiCall: { event: 'form_submission', form_name: 'contact_form', form_type: 'main' }, tags: [] },
+  ]);
+  // A tag that expected form_submission (which WAS captured) → suggest a trigger on it + DLV conditions.
+  const s1 = buildTriggerSuggestions([{ tagName: 'Meta Form', expectedEvent: 'form_submission' }], views);
+  check('suggest: uses the captured expected event', s1[0].event === 'form_submission');
+  check('suggest: proposes DLV conditions from the real push (not the event key / gtm.*)', s1[0].conditions.some((c) => c.key === 'form_name' && c.value === 'contact_form') && !s1[0].conditions.some((c) => c.key === 'event'));
+  check('suggest: how-text names the event + a DLV variable', /Custom Event trigger on "form_submission"/.test(s1[0].how) && /\{\{dlv - form_name\}\}/.test(s1[0].how));
+  // A tag whose expected event NEVER occurred → say so, no conditions.
+  const s2 = buildTriggerSuggestions([{ tagName: 'Purchase', expectedEvent: 'purchase' }], views);
+  check('suggest: expected event never seen → explains it and offers no conditions', s2[0].conditions.length === 0 && /No "purchase" event was seen/.test(s2[0].how));
+  // A tag with no expected event → point at the best real interaction event (not gtm.*).
+  const s3 = buildTriggerSuggestions([{ tagName: 'Mystery' }], views);
+  check('suggest: no expected event → picks the real interaction event (skips gtm.*)', s3[0].event === 'form_submission');
+  check('suggest: empty in = empty out', buildTriggerSuggestions([], views).length === 0);
+}
+
 console.log(`\nta-stream: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 18) { console.error(`expected >= 18 checks, got ${passed}`); process.exit(1); }
+if (passed < 26) { console.error(`expected >= 26 checks, got ${passed}`); process.exit(1); }
