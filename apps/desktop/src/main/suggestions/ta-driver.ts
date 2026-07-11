@@ -267,8 +267,12 @@ export async function runTaVerify(
       console.log(`[tag-assistant]   page ${done}/${groups.length}: ${pageUrl} (${groupTags.length} trigger(s))`);
       try { opts.onPageProgress?.(pageUrl, done, groups.length); } catch { /* progress is a nicety */ }
       if (!(await requestAllowed(pageUrl))) continue;
-      // First group often IS the connect URL — already loaded; skip the redundant navigation.
-      if (!(done === 1 && popup.url().split('?')[0].replace(/\/$/, '') === pageUrl.split('?')[0].replace(/\/$/, ''))) {
+      // The first group is often the connect URL, already loaded — normally skip re-navigating it. BUT in
+      // PREVIEW mode the connect URL loaded WITHOUT the preview params (no preview cookie set, published
+      // build served), so we MUST (re)load it via withPreview so the container serves its debug preview
+      // build under the debug session. So: skip only when NOT in preview mode and it's already the page.
+      const alreadyOnPage = done === 1 && popup.url().split('?')[0].replace(/\/$/, '') === pageUrl.split('?')[0].replace(/\/$/, '');
+      if (previewParams || !alreadyOnPage) {
         try { await popup.goto(withPreview(pageUrl), { waitUntil: 'networkidle', timeout: navTimeoutMs }); } catch {
           for (const t of groupTags) perTag.push({ tagId: t.id, kind: 'navigate', targetFound: false, performed: false, note: `could not load ${pageUrl}`, hits: [] });
           continue;
