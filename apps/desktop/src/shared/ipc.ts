@@ -710,6 +710,36 @@ export interface VerifyTagsResult {
   /** Phase B (best-effort): GTM's on-page debug signal — whether the container actually loaded +
    *  the dataLayer event stream. Present only when gtmDebug was requested. */
   gtmDebug?: { containerLoaded: boolean; containerIds: string[]; dataLayerEvents: string[] };
+  /** Phase 3 (authoritative Tag Assistant runs): the per-event timeline — one entry per dataLayer event
+   *  the container processed, with the exact push (API Call), resolved variables, and the tags that fired
+   *  on it. Powers the in-app "show it in detail" results view. */
+  taEvents?: TaEventView[];
+  /** Phase 3: DLV-based trigger suggestions for tags that did NOT fire, built from the REAL captured
+   *  pushes — so the user can create/align a trigger for anything not firing. */
+  taSuggestions?: TaTriggerSuggestion[];
+}
+
+/** One dataLayer event in the Tag-Assistant-style timeline. */
+export interface TaEventView {
+  eventId: number;
+  eventName: string;
+  /** The exact dataLayer push that raised this event (TA's "API Call" block). */
+  apiCall?: Record<string, unknown>;
+  /** Resolved variable values at this event (name → value). */
+  variables?: Record<string, string>;
+  /** Tags GTM ran on this event, with their status. */
+  tagsFired: Array<{ name: string; status: 'fired' | 'failed' | 'running' | 'unknown' }>;
+}
+
+/** A DLV-based trigger suggestion for a tag that did NOT fire, built from the real captured pushes. */
+export interface TaTriggerSuggestion {
+  tagName: string;
+  /** The dataLayer event to trigger on (empty if none was captured). */
+  event: string;
+  /** dataLayer key → observed value pairs to scope the trigger as Data Layer Variables. */
+  conditions: Array<{ key: string; value: string }>;
+  /** Plain-English "how to build this in GTM". */
+  how: string;
 }
 
 /** A live progress tick streamed WHILE a verify run is in flight (suggestions:verify:event), so the UI
