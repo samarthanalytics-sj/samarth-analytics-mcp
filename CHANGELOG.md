@@ -1,3 +1,9 @@
+## [1.299.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.299.0...v1.299.1) (2026-07-11)
+
+### Bug Fixes
+
+* **verify:** in GTM Preview mode, (re)load the connect page WITH preview params ([#511](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/511)) ([e710bf4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e710bf4ea18f54283064f7c59888ea64fb72b9b0)), closes [#510](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/510)
+
 ## [1.299.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.298.0...v1.299.0) (2026-07-10)
 
 ### Features
