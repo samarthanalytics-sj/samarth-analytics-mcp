@@ -1,3 +1,9 @@
+## [1.300.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.299.1...v1.300.0) (2026-07-11)
+
+### Features
+
+* **verify:** keep the Tag Assistant window open after a run so the user can inspect it ([#512](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/512)) ([40325b5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/40325b58f466241872d844b2db06c1fdd434985b))
+
 ## [1.299.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.299.0...v1.299.1) (2026-07-11)
 
 ### Bug Fixes
