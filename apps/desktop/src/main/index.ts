@@ -10,6 +10,7 @@ import { RegistryService } from './services/registry-service';
 import { registerRegistryIpc } from './ipc/registry-ipc';
 import { registerProvidersIpc } from './ipc/providers-ipc';
 import { GoogleAuthService } from './services/google-auth-service';
+import { closeOpenTaWindow } from './suggestions/ta-driver';
 import { registerGoogleIpc } from './ipc/google-ipc';
 import { AccountClientManager } from './google/account-clients';
 import { GoogleDataService } from './google/data-service';
@@ -232,4 +233,10 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+// A successful "Verify with Tag Assistant" run LEAVES its Chrome window open for the user to inspect the
+// live Tag Assistant panel. Close it on quit so we don't orphan a browser after the app exits.
+app.on('before-quit', () => {
+  void closeOpenTaWindow().catch(() => undefined);
 });
