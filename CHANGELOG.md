@@ -1,3 +1,9 @@
+## [1.301.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.300.0...v1.301.0) (2026-07-11)
+
+### Features
+
+* **verify:** "Pages to verify" — scope Tag Assistant verification to specific URLs ([#513](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/513)) ([a3c9245](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a3c9245b9860a699ce4cf878d0131c9fa3d3129b))
+
 ## [1.300.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.299.1...v1.300.0) (2026-07-11)
 
 ### Features
