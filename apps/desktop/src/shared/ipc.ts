@@ -746,6 +746,10 @@ export interface VerifyTagsOptions {
   /** Page/depth budget for that pre-verify crawl (clamped by the scanner). */
   crawlMaxPages?: number;
   crawlMaxDepth?: number;
+  /** Verify ONLY these exact page URLs (one per line in the UI). When set, the auto-crawl is skipped and
+   *  EVERY tag is driven on EACH of these pages — so forms/tags on pages the crawl missed still get
+   *  exercised. Same-origin URLs only; anything else is dropped. */
+  verifyPages?: string[];
   /** AUTHORITATIVE (Tag-Assistant-grade) mode: instead of a pasted snippet, mint a THROWAWAY preview
    *  that injects a GTM Monitor tag, so verdicts come from GTM's OWN per-tag firing (addEventCallback),
    *  not beacon inference. Requires the GTM account/container/workspace to mint from; draft-only, never

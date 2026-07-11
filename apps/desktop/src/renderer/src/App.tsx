@@ -4789,6 +4789,7 @@ function VerifyPanel({
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [vUrl, setVUrl] = useState('');
   const [vSnippet, setVSnippet] = useState('');
+  const [vVerifyPages, setVVerifyPages] = useState('');
   const [vVerifying, setVVerifying] = useState(false);
   const [vProgress, setVProgress] = useState<VerifyProgressView | null>(null);
   const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
@@ -4858,6 +4859,9 @@ function VerifyPanel({
         return;
       }
       const snippet = (snippetOverride ?? vSnippet).trim();
+      // "Pages to verify" — one URL per line. When present, verify drives every tag on each of these pages
+      // (skips the auto-crawl), so forms/tags on pages the crawl missed get exercised.
+      const verifyPages = vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
       const res = await window.desktop.tags.verify(
         target,
         tags,
@@ -4865,6 +4869,7 @@ function VerifyPanel({
         {
           gtmDebug: true,
           ...(snippet ? { containerSnippet: snippet } : {}),
+          ...(verifyPages.length ? { verifyPages } : {}),
           ...(useMonitor ? { monitor: { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId! } } : {}),
         },
         (p) => setVProgress(p), // live "scanning <url>" / "verifying <url>" feed
@@ -4957,6 +4962,18 @@ function VerifyPanel({
             style={{ ...styles.input, width: '100%', minHeight: 52, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
             disabled={!ready}
           />
+          <textarea
+            value={vVerifyPages}
+            onChange={(e) => setVVerifyPages(e.target.value)}
+            placeholder="Pages to verify (optional) — one URL per line. When set, verify SKIPS the auto-crawl and drives every tag on ONLY these pages, so forms/tags on pages the crawl missed still get tested. e.g. https://www.example.com/contact"
+            style={{ ...styles.input, width: '100%', minHeight: 52, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
+            disabled={!ready}
+          />
+          {vVerifyPages.trim() && (
+            <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+              Verifying only {vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean).length} page(s) — the site crawl is skipped.
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
             <button
               style={styles.primaryBtn}

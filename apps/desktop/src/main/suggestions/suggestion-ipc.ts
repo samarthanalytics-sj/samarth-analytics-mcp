@@ -21,7 +21,7 @@ import { crawlAndSuggest, scanUrls, urlPriority, type ScanProgress } from './sca
 import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
-import { routeTagsToPages } from './verify-routing';
+import { routeTagsToPages, normalizeVerifyPages } from './verify-routing';
 import { runTaVerify, taProfileDirFor } from './ta-driver';
 import { eventsForContainer, taEventsToMonitorEvents } from './ta-stream';
 import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
@@ -208,8 +208,12 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // click tag there. Best-effort — any crawl failure falls back to single-page driving.
       let pagesCrawled = 0;
       let pagesTotal = 0;
+      // "Verify ONLY these pages": the user pasted an explicit page list. Normalized to same-origin absolute
+      // URLs (off-site / unparseable dropped). When present, we skip the auto-crawl entirely and drive
+      // every tag on each of these pages (below) — direct control over coverage for missed forms.
+      const explicitPages = normalizeVerifyPages(o.verifyPages, target);
       const hasClickTags = tagList.some((t) => t.trigger.kind === 'link_click' || t.trigger.kind === 'all_clicks');
-      if (els.length === 0 && hasClickTags && o.crawlForPages !== false) {
+      if (explicitPages.length === 0 && els.length === 0 && hasClickTags && o.crawlForPages !== false) {
         try {
           // SITEMAP-DRIVEN coverage: enumerate EVERY page the site lists (its sitemap, else a
           // rendered-link crawl) and scan them so a click CTA on ANY page is inventoried — not just the
@@ -248,7 +252,12 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         }
       }
       const routed = routeTagsToPages(tagList, els, target);
-      const routedTags = routed.map((t) => ({ id: t.id, ...(t.page ? { page: t.page } : {}), trigger: t.trigger }));
+      // Default: each tag on its routed page. Explicit-pages mode: drive EVERY tag on EACH chosen page, so
+      // a form/tag on a page the crawl missed is still exercised (the user's direct coverage control).
+      const routedTags = explicitPages.length
+        ? explicitPages.flatMap((page) => tagList.map((t) => ({ id: t.id, page, trigger: t.trigger })))
+        : routed.map((t) => ({ id: t.id, ...(t.page ? { page: t.page } : {}), trigger: t.trigger }));
+      if (explicitPages.length) { pagesTotal = explicitPages.length; pagesCrawled = explicitPages.length; }
 
       // AUTHORITATIVE mode: automate the REAL Tag Assistant. ZERO GTM writes — no version, no workspace,
       // no extra container. TA connects to the live site; the debugged popup streams GTM's own per-event

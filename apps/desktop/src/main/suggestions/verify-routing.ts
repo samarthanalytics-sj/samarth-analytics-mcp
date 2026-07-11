@@ -67,6 +67,28 @@ export function elementMatchesTrigger(trigger: VerifyTagInput['trigger'], el: De
   return true;
 }
 
+/**
+ * Normalize a user-pasted "pages to verify" list into same-origin absolute URLs. Each entry is resolved
+ * against `target` (so a bare "/contact" becomes absolute), dropped if it can't parse or is off-origin
+ * (never drive another site), and de-duplicated preserving order. PURE.
+ */
+export function normalizeVerifyPages(raw: unknown, target: string): string[] {
+  const list = Array.isArray(raw) ? raw : [];
+  let origin = '';
+  try { origin = new URL(target).origin; } catch { return []; }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of list) {
+    const s = String(r ?? '').trim();
+    if (!s) continue;
+    let abs: string;
+    try { abs = new URL(s, target).href; } catch { continue; }
+    try { if (new URL(abs).origin !== origin) continue; } catch { continue; }
+    if (!seen.has(abs)) { seen.add(abs); out.push(abs); }
+  }
+  return out;
+}
+
 /** A page the driver would drive anyway (homepage / site-wide) — path is "/" or empty. */
 export function isHomePage(page: string | undefined, baseUrl?: string): boolean {
   if (!page || page === 'site-wide' || page === '/') return true;
