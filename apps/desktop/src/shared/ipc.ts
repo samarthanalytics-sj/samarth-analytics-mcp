@@ -721,6 +721,10 @@ export interface VerifyTagsResult {
 
 /** One dataLayer event in the Tag-Assistant-style timeline. */
 export interface TaEventView {
+  /** Stable, unique, 1-based chronological index — the timeline's identity. `eventId` is NOT unique across
+   *  a multi-page drive (gtm.uniqueEventId resets per page), so React keys, expand state, and the
+   *  screenshot alignment all key on `seq`. */
+  seq: number;
   eventId: number;
   eventName: string;
   /** The exact dataLayer push that raised this event (TA's "API Call" block). */
