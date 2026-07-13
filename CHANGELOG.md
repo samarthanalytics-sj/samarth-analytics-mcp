@@ -1,3 +1,9 @@
+## [1.309.9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.8...v1.309.9) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** proof screenshot shows the tag's OWN event, never the Summary ([#543](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/543)) ([0549124](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/05491248fe054fa4d5ac989fa8a37839e7722101))
+
 ## [1.309.8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.7...v1.309.8) (2026-07-13)
 
 ### Bug Fixes
