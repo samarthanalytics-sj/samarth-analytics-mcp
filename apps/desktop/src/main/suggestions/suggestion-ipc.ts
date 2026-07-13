@@ -282,9 +282,10 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       const routed = routeTagsToPages(tagList, els, target);
       // Default: each tag on its routed page. Explicit-pages mode: drive EVERY tag on EACH chosen page, so
       // a form/tag on a page the crawl missed is still exercised (the user's direct coverage control).
+      const nameById = new Map(tagList.map((t) => [t.id, t.tagName] as const));
       const routedTags = explicitPages.length
-        ? explicitPages.flatMap((page) => tagList.map((t) => ({ id: t.id, page, trigger: t.trigger })))
-        : routed.map((t) => ({ id: t.id, ...(t.page ? { page: t.page } : {}), trigger: t.trigger }));
+        ? explicitPages.flatMap((page) => tagList.map((t) => ({ id: t.id, name: t.tagName, page, trigger: t.trigger })))
+        : routed.map((t) => ({ id: t.id, ...(nameById.get(t.id) ? { name: nameById.get(t.id)! } : {}), ...(t.page ? { page: t.page } : {}), trigger: t.trigger }));
       if (explicitPages.length) { pagesTotal = explicitPages.length; pagesCrawled = explicitPages.length; }
 
       // AUTHORITATIVE mode: automate the REAL Tag Assistant. ZERO GTM writes — no version, no workspace,
