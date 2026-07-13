@@ -1,3 +1,9 @@
+## [1.308.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.1...v1.308.2) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** pair form tags to their page's form by trigger page-scope (fewer Untested) ([#530](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/530)) ([bdff5c2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bdff5c2c51c790177fbacb9b1b2087bd8d869d36))
+
 ## [1.308.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.0...v1.308.1) (2026-07-13)
 
 ### Bug Fixes
