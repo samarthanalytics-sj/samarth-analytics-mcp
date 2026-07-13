@@ -5011,10 +5011,18 @@ function VerifyPanel({
     return m;
   }
 
+  // The site URL to verify against: the top "live site" field, or — when that's left empty — the first
+  // ABSOLUTE URL in the "Pages to verify" box, so a single absolute page there can stand on its own (no need
+  // to type the site twice). A relative page (e.g. "/contact") still needs the top field to resolve against.
+  function verifyTarget(): string {
+    const pages = vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+    return vUrl.trim() || pages.find((u) => /^https?:\/\//i.test(u)) || '';
+  }
+
   async function runVerify(snippetOverride?: string, useMonitor = false, withForms = false): Promise<void> {
     if (!ready || !ctx || vVerifying) return;
-    const target = vUrl.trim();
-    if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against.' }); return; }
+    const target = verifyTarget();
+    if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against (or paste an absolute URL in “Pages to verify”).' }); return; }
     // AUTHORITATIVE mode automates the REAL Tag Assistant — ZERO GTM writes (no version, no workspace,
     // no container). No confirm needed; it may require a one-time Google sign-in (surfaced below).
     const canMonitor = Boolean(ctx.accountId && ctx.containerId && ctx.workspaceId);
@@ -5083,8 +5091,8 @@ function VerifyPanel({
   // decision is made in the effect below once its status bubbles back.
   async function startTaFlow(): Promise<void> {
     if (!ready || !ctx || vVerifying || vTaStage === 'scanning') return;
-    const target = vUrl.trim();
-    if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against.' }); return; }
+    const target = verifyTarget();
+    if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against (or paste an absolute URL in “Pages to verify”).' }); return; }
     if (!(ctx.accountId && ctx.containerId && ctx.workspaceId)) {
       setVNote({ kind: 'error', text: 'Pick a GTM account, container and workspace first — verification reads that container’s tags.' });
       return;
@@ -5241,17 +5249,17 @@ function VerifyPanel({
           )}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
             <button
-              style={styles.primaryBtn}
+              style={{ ...styles.primaryBtn, ...(!ready || vVerifying || !verifyTarget() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
               onClick={() => void runVerify()}
-              disabled={!ready || vVerifying || !vUrl.trim()}
+              disabled={!ready || vVerifying || !verifyTarget()}
               title="Load the live site and verify each tag — nothing is created in your container (no version, no preview)"
             >
               {vVerifyKind === 'firing' ? 'Verifying…' : 'Verify firing'}
             </button>
             <button
-              style={{ background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--c-blue)', borderRadius: 10, padding: '10px 16px', fontSize: 14, cursor: 'pointer', ...(!ready || vVerifying || vTaStage === 'scanning' || !vUrl.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+              style={{ background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--c-blue)', borderRadius: 10, padding: '10px 16px', fontSize: 14, cursor: 'pointer', ...(!ready || vVerifying || vTaStage === 'scanning' || !verifyTarget() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
               onClick={() => void startTaFlow()}
-              disabled={!ready || vVerifying || vTaStage === 'scanning' || !vUrl.trim()}
+              disabled={!ready || vVerifying || vTaStage === 'scanning' || !verifyTarget()}
               title="Authoritative: automates the REAL Tag Assistant — connects it to the site, drives your tags, and reads GTM's own per-event firing. First it scans the site for forms with tags and asks whether to verify those too. ZERO GTM writes. Signs in to Tag Assistant ONCE (saved after that, so it never asks again) and your normal Chrome can stay open."
             >
               {vVerifyKind === 'ta' ? 'Verifying with Tag Assistant…' : vTaStage === 'scanning' ? 'Scanning site for forms…' : 'Verify with Tag Assistant'}
@@ -5605,7 +5613,7 @@ function VerifyPanel({
           </div>
         )}
 
-        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} onReviewedForms={(f) => { vReviewedFormsRef.current = f; }} showFields={vTaStage === 'filling'} onSubmitForms={() => { setVTaStage('idle'); void runVerify(undefined, true, true); }} firedTags={vResult && vResult.verifiedByMonitor && !vResult.error && vFormsVerified ? new Set(fired.map((v) => v.tagName)) : undefined} onScanProgress={(p) => setVProgress(p)} />
+        <FormFillReview url={verifyTarget()} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} onReviewedForms={(f) => { vReviewedFormsRef.current = f; }} showFields={vTaStage === 'filling'} onSubmitForms={() => { setVTaStage('idle'); void runVerify(undefined, true, true); }} firedTags={vResult && vResult.verifiedByMonitor && !vResult.error && vFormsVerified ? new Set(fired.map((v) => v.tagName)) : undefined} onScanProgress={(p) => setVProgress(p)} />
       </div>
       {vLightbox && <ProofLightbox shot={vLightbox} onClose={() => setVLightbox(null)} />}
     </div>
