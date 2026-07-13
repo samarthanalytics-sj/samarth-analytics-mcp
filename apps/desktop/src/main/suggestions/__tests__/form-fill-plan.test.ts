@@ -44,7 +44,7 @@ const form = (o: Partial<RawForm>): RawForm => {
   check('category select picks first real option + carries options', byName('topic')?.value === 'Sales' && (byName('topic')?.options ?? []).includes('Support'));
   check('required flags carried', byName('email')?.required === true && byName('lname')?.required === false);
   check('selector is name-based', byName('email')?.selector === '[name="email"]');
-  check('message got the disclaimer text', /test submission/i.test(byName('message')?.value ?? ''));
+  check('message got the simple test text', byName('message')?.value === 'test form please ignore');
 }
 
 // ── a form with NO fillable fields (only a hidden control) is dropped ─────────────────────────────
