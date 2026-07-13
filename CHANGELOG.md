@@ -1,3 +1,9 @@
+## [1.304.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.303.0...v1.304.0) (2026-07-13)
+
+### Features
+
+* **verify:** Phase 2 — real form submits through Tag Assistant + simple Test values ([#517](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/517)) ([104df97](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/104df975708d10588d782c1606a4413e7dfff3ed))
+
 ## [1.303.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.302.1...v1.303.0) (2026-07-13)
 
 ### Features
