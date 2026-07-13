@@ -111,7 +111,7 @@ function scrollAndCollectForms(): Promise<RawForm[]> {
         /* a mid-scroll extractor error on one frame must not abort the whole pass */
       }
     };
-    const step = Math.max(300, Math.floor(window.innerHeight * 0.8));
+    const step = Math.max(300, Math.floor(window.innerHeight * 0.6)); // overlap ~40% so a section stays in view across >=2 grabs (survives unmount-on-exit)
     let y = 0;
     const tick = (): void => {
       window.scrollTo(0, y);
@@ -127,9 +127,9 @@ function scrollAndCollectForms(): Promise<RawForm[]> {
           setTimeout(() => {
             grab();
             resolve([...collected.values()].map((f, i) => ({ ...f, index: i })));
-          }, 400);
+          }, 500);
         }
-      }, 150);
+      }, 450); // dwell before each grab: long enough for an IO-triggered React.lazy chunk to fetch + mount + animate
     };
     tick();
   });
@@ -209,6 +209,15 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
   });
   // Never let a scanned page spawn windows.
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // Show the scan window OFFSCREEN (not `show:false`). A never-shown Electron window reports
+  // document.visibilityState='hidden' with a 0px painted viewport, so Chromium never delivers
+  // IntersectionObserver callbacks — and modern sites code-split every below-fold section as
+  // React.lazy()+<Suspense> gated on scroll-visibility, so those sections (contact + newsletter forms) never
+  // mount and their <input>s never enter the DOM (the "input=0" we saw). Showing it offscreen + unfocused
+  // flips visibilityState to 'visible' and gives a real 1366x900 compositing viewport, so IO fires and the
+  // lazy forms mount — while staying invisible to the user and never stealing focus. Still read-only: the
+  // driver only navigates + scrolls + reads the DOM.
+  try { win.setPosition(-32000, -32000); win.showInactive(); } catch { /* showing may fail on a headless host — non-fatal, falls back to hidden behaviour */ }
   let lastStatus: number | null = null;
   win.webContents.on('did-navigate', (_e, _url, httpResponseCode) => {
     lastStatus = typeof httpResponseCode === 'number' ? httpResponseCode : null;
@@ -287,11 +296,11 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
         await wc.executeJavaScript(`window.__sxForms = ${extractFormsInPage.toString()};`, true);
         scrolledForms = (await withTimeout(
           wc.executeJavaScript(inPage(scrollAndCollectForms), true),
-          25_000, // ceiling raised so a tall homepage finishes scrolling to the FOOTER (newsletter / "Stay
-          //         Updated" forms live there) before the pass is cut off — else the footer form is missed
+          35_000, // ceiling raised (smaller step + longer dwell now that the window is visible so IO fires and
+          //         lazy sections actually mount) so a tall homepage still reaches the FOOTER newsletter form
           'scroll+forms',
         )) as RawForm[];
-        if (autoSettle) await waitNetworkIdle(0, 500, 4_000);
+        if (autoSettle) await waitNetworkIdle(0, 700, 6_000); // give a just-triggered lazy chunk time to finish before the final read
         else await delay(Math.min(fixedSettleMs, 800));
       } catch {
         /* scroll/collect failed or timed out — the form read below does a single fallback pass */
