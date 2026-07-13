@@ -35,6 +35,12 @@ check('isHomePage NOT an absolute subpage', !isHomePage('https://site.com/career
 check('text equals matches', elementMatchesTrigger(tag().trigger, el('/careers', 'View Open Positions')));
 check('text equals is case-insensitive', elementMatchesTrigger(tag().trigger, el('/careers', 'view open positions')));
 check('text equals does NOT match a different label', !elementMatchesTrigger(tag().trigger, el('/careers', 'Apply Now')));
+// Decorated on-page labels still EQUALS-match after normalization (arrow glyph, nbsp, extra whitespace).
+check('text equals matches a label with a trailing arrow glyph', elementMatchesTrigger(tag().trigger, el('/careers', 'View Open Positions →')));
+check('text equals matches a label with nbsp + extra spaces', elementMatchesTrigger(tag().trigger, el('/careers', '  View Open   Positions ')));
+// equals-then-contains fallback: an equals trigger matches a label carrying extra words.
+check('text equals falls back to contains for an extra-word label', elementMatchesTrigger(tag().trigger, el('/careers', 'View Open Positions Today')));
+check('text equals still rejects an unrelated label', !elementMatchesTrigger(tag().trigger, el('/careers', 'Read the blog')));
 {
   const t = tag({ trigger: { name: 'x', kind: 'link_click', clickTextValue: 'Free Audit', clickTextOperator: 'contains' } });
   check('text contains matches a superset label', elementMatchesTrigger(t.trigger, el('/', 'Get a Free Audit')));
