@@ -23,7 +23,7 @@ import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-dr
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
 import { routeTagsToPages, normalizeVerifyPages } from './verify-routing';
 import { runTaVerify, taProfileDirFor, type TaFormSubmit } from './ta-driver';
-import { eventsForContainer, taEventsToMonitorEvents, toTaEventViews, buildTriggerSuggestions } from './ta-stream';
+import { eventsForContainer, taEventsToMonitorEvents, toTaEventViews, buildTriggerSuggestions, pageScopeToPath } from './ta-stream';
 import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
 import { matchFormsToTags, dedupeSharedFields, isFormEventName, type PagedForm, type FormTagIdentity } from './form-tag-match';
 import { snapshotToVerifyInputs } from './container-verify';
@@ -373,13 +373,28 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         // in a reviewed form's expectedTags) and it still didn't fire, that is NOT "untested" — it's a real
         // NOT-FIRING (its trigger's form name / id / page filter doesn't match what that form sent). Move it
         // out of Untested so the operator gets an actionable fix instead of a vague "we didn't test it".
-        const submittedFormTags = new Set(
-          (Array.isArray(o.reviewedForms) ? o.reviewedForms : []).flatMap((f) => (Array.isArray(f.expectedTags) ? f.expectedTags : [])),
-        );
+        const reviewedForms = Array.isArray(o.reviewedForms) ? o.reviewedForms : [];
+        const submittedFormTags = new Set(reviewedForms.flatMap((f) => (Array.isArray(f.expectedTags) ? f.expectedTags : [])));
+        // The page each form tag's MATCHED form actually lives on (from the reviewed forms). Every form on
+        // this site pushes the SAME form_name / form_type, so the tag's own trigger scope (usually site-wide)
+        // can't tell them apart — the FORM's PAGE is the real discriminator. We use it both to explain a
+        // not-firing form tag and to suggest a concrete {{Page Path}} trigger (vs a useless "add a field").
+        const formPageByTag = new Map<string, string>();
+        for (const f of reviewedForms) {
+          const page = String((f as { page?: unknown }).page ?? '').trim();
+          if (!page) continue;
+          for (const tn of (Array.isArray(f.expectedTags) ? f.expectedTags : [])) {
+            if (typeof tn === 'string' && !formPageByTag.has(tn)) formPageByTag.set(tn, page);
+          }
+        }
         for (const v of verdicts) {
           if (v.inconclusive && !v.fired && submittedFormTags.has(v.tagName) && !firedTagNames.has(v.tagName)) {
             v.inconclusive = false;
-            v.reason = 'Its form WAS submitted for real in this run, but GTM did not fire this tag — so its trigger condition (the form name / id, or a page-path filter) does not match what that form actually sent. Open the tag’s trigger in GTM and compare it with the dataLayer above.';
+            const fp = formPageByTag.get(v.tagName);
+            const path = fp ? pageScopeToPath(fp) ?? fp : '';
+            v.reason = path
+              ? `Its form on ${path} WAS submitted for real, but GTM didn’t fire this tag — its trigger condition doesn’t match what that form sent. Every form on this site pushes the SAME form_name / form_type, so scope this tag’s trigger by Page Path = “${path}” (the page is what makes it unique) — see the suggested trigger below.`
+              : 'Its form WAS submitted for real in this run, but GTM did not fire this tag — so its trigger condition (the form name / id, or a page-path filter) does not match what that form actually sent. Open the tag’s trigger in GTM and compare it with the dataLayer above.';
           }
         }
         // Suggest DLV triggers only for tags that GENUINELY didn't fire — exclude "couldn't auto-test
@@ -389,9 +404,10 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           .map((v) => {
             const tag = tagList.find((t) => t.tagName === v.tagName);
             const expectedEvent = tag && tag.trigger.kind === 'custom_event' ? tag.trigger.eventName : undefined;
-            // tag.page = the tag's resolved Page-Path / URL trigger scope → a {{Page Path}} condition in the
-            // suggestion, so the proposed trigger is scoped to the page this tag's CTA/form actually lives on.
-            return { tagName: v.tagName, ...(expectedEvent ? { expectedEvent } : {}), ...(tag?.page ? { page: tag.page } : {}) };
+            // Prefer the MATCHED FORM's page (the real discriminator) over the tag's own trigger scope (often
+            // site-wide for a form tag), so the suggestion proposes a concrete {{Page Path}} = the form's page.
+            const page = formPageByTag.get(v.tagName) ?? tag?.page;
+            return { tagName: v.tagName, ...(expectedEvent ? { expectedEvent } : {}), ...(page ? { page } : {}) };
           });
         const taSuggestions = buildTriggerSuggestions(unfired, allEventViews);
         return { ...base, verdicts, ...(taEventViews.length ? { taEvents: taEventViews } : {}), ...(taSuggestions.length ? { taSuggestions } : {}) };
