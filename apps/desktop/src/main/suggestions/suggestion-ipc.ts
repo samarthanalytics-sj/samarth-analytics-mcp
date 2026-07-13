@@ -22,7 +22,7 @@ import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } fro
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
 import { routeTagsToPages, normalizeVerifyPages } from './verify-routing';
-import { runTaVerify, taProfileDirFor } from './ta-driver';
+import { runTaVerify, taProfileDirFor, type TaFormSubmit } from './ta-driver';
 import { eventsForContainer, taEventsToMonitorEvents, toTaEventViews, buildTriggerSuggestions } from './ta-stream';
 import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
 import { matchFormsToTags, dedupeSharedFields, isFormEventName, type PagedForm, type FormTagIdentity } from './form-tag-match';
@@ -40,6 +40,40 @@ import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
  *  connected Google account, so switching the active Gmail uses that Gmail's own TA session. */
 function taProfileDir(accountId?: string | null): string {
   return taProfileDirFor(app.getPath('userData'), accountId);
+}
+
+/** Discover the site's forms that MATCH the container's form tags, filled with the default (editable)
+ *  test values, so "Verify with Tag Assistant" can REALLY submit each one. Same crawl as
+ *  formTagVerifyPlan (homepage + form-likely pages, cached), then form↔tag matching. Best-effort. */
+async function discoverFormsForTaSubmit(target: string, formTags: FormTagIdentity[], maxPages = 40): Promise<TaFormSubmit[]> {
+  if (formTags.length === 0) return [];
+  const pagedForms: PagedForm[] = [];
+  const disc = await discoverSite(target);
+  const formLikely = disc.urls.filter((u) => u !== target && urlPriority(u) === 1);
+  const pages = [target, ...formLikely].slice(0, Math.max(1, Math.min(maxPages, 60)));
+  const driver = await makeDriver({ cachePages: true });
+  try {
+    for (const page of pages) {
+      if (!urlAllowed(page, []).ok) continue;
+      let driven: Awaited<ReturnType<typeof driver.open>> | null = null;
+      try { driven = await driver.open(page); } catch { continue; }
+      const raw = driven?.rawForms ?? [];
+      if (raw.length === 0) continue;
+      for (const v of toFormFillViews(raw, page, undefined, '')) pagedForms.push({ ...v, page }); // '' => plain test@gmail.com
+    }
+  } finally {
+    try { await driver.close(); } catch { /* best-effort */ }
+  }
+  const { matched } = matchFormsToTags(pagedForms, formTags);
+  const seen = new Set<string>();
+  const out: TaFormSubmit[] = [];
+  for (const f of matched) {
+    const key = `${f.page}|${f.formId}|${f.formClasses}`; // a form matched to >1 tag → submit it once
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ page: f.page, formId: f.formId, formClasses: f.formClasses, method: f.method, fields: f.fields.map((x) => ({ selector: x.selector, type: x.type, value: x.value })) });
+  }
+  return out;
 }
 
 export function registerSuggestionsIpc(data: GoogleDataService): void {
@@ -271,6 +305,19 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         // own container-owning session.
         const ident = data.activeAccountIdentity();
         const profileDir = taProfileDir(ident?.id);
+        // REAL FORM SUBMITS: find the site forms matching this container's form tags, filled with the
+        // default (editable) test values, so Tag Assistant submits each for real and proves the form tag
+        // fires on a genuine form_submission (not a synthetic push). Best-effort — a discovery failure
+        // just means the click/config tags still verify.
+        emit({ phase: 'crawl', message: 'Finding the forms that have a tag, to submit them for real…' });
+        const formTags: FormTagIdentity[] = tagList
+          .filter((t) => t.trigger.kind === 'custom_event' && isFormEventName(t.trigger.eventName ?? t.eventName ?? ''))
+          .map((t) => {
+            const cd = t.trigger.customEventData ?? {};
+            const formName = cd.form_name ?? cd.formName ?? cd.form_id ?? cd.formId;
+            return { tagName: t.tagName, eventName: t.eventName ?? '', platform: t.platform, ...(formName ? { formName: String(formName) } : {}) };
+          });
+        const taForms = await discoverFormsForTaSubmit(target, formTags).catch(() => [] as TaFormSubmit[]);
         emit({ phase: 'monitor', message: 'Opening Tag Assistant (your Chrome can stay open)...' });
         const publicId = await data.getContainerPublicId(o.monitor.accountId, o.monitor.containerId);
         const ta = await runTaVerify(profileDir, target, routedTags, publicId, {
@@ -280,8 +327,10 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           // The GTM Preview snippet (gtm_auth/gtm_preview) makes the published GTM container enter Tag
           // Assistant debug — without it, connect only debugs Google tags. Reuses the existing snippet box.
           ...(o.containerSnippet ? { previewSnippet: o.containerSnippet } : {}),
+          ...(taForms.length ? { forms: taForms } : {}),
           onSignInPrompt: () => emit({ phase: 'monitor', message: 'ONE-TIME Tag Assistant sign-in: complete it in the window that just opened (your email is pre-filled). It is saved after this, so verify never asks again.' }),
           onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Driving tags in the Tag Assistant window', page, done, total }),
+          onFormProgress: (page, done, total) => emit({ phase: 'drive', message: 'Submitting a form for real in Tag Assistant', page, done, total }),
         });
         const base = { url: target, injected: false, previewAuth: false, pagesOk: ta.pagesOk, verifiedByMonitor: true as const, ...(ta.pagesDriven.length ? { pagesDriven: ta.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}) };
         if (ta.needSignIn || ta.error) return { ...base, verdicts: [], error: ta.error ?? 'Tag Assistant run failed.', ...(ta.needSignIn ? { needTaSignIn: true } : {}) };
@@ -365,7 +414,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       try { await driver.close(); } catch { /* best-effort */ }
     }
     // A traceable, unique alias so a real submit (Phase 2) is filterable in the operator's CRM.
-    const emailTag = `d${Date.now().toString(36)}`;
+    const emailTag = ''; // plain test@gmail.com by default (simple test values); editable in the review
     const forms = toFormFillViews(rawForms, target, locale.id, emailTag);
     return { url: target, localeId: locale.id, locales: localeOptions(), forms, ...(error ? { error } : {}) };
   });
@@ -379,7 +428,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
     const o = (opts ?? {}) as FormTagVerifyPlanOptions;
     const locale = localeById(o.localeId);
-    const emailTag = `d${Date.now().toString(36)}`;
+    const emailTag = ''; // plain test@gmail.com by default (simple test values); editable in the review
     let error: string | undefined;
     const empty = (err: string): FormTagVerifyPlanResult => ({ url: target, localeId: locale.id, locales: localeOptions(), matched: [], sharedFields: [], unmatchedTags: [], pagesCrawled: 0, error: err });
 

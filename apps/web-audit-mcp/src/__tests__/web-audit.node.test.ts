@@ -190,8 +190,9 @@ check('role: a VISIBLE email named honeypot-ish is still classified normally whe
   ];
   const plan = buildFillPlan(fields, US_LOCALE, { emailTag: 'run1' });
   const byName = (n: string): (typeof plan)[number] | undefined => plan.find((p) => p.name === n);
-  check('fill: email is a traceable +tag alias', byName('email')?.value === 'gtm-verify+run1@example.com');
-  check('fill: given/family names split', byName('fname')?.value === 'Gtm' && byName('lname')?.value === 'Verify');
+  check('fill: email is test@gmail.com (+tag only when a tag is supplied)', byName('email')?.value === 'test+run1@gmail.com');
+  check('fill: email is plain test@gmail.com by default (no tag)', buildFillPlan(fields).find((p) => p.name === 'email')?.value === 'test@gmail.com');
+  check('fill: given/family names are simple Test values', byName('fname')?.value === 'Test' && byName('lname')?.value === 'Test');
   check('fill: phone is a reserved US number', /^\+1 202-555-01/.test(byName('phone')?.value ?? ''));
   check('fill: country select picks the matching real option', byName('country')?.value === 'United States');
   check('fill: category select skips the placeholder, picks first real option', byName('category')?.value === 'Sales');
