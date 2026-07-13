@@ -186,7 +186,12 @@ export function evaluateVerify(
  *  timeout = fired-but-errored); a tag GTM never fired did NOT fire. Ground truth from the container
  *  itself — no beacon inference, no dual-container ambiguity — and it carries the exact events + status,
  *  which is what the Tag-Assistant-style firing panel renders. PURE. */
-export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent[], perTag: PerTagCapture[] = []): VerifyTagVerdict[] {
+export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent[], perTag: PerTagCapture[] = [], opts: { scopedPages?: number } = {}): VerifyTagVerdict[] {
+  // When the operator scoped the run to an explicit "Pages to verify" list, a tag left untested is almost
+  // always one whose CTA/form lives on a DIFFERENT page — not a scan-budget miss. Say so plainly.
+  const scopeHint = opts.scopedPages && opts.scopedPages > 0
+    ? ` You verified only ${opts.scopedPages === 1 ? 'this 1 page' : `these ${opts.scopedPages} pages`} (your “Pages to verify” list), so this tag’s trigger lives on a page you didn’t include — add that page to the list, or clear the box to verify the whole site.`
+    : '';
   // Form tags ARE included now: the driver verifies them by a REAL form submit (never a synthetic push),
   // so the monitor stream authoritatively reports which form tags fired on the real form_submission. A form
   // tag that fired → fired; one whose form wasn't submitted (no matching form, or a Skip run) → its
@@ -241,7 +246,7 @@ export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent
         ...base,
         fired: false,
         inconclusive: true,
-        reason: `${why} — that is NOT evidence it’s broken. The real test is the “verify by real submit” step below (for forms) or a real interaction in GTM Preview.`,
+        reason: `${why} — that is NOT evidence it’s broken.${scopeHint} The real test is the “verify by real submit” step below (for forms) or a real interaction in GTM Preview.`,
         interaction: { kind: 'none', targetFound: cap?.targetFound ?? false, performed: cap?.performed ?? false },
       };
     }
