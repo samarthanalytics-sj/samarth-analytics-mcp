@@ -1,3 +1,9 @@
+## [1.308.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.2...v1.308.3) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** cut Untested — match decorated CTAs, reclassify submitted-but-unfired, extract icon-submit forms ([#531](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/531)) ([c44ac89](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c44ac89cbb0f08c96d29ab113eadffdf972da954))
+
 ## [1.308.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.1...v1.308.2) (2026-07-13)
 
 ### Bug Fixes
