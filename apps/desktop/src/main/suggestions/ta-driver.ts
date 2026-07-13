@@ -208,45 +208,60 @@ function dismissTaOverlays(): void {
   } catch { /* best-effort */ }
 }
 
-/** In the TA page: click the NEWEST rail event (highest global number) — i.e. the event we JUST triggered
- *  by driving a click / submitting a form. Reliable because it needs no number/name matching: whatever we
- *  just caused is the top of the rail. Returns whether it clicked. */
-function clickNewestTaRow(): boolean {
+/** In the TA page: click the NEWEST rail event that ACTUALLY FIRED a tag, and return its Tags-Fired text.
+ *  A real form submit fires a CASCADE (gtm.formInteract → Form Submit → cta_click → form_submission) and
+ *  the very newest event can be a form_submission that fired NOTHING — screenshotting it shows a blank
+ *  "Tags Fired: None" panel. So walk newest → older, click each, and stop at the first whose panel lists a
+ *  fired tag; skip the empty ones. Async so it can wait for the panel to switch. Returns { fired } or null. */
+async function clickNewestFiredTaRow(): Promise<{ fired: string } | null> {
   try {
+    const byNum: Record<number, { el: HTMLElement; depth: number }> = {};
     const all = Array.prototype.slice.call(document.querySelectorAll('a,li,button,[role="button"],div,span')) as HTMLElement[];
-    let best: HTMLElement | null = null;
-    let bestNum = -1;
-    let bestDepth = Infinity;
     for (const el of all) {
       const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
       const m = /^(\d+)\s*(\D.*)$/.exec(t);
       if (!m || t.length > 44) continue;
       const num = parseInt(m[1], 10);
       const depth = el.querySelectorAll('*').length;
-      if (num > bestNum || (num === bestNum && depth < bestDepth)) { bestNum = num; bestDepth = depth; best = el; }
+      if (!byNum[num] || depth < byNum[num].depth) byNum[num] = { el, depth };
     }
-    if (!best) return false;
-    let target: HTMLElement | null = best;
-    for (let k = 0; k < 5 && target; k += 1) {
-      const tag = target.tagName.toLowerCase();
-      if (tag === 'a' || tag === 'button' || target.getAttribute('role') === 'button' || (target as unknown as { onclick?: unknown }).onclick) break;
-      target = target.parentElement;
+    const nums = Object.keys(byNum).map(Number).sort((a, b) => b - a); // newest first
+    for (const num of nums.slice(0, 10)) {
+      const el = byNum[num].el;
+      let target: HTMLElement | null = el;
+      for (let k = 0; k < 5 && target; k += 1) {
+        const tag = target.tagName.toLowerCase();
+        if (tag === 'a' || tag === 'button' || target.getAttribute('role') === 'button' || (target as unknown as { onclick?: unknown }).onclick) break;
+        target = target.parentElement;
+      }
+      (target ?? el).click();
+      await new Promise((r) => setTimeout(r, 320)); // let the panel switch to this event
+      const body = (document.body.textContent || '').replace(/\s+/g, ' ');
+      const fi = body.indexOf('Tags Fired');
+      if (fi < 0) continue;
+      const nfi = body.indexOf('Tags Not Fired', fi);
+      const fired = body.slice(fi, nfi > fi ? nfi : fi + 1500);
+      const firedBody = fired.replace(/tags fired/i, '').trim();
+      if (firedBody && !/^none\b/i.test(firedBody)) return { fired }; // this event has a fired tag
     }
-    (target ?? best).click();
-    return true;
-  } catch { return false; }
+    return null;
+  } catch { return null; }
 }
 
-/** In the TA page: read back what the panel now shows — the raw dataLayer event from the "API Call" block
- *  (e.g. gtm.linkClick) and the "Tags Fired" text region (to confirm a target tag name is listed there). */
-function readTaPanel(): { event: string; fired: string } {
+/** In the TA page: open the rail "Summary" view (the aggregate Tags-Fired list) so the FALLBACK proof
+ *  screenshot is meaningful — never a random empty event. Best-effort. */
+function clickTaSummary(): void {
   try {
-    const all = (document.body.textContent || '').replace(/\s+/g, ' ');
-    const m = /dataLayer\.push\(\{\s*event:\s*["']([^"']+)["']/.exec(all);
-    const fi = all.indexOf('Tags Fired');
-    const fired = fi >= 0 ? all.slice(fi, (() => { const n = all.indexOf('Tags Not Fired', fi); return n > fi ? n : fi + 1500; })()) : '';
-    return { event: m ? m[1] : '', fired };
-  } catch { return { event: '', fired: '' }; }
+    const el = (Array.prototype.slice.call(document.querySelectorAll('a,li,button,[role="button"],div,span')) as HTMLElement[])
+      .find((e) => (e.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase() === 'summary');
+    if (!el) return;
+    let t: HTMLElement | null = el;
+    for (let k = 0; k < 4 && t; k += 1) {
+      if (t.tagName.toLowerCase() === 'button' || t.getAttribute('role') === 'button' || (t as unknown as { onclick?: unknown }).onclick) break;
+      t = t.parentElement;
+    }
+    (t ?? el).click();
+  } catch { /* best-effort */ }
 }
 
 /**
@@ -359,12 +374,10 @@ export async function runTaVerify(
     const snapNewestTa = async (): Promise<void> => {
       try {
         await ta.evaluate(dismissTaOverlays).catch(() => undefined);
-        const clicked = await ta.evaluate<boolean>(clickNewestTaRow).catch(() => false);
-        if (!clicked) return;
-        await ta.waitForTimeout(350); // let the panel switch to that event
-        const panel = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
+        const res = await ta.evaluate<{ fired: string } | null>(clickNewestFiredTaRow).catch(() => null);
+        if (!res || !res.fired) return; // no fired-tag event to prove — never screenshot a blank panel
         const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
-        captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: panel.fired });
+        captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: res.fired });
       } catch { /* proof is best-effort */ }
     };
 
@@ -505,12 +518,14 @@ export async function runTaVerify(
     console.log(`[tag-assistant] captured ${frames.length} debug frame(s) -> ${evs.length} event(s) for ${containerPublicId}, ${firedCount} tag-fire(s)${problem ? ` -- ${problem}` : ''}`);
 
     // Proof screenshots were captured DURING the drive (snapNewestTa), each recording the panel's fired-tag
-    // text so the IPC attaches it to whichever tags it proves. Add ONE final full-panel screenshot as a
-    // guaranteed fallback, so a genuinely-fired tag always has SOME proof even if its per-event snap missed.
+    // text so the IPC attaches it to whichever tags it proves. Fallback = the TA SUMMARY view (the aggregate
+    // Tags-Fired list) — a meaningful "everything that fired" panel, NEVER a random empty event — so a fired
+    // tag whose per-event snap missed still shows real proof, not a blank "Tags Fired: None".
     let summaryShot: string | undefined;
     try {
       await ta.evaluate(dismissTaOverlays).catch(() => undefined);
-      await ta.waitForTimeout(200);
+      await ta.evaluate(clickTaSummary).catch(() => undefined);
+      await ta.waitForTimeout(400);
       const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
       summaryShot = `data:image/jpeg;base64,${buf.toString('base64')}`;
     } catch { /* best-effort */ }
