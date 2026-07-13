@@ -1,3 +1,9 @@
+## [1.309.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.5...v1.309.6) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** let an absolute "Pages to verify" URL stand alone; dim the disabled Verify button ([#540](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/540)) ([8bf1bad](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8bf1badb29577749a7598a25c40963b051e50fcb))
+
 ## [1.309.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.4...v1.309.5) (2026-07-13)
 
 ### Bug Fixes
