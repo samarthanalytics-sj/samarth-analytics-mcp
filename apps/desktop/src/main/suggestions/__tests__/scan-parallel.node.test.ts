@@ -128,10 +128,30 @@ async function run(): Promise<void> {
     const res = await scanUrls(pool[0], list, 'acme.com', undefined, { drivers: pool.slice(1) });
     check('scanUrls/par: a failed page is recorded, the rest still scanned', res.summary.pagesScanned === 3 && new Set(t.opened.map(norm)).size === 4);
   }
+
+  // ── header/nav/footer links are scanned FIRST, so a footer-only page survives a tight budget ────────
+  {
+    const N = 'https://nav.com/';
+    const aReg = (href: string, region: '' | 'header' | 'footer' | 'main'): { tag: 'a'; href: string; text: string; hasDownload: boolean; region: '' | 'header' | 'footer' | 'main' } =>
+      ({ tag: 'a', href, text: 'link', hasDownload: false, region });
+    const pageR = (url: string, main: string[], footer: string[]): DrivenPage =>
+      ({ ok: true, httpStatus: 200, finalUrl: url, raw: { elements: [...main.map((h) => aReg(h, 'main')), ...footer.map((h) => aReg(h, 'footer'))], signals: { scriptSrcs: [], classNames: [], selectorsPresent: [], iframeSrcs: [] } }, rawForms: [] });
+    const pages: Record<string, DrivenPage> = {};
+    // Home links to 5 CONTENT pages (main region) + ONE footer link to /privacy. With only 3 pages of
+    // budget and the footer NOT prioritized, /privacy would lose to the content pages and never be scanned.
+    pages[N] = pageR(N, [`${N}c1`, `${N}c2`, `${N}c3`, `${N}c4`, `${N}c5`], [`${N}privacy`]);
+    for (const c of ['c1', 'c2', 'c3', 'c4', 'c5', 'privacy']) pages[`${N}${c}`] = pageR(`${N}${c}`, [], []);
+    const t = newTracker();
+    const pool = poolOf(1, pages, t); // sequential → deterministic priority order
+    await crawlAndSuggest(pool[0], N, { maxPages: 3, maxDepth: 2, drivers: pool.slice(1) });
+    const opened = t.opened.map(norm);
+    check('crawl/nav: a FOOTER-only page is scanned within a tight budget (nav links prioritized)', opened.includes(norm(`${N}privacy`)));
+    check('crawl/nav: the footer page is scanned BEFORE the content pages', opened.indexOf(norm(`${N}privacy`)) === 1);
+  }
 }
 
 void run().then(() => {
   console.log(`\nscan-parallel: ${passed} passed, ${failed} failed`);
   if (failed) { console.error(failures.join('\n')); process.exit(1); }
-  if (passed < 17) { console.error(`expected >= 17 checks, got ${passed}`); process.exit(1); }
+  if (passed < 19) { console.error(`expected >= 19 checks, got ${passed}`); process.exit(1); }
 });
