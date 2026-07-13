@@ -36,6 +36,12 @@ export interface TaTagResult {
 export interface TaEventRecord {
   /** The container that processed the event (publicId, e.g. GTM-NKZD4BVB). */
   container: string;
+  /** Which page load this event belongs to. `gtm.uniqueEventId` (the frame's `eventId`) RESTARTS at 0 on
+   *  every full page navigation, but we drive one debug session across many pages into a single stream —
+   *  so `container|eventId` alone collides page-to-page (page B's event 5 overwriting page A's event 5).
+   *  Epoch increments each time a container's DATA_LAYER eventId goes backwards (a fresh document), which
+   *  keeps each page's events distinct and gives a correct chronological order (epoch, then eventId). */
+  epoch: number;
   eventId: number;
   eventName: string;
   /** The EXACT dataLayer push that raised the event — TA's "API Call" block. Absent for internal
@@ -76,6 +82,13 @@ const STATUS_RANK: Record<TaTagStatus, number> = { unknown: 0, running: 1, fired
 export function parseTaFrames(frames: unknown[]): TaCapture {
   const containers = new Map<string, TaContainer>();
   const events = new Map<string, TaEventRecord>();
+  // Per-container page epoch. gtm.uniqueEventId (the frame's eventId) resets to 0 on every full page load,
+  // but we stream a whole multi-page drive into ONE capture, so `container|eventId` collides across pages.
+  // Bump the epoch whenever a container's DATA_LAYER eventId goes strictly backwards (a new document has
+  // restarted the counter), and key events by container|epoch|eventId so each page stays separate. Only
+  // DATA_LAYER frames advance the boundary (they arrive in push order, strictly increasing within a page);
+  // straggling TAG frames for a prior event reuse the current epoch, which is the page they fired on.
+  const epochOf = new Map<string, { epoch: number; maxDl: number }>();
 
   for (const raw of frames) {
     let frame: Record<string, unknown> | null = null;
@@ -117,15 +130,27 @@ export function parseTaFrames(frames: unknown[]): TaCapture {
     const container = String(key.publicId ?? '');
     const eventId = Number(key.eventId);
     if (!container || !Number.isFinite(eventId)) continue;
-    const mapKey = `${container}|${eventId}`;
+    const messageType = String(san.messageType ?? '');
+
+    // Advance the page epoch on a DATA_LAYER push whose eventId dropped below this epoch's high-water mark
+    // (a fresh page reset the counter). A page always starts with gtm.init(0)+gtm.js(1), so maxDl is >=1
+    // before real events, and the new page's eventId 0 is a strict decrease — reliably detected. Equal
+    // eventIds (duplicate frames) do NOT bump, so a re-emitted push can't split one page in two.
+    let ep = epochOf.get(container);
+    if (!ep) { ep = { epoch: 0, maxDl: -1 }; epochOf.set(container, ep); }
+    if (messageType === 'DATA_LAYER') {
+      if (eventId < ep.maxDl) ep.epoch += 1;
+      ep.maxDl = eventId;
+    }
+    const epoch = ep.epoch;
+
+    const mapKey = `${container}|${epoch}|${eventId}`;
     let rec = events.get(mapKey);
     if (!rec) {
-      rec = { container, eventId, eventName: String(key.eventName ?? ''), tags: [] };
+      rec = { container, epoch, eventId, eventName: String(key.eventName ?? ''), tags: [] };
       events.set(mapKey, rec);
     }
     if (!rec.eventName && key.eventName) rec.eventName = String(key.eventName);
-
-    const messageType = String(san.messageType ?? '');
     if (messageType === 'DATA_LAYER') {
       const msg = asObj(san.message);
       if (msg) {
@@ -157,8 +182,9 @@ export function parseTaFrames(frames: unknown[]): TaCapture {
 
   return {
     containers: [...containers.values()],
-    // Chronological (eventId order per container, containers interleaved as captured).
-    events: [...events.values()].sort((a, b) => (a.container === b.container ? a.eventId - b.eventId : 0)),
+    // Chronological within a container: page epoch first, then eventId. Containers interleave as captured.
+    events: [...events.values()].sort((a, b) =>
+      a.container === b.container ? (a.epoch - b.epoch) || (a.eventId - b.eventId) : 0),
   };
 }
 
@@ -186,9 +212,12 @@ function collectVariables(san: Record<string, unknown>, rec: TaEventRecord): voi
   }
 }
 
-/** The events of ONE container (the site's GTM web container), oldest first — what the UI renders. */
+/** The events of ONE container (the site's GTM web container), oldest first — what the UI renders. Ordered
+ *  by page epoch then eventId, so a multi-page drive reads top-to-bottom in the true firing order. */
 export function eventsForContainer(capture: TaCapture, publicId: string): TaEventRecord[] {
-  return capture.events.filter((e) => e.container === publicId).sort((a, b) => a.eventId - b.eventId);
+  return capture.events
+    .filter((e) => e.container === publicId)
+    .sort((a, b) => (a.epoch - b.epoch) || (a.eventId - b.eventId));
 }
 
 /** Convert one container's TA event records into the MonitorEvent shape the existing verdict pipeline
@@ -226,6 +255,10 @@ export function taEventsToMonitorEvents(
 
 /** One dataLayer event for the in-app timeline (mirrors shared/ipc TaEventView). */
 export interface TaEventView {
+  /** Stable, unique, 1-based chronological index across the whole capture. `eventId` alone is NOT unique
+   *  once a drive spans pages (it resets per page), so `seq` is the timeline's identity — React key,
+   *  expand/collapse state, and the Phase-3 screenshot alignment all key on it. */
+  seq: number;
   eventId: number;
   eventName: string;
   apiCall?: Record<string, unknown>;
@@ -246,7 +279,10 @@ export interface TaTriggerSuggestion {
 /** Map one container's parsed events into the timeline view the renderer shows (the API-Call push +
  *  resolved variables + the tags that fired on each event). PURE. */
 export function toTaEventViews(events: TaEventRecord[]): TaEventView[] {
-  return events.map((e) => ({
+  // `events` arrives in chronological (epoch, eventId) order from eventsForContainer, so the array index
+  // is a stable global sequence — the identity the UI keys on (eventId repeats across page loads).
+  return events.map((e, i) => ({
+    seq: i + 1,
     eventId: e.eventId,
     eventName: e.eventName,
     ...(e.apiCall ? { apiCall: e.apiCall } : {}),

@@ -101,15 +101,15 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
 // ── taEventsToMonitorEvents: TA names → container tag IDs for the existing verdict pipeline ─────────
 {
   const events: TaEventRecord[] = [
-    { container: 'GTM-X', eventId: 33, eventName: 'form_submission', tags: [
+    { container: 'GTM-X', epoch: 0, eventId: 33, eventName: 'form_submission', tags: [
       { name: 'GA4 - Event - Get In Touch Form Tag', status: 'fired' },
       { name: 'Meta - Event - Get In Touch Form Tag', status: 'failed' },
       { name: 'Some Other Container Tag', status: 'fired' }, // not in inventory — dropped
     ] },
-    { container: 'GTM-X', eventId: 34, eventName: 'cta_click', tags: [{ name: 'CTA Tag', status: 'running' }] },
+    { container: 'GTM-X', epoch: 0, eventId: 34, eventName: 'cta_click', tags: [{ name: 'CTA Tag', status: 'running' }] },
     // The KEY case: an event where a click tag was EVALUATED but did NOT fire (unknown). It must NOT be
     // credited to this event — that was the bug that labelled click tags with the synthetic form_submission.
-    { container: 'GTM-X', eventId: 35, eventName: 'form_submission', tags: [
+    { container: 'GTM-X', epoch: 0, eventId: 35, eventName: 'form_submission', tags: [
       { name: 'GA4 - Event - Get In Touch Form Tag', status: 'fired' }, // the form tag really fired here
       { name: 'Email Click Tag', status: 'unknown' },                    // evaluated, NOT fired → excluded
     ] },
@@ -147,8 +147,8 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
 // ── Phase 3: toTaEventViews (timeline) ──────────────────────────────────────────────────────────────
 {
   const events: TaEventRecord[] = [
-    { container: 'GTM-X', eventId: 33, eventName: 'form_submission', apiCall: { event: 'form_submission', form_name: 'contact_form' }, variables: { 'dlv - form_name': 'contact_form' }, tags: [{ name: 'GA4 Form', status: 'fired' }, { name: 'Meta Form', status: 'failed' }] },
-    { container: 'GTM-X', eventId: 30, eventName: 'gtm.init', tags: [] },
+    { container: 'GTM-X', epoch: 0, eventId: 33, eventName: 'form_submission', apiCall: { event: 'form_submission', form_name: 'contact_form' }, variables: { 'dlv - form_name': 'contact_form' }, tags: [{ name: 'GA4 Form', status: 'fired' }, { name: 'Meta Form', status: 'failed' }] },
+    { container: 'GTM-X', epoch: 0, eventId: 30, eventName: 'gtm.init', tags: [] },
   ];
   const views = toTaEventViews(events);
   check('timeline: carries eventName + apiCall push', views[0].eventName === 'form_submission' && views[0].apiCall?.form_name === 'contact_form');
@@ -160,8 +160,8 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
 // ── Phase 3: buildTriggerSuggestions (DLV suggestions for not-fired tags) ────────────────────────────
 {
   const views = toTaEventViews([
-    { container: 'GTM-X', eventId: 1, eventName: 'gtm.js', tags: [] },
-    { container: 'GTM-X', eventId: 2, eventName: 'form_submission', apiCall: { event: 'form_submission', form_name: 'contact_form', form_type: 'main' }, tags: [] },
+    { container: 'GTM-X', epoch: 0, eventId: 1, eventName: 'gtm.js', tags: [] },
+    { container: 'GTM-X', epoch: 0, eventId: 2, eventName: 'form_submission', apiCall: { event: 'form_submission', form_name: 'contact_form', form_type: 'main' }, tags: [] },
   ]);
   // A tag that expected form_submission (which WAS captured) → suggest a trigger on it + DLV conditions.
   const s1 = buildTriggerSuggestions([{ tagName: 'Meta Form', expectedEvent: 'form_submission' }], views);
@@ -177,6 +177,56 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
   check('suggest: empty in = empty out', buildTriggerSuggestions([], views).length === 0);
 }
 
+// ── the MULTI-PAGE collision bug: gtm.uniqueEventId resets per page, so a drive across pages must NOT
+//    merge page-B's event N onto page-A's event N (that mislabeled click tags as gtm.formInteract). ──────
+{
+  const dl = (id: number, name: string, extra: Record<string, unknown> = {}): string =>
+    memo('GTM-NKZD4BVB', id, name, 'DATA_LAYER', { message: { event: name, ...extra } });
+  const tag = (id: number, name: string, tagName: string): string =>
+    memo('GTM-NKZD4BVB', id, name, 'TAG_STATUS', { tagInfo: [{ name: tagName, execute: 'execute_succeeded' }] });
+  const frames: unknown[] = [
+    starting('GTM-NKZD4BVB', true),
+    details('GTM-NKZD4BVB', true),
+    // PAGE 1: an email link click fires the Email Click tags (uniqueEventId 0,1,5).
+    dl(0, 'gtm.init'), dl(1, 'gtm.js'),
+    dl(5, 'gtm.linkClick', { 'gtm.elementUrl': 'mailto:hi@x.com' }),
+    tag(5, 'gtm.linkClick', 'GA4 - Event - Email Click Tag'),
+    tag(5, 'gtm.linkClick', 'Meta - Event - Email Click Tag'),
+    // PAGE 2 (navigation → uniqueEventId RESTARTS at 0): a form interaction fires the CTA tag, also at
+    // eventId 5. Pre-fix this collided with page 1's event 5 and the later push (gtm.formInteract) won,
+    // so the Email Click tags were wrongly shown under gtm.formInteract.
+    dl(0, 'gtm.init'), dl(1, 'gtm.js'),
+    dl(5, 'gtm.formInteract', { 'gtm.elementId': 'contact' }),
+    tag(5, 'gtm.formInteract', 'GA4 - Event - CTA Click Tag'),
+  ];
+  const cap = parseTaFrames(frames);
+  const evs = eventsForContainer(cap, 'GTM-NKZD4BVB');
+  check('multi-page: the two same-eventId events are kept SEPARATE (not merged)', evs.filter((e) => e.eventId === 5).length === 2);
+  check('multi-page: they carry distinct page epochs', new Set(evs.filter((e) => e.eventId === 5).map((e) => e.epoch)).size === 2);
+  check('multi-page: page-1 order (epoch,eventId) comes before page-2', evs[0].epoch === 0 && evs[evs.length - 1].epoch === 1);
+  const lc = evs.find((e) => e.eventName === 'gtm.linkClick')!;
+  const fi = evs.find((e) => e.eventName === 'gtm.formInteract')!;
+  check('multi-page: Email Click tags are attributed to gtm.linkClick (the actual bug)', lc.tags.some((t) => t.name === 'GA4 - Event - Email Click Tag' && t.status === 'fired'));
+  check('multi-page: the click event does NOT carry the other page’s CTA tag', !lc.tags.some((t) => t.name === 'GA4 - Event - CTA Click Tag'));
+  check('multi-page: CTA tag stays on gtm.formInteract, uncontaminated by the click tags', fi.tags.some((t) => t.name === 'GA4 - Event - CTA Click Tag') && !fi.tags.some((t) => /Email Click/.test(t.name)));
+  const views = toTaEventViews(evs);
+  check('multi-page: every timeline view gets a unique seq (stable identity despite repeated eventId)', new Set(views.map((v) => v.seq)).size === views.length && views.length === evs.length);
+  check('multi-page: seq is 1-based chronological', views[0].seq === 1 && views[views.length - 1].seq === views.length);
+}
+
+// ── a DUPLICATE DATA_LAYER frame (same eventId) must NOT be mistaken for a new page ─────────────────────
+{
+  const cap = parseTaFrames([
+    memo('GTM-Y', 0, 'gtm.init', 'DATA_LAYER', { message: { event: 'gtm.init' } }),
+    memo('GTM-Y', 1, 'gtm.js', 'DATA_LAYER', { message: { event: 'gtm.js' } }),
+    memo('GTM-Y', 2, 'purchase', 'DATA_LAYER', { message: { event: 'purchase' } }),
+    memo('GTM-Y', 2, 'purchase', 'DATA_LAYER', { message: { event: 'purchase' } }), // re-emit, same id
+    memo('GTM-Y', 2, 'purchase', 'TAG_STATUS', { tagInfo: [{ name: 'GA4 Purchase', execute: 'execute_succeeded' }] }),
+  ]);
+  const evs = eventsForContainer(cap, 'GTM-Y');
+  check('duplicate push: no phantom epoch split (one purchase event, tag intact)', evs.filter((e) => e.eventName === 'purchase').length === 1 && evs.find((e) => e.eventName === 'purchase')!.tags[0]?.status === 'fired');
+}
+
 console.log(`\nta-stream: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 29) { console.error(`expected >= 26 checks, got ${passed}`); process.exit(1); }
+if (passed < 37) { console.error(`expected >= 37 checks, got ${passed}`); process.exit(1); }

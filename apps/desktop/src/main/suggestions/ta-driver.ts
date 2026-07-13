@@ -438,16 +438,19 @@ export async function runTaVerify(
     // PHASE 3: screenshot the REAL Tag Assistant panel per event — click the event in TA's left rail, then
     // capture the page (rail + its Tags-Fired panel). Best-effort: only events that fired a tag, capped, and
     // any failure is skipped. This is proof from Tag Assistant itself, not the website page.
+    // Key by the global 1-based sequence (index in the chronological event list) — the SAME `seq`
+    // toTaEventViews assigns — so each shot lands on exactly its own timeline event. eventId can't be the
+    // key: it resets per page, so a multi-page drive would alias two events onto one screenshot.
     const eventShots: Record<number, string> = {};
-    const shotEvents = evs.filter((e) => e.tags.some((t) => t.status === 'fired')).slice(0, 12);
+    const shotEvents = evs.map((e, i) => ({ e, seq: i + 1 })).filter(({ e }) => e.tags.some((t) => t.status === 'fired')).slice(0, 12);
     if (shotEvents.length) console.log(`[tag-assistant] capturing ${shotEvents.length} Tag Assistant panel screenshot(s)…`);
-    for (const ev of shotEvents) {
+    for (const { seq } of shotEvents) {
       try {
-        const clicked = await ta.evaluate<boolean>(clickTaEventInRail, ev.eventId);
+        const clicked = await ta.evaluate<boolean>(clickTaEventInRail, seq);
         if (!clicked) continue;
         await ta.waitForTimeout(400); // let the panel switch to this event
         const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
-        eventShots[ev.eventId] = `data:image/jpeg;base64,${buf.toString('base64')}`;
+        eventShots[seq] = `data:image/jpeg;base64,${buf.toString('base64')}`;
       } catch { /* a screenshot must never fail the run */ }
     }
 

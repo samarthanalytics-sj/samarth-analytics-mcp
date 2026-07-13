@@ -4402,7 +4402,7 @@ function VerifyScorecard({ fired, config, server, untested, issues }: { fired: n
  *  exact push (API Call), resolved variables, and the tags it fired. This is the "show it in detail" view,
  *  rendered inside the app from the authoritative Tag Assistant debug stream. */
 function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taEvents']> }): JSX.Element {
-  const [open, setOpen] = useState<Set<number>>(new Set([events.find((e) => e.tagsFired.length)?.eventId ?? -1]));
+  const [open, setOpen] = useState<Set<number>>(new Set([events.find((e) => e.tagsFired.length)?.seq ?? -1]));
   const [shot, setShot] = useState<{ src: string; name: string } | null>(null);
   const statusColor = (s: string): string => (s === 'fired' ? 'var(--c-green)' : s === 'failed' ? 'var(--c-red)' : 'var(--text-muted)');
   return (
@@ -4410,15 +4410,15 @@ function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taE
       <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6, letterSpacing: 0.2 }}>Event timeline <span style={{ ...styles.muted, fontWeight: 400 }}>· what Tag Assistant saw, event by event</span></div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {events.map((ev) => {
-          const isOpen = open.has(ev.eventId);
+          const isOpen = open.has(ev.seq);
           const firedN = ev.tagsFired.filter((t) => t.status === 'fired').length;
           const failedN = ev.tagsFired.filter((t) => t.status === 'failed').length;
           const apiEntries = ev.apiCall ? Object.entries(ev.apiCall).filter(([k]) => k !== 'gtm.uniqueEventId') : [];
           const varEntries = ev.variables ? Object.entries(ev.variables) : [];
           return (
-            <div key={ev.eventId} style={{ border: '1px solid var(--border-2)', borderRadius: 8, background: 'var(--surface-2)', overflow: 'hidden' }}>
+            <div key={ev.seq} style={{ border: '1px solid var(--border-2)', borderRadius: 8, background: 'var(--surface-2)', overflow: 'hidden' }}>
               <button
-                onClick={() => setOpen((o) => { const n = new Set(o); n.has(ev.eventId) ? n.delete(ev.eventId) : n.add(ev.eventId); return n; })}
+                onClick={() => setOpen((o) => { const n = new Set(o); n.has(ev.seq) ? n.delete(ev.seq) : n.add(ev.seq); return n; })}
                 style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', color: 'var(--text)' }}
               >
                 <span style={{ opacity: 0.6, fontSize: 11, width: 12 }}>{isOpen ? '▾' : '▸'}</span>
