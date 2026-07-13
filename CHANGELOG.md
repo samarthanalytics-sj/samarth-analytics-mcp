@@ -1,3 +1,9 @@
+## [1.307.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.0...v1.307.1) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** stop cross-page event collision mislabeling click tags as gtm.formInteract ([#523](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/523)) ([a6a39f1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a6a39f1f54b17481b64c2bc124252cda92f6d0a6))
+
 ## [1.307.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.306.0...v1.307.0) (2026-07-13)
 
 ### Features
