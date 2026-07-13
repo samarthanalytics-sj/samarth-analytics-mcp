@@ -1,3 +1,9 @@
+## [1.308.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.3...v1.308.4) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** proof screenshot never shows a blank "Tags Fired: None" panel ([#532](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/532)) ([c44fe44](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c44fe44032dbad67b98a146b9bbdec91cc90c6f5))
+
 ## [1.308.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.2...v1.308.3) (2026-07-13)
 
 ### Bug Fixes
