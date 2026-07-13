@@ -212,7 +212,7 @@ function dismissTaOverlays(): void {
 /** In the TA page: tag the NEWEST rail event rows with data-ta-snap="i" (i=0 is newest) and return their
  *  selectors, newest first. The driver then REAL-clicks each via Playwright (an in-page synthetic .click()
  *  does NOT switch Tag Assistant's Angular panel — that was why every proof came out as the Summary). */
-function tagNewestTaRows(): Array<{ sel: string; num: number }> {
+function tagNewestTaRows(limit?: number): Array<{ sel: string; num: number }> {
   const byNum: Record<number, { el: HTMLElement; depth: number }> = {};
   try {
     document.querySelectorAll('[data-ta-snap]').forEach((e) => e.removeAttribute('data-ta-snap')); // clear last call's tags so an index never matches two rows
@@ -226,7 +226,7 @@ function tagNewestTaRows(): Array<{ sel: string; num: number }> {
       if (!byNum[num] || depth < byNum[num].depth) byNum[num] = { el, depth };
     }
   } catch { /* best-effort */ }
-  const nums = Object.keys(byNum).map(Number).sort((a, b) => b - a).slice(0, 14); // newest first
+  const nums = Object.keys(byNum).map(Number).sort((a, b) => b - a).slice(0, limit ?? 14); // newest first
   return nums.map((num, i) => { byNum[num].el.setAttribute('data-ta-snap', String(i)); return { sel: `[data-ta-snap="${i}"]`, num }; });
 }
 
@@ -366,6 +366,7 @@ export async function runTaVerify(
     // text so the IPC attaches it to whichever tags it proves. `ta` is a SEPARATE page from the popup, so a
     // form submit reloading the popup never loses these. Best-effort — a screenshot never fails the run.
     const captures: Array<{ screenshot: string; fired: string }> = [];
+    let snapTried = 0; // diagnostic: drive-events we tried to prove vs captures.length that switched to a real event view
     const firedBodyOf = (fired: string): string => fired.replace(/tags fired/i, '').trim();
     const hasFired = (fired: string): boolean => { const b = firedBodyOf(fired); return !!b && !/^none\b/i.test(b); };
     // Screenshot the TA panel for the EVENT we just drove. Tag the newest rail rows, then REAL-click each via
@@ -376,6 +377,7 @@ export async function runTaVerify(
     // event that fired a tag (`target.event`). Fall back to the newest event that fired ANYTHING, so the
     // proof is still that event's own panel — never a blank "Tags Fired: None" and never the Summary.
     const snapNewestTa = async (target: { names?: string[]; event?: string } = {}): Promise<void> => {
+      snapTried += 1;
       try {
         await ta.evaluate(dismissTaOverlays).catch(() => undefined);
         const rows = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows).catch(() => [] as Array<{ sel: string; num: number }>);
@@ -386,9 +388,12 @@ export async function runTaVerify(
         let firstFired: { sel: string; fired: string } | null = null;
         for (const row of rows) {
           await ta.click(row.sel, { timeout: 2500 }).catch(() => undefined); // REAL click → Angular switches the panel
-          await ta.waitForTimeout(260);
+          await ta.waitForTimeout(350); // let Angular render the switched-to event panel (API Call + Tags Fired)
           const panel = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
-          if (!hasFired(panel.fired)) continue; // skip empty events (e.g. a bare form_submission that fired nothing)
+          // REQUIRE a real EVENT view: the Summary panel also has a "Tags Fired" list (every fired tag) but NO
+          // API-Call event, so panel.event is empty there. Without this check a click that failed to switch the
+          // panel left us on the Summary, whose all-tags list matched EVERY target → every proof was the Summary.
+          if (!panel.event || !hasFired(panel.fired)) continue;
           if (!firstFired) firstFired = { sel: row.sel, fired: panel.fired };
           const firedLc = panel.fired.toLowerCase();
           const nameHit = names.length > 0 && names.some((n) => firedLc.includes(n));
@@ -521,6 +526,32 @@ export async function runTaVerify(
 
     await popup.waitForTimeout(Math.max(settleMs, 1500)); // let the last TAG_STATUS frames arrive
 
+    // POST-HOC per-event proof sweep. The rail is now STABLE (nothing streaming), so a real Playwright click
+    // reliably switches TA's Angular panel and the row tag isn't wiped by a mid-stream re-render — the race
+    // that could leave the during-drive snaps stuck on the Summary. Walk the newest ~40 rail rows once and
+    // screenshot each REAL event view that fired a tag (panel.event non-empty), deduped against what we
+    // already captured, so every fired tag can be matched to ITS OWN event panel rather than the Summary.
+    try {
+      await ta.evaluate(dismissTaOverlays).catch(() => undefined);
+      const rows = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows, 40).catch(() => [] as Array<{ sel: string; num: number }>);
+      const seen = new Set<string>(captures.map((c) => firedBodyOf(c.fired).slice(0, 80)));
+      let swept = 0;
+      for (const row of rows) {
+        if (captures.length >= 28) break; // bound the payload / time
+        await ta.click(row.sel, { timeout: 2500 }).catch(() => undefined);
+        await ta.waitForTimeout(300);
+        const panel = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
+        if (!panel.event || !hasFired(panel.fired)) continue; // real event view that fired a tag only
+        const key = firedBodyOf(panel.fired).slice(0, 80);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
+        captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: panel.fired });
+        swept += 1;
+      }
+      console.log(`[tag-assistant] post-hoc sweep added ${swept} per-event proof(s) from ${rows.length} stable rail row(s).`);
+    } catch { /* proof is best-effort */ }
+
     // Harvest + parse the stream from the TA page.
     const frames = await ta.evaluate<string[]>(() => (window as unknown as { __taFrames?: string[] }).__taFrames ?? []).catch(() => [] as string[]);
     const capture = parseTaFrames(frames);
@@ -547,7 +578,7 @@ export async function runTaVerify(
       const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
       summaryShot = `data:image/jpeg;base64,${buf.toString('base64')}`;
     } catch { /* best-effort */ }
-    console.log(`[tag-assistant] captured ${captures.length} in-drive proof screenshot(s)${summaryShot ? ' + a summary' : ''}`);
+    console.log(`[tag-assistant] captured ${captures.length}/${snapTried} in-drive per-event proof screenshot(s)${summaryShot ? ' + a Summary fallback' : ''}${snapTried > 0 && captures.length < snapTried / 2 ? ' -- LOW switch ratio: the rail clicks are not switching TA to the per-event panel, so those tags fall back to the Summary. If this persists, the TA rail-row selector needs revisiting.' : ''}`);
 
     console.log('[tag-assistant] leaving the Tag Assistant window OPEN so you can inspect it — it closes automatically when you run verify again or quit the app.');
     keepWindowOpen = true; // reached a real result — keep the TA panel up for the user to review
