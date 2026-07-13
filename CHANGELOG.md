@@ -1,3 +1,9 @@
+## [1.309.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.2...v1.309.3) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** drop volatile DLV conditions (timestamp), add Page Path to trigger suggestions ([#536](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/536)) ([54cf491](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/54cf4916934a72185aa33986152fd2c72e816f4f))
+
 ## [1.309.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.1...v1.309.2) (2026-07-13)
 
 ### Bug Fixes
