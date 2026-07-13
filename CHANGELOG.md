@@ -1,3 +1,9 @@
+## [1.307.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.306.0...v1.307.0) (2026-07-13)
+
+### Features
+
+* **verify:** Phase 3 — screenshots from the Tag Assistant panel per event ([#522](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/522)) ([9fdfac8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9fdfac822daae64e0db23bebc90fe64802b61a7f))
+
 ## [1.306.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.305.0...v1.306.0) (2026-07-13)
 
 ### Features
