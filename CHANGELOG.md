@@ -1,3 +1,9 @@
+## [1.303.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.302.1...v1.303.0) (2026-07-13)
+
+### Features
+
+* **verify:** Phase 1 — drop the location/locale picker from form review (generic editable values) ([#516](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/516)) ([e4ebae2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e4ebae22d30e3eb2374a4fa7eb2ad90782b0b46c))
+
 ## [1.302.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.302.0...v1.302.1) (2026-07-13)
 
 ### Bug Fixes
