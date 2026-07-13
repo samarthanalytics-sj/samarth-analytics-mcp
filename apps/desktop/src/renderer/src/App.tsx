@@ -4968,6 +4968,15 @@ function VerifyPanel({
   // Whether the LAST run actually submitted the forms (Proceed), so the Forms section shows per-form
   // fired/not-fired only when they were really tested — a Skip run must not show forms as "not fired".
   const [vFormsVerified, setVFormsVerified] = useState(false);
+  // Collapse the (tall) setup form once a run completes — the results table becomes the focus; a compact
+  // bar shows the URL(s) used + a "Start new tag verification" button that re-opens the form.
+  const [vSetupOpen, setVSetupOpen] = useState(true);
+  // Results filters (empty set = show all): status (fired/untested/notfired), interaction type
+  // (click/form), platform (ga4/meta/html), and a tag-name search. Pure client-side over the verdicts.
+  const [fStatus, setFStatus] = useState<Set<string>>(new Set());
+  const [fType, setFType] = useState<Set<string>>(new Set());
+  const [fPlatform, setFPlatform] = useState<Set<string>>(new Set());
+  const [fSearch, setFSearch] = useState('');
   // The verification screenshot currently shown full-screen (visual proof), or null.
   const [vLightbox, setVLightbox] = useState<{ src: string; name: string } | null>(null);
   const showProof = (v: VVerdict): void => { if (v.screenshot) setVLightbox({ src: v.screenshot, name: v.tagName }); };
@@ -5058,6 +5067,7 @@ function VerifyPanel({
         (p) => setVProgress(p), // live "scanning <url>" / "verifying <url>" feed
       );
       setVResult(res);
+      if (!res.error) setVSetupOpen(false); // run done → collapse the setup form, lead with the results
     } catch (e) {
       setVNote({ kind: 'error', text: verifyErrorText(e) });
     } finally {
@@ -5127,6 +5137,40 @@ function VerifyPanel({
   const inconclusive = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive && !v.serverRelay) ?? [];
   const notFired = vResult?.verdicts.filter((v) => !v.fired && !v.inconclusive) ?? [];
 
+  // ── Results filters (client-side over the verdicts) ────────────────────────────────────────────────
+  const platformOf = (name: string): string =>
+    /\bmeta\b|facebook|fb\s*pixel/i.test(name) ? 'meta'
+      : /\bga4\b|google\s*analytics|gtag/i.test(name) ? 'ga4'
+      : /\bchtml\b|custom\s*html|\bhtml\b/i.test(name) ? 'html'
+      : 'other';
+  const typeOf = (v: VVerdict): string => {
+    const k = v.interaction?.kind;
+    if (k === 'submit' || /form_submission|form_submit/i.test(v.event ?? '')) return 'form';
+    if (k === 'click') return 'click';
+    return 'other';
+  };
+  const passesTPS = (v: VVerdict): boolean => {
+    if (fType.size && !fType.has(typeOf(v))) return false;
+    if (fPlatform.size && !fPlatform.has(platformOf(v.tagName))) return false;
+    const q = fSearch.trim().toLowerCase();
+    if (q && !v.tagName.toLowerCase().includes(q)) return false;
+    return true;
+  };
+  const showStatus = (s: string): boolean => fStatus.size === 0 || fStatus.has(s);
+  const fFiredReal = firedReal.filter(passesTPS);
+  const fFiredSynthetic = firedSynthetic.filter(passesTPS);
+  const fServerRelayed = serverRelayed.filter(passesTPS);
+  const fInconclusive = inconclusive.filter(passesTPS);
+  const fNotFired = notFired.filter(passesTPS);
+  const filtersActive = fStatus.size > 0 || fType.size > 0 || fPlatform.size > 0 || fSearch.trim().length > 0;
+  const toggleF = (setter: React.Dispatch<React.SetStateAction<Set<string>>>, key: string) => (): void =>
+    setter((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+  const FILTER_GROUPS: Array<{ label: string; items: Array<[string, string]>; set: Set<string>; setter: React.Dispatch<React.SetStateAction<Set<string>>> }> = [
+    { label: 'Status', items: [['fired', 'Fired'], ['untested', 'Untested'], ['notfired', 'Not firing']], set: fStatus, setter: setFStatus },
+    { label: 'Type', items: [['click', 'Clicks'], ['form', 'Forms']], set: fType, setter: setFType },
+    { label: 'Platform', items: [['ga4', 'GA4'], ['meta', 'Meta'], ['html', 'cHTML']], set: fPlatform, setter: setFPlatform },
+  ];
+
   return (
     <div style={styles.reviewWrap}>
       <div style={styles.chatHeader}>
@@ -5147,6 +5191,16 @@ function VerifyPanel({
             )}
             {active?.email ? ` · ${active.email}` : ''}
           </div>
+          {!vSetupOpen ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+              <span style={{ ...styles.muted, fontSize: 13 }}>
+                Verified: <b style={{ color: 'var(--text)' }}>{(vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)[0]) || vUrl.trim()}</b>
+                {vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean).length > 1 ? <span style={styles.muted}> +{vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean).length - 1} more URL(s)</span> : null}
+                {vResult?.pagesDriven?.length ? <span style={styles.muted}> · drove {vResult.pagesDriven.length} page(s)</span> : null}
+              </span>
+              <button style={styles.primaryBtn} onClick={() => { setVSetupOpen(true); setVNote(null); }}>Start new tag verification</button>
+            </div>
+          ) : (<>
           {!ready && (
             <div style={{ color: 'var(--c-amber)', fontSize: 13, marginTop: 4 }}>
               {!active?.hasGoogleToken ? 'Sign this account into Google first.' : 'Pick a GTM account, container and draft workspace in the Chat tab (the GTM bar), then return here.'}
@@ -5285,6 +5339,7 @@ function VerifyPanel({
               {vNote.text}
             </div>
           )}
+          </>)}
         </div>
 
         {vResult && (
@@ -5317,6 +5372,40 @@ function VerifyPanel({
               <div style={{ fontWeight: 600, color: 'var(--c-red)' }}>Error: {vResult.error}</div>
             ) : (
               <VerifyScorecard fired={firedReal.length} config={firedSynthetic.length} server={serverRelayed.length} untested={inconclusive.length} issues={notFired.length} />
+            )}
+            {/* Filter + search bar for the results below — status / interaction type / platform / free text. */}
+            {!vResult.error && vResult.verdicts.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginTop: 10, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border-2)', background: 'var(--surface-2)' }}>
+                <input
+                  value={fSearch}
+                  onChange={(e) => setFSearch(e.target.value)}
+                  placeholder="Search tags…"
+                  style={{ ...styles.input, flex: '1 1 170px', minWidth: 130, maxWidth: 260, padding: '5px 9px', fontSize: 12.5 }}
+                />
+                {FILTER_GROUPS.map((g) => (
+                  <div key={g.label} style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                    <span style={{ ...styles.muted, fontSize: 11.5 }}>{g.label}:</span>
+                    {g.items.map(([key, txt]) => {
+                      const active = g.set.has(key);
+                      return (
+                        <button
+                          key={key}
+                          onClick={toggleF(g.setter, key)}
+                          style={{ padding: '2px 9px', borderRadius: 20, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', border: `1px solid ${active ? 'var(--c-blue)' : 'var(--border-2)'}`, background: active ? 'var(--c-blue)' : 'transparent', color: active ? '#fff' : 'var(--text-dim)' }}
+                        >
+                          {txt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
+                {filtersActive && (
+                  <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => { setFStatus(new Set()); setFType(new Set()); setFPlatform(new Set()); setFSearch(''); }}>clear</button>
+                )}
+              </div>
+            )}
+            {filtersActive && !vResult.error && ((showStatus('fired') ? fFiredReal.length + fFiredSynthetic.length + fServerRelayed.length : 0) + (showStatus('untested') ? fInconclusive.length : 0) + (showStatus('notfired') ? fNotFired.length : 0)) === 0 && (
+              <div style={{ ...styles.muted, fontSize: 13, marginTop: 12, padding: 12, textAlign: 'center', border: '1px dashed var(--border-2)', borderRadius: 8 }}>No tags match the current filters.</div>
             )}
             {/* Phase 3: the Tag-Assistant-style detail — the event timeline (API Call + tags fired per
                 event). Collapsed by default: the results TABLE below now carries the per-tag screenshots,
@@ -5405,13 +5494,13 @@ function VerifyPanel({
               );
             })()}
 
-            {(firedReal.length + firedSynthetic.length + serverRelayed.length) > 0 && !vResult.error && (
+            {showStatus('fired') && (fFiredReal.length + fFiredSynthetic.length + fServerRelayed.length) > 0 && !vResult.error && (
               <div style={{ marginTop: 12 }}>
-                <VerifyResultsTable rows={[...firedReal, ...firedSynthetic, ...serverRelayed]} onProof={showProof} />
-                {(firedSynthetic.length > 0 || serverRelayed.length > 0) && (
+                <VerifyResultsTable rows={[...fFiredReal, ...fFiredSynthetic, ...fServerRelayed]} onProof={showProof} />
+                {(fFiredSynthetic.length > 0 || fServerRelayed.length > 0) && (
                   <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 8, lineHeight: 1.55, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    {firedSynthetic.length > 0 && <span>⚙ <b style={{ color: 'var(--c-amber)' }}>Config-verified</b> — fired on a synthetic dataLayer push (trigger is wired right), NOT a real submit. Confirm with a real submit in GTM Preview.</span>}
-                    {serverRelayed.length > 0 && <span>🛰 <b style={{ color: 'var(--c-blue)' }}>Server-side</b> — no browser beacon, but relayed to your sGTM (normal for Conversion-API destinations).</span>}
+                    {fFiredSynthetic.length > 0 && <span>⚙ <b style={{ color: 'var(--c-amber)' }}>Config-verified</b> — fired on a synthetic dataLayer push (trigger is wired right), NOT a real submit. Confirm with a real submit in GTM Preview.</span>}
+                    {fServerRelayed.length > 0 && <span>🛰 <b style={{ color: 'var(--c-blue)' }}>Server-side</b> — no browser beacon, but relayed to your sGTM (normal for Conversion-API destinations).</span>}
                   </div>
                 )}
               </div>
@@ -5420,14 +5509,14 @@ function VerifyPanel({
             {/* UNTESTED = we never exercised the trigger here (its CTA wasn't on a page we drove, or its form
                 wasn't submitted). NOT the same as "not firing". Show, per tag, WHY it wasn't tested + how to
                 test it — visibly, not just on hover — so the operator knows these were skipped, not broken. */}
-            {inconclusive.length > 0 && (
+            {showStatus('untested') && fInconclusive.length > 0 && (
               <div style={{ marginTop: 12 }}>
-                <div style={{ ...styles.h2, color: 'var(--text-dim)' }}>⏭ Untested here ({inconclusive.length})</div>
+                <div style={{ ...styles.h2, color: 'var(--text-dim)' }}>⏭ Untested here ({fInconclusive.length}{filtersActive && fInconclusive.length !== inconclusive.length ? ` of ${inconclusive.length}` : ''})</div>
                 <div style={{ ...styles.muted, fontSize: 12, marginBottom: 6, lineHeight: 1.5 }}>
                   We didn’t exercise these tags’ triggers in this run — this is <b>not</b> “not firing”. Either the CTA/link they listen to wasn’t on a page we drove, or (for a form tag) its form wasn’t among the ones submitted. Below is why each one, and how to actually test it.
                 </div>
                 <ul style={styles.resultList}>
-                  {inconclusive.map((v) => {
+                  {fInconclusive.map((v) => {
                     const k = verdictKindLabel(v);
                     return (
                       <li key={v.tagId} style={{ ...styles.resultRow, display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'stretch' }}>
@@ -5441,14 +5530,14 @@ function VerifyPanel({
               </div>
             )}
 
-            {notFired.length > 0 && (
+            {showStatus('notfired') && fNotFired.length > 0 && (
               <div style={{ marginTop: 12 }}>
-                <div style={{ ...styles.h2, color: 'var(--c-red)' }}>❌ Not firing ({notFired.length})</div>
+                <div style={{ ...styles.h2, color: 'var(--c-red)' }}>❌ Not firing ({fNotFired.length}{filtersActive && fNotFired.length !== notFired.length ? ` of ${notFired.length}` : ''})</div>
                 <div style={{ ...styles.muted, fontSize: 12, marginBottom: 6, lineHeight: 1.5 }}>
                   We <b>did</b> exercise these — drove the click / submitted the form — but GTM did not fire the tag. That means a <b>trigger condition doesn’t match</b> what the page sent. Compare each condition (event name, form name / id, page path) against the dataLayer below.
                 </div>
                 <ul style={styles.resultList}>
-                  {notFired.map((v) => {
+                  {fNotFired.map((v) => {
                     const k = verdictKindLabel(v);
                     return (
                       <li key={v.tagId} style={{ ...styles.resultRow, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
