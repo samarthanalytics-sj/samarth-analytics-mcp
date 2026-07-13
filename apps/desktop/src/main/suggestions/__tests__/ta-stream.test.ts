@@ -220,6 +220,16 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
   check('vary: no false "identical" note when form_name varies', !/identical on every form/i.test(vn.how));
   check('vary: surfaces the distinctive form_name value for THIS page', vn.conditions.some((c) => c.key === 'dlv - form_name' && c.value === 'dashboards_form'));
 
+  // form_id — when form_name/type are SHARED but form_id DIFFERS, use the distinctive form_id (and no note).
+  const byId = toTaEventViews([
+    { container: 'GTM-X', epoch: 0, eventId: 12, eventName: 'form_submission', variables: { 'dlv - form_name': 'solution_contact_form', 'dlv - form_type': 'service_request', 'dlv - form_id': 'contact-dashboards', 'dlv - CTA Location': '/a' }, tags: [] },
+    { container: 'GTM-X', epoch: 1, eventId: 12, eventName: 'form_submission', variables: { 'dlv - form_name': 'solution_contact_form', 'dlv - form_type': 'service_request', 'dlv - form_id': 'contact-tagmgmt', 'dlv - CTA Location': '/b' }, tags: [] },
+  ]);
+  const bid = buildTriggerSuggestions([{ tagName: 'GA4 A', expectedEvent: 'form_submission', page: '/a' }], byId)[0];
+  check('formId: surfaces the distinctive form_id value', bid.conditions.some((c) => c.key === 'dlv - form_id' && c.value === 'contact-dashboards'));
+  check('formId: no false "identical" note when form_id varies', !/identical on every form/i.test(bid.how));
+  check('formId: form_id ranks ahead of the page-ish CTA Location', bid.conditions.some((c) => c.key === 'dlv - form_id') && bid.conditions[0].key === 'Page Path');
+
   // Finding 2/5 — site-wide tag + every field shared → propose NO shared form_name/type, just the note.
   const allShared = toTaEventViews([
     { container: 'GTM-X', epoch: 0, eventId: 6, eventName: 'form_submission', variables: { 'dlv - form_name': 'solution_contact_form', 'dlv - form_type': 'service_request' }, tags: [] },
