@@ -1,3 +1,9 @@
+## [1.309.13](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.12...v1.309.13) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** scrape lazy-mounted (IntersectionObserver) forms — show the scan window offscreen ([#547](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/547)) ([a89261b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a89261b5968bcd4474b124a8b8ae231b698f9fa1))
+
 ## [1.309.12](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.11...v1.309.12) (2026-07-13)
 
 ### Bug Fixes
