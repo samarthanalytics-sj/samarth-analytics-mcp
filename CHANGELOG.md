@@ -1,3 +1,9 @@
+## [1.309.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.3...v1.309.4) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** scope trigger suggestions by the DISTINCTIVE variable, not shared form_name/type ([#538](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/538)) ([a491289](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a4912896bcd20b4d8fbaefaabeffde318e075bb9)), closes [#536](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/536)
+
 ## [1.309.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.2...v1.309.3) (2026-07-13)
 
 ### Bug Fixes
