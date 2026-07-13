@@ -1,3 +1,9 @@
+## [1.309.8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.7...v1.309.8) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** say WHY tags are untested in a scoped single-page run ([#542](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/542)) ([c46eca6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c46eca6aca55c7aba04ef26fbfdbd396e34f3d81))
+
 ## [1.309.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.6...v1.309.7) (2026-07-13)
 
 ### Bug Fixes
