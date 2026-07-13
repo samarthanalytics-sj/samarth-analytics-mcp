@@ -347,6 +347,14 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         // Phase 3: attach the real Tag Assistant panel screenshots (keyed by the global `seq`, which the
         // driver and toTaEventViews assign identically) to their events.
         if (ta.eventShots) for (const v of allEventViews) { if (ta.eventShots[v.seq]) v.screenshot = ta.eventShots[v.seq]; }
+        // Attach that panel screenshot to each FIRED verdict too, so the results TABLE shows the proof
+        // side-by-side per tag (its existing "Proof" column) — the table becomes the primary at-a-glance
+        // view, not only the event-by-event timeline. Use the event where THIS tag actually fired.
+        for (const v of verdicts) {
+          if (!v.fired) continue;
+          const shot = allEventViews.find((e) => e.screenshot && e.tagsFired.some((t) => t.name === v.tagName && (t.status === 'fired' || t.status === 'running')));
+          if (shot?.screenshot) v.screenshot = shot.screenshot;
+        }
         // Timeline UI: show meaningful events only — those that fired a tag, or carry a real (non-internal)
         // push. Hides the many empty gtm.init/gtm.dom/gtm.load ticks per page nav. (Suggestions still match
         // against the FULL set below so an expected event is never missed.)
