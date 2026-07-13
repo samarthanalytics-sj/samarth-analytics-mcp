@@ -459,7 +459,10 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
             // all onto one form. With no form-name condition we omit it, so matching falls to the tag name
             // (whose service token pairs with the form's page path).
             const formName = cd.form_name ?? cd.formName ?? cd.form_id ?? cd.formId;
-            return { tagName: t.tagName, eventName: t.eventName, platform: t.platform, ...(formName ? { formName: String(formName) } : {}) };
+            // t.page is the tag's resolved Page-Path / URL trigger scope (snapshotToVerifyInputs computes
+            // it). Feed it to matching so a page-scoped form tag pairs deterministically with that page's
+            // form — the strongest signal for generic-named tags (was discarded here before).
+            return { tagName: t.tagName, eventName: t.eventName, platform: t.platform, ...(formName ? { formName: String(formName) } : {}), ...(t.page ? { page: t.page } : {}) };
           });
       }
     } catch (e) {

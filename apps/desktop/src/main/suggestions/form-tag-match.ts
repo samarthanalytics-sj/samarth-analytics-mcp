@@ -17,6 +17,11 @@ export interface FormTagIdentity {
   platform: string;
   /** The tag's resolved form-name condition (customEventData), when present — the best match key. */
   formName?: string;
+  /** The tag's PAGE-PATH scope (from a Page Path / Page URL trigger condition), e.g. "/contact". The
+   *  DETERMINISTIC pairing signal: a tag scoped to /contact pairs with the /contact form regardless of
+   *  names — which rescues generic tags ("Contact us", "Get In Touch") whose tokens are too common to
+   *  pass the distinctiveness gate. */
+  page?: string;
 }
 
 // Words that don't help tell one form from another (tag-name boilerplate + generic filler).
@@ -93,6 +98,8 @@ export function matchFormsToTags(
   tags: FormTagIdentity[],
 ): { matched: MatchedFormView[]; unmatchedTags: string[] } {
   const formTok = forms.map(formIdentity);
+  // Each form's own URL pathname (trailing slash trimmed) — for deterministic page-path scope pairing.
+  const formPath = forms.map((f) => { try { return new URL(f.page).pathname.replace(/\/+$/, '') || '/'; } catch { return ''; } });
   const byKey = new Map<string, MatchedFormView>();
   const unmatched: string[] = [];
   // Is a token->form match CONFIDENT? A strong MAJORITY of the identity's tokens must appear in the form
@@ -118,14 +125,32 @@ export function matchFormsToTags(
     return confident ? { idx: bestIdx, score: bestScore } : { idx: -1, score: 0 };
   };
   for (const tag of tags) {
-    // Try each of the tag's identities (form_name condition → tag name → event name) and keep the
-    // strongest confident match. So when the form_name condition is generic/shared, the SERVICE token in
-    // the tag name still pairs with the form's page-path token.
     let bestIdx = -1;
-    let bestScore = -1;
-    for (const tt of tagIdentities(tag)) {
-      const r = scoreIdentity(tt);
-      if (r.idx >= 0 && r.score > bestScore) { bestIdx = r.idx; bestScore = r.score; }
+    // 1. DETERMINISTIC page-path scope pairing FIRST. A form tag scoped to a page path (its Page Path /
+    //    URL trigger condition) pairs with the crawled form on that exact path — no token guessing. This
+    //    rescues generic-named tags ("Contact us" → /contact, "Apply for Web Analyst" → /careers) whose
+    //    STOP-stripped tokens are too common to survive the distinctiveness gate but whose PAGE is
+    //    unambiguous. When several forms sit on the path, prefer the one whose tokens overlap the tag most.
+    if (tag.page) {
+      const scope = tag.page.replace(/\/+$/, '') || '/';
+      const onScope = forms
+        .map((_f, i) => i)
+        .filter((i) => formPath[i] === scope || (scope !== '/' && formPath[i].startsWith(scope + '/')));
+      if (onScope.length) {
+        const idsets = tagIdentities(tag);
+        const overlap = (i: number): number => idsets.reduce((m, tt) => Math.max(m, shared(tt, formTok[i])), 0);
+        bestIdx = onScope.reduce((best, i) => (overlap(i) > overlap(best) ? i : best), onScope[0]);
+      }
+    }
+    // 2. Token overlap fallback. Try each of the tag's identities (form_name → tag name → event name) and
+    //    keep the strongest confident match — so a generic/shared form_name doesn't hide the SERVICE token
+    //    in the tag name pairing with the form's page-path token.
+    if (bestIdx < 0) {
+      let bestScore = -1;
+      for (const tt of tagIdentities(tag)) {
+        const r = scoreIdentity(tt);
+        if (r.idx >= 0 && r.score > bestScore) { bestIdx = r.idx; bestScore = r.score; }
+      }
     }
     if (bestIdx >= 0) {
       const f = forms[bestIdx];
