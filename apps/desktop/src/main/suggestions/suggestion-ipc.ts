@@ -344,16 +344,20 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         // tags fired). taSuggestions = DLV-based triggers for tags that didn't fire, built from the tag's
         // expected custom_event name + the REAL pushes we captured.
         const allEventViews = toTaEventViews(taEvents);
-        // Phase 3: attach the real Tag Assistant panel screenshots (keyed by the global `seq`, which the
-        // driver and toTaEventViews assign identically) to their events.
-        if (ta.eventShots) for (const v of allEventViews) { if (ta.eventShots[v.seq]) v.screenshot = ta.eventShots[v.seq]; }
-        // Attach that panel screenshot to each FIRED verdict too, so the results TABLE shows the proof
-        // side-by-side per tag (its existing "Proof" column) — the table becomes the primary at-a-glance
-        // view, not only the event-by-event timeline. Use the event where THIS tag actually fired.
+        // Proof screenshots were captured DURING the drive; each records the panel's "Tags Fired" text, so
+        // attach a capture to whichever FIRED tags it names. shotFor returns the capture whose panel listed
+        // any of the given tag names. Fired verdicts get the capture that proves them (or the summary
+        // fallback so every fired tag has SOME proof); timeline events get the capture overlapping their tags.
+        const shotFor = (names: string[]): string | undefined =>
+          (ta.captures ?? []).find((c) => names.some((n) => n && c.fired.includes(n)))?.screenshot;
+        for (const v of allEventViews) {
+          const s = shotFor(v.tagsFired.filter((t) => t.status === 'fired' || t.status === 'running').map((t) => t.name));
+          if (s) v.screenshot = s;
+        }
         for (const v of verdicts) {
           if (!v.fired) continue;
-          const shot = allEventViews.find((e) => e.screenshot && e.tagsFired.some((t) => t.name === v.tagName && (t.status === 'fired' || t.status === 'running')));
-          if (shot?.screenshot) v.screenshot = shot.screenshot;
+          const s = shotFor([v.tagName]) ?? ta.summaryShot;
+          if (s) v.screenshot = s;
         }
         // Timeline UI: show meaningful events only — those that fired a tag, or carry a real (non-internal)
         // push. Hides the many empty gtm.init/gtm.dom/gtm.load ticks per page nav. (Suggestions still match

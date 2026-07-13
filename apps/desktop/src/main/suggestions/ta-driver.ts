@@ -181,9 +181,13 @@ export interface TaVerifyResult {
   pagesDriven: string[];
   /** The parsed authoritative debug capture (per-event tags fired + API-Call pushes). */
   capture?: TaCapture;
-  /** JPEG data-URI screenshots of the Tag Assistant panel, keyed by eventId (Phase 3 — proof of the
-   *  tags-fired view per event). Best-effort. */
-  eventShots?: Record<number, string>;
+  /** Proof screenshots captured DURING the drive: each is the Tag Assistant panel right after an
+   *  interaction, with `fired` = the "Tags Fired" text shown, so the IPC attaches it to whichever tags it
+   *  proves. Best-effort. */
+  captures?: Array<{ screenshot: string; fired: string }>;
+  /** One full Tag Assistant panel screenshot taken at the end — a guaranteed fallback so a genuinely-fired
+   *  tag always has SOME proof. */
+  summaryShot?: string;
 }
 
 // ── Phase 3 rail navigation (runs IN the Tag Assistant page) ─────────────────────────────────────────
@@ -204,43 +208,31 @@ function dismissTaOverlays(): void {
   } catch { /* best-effort */ }
 }
 
-/** In the TA page: tag each left-rail event row (its text reads "<globalNum><Friendly Name>", e.g.
- *  "131Link Click") with data-ta-row=idx and return them oldest-first ([{idx, num, name}]). One element
- *  per global number — the smallest (the row itself), never an ancestor that merely contains it. */
-function indexTaRailRows(): Array<{ idx: number; num: number; name: string }> {
-  const byNum: Record<number, { el: HTMLElement; name: string; depth: number }> = {};
+/** In the TA page: click the NEWEST rail event (highest global number) — i.e. the event we JUST triggered
+ *  by driving a click / submitting a form. Reliable because it needs no number/name matching: whatever we
+ *  just caused is the top of the rail. Returns whether it clicked. */
+function clickNewestTaRow(): boolean {
   try {
     const all = Array.prototype.slice.call(document.querySelectorAll('a,li,button,[role="button"],div,span')) as HTMLElement[];
+    let best: HTMLElement | null = null;
+    let bestNum = -1;
+    let bestDepth = Infinity;
     for (const el of all) {
       const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
       const m = /^(\d+)\s*(\D.*)$/.exec(t);
-      if (!m || t.length > 44) continue; // a compact rail label, not a big panel/container
+      if (!m || t.length > 44) continue;
       const num = parseInt(m[1], 10);
       const depth = el.querySelectorAll('*').length;
-      const prev = byNum[num];
-      if (!prev || depth < prev.depth) byNum[num] = { el, name: m[2].trim(), depth };
+      if (num > bestNum || (num === bestNum && depth < bestDepth)) { bestNum = num; bestDepth = depth; best = el; }
     }
-  } catch { /* best-effort */ }
-  const out: Array<{ idx: number; num: number; name: string }> = [];
-  Object.keys(byNum).map(Number).sort((a, b) => a - b).forEach((num, i) => {
-    byNum[num].el.setAttribute('data-ta-row', String(i));
-    out.push({ idx: i, num, name: byNum[num].name });
-  });
-  return out;
-}
-
-/** In the TA page: click a rail row previously tagged by indexTaRailRows (the row or its clickable ancestor). */
-function clickTaRowByIdx(idx: number): boolean {
-  try {
-    const el = document.querySelector('[data-ta-row="' + idx + '"]') as HTMLElement | null;
-    if (!el) return false;
-    let target: HTMLElement | null = el;
+    if (!best) return false;
+    let target: HTMLElement | null = best;
     for (let k = 0; k < 5 && target; k += 1) {
       const tag = target.tagName.toLowerCase();
       if (tag === 'a' || tag === 'button' || target.getAttribute('role') === 'button' || (target as unknown as { onclick?: unknown }).onclick) break;
       target = target.parentElement;
     }
-    (target ?? el).click();
+    (target ?? best).click();
     return true;
   } catch { return false; }
 }
@@ -257,23 +249,10 @@ function readTaPanel(): { event: string; fired: string } {
   } catch { return { event: '', fired: '' }; }
 }
 
-/** Node-side: map our raw dataLayer event to the label Tag Assistant shows in its rail. Custom events show
- *  their raw name; built-in gtm.* events show a friendly label. Used only to PRE-FILTER candidate rows —
- *  the read-back confirm is the source of truth, so a wrong guess just falls through to the scan pass. */
-function taFriendlyName(raw: string): string {
-  const map: Record<string, string> = {
-    'gtm.js': 'container loaded', 'gtm.dom': 'dom ready', 'gtm.load': 'window loaded',
-    'gtm.click': 'click', 'gtm.linkClick': 'link click', 'gtm.scrollDepth': 'scroll depth',
-    'gtm.formInteract': 'form interaction', 'gtm.formSubmit': 'form submit', 'gtm.timer': 'timer',
-    'gtm.historyChange': 'history', 'gtm.init': 'initialization', 'gtm.video': 'video',
-  };
-  return (map[raw] ?? raw).toLowerCase();
-}
-
 /**
  * The Phase-2 drive: connect TA to `url`, then sequentially navigate the SAME debugged popup through each
- * tag's page and drive its trigger, capturing the debug stream throughout. Screenshots + the TA-style
- * timeline UI land in Phase 3.
+ * tag's page and drive its trigger, capturing the debug stream throughout. Proof screenshots are captured
+ * DURING the drive (per interaction) and the TA-style timeline UI renders them.
  */
 export async function runTaVerify(
   profileDir: string,
@@ -370,6 +349,25 @@ export async function runTaVerify(
     await popup.waitForLoadState('networkidle', { timeout: navTimeoutMs }).catch(() => undefined);
     await popup.waitForTimeout(Math.max(settleMs, 4000)); // debug handshake + container debug reload
 
+    // PROOF: screenshot the Tag Assistant panel DURING the drive. Right after each click / form submit, the
+    // event we just caused is the NEWEST rail row, so clicking it shows exactly that event's Tags-Fired
+    // panel. This beats a post-hoc rail search, which drowns in the scan's scroll_depth events and misses
+    // the form_submission events that run LAST (highest seq). Each capture records the panel's fired-tag
+    // text so the IPC attaches it to whichever tags it proves. `ta` is a SEPARATE page from the popup, so a
+    // form submit reloading the popup never loses these. Best-effort — a screenshot never fails the run.
+    const captures: Array<{ screenshot: string; fired: string }> = [];
+    const snapNewestTa = async (): Promise<void> => {
+      try {
+        await ta.evaluate(dismissTaOverlays).catch(() => undefined);
+        const clicked = await ta.evaluate<boolean>(clickNewestTaRow).catch(() => false);
+        if (!clicked) return;
+        await ta.waitForTimeout(350); // let the panel switch to that event
+        const panel = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
+        const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
+        captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: panel.fired });
+      } catch { /* proof is best-effort */ }
+    };
+
     // Drive each page's tags IN THE SAME POPUP (sequential — the debug session rides window.opener).
     const byPage = new Map<string, VerifyDriverTag[]>();
     for (const t of tags) {
@@ -427,6 +425,7 @@ export async function runTaVerify(
           Object.keys(data).forEach((k) => pushedDlKeys.add(k));
           try { await popup.evaluate(pushDataLayerInPage, payload); } catch { /* reported by stream absence */ }
           await popup.waitForTimeout(Math.max(settleMs, 700));
+          await snapNewestTa(); // proof of the event we just pushed
           perTag.push({ tagId: tag.id, kind: 'custom_event', targetFound: true, performed: true, conditionSupplied: Object.keys(data).length > 0 || !/(^|_)forms?(_|$)/i.test(evName), hits: [] });
           continue;
         }
@@ -437,7 +436,7 @@ export async function runTaVerify(
         } catch (e) {
           outcome = { targetFound: false, performed: false, note: (e instanceof Error ? e.message : String(e)).slice(0, 150) };
         }
-        if (outcome.performed) await popup.waitForTimeout(Math.max(settleMs, 700));
+        if (outcome.performed) { await popup.waitForTimeout(Math.max(settleMs, 700)); await snapNewestTa(); } // proof of the click we just drove
         perTag.push({
           tagId: tag.id,
           kind: kind === 'form_submit' ? 'submit' : 'click',
@@ -475,6 +474,18 @@ export async function runTaVerify(
       }
       // Let the (often AJAX) submit resolve + the success-state form_submission push + the tag fire.
       await popup.waitForTimeout(Math.max(settleMs, 3000));
+      // Poll briefly for the newest rail event to become form_submission (frames arrive async after the
+      // reload), then snapshot that event's Tags-Fired panel — proof for THIS form's tags.
+      for (let poll = 0; poll < 6; poll += 1) {
+        const ev = await ta.evaluate<{ event: string; fired: string }>(() => {
+          const all = (document.body.textContent || '').replace(/\s+/g, ' ');
+          const m = /dataLayer\.push\(\{\s*event:\s*["']([^"']+)["']/.exec(all);
+          return { event: m ? m[1] : '', fired: '' };
+        }).catch(() => ({ event: '', fired: '' }));
+        if (/form_submission|form_submit/i.test(ev.event)) break;
+        await ta.waitForTimeout(400);
+      }
+      await snapNewestTa(); // proof of the real form submit we just did
     }
 
     await popup.waitForTimeout(Math.max(settleMs, 1500)); // let the last TAG_STATUS frames arrive
@@ -493,69 +504,21 @@ export async function runTaVerify(
     const firedCount = evs.reduce((n, e) => n + e.tags.filter((t) => t.status === 'fired').length, 0);
     console.log(`[tag-assistant] captured ${frames.length} debug frame(s) -> ${evs.length} event(s) for ${containerPublicId}, ${firedCount} tag-fire(s)${problem ? ` -- ${problem}` : ''}`);
 
-    // PHASE 3: screenshot the REAL Tag Assistant panel per event — select the event in TA's left rail, then
-    // capture the page (rail + its Tags-Fired panel). Because TA's rail number isn't in our frames, we
-    // CONFIRM each row by reading back the panel's dataLayer event + Tags-Fired names before shooting, so a
-    // screenshot never lands on the wrong event. Best-effort: only tag-firing events, capped, failures
-    // skipped. Keyed by the global 1-based `seq` (same as toTaEventViews) so each shot maps to its own
-    // timeline event (eventId can't key it — it resets per page and would alias two events onto one shot).
-    const eventShots: Record<number, string> = {};
-    const targets = evs
-      .map((e, i) => ({ seq: i + 1, eventName: e.eventName, firedTags: e.tags.filter((t) => t.status === 'fired').map((t) => t.name) }))
-      .filter((t) => t.firedTags.length > 0)
-      .slice(0, 40); // most tags fire on their OWN event, so cap high enough that ~every fired tag gets a shot
-    if (targets.length) {
-      console.log(`[tag-assistant] capturing ${targets.length} Tag Assistant panel screenshot(s)…`);
-      const CLICK_CAP = 120;
-      let clicks = 0;
-      const usedRows = new Set<number>();
-      const matches = (p: { event: string; fired: string }, t: { eventName: string; firedTags: string[] }): boolean =>
-        p.event === t.eventName && (t.firedTags.length === 0 || t.firedTags.some((n) => p.fired.includes(n)));
-      const clickAndRead = async (idx: number): Promise<{ event: string; fired: string }> => {
-        const ok = await ta.evaluate<boolean>(clickTaRowByIdx, idx).catch(() => false);
-        if (!ok) return { event: '', fired: '' };
-        await ta.waitForTimeout(320); // let the panel switch to this event
-        return ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
-      };
-      const captureShot = async (seq: number): Promise<void> => {
-        try {
-          await ta.evaluate(dismissTaOverlays).catch(() => undefined);
-          const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
-          eventShots[seq] = `data:image/jpeg;base64,${buf.toString('base64')}`;
-        } catch { /* a screenshot must never fail the run */ }
-      };
-      try { await ta.evaluate(dismissTaOverlays); } catch { /* best-effort */ }
+    // Proof screenshots were captured DURING the drive (snapNewestTa), each recording the panel's fired-tag
+    // text so the IPC attaches it to whichever tags it proves. Add ONE final full-panel screenshot as a
+    // guaranteed fallback, so a genuinely-fired tag always has SOME proof even if its per-event snap missed.
+    let summaryShot: string | undefined;
+    try {
+      await ta.evaluate(dismissTaOverlays).catch(() => undefined);
       await ta.waitForTimeout(200);
-      let rail: Array<{ idx: number; num: number; name: string }> = [];
-      try { rail = await ta.evaluate<Array<{ idx: number; num: number; name: string }>>(indexTaRailRows); } catch { /* best-effort */ }
-      // Pass 1: pre-filter candidate rows by TA's friendly label, confirm by read-back, then shoot.
-      for (const target of targets) {
-        if (clicks >= CLICK_CAP) break;
-        const friendly = taFriendlyName(target.eventName);
-        const cands = rail.filter((r) => !usedRows.has(r.idx) && r.name.toLowerCase() === friendly).sort((a, b) => a.num - b.num);
-        for (const cand of cands) {
-          if (clicks >= CLICK_CAP) break;
-          clicks += 1;
-          const panel = await clickAndRead(cand.idx);
-          if (matches(panel, target)) { usedRows.add(cand.idx); await captureShot(target.seq); break; }
-        }
-      }
-      // Pass 2: for any target the label guess missed, scan remaining rows and match by read-back only.
-      for (const r of rail) {
-        if (clicks >= CLICK_CAP) break;
-        if (usedRows.has(r.idx)) continue;
-        const rem = targets.filter((t) => eventShots[t.seq] === undefined);
-        if (!rem.length) break;
-        clicks += 1;
-        const panel = await clickAndRead(r.idx);
-        const hit = rem.find((t) => matches(panel, t));
-        if (hit) { usedRows.add(r.idx); await captureShot(hit.seq); }
-      }
-    }
+      const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
+      summaryShot = `data:image/jpeg;base64,${buf.toString('base64')}`;
+    } catch { /* best-effort */ }
+    console.log(`[tag-assistant] captured ${captures.length} in-drive proof screenshot(s)${summaryShot ? ' + a summary' : ''}`);
 
     console.log('[tag-assistant] leaving the Tag Assistant window OPEN so you can inspect it — it closes automatically when you run verify again or quit the app.');
     keepWindowOpen = true; // reached a real result — keep the TA panel up for the user to review
-    return { pagesOk: true, perTag, pagesDriven, capture, ...(Object.keys(eventShots).length ? { eventShots } : {}), ...(problem ? { debugProblem: problem } : {}) };
+    return { pagesOk: true, perTag, pagesDriven, capture, ...(captures.length ? { captures } : {}), ...(summaryShot ? { summaryShot } : {}), ...(problem ? { debugProblem: problem } : {}) };
   } catch (e) {
     return { pagesOk: false, perTag, pagesDriven, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
   } finally {

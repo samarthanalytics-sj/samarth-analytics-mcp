@@ -5402,22 +5402,48 @@ function VerifyPanel({
               );
             })()}
 
-            {(firedReal.length + firedSynthetic.length + serverRelayed.length + inconclusive.length) > 0 && !vResult.error && (
+            {(firedReal.length + firedSynthetic.length + serverRelayed.length) > 0 && !vResult.error && (
               <div style={{ marginTop: 12 }}>
-                <VerifyResultsTable rows={[...firedReal, ...firedSynthetic, ...serverRelayed, ...inconclusive]} onProof={showProof} />
-                {(firedSynthetic.length > 0 || serverRelayed.length > 0 || inconclusive.length > 0) && (
+                <VerifyResultsTable rows={[...firedReal, ...firedSynthetic, ...serverRelayed]} onProof={showProof} />
+                {(firedSynthetic.length > 0 || serverRelayed.length > 0) && (
                   <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 8, lineHeight: 1.55, display: 'flex', flexDirection: 'column', gap: 3 }}>
                     {firedSynthetic.length > 0 && <span>⚙ <b style={{ color: 'var(--c-amber)' }}>Config-verified</b> — fired on a synthetic dataLayer push (trigger is wired right), NOT a real submit. Confirm with a real submit in GTM Preview.</span>}
                     {serverRelayed.length > 0 && <span>🛰 <b style={{ color: 'var(--c-blue)' }}>Server-side</b> — no browser beacon, but relayed to your sGTM (normal for Conversion-API destinations).</span>}
-                    {inconclusive.length > 0 && <span>⏭ <b>Untested here</b> ≠ broken — needs the CTA’s own page or a real interaction in GTM Preview.</span>}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* UNTESTED = we never exercised the trigger here (its CTA wasn't on a page we drove, or its form
+                wasn't submitted). NOT the same as "not firing". Show, per tag, WHY it wasn't tested + how to
+                test it — visibly, not just on hover — so the operator knows these were skipped, not broken. */}
+            {inconclusive.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ ...styles.h2, color: 'var(--text-dim)' }}>⏭ Untested here ({inconclusive.length})</div>
+                <div style={{ ...styles.muted, fontSize: 12, marginBottom: 6, lineHeight: 1.5 }}>
+                  We didn’t exercise these tags’ triggers in this run — this is <b>not</b> “not firing”. Either the CTA/link they listen to wasn’t on a page we drove, or (for a form tag) its form wasn’t among the ones submitted. Below is why each one, and how to actually test it.
+                </div>
+                <ul style={styles.resultList}>
+                  {inconclusive.map((v) => {
+                    const k = verdictKindLabel(v);
+                    return (
+                      <li key={v.tagId} style={{ ...styles.resultRow, display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'stretch' }}>
+                        <div><span style={{ fontWeight: 600, color: 'var(--text-dim)' }}>UNTESTED</span> <span title={k.label} aria-hidden>{k.icon}</span> {v.tagName}</div>
+                        {v.reason ? <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2 }}>Why: {v.reason}</div> : null}
+                        <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>How to test: {verdictHowToTest(v)}</div>
+                      </li>
+                    );
+                  })}
+                </ul>
               </div>
             )}
 
             {notFired.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <div style={{ ...styles.h2, color: 'var(--c-red)' }}>❌ Not firing ({notFired.length})</div>
+                <div style={{ ...styles.muted, fontSize: 12, marginBottom: 6, lineHeight: 1.5 }}>
+                  We <b>did</b> exercise these — drove the click / submitted the form — but GTM did not fire the tag. That means a <b>trigger condition doesn’t match</b> what the page sent. Compare each condition (event name, form name / id, page path) against the dataLayer below.
+                </div>
                 <ul style={styles.resultList}>
                   {notFired.map((v) => {
                     const k = verdictKindLabel(v);
