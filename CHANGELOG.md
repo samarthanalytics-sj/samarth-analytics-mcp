@@ -1,3 +1,9 @@
+## [1.305.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.304.1...v1.305.0) (2026-07-13)
+
+### Features
+
+* **verify:** Phase 2b — Verify with Tag Assistant submits the operator's REVIEWED form values ([#519](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/519)) ([c1b4538](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c1b4538395b30280cfe359aefa0b572bf53e5b41))
+
 ## [1.304.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.304.0...v1.304.1) (2026-07-13)
 
 ### Bug Fixes
