@@ -1,3 +1,9 @@
+## [1.309.12](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.11...v1.309.12) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** scan footer/nav pages (Contact, Privacy, Careers) not in the sitemap ([#546](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/546)) ([97e7792](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/97e779264b1660d1b8db63347bf34776616aa851))
+
 ## [1.309.11](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.10...v1.309.11) (2026-07-13)
 
 ### Bug Fixes
