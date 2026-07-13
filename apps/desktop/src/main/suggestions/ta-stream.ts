@@ -128,7 +128,14 @@ export function parseTaFrames(frames: unknown[]): TaCapture {
     const messageType = String(san.messageType ?? '');
     if (messageType === 'DATA_LAYER') {
       const msg = asObj(san.message);
-      if (msg) rec.apiCall = msg;
+      if (msg) {
+        rec.apiCall = msg;
+        // AUTHORITATIVE event name = the real dataLayer push's own `event`. The frame's key.eventName is
+        // UNRELIABLE — observed mislabeled (e.g. a gtm.linkClick event keyed as "form_submission"), which
+        // put the wrong event in the timeline header AND the verdict EVENT column. The push's event wins.
+        const pushEvent = typeof msg.event === 'string' ? msg.event.trim() : '';
+        if (pushEvent) rec.eventName = pushEvent;
+      }
       collectVariables(san, rec);
     } else if (messageType === 'MACRO_RESOLVED') {
       collectVariables(san, rec);

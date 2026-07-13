@@ -4719,7 +4719,7 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus }: 
           )}
         </div>
         <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
-            Each field is pre-filled with a generic, editable test value — edit any of them below. The test email uses a traceable gtm-verify+…@example.com alias so your CRM can filter these.
+            Each field is pre-filled with a generic, editable test value (name “Test”, email test@gmail.com) — edit any of them below.
           </div>
           {note && (
             <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)' }}>{note}</div>
@@ -4881,6 +4881,7 @@ function VerifyPanel({
   const [vSnippet, setVSnippet] = useState('');
   const [vVerifyPages, setVVerifyPages] = useState('');
   const [vVerifying, setVVerifying] = useState(false);
+  const [vVerifyKind, setVVerifyKind] = useState<'firing' | 'ta' | null>(null);
   const [vProgress, setVProgress] = useState<VerifyProgressView | null>(null);
   const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
@@ -4929,6 +4930,7 @@ function VerifyPanel({
       return;
     }
     setVVerifying(true);
+    setVVerifyKind(useMonitor ? 'ta' : 'firing');
     setVProgress({ phase: 'prepare', message: 'Preparing verification…' });
     setVNote(null);
     onError('');
@@ -4969,6 +4971,7 @@ function VerifyPanel({
       setVNote({ kind: 'error', text: verifyErrorText(e) });
     } finally {
       setVVerifying(false);
+      setVVerifyKind(null);
       setVProgress(null);
     }
   }
@@ -5071,7 +5074,7 @@ function VerifyPanel({
               disabled={!ready || vVerifying || !vUrl.trim()}
               title="Load the live site and verify each tag — nothing is created in your container (no version, no preview)"
             >
-              {vVerifying ? 'Verifying…' : 'Verify firing'}
+              {vVerifyKind === 'firing' ? 'Verifying…' : 'Verify firing'}
             </button>
             <button
               style={{ background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--c-blue)', borderRadius: 10, padding: '10px 16px', fontSize: 14, cursor: 'pointer', ...(!ready || vVerifying || !vUrl.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
@@ -5079,7 +5082,7 @@ function VerifyPanel({
               disabled={!ready || vVerifying || !vUrl.trim()}
               title="Authoritative: automates the REAL Tag Assistant — connects it to the site, drives your tags, and reads GTM's own per-event firing. ZERO GTM writes. Signs in to Tag Assistant ONCE (saved after that, so it never asks again) and your normal Chrome can stay open."
             >
-              {vVerifying ? 'Verifying…' : 'Verify with Tag Assistant'}
+              {vVerifyKind === 'ta' ? 'Verifying with Tag Assistant…' : 'Verify with Tag Assistant'}
             </button>
           </div>
           {/* ONE run, two parts: this single action verifies the tags AND discovers the forms-with-tags.

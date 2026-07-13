@@ -129,6 +129,21 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
   check('map: an EVALUATED-but-not-fired (unknown) tag is EXCLUDED from the event', !me[2].tags.some((t) => t.id === '30') && me[2].tags.some((t) => t.id === '12'));
 }
 
+// ── the eventName bug: a MISLABELED key.eventName must be overridden by the real dataLayer push event ──
+{
+  // key.eventName lies "form_submission" for an event whose actual push is gtm.linkClick (the exact bug
+  // seen live: timeline header said form_submission while the API Call said gtm.linkClick).
+  const cap = parseTaFrames([
+    memo('GTM-X', 50, 'form_submission', 'DATA_LAYER', { message: { event: 'gtm.linkClick', 'gtm.elementUrl': 'https://x.com' } }),
+    memo('GTM-X', 50, 'form_submission', 'TAG_STATUS', { tagInfo: [{ name: 'Email Click Tag', execute: 'execute_succeeded' }] }),
+  ]);
+  const ev = eventsForContainer(cap, 'GTM-X')[0];
+  check('eventName: the real push event (gtm.linkClick) overrides the mislabeled key.eventName', ev.eventName === 'gtm.linkClick');
+  check('eventName: the apiCall push is still carried', ev.apiCall?.['gtm.elementUrl'] === 'https://x.com');
+  const me2 = taEventsToMonitorEvents([ev], [{ id: '99', tagName: 'Email Click Tag' }]);
+  check('eventName: the corrected name flows to the verdict pipeline', me2[0].event === 'gtm.linkClick');
+}
+
 // ── Phase 3: toTaEventViews (timeline) ──────────────────────────────────────────────────────────────
 {
   const events: TaEventRecord[] = [
@@ -164,4 +179,4 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
 
 console.log(`\nta-stream: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 26) { console.error(`expected >= 26 checks, got ${passed}`); process.exit(1); }
+if (passed < 29) { console.error(`expected >= 26 checks, got ${passed}`); process.exit(1); }
