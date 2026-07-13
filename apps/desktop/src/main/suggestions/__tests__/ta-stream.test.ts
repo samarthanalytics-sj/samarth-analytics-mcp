@@ -5,7 +5,7 @@
 // samarthanalytics.com (2026-07-10 probes): CONTAINER_STARTING/CONTAINER_DETAILS/PING wrappers and
 // MEMO.data.memo.sanitized frames (EVENT_STARTED / DATA_LAYER / MACRO_RESOLVED / TAG_STARTED / TAG_STATUS).
 
-import { parseTaFrames, eventsForContainer, containerDebugProblem, mapExecuteStatus, taEventsToMonitorEvents, toTaEventViews, buildTriggerSuggestions, type TaEventRecord } from '../ta-stream';
+import { parseTaFrames, eventsForContainer, containerDebugProblem, mapExecuteStatus, taEventsToMonitorEvents, toTaEventViews, buildTriggerSuggestions, pageScopeToPath, type TaEventRecord } from '../ta-stream';
 
 let passed = 0;
 let failed = 0;
@@ -175,6 +175,29 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
   const s3 = buildTriggerSuggestions([{ tagName: 'Mystery' }], views);
   check('suggest: no expected event → picks the real interaction event (skips gtm.*)', s3[0].event === 'form_submission');
   check('suggest: empty in = empty out', buildTriggerSuggestions([], views).length === 0);
+
+  // VOLATILE params (timestamp/nonce/uuid) must be DROPPED — a trigger scoped on them never matches again.
+  const volViews = toTaEventViews([
+    { container: 'GTM-X', epoch: 0, eventId: 3, eventName: 'form_submission', apiCall: { event: 'form_submission', form_name: 'solution_contact_form', form_type: 'service_request', timestamp: '2026-07-13T12:47:07.892Z', nonce: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', event_id: '1699999999999' }, tags: [] },
+  ]);
+  const sv = buildTriggerSuggestions([{ tagName: 'GA4 Form', expectedEvent: 'form_submission', page: '/services/custom-dashboards' }], volViews)[0];
+  check('suggest: drops the volatile timestamp condition', !sv.conditions.some((c) => c.key === 'timestamp') && !/timestamp/.test(sv.how));
+  check('suggest: drops nonce/uuid + event_id', !sv.conditions.some((c) => c.key === 'nonce' || c.key === 'event_id'));
+  check('suggest: keeps the stable form_name / form_type', sv.conditions.some((c) => c.key === 'form_name') && sv.conditions.some((c) => c.key === 'form_type'));
+  // Page Path is added as a BUILT-IN (rendered {{Page Path}}, not {{dlv - Page Path}}).
+  const pp = sv.conditions.find((c) => c.key === 'Page Path');
+  check('suggest: adds a {{Page Path}} built-in condition from the tag scope', !!pp && pp!.builtin === true && pp!.value === '/services/custom-dashboards');
+  check('suggest: how-text renders Page Path as a built-in, not a dlv', /\{\{Page Path\}\} = "\/services\/custom-dashboards"/.test(sv.how) && !/dlv - Page Path/.test(sv.how));
+  // At most 2 DLV conditions (+ Page Path) — specific but simple.
+  check('suggest: caps DLV conditions at 2 (form_name, form_type) + Page Path', sv.conditions.filter((c) => !c.builtin).length === 2 && sv.conditions.length === 3);
+  // Site-wide scope → no Page Path condition (nothing to filter on).
+  const swide = buildTriggerSuggestions([{ tagName: 'GA4 Form', expectedEvent: 'form_submission', page: 'site-wide' }], volViews)[0];
+  check('suggest: site-wide scope adds no Page Path condition', !swide.conditions.some((c) => c.key === 'Page Path'));
+  // pageScopeToPath: URL / bare host / path / site-wide.
+  check('pageScopeToPath: full URL → pathname', pageScopeToPath('https://www.example.com/contact?x=1') === '/contact');
+  check('pageScopeToPath: bare host/path → path', pageScopeToPath('www.example.com/services/x') === '/services/x');
+  check('pageScopeToPath: already a path → unchanged', pageScopeToPath('/careers') === '/careers');
+  check('pageScopeToPath: site-wide / empty → null', pageScopeToPath('site-wide') === null && pageScopeToPath('') === null && pageScopeToPath(undefined) === null);
 }
 
 // ── the MULTI-PAGE collision bug: gtm.uniqueEventId resets per page, so a drive across pages must NOT

@@ -4494,7 +4494,7 @@ function TaTriggerSuggestions({ suggestions }: { suggestions: NonNullable<Verify
             {s.conditions.length > 0 && (
               <div style={{ fontFamily: 'monospace', fontSize: 11, marginTop: 5, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                 {s.conditions.map((c) => (
-                  <span key={c.key} style={{ background: 'var(--surface-3)', borderRadius: 5, padding: '2px 6px' }}>{`{{dlv - ${c.key}}}`} = “{c.value}”</span>
+                  <span key={c.key} style={{ background: 'var(--surface-3)', borderRadius: 5, padding: '2px 6px' }}>{c.builtin ? `{{${c.key}}}` : `{{dlv - ${c.key}}}`} = “{c.value}”</span>
                 ))}
               </div>
             )}
