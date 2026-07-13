@@ -4621,8 +4621,6 @@ const vStyles: Record<string, React.CSSProperties> = {
 function FormFillReview({ url, snippet, active, onError, runSignal, onStatus }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number; onStatus?: (s: { loading: boolean; count: number | null }) => void }): JSX.Element {
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
-  const [localeId, setLocaleId] = useState('us');
-  const [locales, setLocales] = useState<Array<{ id: string; label: string }>>([{ id: 'us', label: 'United States' }]);
   const [plan, setPlan] = useState<FormTagVerifyPlanResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -4644,9 +4642,9 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus }: 
   // initial mount (runSignal 0); fetchPlan itself no-ops with a note if the URL / GTM target isn't ready.
   useEffect(() => {
     if (runSignal > 0) void fetchPlan();
-  }, [runSignal]); // intentionally only on the verify signal — not on url/locale edits
+  }, [runSignal]); // intentionally only on the verify signal — not on url edits
 
-  async function fetchPlan(loc: string = localeId): Promise<void> {
+  async function fetchPlan(): Promise<void> {
     const target = url.trim();
     if (!target) { setNote('Enter your site’s main URL.'); return; }
     if (!ready || !ctx) { setNote('Pick a GTM account, container and workspace in the GTM bar above first — that’s the container whose form tags we verify.'); return; }
@@ -4654,12 +4652,11 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus }: 
     onStatus?.({ loading: true, count: null }); // this run's form-discovery is now in flight
     let count: number | null = null;
     try {
-      const res = await window.desktop.tags.formTagVerifyPlan(target, { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!, localeId: loc });
+      const res = await window.desktop.tags.formTagVerifyPlan(target, { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId! });
       setPlan(res);
       const sv: Record<string, string> = {};
       for (const f of res.sharedFields) sv[f.key] = f.value;
       setShared(sv);
-      if (res.locales?.length) setLocales(res.locales);
       if (res.error) setNote(res.error);
       else if (res.matched.length === 0) setNote(`Crawled ${res.pagesCrawled} page(s) but found no site form matching your container’s form tags — the forms may be on pages we didn’t reach, render late, or their names differ from the tags.`);
       count = res.error ? null : res.matched.length;
@@ -4710,12 +4707,7 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus }: 
       </div>
       <div style={styles.card}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ ...styles.muted, fontSize: 13 }}>Location</label>
-          {/* No separate "find forms" button — the tag-verify above triggers discovery. Changing the
-              location re-discovers if we've already found forms once. */}
-          <select value={localeId} disabled={loading} onChange={(e) => { const v = e.target.value; setLocaleId(v); if (plan) void fetchPlan(v); }} style={{ ...styles.input, width: 'auto', minWidth: 160 }}>
-            {locales.map((l) => (<option key={l.id} value={l.id}>{l.label}</option>))}
-          </select>
+          {/* No separate "find forms" button — the tag-verify above triggers discovery. */}
           {loading ? (
             <span style={{ ...styles.muted, fontSize: 12.5 }}>Crawling &amp; matching forms…</span>
           ) : plan ? (
@@ -4727,7 +4719,7 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus }: 
           )}
         </div>
         <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
-            US only for now; UK / AUS come later. The test email uses a traceable gtm-verify+…@example.com alias so your CRM can filter these.
+            Each field is pre-filled with a generic, editable test value — edit any of them below. The test email uses a traceable gtm-verify+…@example.com alias so your CRM can filter these.
           </div>
           {note && (
             <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)' }}>{note}</div>
