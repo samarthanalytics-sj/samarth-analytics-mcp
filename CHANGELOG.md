@@ -1,3 +1,9 @@
+## [1.308.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.5...v1.308.0) (2026-07-13)
+
+### Features
+
+* **verify:** scan header/nav/footer pages first + whole-site coverage with live progress ([#528](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/528)) ([3d37f75](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3d37f75015f31542fa9a999447cf374c0dc83b20))
+
 ## [1.307.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.4...v1.307.5) (2026-07-13)
 
 ### Bug Fixes
