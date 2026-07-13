@@ -1,3 +1,9 @@
+## [1.309.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.6...v1.309.7) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** forms scan respects the "Pages to verify" list (no whole-site crawl) ([#541](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/541)) ([ab9be2a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ab9be2ad561ffeba5dda333d6e606641df4032dd))
+
 ## [1.309.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.5...v1.309.6) (2026-07-13)
 
 ### Bug Fixes
