@@ -47,29 +47,32 @@ export interface LocaleProfile {
   data: Record<FieldRole, string>;
 }
 
+// Simple, uniform test values (operator preference): text = "Test", numbers = 1234567890, longer
+// message/comment fields = "test form please ignore". Format-critical fields stay valid so the form still
+// submits: email is computed (test@gmail.com), website is a real URL, country/select pick a real option.
 const US_DATA: Record<FieldRole, string> = {
   given_name: 'Test',
   family_name: 'Test',
-  full_name: 'Test Test',
+  full_name: 'Test',
   email: '', // computed — see buildFillPlan (default test@gmail.com)
-  phone: '+1 202-555-0142', // 555-01xx is reserved-for-fiction, never a real subscriber
-  website: 'https://example.com',
-  street: '1600 Amphitheatre Parkway',
-  city: 'Mountain View',
-  state: 'CA',
-  postal: '94043',
-  country: 'United States',
-  company: 'GTM Verify Co',
-  job_title: 'Analyst',
-  subject: 'Tag verification test',
-  message: 'Automated tag-verification test submission. Please disregard.',
+  phone: '1234567890',
+  website: 'https://example.com', // a URL field needs a valid URL, not "Test"
+  street: 'Test',
+  city: 'Test',
+  state: 'Test',
+  postal: '1234567890',
+  country: 'United States', // kept valid so a country <select> matches a real option
+  company: 'Test',
+  job_title: 'Test',
+  subject: 'Test',
+  message: 'test form please ignore', // textarea / comments / longer-text fields
   consent: '', // checkbox — 'true' applied by valueForRole
   marketing_opt_in: '', // leave unchecked
   select: '', // pick a real option at fill time
-  number: '1',
+  number: '1234567890',
   date: '2025-01-01',
   honeypot: '', // anti-spam trap — MUST stay empty or the submit is silently rejected
-  other: 'test',
+  other: 'Test',
 };
 
 export const US_LOCALE: LocaleProfile = { id: 'us', label: 'United States', country: 'United States', data: US_DATA };
