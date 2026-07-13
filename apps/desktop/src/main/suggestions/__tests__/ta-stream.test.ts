@@ -107,18 +107,26 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
       { name: 'Some Other Container Tag', status: 'fired' }, // not in inventory — dropped
     ] },
     { container: 'GTM-X', eventId: 34, eventName: 'cta_click', tags: [{ name: 'CTA Tag', status: 'running' }] },
+    // The KEY case: an event where a click tag was EVALUATED but did NOT fire (unknown). It must NOT be
+    // credited to this event — that was the bug that labelled click tags with the synthetic form_submission.
+    { container: 'GTM-X', eventId: 35, eventName: 'form_submission', tags: [
+      { name: 'GA4 - Event - Get In Touch Form Tag', status: 'fired' }, // the form tag really fired here
+      { name: 'Email Click Tag', status: 'unknown' },                    // evaluated, NOT fired → excluded
+    ] },
   ];
   const inventory = [
     { id: '12', tagName: 'GA4 - Event - Get In Touch Form Tag' },
     { id: '13', tagName: 'Meta - Event - Get In Touch Form Tag' },
     { id: '20', tagName: 'CTA Tag' },
+    { id: '30', tagName: 'Email Click Tag' },
   ];
   const me = taEventsToMonitorEvents(events, inventory);
   check('map: event names carried', me[0].event === 'form_submission' && me[1].event === 'cta_click');
   check('map: fired → success with the container tag id', me[0].tags.some((t) => t.id === '12' && t.status === 'success'));
   check('map: failed → failure', me[0].tags.some((t) => t.id === '13' && t.status === 'failure'));
-  check('map: running → unknown (still fired; treated clean by monitorVerdicts)', me[1].tags[0].status === 'unknown' && me[1].tags[0].id === '20');
+  check('map: running → success (TAG_STARTED means it fired)', me[1].tags[0].status === 'success' && me[1].tags[0].id === '20');
   check('map: a tag not in the inventory is DROPPED (no cross-container credit)', me[0].tags.length === 2);
+  check('map: an EVALUATED-but-not-fired (unknown) tag is EXCLUDED from the event', !me[2].tags.some((t) => t.id === '30') && me[2].tags.some((t) => t.id === '12'));
 }
 
 // ── Phase 3: toTaEventViews (timeline) ──────────────────────────────────────────────────────────────
