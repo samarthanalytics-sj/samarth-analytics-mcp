@@ -1,3 +1,9 @@
+## [1.302.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.302.0...v1.302.1) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** don't credit evaluated-but-not-fired tags to an event (wrong EVENT column) ([#515](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/515)) ([0d2b968](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0d2b968800798cb8f05ce4b1781a7f097dd8e207))
+
 ## [1.302.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.301.0...v1.302.0) (2026-07-11)
 
 ### Features
