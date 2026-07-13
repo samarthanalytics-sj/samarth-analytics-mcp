@@ -274,7 +274,7 @@ async function scanTarget(
   url: string,
   siteHost: string,
   base: string,
-): Promise<{ page?: PageScan; links?: string[]; reason?: string }> {
+): Promise<{ page?: PageScan; links?: string[]; reason?: string; rawForms?: RawForm[] }> {
   const driven = await driver.open(url);
   if (!driven.ok) return { reason: driven.error ? `scan failed: ${driven.error}`.slice(0, 200) : 'navigation failed' };
   if (driven.httpStatus !== null && driven.httpStatus >= 400) return { reason: `http ${driven.httpStatus}` };
@@ -297,7 +297,10 @@ async function scanTarget(
     const norm = normalizeUrl(el.href, url);
     if (norm && sameSite(norm, base)) links.push(norm);
   }
-  return { page: { page: path, elements, forms, signals: driven.raw.signals }, links };
+  // Surface the RAW forms alongside the page so the verify scan can build the form-fill plan from this same
+  // crawl (site crawled ONCE for both click CTAs and forms). Kept off PageScan (a shared type); other
+  // callers just ignore it.
+  return { page: { page: path, elements, forms, signals: driven.raw.signals }, links, ...(driven.rawForms ? { rawForms: driven.rawForms } : {}) };
 }
 
 /** Dedup key for a suggestion — its event + trigger filter (mirrors buildSuggestions). */
@@ -496,6 +499,9 @@ export async function crawlAndSuggest(
   startUrl: string,
   opts: ScanOptions = {},
   onProgress?: OnScanProgress,
+  // Called once per scanned page with its RAW forms — lets the verify scan build the form-fill plan from
+  // the SAME crawl that inventories click CTAs (one crawl, not two). Best-effort; ignored by other callers.
+  onPageForms?: (page: string, rawForms: RawForm[]) => void,
 ): Promise<TagScanResult> {
   // Cap lifted 50 → 150: a larger site (200+ pages) left many CTAs "untested here" under the old budget.
   // The default (when no budget is passed) stays 10 — only callers that explicitly request more (Verify)
@@ -586,6 +592,9 @@ export async function crawlAndSuggest(
         } else {
           pageScans.push(r.page);
           enqueueLinks(r.links, item.depth);
+          if (onPageForms && r.rawForms?.length) {
+            try { onPageForms(item.url, r.rawForms); } catch { /* a forms sink error must never abort the crawl */ }
+          }
           // Stream the running list so the review panel fills in as the crawl proceeds.
           if (onProgress) {
             try {

@@ -17,7 +17,7 @@ import { findGa4BaseTag } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, VerifyProgressView, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult, SuggestionScreenshotResult } from '../../shared/ipc';
-import { crawlAndSuggest, scanUrls, urlPriority, type ScanProgress } from './scan-core';
+import { crawlAndSuggest, scanUrls, type ScanProgress } from './scan-core';
 import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
 import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
@@ -40,6 +40,22 @@ import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
  *  connected Google account, so switching the active Gmail uses that Gmail's own TA session. */
 function taProfileDir(accountId?: string | null): string {
   return taProfileDirFor(app.getPath('userData'), accountId);
+}
+
+// Process-wide: the click-CTA element inventory captured by the verify SCAN step (formTagVerifyPlan crawls
+// the site to find forms AND, in the SAME pass, inventories click CTAs). The Tag Assistant / verify run that
+// follows within a few seconds reuses this instead of crawling again — so the site is scanned ONCE, not
+// twice. Short TTL, keyed by target URL; a stale/absent entry just falls back to crawling.
+const VERIFY_ELS_TTL_MS = 15 * 60_000; // long enough that reviewing/editing forms at the gate won't expire it
+const verifyElsCache = new Map<string, { els: DetectedElementView[]; pagesCrawled: number; pagesTotal: number; ts: number }>();
+const elsCacheKey = (url: string): string => url.trim().replace(/\/$/, '');
+function cacheVerifyEls(url: string, els: DetectedElementView[], pagesCrawled: number, pagesTotal: number): void {
+  verifyElsCache.set(elsCacheKey(url), { els, pagesCrawled, pagesTotal, ts: Date.now() });
+}
+function takeVerifyEls(url: string): { els: DetectedElementView[]; pagesCrawled: number; pagesTotal: number } | null {
+  const hit = verifyElsCache.get(elsCacheKey(url));
+  if (!hit || Date.now() - hit.ts > VERIFY_ELS_TTL_MS) return null;
+  return { els: hit.els, pagesCrawled: hit.pagesCrawled, pagesTotal: hit.pagesTotal };
 }
 
 export function registerSuggestionsIpc(data: GoogleDataService): void {
@@ -213,6 +229,18 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // every tag on each of these pages (below) — direct control over coverage for missed forms.
       const explicitPages = normalizeVerifyPages(o.verifyPages, target);
       const hasClickTags = tagList.some((t) => t.trigger.kind === 'link_click' || t.trigger.kind === 'all_clicks');
+      // REUSE the scan step's crawl: the Forms scan (formTagVerifyPlan) that runs BEFORE the gate already
+      // crawled this URL and cached its click-CTA inventory, so pull that here and skip a SECOND full crawl.
+      // The one scan finds forms AND inventories click CTAs together.
+      if (els.length === 0 && explicitPages.length === 0) {
+        const cached = takeVerifyEls(target);
+        if (cached && cached.els.length) {
+          els = cached.els;
+          pagesCrawled = cached.pagesCrawled;
+          pagesTotal = cached.pagesTotal;
+          emit({ phase: 'prepare', message: 'Reusing the page scan from the form step' });
+        }
+      }
       if (explicitPages.length === 0 && els.length === 0 && hasClickTags && o.crawlForPages !== false) {
         try {
           // SITEMAP-DRIVEN coverage: enumerate EVERY page the site lists (its sitemap, else a
@@ -423,34 +451,34 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       return empty(o.accountId ? 'This container has no form (custom-event) tags to verify. Create form-tracking tags first.' : 'Pick a GTM account, container and workspace (the GTM bar) so we know which form tags to verify.');
     }
 
-    // 2. Crawl the site for forms across pages (same-site, bounded).
+    // 2. Crawl the site ONCE. This single pass BOTH collects the forms (per page, via the onPageForms
+    //    callback) AND inventories the click CTAs — which we cache so the Tag Assistant / verify run that
+    //    follows the gate reuses it instead of crawling again. That is what removes the double page scan:
+    //    while finding the forms we already capture the click data. cachePages shares renders with any
+    //    later crawl; the pool is closed by crawlAndSuggest.
     const pagedForms: PagedForm[] = [];
     let pagesCrawled = 0;
     try {
-      const disc = await discoverSite(target);
-      // Visit the homepage + every FORM-LIKELY page (contact/careers/services/solutions/audit/
-      // consultation/demo…), skipping blog posts & guides — those carry only the shared footer form we
-      // already capture on the homepage. On a large site (many /services/* + /solutions/* landing forms)
-      // a low fixed cap found only the first couple; form-likely-first + a bigger budget covers them all.
-      const formLikely = disc.urls.filter((u) => u !== target && urlPriority(u) === 1);
-      const pages = [target, ...formLikely].slice(0, Math.max(1, Math.min(o.maxPages ?? 40, 60)));
-      // cachePages: reuse pages already rendered by the click-tag verify crawl (which auto-runs on the
-      // same verify and covers the whole sitemap) — these form-likely pages are a subset, so with the
-      // cache this crawl adds ~no extra browser work.
-      const driver = await makeDriver({ cachePages: true });
+      let seedUrls: string[] = [];
+      let pagesTotal = 0;
       try {
-        for (const page of pages) {
-          if (!urlAllowed(page, []).ok) continue;
-          let driven: Awaited<ReturnType<typeof driver.open>> | null = null;
-          try { driven = await driver.open(page); } catch { continue; }
-          pagesCrawled += 1;
-          const raw = driven?.rawForms ?? [];
-          if (raw.length === 0) continue;
-          for (const v of toFormFillViews(raw, page, locale.id, emailTag)) pagedForms.push({ ...v, page });
-        }
-      } finally {
-        try { await driver.close(); } catch { /* best-effort */ }
-      }
+        const disc = await discoverSite(target);
+        seedUrls = disc.urls.filter((u) => u !== target);
+        pagesTotal = disc.urls.length;
+      } catch { /* discovery best-effort — crawlAndSuggest still BFS-crawls from the target */ }
+      // Sitemap present → cover it (up to the 150 cap); none → a bounded BFS (40) like the old form crawl.
+      const maxPages = o.maxPages ?? (seedUrls.length ? Math.min(pagesTotal || seedUrls.length + 1, 150) : 40);
+      const pool = await makeDrivers(Math.min(scanConcurrency(), maxPages), { maxPages, cachePages: true });
+      const scan = await crawlAndSuggest(
+        pool[0],
+        target,
+        { maxPages, platforms: ['ga4'], drivers: pool.slice(1), ...(seedUrls.length ? { seedUrls } : {}) },
+        undefined,
+        (page, raw) => { for (const v of toFormFillViews(raw, page, locale.id, emailTag)) pagedForms.push({ ...v, page }); },
+      );
+      pagesCrawled = scan.summary.pagesScanned;
+      // Cache the click-CTA inventory (+ coverage counts) for the verify run that follows the gate.
+      cacheVerifyEls(target, scan.inventory.elements as DetectedElementView[], pagesCrawled, pagesTotal || pagesCrawled);
     } catch (e) {
       error = `Crawl issue: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`;
     }
