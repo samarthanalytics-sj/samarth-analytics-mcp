@@ -4665,6 +4665,9 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, on
       formClasses: form.formClasses,
       method: form.method,
       fields: form.fields.map((f) => ({ selector: f.selector, type: f.type, value: shared[dedupKey(f.role, f.label)] ?? f.value })),
+      // Carry which tags this form is expected to fire, so a form tag whose form WAS submitted but that
+      // didn't fire is reported as "not firing" (a real trigger mismatch), not vaguely "untested".
+      expectedTags: form.expectedTags.map((t) => t.tagName),
     }));
     onReviewedForms(forms);
   }, [plan, shared]); // eslint-disable-line react-hooks/exhaustive-deps

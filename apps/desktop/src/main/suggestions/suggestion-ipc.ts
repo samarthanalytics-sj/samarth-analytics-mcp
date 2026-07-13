@@ -367,6 +367,20 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
             (e.apiCall && Object.keys(e.apiCall).some((k) => k !== 'event' && k !== 'gtm.uniqueEventId' && !/^gtm\./i.test(k))),
         );
         const firedTagNames = new Set(verdicts.filter((v) => v.fired).map((v) => v.tagName));
+        // RECLASSIFY submitted-but-unfired form tags: a form tag is "inconclusive/untested" by default
+        // (form tags are never synthetically driven). But if its form was ACTUALLY submitted this run (it's
+        // in a reviewed form's expectedTags) and it still didn't fire, that is NOT "untested" — it's a real
+        // NOT-FIRING (its trigger's form name / id / page filter doesn't match what that form sent). Move it
+        // out of Untested so the operator gets an actionable fix instead of a vague "we didn't test it".
+        const submittedFormTags = new Set(
+          (Array.isArray(o.reviewedForms) ? o.reviewedForms : []).flatMap((f) => (Array.isArray(f.expectedTags) ? f.expectedTags : [])),
+        );
+        for (const v of verdicts) {
+          if (v.inconclusive && !v.fired && submittedFormTags.has(v.tagName) && !firedTagNames.has(v.tagName)) {
+            v.inconclusive = false;
+            v.reason = 'Its form WAS submitted for real in this run, but GTM did not fire this tag — so its trigger condition (the form name / id, or a page-path filter) does not match what that form actually sent. Open the tag’s trigger in GTM and compare it with the dataLayer above.';
+          }
+        }
         // Suggest DLV triggers only for tags that GENUINELY didn't fire — exclude "couldn't auto-test
         // here" (inconclusive) and server-relayed tags, which aren't real failures.
         const unfired = verdicts

@@ -442,29 +442,38 @@ export function driveInPage(spec: DriveSpec): DriveOutcome {
       h.scrollIntoView({ block: 'center', inline: 'center' });
     } catch { /* best-effort — never let highlighting break the drive */ }
   };
+  // Normalize a visible label for text matching: non-breaking spaces → space, arrow/chevron glyphs (a CTA
+  // rendered "Read full analysis →" / "Learn more ›") → space, collapse whitespace, case-fold. This lets a
+  // decorated on-page label EQUALS-match the trigger's plain text (the #1 cause of a real CTA reading
+  // "Untested" because the exact-text compare failed).
+  const normLabel = (s: string): string => (s || '')
+    .replace(/[   ]/g, ' ')
+    .replace(/[←-⇿➔➙➜➡⟶⮕▶▸❯»›→‹«]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
   const matches = (hay: string, val: string | undefined, op: string | undefined): boolean => {
     if (!val) return false;
-    const h = (hay || '').trim();
-    const hl = h.toLowerCase();
-    const vl = val.toLowerCase();
+    const h = normLabel(hay);
+    const vl = normLabel(val);
     switch (op) {
       case 'contains':
-        return hl.indexOf(vl) >= 0;
+        return h.indexOf(vl) >= 0;
       case 'startsWith':
-        return hl.indexOf(vl) === 0;
+        return h.indexOf(vl) === 0;
       case 'endsWith':
-        // `hl.length >= vl.length` guards the empty/short-haystack case: without it, hay='' + val='?'
+        // `h.length >= vl.length` guards the empty/short-haystack case: without it, hay='' + val='?'
         // gives lastIndexOf=-1 === (0-1)=-1 → TRUE, so every TEXT-LESS <a>/<button> (logo, icon, FAB)
         // "ends with ?" and the shortest-text ranking rings an icon instead of a real FAQ question row.
-        return vl.length > 0 && hl.length >= vl.length && hl.lastIndexOf(vl) === hl.length - vl.length;
+        return vl.length > 0 && h.length >= vl.length && h.lastIndexOf(vl) === h.length - vl.length;
       case 'matchRegex':
         try {
-          return new RegExp(val, 'i').test(h);
+          return new RegExp(val, 'i').test((hay || '').trim());
         } catch {
           return false;
         }
       default:
-        return hl === vl; // equals
+        return h === vl; // equals (on normalized labels)
     }
   };
 
@@ -517,14 +526,24 @@ export function driveInPage(spec: DriveSpec): DriveOutcome {
     return false;
   };
   const ownTextLen = (n: Element): number => ((n.textContent || (n as HTMLInputElement).value || '') as string).trim().length;
-  const candidates: Element[] = [];
-  for (const n of nodes) {
-    const txt = ((n.textContent || (n as HTMLInputElement).value || '') as string).trim();
-    const href = (n.getAttribute && n.getAttribute('href')) || '';
-    const okText = spec.clickText ? matches(txt, spec.clickText, spec.clickTextOp || 'equals') : true;
-    const okUrl = spec.clickUrl ? matches(href, spec.clickUrl, spec.clickUrlOp || 'contains') : true;
-    if (spec.clickText && okText && okUrl) candidates.push(n);
-    else if (!spec.clickText && spec.clickUrl && okUrl) candidates.push(n);
+  const collect = (textOp: string): Element[] => {
+    const out: Element[] = [];
+    for (const n of nodes) {
+      const txt = ((n.textContent || (n as HTMLInputElement).value || '') as string).trim();
+      const href = (n.getAttribute && n.getAttribute('href')) || '';
+      const okText = spec.clickText ? matches(txt, spec.clickText, textOp) : true;
+      const okUrl = spec.clickUrl ? matches(href, spec.clickUrl, spec.clickUrlOp || 'contains') : true;
+      if (spec.clickText && okText && okUrl) out.push(n);
+      else if (!spec.clickText && spec.clickUrl && okUrl) out.push(n);
+    }
+    return out;
+  };
+  let candidates = collect(spec.clickTextOp || 'equals');
+  // EQUALS-THEN-CONTAINS fallback: an EQUALS text trigger that matched nothing is retried as CONTAINS —
+  // for a label carrying extra words / a wrapping child ("Read full analysis of Q4" vs "Read Full
+  // Analysis"). The content → leaf → shortest-own-label ranking below still keeps it off a broader control.
+  if (candidates.length === 0 && spec.clickText && (spec.clickTextOp || 'equals') === 'equals') {
+    candidates = collect('contains');
   }
   // Prefer content over chrome; then the innermost control (drop any that merely wraps another match);
   // then the tightest label (a button reading exactly "FAQs" beats a card that just contains it).
