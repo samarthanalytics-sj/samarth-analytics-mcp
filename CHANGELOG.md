@@ -1,3 +1,9 @@
+## [1.309.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.4...v1.309.5) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** treat form_id as a form-identity discriminator in trigger suggestions ([#539](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/539)) ([a0db2a7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a0db2a76608ae33e1bc26d00accfa96e97763ed7))
+
 ## [1.309.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.3...v1.309.4) (2026-07-13)
 
 ### Bug Fixes
