@@ -274,7 +274,7 @@ async function scanTarget(
   url: string,
   siteHost: string,
   base: string,
-): Promise<{ page?: PageScan; links?: string[]; reason?: string; rawForms?: RawForm[] }> {
+): Promise<{ page?: PageScan; links?: string[]; navLinks?: string[]; reason?: string; rawForms?: RawForm[] }> {
   const driven = await driver.open(url);
   if (!driven.ok) return { reason: driven.error ? `scan failed: ${driven.error}`.slice(0, 200) : 'navigation failed' };
   if (driven.httpStatus !== null && driven.httpStatus >= 400) return { reason: `http ${driven.httpStatus}` };
@@ -292,15 +292,22 @@ async function scanTarget(
     hidden: f.hidden,
   }));
   const links: string[] = [];
+  const navLinks: string[] = [];
   for (const el of driven.raw.elements) {
     if (el.tag !== 'a' || !el.href) continue;
     const norm = normalizeUrl(el.href, url);
-    if (norm && sameSite(norm, base)) links.push(norm);
+    if (!norm || !sameSite(norm, base)) continue;
+    links.push(norm);
+    // Anchors in the site's HEADER / NAV / FOOTER are its primary navigation (contact, about, privacy,
+    // careers, services…). Surface those separately so the crawler can scan them FIRST — a page reachable
+    // only from the footer (a privacy policy carrying a mailto/tel, or a contact tab tucked in the footer)
+    // must not be stranded past the page budget.
+    if (el.region === 'header' || el.region === 'nav' || el.region === 'footer') navLinks.push(norm);
   }
   // Surface the RAW forms alongside the page so the verify scan can build the form-fill plan from this same
   // crawl (site crawled ONCE for both click CTAs and forms). Kept off PageScan (a shared type); other
   // callers just ignore it.
-  return { page: { page: path, elements, forms, signals: driven.raw.signals }, links, ...(driven.rawForms ? { rawForms: driven.rawForms } : {}) };
+  return { page: { page: path, elements, forms, signals: driven.raw.signals }, links, ...(navLinks.length ? { navLinks } : {}), ...(driven.rawForms ? { rawForms: driven.rawForms } : {}) };
 }
 
 /** Dedup key for a suggestion — its event + trigger filter (mirrors buildSuggestions). */
@@ -503,10 +510,11 @@ export async function crawlAndSuggest(
   // the SAME crawl that inventories click CTAs (one crawl, not two). Best-effort; ignored by other callers.
   onPageForms?: (page: string, rawForms: RawForm[]) => void,
 ): Promise<TagScanResult> {
-  // Cap lifted 50 → 150: a larger site (200+ pages) left many CTAs "untested here" under the old budget.
-  // The default (when no budget is passed) stays 10 — only callers that explicitly request more (Verify)
-  // reach higher. Pages are prioritized (home → form-likely → content), so the budget is spent well.
-  const maxPages = clamp(opts.maxPages, 10, 150);
+  // Cap lifted 150 → 300: a larger site (200+ pages) left many CTAs "untested here" under the old budget,
+  // and the user wants EVERY page scanned. The default (when no budget is passed) stays 10 — only callers
+  // that explicitly request more (Verify) reach higher. Pages are prioritized (header/nav/footer navigation
+  // first, then home → form-likely → content), so even a truncated budget covers the important pages.
+  const maxPages = clamp(opts.maxPages, 10, 300);
   const maxDepth = clamp(opts.maxDepth, 2, 4);
   const platforms = opts.platforms ?? ['ga4'];
 
@@ -564,14 +572,15 @@ export async function crawlAndSuggest(
     }
     return null;
   };
-  // Add a scanned page's links to the frontier (synchronous critical section).
-  const enqueueLinks = (links: string[] | undefined, depth: number): void => {
+  // Add a scanned page's links to the frontier (synchronous critical section). `seed` promotes them to top
+  // priority (header/nav/footer navigation) so they're scanned before ordinary in-page/content links.
+  const enqueueLinks = (links: string[] | undefined, depth: number, seed = false): void => {
     if (depth >= maxDepth) return;
     for (const norm of links ?? []) {
       const k = norm.replace(/\/$/, '');
       if (visited.has(k) || discovered.has(norm)) continue;
       discovered.add(norm);
-      queue.push({ url: norm, depth: depth + 1 });
+      queue.push({ url: norm, depth: depth + 1, ...(seed ? { seed: true } : {}) });
     }
   };
 
@@ -591,6 +600,7 @@ export async function crawlAndSuggest(
           notScanned.push({ url: item.url, reason: r.reason ?? 'not scanned' });
         } else {
           pageScans.push(r.page);
+          enqueueLinks(r.navLinks, item.depth, true); // header/nav/footer navigation → scanned first
           enqueueLinks(r.links, item.depth);
           if (onPageForms && r.rawForms?.length) {
             try { onPageForms(item.url, r.rawForms); } catch { /* a forms sink error must never abort the crawl */ }

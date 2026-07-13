@@ -421,11 +421,17 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
   // CONTAINER-TAG-DRIVEN plan: crawl the site for forms, keep only forms that HAVE a matching container
   // form tag, and collapse their fields into ONE de-duplicated data-entry set. READ-ONLY (reads the DOM
   // + the container snapshot; fills/submits nothing — the operator submits from the review step).
-  ipcMain.handle('suggestions:formTagVerifyPlan', async (_e, url: unknown, opts?: FormTagVerifyPlanOptions): Promise<FormTagVerifyPlanResult> => {
+  ipcMain.handle('suggestions:formTagVerifyPlan', async (event, requestId: unknown, url: unknown, opts?: FormTagVerifyPlanOptions): Promise<FormTagVerifyPlanResult> => {
     const target = String(url ?? '').trim();
     const verdict = urlAllowed(target, []);
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
     const o = (opts ?? {}) as FormTagVerifyPlanOptions;
+    // Live crawl progress (this scan can now cover the whole site), so the panel shows "Scanning X/Y" not a
+    // silent spinner. Best-effort — a closed window never breaks the scan.
+    const reqId = String(requestId ?? '');
+    const emit = (p: { page?: string; done: number; total: number }): void => {
+      try { if (reqId && !event.sender.isDestroyed()) event.sender.send('suggestions:formPlan:event', { requestId: reqId, phase: 'crawl', message: 'Scanning site pages for forms & CTAs', ...p }); } catch { /* window gone */ }
+    };
     const locale = localeById(o.localeId);
     const emailTag = ''; // plain test@gmail.com by default (simple test values); editable in the review
     let error: string | undefined;
@@ -474,14 +480,16 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         seedUrls = disc.urls.filter((u) => u !== target);
         pagesTotal = disc.urls.length;
       } catch { /* discovery best-effort — crawlAndSuggest still BFS-crawls from the target */ }
-      // Sitemap present → cover it (up to the 150 cap); none → a bounded BFS (40) like the old form crawl.
-      const maxPages = o.maxPages ?? (seedUrls.length ? Math.min(pagesTotal || seedUrls.length + 1, 150) : 40);
+      // Sitemap present → cover the WHOLE site (up to the 300 cap); none → a bounded BFS (60). Header/nav/
+      // footer links are scanned first (crawlAndSuggest), so contact/privacy/footer pages are never stranded.
+      const maxPages = o.maxPages ?? (seedUrls.length ? Math.min(pagesTotal || seedUrls.length + 1, 300) : 60);
+      const crawlTotal = maxPages;
       const pool = await makeDrivers(Math.min(scanConcurrency(), maxPages), { maxPages, cachePages: true });
       const scan = await crawlAndSuggest(
         pool[0],
         target,
         { maxPages, platforms: ['ga4'], drivers: pool.slice(1), ...(seedUrls.length ? { seedUrls } : {}) },
-        undefined,
+        (p) => emit({ ...(p.page ? { page: p.page } : {}), done: p.scanned, total: crawlTotal }),
         (page, raw) => { for (const v of toFormFillViews(raw, page, locale.id, emailTag)) pagedForms.push({ ...v, page }); },
       );
       pagesCrawled = scan.summary.pagesScanned;

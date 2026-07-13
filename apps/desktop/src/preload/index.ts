@@ -260,9 +260,23 @@ const api = {
     formsForFill: (url: string, opts?: FormsForFillOptions): Promise<FormsForFillResult> =>
       ipcRenderer.invoke('suggestions:formsForFill', url, opts),
     // Container-tag-driven plan: crawl a site, keep only forms that HAVE a container tag, de-dup their
-    // fields into one data-entry set. Read-only.
-    formTagVerifyPlan: (url: string, opts: FormTagVerifyPlanOptions): Promise<FormTagVerifyPlanResult> =>
-      ipcRenderer.invoke('suggestions:formTagVerifyPlan', url, opts),
+    // fields into one data-entry set. Read-only. onProgress streams the crawl (this now scans the whole site).
+    formTagVerifyPlan: (
+      url: string,
+      opts: FormTagVerifyPlanOptions,
+      onProgress?: (p: VerifyProgressView) => void,
+    ): Promise<FormTagVerifyPlanResult> => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const listener = (_e: unknown, payload: { requestId: string } & VerifyProgressView): void => {
+        if (payload?.requestId !== requestId) return;
+        const { requestId: _drop, ...p } = payload;
+        onProgress?.(p);
+      };
+      if (onProgress) ipcRenderer.on('suggestions:formPlan:event', listener);
+      return ipcRenderer
+        .invoke('suggestions:formTagVerifyPlan', requestId, url, opts)
+        .finally(() => { if (onProgress) ipcRenderer.removeListener('suggestions:formPlan:event', listener); });
+    },
     // Phase 2 — REAL submit: fill the reviewed values + submit one form for real; reports the analytics
     // events it fired. The form POST is delivered (a real lead); analytics hits are captured, not sent.
     submitFormAndVerify: (
