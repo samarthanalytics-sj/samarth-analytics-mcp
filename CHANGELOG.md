@@ -1,3 +1,9 @@
+## [1.309.11](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.10...v1.309.11) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** collapse the Forms section after a run so no tag is listed twice ([#545](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/545)) ([42baac5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/42baac5f8160431e8c6d5ed3364047268a4c189b))
+
 ## [1.309.10](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.9...v1.309.10) (2026-07-13)
 
 ### Bug Fixes
