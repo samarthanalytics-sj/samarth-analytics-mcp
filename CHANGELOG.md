@@ -1,3 +1,9 @@
+## [1.306.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.305.0...v1.306.0) (2026-07-13)
+
+### Features
+
+* **verify:** simpler default form-fill values — text "Test", numbers 1234567890, message "test form please ignore" ([#520](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/520)) ([a8c1a28](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a8c1a28180b288407da1c8bcf21f3eb6aa5ab1e6))
+
 ## [1.305.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.304.1...v1.305.0) (2026-07-13)
 
 ### Features
