@@ -328,31 +328,36 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   check('monitor: execution time carried', by.get('lead')!.monitorExecutionMs === 9);
 }
 
-// ── verdictsFromMonitor: FORM tags are EXCLUDED; un-exercised non-form tags are INCONCLUSIVE ─────────
+// ── verdictsFromMonitor: FORM tags are INCLUDED — credited from the REAL-submit stream ───────────────
 {
   const tags: VerifyTagInput[] = [
     tag({ id: 'faq', tagName: 'FAQs Click', eventName: 'faqs_click', trigger: { name: 'FAQ', kind: 'link_click', clickTextValue: 'FAQs', clickTextOperator: 'equals' } }),
     tag({ id: 'scroll', tagName: 'Scroll Depth Tag', eventName: 'custom_scroll_depth', platform: 'ga4_event', trigger: { name: 'SD', kind: 'custom_event', eventName: 'custom_scroll_depth' } }),
-    // FORM tags — must NOT appear in the monitor table (they belong to the real-submit Forms section).
+    // FORM tags — 'realform' fired on the real submit; 'cons' form was never submitted.
     tag({ id: 'cons', tagName: 'Get Your Free GA4 Consultation Form Tag', eventName: 'form_submission', platform: 'ga4_event', trigger: { name: 'Cons', kind: 'custom_event', eventName: 'form_submission' } }),
     tag({ id: 'realform', tagName: 'Contact Form Tag', eventName: 'form_submission', platform: 'ga4_event', trigger: { name: 'Contact', kind: 'custom_event', eventName: 'form_submission', customEventData: { form_name: 'contact_form' } } }),
   ];
   const perTag: PerTagCapture[] = [
     cap({ tagId: 'faq', kind: 'click', targetFound: false, performed: false }),
     cap({ tagId: 'scroll', kind: 'custom_event', targetFound: true, performed: true }),
-    cap({ tagId: 'cons', kind: 'custom_event', targetFound: true, performed: true }),
-    cap({ tagId: 'realform', kind: 'custom_event', targetFound: true, performed: true }),
+    // Form tags are NEVER driven synthetically → performed:false (note "verified by the real form submit").
+    cap({ tagId: 'cons', kind: 'custom_event', targetFound: true, performed: false }),
+    cap({ tagId: 'realform', kind: 'custom_event', targetFound: true, performed: false }),
   ];
-  const events: MonitorEvent[] = [{ event: 'custom_scroll_depth', tags: [{ id: 'scroll', status: 'success' }] }];
+  // The real submit fired 'realform' on form_submission; 'cons' is not in the stream (its form wasn't sent).
+  const events: MonitorEvent[] = [
+    { event: 'custom_scroll_depth', tags: [{ id: 'scroll', status: 'success' }] },
+    { event: 'form_submission', tags: [{ id: 'realform', status: 'success' }] },
+  ];
   const out = verdictsFromMonitor(tags, events, perTag);
   const by = new Map(out.map((x) => [x.tagId, x]));
 
-  check('monitor: FORM tags are EXCLUDED — verified by the real-submit Forms section, not this table', !by.has('cons') && !by.has('realform'));
+  check('monitor: a FORM tag that fired on the real submit → fired', by.get('realform')?.fired === true);
+  check('monitor: the fired form tag reports its event', by.get('realform')?.event === 'form_submission');
+  check('monitor: a form tag whose form was NOT submitted → inconclusive, not a false "not firing"', by.get('cons')?.fired === false && by.get('cons')?.inconclusive === true);
   check('monitor: non-form tags still reported', by.has('faq') && by.has('scroll'));
   check('monitor: a driven non-form custom-event tag GTM fired → fired', by.get('scroll')!.fired === true);
   check('monitor: a click tag whose CTA was NOT found → inconclusive, not "not firing"', by.get('faq')!.fired === false && by.get('faq')!.inconclusive === true);
-  // No form tag can land in the "Issues" (genuine not-firing) bucket, because none are reported at all.
-  check('monitor: no form tag appears as a firing issue', out.every((v) => v.tagId !== 'cons' && v.tagId !== 'realform'));
 }
 
 // ── verdictsFromMonitor: never-happened vs genuine not-fire (NON-form custom-event tags) ────────────

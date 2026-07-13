@@ -413,11 +413,12 @@ export async function runTaVerify(
         if (kind === 'custom_event') {
           const evName = tag.trigger.eventName ?? '';
           if (!evName) { perTag.push({ tagId: tag.id, kind: 'custom_event', targetFound: false, performed: false, note: 'the trigger has no dataLayer event name', hits: [] }); continue; }
-          // FORM tags (form_submission etc.) are verified by the REAL form submit below — a synthetic push
-          // here would fire the tag on OUR event with the tag's OWN declared form_name, which can contradict
-          // the real submit (the site's actual form_name). Skip the synthetic push when we have forms to
-          // submit for real; without any forms, fall through to the synthetic push (best-effort).
-          if (isFormEventName(evName) && (opts.forms?.length ?? 0) > 0) {
+          // FORM tags (form_submission etc.) are verified ONLY by the REAL form submit below — NEVER a
+          // synthetic push. A synthetic push fires the tag on OUR event with the tag's OWN declared
+          // form_name, which can contradict the real submit AND (now that form tags are credited from the
+          // monitor stream) would be a false "fired" on a Skip run. So when no form was really submitted for
+          // it, a form tag stays untested (inconclusive), not falsely fired.
+          if (isFormEventName(evName)) {
             perTag.push({ tagId: tag.id, kind: 'custom_event', targetFound: true, performed: false, note: 'verified by the real form submit', hits: [] });
             continue;
           }
@@ -502,10 +503,10 @@ export async function runTaVerify(
     const targets = evs
       .map((e, i) => ({ seq: i + 1, eventName: e.eventName, firedTags: e.tags.filter((t) => t.status === 'fired').map((t) => t.name) }))
       .filter((t) => t.firedTags.length > 0)
-      .slice(0, 12);
+      .slice(0, 40); // most tags fire on their OWN event, so cap high enough that ~every fired tag gets a shot
     if (targets.length) {
       console.log(`[tag-assistant] capturing ${targets.length} Tag Assistant panel screenshot(s)…`);
-      const CLICK_CAP = 45;
+      const CLICK_CAP = 120;
       let clicks = 0;
       const usedRows = new Set<number>();
       const matches = (p: { event: string; fired: string }, t: { eventName: string; firedTags: string[] }): boolean =>

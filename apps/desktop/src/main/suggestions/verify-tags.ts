@@ -187,12 +187,12 @@ export function evaluateVerify(
  *  itself — no beacon inference, no dual-container ambiguity — and it carries the exact events + status,
  *  which is what the Tag-Assistant-style firing panel renders. PURE. */
 export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent[], perTag: PerTagCapture[] = []): VerifyTagVerdict[] {
-  // FORM tags belong to the real-submit "Forms" section, NOT this table. Driving a form tag here via a
-  // SYNTHETIC form_submission push proves only that it fires on its OWN declared form_name — which can
-  // directly CONTRADICT the authoritative real submit (a tag can read "fired" here yet "not fired" on the
-  // real form, whose actual form_name differs). It also mixes forms in with the click/config tags. So drop
-  // them: every form tag is covered authoritatively by the Forms section (+ the "no matching form" list).
-  const reportable = tags.filter((t) => !(t.trigger.kind === 'custom_event' && isFormEventName(t.trigger.eventName ?? t.eventName ?? '')));
+  // Form tags ARE included now: the driver verifies them by a REAL form submit (never a synthetic push),
+  // so the monitor stream authoritatively reports which form tags fired on the real form_submission. A form
+  // tag that fired → fired; one whose form wasn't submitted (no matching form, or a Skip run) → its
+  // form_submission event never happened → INCONCLUSIVE ("verified only by a real submit"), never a false
+  // "not firing". This is what lets the Forms section + the table agree with Tag Assistant.
+  const reportable = tags;
   const byId = monitorVerdicts(reportable.map((t) => t.id), events);
   const capById = new Map(perTag.map((c) => [c.tagId, c] as const));
   // Every dataLayer event that ACTUALLY happened during the drive, per the monitor stream. A
