@@ -186,31 +186,88 @@ export interface TaVerifyResult {
   eventShots?: Record<number, string>;
 }
 
-/** Runs in the Tag Assistant page: click the left-rail item for a given eventId so its Tags-Fired panel
- *  shows, ready to screenshot. TA lists events as "<eventId> <Event Name>". Matches the shortest element
- *  whose text starts with the eventId as a standalone number, then clicks it (or its clickable ancestor).
- *  Returns whether it clicked. Tolerant — never throws. */
-function clickTaEventInRail(eventId: number): boolean {
+// ── Phase 3 rail navigation (runs IN the Tag Assistant page) ─────────────────────────────────────────
+// Tag Assistant numbers its left-rail events with its OWN continuous global counter (…131, 178, 186…),
+// which is NOT the gtm.uniqueEventId in our debug frames — so we can't address a row by number. Instead we
+// index the rows, click a candidate, and READ BACK what the panel shows (the API Call's dataLayer event +
+// the Tags-Fired names) to confirm we landed on the right event before screenshotting.
+
+/** In the TA page: dismiss the blue "Connected!" modal / any dialog "Continue" button that overlays the
+ *  debug panel (it reappears on each navigation), so a screenshot shows the event detail, not the modal. */
+function dismissTaOverlays(): void {
   try {
-    const re = new RegExp('^' + eventId + '(?!\\d)'); // "178" matches "178Link Click", not "1785"
+    const btns = Array.prototype.slice.call(document.querySelectorAll('button')) as HTMLElement[];
+    for (const b of btns) {
+      const t = (b.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (t === 'continue') b.click();
+    }
+  } catch { /* best-effort */ }
+}
+
+/** In the TA page: tag each left-rail event row (its text reads "<globalNum><Friendly Name>", e.g.
+ *  "131Link Click") with data-ta-row=idx and return them oldest-first ([{idx, num, name}]). One element
+ *  per global number — the smallest (the row itself), never an ancestor that merely contains it. */
+function indexTaRailRows(): Array<{ idx: number; num: number; name: string }> {
+  const byNum: Record<number, { el: HTMLElement; name: string; depth: number }> = {};
+  try {
     const all = Array.prototype.slice.call(document.querySelectorAll('a,li,button,[role="button"],div,span')) as HTMLElement[];
-    const cands = all.filter((el) => {
+    for (const el of all) {
       const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
-      return t.length > 0 && t.length < 40 && re.test(t);
-    });
-    if (cands.length === 0) return false;
-    cands.sort((a, b) => a.querySelectorAll('*').length - b.querySelectorAll('*').length); // smallest = the row itself
-    let target: HTMLElement | null = cands[0];
-    for (let i = 0; i < 5 && target; i += 1) {
+      const m = /^(\d+)\s*(\D.*)$/.exec(t);
+      if (!m || t.length > 44) continue; // a compact rail label, not a big panel/container
+      const num = parseInt(m[1], 10);
+      const depth = el.querySelectorAll('*').length;
+      const prev = byNum[num];
+      if (!prev || depth < prev.depth) byNum[num] = { el, name: m[2].trim(), depth };
+    }
+  } catch { /* best-effort */ }
+  const out: Array<{ idx: number; num: number; name: string }> = [];
+  Object.keys(byNum).map(Number).sort((a, b) => a - b).forEach((num, i) => {
+    byNum[num].el.setAttribute('data-ta-row', String(i));
+    out.push({ idx: i, num, name: byNum[num].name });
+  });
+  return out;
+}
+
+/** In the TA page: click a rail row previously tagged by indexTaRailRows (the row or its clickable ancestor). */
+function clickTaRowByIdx(idx: number): boolean {
+  try {
+    const el = document.querySelector('[data-ta-row="' + idx + '"]') as HTMLElement | null;
+    if (!el) return false;
+    let target: HTMLElement | null = el;
+    for (let k = 0; k < 5 && target; k += 1) {
       const tag = target.tagName.toLowerCase();
       if (tag === 'a' || tag === 'button' || target.getAttribute('role') === 'button' || (target as unknown as { onclick?: unknown }).onclick) break;
       target = target.parentElement;
     }
-    (target ?? cands[0]).click();
+    (target ?? el).click();
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
+}
+
+/** In the TA page: read back what the panel now shows — the raw dataLayer event from the "API Call" block
+ *  (e.g. gtm.linkClick) and the "Tags Fired" text region (to confirm a target tag name is listed there). */
+function readTaPanel(): { event: string; fired: string } {
+  try {
+    const all = (document.body.textContent || '').replace(/\s+/g, ' ');
+    const m = /dataLayer\.push\(\{\s*event:\s*["']([^"']+)["']/.exec(all);
+    const fi = all.indexOf('Tags Fired');
+    const fired = fi >= 0 ? all.slice(fi, (() => { const n = all.indexOf('Tags Not Fired', fi); return n > fi ? n : fi + 1500; })()) : '';
+    return { event: m ? m[1] : '', fired };
+  } catch { return { event: '', fired: '' }; }
+}
+
+/** Node-side: map our raw dataLayer event to the label Tag Assistant shows in its rail. Custom events show
+ *  their raw name; built-in gtm.* events show a friendly label. Used only to PRE-FILTER candidate rows —
+ *  the read-back confirm is the source of truth, so a wrong guess just falls through to the scan pass. */
+function taFriendlyName(raw: string): string {
+  const map: Record<string, string> = {
+    'gtm.js': 'container loaded', 'gtm.dom': 'dom ready', 'gtm.load': 'window loaded',
+    'gtm.click': 'click', 'gtm.linkClick': 'link click', 'gtm.scrollDepth': 'scroll depth',
+    'gtm.formInteract': 'form interaction', 'gtm.formSubmit': 'form submit', 'gtm.timer': 'timer',
+    'gtm.historyChange': 'history', 'gtm.init': 'initialization', 'gtm.video': 'video',
+  };
+  return (map[raw] ?? raw).toLowerCase();
 }
 
 /**
@@ -435,23 +492,64 @@ export async function runTaVerify(
     const firedCount = evs.reduce((n, e) => n + e.tags.filter((t) => t.status === 'fired').length, 0);
     console.log(`[tag-assistant] captured ${frames.length} debug frame(s) -> ${evs.length} event(s) for ${containerPublicId}, ${firedCount} tag-fire(s)${problem ? ` -- ${problem}` : ''}`);
 
-    // PHASE 3: screenshot the REAL Tag Assistant panel per event — click the event in TA's left rail, then
-    // capture the page (rail + its Tags-Fired panel). Best-effort: only events that fired a tag, capped, and
-    // any failure is skipped. This is proof from Tag Assistant itself, not the website page.
-    // Key by the global 1-based sequence (index in the chronological event list) — the SAME `seq`
-    // toTaEventViews assigns — so each shot lands on exactly its own timeline event. eventId can't be the
-    // key: it resets per page, so a multi-page drive would alias two events onto one screenshot.
+    // PHASE 3: screenshot the REAL Tag Assistant panel per event — select the event in TA's left rail, then
+    // capture the page (rail + its Tags-Fired panel). Because TA's rail number isn't in our frames, we
+    // CONFIRM each row by reading back the panel's dataLayer event + Tags-Fired names before shooting, so a
+    // screenshot never lands on the wrong event. Best-effort: only tag-firing events, capped, failures
+    // skipped. Keyed by the global 1-based `seq` (same as toTaEventViews) so each shot maps to its own
+    // timeline event (eventId can't key it — it resets per page and would alias two events onto one shot).
     const eventShots: Record<number, string> = {};
-    const shotEvents = evs.map((e, i) => ({ e, seq: i + 1 })).filter(({ e }) => e.tags.some((t) => t.status === 'fired')).slice(0, 12);
-    if (shotEvents.length) console.log(`[tag-assistant] capturing ${shotEvents.length} Tag Assistant panel screenshot(s)…`);
-    for (const { seq } of shotEvents) {
-      try {
-        const clicked = await ta.evaluate<boolean>(clickTaEventInRail, seq);
-        if (!clicked) continue;
-        await ta.waitForTimeout(400); // let the panel switch to this event
-        const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
-        eventShots[seq] = `data:image/jpeg;base64,${buf.toString('base64')}`;
-      } catch { /* a screenshot must never fail the run */ }
+    const targets = evs
+      .map((e, i) => ({ seq: i + 1, eventName: e.eventName, firedTags: e.tags.filter((t) => t.status === 'fired').map((t) => t.name) }))
+      .filter((t) => t.firedTags.length > 0)
+      .slice(0, 12);
+    if (targets.length) {
+      console.log(`[tag-assistant] capturing ${targets.length} Tag Assistant panel screenshot(s)…`);
+      const CLICK_CAP = 45;
+      let clicks = 0;
+      const usedRows = new Set<number>();
+      const matches = (p: { event: string; fired: string }, t: { eventName: string; firedTags: string[] }): boolean =>
+        p.event === t.eventName && (t.firedTags.length === 0 || t.firedTags.some((n) => p.fired.includes(n)));
+      const clickAndRead = async (idx: number): Promise<{ event: string; fired: string }> => {
+        const ok = await ta.evaluate<boolean>(clickTaRowByIdx, idx).catch(() => false);
+        if (!ok) return { event: '', fired: '' };
+        await ta.waitForTimeout(320); // let the panel switch to this event
+        return ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
+      };
+      const captureShot = async (seq: number): Promise<void> => {
+        try {
+          await ta.evaluate(dismissTaOverlays).catch(() => undefined);
+          const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
+          eventShots[seq] = `data:image/jpeg;base64,${buf.toString('base64')}`;
+        } catch { /* a screenshot must never fail the run */ }
+      };
+      try { await ta.evaluate(dismissTaOverlays); } catch { /* best-effort */ }
+      await ta.waitForTimeout(200);
+      let rail: Array<{ idx: number; num: number; name: string }> = [];
+      try { rail = await ta.evaluate<Array<{ idx: number; num: number; name: string }>>(indexTaRailRows); } catch { /* best-effort */ }
+      // Pass 1: pre-filter candidate rows by TA's friendly label, confirm by read-back, then shoot.
+      for (const target of targets) {
+        if (clicks >= CLICK_CAP) break;
+        const friendly = taFriendlyName(target.eventName);
+        const cands = rail.filter((r) => !usedRows.has(r.idx) && r.name.toLowerCase() === friendly).sort((a, b) => a.num - b.num);
+        for (const cand of cands) {
+          if (clicks >= CLICK_CAP) break;
+          clicks += 1;
+          const panel = await clickAndRead(cand.idx);
+          if (matches(panel, target)) { usedRows.add(cand.idx); await captureShot(target.seq); break; }
+        }
+      }
+      // Pass 2: for any target the label guess missed, scan remaining rows and match by read-back only.
+      for (const r of rail) {
+        if (clicks >= CLICK_CAP) break;
+        if (usedRows.has(r.idx)) continue;
+        const rem = targets.filter((t) => eventShots[t.seq] === undefined);
+        if (!rem.length) break;
+        clicks += 1;
+        const panel = await clickAndRead(r.idx);
+        const hit = rem.find((t) => matches(panel, t));
+        if (hit) { usedRows.add(r.idx); await captureShot(hit.seq); }
+      }
     }
 
     console.log('[tag-assistant] leaving the Tag Assistant window OPEN so you can inspect it — it closes automatically when you run verify again or quit the app.');
