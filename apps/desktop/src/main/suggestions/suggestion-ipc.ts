@@ -389,7 +389,9 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           .map((v) => {
             const tag = tagList.find((t) => t.tagName === v.tagName);
             const expectedEvent = tag && tag.trigger.kind === 'custom_event' ? tag.trigger.eventName : undefined;
-            return { tagName: v.tagName, ...(expectedEvent ? { expectedEvent } : {}) };
+            // tag.page = the tag's resolved Page-Path / URL trigger scope → a {{Page Path}} condition in the
+            // suggestion, so the proposed trigger is scoped to the page this tag's CTA/form actually lives on.
+            return { tagName: v.tagName, ...(expectedEvent ? { expectedEvent } : {}), ...(tag?.page ? { page: tag.page } : {}) };
           });
         const taSuggestions = buildTriggerSuggestions(unfired, allEventViews);
         return { ...base, verdicts, ...(taEventViews.length ? { taEvents: taEventViews } : {}), ...(taSuggestions.length ? { taSuggestions } : {}) };

@@ -272,7 +272,8 @@ export interface TaEventView {
 export interface TaTriggerSuggestion {
   tagName: string;
   event: string;
-  conditions: Array<{ key: string; value: string }>;
+  /** `builtin` renders as {{key}} (a GTM built-in like Page Path); otherwise {{dlv - key}}. */
+  conditions: Array<{ key: string; value: string; builtin?: boolean }>;
   how: string;
 }
 
@@ -293,17 +294,48 @@ export function toTaEventViews(events: TaEventRecord[]): TaEventView[] {
 
 const INTERNAL_EVENT = /^(gtm\.|page_view$|user_engagement$|scroll$)/i;
 
+// Push params that can NEVER be a stable trigger condition: they change on every submit / session / page
+// load, so a trigger scoped on them matches once and never again (the timestamp the user hit). Dropped from
+// the suggested conditions — matched on either the KEY name or a value that LOOKS volatile.
+const VOLATILE_KEY = /(^|[_.])(timestamp|time|datetime|date|ts|nonce|event_?id|session_?id|client_?id|user_?id|request_?id|transaction_?id|order_?id|uuid|guid|hash|token|rand(om)?)([_.]|$)/i;
+const VOLATILE_VALUE = /^\d{10,}$|^\d{4}-\d{2}-\d{2}[T ]\d|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i; // epoch-ms, ISO datetime, UUID
+// Stable form-identity keys we LEAD with (and prefer): a form trigger should key off these.
+const PREFERRED_KEY = /^(form_?name|form_?type|form_?id)$/i;
+
+/** The tag's resolved trigger scope → a clean Page Path for a {{Page Path}} trigger condition, or null when
+ *  it's site-wide / unknown (no meaningful path filter to add). Handles a path, a full URL, or a bare
+ *  host/path. PURE. */
+export function pageScopeToPath(page?: string): string | null {
+  if (!page) return null;
+  let p = page.trim();
+  if (!p || /^(site-?wide|all\s*pages?|any|\*)$/i.test(p)) return null;
+  const m = /^(?:https?:)?\/\/[^/]+(\/.*)?$/i.exec(p);                 // full or protocol-relative URL
+  if (m) p = m[1] ?? '/';
+  else if (/^[^/\s]+\.[^/\s]+\//.test(p)) p = p.slice(p.indexOf('/')); // bare host.tld/path
+  p = p.replace(/[?#].*$/, '');                                        // drop query / hash
+  if (!p.startsWith('/')) p = `/${p}`;
+  return p.slice(0, 120) || '/';
+}
+
+/** A condition's GTM variable reference: a built-in (Page Path) as {{Name}}, a captured push key as its
+ *  Data Layer Variable {{dlv - key}}. */
+function conditionVarRef(c: { key: string; builtin?: boolean }): string {
+  return c.builtin ? `{{${c.key}}}` : `{{dlv - ${c.key}}}`;
+}
+
 /** Build DLV-based trigger suggestions for tags that did NOT fire, using the REAL pushes we captured.
  *  For each unfired tag we look for the event it was meant to fire on (expectedEvent) among the captured
- *  events; if found, we surface that event + up to 4 of its push params as Data Layer Variable conditions;
- *  if the event never occurred, we say so. When the tag has no expected event, we point at the best
- *  captured interaction event. PURE + unit-tested. */
+ *  events; if found, we surface that event + its STABLE push params as Data Layer Variable conditions
+ *  (volatile params like timestamp/nonce/uuid are dropped — they'd never match again), leading with
+ *  form_name / form_type and capped at 2, plus a {{Page Path}} condition for the page the tag's CTA/form
+ *  lives on so the trigger is specific and easy to verify. If the event never occurred, we say so. When the
+ *  tag has no expected event, we point at the best captured interaction event. PURE + unit-tested. */
 export function buildTriggerSuggestions(
-  unfired: Array<{ tagName: string; expectedEvent?: string }>,
+  unfired: Array<{ tagName: string; expectedEvent?: string; page?: string }>,
   events: TaEventView[],
 ): TaTriggerSuggestion[] {
   const realInteraction = events.find((e) => !INTERNAL_EVENT.test(e.eventName));
-  return unfired.map(({ tagName, expectedEvent }) => {
+  return unfired.map(({ tagName, expectedEvent, page }) => {
     const match = expectedEvent ? events.find((e) => e.eventName === expectedEvent) : undefined;
     const ev = match ?? (expectedEvent ? undefined : realInteraction);
     if (!ev) {
@@ -312,12 +344,21 @@ export function buildTriggerSuggestions(
         : `No custom dataLayer event was captured for this tag. Add a dataLayer.push({ event: "…" }) where it should fire and trigger this tag on that event.`;
       return { tagName, event: expectedEvent ?? '', conditions: [], how };
     }
-    const conditions = Object.entries(ev.apiCall ?? {})
+    // Stable DLV conditions from the real push: drop the event key, gtm.* internals, and VOLATILE params
+    // (timestamp/nonce/uuid...) that would make the trigger un-matchable; lead with form_name / form_type;
+    // cap at 2 so it stays specific but simple.
+    const dlv = Object.entries(ev.apiCall ?? {})
       .filter(([k]) => k !== 'event' && !/^gtm\./i.test(k))
-      .slice(0, 4)
-      .map(([key, value]) => ({ key, value: (typeof value === 'string' ? value : JSON.stringify(value)).slice(0, 60) }));
+      .filter(([k, v]) => !VOLATILE_KEY.test(k) && !VOLATILE_VALUE.test(typeof v === 'string' ? v : JSON.stringify(v)))
+      .map(([key, value]) => ({ key, value: (typeof value === 'string' ? value : JSON.stringify(value)).slice(0, 60) }))
+      .sort((a, b) => (PREFERRED_KEY.test(b.key) ? 1 : 0) - (PREFERRED_KEY.test(a.key) ? 1 : 0))
+      .slice(0, 2);
+    // Add the Page Path built-in so the trigger fires ONLY on the page this tag's CTA/form lives on. Skipped
+    // for site-wide / unknown scopes (there is no path filter to add).
+    const pagePath = pageScopeToPath(page);
+    const conditions: TaTriggerSuggestion['conditions'] = pagePath ? [...dlv, { key: 'Page Path', value: pagePath, builtin: true }] : dlv;
     const cond = conditions.length
-      ? ', scoped with ' + conditions.map((c) => `{{dlv - ${c.key}}} = "${c.value}"`).join(' and ')
+      ? ', scoped with ' + conditions.map((c) => `${conditionVarRef(c)} = "${c.value}"`).join(' and ')
       : '';
     return {
       tagName,
