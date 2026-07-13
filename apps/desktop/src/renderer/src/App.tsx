@@ -4784,7 +4784,16 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
             </div>
             )}
 
-            {matched.map((form, i) => {
+            {firedTags ? (
+              // AFTER a Tag Assistant run: the per-form fired/not-fired result for every tag is already in
+              // the Tags Fired table + Not-firing section above. Collapse this to a one-line summary so no
+              // tag is listed twice (the per-form grid used to repeat all of them here).
+              <div style={styles.card}>
+                <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                  {matched.length} form(s) were submitted for real. Each form tag’s fired / not-fired result is shown once in the <b style={{ color: 'var(--c-green)' }}>Tags Fired</b> table and the <b style={{ color: 'var(--c-red)' }}>Not firing</b> section above — not repeated here.
+                </div>
+              </div>
+            ) : matched.map((form, i) => {
               const r = results[i];
               return (
                 <div key={`${form.page}|${form.formId}|${form.formTitle}`} style={styles.card}>
@@ -4794,23 +4803,9 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
                     <span style={{ ...styles.muted, fontSize: 12 }}>{form.page.replace(/^https?:\/\//, '').slice(0, 60)}</span>
                     {form.method === 'js' ? <span style={{ ...styles.muted, fontSize: 12 }}>(JS/div widget)</span> : null}
                   </div>
-                  {firedTags ? (
-                    // AFTER a Tag Assistant run: show whether each expected tag actually fired (from the
-                    // real submit), so the Forms section itself reports fired / not-fired per tag.
-                    <ul style={{ ...styles.resultList, marginTop: 6 }}>
-                      {form.expectedTags.map((t) => {
-                        const didFire = firedTags.has(t.tagName);
-                        return (
-                          <li key={t.tagName} style={{ ...styles.resultRow, display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span style={{ color: didFire ? 'var(--c-green)' : 'var(--c-red)', fontWeight: 600, fontSize: 12.5, whiteSpace: 'nowrap' }}>{didFire ? '✅ Fired' : '❌ Not fired'}</span>
-                            <span style={{ fontSize: 12.5 }}>{t.tagName}</span>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : (
-                    <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 4 }}>Tag(s) expected to fire: {form.expectedTags.map((t) => t.tagName).join(', ')}</div>
-                  )}
+                  {/* Pre-run review only (post-run this whole grid collapses to a summary — see above), so
+                      just list the tags this form is expected to fire. */}
+                  <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 4 }}>Tag(s) expected to fire: {form.expectedTags.map((t) => t.tagName).join(', ')}</div>
                   {r && (
                     <div style={{ fontSize: 12.5, marginTop: 8 }}>
                       {r.error ? (
