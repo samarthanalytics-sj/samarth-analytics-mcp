@@ -316,6 +316,8 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         // tags fired). taSuggestions = DLV-based triggers for tags that didn't fire, built from the tag's
         // expected custom_event name + the REAL pushes we captured.
         const allEventViews = toTaEventViews(taEvents);
+        // Phase 3: attach the real Tag Assistant panel screenshots (keyed by eventId) to their events.
+        if (ta.eventShots) for (const v of allEventViews) { if (ta.eventShots[v.eventId]) v.screenshot = ta.eventShots[v.eventId]; }
         // Timeline UI: show meaningful events only — those that fired a tag, or carry a real (non-internal)
         // push. Hides the many empty gtm.init/gtm.dom/gtm.load ticks per page nav. (Suggestions still match
         // against the FULL set below so an expected event is never missed.)
