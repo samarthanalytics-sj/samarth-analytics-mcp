@@ -5418,9 +5418,6 @@ function VerifyPanel({
                 {vShowTimeline && <TaEventTimeline events={vResult.taEvents} />}
               </div>
             )}
-            {!vResult.error && vResult.taSuggestions && vResult.taSuggestions.length > 0 && (
-              <TaTriggerSuggestions suggestions={vResult.taSuggestions} />
-            )}
             {vResult.pagesDriven?.length && !vResult.error ? (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
                 Drove across {vResult.pagesDriven.length} page(s)
@@ -5576,6 +5573,15 @@ function VerifyPanel({
                     );
                   })}
                 </ul>
+              </div>
+            )}
+
+            {/* FOOTER: DLV-based "how to fire the ones that didn't" suggestions. Placed at the END of the
+                results (below the Fired / Untested / Not-firing tables) so it reads as a fix-it footer where
+                the table ends, not a banner above the results. Same render condition as before. */}
+            {!vResult.error && vResult.taSuggestions && vResult.taSuggestions.length > 0 && (
+              <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-2)' }}>
+                <TaTriggerSuggestions suggestions={vResult.taSuggestions} />
               </div>
             )}
 
