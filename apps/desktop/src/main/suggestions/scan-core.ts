@@ -538,7 +538,11 @@ export async function crawlAndSuggest(
   const pageScans: PageScan[] = [];
   const visited = new Set<string>();
   const discovered = new Set<string>([start]);
-  const queue: { url: string; depth: number; seed?: boolean }[] = [{ url: start, depth: 0 }];
+  // The start page is scanned FIRST (top priority) — it carries the site's header/footer nav, and we must
+  // discover those links before a large sitemap-seed set consumes the budget. Otherwise, with seeds present,
+  // the home page (depth-0, non-seed) would sort BELOW the seeds and be scanned last, too late to enqueue its
+  // footer links.
+  const queue: { url: string; depth: number; seed?: boolean; nav?: boolean }[] = [{ url: start, depth: 0, nav: true }];
   // Seed content-hub pages at TOP priority so they're scanned before the page budget is spent on the
   // (many) form-likely pages — otherwise content CTAs ("Read Full Case Study", …) never get inventoried.
   for (const s of opts.seedUrls ?? []) {
@@ -555,8 +559,12 @@ export async function crawlAndSuggest(
   // checks, reserving a budget slot and an `active` slot. null when nothing is claimable right now.
   const claimNext = (): { url: string; depth: number } | null => {
     while (queue.length > 0 && opened < maxPages) {
-      // Seeds first, then shallowest, then by crawl rank (home → form-likely → content hub → other).
-      queue.sort((a, b) => (b.seed ? 1 : 0) - (a.seed ? 1 : 0) || a.depth - b.depth || crawlRank(b.url) - crawlRank(a.url));
+      // Priority: the site's REAL navigation (header/nav/footer links) first — even above sitemap seeds and
+      // regardless of depth — so Contact / Privacy / Careers (often NOT in the sitemap, and only depth-1 from
+      // the home page) are never crowded out by a large sitemap. Then sitemap seeds, then shallowest, then
+      // crawl rank (home → form-likely → content hub → other).
+      const pri = (x: { seed?: boolean; nav?: boolean }): number => (x.nav ? 2 : x.seed ? 1 : 0);
+      queue.sort((a, b) => pri(b) - pri(a) || a.depth - b.depth || crawlRank(b.url) - crawlRank(a.url));
       const item = queue.shift()!;
       const key = item.url.replace(/\/$/, '');
       if (visited.has(key)) continue;
@@ -572,15 +580,16 @@ export async function crawlAndSuggest(
     }
     return null;
   };
-  // Add a scanned page's links to the frontier (synchronous critical section). `seed` promotes them to top
-  // priority (header/nav/footer navigation) so they're scanned before ordinary in-page/content links.
-  const enqueueLinks = (links: string[] | undefined, depth: number, seed = false): void => {
+  // Add a scanned page's links to the frontier (synchronous critical section). `priority` orders them:
+  // 'nav' (header/nav/footer navigation) is scanned before everything, 'seed' before ordinary links, 'none'
+  // is a plain in-page/content link.
+  const enqueueLinks = (links: string[] | undefined, depth: number, priority: 'nav' | 'seed' | 'none' = 'none'): void => {
     if (depth >= maxDepth) return;
     for (const norm of links ?? []) {
       const k = norm.replace(/\/$/, '');
       if (visited.has(k) || discovered.has(norm)) continue;
       discovered.add(norm);
-      queue.push({ url: norm, depth: depth + 1, ...(seed ? { seed: true } : {}) });
+      queue.push({ url: norm, depth: depth + 1, ...(priority === 'nav' ? { nav: true } : priority === 'seed' ? { seed: true } : {}) });
     }
   };
 
@@ -600,7 +609,7 @@ export async function crawlAndSuggest(
           notScanned.push({ url: item.url, reason: r.reason ?? 'not scanned' });
         } else {
           pageScans.push(r.page);
-          enqueueLinks(r.navLinks, item.depth, true); // header/nav/footer navigation → scanned first
+          enqueueLinks(r.navLinks, item.depth, 'nav'); // header/nav/footer navigation → scanned first (above sitemap seeds)
           enqueueLinks(r.links, item.depth);
           if (onPageForms && r.rawForms?.length) {
             try { onPageForms(item.url, r.rawForms); } catch { /* a forms sink error must never abort the crawl */ }
