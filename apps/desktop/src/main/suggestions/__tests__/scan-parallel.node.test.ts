@@ -148,10 +148,31 @@ async function run(): Promise<void> {
     check('crawl/nav: a FOOTER-only page is scanned within a tight budget (nav links prioritized)', opened.includes(norm(`${N}privacy`)));
     check('crawl/nav: the footer page is scanned BEFORE the content pages', opened.indexOf(norm(`${N}privacy`)) === 1);
   }
+
+  // ── footer nav links beat a LARGE SITEMAP: /contact (footer, not in the sitemap) must be scanned even
+  //    when the sitemap already fills the budget — the real-world bug (226-page sitemap crowded out /contact).
+  {
+    const N = 'https://big.com/';
+    const aReg = (href: string, region: '' | 'footer'): { tag: 'a'; href: string; text: string; hasDownload: boolean; region: '' | 'footer' } =>
+      ({ tag: 'a', href, text: 'link', hasDownload: false, region });
+    const pageR = (url: string, footer: string[]): DrivenPage =>
+      ({ ok: true, httpStatus: 200, finalUrl: url, raw: { elements: footer.map((h) => aReg(h, 'footer')), signals: { scriptSrcs: [], classNames: [], selectorsPresent: [], iframeSrcs: [] } }, rawForms: [] });
+    const pages: Record<string, DrivenPage> = {};
+    // Home has a FOOTER link to /contact (NOT in the sitemap). The sitemap has 5 blog pages.
+    pages[N] = pageR(N, [`${N}contact`]);
+    for (const p of ['contact', 's1', 's2', 's3', 's4', 's5']) pages[`${N}${p}`] = pageR(`${N}${p}`, []);
+    const seedUrls = ['s1', 's2', 's3', 's4', 's5'].map((s) => `${N}${s}`);
+    const t = newTracker();
+    const pool = poolOf(1, pages, t);
+    await crawlAndSuggest(pool[0], N, { maxPages: 3, maxDepth: 2, seedUrls, drivers: pool.slice(1) });
+    const opened = t.opened.map(norm);
+    check('crawl/nav: home scanned first even with sitemap seeds present', opened[0] === norm(N));
+    check('crawl/nav: a footer link NOT in the sitemap beats the sitemap flood under a tight budget', opened.includes(norm(`${N}contact`)) && opened.indexOf(norm(`${N}contact`)) === 1);
+  }
 }
 
 void run().then(() => {
   console.log(`\nscan-parallel: ${passed} passed, ${failed} failed`);
   if (failed) { console.error(failures.join('\n')); process.exit(1); }
-  if (passed < 19) { console.error(`expected >= 19 checks, got ${passed}`); process.exit(1); }
+  if (passed < 21) { console.error(`expected >= 21 checks, got ${passed}`); process.exit(1); }
 });

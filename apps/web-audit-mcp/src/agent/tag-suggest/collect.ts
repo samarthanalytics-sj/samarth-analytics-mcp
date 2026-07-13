@@ -54,8 +54,26 @@ export function collectPageInBrowser(): PageScanRaw {
   const PROVIDER_SELECTORS = ['.hs-form', '[data-tf-widget]', '[data-paperform-id]', '#mce-EMAIL', '#mc-embedded-subscribe', '.gform_wrapper', '.wpcf7', '.wpforms-form', '.wpforms-container'];
 
   const regionOf = (el: Element): RawElement['region'] => {
-    const t = el.closest('header,footer,nav,main')?.tagName.toLowerCase();
-    return t === 'header' || t === 'footer' || t === 'nav' || t === 'main' ? t : '';
+    // 1) Semantic landmark elements.
+    const sem = el.closest('header,footer,nav,main')?.tagName.toLowerCase();
+    if (sem === 'header' || sem === 'footer' || sem === 'nav' || sem === 'main') return sem;
+    // 2) ARIA landmark roles — footers/headers/navs are very often plain <div>s with a role instead of the
+    //    semantic tag (contentinfo = footer, banner = header, navigation = nav).
+    const roleEl = el.closest('[role="contentinfo"],[role="banner"],[role="navigation"]');
+    const role = roleEl?.getAttribute('role')?.toLowerCase();
+    if (role === 'contentinfo') return 'footer';
+    if (role === 'banner') return 'header';
+    if (role === 'navigation') return 'nav';
+    // 3) Class / id heuristics — the common React/Tailwind case where the footer/header is a <div class=
+    //    "site-footer">, so links to Contact / Privacy / Careers were being missed entirely. Over-matching is
+    //    harmless here: a mis-tagged nav link is only crawled a little earlier, never dropped.
+    const cls = el.closest('[class*="footer" i],[id*="footer" i],[class*="navbar" i],[class*="site-header" i],[class*="page-header" i],[class*="main-header" i],[class*="masthead" i]');
+    if (cls) {
+      const sig = ((cls.getAttribute('class') || '') + ' ' + (cls.getAttribute('id') || '')).toLowerCase();
+      if (sig.includes('footer')) return 'footer';
+      return 'header';
+    }
+    return '';
   };
   const txt = (el: Element): string => (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120);
   // A control that LOOKS clickable: a button role, an onclick handler, or a btn/button/cta class
