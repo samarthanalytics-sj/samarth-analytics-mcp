@@ -48,10 +48,10 @@ export interface LocaleProfile {
 }
 
 const US_DATA: Record<FieldRole, string> = {
-  given_name: 'Gtm',
-  family_name: 'Verify',
-  full_name: 'GTM Verify',
-  email: '', // computed (gtm-verify+<tag>@example.com)
+  given_name: 'Test',
+  family_name: 'Test',
+  full_name: 'Test Test',
+  email: '', // computed — see buildFillPlan (default test@gmail.com)
   phone: '+1 202-555-0142', // 555-01xx is reserved-for-fiction, never a real subscriber
   website: 'https://example.com',
   street: '1600 Amphitheatre Parkway',
@@ -169,8 +169,10 @@ export function buildFillPlan(
   locale: LocaleProfile = US_LOCALE,
   opts: { emailTag?: string } = {},
 ): FillPlanItem[] {
-  const tag = (opts.emailTag || 'test').replace(/[^a-z0-9._-]/gi, '').slice(0, 40) || 'test';
-  const email = `gtm-verify+${tag}@example.com`;
+  // Default test email is a plain, editable test@gmail.com (the user asked for simple test values). The
+  // emailTag can still make it traceable/unique if a caller opts in, but the default is the simple address.
+  const tag = (opts.emailTag || '').replace(/[^a-z0-9._-]/gi, '').slice(0, 40);
+  const email = tag ? `test+${tag}@gmail.com` : 'test@gmail.com';
   return fields
     .map((f) => {
       const role = classifyFieldRole(f);

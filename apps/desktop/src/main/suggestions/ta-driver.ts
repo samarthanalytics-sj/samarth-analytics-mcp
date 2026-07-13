@@ -22,8 +22,20 @@ import {
   driveInPage, specFor, buildCustomEventPayload, withPreviewParams,
   type VerifyDriverTag, type DriveOutcome,
 } from './verify-driver';
+import { fillAndSubmitInPage, type FormSubmitFieldInput } from './form-submit-driver';
+import { isFormEventName } from './form-tag-match';
 import { parseTaFrames, type TaCapture } from './ta-stream';
 import type { PerTagCapture } from './verify-tags';
+
+/** One reviewed form to REALLY submit through the Tag Assistant session (page + identity + filled fields). */
+export interface TaFormSubmit {
+  page: string;
+  formId: string;
+  formClasses: string;
+  /** 'js' = a div/JS widget → click its submit control; anything else = native <form>.submit(). */
+  method: string;
+  fields: FormSubmitFieldInput[];
+}
 
 const TA_URL = 'https://tagassistant.google.com/';
 
@@ -180,7 +192,7 @@ export async function runTaVerify(
   url: string,
   tags: VerifyDriverTag[],
   containerPublicId: string,
-  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; previewSnippet?: string; onSignInPrompt?: () => void; onPageProgress?: (page: string, done: number, total: number) => void } = {},
+  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; previewSnippet?: string; forms?: TaFormSubmit[]; onSignInPrompt?: () => void; onPageProgress?: (page: string, done: number, total: number) => void; onFormProgress?: (page: string, done: number, total: number) => void } = {},
 ): Promise<TaVerifyResult> {
   const settleMs = opts.settleMs ?? 900;
   const navTimeoutMs = opts.navTimeoutMs ?? 25_000;
@@ -313,6 +325,14 @@ export async function runTaVerify(
         if (kind === 'custom_event') {
           const evName = tag.trigger.eventName ?? '';
           if (!evName) { perTag.push({ tagId: tag.id, kind: 'custom_event', targetFound: false, performed: false, note: 'the trigger has no dataLayer event name', hits: [] }); continue; }
+          // FORM tags (form_submission etc.) are verified by the REAL form submit below — a synthetic push
+          // here would fire the tag on OUR event with the tag's OWN declared form_name, which can contradict
+          // the real submit (the site's actual form_name). Skip the synthetic push when we have forms to
+          // submit for real; without any forms, fall through to the synthetic push (best-effort).
+          if (isFormEventName(evName) && (opts.forms?.length ?? 0) > 0) {
+            perTag.push({ tagId: tag.id, kind: 'custom_event', targetFound: true, performed: false, note: 'verified by the real form submit', hits: [] });
+            continue;
+          }
           const data = tag.trigger.customEventData ?? {};
           const payload = buildCustomEventPayload(evName, data, pushedDlKeys);
           Object.keys(data).forEach((k) => pushedDlKeys.add(k));
@@ -339,6 +359,35 @@ export async function runTaVerify(
         });
       }
     }
+
+    // REAL FORM SUBMITS: for each reviewed form, load its page in the SAME debugged popup, fill the
+    // reviewed values, and submit FOR REAL. The route handler only aborts analytics collectors, so the
+    // form's own POST goes through (a real lead) and the site fires its genuine form_submission event —
+    // which Tag Assistant captures, so the form tag's firing is proven by the REAL submit, not a synthetic
+    // push. Sequential (each submit navigates the page). Screenshots of the TA panel land in Phase 3.
+    const forms = opts.forms ?? [];
+    for (let i = 0; i < forms.length; i += 1) {
+      const form = forms[i];
+      console.log(`[tag-assistant] real form submit ${i + 1}/${forms.length}: ${form.page}`);
+      try { opts.onFormProgress?.(form.page, i + 1, forms.length); } catch { /* progress is a nicety */ }
+      if (!(await requestAllowed(form.page))) continue;
+      try { await popup.goto(withPreview(form.page), { waitUntil: 'networkidle', timeout: navTimeoutMs }); } catch { continue; }
+      await popup.waitForTimeout(Math.max(settleMs, 1500));
+      await popup.evaluate(grantConsentInPage).catch(() => undefined);
+      await popup.evaluate(hideCookieOverlaysInPage).catch(() => undefined);
+      try {
+        const outcome = await popup.evaluate<{ filled: number; submitted: boolean; note?: string }>(
+          fillAndSubmitInPage,
+          { formId: form.formId, formClasses: form.formClasses, method: form.method, fields: form.fields },
+        );
+        console.log(`[tag-assistant]   filled ${outcome.filled} field(s), submitted=${outcome.submitted}${outcome.note ? ` (${outcome.note})` : ''}`);
+      } catch (e) {
+        console.log(`[tag-assistant]   form submit failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`);
+      }
+      // Let the (often AJAX) submit resolve + the success-state form_submission push + the tag fire.
+      await popup.waitForTimeout(Math.max(settleMs, 3000));
+    }
+
     await popup.waitForTimeout(Math.max(settleMs, 1500)); // let the last TAG_STATUS frames arrive
 
     // Harvest + parse the stream from the TA page.
