@@ -496,23 +496,34 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     //    later crawl; the pool is closed by crawlAndSuggest.
     const pagedForms: PagedForm[] = [];
     let pagesCrawled = 0;
+    // "Pages to verify": when the operator gave an explicit list, scan ONLY those pages — no sitemap
+    // discovery, no BFS — so a single-page verify doesn't crawl the whole 226-page site. Kept in lockstep
+    // with the scoped tag-verification run (same normalizeVerifyPages list).
+    const explicitPages = normalizeVerifyPages(o.verifyPages, target);
     try {
       let seedUrls: string[] = [];
       let pagesTotal = 0;
-      try {
-        const disc = await discoverSite(target);
-        seedUrls = disc.urls.filter((u) => u !== target);
-        pagesTotal = disc.urls.length;
-      } catch { /* discovery best-effort — crawlAndSuggest still BFS-crawls from the target */ }
-      // Sitemap present → cover the WHOLE site (up to the 300 cap); none → a bounded BFS (60). Header/nav/
-      // footer links are scanned first (crawlAndSuggest), so contact/privacy/footer pages are never stranded.
-      const maxPages = o.maxPages ?? (seedUrls.length ? Math.min(pagesTotal || seedUrls.length + 1, 300) : 60);
+      if (explicitPages.length === 0) {
+        try {
+          const disc = await discoverSite(target);
+          seedUrls = disc.urls.filter((u) => u !== target);
+          pagesTotal = disc.urls.length;
+        } catch { /* discovery best-effort — crawlAndSuggest still BFS-crawls from the target */ }
+      }
+      // Explicit list → scan exactly those (start = first page, the rest as top-priority seeds, budget =
+      // list length so BFS-discovered links never get a slot). Else: sitemap present → whole site (up to the
+      // 300 cap); none → a bounded BFS (60), header/nav/footer pages scanned first so none are stranded.
+      const startUrl = explicitPages.length ? explicitPages[0] : target;
+      const seeds = explicitPages.length ? explicitPages.slice(1) : seedUrls;
+      const maxPages = explicitPages.length
+        ? explicitPages.length
+        : o.maxPages ?? (seedUrls.length ? Math.min(pagesTotal || seedUrls.length + 1, 300) : 60);
       const crawlTotal = maxPages;
       const pool = await makeDrivers(Math.min(scanConcurrency(), maxPages), { maxPages, cachePages: true });
       const scan = await crawlAndSuggest(
         pool[0],
-        target,
-        { maxPages, platforms: ['ga4'], drivers: pool.slice(1), ...(seedUrls.length ? { seedUrls } : {}) },
+        startUrl,
+        { maxPages, platforms: ['ga4'], drivers: pool.slice(1), ...(seeds.length ? { seedUrls: seeds } : {}) },
         (p) => emit({ ...(p.page ? { page: p.page } : {}), done: p.scanned, total: crawlTotal }),
         (page, raw) => { for (const v of toFormFillViews(raw, page, locale.id, emailTag)) pagedForms.push({ ...v, page }); },
       );

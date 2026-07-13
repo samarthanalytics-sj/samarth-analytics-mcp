@@ -927,6 +927,9 @@ export interface FormTagVerifyPlanOptions {
   localeId?: string;
   /** Crawl budget for finding forms across the site. */
   maxPages?: number;
+  /** "Pages to verify" — when set, scan ONLY these pages for forms (no sitemap crawl), matching the
+   *  scoped tag-verification run. Same list the verify call gets, so the two stay in lockstep. */
+  verifyPages?: string[];
 }
 export interface FormTagVerifyPlanResult {
   url: string;

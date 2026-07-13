@@ -4628,7 +4628,7 @@ const vStyles: Record<string, React.CSSProperties> = {
 // a fix suggestion when it doesn't fire). Real submits — an explicit warning + confirm gate them.
 // Rendered INSIDE VerifyPanel — shares the same URL + Preview snippet as tag verification (one panel,
 // one URL). This subsection does the container-tag-driven REAL-submit form check.
-function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, onReviewedForms, showFields = true, onSubmitForms, firedTags, onScanProgress }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number; onStatus?: (s: { loading: boolean; count: number | null }) => void; onReviewedForms?: (forms: NonNullable<VerifyTagsOptions['reviewedForms']>) => void; showFields?: boolean; onSubmitForms?: () => void; firedTags?: Set<string>; onScanProgress?: (p: VerifyProgressView) => void }): JSX.Element {
+function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal, onStatus, onReviewedForms, showFields = true, onSubmitForms, firedTags, onScanProgress }: { url: string; verifyPages?: string[]; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number; onStatus?: (s: { loading: boolean; count: number | null }) => void; onReviewedForms?: (forms: NonNullable<VerifyTagsOptions['reviewedForms']>) => void; showFields?: boolean; onSubmitForms?: () => void; firedTags?: Set<string>; onScanProgress?: (p: VerifyProgressView) => void }): JSX.Element {
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [plan, setPlan] = useState<FormTagVerifyPlanResult | null>(null);
@@ -4680,7 +4680,7 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, on
     onStatus?.({ loading: true, count: null }); // this run's form-discovery is now in flight
     let count: number | null = null;
     try {
-      const res = await window.desktop.tags.formTagVerifyPlan(target, { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId! }, onScanProgress);
+      const res = await window.desktop.tags.formTagVerifyPlan(target, { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId!, ...(verifyPages && verifyPages.length ? { verifyPages } : {}) }, onScanProgress);
       setPlan(res);
       const sv: Record<string, string> = {};
       for (const f of res.sharedFields) sv[f.key] = f.value;
@@ -5613,7 +5613,7 @@ function VerifyPanel({
           </div>
         )}
 
-        <FormFillReview url={verifyTarget()} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} onReviewedForms={(f) => { vReviewedFormsRef.current = f; }} showFields={vTaStage === 'filling'} onSubmitForms={() => { setVTaStage('idle'); void runVerify(undefined, true, true); }} firedTags={vResult && vResult.verifiedByMonitor && !vResult.error && vFormsVerified ? new Set(fired.map((v) => v.tagName)) : undefined} onScanProgress={(p) => setVProgress(p)} />
+        <FormFillReview url={verifyTarget()} verifyPages={vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} onReviewedForms={(f) => { vReviewedFormsRef.current = f; }} showFields={vTaStage === 'filling'} onSubmitForms={() => { setVTaStage('idle'); void runVerify(undefined, true, true); }} firedTags={vResult && vResult.verifiedByMonitor && !vResult.error && vFormsVerified ? new Set(fired.map((v) => v.tagName)) : undefined} onScanProgress={(p) => setVProgress(p)} />
       </div>
       {vLightbox && <ProofLightbox shot={vLightbox} onClose={() => setVLightbox(null)} />}
     </div>
