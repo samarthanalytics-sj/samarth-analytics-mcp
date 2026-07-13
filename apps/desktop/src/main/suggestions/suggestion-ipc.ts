@@ -272,9 +272,9 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         const ident = data.activeAccountIdentity();
         const profileDir = taProfileDir(ident?.id);
         // REAL FORM SUBMITS use the operator-REVIEWED forms from the Forms panel (with any edited values).
-        // The Forms panel discovers the forms + shows the editable fields on the FIRST verify run and
-        // publishes them up; so the FIRST run just drives the tags + shows the fields to review, and the
-        // NEXT "Verify with Tag Assistant" run submits exactly what was reviewed (scan → review → submit).
+        // The renderer runs a scan → gate → fill wizard FIRST (find forms-with-tags, ask skip/proceed, edit
+        // the shared data), so this single run drives the click tags AND submits exactly what was reviewed.
+        // Empty when the user skipped forms or the site had none → click-tag verification only.
         const taForms: TaFormSubmit[] = (Array.isArray(o.reviewedForms) ? o.reviewedForms : [])
           .map((f) => ({ page: String(f.page ?? ''), formId: String(f.formId ?? ''), formClasses: String(f.formClasses ?? ''), method: String(f.method ?? ''), fields: (f.fields ?? []).map((x) => ({ selector: String(x.selector ?? ''), type: String(x.type ?? ''), value: String(x.value ?? '') })) }))
           .filter((f) => f.page && f.fields.length);

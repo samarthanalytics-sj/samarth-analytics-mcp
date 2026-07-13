@@ -4628,7 +4628,7 @@ const vStyles: Record<string, React.CSSProperties> = {
 // a fix suggestion when it doesn't fire). Real submits — an explicit warning + confirm gate them.
 // Rendered INSIDE VerifyPanel — shares the same URL + Preview snippet as tag verification (one panel,
 // one URL). This subsection does the container-tag-driven REAL-submit form check.
-function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, onReviewedForms }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number; onStatus?: (s: { loading: boolean; count: number | null }) => void; onReviewedForms?: (forms: NonNullable<VerifyTagsOptions['reviewedForms']>) => void }): JSX.Element {
+function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, onReviewedForms, showFields = true, onSubmitForms }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number; onStatus?: (s: { loading: boolean; count: number | null }) => void; onReviewedForms?: (forms: NonNullable<VerifyTagsOptions['reviewedForms']>) => void; showFields?: boolean; onSubmitForms?: () => void }): JSX.Element {
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [plan, setPlan] = useState<FormTagVerifyPlanResult | null>(null);
@@ -4727,7 +4727,7 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, on
       <div style={{ borderTop: '1px solid rgba(128,128,128,0.22)', marginTop: 14, paddingTop: 12 }}>
         <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--text)' }}>Forms — verified by a real submit</div>
         <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 2, marginBottom: 6 }}>
-          The first verify above finds the forms that HAVE a tracking tag and lists them here with editable values. Edit anything, then click <b>Verify with Tag Assistant</b> again — it submits these forms for real and shows each form_submission (and the tags it fired) in the results above. Real submits create a real lead per form.
+          When you run <b>Verify with Tag Assistant</b>, we first scan the site and match its forms to your container’s form tags. If you choose to verify them, edit the shared data once below and submit — each form is submitted for real inside the Tag Assistant session and its form_submission (and the tags it fired) show in the results above. Real submits create a real lead per form.
         </div>
       </div>
       <div style={styles.card}>
@@ -4751,7 +4751,7 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, on
           )}
         </div>
 
-        {plan && matched.length > 0 && (
+        {showFields && plan && matched.length > 0 && (
           <>
             <div style={styles.card}>
               <div style={styles.h2}>Enter the data once ({plan.sharedFields.length} field(s))</div>
@@ -4777,7 +4777,7 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, on
                   </li>
                 ))}
               </ul>
-              {(touched || Object.keys(results).length > 0) ? (
+              {(touched || Object.keys(results).length > 0 || onSubmitForms) ? (
                 confirming ? (
                   <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--c-red)', background: 'rgba(220,60,60,0.08)', fontSize: 13 }}>
                     <div style={{ color: 'var(--text)' }}>
@@ -4786,13 +4786,15 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, on
                       pixel or server-side automation may still fire for real. Continue?
                     </div>
                     <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                      <button style={styles.dangerGhost} onClick={() => void submitAll()} disabled={submitting}>{submitting ? 'Submitting…' : `Yes, submit all ${matched.length} & verify`}</button>
+                      {/* Orchestrated flow: hand back to the parent's single Tag Assistant run (click tags +
+                          real submits). Legacy (no onSubmitForms): the standalone beacon-based submit. */}
+                      <button style={styles.dangerGhost} onClick={() => { setConfirming(false); if (onSubmitForms) onSubmitForms(); else void submitAll(); }} disabled={submitting}>{submitting ? 'Submitting…' : `Yes, submit all ${matched.length} & verify`}</button>
                       <button style={styles.toggleOff} onClick={() => setConfirming(false)} disabled={submitting}>Cancel</button>
                     </div>
                   </div>
                 ) : (
                   <button style={styles.primaryBtn} onClick={() => setConfirming(true)} disabled={submitting}>
-                    {submitting ? 'Submitting…' : `Submit all ${matched.length} form(s) & verify`}
+                    {submitting ? 'Submitting…' : onSubmitForms ? `Submit all ${matched.length} form(s) & run Tag Assistant` : `Submit all ${matched.length} form(s) & verify`}
                   </button>
                 )
               ) : (
@@ -4922,6 +4924,10 @@ function VerifyPanel({
   // The embedded form-discovery's status (bubbled up) so this ONE Verify run shows a single combined
   // state — tags + forms — instead of two independent-looking passes.
   const [vFormStatus, setVFormStatus] = useState<{ loading: boolean; count: number | null }>({ loading: false, count: null });
+  // The Tag-Assistant wizard stage: idle → scanning (crawl + match forms) → gate (skip/proceed) →
+  // filling (edit the shared data). The actual Tag Assistant run (click tags [+ real form submits]) fires
+  // when the user picks Skip, Proceed+Submit, or when the scan finds no forms.
+  const [vTaStage, setVTaStage] = useState<'idle' | 'scanning' | 'gate' | 'filling'>('idle');
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   // Bumped whenever a tag-verify runs; the embedded Forms subsection watches it and auto-discovers the
   // site's forms-with-tags in the same pass — so there's ONE action, not a separate "find forms" button.
@@ -4946,7 +4952,7 @@ function VerifyPanel({
     return m;
   }
 
-  async function runVerify(snippetOverride?: string, useMonitor = false): Promise<void> {
+  async function runVerify(snippetOverride?: string, useMonitor = false, withForms = false): Promise<void> {
     if (!ready || !ctx || vVerifying) return;
     const target = vUrl.trim();
     if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against.' }); return; }
@@ -4957,16 +4963,16 @@ function VerifyPanel({
       setVNote({ kind: 'error', text: 'Pick a GTM account, container and workspace first — verification reads that container’s tags.' });
       return;
     }
+    setVTaStage('idle'); // a run supersedes the scan/gate/fill wizard
     setVVerifying(true);
     setVVerifyKind(useMonitor ? 'ta' : 'firing');
     setVProgress({ phase: 'prepare', message: 'Preparing verification…' });
     setVNote(null);
     onError('');
-    // SNAPSHOT the reviewed forms NOW, before setVRunSignal re-discovers (which clears the panel + the
-    // ref). This is what makes the flow "run 1 shows the fields → edit → run 2 submits the edited values".
-    const reviewedForms = useMonitor ? [...vReviewedFormsRef.current] : [];
-    // Kick the embedded Forms subsection to discover forms-with-tags for the same URL in parallel.
-    setVRunSignal((n) => n + 1);
+    // Submit the operator's REVIEWED/edited forms (from the Forms panel) only when this run was launched
+    // from "Proceed with form verification" (withForms). The forms were already scanned + matched up front
+    // (startTaFlow), so there's no re-discovery here and the edited values are read straight off the ref.
+    const reviewedForms = useMonitor && withForms ? [...vReviewedFormsRef.current] : [];
     try {
       const { tags, skipped } = await window.desktop.gtm.verifiableTags(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
       setVSkipped(skipped);
@@ -5009,6 +5015,33 @@ function VerifyPanel({
       setVProgress(null);
     }
   }
+
+  // STEP 1 of the Tag-Assistant flow: scan the site and match its forms to the container's form tags FIRST
+  // (no Tag Assistant yet). When the scan lands we either gate (forms found → ask skip/proceed) or, if there
+  // are none, go straight to click-tag verification. Bumping vRunSignal triggers the Forms panel's scan; the
+  // decision is made in the effect below once its status bubbles back.
+  async function startTaFlow(): Promise<void> {
+    if (!ready || !ctx || vVerifying || vTaStage === 'scanning') return;
+    const target = vUrl.trim();
+    if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against.' }); return; }
+    if (!(ctx.accountId && ctx.containerId && ctx.workspaceId)) {
+      setVNote({ kind: 'error', text: 'Pick a GTM account, container and workspace first — verification reads that container’s tags.' });
+      return;
+    }
+    setVNote(null); onError(''); setVResult(null);
+    vReviewedFormsRef.current = [];
+    setVFormStatus({ loading: true, count: null }); // guards the effect from acting on a prior scan's count
+    setVTaStage('scanning');
+    setVRunSignal((n) => n + 1); // Forms panel crawls + matches forms-with-tags for this URL
+  }
+
+  // Once STEP 1's scan finishes: forms found → open the skip/proceed gate; none → verify click tags only.
+  useEffect(() => {
+    if (vTaStage !== 'scanning' || vFormStatus.loading) return;
+    if (vFormStatus.count && vFormStatus.count > 0) setVTaStage('gate');
+    else { setVTaStage('idle'); void runVerify(undefined, true, false); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vTaStage, vFormStatus]);
 
   // Apply the "align event name" fix: set the GA4 tag's Event Name to the value that actually
   // fired (draft-only write), then prompt a re-verify to confirm.
@@ -5111,25 +5144,39 @@ function VerifyPanel({
               {vVerifyKind === 'firing' ? 'Verifying…' : 'Verify firing'}
             </button>
             <button
-              style={{ background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--c-blue)', borderRadius: 10, padding: '10px 16px', fontSize: 14, cursor: 'pointer', ...(!ready || vVerifying || !vUrl.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-              onClick={() => void runVerify(undefined, true)}
-              disabled={!ready || vVerifying || !vUrl.trim()}
-              title="Authoritative: automates the REAL Tag Assistant — connects it to the site, drives your tags, and reads GTM's own per-event firing. ZERO GTM writes. Signs in to Tag Assistant ONCE (saved after that, so it never asks again) and your normal Chrome can stay open."
+              style={{ background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--c-blue)', borderRadius: 10, padding: '10px 16px', fontSize: 14, cursor: 'pointer', ...(!ready || vVerifying || vTaStage === 'scanning' || !vUrl.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+              onClick={() => void startTaFlow()}
+              disabled={!ready || vVerifying || vTaStage === 'scanning' || !vUrl.trim()}
+              title="Authoritative: automates the REAL Tag Assistant — connects it to the site, drives your tags, and reads GTM's own per-event firing. First it scans the site for forms with tags and asks whether to verify those too. ZERO GTM writes. Signs in to Tag Assistant ONCE (saved after that, so it never asks again) and your normal Chrome can stay open."
             >
-              {vVerifyKind === 'ta' ? 'Verifying with Tag Assistant…' : 'Verify with Tag Assistant'}
+              {vVerifyKind === 'ta' ? 'Verifying with Tag Assistant…' : vTaStage === 'scanning' ? 'Scanning site for forms…' : 'Verify with Tag Assistant'}
             </button>
           </div>
-          {/* ONE run, two parts: this single action verifies the tags AND discovers the forms-with-tags.
-              A single combined status so it reads as one verification, not two. */}
+          {/* STEP 2 — the skip/proceed gate, shown once the up-front form scan finds forms with tags. */}
+          {vTaStage === 'gate' && (
+            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-blue)', background: 'rgba(70,130,240,0.06)' }}>
+              <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 8, lineHeight: 1.45 }}>
+                Found <b>{vFormStatus.count}</b> form(s) with a tracking tag. Verifying them submits each form <b>for real</b> (a real lead per form). Verify the forms too, or just the click tags?
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button style={styles.primaryBtn} onClick={() => setVTaStage('filling')}>Proceed with form verification</button>
+                <button style={styles.toggleOff} onClick={() => { setVTaStage('idle'); void runVerify(undefined, true, false); }}>Skip forms — verify click tags only</button>
+              </div>
+            </div>
+          )}
+          {/* Sequential now: STEP 1 scans the site for forms, then (after the skip/proceed gate) the Tag
+              Assistant run verifies the click tags [+ submits the reviewed forms for real]. */}
           {(vVerifying || vFormStatus.loading) ? (
             <div style={{ marginTop: 8 }}>
               <div style={{ fontSize: 12.5, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span aria-hidden>⏳</span>
                 <span>
-                  One verification running —{' '}
-                  {vVerifying ? <b>checking tags</b> : <span style={{ color: 'var(--c-green)' }}>tags ✓</span>}
-                  {' · '}
-                  {vFormStatus.loading ? <b>discovering forms</b> : vFormStatus.count !== null ? <span style={{ color: 'var(--c-green)' }}>{vFormStatus.count} form(s) with tags ✓</span> : <span>forms</span>}
+                  {(vFormStatus.loading && !vVerifying)
+                    ? <b>Scanning the site &amp; matching forms to tags…</b>
+                    : <>
+                        <b>Verifying with Tag Assistant</b>
+                        {vFormStatus.count ? <span style={{ color: 'var(--c-green)' }}> · {vFormStatus.count} form(s) found</span> : null}
+                      </>}
                 </span>
               </div>
               {/* Indeterminate bar — no % is known (the driver loads + drives every page), so an animated
@@ -5170,9 +5217,9 @@ function VerifyPanel({
                 <span>Keep this tab open until it finishes — it loads and drives every page, which can take a minute on a larger site. Leaving or switching tabs cancels the run and you'll have to start over.</span>
               </div>
             </div>
-          ) : (vResult && !vResult.error && vFormStatus.count !== null && vFormStatus.count > 0) ? (
+          ) : (vResult && !vResult.error && vTaStage === 'idle' && vFormStatus.count !== null && vFormStatus.count > 0) ? (
             <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--text-dim)' }}>
-              This run also found <b>{vFormStatus.count}</b> form(s) with a tracking tag — fill the data once and submit below to verify them by a real submit (gated).
+              This site has <b>{vFormStatus.count}</b> form(s) with a tracking tag. To verify those by a real submit, run <b>Verify with Tag Assistant</b> again and choose <b>Proceed with form verification</b>.
             </div>
           ) : null}
           {vNote && (
@@ -5380,7 +5427,7 @@ function VerifyPanel({
           </div>
         )}
 
-        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} onReviewedForms={(f) => { vReviewedFormsRef.current = f; }} />
+        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} onReviewedForms={(f) => { vReviewedFormsRef.current = f; }} showFields={vTaStage === 'filling'} onSubmitForms={() => { setVTaStage('idle'); void runVerify(undefined, true, true); }} />
       </div>
       {vLightbox && <ProofLightbox shot={vLightbox} onClose={() => setVLightbox(null)} />}
     </div>
