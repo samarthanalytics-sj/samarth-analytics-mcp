@@ -164,6 +164,24 @@ const tag = (tagName: string, eventName: string, formName?: string): FormTagIden
   check('one-of-three shared token → unmatched (no pile-on)', matched.length === 0 && unmatchedTags.length === 1);
 }
 
+// ── page-path SCOPE pairing: a page-scoped tag pairs deterministically, regardless of names ─────────
+// A generic "Contact us Form Tag" scoped (Page Path condition) to /contact pairs with the /contact form
+// even when the form's title/name share no distinctive token — {contact} alone is too common to pass the
+// distinctiveness gate, but the page scope is unambiguous. It must NOT stray to an off-path form.
+{
+  const forms = [
+    form({ title: '', formId: '', page: 'https://site.com/contact', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] }),
+    form({ title: 'Newsletter', formId: 'nl', page: 'https://site.com/blog', fields: [fld({ name: 'email', type: 'email', role: 'email', selector: '[name="email"]' })] }),
+  ];
+  const tags: FormTagIdentity[] = [
+    { tagName: 'GA4 - Event - Contact us Form Tag', eventName: 'form_submission', platform: 'ga4_event', page: '/contact' },
+  ];
+  const { matched, unmatchedTags } = matchFormsToTags(forms, tags);
+  check('page-scope: a /contact-scoped tag pairs with the /contact form (no token help)', matched.some((m) => /\/contact$/.test(m.page) && m.expectedTags.some((t) => /Contact us/.test(t.tagName))));
+  check('page-scope: it is NOT left unmatched', unmatchedTags.length === 0);
+  check('page-scope: it does NOT pair with the off-path /blog form', !matched.some((m) => /\/blog$/.test(m.page)));
+}
+
 // ── isFormEventName: only true form-submit custom events count as form tags ───────────────────────
 check('isFormEventName: form_submission → true', isFormEventName('form_submission'));
 check('isFormEventName: submit_form → true', isFormEventName('submit_form'));
