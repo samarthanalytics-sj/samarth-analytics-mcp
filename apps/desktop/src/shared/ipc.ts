@@ -729,6 +729,9 @@ export interface TaEventView {
   variables?: Record<string, string>;
   /** Tags GTM ran on this event, with their status. */
   tagsFired: Array<{ name: string; status: 'fired' | 'failed' | 'running' | 'unknown' }>;
+  /** JPEG data-URI screenshot of the REAL Tag Assistant panel for this event (its Tags-Fired view),
+   *  captured by clicking the event in Tag Assistant. Best-effort — absent if the capture didn't land. */
+  screenshot?: string;
 }
 
 /** A DLV-based trigger suggestion for a tag that did NOT fire, built from the real captured pushes. */

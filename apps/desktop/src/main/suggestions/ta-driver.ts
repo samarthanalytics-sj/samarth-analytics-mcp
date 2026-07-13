@@ -69,6 +69,7 @@ interface PwPage {
   waitForTimeout(ms: number): Promise<void>;
   waitForLoadState(state?: string, opts?: Record<string, unknown>): Promise<void>;
   locator(sel: string): { first(): { count(): Promise<number>; click(o?: Record<string, unknown>): Promise<void>; fill(v: string, o?: Record<string, unknown>): Promise<void> } };
+  screenshot(opts?: { type?: 'jpeg' | 'png'; quality?: number; fullPage?: boolean; timeout?: number }): Promise<Buffer>;
   isClosed(): boolean;
   url(): string;
 }
@@ -180,6 +181,36 @@ export interface TaVerifyResult {
   pagesDriven: string[];
   /** The parsed authoritative debug capture (per-event tags fired + API-Call pushes). */
   capture?: TaCapture;
+  /** JPEG data-URI screenshots of the Tag Assistant panel, keyed by eventId (Phase 3 — proof of the
+   *  tags-fired view per event). Best-effort. */
+  eventShots?: Record<number, string>;
+}
+
+/** Runs in the Tag Assistant page: click the left-rail item for a given eventId so its Tags-Fired panel
+ *  shows, ready to screenshot. TA lists events as "<eventId> <Event Name>". Matches the shortest element
+ *  whose text starts with the eventId as a standalone number, then clicks it (or its clickable ancestor).
+ *  Returns whether it clicked. Tolerant — never throws. */
+function clickTaEventInRail(eventId: number): boolean {
+  try {
+    const re = new RegExp('^' + eventId + '(?!\\d)'); // "178" matches "178Link Click", not "1785"
+    const all = Array.prototype.slice.call(document.querySelectorAll('a,li,button,[role="button"],div,span')) as HTMLElement[];
+    const cands = all.filter((el) => {
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      return t.length > 0 && t.length < 40 && re.test(t);
+    });
+    if (cands.length === 0) return false;
+    cands.sort((a, b) => a.querySelectorAll('*').length - b.querySelectorAll('*').length); // smallest = the row itself
+    let target: HTMLElement | null = cands[0];
+    for (let i = 0; i < 5 && target; i += 1) {
+      const tag = target.tagName.toLowerCase();
+      if (tag === 'a' || tag === 'button' || target.getAttribute('role') === 'button' || (target as unknown as { onclick?: unknown }).onclick) break;
+      target = target.parentElement;
+    }
+    (target ?? cands[0]).click();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -403,9 +434,26 @@ export async function runTaVerify(
     const evs = eventsForContainer(capture, containerPublicId);
     const firedCount = evs.reduce((n, e) => n + e.tags.filter((t) => t.status === 'fired').length, 0);
     console.log(`[tag-assistant] captured ${frames.length} debug frame(s) -> ${evs.length} event(s) for ${containerPublicId}, ${firedCount} tag-fire(s)${problem ? ` -- ${problem}` : ''}`);
+
+    // PHASE 3: screenshot the REAL Tag Assistant panel per event — click the event in TA's left rail, then
+    // capture the page (rail + its Tags-Fired panel). Best-effort: only events that fired a tag, capped, and
+    // any failure is skipped. This is proof from Tag Assistant itself, not the website page.
+    const eventShots: Record<number, string> = {};
+    const shotEvents = evs.filter((e) => e.tags.some((t) => t.status === 'fired')).slice(0, 12);
+    if (shotEvents.length) console.log(`[tag-assistant] capturing ${shotEvents.length} Tag Assistant panel screenshot(s)…`);
+    for (const ev of shotEvents) {
+      try {
+        const clicked = await ta.evaluate<boolean>(clickTaEventInRail, ev.eventId);
+        if (!clicked) continue;
+        await ta.waitForTimeout(400); // let the panel switch to this event
+        const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
+        eventShots[ev.eventId] = `data:image/jpeg;base64,${buf.toString('base64')}`;
+      } catch { /* a screenshot must never fail the run */ }
+    }
+
     console.log('[tag-assistant] leaving the Tag Assistant window OPEN so you can inspect it — it closes automatically when you run verify again or quit the app.');
     keepWindowOpen = true; // reached a real result — keep the TA panel up for the user to review
-    return { pagesOk: true, perTag, pagesDriven, capture, ...(problem ? { debugProblem: problem } : {}) };
+    return { pagesOk: true, perTag, pagesDriven, capture, ...(Object.keys(eventShots).length ? { eventShots } : {}), ...(problem ? { debugProblem: problem } : {}) };
   } catch (e) {
     return { pagesOk: false, perTag, pagesDriven, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
   } finally {

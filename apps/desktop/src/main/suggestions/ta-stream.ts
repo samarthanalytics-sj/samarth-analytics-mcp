@@ -231,6 +231,8 @@ export interface TaEventView {
   apiCall?: Record<string, unknown>;
   variables?: Record<string, string>;
   tagsFired: Array<{ name: string; status: TaTagStatus }>;
+  /** Phase 3: JPEG data-URI screenshot of the Tag Assistant panel for this event (attached by the IPC). */
+  screenshot?: string;
 }
 
 /** A DLV trigger suggestion for a not-fired tag (mirrors shared/ipc TaTriggerSuggestion). */

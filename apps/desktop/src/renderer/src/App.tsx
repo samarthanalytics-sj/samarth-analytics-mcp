@@ -4403,6 +4403,7 @@ function VerifyScorecard({ fired, config, server, untested, issues }: { fired: n
  *  rendered inside the app from the authoritative Tag Assistant debug stream. */
 function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taEvents']> }): JSX.Element {
   const [open, setOpen] = useState<Set<number>>(new Set([events.find((e) => e.tagsFired.length)?.eventId ?? -1]));
+  const [shot, setShot] = useState<{ src: string; name: string } | null>(null);
   const statusColor = (s: string): string => (s === 'fired' ? 'var(--c-green)' : s === 'failed' ? 'var(--c-red)' : 'var(--text-muted)');
   return (
     <div style={{ marginTop: 10 }}>
@@ -4426,6 +4427,7 @@ function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taE
                 {firedN > 0 && <span style={{ fontSize: 11.5, color: 'var(--c-green)', fontWeight: 600 }}>{firedN} fired</span>}
                 {failedN > 0 && <span style={{ fontSize: 11.5, color: 'var(--c-red)', fontWeight: 600 }}>{failedN} failed</span>}
                 {ev.tagsFired.length === 0 && <span style={{ fontSize: 11.5, ...styles.muted }}>no tags</span>}
+                {ev.screenshot && <span title="Tag Assistant screenshot attached" style={{ fontSize: 11, opacity: 0.6 }}>📷</span>}
               </button>
               {isOpen && (
                 <div style={{ padding: '2px 10px 10px 30px', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -4461,12 +4463,19 @@ function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taE
                       </div>
                     </details>
                   )}
+                  {ev.screenshot && (
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, ...styles.muted, marginBottom: 3 }}>TAG ASSISTANT PANEL</div>
+                      <ProofThumb screenshot={ev.screenshot} name={`Tag Assistant — ${ev.eventName}`} onOpen={() => setShot({ src: ev.screenshot!, name: `Tag Assistant — ${ev.eventName}` })} />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           );
         })}
       </div>
+      {shot && <ProofLightbox shot={shot} onClose={() => setShot(null)} />}
     </div>
   );
 }
