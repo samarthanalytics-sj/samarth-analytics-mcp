@@ -1,3 +1,9 @@
+## [1.307.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.4...v1.307.5) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** credit form tags from the real-submit stream; more screenshots; deeper footer scan ([#527](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/527)) ([b622e38](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b622e380abf0f2e8331e91585d68c56fb0532aa4))
+
 ## [1.307.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.3...v1.307.4) (2026-07-13)
 
 ### Bug Fixes
