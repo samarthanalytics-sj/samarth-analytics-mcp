@@ -287,7 +287,8 @@ export function createElectronDriver(opts: ElectronDriverOptions = {}): PageDriv
         await wc.executeJavaScript(`window.__sxForms = ${extractFormsInPage.toString()};`, true);
         scrolledForms = (await withTimeout(
           wc.executeJavaScript(inPage(scrollAndCollectForms), true),
-          15_000,
+          25_000, // ceiling raised so a tall homepage finishes scrolling to the FOOTER (newsletter / "Stay
+          //         Updated" forms live there) before the pass is cut off — else the footer form is missed
           'scroll+forms',
         )) as RawForm[];
         if (autoSettle) await waitNetworkIdle(0, 500, 4_000);
