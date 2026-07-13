@@ -68,6 +68,7 @@ interface PwPage {
   evaluate<R = unknown>(fn: unknown, arg?: unknown): Promise<R>;
   waitForTimeout(ms: number): Promise<void>;
   waitForLoadState(state?: string, opts?: Record<string, unknown>): Promise<void>;
+  click(sel: string, opts?: Record<string, unknown>): Promise<void>;
   locator(sel: string): { first(): { count(): Promise<number>; click(o?: Record<string, unknown>): Promise<void>; fill(v: string, o?: Record<string, unknown>): Promise<void> } };
   screenshot(opts?: { type?: 'jpeg' | 'png'; quality?: number; fullPage?: boolean; timeout?: number }): Promise<Buffer>;
   isClosed(): boolean;
@@ -208,14 +209,13 @@ function dismissTaOverlays(): void {
   } catch { /* best-effort */ }
 }
 
-/** In the TA page: click the NEWEST rail event that ACTUALLY FIRED a tag, and return its Tags-Fired text.
- *  A real form submit fires a CASCADE (gtm.formInteract → Form Submit → cta_click → form_submission) and
- *  the very newest event can be a form_submission that fired NOTHING — screenshotting it shows a blank
- *  "Tags Fired: None" panel. So walk newest → older, click each, and stop at the first whose panel lists a
- *  fired tag; skip the empty ones. Async so it can wait for the panel to switch. Returns { fired } or null. */
-async function clickNewestFiredTaRow(): Promise<{ fired: string } | null> {
+/** In the TA page: tag the NEWEST rail event rows with data-ta-snap="i" (i=0 is newest) and return their
+ *  selectors, newest first. The driver then REAL-clicks each via Playwright (an in-page synthetic .click()
+ *  does NOT switch Tag Assistant's Angular panel — that was why every proof came out as the Summary). */
+function tagNewestTaRows(): Array<{ sel: string; num: number }> {
+  const byNum: Record<number, { el: HTMLElement; depth: number }> = {};
   try {
-    const byNum: Record<number, { el: HTMLElement; depth: number }> = {};
+    document.querySelectorAll('[data-ta-snap]').forEach((e) => e.removeAttribute('data-ta-snap')); // clear last call's tags so an index never matches two rows
     const all = Array.prototype.slice.call(document.querySelectorAll('a,li,button,[role="button"],div,span')) as HTMLElement[];
     for (const el of all) {
       const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
@@ -225,27 +225,22 @@ async function clickNewestFiredTaRow(): Promise<{ fired: string } | null> {
       const depth = el.querySelectorAll('*').length;
       if (!byNum[num] || depth < byNum[num].depth) byNum[num] = { el, depth };
     }
-    const nums = Object.keys(byNum).map(Number).sort((a, b) => b - a); // newest first
-    for (const num of nums.slice(0, 10)) {
-      const el = byNum[num].el;
-      let target: HTMLElement | null = el;
-      for (let k = 0; k < 5 && target; k += 1) {
-        const tag = target.tagName.toLowerCase();
-        if (tag === 'a' || tag === 'button' || target.getAttribute('role') === 'button' || (target as unknown as { onclick?: unknown }).onclick) break;
-        target = target.parentElement;
-      }
-      (target ?? el).click();
-      await new Promise((r) => setTimeout(r, 320)); // let the panel switch to this event
-      const body = (document.body.textContent || '').replace(/\s+/g, ' ');
-      const fi = body.indexOf('Tags Fired');
-      if (fi < 0) continue;
-      const nfi = body.indexOf('Tags Not Fired', fi);
-      const fired = body.slice(fi, nfi > fi ? nfi : fi + 1500);
-      const firedBody = fired.replace(/tags fired/i, '').trim();
-      if (firedBody && !/^none\b/i.test(firedBody)) return { fired }; // this event has a fired tag
-    }
-    return null;
-  } catch { return null; }
+  } catch { /* best-effort */ }
+  const nums = Object.keys(byNum).map(Number).sort((a, b) => b - a).slice(0, 14); // newest first
+  return nums.map((num, i) => { byNum[num].el.setAttribute('data-ta-snap', String(i)); return { sel: `[data-ta-snap="${i}"]`, num }; });
+}
+
+/** In the TA page: read the panel now showing — the raw dataLayer event from the API Call block + the
+ *  "Tags Fired" text region (to confirm the target tag is listed and the event isn't empty). */
+function readTaPanel(): { event: string; fired: string } {
+  try {
+    const all = (document.body.textContent || '').replace(/\s+/g, ' ');
+    const m = /dataLayer\.push\(\{\s*event:\s*["']([^"']+)["']/.exec(all);
+    const fi = all.indexOf('Tags Fired');
+    const nfi = fi >= 0 ? all.indexOf('Tags Not Fired', fi) : -1;
+    const fired = fi >= 0 ? all.slice(fi, nfi > fi ? nfi : fi + 1500) : '';
+    return { event: m ? m[1] : '', fired };
+  } catch { return { event: '', fired: '' }; }
 }
 
 /** In the TA page: open the rail "Summary" view (the aggregate Tags-Fired list) so the FALLBACK proof
@@ -371,13 +366,40 @@ export async function runTaVerify(
     // text so the IPC attaches it to whichever tags it proves. `ta` is a SEPARATE page from the popup, so a
     // form submit reloading the popup never loses these. Best-effort — a screenshot never fails the run.
     const captures: Array<{ screenshot: string; fired: string }> = [];
-    const snapNewestTa = async (): Promise<void> => {
+    const firedBodyOf = (fired: string): string => fired.replace(/tags fired/i, '').trim();
+    const hasFired = (fired: string): boolean => { const b = firedBodyOf(fired); return !!b && !/^none\b/i.test(b); };
+    // Screenshot the TA panel for the EVENT we just drove. Tag the newest rail rows, then REAL-click each via
+    // Playwright and read its panel — an in-page synthetic `.click()` does NOT switch Tag Assistant's Angular
+    // panel (that made every proof come out as the aggregate Summary, the same image for every tag). Walk
+    // newest → older and pick the row that proves `target`: for a click/custom_event, the one whose
+    // Tags-Fired lists the tag we just drove (`target.names`); for a form submit, the newest form_submission
+    // event that fired a tag (`target.event`). Fall back to the newest event that fired ANYTHING, so the
+    // proof is still that event's own panel — never a blank "Tags Fired: None" and never the Summary.
+    const snapNewestTa = async (target: { names?: string[]; event?: string } = {}): Promise<void> => {
       try {
         await ta.evaluate(dismissTaOverlays).catch(() => undefined);
-        const res = await ta.evaluate<{ fired: string } | null>(clickNewestFiredTaRow).catch(() => null);
-        if (!res || !res.fired) return; // no fired-tag event to prove — never screenshot a blank panel
+        const rows = await ta.evaluate<Array<{ sel: string; num: number }>>(tagNewestTaRows).catch(() => [] as Array<{ sel: string; num: number }>);
+        if (!rows.length) return;
+        const names = (target.names ?? []).filter(Boolean).map((n) => n.toLowerCase());
+        const evRe = target.event ? new RegExp(target.event, 'i') : null;
+        let best: { sel: string; fired: string } | null = null;
+        let firstFired: { sel: string; fired: string } | null = null;
+        for (const row of rows) {
+          await ta.click(row.sel, { timeout: 2500 }).catch(() => undefined); // REAL click → Angular switches the panel
+          await ta.waitForTimeout(260);
+          const panel = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
+          if (!hasFired(panel.fired)) continue; // skip empty events (e.g. a bare form_submission that fired nothing)
+          if (!firstFired) firstFired = { sel: row.sel, fired: panel.fired };
+          const firedLc = panel.fired.toLowerCase();
+          const nameHit = names.length > 0 && names.some((n) => firedLc.includes(n));
+          const evHit = !!evRe && evRe.test(panel.event);
+          if (nameHit || evHit) { best = { sel: row.sel, fired: panel.fired }; break; } // this event proves the target
+        }
+        const chosen = best ?? firstFired;
+        if (!chosen) return; // nothing fired to prove — never screenshot a blank panel
+        if (!best) { await ta.click(chosen.sel, { timeout: 2500 }).catch(() => undefined); await ta.waitForTimeout(220); } // fallback row wasn't the last clicked — re-select it
         const buf = await ta.screenshot({ type: 'jpeg', quality: 55, timeout: 5000 });
-        captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: res.fired });
+        captures.push({ screenshot: `data:image/jpeg;base64,${buf.toString('base64')}`, fired: chosen.fired });
       } catch { /* proof is best-effort */ }
     };
 
@@ -438,7 +460,7 @@ export async function runTaVerify(
           Object.keys(data).forEach((k) => pushedDlKeys.add(k));
           try { await popup.evaluate(pushDataLayerInPage, payload); } catch { /* reported by stream absence */ }
           await popup.waitForTimeout(Math.max(settleMs, 700));
-          await snapNewestTa(); // proof of the event we just pushed
+          await snapNewestTa({ names: tag.name ? [tag.name] : [] }); // proof of the event we just pushed — targeted to THIS tag
           perTag.push({ tagId: tag.id, kind: 'custom_event', targetFound: true, performed: true, conditionSupplied: Object.keys(data).length > 0 || !/(^|_)forms?(_|$)/i.test(evName), hits: [] });
           continue;
         }
@@ -449,7 +471,7 @@ export async function runTaVerify(
         } catch (e) {
           outcome = { targetFound: false, performed: false, note: (e instanceof Error ? e.message : String(e)).slice(0, 150) };
         }
-        if (outcome.performed) { await popup.waitForTimeout(Math.max(settleMs, 700)); await snapNewestTa(); } // proof of the click we just drove
+        if (outcome.performed) { await popup.waitForTimeout(Math.max(settleMs, 700)); await snapNewestTa({ names: tag.name ? [tag.name] : [] }); } // proof of the click we just drove — targeted to THIS tag
         perTag.push({
           tagId: tag.id,
           kind: kind === 'form_submit' ? 'submit' : 'click',
@@ -490,15 +512,11 @@ export async function runTaVerify(
       // Poll briefly for the newest rail event to become form_submission (frames arrive async after the
       // reload), then snapshot that event's Tags-Fired panel — proof for THIS form's tags.
       for (let poll = 0; poll < 6; poll += 1) {
-        const ev = await ta.evaluate<{ event: string; fired: string }>(() => {
-          const all = (document.body.textContent || '').replace(/\s+/g, ' ');
-          const m = /dataLayer\.push\(\{\s*event:\s*["']([^"']+)["']/.exec(all);
-          return { event: m ? m[1] : '', fired: '' };
-        }).catch(() => ({ event: '', fired: '' }));
+        const ev = await ta.evaluate<{ event: string; fired: string }>(readTaPanel).catch(() => ({ event: '', fired: '' }));
         if (/form_submission|form_submit/i.test(ev.event)) break;
         await ta.waitForTimeout(400);
       }
-      await snapNewestTa(); // proof of the real form submit we just did
+      await snapNewestTa({ event: 'form_submission|form_submit' }); // proof of the real form submit we just did
     }
 
     await popup.waitForTimeout(Math.max(settleMs, 1500)); // let the last TAG_STATUS frames arrive

@@ -82,6 +82,9 @@ export interface DriverTrigger {
 }
 export interface VerifyDriverTag {
   id: string;
+  /** The tag's display name (e.g. "GA4 - Event - Phone Click Tag") — used to target its OWN event in the
+   *  Tag Assistant rail for the proof screenshot, so each tag's shot is the event it actually fired on. */
+  name?: string;
   /** The page the tag's trigger lives on ("/contact", "site-wide", "/"). Drives per-page navigation. */
   page?: string;
   trigger: DriverTrigger;
