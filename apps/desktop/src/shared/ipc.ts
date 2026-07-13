@@ -743,9 +743,9 @@ export interface TaTriggerSuggestion {
   tagName: string;
   /** The dataLayer event to trigger on (empty if none was captured). */
   event: string;
-  /** Variable → observed value pairs to scope the trigger. `builtin` renders as {{key}} (a GTM built-in
-   *  like Page Path); otherwise as the Data Layer Variable {{dlv - key}}. */
-  conditions: Array<{ key: string; value: string; builtin?: boolean }>;
+  /** Variable → observed value pairs to scope the trigger. `key` is the FULL GTM variable reference
+   *  (e.g. "dlv - form_name", "Page Path"), rendered {{key}}. */
+  conditions: Array<{ key: string; value: string }>;
   /** Plain-English "how to build this in GTM". */
   how: string;
 }

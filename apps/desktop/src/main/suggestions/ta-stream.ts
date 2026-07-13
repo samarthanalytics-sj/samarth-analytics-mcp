@@ -272,8 +272,8 @@ export interface TaEventView {
 export interface TaTriggerSuggestion {
   tagName: string;
   event: string;
-  /** `builtin` renders as {{key}} (a GTM built-in like Page Path); otherwise {{dlv - key}}. */
-  conditions: Array<{ key: string; value: string; builtin?: boolean }>;
+  /** `key` is the FULL GTM variable reference (e.g. "dlv - form_name", "Page Path"); rendered {{key}}. */
+  conditions: Array<{ key: string; value: string }>;
   how: string;
 }
 
@@ -294,13 +294,27 @@ export function toTaEventViews(events: TaEventRecord[]): TaEventView[] {
 
 const INTERNAL_EVENT = /^(gtm\.|page_view$|user_engagement$|scroll$)/i;
 
-// Push params that can NEVER be a stable trigger condition: they change on every submit / session / page
-// load, so a trigger scoped on them matches once and never again (the timestamp the user hit). Dropped from
-// the suggested conditions — matched on either the KEY name or a value that LOOKS volatile.
-const VOLATILE_KEY = /(^|[_.])(timestamp|time|datetime|date|ts|nonce|event_?id|session_?id|client_?id|user_?id|request_?id|transaction_?id|order_?id|uuid|guid|hash|token|rand(om)?)([_.]|$)/i;
-const VOLATILE_VALUE = /^\d{10,}$|^\d{4}-\d{2}-\d{2}[T ]\d|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i; // epoch-ms, ISO datetime, UUID
-// Stable form-identity keys we LEAD with (and prefer): a form trigger should key off these.
-const PREFERRED_KEY = /^(form_?name|form_?type|form_?id)$/i;
+// Variables/keys that can NEVER be a stable trigger condition: they change on every submit / session / page
+// load, so a trigger scoped on them matches once and never again (the timestamp the user hit). Matched on
+// the variable NAME or a value that LOOKS volatile. The name boundary is any non-alphanumeric so it catches
+// both raw keys ("timestamp") and resolved-variable names ("dlv - Timestamp").
+const VOLATILE_KEY = /(^|[^a-z0-9])(timestamp|time|datetime|date|ts|nonce|event_?id|session_?id|client_?id|user_?id|request_?id|transaction_?id|order_?id|uuid|guid|hash|token|rand(om)?)([^a-z0-9]|$)/i;
+// epoch-ms, ISO datetime, date-only, locale date, UUID, long hex — anything unique-per-submit / per-day.
+const VOLATILE_VALUE = /^\d{10,}$|^\d{4}-\d{2}-\d{2}([T ]\d|$)|^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-|^[0-9a-f]{16,}$/i;
+// GTM internals that surface in the resolved-variables map but aren't real conditions. Anchored to the
+// exact name so a legit variable like "Event Category" survives (a prefix match would wrongly drop it).
+const NONCONDITION_VAR = /^(_?event|_triggers)$/i;
+// Lead a trigger with the most identifying variables — form identity first, then the CTA / page ones.
+const RANK_HINT = /(form_?name|form_?type|form_?id|cta[ _-]?text|cta[ _-]?location|page[ _-]?path|page[ _-]?url)/i;
+// A form-identity variable (used to detect when form_name/form_type are SHARED across every form).
+const FORM_IDENTITY = /(^|[^a-z0-9])(form_?name|form_?type)([^a-z0-9]|$)/i;
+// A page-scope signal variable (Page Path / Page URL / *Location) — used to page-match + de-dupe.
+const PAGE_VAR = /page[ _-]?(path|url)|(^|[^a-z0-9])location([^a-z0-9]|$)/i;
+// A value we must never emit as a literal condition (PII), and the shape a non-form/CTA value must have to
+// be a usable equals-condition (a single-token slug / path / enum — NO spaces, so multi-word free text and
+// names like "John Smith" are rejected; money, email and phone are rejected too).
+const PII_VALUE = /@|^\+?\d[\d\s().-]{6,}$/;
+const STABLE_LOOKING = /^[/#]?[\w/-]{1,80}$/;
 
 /** The tag's resolved trigger scope → a clean Page Path for a {{Page Path}} trigger condition, or null when
  *  it's site-wide / unknown (no meaningful path filter to add). Handles a path, a full URL, or a bare
@@ -317,54 +331,147 @@ export function pageScopeToPath(page?: string): string | null {
   return p.slice(0, 120) || '/';
 }
 
-/** A condition's GTM variable reference: a built-in (Page Path) as {{Name}}, a captured push key as its
- *  Data Layer Variable {{dlv - key}}. */
-function conditionVarRef(c: { key: string; builtin?: boolean }): string {
-  return c.builtin ? `{{${c.key}}}` : `{{dlv - ${c.key}}}`;
+/** Is a resolved value usable as a literal trigger condition? Drops empty / undefined / blob / volatile. */
+function usableCondValue(v: string): boolean {
+  const s = v.trim();
+  if (!s || s === 'undefined' || s === 'null' || s === '[]' || s === '{}') return false;
+  if (s.length > 80) return false;                 // giant element-path blobs etc. — not a trigger value
+  return !VOLATILE_VALUE.test(s);
 }
 
-/** Build DLV-based trigger suggestions for tags that did NOT fire, using the REAL pushes we captured.
- *  For each unfired tag we look for the event it was meant to fire on (expectedEvent) among the captured
- *  events; if found, we surface that event + its STABLE push params as Data Layer Variable conditions
- *  (volatile params like timestamp/nonce/uuid are dropped — they'd never match again), leading with
- *  form_name / form_type and capped at 2, plus a {{Page Path}} condition for the page the tag's CTA/form
- *  lives on so the trigger is specific and easy to verify. If the event never occurred, we say so. When the
- *  tag has no expected event, we point at the best captured interaction event. PURE + unit-tested. */
+/** Candidate trigger conditions for ONE event, keyed by the FULL GTM variable name (rendered {{name}}).
+ *  Primary source = the resolved Variables map (the debug "Variables" tab: form_name, CTA Location, CTA
+ *  Text, Form Classes, ... — everything the container actually resolved), which is far richer than the raw
+ *  dataLayer push. Falls back to the raw push (as {{dlv - key}}) only when no variables were resolved. */
+function eventConditions(ev: TaEventView): Array<{ key: string; value: string }> {
+  const fromVars = Object.entries(ev.variables ?? {}).map(([name, value]) => ({ key: name.trim(), value: String(value) }));
+  const src = fromVars.length
+    ? fromVars
+    : Object.entries(ev.apiCall ?? {})
+        .filter(([k]) => k !== 'event' && !/^gtm\./i.test(k))
+        .map(([k, v]) => ({ key: `dlv - ${k}`, value: typeof v === 'string' ? v : JSON.stringify(v) }));
+  return src
+    .filter((c) => !NONCONDITION_VAR.test(c.key) && !/^gtm\./i.test(c.key) && !VOLATILE_KEY.test(c.key) && usableCondValue(c.value))
+    // Keep the FULL value (usableCondValue already caps at 80): a GTM equals-condition must be the exact
+    // value, and page-matching compares on it — a re-truncation here would make the condition un-matchable.
+    .map((c) => ({ key: c.key, value: c.value.trim() }));
+}
+
+/** Per eventName: how many events fired, and the set of distinct VALUES each candidate key took across all
+ *  of them. A key with ONE value across ≥2 same-name events can't distinguish them (form_name / form_type
+ *  were identical on every form here) → a WEAK condition; a key whose value VARIED is distinctive. */
+function conditionDistinctness(events: TaEventView[]): Map<string, { count: number; keys: Map<string, Set<string>> }> {
+  const m = new Map<string, { count: number; keys: Map<string, Set<string>> }>();
+  for (const e of events) {
+    let slot = m.get(e.eventName);
+    if (!slot) { slot = { count: 0, keys: new Map() }; m.set(e.eventName, slot); }
+    slot.count += 1;
+    for (const c of eventConditions(e)) {
+      const set = slot.keys.get(c.key) ?? new Set<string>();
+      set.add(c.value);
+      slot.keys.set(c.key, set);
+    }
+  }
+  return m;
+}
+
+const rankConds = (cs: Array<{ key: string; value: string }>): Array<{ key: string; value: string }> =>
+  [...cs].sort((a, b) => (RANK_HINT.test(b.key) ? 1 : 0) - (RANK_HINT.test(a.key) ? 1 : 0));
+
+/** A condition's page path if it IS a page-scope variable (Page Path / Page URL / *Location), else null —
+ *  normalized so a full URL and a bare path compare equal. Used to page-match a tag to its own form's event. */
+const condPath = (c: { key: string; value: string }): string | null => (PAGE_VAR.test(c.key) ? pageScopeToPath(c.value) : null);
+
+/** May this condition be emitted as a literal GTM equals-condition? Never PII (email/phone); form/CTA/page
+ *  identity is always fine; any other variable only if its value looks like a stable slug/path/enum. */
+function emittableCond(c: { key: string; value: string }): boolean {
+  if (PII_VALUE.test(c.value)) return false;
+  if (RANK_HINT.test(c.key)) return true;
+  return STABLE_LOOKING.test(c.value);
+}
+
+/** Build trigger suggestions for tags that did NOT fire, using the REAL pushes + resolved VARIABLES we
+ *  captured. For each unfired tag we find the event it was meant to fire on (page-matched to the tag's own
+ *  page when several same-name events exist — the site pushes identical form_name/type on every form, so
+ *  the page is the real discriminator), then scope the suggested Custom Event trigger with the DISTINCTIVE
+ *  variables: {{Page Path}} for the page the tag lives on, plus any variable whose value VARIED across the
+ *  captured forms. Volatile params (timestamp/nonce/uuid) are dropped, and when form_name/form_type are
+ *  identical across every form we say so instead of proposing them (they can't tell the forms apart). If the
+ *  event never occurred, we explain that. PURE + unit-tested. */
 export function buildTriggerSuggestions(
   unfired: Array<{ tagName: string; expectedEvent?: string; page?: string }>,
   events: TaEventView[],
 ): TaTriggerSuggestion[] {
   const realInteraction = events.find((e) => !INTERNAL_EVENT.test(e.eventName));
+  const distinct = conditionDistinctness(events);
   return unfired.map(({ tagName, expectedEvent, page }) => {
-    const match = expectedEvent ? events.find((e) => e.eventName === expectedEvent) : undefined;
-    const ev = match ?? (expectedEvent ? undefined : realInteraction);
+    const pagePath = pageScopeToPath(page);
+    // Which captured event should this tag fire on? Among same-name events, UNIQUELY page-match the one
+    // whose page-scope variable resolves to THIS tag's page (so a form tag maps to its OWN form's push, not
+    // the first form's). Ambiguous (≥2 events on the same page) or no match → we can't attribute ev's vars.
+    const sameName = expectedEvent ? events.filter((e) => e.eventName === expectedEvent) : realInteraction ? [realInteraction] : [];
+    const pageMatches = pagePath ? sameName.filter((e) => eventConditions(e).some((c) => condPath(c) === pagePath)) : [];
+    const pageMatch = pageMatches.length === 1 ? pageMatches[0] : undefined;
+    const ev = pageMatch ?? sameName[0] ?? (expectedEvent ? undefined : realInteraction);
     if (!ev) {
       const how = expectedEvent
         ? `No "${expectedEvent}" event was seen during the test, so this tag never had a chance to fire. Make sure the site pushes { event: "${expectedEvent}" } to the dataLayer at the right moment, then trigger this tag on it.`
         : `No custom dataLayer event was captured for this tag. Add a dataLayer.push({ event: "…" }) where it should fire and trigger this tag on that event.`;
       return { tagName, event: expectedEvent ?? '', conditions: [], how };
     }
-    // Stable DLV conditions from the real push: drop the event key, gtm.* internals, and VOLATILE params
-    // (timestamp/nonce/uuid...) that would make the trigger un-matchable; lead with form_name / form_type;
-    // cap at 2 so it stays specific but simple.
-    const dlv = Object.entries(ev.apiCall ?? {})
-      .filter(([k]) => k !== 'event' && !/^gtm\./i.test(k))
-      .filter(([k, v]) => !VOLATILE_KEY.test(k) && !VOLATILE_VALUE.test(typeof v === 'string' ? v : JSON.stringify(v)))
-      .map(([key, value]) => ({ key, value: (typeof value === 'string' ? value : JSON.stringify(value)).slice(0, 60) }))
-      .sort((a, b) => (PREFERRED_KEY.test(b.key) ? 1 : 0) - (PREFERRED_KEY.test(a.key) ? 1 : 0))
-      .slice(0, 2);
-    // Add the Page Path built-in so the trigger fires ONLY on the page this tag's CTA/form lives on. Skipped
-    // for site-wide / unknown scopes (there is no path filter to add).
-    const pagePath = pageScopeToPath(page);
-    const conditions: TaTriggerSuggestion['conditions'] = pagePath ? [...dlv, { key: 'Page Path', value: pagePath, builtin: true }] : dlv;
-    const cond = conditions.length
-      ? ', scoped with ' + conditions.map((c) => `${conditionVarRef(c)} = "${c.value}"`).join(' and ')
-      : '';
+    const slot = distinct.get(ev.eventName);
+    const many = (slot?.count ?? 0) >= 2;
+    const evConds = eventConditions(ev);
+    const distinctiveVars = evConds.filter((c) => (slot?.keys.get(c.key)?.size ?? 0) > 1);
+    // Can we attribute ev's captured vars to THIS tag? Only when we uniquely page-matched it, or there's a
+    // single same-name event (nothing to confuse it with). Otherwise ev is arbitrary → trust only Page Path.
+    // When we CAN trust it: with ≥2 events use only the vars that VARIED (distinctive); with <2, offer the
+    // best stable vars (form identity first) since distinctiveness is unknowable.
+    const trust = !!pageMatch || !many;
+    const usable = !trust ? [] : many ? distinctiveVars : rankConds(evConds);
+    // Lead with {{Page Path}} (the reliable per-tag discriminator), then distinctive vars, capped at 3. Skip
+    // page-scope vars (the leading Page Path already covers the page) and anything not safely emittable.
+    const conditions: TaTriggerSuggestion['conditions'] = [];
+    if (pagePath) conditions.push({ key: 'Page Path', value: pagePath });
+    for (const c of rankConds(usable)) {
+      if (conditions.length >= 3) break;
+      if (pagePath && PAGE_VAR.test(c.key)) continue;
+      if (!emittableCond(c)) continue;
+      if (!conditions.some((x) => x.key === c.key)) conditions.push(c);
+    }
+    // Nothing usable AND no page → fall back to the best vars we can trust, but with ≥2 forms NEVER the
+    // proven-shared ones (they'd over-fire on every form). Empty is fine — the note tells the operator why.
+    if (conditions.length === 0 && trust) {
+      const pool = (many ? distinctiveVars : rankConds(evConds)).filter(emittableCond);
+      for (const c of pool.slice(0, 2)) if (!conditions.some((x) => x.key === c.key)) conditions.push(c);
+    }
+    // A form-identity field is SHARED when it's constant across every captured form. Only call the forms
+    // indistinguishable (and only name the actually-shared fields) when NO form-identity field varied — a
+    // varying one IS a good condition and is proposed above, so the note must not contradict it.
+    const formFieldShared = (field: string): boolean => {
+      if (!many || !slot) return false;
+      // Match camelCase too (formName / formType), consistent with FORM_IDENTITY — else the note silently
+      // vanishes on a camelCase site, leaving an empty, unexplained suggestion.
+      const re = new RegExp(`(^|[^a-z0-9])${field.replace('_', '_?')}([^a-z0-9]|$)`, 'i');
+      const sets = [...slot.keys].filter(([k]) => re.test(k)).map(([, s]) => s);
+      return sets.length > 0 && sets.every((s) => s.size === 1);
+    };
+    const anyFormVaries = !!slot && [...slot.keys].some(([k, s]) => FORM_IDENTITY.test(k) && s.size > 1);
+    const sharedFields = anyFormVaries ? [] : ['form_name', 'form_type'].filter(formFieldShared);
+    const cond = conditions.length ? ', scoped with ' + conditions.map((c) => `{{${c.key}}} = "${c.value}"`).join(' and ') : '';
+    const fields = sharedFields.join(' and ');
+    const wasWere = sharedFields.length > 1 ? 'were' : 'was';
+    const itThey = sharedFields.length > 1 ? 'they' : 'it';
+    const note = sharedFields.length === 0
+      ? ''
+      : pagePath
+        ? ` Note: ${fields} ${wasWere} identical on every form submitted here, so ${itThey} can’t tell these forms apart — Page Path is what distinguishes this one.`
+        : ` Note: ${fields} ${wasWere} identical on every form here and this tag isn’t page-scoped, so nothing captured distinguishes these forms — add a form-specific field (e.g. a hidden input carrying the form’s name) to the dataLayer push and key the trigger on it.`;
     return {
       tagName,
       event: ev.eventName,
       conditions,
-      how: `Create a Custom Event trigger on "${ev.eventName}"${cond}, then set this tag to fire on it. (These values come from the real push captured during the test.)`,
+      how: `Create a Custom Event trigger on "${ev.eventName}"${cond}, then set this tag to fire on it. (These values come from the real push captured during the test.)${note}`,
     };
   });
 }
