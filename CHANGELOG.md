@@ -1,3 +1,9 @@
+## [1.309.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.1...v1.309.2) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** move DLV trigger-suggestions to the results footer ([#535](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/535)) ([89f34ec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/89f34ec19d5748c9ad7a7a7b29d5d2c4e7f51ba9))
+
 ## [1.309.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.0...v1.309.1) (2026-07-13)
 
 ### Bug Fixes
