@@ -187,8 +187,15 @@ export function eventsForContainer(capture: TaCapture, publicId: string): TaEven
 /** Convert one container's TA event records into the MonitorEvent shape the existing verdict pipeline
  *  (verdictsFromMonitor → monitorVerdicts) consumes — TA names are mapped to container tag IDs via the
  *  inventory (name → id). Tags TA reports that aren't in the inventory are dropped (another container's
- *  tags can never be miscredited). Status mapping: fired→success, failed→failure, running/unknown→unknown
- *  (a tag that appears at all DID fire; monitorVerdicts treats fired+unknown as clean success). PURE. */
+ *  tags can never be miscredited).
+ *
+ *  CRITICAL: only tags that ACTUALLY FIRED are emitted per event. GTM's per-event debug also reports tags
+ *  it EVALUATED but did NOT fire (that is how Tag Assistant shows "N tags did not fire" for an event);
+ *  those map to `unknown`. Crediting them was the bug that mis-attributed click tags to the synthetic
+ *  `form_submission` events we push on every page (a click tag was "seen" on form_submission with an
+ *  unknown/not-fired status, so it was wrongly reported as firing there — and, being the earliest event,
+ *  that is the event the UI showed). So: fired (execute_succeeded) + running (TAG_STARTED) → success;
+ *  failed (execute_failure) → failure; unknown (evaluated-but-not-fired / unrecognized) → EXCLUDED. PURE. */
 export function taEventsToMonitorEvents(
   events: TaEventRecord[],
   inventory: Array<{ id: string; tagName: string }>,
@@ -200,10 +207,11 @@ export function taEventsToMonitorEvents(
       .map((t) => {
         const id = idByName.get(t.name);
         if (!id) return null;
-        const status = t.status === 'fired' ? 'success' as const : t.status === 'failed' ? 'failure' as const : 'unknown' as const;
+        if (t.status === 'unknown') return null; // evaluated-but-not-fired — don't credit it to this event
+        const status = t.status === 'failed' ? 'failure' as const : 'success' as const; // fired + running = fired
         return { id, name: t.name, status };
       })
-      .filter((t): t is { id: string; name: string; status: 'success' | 'failure' | 'unknown' } => t !== null),
+      .filter((t): t is { id: string; name: string; status: 'success' | 'failure' } => t !== null),
   }));
 }
 

@@ -294,6 +294,15 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         }
         const monitorEvents = taEventsToMonitorEvents(taEvents, tagList.map((t) => ({ id: t.id, tagName: t.tagName })));
         const verdicts = verdictsFromMonitor(tagList, monitorEvents, ta.perTag);
+        // DIAGNOSTIC: per-event fired tags (after the not-fired exclusion) + each fired tag's event list.
+        // Confirms attribution is correct (a click tag should show gtm.linkClick, not the synthetic
+        // form_submission). Concise — one line per non-empty event + one per fired tag.
+        for (const me of monitorEvents) {
+          if (me.tags.length) console.log(`[ta-attr] event ${me.event}: ${me.tags.map((t) => t.name ?? t.id).join(', ')}`);
+        }
+        for (const v of verdicts.filter((x) => x.fired)) {
+          console.log(`[ta-attr]   tag "${v.tagName}" -> shown event=${v.event ?? '?'} | all events=[${(v.monitorEvents ?? []).join(', ')}]`);
+        }
         // Phase 3: the in-app detail views. taEventViews = the TA-style timeline (event → API Call push +
         // tags fired). taSuggestions = DLV-based triggers for tags that didn't fire, built from the tag's
         // expected custom_event name + the REAL pushes we captured.
