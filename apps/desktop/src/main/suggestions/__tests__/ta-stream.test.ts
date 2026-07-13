@@ -166,7 +166,7 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
   // A tag that expected form_submission (which WAS captured) → suggest a trigger on it + DLV conditions.
   const s1 = buildTriggerSuggestions([{ tagName: 'Meta Form', expectedEvent: 'form_submission' }], views);
   check('suggest: uses the captured expected event', s1[0].event === 'form_submission');
-  check('suggest: proposes DLV conditions from the real push (not the event key / gtm.*)', s1[0].conditions.some((c) => c.key === 'form_name' && c.value === 'contact_form') && !s1[0].conditions.some((c) => c.key === 'event'));
+  check('suggest: proposes conditions from the real push (not the event key / gtm.*)', s1[0].conditions.some((c) => c.key === 'dlv - form_name' && c.value === 'contact_form') && !s1[0].conditions.some((c) => /(^|- )event$/.test(c.key)));
   check('suggest: how-text names the event + a DLV variable', /Custom Event trigger on "form_submission"/.test(s1[0].how) && /\{\{dlv - form_name\}\}/.test(s1[0].how));
   // A tag whose expected event NEVER occurred → say so, no conditions.
   const s2 = buildTriggerSuggestions([{ tagName: 'Purchase', expectedEvent: 'purchase' }], views);
@@ -181,18 +181,92 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
     { container: 'GTM-X', epoch: 0, eventId: 3, eventName: 'form_submission', apiCall: { event: 'form_submission', form_name: 'solution_contact_form', form_type: 'service_request', timestamp: '2026-07-13T12:47:07.892Z', nonce: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', event_id: '1699999999999' }, tags: [] },
   ]);
   const sv = buildTriggerSuggestions([{ tagName: 'GA4 Form', expectedEvent: 'form_submission', page: '/services/custom-dashboards' }], volViews)[0];
-  check('suggest: drops the volatile timestamp condition', !sv.conditions.some((c) => c.key === 'timestamp') && !/timestamp/.test(sv.how));
-  check('suggest: drops nonce/uuid + event_id', !sv.conditions.some((c) => c.key === 'nonce' || c.key === 'event_id'));
-  check('suggest: keeps the stable form_name / form_type', sv.conditions.some((c) => c.key === 'form_name') && sv.conditions.some((c) => c.key === 'form_type'));
-  // Page Path is added as a BUILT-IN (rendered {{Page Path}}, not {{dlv - Page Path}}).
+  check('suggest: drops the volatile timestamp condition', !sv.conditions.some((c) => /timestamp/i.test(c.key)) && !/timestamp/i.test(sv.how));
+  check('suggest: drops nonce/uuid + event_id', !sv.conditions.some((c) => /nonce|event_id/i.test(c.key)));
+  // Single captured form → its form_name/type are trustable (nothing to confuse it with) and Page Path leads.
+  check('suggest: keeps the stable form_name / form_type (single form)', sv.conditions.some((c) => c.key === 'dlv - form_name') && sv.conditions.some((c) => c.key === 'dlv - form_type'));
   const pp = sv.conditions.find((c) => c.key === 'Page Path');
-  check('suggest: adds a {{Page Path}} built-in condition from the tag scope', !!pp && pp!.builtin === true && pp!.value === '/services/custom-dashboards');
-  check('suggest: how-text renders Page Path as a built-in, not a dlv', /\{\{Page Path\}\} = "\/services\/custom-dashboards"/.test(sv.how) && !/dlv - Page Path/.test(sv.how));
-  // At most 2 DLV conditions (+ Page Path) — specific but simple.
-  check('suggest: caps DLV conditions at 2 (form_name, form_type) + Page Path', sv.conditions.filter((c) => !c.builtin).length === 2 && sv.conditions.length === 3);
+  check('suggest: adds a {{Page Path}} condition from the tag scope', !!pp && pp!.value === '/services/custom-dashboards');
+  check('suggest: how-text renders Page Path', /\{\{Page Path\}\} = "\/services\/custom-dashboards"/.test(sv.how));
+  check('suggest: Page Path leads the conditions', sv.conditions[0].key === 'Page Path');
+  check('suggest: caps at 3 conditions', sv.conditions.length <= 3);
   // Site-wide scope → no Page Path condition (nothing to filter on).
   const swide = buildTriggerSuggestions([{ tagName: 'GA4 Form', expectedEvent: 'form_submission', page: 'site-wide' }], volViews)[0];
   check('suggest: site-wide scope adds no Page Path condition', !swide.conditions.some((c) => c.key === 'Page Path'));
+
+  // THE user's case: every form pushes the SAME form_name / form_type, on DIFFERENT pages (resolved as the
+  // CTA Location variable). form_name/type are non-distinctive → the suggestion must lead with Page Path and
+  // SAY they can't tell the forms apart, and each tag gets its OWN page.
+  const sharedForms = toTaEventViews([
+    { container: 'GTM-X', epoch: 0, eventId: 4, eventName: 'form_submission', apiCall: { event: 'form_submission', form_name: 'solution_contact_form', form_type: 'service_request' }, variables: { 'dlv - form_name': 'solution_contact_form', 'dlv - form_type': 'service_request', 'dlv - CTA Location': '/services/custom-dashboards', 'dlv - Timestamp': '2026-07-13T12:47:07.892Z' }, tags: [] },
+    { container: 'GTM-X', epoch: 1, eventId: 4, eventName: 'form_submission', apiCall: { event: 'form_submission', form_name: 'solution_contact_form', form_type: 'service_request' }, variables: { 'dlv - form_name': 'solution_contact_form', 'dlv - form_type': 'service_request', 'dlv - CTA Location': '/services/tag-management', 'dlv - Timestamp': '2026-07-13T12:48:07.007Z' }, tags: [] },
+  ]);
+  const shared = buildTriggerSuggestions([
+    { tagName: 'GA4 Dashboards Form', expectedEvent: 'form_submission', page: '/services/custom-dashboards' },
+    { tagName: 'GA4 Tag Mgmt Form', expectedEvent: 'form_submission', page: '/services/tag-management' },
+  ], sharedForms);
+  check('shared: does NOT propose the non-distinctive form_name / form_type', !shared[0].conditions.some((c) => /form_name|form_type/i.test(c.key)) && !shared[1].conditions.some((c) => /form_name|form_type/i.test(c.key)));
+  check('shared: notes that form_name/type are identical across forms', /identical on every form/i.test(shared[0].how));
+  check('shared: each tag gets ITS OWN page path (distinct suggestions)', shared[0].conditions[0].value === '/services/custom-dashboards' && shared[1].conditions[0].value === '/services/tag-management');
+  check('shared: Page Path covers the page → the page-ish CTA Location is NOT duplicated', shared[0].conditions.length === 1 && shared[0].conditions[0].key === 'Page Path');
+  check('shared: still drops the volatile Timestamp variable', !shared[0].conditions.some((c) => /timestamp/i.test(c.key)));
+
+  // Finding 1/6 — a form-identity field that VARIES must be proposed, and the note must NOT claim it's shared.
+  const varyName = toTaEventViews([
+    { container: 'GTM-X', epoch: 0, eventId: 5, eventName: 'form_submission', variables: { 'dlv - form_name': 'dashboards_form', 'dlv - form_type': 'service_request', 'dlv - CTA Location': '/a' }, tags: [] },
+    { container: 'GTM-X', epoch: 1, eventId: 5, eventName: 'form_submission', variables: { 'dlv - form_name': 'tagmgmt_form', 'dlv - form_type': 'service_request', 'dlv - CTA Location': '/b' }, tags: [] },
+  ]);
+  const vn = buildTriggerSuggestions([{ tagName: 'GA4 A', expectedEvent: 'form_submission', page: '/a' }], varyName)[0];
+  check('vary: no false "identical" note when form_name varies', !/identical on every form/i.test(vn.how));
+  check('vary: surfaces the distinctive form_name value for THIS page', vn.conditions.some((c) => c.key === 'dlv - form_name' && c.value === 'dashboards_form'));
+
+  // Finding 2/5 — site-wide tag + every field shared → propose NO shared form_name/type, just the note.
+  const allShared = toTaEventViews([
+    { container: 'GTM-X', epoch: 0, eventId: 6, eventName: 'form_submission', variables: { 'dlv - form_name': 'solution_contact_form', 'dlv - form_type': 'service_request' }, tags: [] },
+    { container: 'GTM-X', epoch: 1, eventId: 6, eventName: 'form_submission', variables: { 'dlv - form_name': 'solution_contact_form', 'dlv - form_type': 'service_request' }, tags: [] },
+  ]);
+  const as1 = buildTriggerSuggestions([{ tagName: 'GA4 Site', expectedEvent: 'form_submission', page: 'site-wide' }], allShared)[0];
+  check('siteShared: proposes NO shared form_name / form_type conditions', !as1.conditions.some((c) => /form_name|form_type/i.test(c.key)));
+  check('siteShared: emits the add-a-form-field note', /add a form-specific field/i.test(as1.how));
+
+  // Finding 10 — never emit an email (PII) value as a condition.
+  const pii = toTaEventViews([
+    { container: 'GTM-X', epoch: 0, eventId: 9, eventName: 'form_submission', variables: { 'dlv - user_email': 'a@b.com', 'dlv - CTA Location': '/c' }, tags: [] },
+    { container: 'GTM-X', epoch: 1, eventId: 9, eventName: 'form_submission', variables: { 'dlv - user_email': 'd@e.com', 'dlv - CTA Location': '/f' }, tags: [] },
+  ]);
+  const pv = buildTriggerSuggestions([{ tagName: 'PII', expectedEvent: 'form_submission', page: '/c' }], pii)[0];
+  check('pii: never emits an email value as a condition', !pv.conditions.some((c) => /@/.test(c.value)));
+
+  // Finding 11 — a date-only value is volatile (per-day) and must be dropped.
+  const dateOnly = toTaEventViews([
+    { container: 'GTM-X', epoch: 0, eventId: 8, eventName: 'form_submission', variables: { 'dlv - submitted_on': '2026-07-13', 'dlv - form_name': 'x' }, tags: [] },
+  ]);
+  const dov = buildTriggerSuggestions([{ tagName: 'Date', expectedEvent: 'form_submission' }], dateOnly)[0];
+  check('volatile: drops a date-only value', !dov.conditions.some((c) => /submitted_on/i.test(c.key)));
+
+  // Finding 12 — a real variable named "Event Category" must NOT be dropped as an internal.
+  const evCat = toTaEventViews([
+    { container: 'GTM-X', epoch: 0, eventId: 7, eventName: 'custom_x', variables: { 'Event Category': 'engagement' }, tags: [] },
+  ]);
+  const ec = buildTriggerSuggestions([{ tagName: 'T', expectedEvent: 'custom_x' }], evCat)[0];
+  check('nonInternal: keeps a real variable named "Event Category"', ec.conditions.some((c) => c.key === 'Event Category' && c.value === 'engagement'));
+
+  // Regression — shared camelCase form fields (formName/formType) must STILL trigger the note (not just snake_case).
+  const camelShared = toTaEventViews([
+    { container: 'GTM-X', epoch: 0, eventId: 10, eventName: 'form_submission', apiCall: { event: 'form_submission', formName: 'contact', formType: 'main' }, tags: [] },
+    { container: 'GTM-X', epoch: 1, eventId: 10, eventName: 'form_submission', apiCall: { event: 'form_submission', formName: 'contact', formType: 'main' }, tags: [] },
+  ]);
+  const cs = buildTriggerSuggestions([{ tagName: 'Camel', expectedEvent: 'form_submission', page: 'site-wide' }], camelShared)[0];
+  check('camel: shared camelCase form fields still trigger the note', /identical on every form/i.test(cs.how));
+
+  // Regression — a multi-word free-text value (a person's name) must NOT be emitted as a condition (PII).
+  const nameLeak = toTaEventViews([
+    { container: 'GTM-X', epoch: 0, eventId: 11, eventName: 'form_submission', variables: { 'dlv - full_name': 'John Smith', 'dlv - CTA Location': '/c' }, tags: [] },
+    { container: 'GTM-X', epoch: 1, eventId: 11, eventName: 'form_submission', variables: { 'dlv - full_name': 'Jane Doe', 'dlv - CTA Location': '/f' }, tags: [] },
+  ]);
+  const nl = buildTriggerSuggestions([{ tagName: 'Name', expectedEvent: 'form_submission', page: '/c' }], nameLeak)[0];
+  check('pii: does not emit a multi-word free-text name value', !nl.conditions.some((c) => /full_name/i.test(c.key)));
+
   // pageScopeToPath: URL / bare host / path / site-wide.
   check('pageScopeToPath: full URL → pathname', pageScopeToPath('https://www.example.com/contact?x=1') === '/contact');
   check('pageScopeToPath: bare host/path → path', pageScopeToPath('www.example.com/services/x') === '/services/x');
