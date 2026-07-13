@@ -42,40 +42,6 @@ function taProfileDir(accountId?: string | null): string {
   return taProfileDirFor(app.getPath('userData'), accountId);
 }
 
-/** Discover the site's forms that MATCH the container's form tags, filled with the default (editable)
- *  test values, so "Verify with Tag Assistant" can REALLY submit each one. Same crawl as
- *  formTagVerifyPlan (homepage + form-likely pages, cached), then form↔tag matching. Best-effort. */
-async function discoverFormsForTaSubmit(target: string, formTags: FormTagIdentity[], maxPages = 40): Promise<TaFormSubmit[]> {
-  if (formTags.length === 0) return [];
-  const pagedForms: PagedForm[] = [];
-  const disc = await discoverSite(target);
-  const formLikely = disc.urls.filter((u) => u !== target && urlPriority(u) === 1);
-  const pages = [target, ...formLikely].slice(0, Math.max(1, Math.min(maxPages, 60)));
-  const driver = await makeDriver({ cachePages: true });
-  try {
-    for (const page of pages) {
-      if (!urlAllowed(page, []).ok) continue;
-      let driven: Awaited<ReturnType<typeof driver.open>> | null = null;
-      try { driven = await driver.open(page); } catch { continue; }
-      const raw = driven?.rawForms ?? [];
-      if (raw.length === 0) continue;
-      for (const v of toFormFillViews(raw, page, undefined, '')) pagedForms.push({ ...v, page }); // '' => plain test@gmail.com
-    }
-  } finally {
-    try { await driver.close(); } catch { /* best-effort */ }
-  }
-  const { matched } = matchFormsToTags(pagedForms, formTags);
-  const seen = new Set<string>();
-  const out: TaFormSubmit[] = [];
-  for (const f of matched) {
-    const key = `${f.page}|${f.formId}|${f.formClasses}`; // a form matched to >1 tag → submit it once
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ page: f.page, formId: f.formId, formClasses: f.formClasses, method: f.method, fields: f.fields.map((x) => ({ selector: x.selector, type: x.type, value: x.value })) });
-  }
-  return out;
-}
-
 export function registerSuggestionsIpc(data: GoogleDataService): void {
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
 
@@ -305,19 +271,13 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         // own container-owning session.
         const ident = data.activeAccountIdentity();
         const profileDir = taProfileDir(ident?.id);
-        // REAL FORM SUBMITS: find the site forms matching this container's form tags, filled with the
-        // default (editable) test values, so Tag Assistant submits each for real and proves the form tag
-        // fires on a genuine form_submission (not a synthetic push). Best-effort — a discovery failure
-        // just means the click/config tags still verify.
-        emit({ phase: 'crawl', message: 'Finding the forms that have a tag, to submit them for real…' });
-        const formTags: FormTagIdentity[] = tagList
-          .filter((t) => t.trigger.kind === 'custom_event' && isFormEventName(t.trigger.eventName ?? t.eventName ?? ''))
-          .map((t) => {
-            const cd = t.trigger.customEventData ?? {};
-            const formName = cd.form_name ?? cd.formName ?? cd.form_id ?? cd.formId;
-            return { tagName: t.tagName, eventName: t.eventName ?? '', platform: t.platform, ...(formName ? { formName: String(formName) } : {}) };
-          });
-        const taForms = await discoverFormsForTaSubmit(target, formTags).catch(() => [] as TaFormSubmit[]);
+        // REAL FORM SUBMITS use the operator-REVIEWED forms from the Forms panel (with any edited values).
+        // The Forms panel discovers the forms + shows the editable fields on the FIRST verify run and
+        // publishes them up; so the FIRST run just drives the tags + shows the fields to review, and the
+        // NEXT "Verify with Tag Assistant" run submits exactly what was reviewed (scan → review → submit).
+        const taForms: TaFormSubmit[] = (Array.isArray(o.reviewedForms) ? o.reviewedForms : [])
+          .map((f) => ({ page: String(f.page ?? ''), formId: String(f.formId ?? ''), formClasses: String(f.formClasses ?? ''), method: String(f.method ?? ''), fields: (f.fields ?? []).map((x) => ({ selector: String(x.selector ?? ''), type: String(x.type ?? ''), value: String(x.value ?? '') })) }))
+          .filter((f) => f.page && f.fields.length);
         emit({ phase: 'monitor', message: 'Opening Tag Assistant (your Chrome can stay open)...' });
         const publicId = await data.getContainerPublicId(o.monitor.accountId, o.monitor.containerId);
         const ta = await runTaVerify(profileDir, target, routedTags, publicId, {

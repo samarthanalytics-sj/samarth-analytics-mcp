@@ -780,6 +780,10 @@ export interface VerifyTagsOptions {
    *  EVERY tag is driven on EACH of these pages — so forms/tags on pages the crawl missed still get
    *  exercised. Same-origin URLs only; anything else is dropped. */
   verifyPages?: string[];
+  /** The operator-REVIEWED forms to submit for real through Tag Assistant (from the Forms review panel,
+   *  with any edited field values). When present, these are submitted instead of auto-discovered/default-
+   *  filled forms — so "Verify with Tag Assistant" uses exactly what the user reviewed. */
+  reviewedForms?: Array<{ page: string; formId: string; formClasses: string; method: string; fields: Array<{ selector: string; type: string; value: string }> }>;
   /** AUTHORITATIVE (Tag-Assistant-grade) mode: instead of a pasted snippet, mint a THROWAWAY preview
    *  that injects a GTM Monitor tag, so verdicts come from GTM's OWN per-tag firing (addEventCallback),
    *  not beacon inference. Requires the GTM account/container/workspace to mint from; draft-only, never

@@ -28,6 +28,7 @@ import type {
   TagScanResult,
   VerifyTagInput,
   VerifyTagsResult,
+  VerifyTagsOptions,
   VerifyProgressView,
   FormTagVerifyPlanResult,
   SubmitFormVerifyResult,
@@ -4618,7 +4619,7 @@ const vStyles: Record<string, React.CSSProperties> = {
 // a fix suggestion when it doesn't fire). Real submits — an explicit warning + confirm gate them.
 // Rendered INSIDE VerifyPanel — shares the same URL + Preview snippet as tag verification (one panel,
 // one URL). This subsection does the container-tag-driven REAL-submit form check.
-function FormFillReview({ url, snippet, active, onError, runSignal, onStatus }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number; onStatus?: (s: { loading: boolean; count: number | null }) => void }): JSX.Element {
+function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, onReviewedForms }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number; onStatus?: (s: { loading: boolean; count: number | null }) => void; onReviewedForms?: (forms: NonNullable<VerifyTagsOptions['reviewedForms']>) => void }): JSX.Element {
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [plan, setPlan] = useState<FormTagVerifyPlanResult | null>(null);
@@ -4643,6 +4644,21 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus }: 
   useEffect(() => {
     if (runSignal > 0) void fetchPlan();
   }, [runSignal]); // intentionally only on the verify signal — not on url edits
+
+  // Publish the operator-reviewed forms (matched forms + the edited shared values applied) UP to the
+  // parent so the NEXT "Verify with Tag Assistant" run submits exactly these — Phase 2b. Recomputes
+  // whenever the plan or an edited value changes.
+  useEffect(() => {
+    if (!onReviewedForms) return;
+    const forms = (plan?.matched ?? []).map((form) => ({
+      page: form.page,
+      formId: form.formId,
+      formClasses: form.formClasses,
+      method: form.method,
+      fields: form.fields.map((f) => ({ selector: f.selector, type: f.type, value: shared[dedupKey(f.role, f.label)] ?? f.value })),
+    }));
+    onReviewedForms(forms);
+  }, [plan, shared]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function fetchPlan(): Promise<void> {
     const target = url.trim();
@@ -4702,7 +4718,7 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus }: 
       <div style={{ borderTop: '1px solid rgba(128,128,128,0.22)', marginTop: 14, paddingTop: 12 }}>
         <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--text)' }}>Forms — verified by a real submit</div>
         <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 2, marginBottom: 6 }}>
-          Runs automatically with the verify above: we find the forms that HAVE a tracking tag, you fill the data once, then submit each for real and verify its tag (with a fix when it doesn’t fire). Real submits create a real lead per form.
+          The first verify above finds the forms that HAVE a tracking tag and lists them here with editable values. Edit anything, then click <b>Verify with Tag Assistant</b> again — it submits these forms for real and shows each form_submission (and the tags it fired) in the results above. Real submits create a real lead per form.
         </div>
       </div>
       <div style={styles.card}>
@@ -4882,6 +4898,9 @@ function VerifyPanel({
   const [vVerifyPages, setVVerifyPages] = useState('');
   const [vVerifying, setVVerifying] = useState(false);
   const [vVerifyKind, setVVerifyKind] = useState<'firing' | 'ta' | null>(null);
+  // The operator-reviewed forms (edited values) published up from the Forms panel — submitted for real by
+  // the next "Verify with Tag Assistant" run (Phase 2b). A ref so an edit doesn't re-render the buttons.
+  const vReviewedFormsRef = useRef<NonNullable<VerifyTagsOptions['reviewedForms']>>([]);
   const [vProgress, setVProgress] = useState<VerifyProgressView | null>(null);
   const [vResult, setVResult] = useState<VerifyTagsResult | null>(null);
   const [vSkipped, setVSkipped] = useState<Array<{ tagId: string; name: string; reason: string }>>([]);
@@ -4934,6 +4953,9 @@ function VerifyPanel({
     setVProgress({ phase: 'prepare', message: 'Preparing verification…' });
     setVNote(null);
     onError('');
+    // SNAPSHOT the reviewed forms NOW, before setVRunSignal re-discovers (which clears the panel + the
+    // ref). This is what makes the flow "run 1 shows the fields → edit → run 2 submits the edited values".
+    const reviewedForms = useMonitor ? [...vReviewedFormsRef.current] : [];
     // Kick the embedded Forms subsection to discover forms-with-tags for the same URL in parallel.
     setVRunSignal((n) => n + 1);
     try {
@@ -4962,6 +4984,9 @@ function VerifyPanel({
           gtmDebug: true,
           ...(snippet ? { containerSnippet: snippet } : {}),
           ...(verifyPages.length ? { verifyPages } : {}),
+          // Phase 2b: submit the user's REVIEWED/edited form values (from the Forms panel) instead of the
+          // auto defaults. Snapshotted above before the panel re-discovered; empty on the first run.
+          ...(reviewedForms.length ? { reviewedForms } : {}),
           ...(useMonitor ? { monitor: { accountId: ctx.accountId!, containerId: ctx.containerId!, workspaceId: ctx.workspaceId! } } : {}),
         },
         (p) => setVProgress(p), // live "scanning <url>" / "verifying <url>" feed
@@ -5346,7 +5371,7 @@ function VerifyPanel({
           </div>
         )}
 
-        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} />
+        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} onReviewedForms={(f) => { vReviewedFormsRef.current = f; }} />
       </div>
       {vLightbox && <ProofLightbox shot={vLightbox} onClose={() => setVLightbox(null)} />}
     </div>
