@@ -1,3 +1,9 @@
+## [1.307.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.3...v1.307.4) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** per-tag screenshots in the results table + honest form firing status ([#526](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/526)) ([58a0613](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/58a0613ed1ec5d22c5f6ce34b06eda8f26d9fb69))
+
 ## [1.307.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.2...v1.307.3) (2026-07-13)
 
 ### Bug Fixes
