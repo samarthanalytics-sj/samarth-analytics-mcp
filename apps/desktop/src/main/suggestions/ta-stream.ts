@@ -306,8 +306,10 @@ const VOLATILE_VALUE = /^\d{10,}$|^\d{4}-\d{2}-\d{2}([T ]\d|$)|^\d{1,2}[/-]\d{1,
 const NONCONDITION_VAR = /^(_?event|_triggers)$/i;
 // Lead a trigger with the most identifying variables — form identity first, then the CTA / page ones.
 const RANK_HINT = /(form_?name|form_?type|form_?id|cta[ _-]?text|cta[ _-]?location|page[ _-]?path|page[ _-]?url)/i;
-// A form-identity variable (used to detect when form_name/form_type are SHARED across every form).
-const FORM_IDENTITY = /(^|[^a-z0-9])(form_?name|form_?type)([^a-z0-9]|$)/i;
+// A form-identity variable (form_name / form_type / form_id): the fields a form trigger should key off, and
+// what we check for SHARED-vs-distinctive. form_id is included — it often differs per form even when the
+// name/type don't, so it can be the real discriminator.
+const FORM_IDENTITY = /(^|[^a-z0-9])(form_?name|form_?type|form_?id)([^a-z0-9]|$)/i;
 // A page-scope signal variable (Page Path / Page URL / *Location) — used to page-match + de-dupe.
 const PAGE_VAR = /page[ _-]?(path|url)|(^|[^a-z0-9])location([^a-z0-9]|$)/i;
 // A value we must never emit as a literal condition (PII), and the shape a non-form/CTA value must have to
@@ -375,8 +377,11 @@ function conditionDistinctness(events: TaEventView[]): Map<string, { count: numb
   return m;
 }
 
+// Rank a condition: form identity (name / id / type) first, then other RANK_HINT (CTA / page), then the rest
+// — so a distinctive form_id / form_name leads the surfaced conditions.
+const condRank = (key: string): number => (FORM_IDENTITY.test(key) ? 0 : RANK_HINT.test(key) ? 1 : 2);
 const rankConds = (cs: Array<{ key: string; value: string }>): Array<{ key: string; value: string }> =>
-  [...cs].sort((a, b) => (RANK_HINT.test(b.key) ? 1 : 0) - (RANK_HINT.test(a.key) ? 1 : 0));
+  [...cs].sort((a, b) => condRank(a.key) - condRank(b.key));
 
 /** A condition's page path if it IS a page-scope variable (Page Path / Page URL / *Location), else null —
  *  normalized so a full URL and a bare path compare equal. Used to page-match a tag to its own form's event. */
@@ -457,7 +462,7 @@ export function buildTriggerSuggestions(
       return sets.length > 0 && sets.every((s) => s.size === 1);
     };
     const anyFormVaries = !!slot && [...slot.keys].some(([k, s]) => FORM_IDENTITY.test(k) && s.size > 1);
-    const sharedFields = anyFormVaries ? [] : ['form_name', 'form_type'].filter(formFieldShared);
+    const sharedFields = anyFormVaries ? [] : ['form_name', 'form_type', 'form_id'].filter(formFieldShared);
     const cond = conditions.length ? ', scoped with ' + conditions.map((c) => `{{${c.key}}} = "${c.value}"`).join(' and ') : '';
     const fields = sharedFields.join(' and ');
     const wasWere = sharedFields.length > 1 ? 'were' : 'was';
