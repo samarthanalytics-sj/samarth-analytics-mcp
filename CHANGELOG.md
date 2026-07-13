@@ -1,3 +1,9 @@
+## [1.309.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.4...v1.309.0) (2026-07-13)
+
+### Features
+
+* **verify:** collapse the setup after a run + filter/search the results ([#533](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/533)) ([23a4bae](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/23a4baee6ab71702457bb09ff5f6bdfb9641122b))
+
 ## [1.308.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.3...v1.308.4) (2026-07-13)
 
 ### Bug Fixes
