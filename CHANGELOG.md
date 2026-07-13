@@ -1,3 +1,9 @@
+## [1.309.10](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.9...v1.309.10) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** concrete per-form trigger suggestions, inlined into Not-firing (no duplicate section) ([#544](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/544)) ([83cd413](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/83cd413a8c157d04fc5cccf82fddc9120693456d))
+
 ## [1.309.9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.8...v1.309.9) (2026-07-13)
 
 ### Bug Fixes
