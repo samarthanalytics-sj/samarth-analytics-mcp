@@ -1,3 +1,9 @@
+## [1.307.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.2...v1.307.3) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** one site crawl for the Tag Assistant flow (no double page scan) ([#525](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/525)) ([f2277f2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f2277f261708f4ebeb181deb0754b640daed8199))
+
 ## [1.307.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.1...v1.307.2) (2026-07-13)
 
 ### Bug Fixes
