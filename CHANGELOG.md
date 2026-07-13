@@ -1,3 +1,9 @@
+## [1.308.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.0...v1.308.1) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** capture proof screenshots during the drive + visible Untested reasons ([#529](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/529)) ([43f6b2a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/43f6b2a67226eb6710838912e38da9c409651143))
+
 ## [1.308.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.5...v1.308.0) (2026-07-13)
 
 ### Features
