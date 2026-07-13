@@ -4628,7 +4628,7 @@ const vStyles: Record<string, React.CSSProperties> = {
 // a fix suggestion when it doesn't fire). Real submits — an explicit warning + confirm gate them.
 // Rendered INSIDE VerifyPanel — shares the same URL + Preview snippet as tag verification (one panel,
 // one URL). This subsection does the container-tag-driven REAL-submit form check.
-function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, onReviewedForms, showFields = true, onSubmitForms }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number; onStatus?: (s: { loading: boolean; count: number | null }) => void; onReviewedForms?: (forms: NonNullable<VerifyTagsOptions['reviewedForms']>) => void; showFields?: boolean; onSubmitForms?: () => void }): JSX.Element {
+function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, onReviewedForms, showFields = true, onSubmitForms, firedTags }: { url: string; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number; onStatus?: (s: { loading: boolean; count: number | null }) => void; onReviewedForms?: (forms: NonNullable<VerifyTagsOptions['reviewedForms']>) => void; showFields?: boolean; onSubmitForms?: () => void; firedTags?: Set<string> }): JSX.Element {
   const ctx = active?.gtmContext;
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId && ctx?.workspaceId);
   const [plan, setPlan] = useState<FormTagVerifyPlanResult | null>(null);
@@ -4743,16 +4743,19 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, on
             <span style={{ ...styles.muted, fontSize: 12.5 }}>Runs when you verify above</span>
           )}
         </div>
-        <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
+        {showFields && (
+          <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
             Each field is pre-filled with a generic, editable test value (name “Test”, email test@gmail.com) — edit any of them below.
           </div>
+        )}
           {note && (
             <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)' }}>{note}</div>
           )}
         </div>
 
-        {showFields && plan && matched.length > 0 && (
+        {plan && matched.length > 0 && (showFields || firedTags) && (
           <>
+            {showFields && (
             <div style={styles.card}>
               <div style={styles.h2}>Enter the data once ({plan.sharedFields.length} field(s))</div>
               <div style={{ ...styles.muted, fontSize: 12, marginBottom: 6 }}>
@@ -4801,6 +4804,7 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, on
                 <div style={{ ...styles.muted, fontSize: 12 }}>Review / edit the data above — the Submit button appears once you enter it.</div>
               )}
             </div>
+            )}
 
             {matched.map((form, i) => {
               const r = results[i];
@@ -4812,7 +4816,23 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, on
                     <span style={{ ...styles.muted, fontSize: 12 }}>{form.page.replace(/^https?:\/\//, '').slice(0, 60)}</span>
                     {form.method === 'js' ? <span style={{ ...styles.muted, fontSize: 12 }}>(JS/div widget)</span> : null}
                   </div>
-                  <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 4 }}>Tag(s) expected to fire: {form.expectedTags.map((t) => t.tagName).join(', ')}</div>
+                  {firedTags ? (
+                    // AFTER a Tag Assistant run: show whether each expected tag actually fired (from the
+                    // real submit), so the Forms section itself reports fired / not-fired per tag.
+                    <ul style={{ ...styles.resultList, marginTop: 6 }}>
+                      {form.expectedTags.map((t) => {
+                        const didFire = firedTags.has(t.tagName);
+                        return (
+                          <li key={t.tagName} style={{ ...styles.resultRow, display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ color: didFire ? 'var(--c-green)' : 'var(--c-red)', fontWeight: 600, fontSize: 12.5, whiteSpace: 'nowrap' }}>{didFire ? '✅ Fired' : '❌ Not fired'}</span>
+                            <span style={{ fontSize: 12.5 }}>{t.tagName}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 4 }}>Tag(s) expected to fire: {form.expectedTags.map((t) => t.tagName).join(', ')}</div>
+                  )}
                   {r && (
                     <div style={{ fontSize: 12.5, marginTop: 8 }}>
                       {r.error ? (
@@ -4878,15 +4898,36 @@ function FormFillReview({ url, snippet, active, onError, runSignal, onStatus, on
           </>
         )}
 
-        {plan && plan.unmatchedTags.length > 0 && (
-          <div style={styles.card}>
-            <div style={{ ...styles.h2, color: 'var(--c-amber)' }}>Form tags with no matching form ({plan.unmatchedTags.length})</div>
-            <div style={{ ...styles.muted, fontSize: 12 }}>These container form tags matched no form we found on the site — the form may be on an un-crawled/behind-login page, render late, or its name differs from the tag. Verify those manually.</div>
-            <ul style={styles.resultList}>
-              {plan.unmatchedTags.map((n) => (<li key={n} style={styles.resultRow}>{n}</li>))}
-            </ul>
-          </div>
-        )}
+        {plan && plan.unmatchedTags.length > 0 && (() => {
+          // A form tag can be UNMATCHED (we found no site form for it) yet still FIRE during the run (its
+          // form is named differently, shares a page, or another submit triggered it). Those are NOT a
+          // problem — only tags that neither matched a form NOR fired need manual checking. Before a run
+          // (no firedTags) we can't split, so show the plain unmatched list.
+          const firedUnmatched = firedTags ? plan.unmatchedTags.filter((n) => firedTags.has(n)) : [];
+          const openUnmatched = firedTags ? plan.unmatchedTags.filter((n) => !firedTags.has(n)) : plan.unmatchedTags;
+          return (
+            <>
+              {firedUnmatched.length > 0 && (
+                <div style={styles.card}>
+                  <div style={{ ...styles.h2, color: 'var(--c-green)' }}>Form tags that fired without a matched form ({firedUnmatched.length})</div>
+                  <div style={{ ...styles.muted, fontSize: 12 }}>These form tags fired during the run even though we didn’t pair them to a specific site form (the form is likely named differently or shares a page). They ARE firing — no action needed.</div>
+                  <ul style={styles.resultList}>
+                    {firedUnmatched.map((n) => (<li key={n} style={{ ...styles.resultRow, display: 'flex', gap: 8, alignItems: 'center' }}><span style={{ color: 'var(--c-green)', fontWeight: 600, fontSize: 12.5 }}>✅ Fired</span><span style={{ fontSize: 12.5 }}>{n}</span></li>))}
+                  </ul>
+                </div>
+              )}
+              {openUnmatched.length > 0 && (
+                <div style={styles.card}>
+                  <div style={{ ...styles.h2, color: 'var(--c-amber)' }}>{firedTags ? `Not found and not fired (${openUnmatched.length})` : `Form tags with no matching form (${openUnmatched.length})`}</div>
+                  <div style={{ ...styles.muted, fontSize: 12 }}>{firedTags ? 'These form tags neither matched a form we found NOR fired during the run — the form may be on an un-crawled / behind-login page, render late, or its name differs from the tag. Verify those manually.' : 'These container form tags matched no form we found on the site — the form may be on an un-crawled/behind-login page, render late, or its name differs from the tag. Verify those manually.'}</div>
+                  <ul style={styles.resultList}>
+                    {openUnmatched.map((n) => (<li key={n} style={styles.resultRow}>{n}</li>))}
+                  </ul>
+                </div>
+              )}
+            </>
+          );
+        })()}
       {fLightbox && <ProofLightbox shot={fLightbox} onClose={() => setFLightbox(null)} />}
     </>
   );
@@ -4918,6 +4959,12 @@ function VerifyPanel({
   const [vShowSkipped, setVShowSkipped] = useState(false);
   const [vShowNet, setVShowNet] = useState(false);
   const [vShowDl, setVShowDl] = useState(false);
+  // The results TABLE (with per-tag screenshots) is the primary view; the event-by-event timeline is a
+  // collapsed secondary detail (users found the side-by-side table easier to read).
+  const [vShowTimeline, setVShowTimeline] = useState(false);
+  // Whether the LAST run actually submitted the forms (Proceed), so the Forms section shows per-form
+  // fired/not-fired only when they were really tested — a Skip run must not show forms as "not fired".
+  const [vFormsVerified, setVFormsVerified] = useState(false);
   // The verification screenshot currently shown full-screen (visual proof), or null.
   const [vLightbox, setVLightbox] = useState<{ src: string; name: string } | null>(null);
   const showProof = (v: VVerdict): void => { if (v.screenshot) setVLightbox({ src: v.screenshot, name: v.tagName }); };
@@ -4973,6 +5020,7 @@ function VerifyPanel({
     // from "Proceed with form verification" (withForms). The forms were already scanned + matched up front
     // (startTaFlow), so there's no re-discovery here and the edited values are read straight off the ref.
     const reviewedForms = useMonitor && withForms ? [...vReviewedFormsRef.current] : [];
+    setVFormsVerified(reviewedForms.length > 0); // this run submitted forms → show per-form fired status
     try {
       const { tags, skipped } = await window.desktop.gtm.verifiableTags(ctx.accountId!, ctx.containerId!, ctx.workspaceId!);
       setVSkipped(skipped);
@@ -5268,9 +5316,15 @@ function VerifyPanel({
               <VerifyScorecard fired={firedReal.length} config={firedSynthetic.length} server={serverRelayed.length} untested={inconclusive.length} issues={notFired.length} />
             )}
             {/* Phase 3: the Tag-Assistant-style detail — the event timeline (API Call + tags fired per
-                event) and DLV trigger suggestions for anything that didn't fire. Authoritative runs only. */}
+                event). Collapsed by default: the results TABLE below now carries the per-tag screenshots,
+                so it's the primary at-a-glance view; the timeline is opt-in detail. */}
             {!vResult.error && vResult.taEvents && vResult.taEvents.length > 0 && (
-              <TaEventTimeline events={vResult.taEvents} />
+              <div style={{ marginTop: 8 }}>
+                <button style={styles.linkBtn} onClick={() => setVShowTimeline((o) => !o)}>
+                  {vShowTimeline ? 'hide' : 'show'} event-by-event timeline ({vResult.taEvents.length} event{vResult.taEvents.length === 1 ? '' : 's'})
+                </button>
+                {vShowTimeline && <TaEventTimeline events={vResult.taEvents} />}
+              </div>
             )}
             {!vResult.error && vResult.taSuggestions && vResult.taSuggestions.length > 0 && (
               <TaTriggerSuggestions suggestions={vResult.taSuggestions} />
@@ -5427,7 +5481,7 @@ function VerifyPanel({
           </div>
         )}
 
-        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} onReviewedForms={(f) => { vReviewedFormsRef.current = f; }} showFields={vTaStage === 'filling'} onSubmitForms={() => { setVTaStage('idle'); void runVerify(undefined, true, true); }} />
+        <FormFillReview url={vUrl} snippet={vSnippet} active={active} onError={onError} runSignal={vRunSignal} onStatus={setVFormStatus} onReviewedForms={(f) => { vReviewedFormsRef.current = f; }} showFields={vTaStage === 'filling'} onSubmitForms={() => { setVTaStage('idle'); void runVerify(undefined, true, true); }} firedTags={vResult && vResult.verifiedByMonitor && !vResult.error && vFormsVerified ? new Set(fired.map((v) => v.tagName)) : undefined} />
       </div>
       {vLightbox && <ProofLightbox shot={vLightbox} onClose={() => setVLightbox(null)} />}
     </div>
