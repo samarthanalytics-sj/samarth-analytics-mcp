@@ -1,3 +1,9 @@
+## [1.304.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.304.0...v1.304.1) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** use the real dataLayer push event as the event name (fixes wrong EVENT column + timeline headers) ([#518](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/518)) ([492043c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/492043c52a124719ed86e6807e6ce97d60390ba6)), closes [#515](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/515)
+
 ## [1.304.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.303.0...v1.304.0) (2026-07-13)
 
 ### Features
