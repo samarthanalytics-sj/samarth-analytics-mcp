@@ -381,6 +381,14 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   check('monitor: event DID happen but GTM skipped the tag → genuine not-fire', by.get('cta')!.fired === false && !by.get('cta')!.inconclusive);
   check('monitor: genuine not-fire says the container WAS loaded and blames trigger conditions', /container was definitely loaded/.test(by.get('cta')!.reason ?? '') && /trigger/.test(by.get('cta')!.reason ?? ''));
   check('monitor: genuine not-fire never doubts injection', !/injected|snippet/i.test(by.get('cta')!.reason ?? ''));
+
+  // Scoped run: an untested tag's reason must say WHY (only N pages verified → its trigger is elsewhere).
+  const clickTag = [tag({ id: 'faq', tagName: 'FAQs Click Tag', eventName: 'faq_click', platform: 'ga4_event', trigger: { name: 'FAQ', kind: 'link_click' } })];
+  const notFoundCap = [cap({ tagId: 'faq', kind: 'click', targetFound: false, performed: false })];
+  const scoped = verdictsFromMonitor(clickTag, [], notFoundCap, { scopedPages: 1 })[0];
+  check('monitor: scoped run names the single-page scope in the untested reason', scoped.inconclusive === true && /verified only this 1 page/i.test(scoped.reason ?? '') && /add that page|verify the whole site/i.test(scoped.reason ?? ''));
+  const unscoped = verdictsFromMonitor(clickTag, [], notFoundCap)[0];
+  check('monitor: unscoped run has NO single-page scope note', !/verified only this 1 page/i.test(unscoped.reason ?? ''));
 }
 
 console.log(`\nverify-tags: ${passed} passed, ${failed} failed`);

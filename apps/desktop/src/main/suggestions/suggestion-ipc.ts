@@ -331,7 +331,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           return { ...base, verdicts: [], error: 'Tag Assistant connected but streamed no events for this container — the debug session may not have attached. Re-run; if it persists, sign in again via “Sign in for Tag Assistant”.' };
         }
         const monitorEvents = taEventsToMonitorEvents(taEvents, tagList.map((t) => ({ id: t.id, tagName: t.tagName })));
-        const verdicts = verdictsFromMonitor(tagList, monitorEvents, ta.perTag);
+        const verdicts = verdictsFromMonitor(tagList, monitorEvents, ta.perTag, { scopedPages: explicitPages.length });
         // DIAGNOSTIC: per-event fired tags (after the not-fired exclusion) + each fired tag's event list.
         // Confirms attribution is correct (a click tag should show gtm.linkClick, not the synthetic
         // form_submission). Concise — one line per non-empty event + one per fired tag.
