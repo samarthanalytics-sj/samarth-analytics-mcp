@@ -4480,31 +4480,6 @@ function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taE
   );
 }
 
-/** Phase 3: DLV-based trigger suggestions for tags that did NOT fire — built from the real captured
- *  pushes, so the user can create/align a trigger for anything not firing. */
-function TaTriggerSuggestions({ suggestions }: { suggestions: NonNullable<VerifyTagsResult['taSuggestions']> }): JSX.Element {
-  return (
-    <div style={{ marginTop: 10 }}>
-      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>How to track the tags that didn’t fire <span style={{ ...styles.muted, fontWeight: 400 }}>· DLV-based trigger suggestions</span></div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {suggestions.map((s) => (
-          <div key={s.tagName} style={{ border: '1px solid var(--c-amber-border)', background: 'var(--c-amber-bg)', borderRadius: 8, padding: '8px 10px' }}>
-            <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 3 }}>{s.tagName}</div>
-            <div style={{ fontSize: 12, lineHeight: 1.5 }}>{s.how}</div>
-            {s.conditions.length > 0 && (
-              <div style={{ fontFamily: 'monospace', fontSize: 11, marginTop: 5, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                {s.conditions.map((c) => (
-                  <span key={c.key} style={{ background: 'var(--surface-3)', borderRadius: 5, padding: '2px 6px' }}>{`{{${c.key}}}`} = “{c.value}”</span>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /** A clickable screenshot thumbnail (opens the full image in a lightbox) — the visual proof cell.
  *  Shared by tag verification AND the tag-suggestion panel (both pass a JPEG data-URI + a name). */
 function ProofThumb({ screenshot, name, onOpen }: { screenshot?: string; name: string; onOpen: () => void }): JSX.Element {
@@ -5144,6 +5119,9 @@ function VerifyPanel({
   const serverRelayed = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive && v.serverRelay) ?? [];
   const inconclusive = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive && !v.serverRelay) ?? [];
   const notFired = vResult?.verdicts.filter((v) => !v.fired && !v.inconclusive) ?? [];
+  // Concrete DLV trigger suggestion per tag, so each not-firing tag shows ITS OWN "create this trigger"
+  // inline — no separate, repetitive suggestions section listing the same tags again.
+  const suggByTag = new Map((vResult?.taSuggestions ?? []).map((s) => [s.tagName, s] as const));
 
   // ── Results filters (client-side over the verdicts) ────────────────────────────────────────────────
   const platformOf = (name: string): string =>
@@ -5556,7 +5534,25 @@ function VerifyPanel({
                         {v.observedBeacons && v.observedBeacons.length > 0 && (
                           <div style={{ ...styles.muted, marginLeft: 8, marginTop: 2, fontSize: 12 }}>Beacons seen: {v.observedBeacons.join(', ')}</div>
                         )}
-                        <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>Fix: {verdictHowToFix(v)}</div>
+                        {(() => {
+                          // Prefer the CONCRETE, per-tag trigger suggestion (built from the real push, scoped to
+                          // this tag's own form page) over the generic fix text — this is what replaces the old
+                          // separate, repetitive "DLV suggestions" section.
+                          const sug = suggByTag.get(v.tagName);
+                          if (sug && sug.conditions.length > 0) {
+                            return (
+                              <div style={{ marginLeft: 8, marginTop: 3 }}>
+                                <div style={{ color: 'var(--c-blue)', fontSize: 12.5 }}>Fix: {sug.how}</div>
+                                <div style={{ fontFamily: 'monospace', fontSize: 11, marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                  {sug.conditions.map((c) => (
+                                    <span key={c.key} style={{ background: 'var(--surface-3)', borderRadius: 5, padding: '2px 6px' }}>{`{{${c.key}}}`} = “{c.value}”</span>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          }
+                          return <div style={{ marginLeft: 8, marginTop: 2, color: 'var(--c-blue)', fontSize: 12.5 }}>Fix: {sug ? sug.how : verdictHowToFix(v)}</div>;
+                        })()}
                         {v.observedEvents && v.observedEvents.length > 0 && (
                           <div style={{ marginLeft: 8, marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                             {aligned[v.tagId] ? (
@@ -5581,15 +5577,6 @@ function VerifyPanel({
                     );
                   })}
                 </ul>
-              </div>
-            )}
-
-            {/* FOOTER: DLV-based "how to fire the ones that didn't" suggestions. Placed at the END of the
-                results (below the Fired / Untested / Not-firing tables) so it reads as a fix-it footer where
-                the table ends, not a banner above the results. Same render condition as before. */}
-            {!vResult.error && vResult.taSuggestions && vResult.taSuggestions.length > 0 && (
-              <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-2)' }}>
-                <TaTriggerSuggestions suggestions={vResult.taSuggestions} />
               </div>
             )}
 

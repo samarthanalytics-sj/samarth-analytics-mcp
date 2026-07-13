@@ -277,6 +277,15 @@ check('status: weird/absent → unknown', mapExecuteStatus('zzz') === 'unknown' 
   const nl = buildTriggerSuggestions([{ tagName: 'Name', expectedEvent: 'form_submission', page: '/c' }], nameLeak)[0];
   check('pii: does not emit a multi-word free-text name value', !nl.conditions.some((c) => /full_name/i.test(c.key)));
 
+  // The matched FORM's page (bare host/path) is a valid discriminator even though the tag's own trigger is
+  // site-wide → the suggestion must scope by that page, not give up with "add a form-specific field".
+  const byFormPage = buildTriggerSuggestions(
+    [{ tagName: 'GA4 Dashboards Form', expectedEvent: 'form_submission', page: 'samarthanalytics.com/services/custom-dashboards' }],
+    sharedForms,
+  )[0];
+  check('formPage: scopes by the matched form page (bare host/path → /path)', byFormPage.conditions.some((c) => c.key === 'Page Path' && c.value === '/services/custom-dashboards'));
+  check('formPage: how-text renders the concrete {{Page Path}} trigger', /\{\{Page Path\}\} = "\/services\/custom-dashboards"/.test(byFormPage.how));
+
   // pageScopeToPath: URL / bare host / path / site-wide.
   check('pageScopeToPath: full URL → pathname', pageScopeToPath('https://www.example.com/contact?x=1') === '/contact');
   check('pageScopeToPath: bare host/path → path', pageScopeToPath('www.example.com/services/x') === '/services/x');
