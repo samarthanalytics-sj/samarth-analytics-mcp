@@ -7,6 +7,9 @@ import type {
   AccountView,
   AuditFindingView,
   AuditReportView,
+  WorkspaceCompareResultView,
+  EntityDiffView,
+  WsEntityKind,
   ChatTurn,
   CreateTagOutcome,
   DiscoverResult,
@@ -5650,6 +5653,259 @@ const SEV_BADGE: Record<string, React.CSSProperties> = {
 };
 const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
+// ───────────────────────── Workspace Comparison (Container Audit) ─────────────────────────
+// A SEPARATE functionality from the audit / report: pick 2+ workspaces in the same container and diff them
+// side by side (base vs each). Shows a summary of differences and a per-entity diff (added/removed/changed
+// with field-level changes), with filtering + search, and a distinct "Report Generation" step (CSV / PDF).
+const WS_STATUS_COLOR: Record<EntityDiffView['status'], { fg: string; bg: string; label: string }> = {
+  added: { fg: 'var(--c-green)', bg: 'var(--c-green-bg)', label: 'Added' },
+  removed: { fg: 'var(--c-red)', bg: 'var(--c-red-bg)', label: 'Removed' },
+  changed: { fg: 'var(--c-amber)', bg: 'var(--c-amber-bg)', label: 'Changed' },
+  unchanged: { fg: 'var(--text-muted)', bg: 'var(--surface-2)', label: 'Unchanged' },
+};
+const WS_KIND_LABEL: Record<WsEntityKind, string> = { tag: 'Tag', trigger: 'Trigger', variable: 'Variable', folder: 'Folder' };
+
+function WorkspaceComparison({
+  active,
+  onError,
+}: {
+  active: AccountView | undefined;
+  onError: (m: string) => void;
+}): JSX.Element | null {
+  const ctx = active?.gtmContext;
+  const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId);
+  const [workspaces, setWorkspaces] = useState<GtmWorkspaceView[]>([]);
+  const [wsLoading, setWsLoading] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]); // ORDERED — first is the base
+  const [result, setResult] = useState<WorkspaceCompareResultView | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const [open, setOpen] = useState(false); // the whole comparison section is collapsed until opened
+  const [fStatus, setFStatus] = useState<Set<EntityDiffView['status']>>(new Set(['added', 'removed', 'changed']));
+  const [fKind, setFKind] = useState<Set<WsEntityKind>>(new Set(['tag', 'trigger', 'variable', 'folder']));
+  const [search, setSearch] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportNote, setExportNote] = useState('');
+
+  // Load the container's workspaces when the section is opened (or the container changes).
+  useEffect(() => {
+    if (!open || !ready || !ctx?.accountId || !ctx?.containerId) return;
+    setWsLoading(true);
+    setResult(null);
+    setSelected([]);
+    window.desktop.data
+      .listGtmWorkspaces(ctx.accountId, ctx.containerId)
+      .then((ws) => setWorkspaces(ws))
+      .catch((e) => onError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setWsLoading(false));
+  }, [open, ready, ctx?.accountId, ctx?.containerId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleWs = (id: string): void =>
+    setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+
+  async function compare(): Promise<void> {
+    if (!ready || !ctx?.accountId || !ctx?.containerId || comparing || selected.length < 2) return;
+    onError('');
+    setComparing(true);
+    setResult(null);
+    setExportNote('');
+    try {
+      setResult(await window.desktop.gtm.compareWorkspaces(ctx.accountId, ctx.containerId, selected));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setComparing(false);
+    }
+  }
+
+  async function generateReport(format: 'csv' | 'pdf'): Promise<void> {
+    if (!result || exporting) return;
+    setExporting(true);
+    setExportNote('');
+    try {
+      const slug = (s: string | undefined | null): string => (s ?? '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
+      const base = `Workspace comparison - ${slug(ctx?.containerName) || 'container'}`;
+      let saved: string | null = null;
+      if (format === 'pdf') {
+        saved = await window.desktop.gtm.exportWorkspaceDiffPdf(`${base}.pdf`, result);
+      } else {
+        const { workspaceDiffCsv } = await import('../../shared/gtm-workspace-diff-html');
+        saved = await window.desktop.gtm.exportWorkspaceDiff(`${base}.csv`, workspaceDiffCsv(result));
+      }
+      setExportNote(saved ? `Saved ${saved}` : 'Export cancelled.');
+    } catch (e) {
+      setExportNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  if (!ready) return null;
+
+  const canCompare = workspaces.length >= 2;
+
+  return (
+    <div style={{ ...styles.card, marginTop: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)' }}>Workspace Comparison</div>
+          <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 2 }}>
+            Compare two or more workspaces in this container side by side — configuration, tags, triggers, variables and folders.
+            This is separate from the audit and its report.
+          </div>
+        </div>
+        <button style={styles.toggleOff} onClick={() => setOpen((o) => !o)}>{open ? 'Hide' : 'Open comparison'}</button>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          {wsLoading ? (
+            <div style={styles.muted}>Loading workspaces…</div>
+          ) : !canCompare ? (
+            <div style={{ color: 'var(--c-amber)', fontSize: 13 }}>
+              This container has {workspaces.length} workspace(s). Workspace Comparison needs at least two — create a draft workspace, then compare.
+            </div>
+          ) : (
+            <>
+              <div style={{ ...styles.muted, fontSize: 12, marginBottom: 6 }}>
+                Pick 2+ workspaces (up to 10). The <b>first</b> one you select is the <b>base</b>; every other is compared against it.
+              </div>
+              <ul style={{ ...styles.resultList, maxHeight: 200, overflowY: 'auto' }}>
+                {workspaces.map((w) => {
+                  const idx = selected.indexOf(w.workspaceId);
+                  const isBase = idx === 0;
+                  return (
+                    <li key={w.workspaceId} style={{ ...styles.resultRow, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input type="checkbox" checked={idx >= 0} onChange={() => toggleWs(w.workspaceId)} disabled={selected.length >= 10 && idx < 0} />
+                      <span style={{ fontSize: 13, color: 'var(--text)' }}>{w.name}</span>
+                      {idx >= 0 && (
+                        <span style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 7px', borderRadius: 999, background: isBase ? 'var(--c-blue-bg)' : 'var(--surface-2)', color: isBase ? 'var(--c-blue)' : 'var(--text-muted)' }}>
+                          {isBase ? 'BASE' : `#${idx + 1}`}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              <div style={{ marginTop: 8 }}>
+                <button style={{ ...styles.primaryBtn, ...(selected.length < 2 || comparing ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={compare} disabled={selected.length < 2 || comparing}>
+                  {comparing ? 'Comparing…' : `Compare ${selected.length || ''} workspace(s)`}
+                </button>
+              </div>
+            </>
+          )}
+
+          {result && <WorkspaceDiffResults result={result} fStatus={fStatus} setFStatus={setFStatus} fKind={fKind} setFKind={setFKind} search={search} setSearch={setSearch} exporting={exporting} exportNote={exportNote} onReport={generateReport} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The comparison OUTPUT: summary of differences, a filterable per-entity diff, and the separate report step. */
+function WorkspaceDiffResults({
+  result, fStatus, setFStatus, fKind, setFKind, search, setSearch, exporting, exportNote, onReport,
+}: {
+  result: WorkspaceCompareResultView;
+  fStatus: Set<EntityDiffView['status']>;
+  setFStatus: React.Dispatch<React.SetStateAction<Set<EntityDiffView['status']>>>;
+  fKind: Set<WsEntityKind>;
+  setFKind: React.Dispatch<React.SetStateAction<Set<WsEntityKind>>>;
+  search: string;
+  setSearch: (s: string) => void;
+  exporting: boolean;
+  exportNote: string;
+  onReport: (f: 'csv' | 'pdf') => void;
+}): JSX.Element {
+  const q = search.trim().toLowerCase();
+  const toggle = <T,>(set: React.Dispatch<React.SetStateAction<Set<T>>>, v: T): void =>
+    set((s) => { const n = new Set(s); n.has(v) ? n.delete(v) : n.add(v); return n; });
+  const showEntity = (e: EntityDiffView): boolean =>
+    fStatus.has(e.status) && fKind.has(e.kind) && (!q || e.name.toLowerCase().includes(q));
+
+  const chip = (on: boolean, label: string, color: string, onClick: () => void): JSX.Element => (
+    <button onClick={onClick} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${on ? color : 'var(--border-2)'}`, background: on ? color : 'transparent', color: on ? '#fff' : 'var(--text-muted)' }}>{label}</button>
+  );
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      {/* Summary of differences */}
+      <div style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border-2)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>
+        <b>Summary of differences.</b> {result.headline}
+        <div style={{ ...styles.muted, fontSize: 11, marginTop: 4 }}>
+          GTM has no per-workspace permissions or files — access is account/container-level and identical for every workspace. This compares configuration entities.
+        </div>
+      </div>
+
+      {/* Filters + search */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '10px 0' }}>
+        <span style={{ ...styles.muted, fontSize: 12 }}>Status:</span>
+        {(['changed', 'added', 'removed', 'unchanged'] as const).map((s) => chip(fStatus.has(s), WS_STATUS_COLOR[s].label, WS_STATUS_COLOR[s].fg === 'var(--text-muted)' ? 'var(--c-blue)' : WS_STATUS_COLOR[s].fg, () => toggle(setFStatus, s)))}
+        <span style={{ ...styles.muted, fontSize: 12, marginLeft: 8 }}>Type:</span>
+        {(['tag', 'trigger', 'variable', 'folder'] as const).map((k) => chip(fKind.has(k), WS_KIND_LABEL[k], 'var(--c-blue)', () => toggle(setFKind, k)))}
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name…" style={{ ...styles.input, minWidth: 160, marginLeft: 'auto' }} />
+      </div>
+
+      {/* Per-pair diff */}
+      {result.pairs.map((p) => {
+        const rows = p.entities.filter(showEntity);
+        return (
+          <div key={p.bWorkspaceId} style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)' }}>
+              {p.bName} <span style={{ ...styles.muted, fontWeight: 400 }}>vs</span> {p.aName} <span style={{ ...styles.muted, fontWeight: 400, fontSize: 11 }}>(base)</span>
+            </div>
+            <div style={{ ...styles.muted, fontSize: 12, margin: '2px 0 6px' }}>
+              {p.summary.added + p.summary.removed + p.summary.changed === 0
+                ? 'Identical — no differences.'
+                : `${p.summary.changed} changed · ${p.summary.added} added · ${p.summary.removed} removed · ${p.summary.unchanged} unchanged`}
+            </div>
+            {rows.length === 0 ? (
+              <div style={{ ...styles.muted, fontSize: 12.5, padding: 8, border: '1px dashed var(--border-2)', borderRadius: 6, textAlign: 'center' }}>No entities match the filters.</div>
+            ) : (
+              <ul style={styles.resultList}>
+                {rows.map((e) => {
+                  const c = WS_STATUS_COLOR[e.status];
+                  return (
+                    <li key={`${e.kind}|${e.name}`} style={{ ...styles.resultRow, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: c.bg, color: c.fg, whiteSpace: 'nowrap' }}>{c.label}</span>
+                        <span style={{ ...styles.muted, fontSize: 11.5, whiteSpace: 'nowrap' }}>{WS_KIND_LABEL[e.kind]}</span>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{e.name}</span>
+                      </div>
+                      {e.status === 'changed' && e.changes && e.changes.length > 0 && (
+                        <div style={{ marginLeft: 8, marginTop: 2, fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6 }}>
+                          {e.changes.map((ch) => (
+                            <div key={ch.field}>
+                              <span style={{ color: 'var(--c-blue)' }}>{ch.field}</span>:{' '}
+                              <span style={{ color: 'var(--c-red)' }}>{ch.a === undefined ? '(none)' : ch.a.length > 80 ? ch.a.slice(0, 80) + '…' : ch.a}</span>
+                              {' → '}
+                              <span style={{ color: 'var(--c-green)' }}>{ch.b === undefined ? '(none)' : ch.b.length > 80 ? ch.b.slice(0, 80) + '…' : ch.b}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Report Generation — a clearly SEPARATE step from viewing the comparison above. */}
+      <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-2)' }}>
+        <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>Report generation</div>
+        <div style={{ ...styles.muted, fontSize: 12, margin: '2px 0 8px' }}>Generate a detailed comparison report of everything that differs (separate from the on-screen comparison).</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('pdf')} disabled={exporting}>Generate PDF report</button>
+          <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('csv')} disabled={exporting}>Export CSV</button>
+          {exportNote && <span style={{ ...styles.muted, fontSize: 12 }}>{exportNote}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ContainerAuditPanel({
   active,
   onError,
@@ -5976,6 +6232,10 @@ function ContainerAuditPanel({
             </button>
           </div>
         </div>
+
+        {/* Workspace Comparison — a distinct functionality within Container Audit (separate from Run audit
+            and its report). Compares 2+ workspaces side by side with its own report generation. */}
+        <WorkspaceComparison active={active} onError={onError} />
 
         {report && (
           <div style={styles.card}>
