@@ -40,6 +40,22 @@ function tokens(s: string): Set<string> {
   return new Set(norm.split(' ').filter((t) => t.length > 2 && !STOP.has(t)));
 }
 
+/** A container form tag's CORE name — the tag NAME with the platform/event/"Form Tag" boilerplate stripped,
+ *  so it can be title-matched to a site form: "GA4 - Event - Get In Touch Form Tag" → "get in touch",
+ *  "Meta - Event - Apply for Web Analyst Form Tag" → "apply for web analyst". This is what rescues the
+ *  generic tags that the token path can't: their STOP-stripped tokens are empty ("Get a Free Consultation")
+ *  or a single non-distinctive word ("Get In Touch" → {touch}), yet their name plainly IS the form's title. */
+function coreName(tagName: string): string {
+  return (tagName ?? '')
+    .replace(/^\s*(ga4|meta|chtml|html|google|linkedin|tiktok|pinterest|snap|reddit)\b/i, '')
+    .replace(/\bevent\b/i, '')
+    .replace(/\bform\s*tag\b\s*$/i, '')
+    .replace(/\btag\b\s*$/i, '')
+    .replace(/\bform\b\s*$/i, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+const normTitle = (s: string): string => (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
 /** The token-sets to try as a tag's FORM identity, most-specific first: its resolved form_name (the
  *  trigger condition, when present), its tag NAME, then its event name. A tag matches a form if ANY of
  *  these yields a confident overlap — because a site can bind many DOM-identical, ANONYMOUS forms (no
@@ -140,6 +156,26 @@ export function matchFormsToTags(
         const idsets = tagIdentities(tag);
         const overlap = (i: number): number => idsets.reduce((m, tt) => Math.max(m, shared(tt, formTok[i])), 0);
         bestIdx = onScope.reduce((best, i) => (overlap(i) > overlap(best) ? i : best), onScope[0]);
+      }
+    }
+    // 1b. CORE-NAME ↔ TITLE match. A form whose visible title IS the tag's core name (boilerplate stripped)
+    //     is an unambiguous pairing — "Get In Touch Form Tag" ↔ the "Get In Touch" form, "Stay Updated
+    //     Form Tag" ↔ the "Stay Updated" form — even when the token distinctiveness gate would reject it
+    //     (its tokens are all STOP words, or a lone generic word like {touch}/{contact}). Prefer an EXACT
+    //     title match; else a containment either way, requiring a reasonably specific title (>=5 chars) so a
+    //     short generic title can't grab an unrelated tag.
+    if (bestIdx < 0) {
+      const core = coreName(tag.tagName);
+      if (core.length >= 4) {
+        let exact = -1;
+        let contain = -1;
+        forms.forEach((f, i) => {
+          const ti = normTitle(f.title);
+          if (!ti || ti.length < 4) return;
+          if (ti === core) { if (exact < 0) exact = i; return; }
+          if (ti.length >= 5 && (core.includes(ti) || ti.includes(core)) && contain < 0) contain = i;
+        });
+        bestIdx = exact >= 0 ? exact : contain;
       }
     }
     // 2. Token overlap fallback. Try each of the tag's identities (form_name → tag name → event name) and

@@ -38,6 +38,35 @@ const tag = (tagName: string, eventName: string, formName?: string): FormTagIden
   check('expectedTags carries the event name', matched[0].expectedTags[0].eventName.length > 0);
 }
 
+// ── CORE-NAME ↔ TITLE match rescues generic tags the token gate can't ────────────────────
+{
+  // Every form shares the "solution_contact_form" id (so "contact" is NON-distinctive), and these tags
+  // tokenize to empty ("Get a Free Consultation") or a lone generic word — only tag NAME == form TITLE saves
+  // them. Site-wide form_submission tags (no page scope), so page-path pairing can't help either.
+  const forms = [
+    form({ page: 'https://site.com/a', title: 'Get a Free Consultation', formId: 'solution_contact_form', fields: [fld({ role: 'email', type: 'email' })] }),
+    form({ page: 'https://site.com/', title: 'Stay Updated', formId: 'solution_contact_form', fields: [fld({ role: 'email', type: 'email' })] }),
+    form({ page: 'https://site.com/services/x', title: 'Get a Free Analytics Consultation', formId: 'solution_contact_form', fields: [fld({ role: 'email', type: 'email' })] }),
+  ];
+  const tags = [
+    tag('GA4 - Event - Get a Free Consultation Form Tag', 'form_submission'), // tokens → empty
+    tag('GA4 - Event - Stay Updated Form Tag', 'form_submission'),            // tokens → {stay, updated}
+  ];
+  const { matched, unmatchedTags } = matchFormsToTags(forms, tags);
+  check('core-name: an all-STOP-word tag matches the form whose title IS its core name', matched.some((m) => m.formTitle === 'Get a Free Consultation' && m.expectedTags.some((t) => /Get a Free Consultation/.test(t.tagName))));
+  check('core-name: "Stay Updated" tag matches the "Stay Updated" form', matched.some((m) => m.formTitle === 'Stay Updated' && m.expectedTags.some((t) => /Stay Updated/.test(t.tagName))));
+  check('core-name: does NOT mis-pair "Get a Free Consultation" onto the longer "…Analytics Consultation" form', !matched.some((m) => m.formTitle === 'Get a Free Analytics Consultation' && m.expectedTags.some((t) => /Get a Free Consultation Form Tag/.test(t.tagName))));
+  check('core-name: both generic tags matched (none unmatched)', unmatchedTags.length === 0);
+}
+
+// ── core-name must NOT over-match when no form title matches ──────────────────────────────
+{
+  const forms = [form({ page: 'https://site.com/x', title: 'Newsletter', formId: 'nl', fields: [fld({ role: 'email', type: 'email' })] })];
+  const tags = [tag('GA4 - Event - Apply for Web Analyst Form Tag', 'form_submission')];
+  const { unmatchedTags } = matchFormsToTags(forms, tags);
+  check('core-name: no title match → tag stays unmatched (no false positive)', unmatchedTags.includes('GA4 - Event - Apply for Web Analyst Form Tag'));
+}
+
 // ── two tags → one form ──────────────────────────────────────────────────────────
 {
   const forms = [form({ title: 'Contact us', formId: 'contact', fields: [fld({ name: 'email', role: 'email', selector: '[name="email"]' })] })];
