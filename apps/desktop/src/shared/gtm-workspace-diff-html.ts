@@ -100,7 +100,34 @@ const STATUS: Record<EntityDiffView['status'], { fg: string; bg: string; label: 
   changed: { fg: '#a16207', bg: '#fef3c7', label: 'CHANGED' },
   unchanged: { fg: '#4b5563', bg: '#f3f4f6', label: 'UNCHANGED' },
 };
-const KIND_LABEL: Record<WsEntityKind, string> = { tag: 'Tag', trigger: 'Trigger', variable: 'Variable', folder: 'Folder' };
+const KIND_LABEL: Record<WsEntityKind, string> = { tag: 'Tag', trigger: 'Trigger', variable: 'Variable', builtInVariable: 'Built-in var', folder: 'Folder' };
+
+// Cross-workspace dependency gaps — the "merge would break" section. A dependency (trigger/variable) that
+// resolves in some workspaces but is missing where the entity was copied.
+function dependencySection(r: WorkspaceCompareResultView): string {
+  if (!r.missingDependencies?.length) {
+    return `<div style="font-size:14px;font-weight:700;margin:20px 0 4px">Dependency check</div><div style="font-size:12px;color:#166534">✅ No cross-workspace dependency gaps detected. Variable dependencies are fully checked; any firing-trigger drift shows in the detailed differences below.</div>`;
+  }
+  const rows = r.missingDependencies
+    .map(
+      (m) =>
+        `<tr style="border-bottom:1px solid #eef2f7;page-break-inside:avoid">` +
+        `<td style="padding:5px 8px;color:#6b7280;white-space:nowrap">${KIND_LABEL[m.entity.kind]}</td>` +
+        `<td style="padding:5px 8px;font-weight:600">${esc(m.entity.name)}</td>` +
+        `<td style="padding:5px 8px;font-size:11px"><code style="color:#2563eb">${esc(m.dependency.kind === 'builtInVariable' ? 'Built-in' : m.dependency.kind)}</code> ${esc(m.dependency.name)}</td>` +
+        `<td style="padding:5px 8px;color:#166534;font-size:11px">${esc(m.presentIn.join(', '))}</td>` +
+        `<td style="padding:5px 8px;color:#b91c1c;font-size:11px;font-weight:600">${esc(m.missingIn.join(', '))}</td>` +
+        `</tr>`,
+    )
+    .join('');
+  return (
+    `<div style="font-size:14px;font-weight:700;margin:20px 0 4px">⚠ Cross-workspace dependency gaps <span style="color:#9ca3af;font-weight:400">(resolve before merging)</span></div>` +
+    `<div style="font-size:11px;color:#6b7280;margin-bottom:6px">These entities reference a trigger or variable that exists in some workspaces but is missing where the entity was copied — a merge would leave them broken.</div>` +
+    `<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f8fafc;color:#6b7280">` +
+    `<th style="text-align:left;padding:6px 8px">Type</th><th style="text-align:left;padding:6px 8px">Entity</th><th style="text-align:left;padding:6px 8px">Needs</th><th style="text-align:left;padding:6px 8px">Present in</th><th style="text-align:left;padding:6px 8px">Missing in</th>` +
+    `</tr></thead><tbody>${rows}</tbody></table>`
+  );
+}
 
 const pill = (st: EntityDiffView['status']): string => {
   const s = STATUS[st];
@@ -161,7 +188,7 @@ export function workspaceDiffHtml(r: WorkspaceCompareResultView): string {
       return (
         `<tr style="border-bottom:1px solid #eef2f7">` +
         `<td style="padding:5px 8px;font-weight:600">${esc(w.name)}${isBase ? ' <span style="font-size:10px;color:#2563eb;font-weight:700">BASE</span>' : ''}</td>` +
-        `<td style="padding:5px 8px;color:#6b7280">${w.counts.tag} tags · ${w.counts.trigger} triggers · ${w.counts.variable} vars · ${w.counts.folder} folders</td>` +
+        `<td style="padding:5px 8px;color:#6b7280">${w.counts.tag} tags · ${w.counts.trigger} triggers · ${w.counts.variable} vars · ${w.counts.builtInVariable} built-in · ${w.counts.folder} folders</td>` +
         `</tr>`
       );
     })
@@ -173,6 +200,7 @@ export function workspaceDiffHtml(r: WorkspaceCompareResultView): string {
     `</div>` +
     `<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px"><tbody>${wsRows}</tbody></table>` +
     consolidatedHtml(r) +
+    dependencySection(r) +
     `<div style="font-size:14px;font-weight:700;margin:20px 0 4px">Detailed differences <span style="color:#9ca3af;font-weight:400">(base vs each)</span></div>` +
     r.pairs.map(pairSection).join('')
   );
@@ -189,6 +217,9 @@ export function workspaceDiffCsv(r: WorkspaceCompareResultView): string {
   }
   for (const e of r.consolidated.uncommon) {
     rows.push(line(['Uncommon', e.kind, e.name, e.presentIn.join('; '), e.missingFrom.join('; '), '', '', e.suggestedAction, e.notes]));
+  }
+  for (const m of r.missingDependencies ?? []) {
+    rows.push(line(['Dependency gap', `${m.entity.kind}: ${m.entity.name}`, `needs ${m.dependency.kind}: ${m.dependency.name}`, m.presentIn.join('; '), m.missingIn.join('; '), 'MISSING', '', 'Add the dependency before merging', '']));
   }
   return rows.join('\r\n');
 }

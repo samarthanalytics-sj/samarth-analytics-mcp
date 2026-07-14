@@ -17,12 +17,14 @@ const zeroByKind = (): Record<WsEntityKind, { total: number; common: number; uni
   tag: { total: 2, common: 2, unique: 0 },
   trigger: { total: 1, common: 0, unique: 1 },
   variable: { total: 0, common: 0, unique: 0 },
+  builtInVariable: { total: 0, common: 0, unique: 0 },
   folder: { total: 0, common: 0, unique: 0 },
 });
 const sumByKind = (): WorkspaceCompareResultView['pairs'][number]['summary']['byKind'] => ({
   tag: { added: 1, removed: 0, changed: 1, unchanged: 1 },
   trigger: { added: 0, removed: 1, changed: 0, unchanged: 0 },
   variable: { added: 0, removed: 0, changed: 0, unchanged: 0 },
+  builtInVariable: { added: 0, removed: 0, changed: 0, unchanged: 0 },
   folder: { added: 0, removed: 0, changed: 0, unchanged: 0 },
 });
 
@@ -30,8 +32,8 @@ const result: WorkspaceCompareResultView = {
   containerId: 'GTM-XXXX',
   baseWorkspaceId: 'ws1',
   workspaces: [
-    { workspaceId: 'ws1', name: 'Default Workspace', counts: { tag: 2, trigger: 1, variable: 0, folder: 0 } },
-    { workspaceId: 'ws2', name: 'Experiment', counts: { tag: 2, trigger: 0, variable: 0, folder: 0 } },
+    { workspaceId: 'ws1', name: 'Default Workspace', counts: { tag: 2, trigger: 1, variable: 0, builtInVariable: 0, folder: 0 } },
+    { workspaceId: 'ws2', name: 'Experiment', counts: { tag: 2, trigger: 0, variable: 0, builtInVariable: 0, folder: 0 } },
   ],
   headline: '“Experiment” vs “Default Workspace”: 1 changed, 1 added, 1 removed.',
   consolidated: {
@@ -56,6 +58,13 @@ const result: WorkspaceCompareResultView = {
       ],
     },
   ],
+  dependencies: [
+    { workspaceId: 'ws1', name: 'Default Workspace', entities: [{ kind: 'tag', name: 'Phone Click', type: 'gaawe', dependsOn: [{ kind: 'variable', name: 'Phone Number', present: true }] }] },
+    { workspaceId: 'ws2', name: 'Experiment', entities: [{ kind: 'tag', name: 'Phone Click', type: 'gaawe', dependsOn: [{ kind: 'variable', name: 'Phone Number', present: false }] }] },
+  ],
+  missingDependencies: [
+    { entity: { kind: 'tag', name: 'Phone Click' }, dependency: { kind: 'variable', name: 'Phone Number' }, presentIn: ['Default Workspace'], missingIn: ['Experiment'] },
+  ],
 };
 
 (async () => {
@@ -67,7 +76,13 @@ const result: WorkspaceCompareResultView = {
   // variance quirk); the bytes are identical, so a through-unknown cast is safe here.
   await wb.xlsx.load(buf as unknown as Parameters<typeof wb.xlsx.load>[0]);
   const names = wb.worksheets.map((w) => w.name);
-  check('four sheets in order', names.join(' | ') === 'Summary | Common items | Uncommon items | Detailed diff', names.join(' | '));
+  check('five sheets in order', names.join(' | ') === 'Summary | Common items | Uncommon items | Detailed diff | Dependencies', names.join(' | '));
+
+  // Dependencies sheet — the per-edge rows + the cross-workspace gap.
+  const dps = wb.getWorksheet('Dependencies')!;
+  const dpCells: string[] = []; dps.eachRow((row) => (row.values as unknown[]).forEach((v) => dpCells.push(String(v ?? ''))));
+  check('deps: sheet lists a MISSING edge', dpCells.includes('MISSING'));
+  check('deps: sheet names the cross-workspace gap dependency', dpCells.some((v) => v === 'Phone Number'));
 
   // Common sheet — a column per workspace + merge status; 2 data rows.
   const cs = wb.getWorksheet('Common items')!;

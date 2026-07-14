@@ -50,6 +50,7 @@ interface RawTag {
   paused?: boolean | null;
   parameter?: unknown;
   consentSettings?: unknown;
+  parentFolderId?: string | null;
 }
 interface RawTrigger {
   triggerId?: string | null;
@@ -59,12 +60,14 @@ interface RawTrigger {
   autoEventFilter?: unknown;
   customEventFilter?: unknown;
   parameter?: unknown;
+  parentFolderId?: string | null;
 }
 interface RawVariable {
   variableId?: string | null;
   name?: string | null;
   type?: string | null;
   parameter?: unknown;
+  parentFolderId?: string | null;
 }
 
 const asList = (v: unknown): Array<Record<string, unknown>> =>
@@ -91,6 +94,7 @@ function toSnapshot(tags: RawTag[], triggers: RawTrigger[], variables: RawVariab
       paused: t.paused ?? false,
       parameter: asList(t.parameter),
       consentSettings: (t.consentSettings ?? null) as { consentStatus?: string; consentType?: unknown } | null,
+      ...(t.parentFolderId ? { parentFolderId: t.parentFolderId } : {}),
     })),
     triggers: triggers.map((t) => ({
       triggerId: t.triggerId ?? '',
@@ -100,12 +104,14 @@ function toSnapshot(tags: RawTag[], triggers: RawTrigger[], variables: RawVariab
       autoEventFilter: asList(t.autoEventFilter),
       customEventFilter: asList(t.customEventFilter),
       parameter: asList(t.parameter),
+      ...(t.parentFolderId ? { parentFolderId: t.parentFolderId } : {}),
     })),
     variables: variables.map((v) => ({
       variableId: v.variableId ?? '',
       name: v.name ?? '(unnamed)',
       type: v.type ?? '',
       parameter: asList(v.parameter),
+      ...(v.parentFolderId ? { parentFolderId: v.parentFolderId } : {}),
     })),
   };
 }
@@ -384,6 +390,21 @@ export class GoogleDataService {
       (r) => r.data.nextPageToken
     );
     return folders.map((f) => ({ folderId: f.folderId ?? '', name: f.name ?? '(unnamed)', path: f.path ?? '' }));
+  }
+
+  /** List the ENABLED built-in variables in a workspace (read-only; the create path enables them). Used
+   *  by Workspace Comparison to compare which built-ins each workspace has turned on. Returns type (stable
+   *  match key, e.g. 'clickUrl') + display name (e.g. 'Click URL'). */
+  async listGtmEnabledBuiltInVariables(accountId: string, containerId: string, workspaceId: string): Promise<Array<{ type: string; name: string }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const vars = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.built_in_variables.list({ parent, pageToken }),
+      (r) => r.data.builtInVariable,
+      (r) => r.data.nextPageToken
+    );
+    return vars.map((v) => ({ type: v.type ?? '', name: v.name ?? v.type ?? '(unnamed)' }));
   }
 
   /** The container's public id (GTM-XXXXXX) — needed to build install snippets. */

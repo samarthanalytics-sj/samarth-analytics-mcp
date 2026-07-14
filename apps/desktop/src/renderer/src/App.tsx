@@ -8,6 +8,7 @@ import type {
   AuditFindingView,
   AuditReportView,
   WorkspaceCompareResultView,
+  DependencyView,
   EntityDiffView,
   WsEntityKind,
   ConsolidatedEntityView,
@@ -5767,7 +5768,8 @@ const WS_STATUS_COLOR: Record<EntityDiffView['status'], { fg: string; bg: string
   changed: { fg: 'var(--c-amber)', bg: 'var(--c-amber-bg)', label: 'Changed' },
   unchanged: { fg: 'var(--text-muted)', bg: 'var(--surface-2)', label: 'Unchanged' },
 };
-const WS_KIND_LABEL: Record<WsEntityKind, string> = { tag: 'Tag', trigger: 'Trigger', variable: 'Variable', folder: 'Folder' };
+const WS_KIND_LABEL: Record<WsEntityKind, string> = { tag: 'Tag', trigger: 'Trigger', variable: 'Variable', builtInVariable: 'Built-in var', folder: 'Folder' };
+const WS_KINDS: WsEntityKind[] = ['tag', 'trigger', 'variable', 'builtInVariable', 'folder'];
 const WS_MERGE_COLOR: Record<MergeStatus, { fg: string; bg: string; label: string }> = {
   safe: { fg: 'var(--c-green)', bg: 'var(--c-green-bg)', label: '✅ Safe to merge' },
   review: { fg: 'var(--c-amber)', bg: 'var(--c-amber-bg)', label: '⚠ Review required' },
@@ -5798,7 +5800,7 @@ function WorkspaceComparison({
   const [result, setResult] = useState<WorkspaceCompareResultView | null>(null);
   const [comparing, setComparing] = useState(false);
   const [open, setOpen] = useState(false); // the whole comparison section is collapsed until opened
-  const [fKind, setFKind] = useState<Set<WsEntityKind>>(new Set(['tag', 'trigger', 'variable', 'folder']));
+  const [fKind, setFKind] = useState<Set<WsEntityKind>>(new Set(WS_KINDS));
   const [search, setSearch] = useState('');
   const [exporting, setExporting] = useState(false);
   const [exportNote, setExportNote] = useState('');
@@ -5921,6 +5923,94 @@ function WorkspaceComparison({
 }
 
 /** The comparison OUTPUT: summary of differences, a filterable per-entity diff, and the separate report step. */
+// The dependency view: a cross-workspace "missing dependency" callout (the merge-blockers) plus a
+// per-workspace dependency graph (each entity and the triggers/variables it needs, green when they
+// resolve, red when they don't). Powered by result.dependencies + result.missingDependencies.
+function WsDependencySection({ result }: { result: WorkspaceCompareResultView }): JSX.Element {
+  const perWs = result.dependencies ?? [];
+  const miss = result.missingDependencies ?? [];
+  const [wsIdx, setWsIdx] = useState(0);
+  const [showAllDeps, setShowAllDeps] = useState(false);
+  const [depSearch, setDepSearch] = useState('');
+  const sel = perWs[Math.min(wsIdx, Math.max(0, perWs.length - 1))];
+  const dq = depSearch.trim().toLowerCase();
+  const entitiesWithDeps = (sel?.entities ?? []).filter((e) => e.dependsOn.length > 0 && (!dq || e.name.toLowerCase().includes(dq)));
+  const DEP_CAP = 60;
+  const shownDeps = showAllDeps ? entitiesWithDeps : entitiesWithDeps.slice(0, DEP_CAP);
+  const depChip = (d: DependencyView): JSX.Element => (
+    <span
+      key={`${d.kind}|${d.name}`}
+      title={d.present ? 'resolves in this workspace' : 'MISSING in this workspace'}
+      style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, whiteSpace: 'nowrap', background: d.present ? 'var(--c-green-bg)' : 'var(--c-red-bg)', color: d.present ? 'var(--c-green)' : 'var(--c-red)' }}
+    >
+      {d.kind === 'trigger' ? '⚡ ' : d.kind === 'builtInVariable' ? '◆ ' : '{ } '}{d.name}{d.present ? '' : ' ✕'}
+    </span>
+  );
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)' }}>Dependencies</div>
+      {miss.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: 'var(--c-green)', marginTop: 4 }}>✅ No cross-workspace dependency gaps detected. Variable dependencies are fully checked; any firing-trigger drift shows in the detailed diff below.</div>
+      ) : (
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 12, color: 'var(--c-red)', fontWeight: 600, marginBottom: 4 }}>⚠ {miss.length} cross-workspace dependency gap{miss.length > 1 ? 's' : ''} — resolve before merging.</div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
+                  {['Entity', 'Needs', 'Present in', 'Missing in'].map((h) => (
+                    <th key={h} style={{ textAlign: 'left', padding: '5px 8px', whiteSpace: 'nowrap', borderBottom: '1px solid var(--border)' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {miss.map((m, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <td style={{ padding: '5px 8px' }}><span style={{ ...styles.muted }}>{WS_KIND_LABEL[m.entity.kind]}</span> <b style={{ color: 'var(--text)' }}>{m.entity.name}</b></td>
+                    <td style={{ padding: '5px 8px', color: 'var(--text)' }}>{m.dependency.kind === 'builtInVariable' ? 'Built-in' : m.dependency.kind}: {m.dependency.name}</td>
+                    <td style={{ padding: '5px 8px', color: 'var(--c-green)' }}>{m.presentIn.join(', ')}</td>
+                    <td style={{ padding: '5px 8px', color: 'var(--c-red)', fontWeight: 600 }}>{m.missingIn.join(', ')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {perWs.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
+            <span style={{ ...styles.muted, fontSize: 12 }}>Graph for:</span>
+            {perWs.map((w, i) => (
+              <button key={w.workspaceId} onClick={() => { setWsIdx(i); setShowAllDeps(false); }} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${i === wsIdx ? 'var(--c-blue)' : 'var(--border-2)'}`, background: i === wsIdx ? 'var(--c-blue)' : 'transparent', color: i === wsIdx ? '#fff' : 'var(--text-muted)' }}>{w.name}</button>
+            ))}
+            <input value={depSearch} onChange={(e) => setDepSearch(e.target.value)} placeholder="Filter by name…" style={{ ...styles.input, minWidth: 140, marginLeft: 'auto' }} />
+          </div>
+          {entitiesWithDeps.length === 0 ? (
+            <div style={{ ...styles.muted, fontSize: 12 }}>No tag/trigger/variable dependencies{dq ? ' match the filter' : ' to show for this workspace'}.</div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {shownDeps.map((e) => (
+                  <div key={`${e.kind}|${e.name}`} style={{ border: '1px solid var(--border-2)', borderRadius: 8, padding: '7px 10px' }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}><span style={{ ...styles.muted, fontWeight: 400 }}>{WS_KIND_LABEL[e.kind]}</span> {e.name}</div>
+                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 4 }}>{e.dependsOn.map(depChip)}</div>
+                  </div>
+                ))}
+              </div>
+              {entitiesWithDeps.length > DEP_CAP && (
+                <button style={{ ...styles.linkBtn, marginTop: 6 }} onClick={() => setShowAllDeps((o) => !o)}>
+                  {showAllDeps ? `show fewer` : `show all ${entitiesWithDeps.length} entities`}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WorkspaceDiffResults({
   result, fKind, setFKind, search, setSearch, exporting, exportNote, onReport,
 }: {
@@ -5979,12 +6069,35 @@ function WorkspaceDiffResults({
         <WsStatTile label="Missing items" value={stats.missing} />
       </div>
 
+      {/* Per-kind statistics — Tags / Triggers / Variables / Built-in / Folders, each Total·Common·Unique.
+          Click a card to focus the tables on that one type (a dedicated per-kind comparison). */}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+        {WS_KINDS.map((k) => {
+          const b = stats.byKind[k];
+          if (!b || b.total === 0) return null;
+          const isolated = fKind.size === 1 && fKind.has(k);
+          return (
+            <button
+              key={k}
+              onClick={() => setFKind(isolated ? new Set(WS_KINDS) : new Set([k]))}
+              title={isolated ? 'Show all types' : `Show only ${WS_KIND_LABEL[k]}s`}
+              style={{ textAlign: 'left', cursor: 'pointer', minWidth: 122, borderRadius: 8, padding: '7px 11px', border: `1px solid ${isolated ? 'var(--c-blue)' : 'var(--border-2)'}`, background: isolated ? 'var(--c-blue-bg)' : 'var(--surface)' }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>{WS_KIND_LABEL[k]}s</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                {b.total} total · <span style={{ color: 'var(--c-green)' }}>{b.common} common</span> · <span style={{ color: 'var(--c-amber)' }}>{b.unique} unique</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
       {/* Filters */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0 10px' }}>
         <span style={{ ...styles.muted, fontSize: 12 }}>Merge:</span>
         {(['safe', 'review', 'conflict'] as const).map((m) => chip(fMerge.has(m), WS_MERGE_COLOR[m].label, WS_MERGE_COLOR[m].fg, () => toggle(setFMerge, m)))}
         <span style={{ ...styles.muted, fontSize: 12, marginLeft: 8 }}>Type:</span>
-        {(['tag', 'trigger', 'variable', 'folder'] as const).map((k) => chip(fKind.has(k), WS_KIND_LABEL[k], 'var(--c-blue)', () => toggle(setFKind, k)))}
+        {WS_KINDS.map((k) => chip(fKind.has(k), WS_KIND_LABEL[k], 'var(--c-blue)', () => toggle(setFKind, k)))}
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name…" style={{ ...styles.input, minWidth: 160, marginLeft: 'auto' }} />
       </div>
 
@@ -6051,7 +6164,7 @@ function WorkspaceDiffResults({
         Uncommon items <span style={{ ...styles.muted, fontWeight: 400 }}>(missing from one or more) — {uncommonRows.length} shown</span>
       </div>
       {uncommonRows.length === 0 ? (
-        <div style={{ ...styles.muted, fontSize: 12.5, padding: 8, border: '1px dashed var(--border-2)', borderRadius: 6, textAlign: 'center', marginTop: 4 }}>No uncommon items{q || fKind.size < 4 ? ' match the filters' : ' — every item exists in all workspaces'}.</div>
+        <div style={{ ...styles.muted, fontSize: 12.5, padding: 8, border: '1px dashed var(--border-2)', borderRadius: 6, textAlign: 'center', marginTop: 4 }}>No uncommon items{q || fKind.size < WS_KINDS.length ? ' match the filters' : ' — every item exists in all workspaces'}.</div>
       ) : (
         <div style={{ overflowX: 'auto', marginTop: 4 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
@@ -6094,6 +6207,9 @@ function WorkspaceDiffResults({
           </table>
         </div>
       )}
+
+      {/* Dependency graph + cross-workspace missing-dependency check */}
+      <WsDependencySection result={result} />
 
       {/* Detailed base-vs-each diff (opt-in) */}
       <div style={{ marginTop: 14 }}>

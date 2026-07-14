@@ -114,6 +114,61 @@ check('stableStringify: key order does not matter', stableStringify({ b: 1, a: 2
   check('consolidate: compareWorkspaces includes the consolidation', res.consolidated.common.length === 3 && res.consolidated.uncommon.length === 1);
 }
 
+// ── built-in variable comparison (a 5th kind) ─────────────────────────────────────────────────────────
+{
+  const w1 = toWorkspaceInput('1', 'WS1', snap({}), [], [{ type: 'clickUrl', name: 'Click URL' }, { type: 'pageUrl', name: 'Page URL' }]);
+  const w2 = toWorkspaceInput('2', 'WS2', snap({}), [], [{ type: 'pageUrl', name: 'Page URL' }]);
+  const d = diffWorkspaces(w1, w2);
+  check('built-in: enabled in base only → removed', d.entities.some((e) => e.kind === 'builtInVariable' && e.name === 'Click URL' && e.status === 'removed'));
+  check('built-in: enabled in both → unchanged', d.entities.some((e) => e.kind === 'builtInVariable' && e.name === 'Page URL' && e.status === 'unchanged'));
+  check('built-in: counts.builtInVariable = 2 in WS1', w1.counts.builtInVariable === 2);
+  const con = consolidateWorkspaces([w1, w2]);
+  check('built-in: Page URL common, Click URL uncommon', con.common.some((e) => e.name === 'Page URL' && e.kind === 'builtInVariable') && con.uncommon.some((e) => e.name === 'Click URL' && e.kind === 'builtInVariable'));
+  check('built-in: byKind.builtInVariable.total = 2', con.stats.byKind.builtInVariable.total === 2);
+}
+
+// ── folder MEMBERSHIP / organization (not just folder names) ──────────────────────────────────────────
+{
+  const fA = { folderId: 'fa', name: 'Analytics' };
+  const fM = { folderId: 'fm', name: 'Marketing' };
+  // Same tag "GA4" lives in folder "Analytics" in WS1 but "Marketing" in WS2 → a `folder` field change.
+  const w1 = toWorkspaceInput('1', 'WS1', snap({ tags: [tag({ name: 'GA4', tagId: 't1', parentFolderId: 'fa' })] }), [fA]);
+  const w2 = toWorkspaceInput('2', 'WS2', snap({ tags: [tag({ name: 'GA4', tagId: 't9', parentFolderId: 'fm' })] }), [fM]);
+  const ga4 = diffWorkspaces(w1, w2).entities.find((e) => e.kind === 'tag' && e.name === 'GA4')!;
+  check('folder-membership: a moved tag is "changed" on its folder field', ga4.status === 'changed' && (ga4.changes ?? []).some((c) => c.field === 'folder' && c.a === 'Analytics' && c.b === 'Marketing'));
+  // The folder ENTITY itself differs in membership when it holds different tags.
+  const w3 = toWorkspaceInput('3', 'WS3', snap({ tags: [tag({ name: 'GA4', tagId: 't1', parentFolderId: 'fa' }), tag({ name: 'Meta', tagId: 't2', parentFolderId: 'fa' })] }), [fA]);
+  const w4 = toWorkspaceInput('4', 'WS4', snap({ tags: [tag({ name: 'GA4', tagId: 't1', parentFolderId: 'fa' })] }), [fA]);
+  const folderEnt = diffWorkspaces(w3, w4).entities.find((e) => e.kind === 'folder' && e.name === 'Analytics')!;
+  check('folder-membership: folder with different members is "changed"', folderEnt.status === 'changed' && (folderEnt.changes ?? []).some((c) => c.field === 'members'));
+  const wX = toWorkspaceInput('5', 'WS5', snap({ tags: [tag({ name: 'X', tagId: 'x' })] }));
+  const xTag = [...wX.entities.values()].find((e) => e.kind === 'tag' && e.name === 'X')!;
+  check('folder-membership: an unfoldered entity resolves to no folder (field "")', xTag.fields.folder === '');
+}
+
+// ── dependency graph + cross-workspace missing dependency ─────────────────────────────────────────────
+{
+  const w1 = toWorkspaceInput('1', 'WS1', snap({
+    triggers: [trig({ name: 'CTA Click', triggerId: 'tr1' })],
+    variables: [vari({ name: 'GA4 ID', variableId: 'v1' })],
+    tags: [tag({ name: 'GA4 Event', tagId: 't1', firingTriggerId: ['tr1'], parameter: [{ type: 'template', key: 'measurementId', value: '{{GA4 ID}}' }, { type: 'template', key: 'page', value: '{{Page URL}}' }] })],
+  }));
+  const w2 = toWorkspaceInput('2', 'WS2', snap({
+    // The GA4 ID variable is MISSING here → the copied tag's {{GA4 ID}} is a broken dependency.
+    triggers: [trig({ name: 'CTA Click', triggerId: 'tr9' })],
+    tags: [tag({ name: 'GA4 Event', tagId: 't1', firingTriggerId: ['tr9'], parameter: [{ type: 'template', key: 'measurementId', value: '{{GA4 ID}}' }, { type: 'template', key: 'page', value: '{{Page URL}}' }] })],
+  }));
+  const res = compareWorkspaces('GTM-X', [w1, w2]);
+  check('deps: per-workspace dependency graphs are returned', res.dependencies.length === 2 && res.dependencies[0].entities.length > 0);
+  const dep1 = res.dependencies[0].entities.find((e) => e.name === 'GA4 Event')!;
+  check('deps: tag depends on its firing trigger (present)', dep1.dependsOn.some((d) => d.kind === 'trigger' && d.name === 'CTA Click' && d.present));
+  check('deps: tag depends on its variable (present in WS1)', dep1.dependsOn.some((d) => d.kind === 'variable' && d.name === 'GA4 ID' && d.present));
+  check('deps: {{Page URL}} classified as an always-present built-in', dep1.dependsOn.some((d) => d.kind === 'builtInVariable' && d.name === 'Page URL' && d.present));
+  const miss = res.missingDependencies.find((m) => m.entity.name === 'GA4 Event' && m.dependency.name === 'GA4 ID')!;
+  check('deps: missing dependency detected (var present in WS1, missing in WS2)', !!miss && miss.presentIn.includes('WS1') && miss.missingIn.includes('WS2'));
+  check('deps: a built-in ref is NEVER reported as a missing dependency', !res.missingDependencies.some((m) => m.dependency.name === 'Page URL'));
+}
+
 // ── guard: need >= 2 workspaces ──────────────────────────────────────────────────────────────────────
 {
   let threw = false;
@@ -123,4 +178,4 @@ check('stableStringify: key order does not matter', stableStringify({ b: 1, a: 2
 
 console.log(`\nworkspace-diff: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 30) { console.error(`expected >= 20 checks, got ${passed}`); process.exit(1); }
+if (passed < 44) { console.error(`expected >= 44 checks, got ${passed}`); process.exit(1); }
