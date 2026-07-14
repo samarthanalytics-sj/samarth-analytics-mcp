@@ -28,6 +28,7 @@
     "@googleapis/analyticsdata": "^5.0.1",
     "@googleapis/tagmanager": "^15.0.0",
     "cheerio": "^1.2.0",
+    "exceljs": "^4.4.0",
     "google-auth-library": "10.5.0"
   },
   "devDependencies": {
