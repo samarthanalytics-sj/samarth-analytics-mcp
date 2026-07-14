@@ -1,3 +1,9 @@
+## [1.317.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.316.0...v1.317.0) (2026-07-14)
+
+### Features
+
+* **desktop:** raise the tag-suggestion deep-scan cap 50 → 250 (match verification) ([92b7879](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/92b7879c43de973a8f65f1db7551d9dfe4930567))
+
 ## [1.316.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.315.1...v1.316.0) (2026-07-14)
 
 ### Features
