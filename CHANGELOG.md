@@ -1,3 +1,9 @@
+## [1.324.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.323.0...v1.324.0) (2026-07-14)
+
+### Features
+
+* **desktop:** GA4 user-property naming audit + audience detail ([78eaae9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/78eaae91d86a04ad4f80dded231f219be4ca1ddf))
+
 ## [1.323.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.322.0...v1.323.0) (2026-07-14)
 
 ### Features
