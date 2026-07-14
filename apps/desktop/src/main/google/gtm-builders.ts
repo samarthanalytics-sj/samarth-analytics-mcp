@@ -1502,6 +1502,9 @@ export interface AuditTag {
   /** Consent Mode v2 settings, when present on the tag. consentType is a
    *  parameter list that may itself reference {{variables}}. */
   consentSettings?: { consentStatus?: string; consentType?: unknown } | null;
+  /** The workspace folder this tag lives in (workspace-scoped id; resolve to a name to compare
+   *  organization across workspaces). Optional/additive — read-path only, never written. */
+  parentFolderId?: string;
 }
 export interface AuditTrigger {
   triggerId: string;
@@ -1512,6 +1515,7 @@ export interface AuditTrigger {
   autoEventFilter?: Array<Record<string, unknown>>;
   customEventFilter?: Array<Record<string, unknown>>;
   parameter?: Array<Record<string, unknown>>;
+  parentFolderId?: string;
 }
 export interface AuditVariable {
   variableId: string;
@@ -1519,6 +1523,7 @@ export interface AuditVariable {
   type: string;
   /** Variable config — scanned for {{variable}} references to other variables. */
   parameter?: Array<Record<string, unknown>>;
+  parentFolderId?: string;
 }
 
 /**
@@ -1605,7 +1610,7 @@ export interface AuditReport {
 /** Reserved GTM built-in trigger ids (All Pages, Initialization, Consent Initialization, DOM Ready,
  *  Window Loaded) live in the 2147479xxx range and are never user-deletable. triggers.list doesn't
  *  return them, but guard anyway so a cleanup never targets one. PURE. */
-function isBuiltinTriggerId(id: string): boolean {
+export function isBuiltinTriggerId(id: string): boolean {
   return /^2147479\d{3}$/.test(id);
 }
 

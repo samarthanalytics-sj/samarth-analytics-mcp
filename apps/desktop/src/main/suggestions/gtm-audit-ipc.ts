@@ -72,11 +72,13 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     // read quota; each call already retries a 429. Order follows the picker so the FIRST id is the base.
     const inputs = [];
     for (const wid of uniqueIds) {
-      const [snap, folders] = await Promise.all([
+      const [snap, folders, builtIns] = await Promise.all([
         withQuotaRetry(() => data.getGtmContainerSnapshot(a, c, wid)),
-        withQuotaRetry(() => data.listGtmFolders(a, c, wid)).catch(() => [] as Array<{ name: string }>),
+        withQuotaRetry(() => data.listGtmFolders(a, c, wid)).catch(() => [] as Array<{ folderId: string; name: string }>),
+        // Built-ins + folder membership are best-effort: a 403/absent list must not abort the comparison.
+        withQuotaRetry(() => data.listGtmEnabledBuiltInVariables(a, c, wid)).catch(() => [] as Array<{ type: string; name: string }>),
       ]);
-      inputs.push(toWorkspaceInput(wid, nameById.get(wid) ?? `Workspace ${wid}`, snap, folders));
+      inputs.push(toWorkspaceInput(wid, nameById.get(wid) ?? `Workspace ${wid}`, snap, folders, builtIns));
     }
     return compareWorkspaces(c, inputs);
   });

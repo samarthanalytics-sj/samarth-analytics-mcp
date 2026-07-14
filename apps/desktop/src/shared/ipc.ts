@@ -1006,7 +1006,7 @@ export interface AuditReportView {
 }
 
 /** ── Workspace Comparison (Container Audit) — the serializable diff of 2+ workspaces ─────────────────── */
-export type WsEntityKind = 'tag' | 'trigger' | 'variable' | 'folder';
+export type WsEntityKind = 'tag' | 'trigger' | 'variable' | 'builtInVariable' | 'folder';
 /** One field that differs between the two sides of a changed entity. */
 export interface FieldChangeView {
   field: string;
@@ -1080,6 +1080,28 @@ export interface WorkspaceConsolidationView {
   uncommon: ConsolidatedEntityView[];
 }
 
+/** One dependency edge in the dependency graph (what an entity needs to work). */
+export interface DependencyView {
+  kind: 'trigger' | 'variable' | 'builtInVariable';
+  name: string;
+  /** True when the referenced trigger/variable exists in this workspace (built-ins are always true). */
+  present: boolean;
+}
+/** An entity plus everything it depends on, within one workspace. */
+export interface EntityDependenciesView {
+  kind: WsEntityKind;
+  name: string;
+  type?: string;
+  dependsOn: DependencyView[];
+}
+/** A dependency that resolves in some workspaces but is broken in others holding the same entity. */
+export interface CrossWorkspaceMissingDepView {
+  entity: { kind: WsEntityKind; name: string };
+  dependency: { kind: DependencyView['kind']; name: string };
+  missingIn: string[];
+  presentIn: string[];
+}
+
 /** The full multi-workspace comparison result (gtm:compareWorkspaces). */
 export interface WorkspaceCompareResultView {
   containerId: string;
@@ -1088,6 +1110,10 @@ export interface WorkspaceCompareResultView {
   pairs: PairwiseDiffView[];
   /** Cross-workspace consolidation: common (in all) + uncommon (missing from some) + stats. */
   consolidated: WorkspaceConsolidationView;
+  /** Per-workspace dependency graph (tag->triggers, entity->{{variables}}). */
+  dependencies: Array<{ workspaceId: string; name: string; entities: EntityDependenciesView[] }>;
+  /** Dependencies present in some workspaces but broken in others that hold the same entity. */
+  missingDependencies: CrossWorkspaceMissingDepView[];
   headline: string;
 }
 

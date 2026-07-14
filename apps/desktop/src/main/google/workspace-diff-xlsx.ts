@@ -7,7 +7,7 @@
 import ExcelJS from 'exceljs';
 import type { WorkspaceCompareResultView, ConsolidatedEntityView, MergeStatus, WsEntityKind } from '../../shared/ipc';
 
-const KIND_LABEL: Record<WsEntityKind, string> = { tag: 'Tag', trigger: 'Trigger', variable: 'Variable', folder: 'Folder' };
+const KIND_LABEL: Record<WsEntityKind, string> = { tag: 'Tag', trigger: 'Trigger', variable: 'Variable', builtInVariable: 'Built-in var', folder: 'Folder' };
 const MERGE_LABEL: Record<MergeStatus, string> = { safe: 'Safe to merge', review: 'Review required', conflict: 'Cannot merge' };
 // ARGB fills/fonts (print-safe) for the merge-status + diff-status cells.
 const MERGE_FILL: Record<MergeStatus, string> = { safe: 'FFDCFCE7', review: 'FFFEF3C7', conflict: 'FFFEE2E2' };
@@ -69,17 +69,17 @@ function buildSummarySheet(wb: ExcelJS.Workbook, r: WorkspaceCompareResultView):
   // Per-kind breakdown.
   const kh = ws.addRow(['Type', 'Total', 'Common', 'Unique']);
   kh.font = { bold: true };
-  (['tag', 'trigger', 'variable', 'folder'] as WsEntityKind[]).forEach((k) => {
+  (['tag', 'trigger', 'variable', 'builtInVariable', 'folder'] as WsEntityKind[]).forEach((k) => {
     const b = s.byKind[k];
     ws.addRow([KIND_LABEL[k], b.total, b.common, b.unique]);
   });
   ws.addRow([]);
 
   // Workspaces compared.
-  const wh = ws.addRow(['Workspace', 'Role', 'Tags', 'Triggers', 'Variables', 'Folders']);
+  const wh = ws.addRow(['Workspace', 'Role', 'Tags', 'Triggers', 'Variables', 'Built-in', 'Folders']);
   wh.font = { bold: true };
   for (const w of r.workspaces) {
-    ws.addRow([w.name, w.workspaceId === r.baseWorkspaceId ? 'BASE' : 'compared', w.counts.tag, w.counts.trigger, w.counts.variable, w.counts.folder]);
+    ws.addRow([w.name, w.workspaceId === r.baseWorkspaceId ? 'BASE' : 'compared', w.counts.tag, w.counts.trigger, w.counts.variable, w.counts.builtInVariable, w.counts.folder]);
   }
   ws.addRow([]);
   ws.addRow(['Note: GTM has no per-workspace permissions or files — access is account/container-level and identical for every workspace. This compares configuration entities.']);
@@ -163,8 +163,46 @@ function buildDetailedSheet(wb: ExcelJS.Workbook, r: WorkspaceCompareResultView)
   styleHeader(ws);
 }
 
+// One row per dependency edge, grouped by workspace, with broken edges flagged — the "what breaks a merge"
+// sheet. Missing rows are painted red so they stand out.
+function buildDependenciesSheet(wb: ExcelJS.Workbook, r: WorkspaceCompareResultView): void {
+  const ws = wb.addWorksheet('Dependencies');
+  ws.columns = [
+    { header: 'Workspace', key: 'ws', width: 22 },
+    { header: 'Entity type', key: 'ek', width: 12 },
+    { header: 'Entity', key: 'en', width: 34 },
+    { header: 'Depends on', key: 'dk', width: 14 },
+    { header: 'Dependency', key: 'dn', width: 34 },
+    { header: 'Status', key: 'st', width: 12 },
+  ];
+  for (const w of r.dependencies) {
+    for (const e of w.entities) {
+      for (const d of e.dependsOn) {
+        const status = d.present ? 'OK' : 'MISSING';
+        const row = ws.addRow({ ws: w.name, ek: KIND_LABEL[e.kind], en: e.name, dk: d.kind === 'builtInVariable' ? 'Built-in' : d.kind === 'trigger' ? 'Trigger' : 'Variable', dn: d.name, st: status });
+        if (!d.present) {
+          const c = row.getCell(6);
+          c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+          c.font = { color: { argb: 'FFB91C1C' }, bold: true };
+        }
+      }
+    }
+  }
+  if (r.missingDependencies.length) {
+    ws.addRow([]);
+    const h = ws.addRow(['Cross-workspace gaps (present somewhere, missing where the entity was copied)']);
+    h.font = { bold: true };
+    ws.addRow(['Entity', 'Needs', 'Present in', 'Missing in']).font = { bold: true };
+    for (const m of r.missingDependencies) {
+      ws.addRow([`${KIND_LABEL[m.entity.kind]}: ${m.entity.name}`, `${m.dependency.kind === 'builtInVariable' ? 'Built-in' : m.dependency.kind}: ${m.dependency.name}`, m.presentIn.join(', '), m.missingIn.join(', ')]);
+    }
+  }
+  styleHeader(ws);
+}
+
 /** Build a self-contained .xlsx workbook of the Workspace Comparison (Summary · Common · Uncommon ·
- *  Detailed diff). Consumes the same view the renderer already holds, so the export matches the screen. */
+ *  Detailed diff · Dependencies). Consumes the same view the renderer already holds, so the export matches
+ *  the screen. */
 export async function buildWorkspaceDiffXlsx(result: WorkspaceCompareResultView): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Samarth Analytics';
@@ -172,6 +210,7 @@ export async function buildWorkspaceDiffXlsx(result: WorkspaceCompareResultView)
   buildCommonSheet(wb, result);
   buildUncommonSheet(wb, result);
   buildDetailedSheet(wb, result);
+  buildDependenciesSheet(wb, result);
   const buf = await wb.xlsx.writeBuffer();
   return Buffer.from(buf as ArrayBuffer);
 }
