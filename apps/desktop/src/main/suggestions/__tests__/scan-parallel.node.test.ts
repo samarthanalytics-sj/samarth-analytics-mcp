@@ -169,10 +169,30 @@ async function run(): Promise<void> {
     check('crawl/nav: home scanned first even with sitemap seeds present', opened[0] === norm(N));
     check('crawl/nav: a footer link NOT in the sitemap beats the sitemap flood under a tight budget', opened.includes(norm(`${N}contact`)) && opened.indexOf(norm(`${N}contact`)) === 1);
   }
+
+  // crawl/stop: a cooperative shouldStop() flag halts the crawl mid-run (Stop button).
+  {
+    const N = 'https://stop.com/';
+    const links = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8'];
+    const pages: Record<string, DrivenPage> = {
+      [N]: page(N, links.map((p) => `${N}${p}`)),
+    };
+    for (const p of links) pages[`${N}${p}`] = page(`${N}${p}`, []);
+    const t = newTracker();
+    const pool = poolOf(1, pages, t);
+    let stop = false;
+    const res = await crawlAndSuggest(
+      pool[0],
+      N,
+      { maxPages: 20, maxDepth: 3, drivers: pool.slice(1), shouldStop: () => stop },
+      () => { if (t.opened.length >= 2) stop = true; }, // flip the flag once 2 pages have opened
+    );
+    check('crawl/stop: shouldStop() halts the crawl before all pages are scanned', res.summary.pagesScanned >= 1 && res.summary.pagesScanned < links.length + 1);
+  }
 }
 
 void run().then(() => {
   console.log(`\nscan-parallel: ${passed} passed, ${failed} failed`);
   if (failed) { console.error(failures.join('\n')); process.exit(1); }
-  if (passed < 21) { console.error(`expected >= 21 checks, got ${passed}`); process.exit(1); }
+  if (passed < 22) { console.error(`expected >= 22 checks, got ${passed}`); process.exit(1); }
 });
