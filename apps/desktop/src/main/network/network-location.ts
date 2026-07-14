@@ -293,6 +293,105 @@ export function peekNetworkLocation(): NetworkLocationView | null {
   return cache;
 }
 
+// ── Auto-detect watcher ─────────────────────────────────────────────────────────────────────────
+/**
+ * A stable fingerprint of the active (non-internal) network adapters + their addresses. Changes when a
+ * VPN tunnel comes up or drops, or Wi-Fi/Ethernet switches — a cheap, offline signal to trigger a
+ * geo recheck without polling an external service every tick.
+ */
+export function adapterFingerprint(ifaces: Record<string, NetworkInterfaceInfo[] | undefined>): string {
+  const parts: string[] = [];
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    if (!addrs) continue;
+    for (const a of addrs) if (!a.internal && a.address) parts.push(`${name}:${a.address}`);
+  }
+  return parts.sort().join('|');
+}
+
+/** Whether two location views differ in a way worth pushing to the UI (ignores checkedAt/detectedVia churn). */
+export function locationChanged(prev: NetworkLocationView | null, next: NetworkLocationView): boolean {
+  if (!prev) return true;
+  return prev.ip !== next.ip || prev.connectionType !== next.connectionType || prev.provider !== next.provider || prev.status !== next.status;
+}
+
+export interface NetworkWatchHandle { stop: () => void }
+
+/**
+ * Watch for network changes and call `onChange` when the resolved location materially changes. Two
+ * triggers: (1) an adapter-fingerprint poll every `adapterPollMs` (cheap/local) forces a recheck the
+ * instant a tunnel connects/drops; (2) a full recheck every `recheckMs` catches a public-IP-only change
+ * (e.g. switching VPN server on the same adapter). Timers are unref'd so they never hold the app open.
+ */
+export function startNetworkWatch(opts: {
+  onChange: (view: NetworkLocationView) => void;
+  adapterPollMs?: number;
+  recheckMs?: number;
+  ifaces?: () => Record<string, NetworkInterfaceInfo[] | undefined>;
+  /** The lookup to run on a trigger. Defaults to a forced location check; injectable for tests. */
+  check?: () => Promise<NetworkLocationView>;
+}): NetworkWatchHandle {
+  const pollMs = opts.adapterPollMs ?? 5000;
+  const recheckMs = opts.recheckMs ?? 120_000;
+  const getIfaces = opts.ifaces ?? networkInterfaces;
+  const check = opts.check ?? ((): Promise<NetworkLocationView> => getNetworkLocation({ force: true }));
+  let lastFp = adapterFingerprint(getIfaces());
+  let lastPushed: NetworkLocationView | null = peekNetworkLocation();
+  let checking = false;
+  let pending = false; // a trigger arrived while a lookup was in flight → re-check once it settles
+  let stopped = false;
+  const retryTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  const doCheck = async (): Promise<void> => {
+    if (stopped) return;
+    if (checking) { pending = true; return; } // don't overlap; remember to re-check after this one lands
+    checking = true;
+    // Seed the dedup baseline from the SHARED cache each tick, not just from our own last push: the app
+    // also resolves the location through the pull path (the Refresh button / run-start force-recheck),
+    // which updates the cache. Comparing against the cache keeps the watcher in sync so a real change is
+    // never dedup'd against a stale private baseline. Falls back to our last value when the cache is empty.
+    const prev = peekNetworkLocation() ?? lastPushed;
+    let view: NetworkLocationView | null = null;
+    try {
+      view = await check();
+    } catch {
+      // Transient failure — leave it to the next trigger / the periodic recheck.
+    } finally {
+      checking = false;
+    }
+    if (stopped) return;
+    if (view) {
+      if (locationChanged(prev, view)) opts.onChange(view);
+      lastPushed = view;
+    }
+    if (pending) { pending = false; void doCheck(); return; } // a change landed mid-lookup → re-evaluate
+    // Self-heal a transient blip: a connected→offline flip (e.g. a tunnel reconnecting) rechecks soon
+    // rather than waiting the full interval. Bounded: only fires when we just LOST a connected reading.
+    if (view && prev?.status === 'connected' && view.status !== 'connected') {
+      const rt = setTimeout(() => { retryTimers.delete(rt); void doCheck(); }, 5000);
+      rt.unref?.();
+      retryTimers.add(rt);
+    }
+  };
+
+  const pollTimer = setInterval(() => {
+    const fp = adapterFingerprint(getIfaces());
+    if (fp !== lastFp) { lastFp = fp; void doCheck(); }
+  }, pollMs);
+  const recheckTimer = setInterval(() => { void doCheck(); }, recheckMs);
+  pollTimer.unref?.();
+  recheckTimer.unref?.();
+
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(pollTimer);
+      clearInterval(recheckTimer);
+      for (const rt of retryTimers) clearTimeout(rt);
+      retryTimers.clear();
+    },
+  };
+}
+
 /** Test-only: clear the module cache between cases. */
 export function __resetNetworkCache(): void {
   cache = null;

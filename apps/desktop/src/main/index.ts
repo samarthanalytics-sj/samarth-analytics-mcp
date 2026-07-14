@@ -225,7 +225,7 @@ app.whenReady().then(() => {
   registerGtmAuditIpc(dataService);
   registerGa4AuditIpc(dataService);
   registerGa4MonitoringIpc(ga4Monitoring);
-  registerNetworkIpc();
+  registerNetworkIpc({ configPath: join(dataDir, 'network-config.json') });
   createWindow();
 
   app.on('activate', () => {
