@@ -259,7 +259,7 @@ const api = {
     },
     // Save the tag-verification RESULTS table to a user-chosen file — 'csv' (spreadsheet), 'pdf' or 'doc'
     // (both a styled report with each tag's proof screenshot embedded). Returns the saved path or null.
-    exportVerifyResults: (format: 'csv' | 'xlsx' | 'pdf' | 'doc', defaultName: string, payload: VerifyExportPayload): Promise<string | null> =>
+    exportVerifyResults: (format: 'xlsx' | 'pdf' | 'doc', defaultName: string, payload: VerifyExportPayload): Promise<string | null> =>
       ipcRenderer.invoke('verify:exportResults', format, defaultName, payload),
     // Real-submit form review: read a page's forms + their OWN fields, return a locale fill plan the
     // operator edits before Phase 2 submits. Read-only (fills/submits nothing).

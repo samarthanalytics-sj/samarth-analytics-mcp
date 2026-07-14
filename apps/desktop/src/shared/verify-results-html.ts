@@ -1,43 +1,17 @@
-// Tag-verification results export — pure builders for the downloadable report (CSV + a styled HTML body
-// that the IPC turns into a PDF via Electron printToPDF, or writes as .doc with the MS-Office namespaces).
-// Mirrors the on-screen results table: the scorecard counts, the coverage line, and one row per verdict
-// (Status · Tag · Event · Fired via · Signal · Proof). The PDF/DOC embed each tag's proof SCREENSHOT as
-// an <img> (data-URI); the CSV is text-only (it lists whether proof exists).
-// No I/O, no DOM — safe to run in the main process and unit-testable.
+// Tag-verification results export — the styled HTML body the IPC turns into a PDF via Electron printToPDF,
+// or writes as .doc with the MS-Office namespaces (the XLSX export is built separately by verify-results-
+// xlsx.ts). Mirrors the on-screen results table: the scorecard counts, the coverage line, and one row per
+// verdict (Status · Tag · Event · Fired via · Signal · Proof), each with its proof SCREENSHOT embedded as an
+// <img> (data-URI). No I/O, no DOM — safe to run in the main process and unit-testable.
 
 import type { VerifyExportPayload, VerifyExportRow } from './ipc';
 
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-// One CSV field: wrap in quotes and double any embedded quote, per RFC 4180. Newlines/commas are then
-// safe inside the quotes. null/undefined → empty. Non-strings are stringified.
-const csvField = (v: unknown): string => `"${String(v ?? '').replace(/"/g, '""')}"`;
-
+// Report columns (mirror the on-screen results table header). CSV export was removed — it can't show the
+// proof image; use XLSX (images embedded), PDF, or DOC.
 const COLUMNS = ['Status', 'Tag', 'Event', 'Fired via', 'Signal', 'Proof'] as const;
-
-/** The results as a CSV spreadsheet (one row per verdict). A CSV/Excel file cannot embed an image, so the
- *  Proof column notes that a screenshot exists and where to see it — the PDF and DOC exports embed the
- *  actual image. */
-export function verifyResultsCsv(payload: VerifyExportPayload): string {
-  const rows = payload.rows ?? [];
-  const lines = [COLUMNS.map(csvField).join(',')];
-  for (const r of rows) {
-    lines.push(
-      [
-        r.status ?? '',
-        r.tag ?? '',
-        r.triggerEvent ?? '',
-        r.firedVia ?? '',
-        r.signal ?? '',
-        r.screenshot ? 'captured (image in PDF/DOC export)' : '',
-      ]
-        .map(csvField)
-        .join(','),
-    );
-  }
-  return lines.join('\r\n');
-}
 
 // Print-safe (light) palette per status label — pill fg/bg + a left accent for the row. Keyed by the
 // human status string the renderer sends (matches the on-screen V_STATUS labels).

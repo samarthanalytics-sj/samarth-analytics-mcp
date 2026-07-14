@@ -181,27 +181,20 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
   ipcMain.handle('verify:exportResults', async (e, format: unknown, defaultName: unknown, payload: unknown) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const fmt = String(format ?? '').toLowerCase();
-    if (fmt !== 'csv' && fmt !== 'pdf' && fmt !== 'doc' && fmt !== 'xlsx') throw new Error('Unsupported export format.');
+    if (fmt !== 'pdf' && fmt !== 'doc' && fmt !== 'xlsx') throw new Error('Unsupported export format.');
     const p = payload as VerifyExportPayload;
     if (!p || !Array.isArray(p.rows) || !p.counts) throw new Error('Invalid verification results.');
     const base = String(defaultName ?? 'Tag verification')
       .replace(/[\\/:*?"<>|]/g, '_')
-      .replace(/\.(csv|pdf|doc|xlsx)$/i, '')
+      .replace(/\.(pdf|doc|xlsx)$/i, '')
       .trim() || 'Tag verification';
     const filter =
-      fmt === 'csv' ? { name: 'CSV', extensions: ['csv'] }
-      : fmt === 'doc' ? { name: 'Word', extensions: ['doc'] }
+      fmt === 'doc' ? { name: 'Word', extensions: ['doc'] }
       : fmt === 'xlsx' ? { name: 'Excel', extensions: ['xlsx'] }
       : { name: 'PDF', extensions: ['pdf'] };
     const opts = { title: 'Export tag verification', defaultPath: `${base}.${fmt}`, filters: [filter] };
     const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (canceled || !filePath) return null;
-
-    const { verifyResultsCsv, verifyResultsHtml } = await import('../../shared/verify-results-html');
-    // Prepend a UTF-8 BOM so Excel decodes the file as UTF-8 (without it Excel assumes the legacy ANSI
-    // codepage and renders the em dash "—" and other non-ASCII as mojibake like "â€"").
-    const BOM = String.fromCharCode(0xfeff);
-    if (fmt === 'csv') return await writeReportFile(filePath, BOM + verifyResultsCsv(p));
 
     // XLSX: a native Excel workbook with each proof screenshot EMBEDDED in the Proof cell (the one
     // spreadsheet format that can show the image). exceljs is heavy, so it's imported only for this branch.
@@ -209,6 +202,8 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
       const { buildVerifyResultsXlsx } = await import('./verify-results-xlsx');
       return await writeReportFile(filePath, await buildVerifyResultsXlsx(p));
     }
+
+    const { verifyResultsHtml } = await import('../../shared/verify-results-html');
 
     // PDF + DOC share the same styled HTML; DOC adds the MS-Office namespaces (word:true). The proof
     // screenshots are inline data-URIs, so the document is self-contained.

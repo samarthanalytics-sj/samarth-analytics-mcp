@@ -4991,7 +4991,7 @@ function VerifyPanel({
   const [aligned, setAligned] = useState<Record<string, string>>({});
   const [aligning, setAligning] = useState<string | null>(null);
   // Results-download state: which format is currently exporting (or false), + the "saved to …" note.
-  const [vExporting, setVExporting] = useState<false | 'csv' | 'xlsx' | 'pdf' | 'doc'>(false);
+  const [vExporting, setVExporting] = useState<false | 'xlsx' | 'pdf' | 'doc'>(false);
   const [vExportNote, setVExportNote] = useState('');
   // The CURRENT editable workspace. "Auto" mints a preview which SUBMITS the workspace (now read-only)
   // and hands back a fresh one; a later "Align Event Name" write must target THAT, not the stale
@@ -5150,7 +5150,7 @@ function VerifyPanel({
   // Download the FULL results (every verdict, in display order — fired → config → server → untested →
   // not-firing) as CSV, PDF or DOC. The PDF/DOC embed each tag's proof screenshot. Independent of the
   // on-screen filters so the report is always the complete run. Read-only; no GTM access.
-  async function downloadVerify(format: 'csv' | 'xlsx' | 'pdf' | 'doc'): Promise<void> {
+  async function downloadVerify(format: 'xlsx' | 'pdf' | 'doc'): Promise<void> {
     if (!vResult || vExporting) return;
     setVExporting(format);
     setVExportNote('');
@@ -5410,13 +5410,13 @@ function VerifyPanel({
             {!vResult.error && vResult.verdicts.length > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                 <span style={{ ...styles.muted, fontSize: 12.5, marginRight: 2 }}>Download results:</span>
-                {(['csv', 'xlsx', 'pdf', 'doc'] as const).map((fmt) => (
+                {(['xlsx', 'pdf', 'doc'] as const).map((fmt) => (
                   <button
                     key={fmt}
                     style={{ ...vStyles.dlBtn, ...(vExporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
                     disabled={!!vExporting}
                     onClick={() => void downloadVerify(fmt)}
-                    title={fmt === 'csv' ? 'Download the results table as a CSV spreadsheet (text only — no image; use XLSX/PDF/DOC for the proof image)' : fmt === 'xlsx' ? 'Download an Excel (.xlsx) spreadsheet with each tag’s proof screenshot embedded' : `Download a styled ${fmt.toUpperCase()} report with each tag's proof screenshot`}
+                    title={fmt === 'xlsx' ? 'Download an Excel (.xlsx) spreadsheet with each tag’s proof screenshot embedded' : `Download a styled ${fmt.toUpperCase()} report with each tag's proof screenshot`}
                   >
                     {vExporting === fmt ? '…' : '⬇'} {fmt === 'xlsx' ? 'EXCEL' : fmt.toUpperCase()}
                   </button>
