@@ -16,9 +16,9 @@ const csvField = (v: unknown): string => `"${String(v ?? '').replace(/"/g, '""')
 
 const COLUMNS = ['Status', 'Tag', 'GA4 event name', 'Event', 'Fired via', 'Signal', 'Proof'] as const;
 
-/** The results as a CSV spreadsheet (one row per verdict). Screenshots can't live in a CSV, so the Proof
- *  column records whether one was captured ("screenshot" / ""). The event name is the tag's configured GA4
- *  event (e.g. "phone_click"), which is the value the report is meant to surface. */
+/** The results as a CSV spreadsheet (one row per verdict). A CSV/Excel file cannot embed an image, so the
+ *  Proof column notes that a screenshot exists and where to see it — the PDF and DOC exports embed the
+ *  actual image. The event name is the tag's configured GA4 event (e.g. "phone_click"). */
 export function verifyResultsCsv(payload: VerifyExportPayload): string {
   const rows = payload.rows ?? [];
   const lines = [COLUMNS.map(csvField).join(',')];
@@ -31,7 +31,7 @@ export function verifyResultsCsv(payload: VerifyExportPayload): string {
         r.triggerEvent ?? '',
         r.firedVia ?? '',
         r.signal ?? '',
-        r.screenshot ? 'screenshot' : '',
+        r.screenshot ? 'captured (image in PDF/DOC export)' : '',
       ]
         .map(csvField)
         .join(','),

@@ -197,7 +197,10 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     if (canceled || !filePath) return null;
 
     const { verifyResultsCsv, verifyResultsHtml } = await import('../../shared/verify-results-html');
-    if (fmt === 'csv') return await writeReportFile(filePath, verifyResultsCsv(p));
+    // Prepend a UTF-8 BOM so Excel decodes the file as UTF-8 (without it Excel assumes the legacy ANSI
+    // codepage and renders the em dash "—" and other non-ASCII as mojibake like "â€"").
+    const BOM = String.fromCharCode(0xfeff);
+    if (fmt === 'csv') return await writeReportFile(filePath, BOM + verifyResultsCsv(p));
 
     // PDF + DOC share the same styled HTML; DOC adds the MS-Office namespaces (word:true). The proof
     // screenshots are inline data-URIs, so the document is self-contained.
