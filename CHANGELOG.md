@@ -1,3 +1,9 @@
+## [1.309.14](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.13...v1.309.14) (2026-07-14)
+
+### Bug Fixes
+
+* **desktop:** show each account's email in Settings → Accounts, not truncated ([66b19bc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/66b19bcda9bc0ed6a3ca3b9c0855dfb3921a216f))
+
 ## [1.309.13](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.12...v1.309.13) (2026-07-13)
 
 ### Bug Fixes
