@@ -1,3 +1,9 @@
+## [1.313.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.312.0...v1.313.0) (2026-07-14)
+
+### Features
+
+* **desktop:** single Tag-verification entry — remove "Verify firing", keep "Verify with Tag Assistant" ([9687e55](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9687e5514ee0db83a7af53615d13c105496da807))
+
 ## [1.312.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.311.0...v1.312.0) (2026-07-14)
 
 ### Features
