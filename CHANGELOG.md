@@ -1,3 +1,9 @@
+## [1.310.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.310.0...v1.310.1) (2026-07-14)
+
+### Bug Fixes
+
+* **verify:** match generic form tags to forms by core name ↔ title ([#550](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/550)) ([93cf964](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/93cf964f45f3fd386d28d6f34193de98ad93ec62))
+
 ## [1.310.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.14...v1.310.0) (2026-07-14)
 
 ### Features
