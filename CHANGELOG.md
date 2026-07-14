@@ -1,3 +1,9 @@
+## [1.316.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.315.1...v1.316.0) (2026-07-14)
+
+### Features
+
+* **verify:** add Stop button to cancel website scanning during tag verification ([#558](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/558)) ([3922a9c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3922a9c1a8b6431819242655cbd9290facc44914))
+
 ## [1.315.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.315.0...v1.315.1) (2026-07-14)
 
 ### Bug Fixes
