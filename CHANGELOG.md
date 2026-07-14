@@ -1,3 +1,9 @@
+## [1.325.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.324.1...v1.325.0) (2026-07-14)
+
+### Features
+
+* **desktop:** headline metric cards with green/red deltas on the GA4 audit report ([015bb31](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/015bb31c3a7c90ec6b410d46d9caeabb5695173d))
+
 ## [1.324.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.324.0...v1.324.1) (2026-07-14)
 
 ### Bug Fixes
