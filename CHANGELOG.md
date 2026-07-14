@@ -1,3 +1,9 @@
+## [1.310.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.14...v1.310.0) (2026-07-14)
+
+### Features
+
+* **audit:** add Workspace Comparison to the Container Audit module ([#549](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/549)) ([b78d01b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b78d01b1ffdd10f53dc58e09903d7e6a5417aae0))
+
 ## [1.309.14](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.13...v1.309.14) (2026-07-14)
 
 ### Bug Fixes
