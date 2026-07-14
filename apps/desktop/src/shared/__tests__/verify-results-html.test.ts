@@ -1,6 +1,6 @@
-// Pure tests for the tag-verification results export builders (CSV + HTML). Run:
+// Pure tests for the tag-verification results export builders (HTML). Run:
 // tsx src/shared/__tests__/verify-results-html.test.ts
-import { verifyResultsCsv, verifyResultsHtml, siteLabel } from '../verify-results-html';
+import { verifyResultsHtml, siteLabel } from '../verify-results-html';
 import type { VerifyExportPayload, VerifyExportRow } from '../ipc';
 
 let passed = 0;
@@ -31,26 +31,6 @@ const payload = (over: Partial<VerifyExportPayload> = {}): VerifyExportPayload =
 check('siteLabel strips www + scheme', siteLabel('https://www.example.com/x') === 'example.com');
 check('siteLabel of a bad url is empty', siteLabel('not a url') === '');
 check('siteLabel of undefined is empty', siteLabel(undefined) === '');
-
-// ── verifyResultsCsv ─────────────────────────────────────────────────────────────
-const csv = verifyResultsCsv(payload());
-const csvLines = csv.split('\r\n');
-check('csv: header has the 6 columns (no GA4 event)', csvLines[0] === '"Status","Tag","Event","Fired via","Signal","Proof"');
-check('csv: header has no GA4 event column', !csvLines[0].includes('GA4 event'));
-check('csv: one data row per verdict (+ header)', csvLines.length === 3);
-check('csv: row carries the trigger event', csvLines[1].includes('"gtm.linkClick"'));
-check('csv: proof column notes a screenshot present + where to see it', csvLines[1].endsWith('"captured (image in PDF/DOC export)"'));
-check('csv: proof column blank when no screenshot', csvLines[2].endsWith('""'));
-
-// CSV escaping: quotes doubled, commas + newlines survive inside quotes.
-const tricky = verifyResultsCsv(payload({ rows: [{ status: 'Fired', tag: 'Tag "A", with comma\nand newline' }] }));
-check('csv: doubles embedded quotes', tricky.includes('"Tag ""A"", with comma\nand newline"'));
-// The whole data row is RFC-4180: every field quoted, inner quotes doubled, comma+newline safe inside.
-check(
-  'csv: every field is fully quoted/escaped',
-  tricky.split('\r\n')[1] === '"Fired","Tag ""A"", with comma\nand newline","","","",""',
-  JSON.stringify(tricky.split('\r\n')[1]),
-);
 
 // ── verifyResultsHtml ────────────────────────────────────────────────────────────
 const html = verifyResultsHtml(payload());
