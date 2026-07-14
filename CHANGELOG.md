@@ -1,3 +1,9 @@
+## [1.320.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.319.0...v1.320.0) (2026-07-14)
+
+### Features
+
+* **desktop:** native Excel (.xlsx) export for Workspace Comparison ([ba005cf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ba005cfed536558b5972e7dfa08597cfcf707ea4))
+
 ## [1.319.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.318.0...v1.319.0) (2026-07-14)
 
 ### Features
