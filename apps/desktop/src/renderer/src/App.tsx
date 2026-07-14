@@ -35,6 +35,8 @@ import type {
   VerifyTagsResult,
   VerifyTagsOptions,
   VerifyProgressView,
+  VerifyExportRow,
+  VerifyExportPayload,
   FormTagVerifyPlanResult,
   SubmitFormVerifyResult,
 } from '../../shared/ipc';
@@ -4378,6 +4380,27 @@ const V_STATUS: Record<VStatus, { short: string; icon: string; color: string; bg
   untested: { short: 'Untested', icon: '⏭', color: 'var(--text-muted)', bg: 'var(--surface-3)', border: 'var(--border-2)' },
   issue: { short: 'Issue', icon: '⚠', color: 'var(--c-red)', bg: 'var(--c-red-bg)', border: 'var(--c-red-border)' },
 };
+// The evidence line for a verdict — GTM's own monitor report when authoritative, else the observed
+// beacon host(s). Shared by the results table AND the export so the download matches the screen.
+function verdictSignal(v: VVerdict): string {
+  return v.verifiedByMonitor
+    ? (v.fired ? `GTM monitor: ${v.monitorStatus ?? 'fired'}${typeof v.monitorExecutionMs === 'number' ? ` · ${v.monitorExecutionMs}ms` : ''}` : '—')
+    : v.observedBeacons?.length ? v.observedBeacons.join(', ') : v.fired ? 'GA4 hit' : '—';
+}
+// One verdict → an export row, reusing the same status/label/signal logic the on-screen table uses, so
+// the CSV/PDF/DOC download is a faithful copy of what's shown. `eventName` is the tag's configured GA4
+// event (e.g. "phone_click"); `event` is the dataLayer/trigger event (e.g. "gtm.linkClick").
+function verdictToExportRow(v: VVerdict): VerifyExportRow {
+  return {
+    status: V_STATUS[verdictStatus(v)].short,
+    tag: v.tagName,
+    ...(v.eventName ? { eventName: v.eventName } : {}),
+    ...(v.event ? { triggerEvent: v.event } : {}),
+    firedVia: verdictKindLabel(v).label,
+    signal: verdictSignal(v),
+    ...(v.screenshot ? { screenshot: v.screenshot } : {}),
+  };
+}
 
 /** The result scorecard — big-number stat cards, one per meaningful outcome. */
 function VerifyScorecard({ fired, config, server, untested, issues }: { fired: number; config: number; server: number; untested: number; issues: number }): JSX.Element {
@@ -4508,7 +4531,7 @@ function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: 
       <table style={vStyles.table}>
         <thead>
           <tr>
-            {['Status', 'Tag', 'Event', 'Fired via', 'Signal', ...(anyProof ? ['Proof'] : [])].map((h) => (
+            {['Status', 'Tag', 'GA4 event', 'Event', 'Fired via', 'Signal', ...(anyProof ? ['Proof'] : [])].map((h) => (
               <th key={h} style={vStyles.th}>{h}</th>
             ))}
           </tr>
@@ -4520,15 +4543,14 @@ function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: 
             const via = verdictKindLabel(v);
             // For an authoritative (monitor) verdict the "signal" is GTM's own report — its status +
             // execution time — not a sniffed beacon. Otherwise fall back to the observed beacon host(s).
-            const signal = v.verifiedByMonitor
-              ? (v.fired ? `GTM monitor: ${v.monitorStatus ?? 'fired'}${typeof v.monitorExecutionMs === 'number' ? ` · ${v.monitorExecutionMs}ms` : ''}` : '—')
-              : v.observedBeacons?.length ? v.observedBeacons.join(', ') : v.fired ? 'GA4 hit' : '—';
+            const signal = verdictSignal(v);
             // Keep the per-tag "why / how to verify" guidance on hover so the compact table doesn't lose it.
             const hint = st === 'untested' ? verdictHowToTest(v) : v.reason ?? '';
             return (
               <tr key={v.tagId} title={hint || undefined}>
                 <td style={vStyles.td}><span style={{ ...vStyles.statusPill, color: m.color, background: m.bg, borderColor: m.border }}>{m.icon} {m.short}</span></td>
                 <td style={{ ...vStyles.td, color: 'var(--text)', fontWeight: 500 }}>{v.tagName}</td>
+                <td style={vStyles.td}>{v.eventName ? <code style={mdStyles.code}>{v.eventName}</code> : <span style={styles.muted}>—</span>}</td>
                 <td style={vStyles.td}>{v.event ? <code style={mdStyles.code}>{v.event}</code> : <span style={styles.muted}>—</span>}</td>
                 <td style={{ ...vStyles.td, whiteSpace: 'nowrap' }}><span title={via.label} aria-hidden>{via.icon}</span> {via.label}</td>
                 <td style={{ ...vStyles.td, color: 'var(--text-muted)', fontSize: 12 }}>{signal}</td>
@@ -4597,6 +4619,7 @@ const vStyles: Record<string, React.CSSProperties> = {
   th: { textAlign: 'left', padding: '9px 12px', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', background: 'var(--surface-2)', borderBottom: '1px solid var(--border-2)', fontWeight: 600, whiteSpace: 'nowrap' },
   td: { padding: '9px 12px', borderTop: '1px solid var(--border)', color: 'var(--text-dim)', verticalAlign: 'middle' },
   statusPill: { display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid transparent', borderRadius: 20, padding: '2px 9px', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' },
+  dlBtn: { background: 'var(--surface-2)', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '5px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 },
 };
 
 // Real-submit form review (Phase 1b): fetch a page's forms + their OWN fields (Option 2) and show
@@ -4969,6 +4992,9 @@ function VerifyPanel({
   // Event-name aligns applied this session (tagId → new event name), so the row shows "✓ aligned".
   const [aligned, setAligned] = useState<Record<string, string>>({});
   const [aligning, setAligning] = useState<string | null>(null);
+  // Results-download state: which format is currently exporting (or false), + the "saved to …" note.
+  const [vExporting, setVExporting] = useState<false | 'csv' | 'pdf' | 'doc'>(false);
+  const [vExportNote, setVExportNote] = useState('');
   // The CURRENT editable workspace. "Auto" mints a preview which SUBMITS the workspace (now read-only)
   // and hands back a fresh one; a later "Align Event Name" write must target THAT, not the stale
   // context prop (which lags a render behind) — otherwise "Workspace is already submitted".
@@ -5122,6 +5148,34 @@ function VerifyPanel({
   // Concrete DLV trigger suggestion per tag, so each not-firing tag shows ITS OWN "create this trigger"
   // inline — no separate, repetitive suggestions section listing the same tags again.
   const suggByTag = new Map((vResult?.taSuggestions ?? []).map((s) => [s.tagName, s] as const));
+
+  // Download the FULL results (every verdict, in display order — fired → config → server → untested →
+  // not-firing) as CSV, PDF or DOC. The PDF/DOC embed each tag's proof screenshot. Independent of the
+  // on-screen filters so the report is always the complete run. Read-only; no GTM access.
+  async function downloadVerify(format: 'csv' | 'pdf' | 'doc'): Promise<void> {
+    if (!vResult || vExporting) return;
+    setVExporting(format);
+    setVExportNote('');
+    try {
+      const ordered = [...firedReal, ...firedSynthetic, ...serverRelayed, ...inconclusive, ...notFired];
+      const host = (() => { try { return new URL(vResult.url).hostname.replace(/^www\./, ''); } catch { return 'site'; } })();
+      const payload: VerifyExportPayload = {
+        url: vResult.url,
+        authoritative: vResult.verifiedByMonitor,
+        counts: { fired: firedReal.length, config: firedSynthetic.length, server: serverRelayed.length, untested: inconclusive.length, issues: notFired.length },
+        ...(vResult.pagesDriven?.length ? { pagesDriven: vResult.pagesDriven.length } : {}),
+        ...(vResult.pagesCrawled ? { pagesCrawled: vResult.pagesCrawled } : {}),
+        ...(vResult.pagesTotal ? { pagesTotal: vResult.pagesTotal } : {}),
+        rows: ordered.map(verdictToExportRow),
+      };
+      const saved = await window.desktop.tags.exportVerifyResults(format, `Tag verification - ${host}`, payload);
+      setVExportNote(saved ? `✓ Saved to ${saved}` : 'Export cancelled');
+    } catch (e) {
+      setVNote({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setVExporting(false);
+    }
+  }
 
   // ── Results filters (client-side over the verdicts) ────────────────────────────────────────────────
   const platformOf = (name: string): string =>
@@ -5358,6 +5412,25 @@ function VerifyPanel({
               <div style={{ fontWeight: 600, color: 'var(--c-red)' }}>Error: {vResult.error}</div>
             ) : (
               <VerifyScorecard fired={firedReal.length} config={firedSynthetic.length} server={serverRelayed.length} untested={inconclusive.length} issues={notFired.length} />
+            )}
+            {/* Download the full results (every verdict) — CSV spreadsheet, or a styled PDF / Word doc that
+                embeds each tag's proof screenshot. Independent of the on-screen filters. */}
+            {!vResult.error && vResult.verdicts.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                <span style={{ ...styles.muted, fontSize: 12.5, marginRight: 2 }}>Download results:</span>
+                {(['csv', 'pdf', 'doc'] as const).map((fmt) => (
+                  <button
+                    key={fmt}
+                    style={{ ...vStyles.dlBtn, ...(vExporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+                    disabled={!!vExporting}
+                    onClick={() => void downloadVerify(fmt)}
+                    title={fmt === 'csv' ? 'Download the results table as a CSV spreadsheet' : `Download a styled ${fmt.toUpperCase()} report with each tag's proof screenshot`}
+                  >
+                    {vExporting === fmt ? '…' : '⬇'} {fmt.toUpperCase()}
+                  </button>
+                ))}
+                {vExportNote && <span style={{ ...styles.muted, fontSize: 12 }}>{vExportNote}</span>}
+              </div>
             )}
             {/* Filter + search bar for the results below — status / interaction type / platform / free text. */}
             {!vResult.error && vResult.verdicts.length > 0 && (

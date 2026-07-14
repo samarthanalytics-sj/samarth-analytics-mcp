@@ -12,7 +12,9 @@
 // supplied, and nothing is ever published.
 
 import { ipcMain, dialog, BrowserWindow } from 'electron';
-import { writeFile } from 'node:fs/promises';
+import { writeFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { GoogleDataService } from '../google/data-service';
 import { auditWorkspace } from '../google/audit-runner';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
@@ -20,7 +22,7 @@ import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-bu
 import { withQuotaRetry } from '../google/quota-retry';
 import { reportHtmlDocument, dedupedReportPath } from '../google/ga4-report-export';
 import { gtmAuditHtml, type GtmAuditHtmlMeta } from '../../shared/gtm-audit-html';
-import type { AuditReportView, WorkspaceCompareResultView } from '../../shared/ipc';
+import type { AuditReportView, WorkspaceCompareResultView, VerifyExportPayload } from '../../shared/ipc';
 
 // A prior download of the same report may still be open in a PDF viewer, which locks the file
 // (EBUSY/EPERM/EACCES on Windows). Fall back to a suffixed name so a re-download always succeeds.
@@ -167,6 +169,54 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
       return await writeReportFile(filePath, pdf);
     } finally {
       if (!pdfWin.isDestroyed()) pdfWin.destroy();
+    }
+  });
+
+  // Export the TAG-VERIFICATION results (the Tag-verification tab's table) to a file the user picks:
+  //   csv → a text spreadsheet (Status · Tag · GA4 event name · Trigger event · Fired via · Signal)
+  //   pdf → the styled results report (scorecard + table) with each tag's PROOF SCREENSHOT embedded
+  //   doc → the same HTML written as .doc (Word/Docs open it) — screenshots embedded as data-URIs
+  // The renderer sends the derived rows + counts (VerifyExportPayload); the pure builders format them.
+  // Read-only export — no GTM access. Returns the saved path, or null if cancelled.
+  ipcMain.handle('verify:exportResults', async (e, format: unknown, defaultName: unknown, payload: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const fmt = String(format ?? '').toLowerCase();
+    if (fmt !== 'csv' && fmt !== 'pdf' && fmt !== 'doc') throw new Error('Unsupported export format.');
+    const p = payload as VerifyExportPayload;
+    if (!p || !Array.isArray(p.rows) || !p.counts) throw new Error('Invalid verification results.');
+    const base = String(defaultName ?? 'Tag verification')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\.(csv|pdf|doc)$/i, '')
+      .trim() || 'Tag verification';
+    const filter =
+      fmt === 'csv' ? { name: 'CSV', extensions: ['csv'] }
+      : fmt === 'doc' ? { name: 'Word', extensions: ['doc'] }
+      : { name: 'PDF', extensions: ['pdf'] };
+    const opts = { title: 'Export tag verification', defaultPath: `${base}.${fmt}`, filters: [filter] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+
+    const { verifyResultsCsv, verifyResultsHtml } = await import('../../shared/verify-results-html');
+    if (fmt === 'csv') return await writeReportFile(filePath, verifyResultsCsv(p));
+
+    // PDF + DOC share the same styled HTML; DOC adds the MS-Office namespaces (word:true). The proof
+    // screenshots are inline data-URIs, so the document is self-contained.
+    const html = reportHtmlDocument(base, '', { word: fmt === 'doc', execHtml: verifyResultsHtml(p) });
+    if (fmt === 'doc') return await writeReportFile(filePath, html);
+
+    // PDF: render the HTML in a hidden, script-disabled window and print it. The document can be several
+    // MB once the JPEG proofs are embedded, which can exceed the data:-URL navigation limit — so write it
+    // to a temp file and loadFile() it (robust for any size) instead of a data: URL.
+    const tmpHtml = join(tmpdir(), `samarth-verify-${process.pid}-${Date.now()}.html`);
+    await writeFile(tmpHtml, html, 'utf8');
+    const pdfWin = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    try {
+      await pdfWin.loadFile(tmpHtml);
+      const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+      return await writeReportFile(filePath, pdf);
+    } finally {
+      if (!pdfWin.isDestroyed()) pdfWin.destroy();
+      await unlink(tmpHtml).catch(() => {});
     }
   });
 
