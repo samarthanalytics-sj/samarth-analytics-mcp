@@ -6932,7 +6932,7 @@ function SettingsView({
           {accounts.length === 0 && <p style={styles.muted}>No accounts yet — connect one below.</p>}
           {accounts.map((a) => (
             <div key={a.id} style={{ ...styles.acctRow, ...(a.isActive ? styles.acctRowActive : {}) }}>
-              <span style={{ ...styles.dot, background: a.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
+              <span style={{ ...styles.dot, marginTop: 6, background: a.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
               {rowRename?.id === a.id ? (
                 <input
                   autoFocus
@@ -6948,21 +6948,23 @@ function SettingsView({
                   onBlur={() => { const v = rowRename.value.trim(); setRowRename(null); void run(() => window.desktop.accounts.rename(a.id, v)); }}
                 />
               ) : (
-                <span style={styles.acctRowName} title={a.email}>
-                  {a.displayName || a.email}
-                  {a.displayName ? <span style={styles.acctRowEmail}> · {a.email}</span> : null}
+                <span style={styles.acctIdentity}>
+                  <span style={styles.acctRowName} title={a.displayName || a.email}>{a.displayName || a.email}</span>
+                  {a.displayName ? <span style={styles.acctRowEmail} title={a.email}>{a.email}</span> : null}
                 </span>
               )}
-              {a.isActive ? (
-                <span style={styles.acctActiveBadge}>Active</span>
-              ) : (
-                <button style={styles.acctRowBtn} onClick={() => void run(() => window.desktop.accounts.setActive(a.id))}>Switch</button>
-              )}
-              <button style={styles.acctRowBtn} onClick={() => setRowRename({ id: a.id, value: a.displayName ?? '' })}>Rename</button>
-              {a.hasGoogleToken && (
-                <button style={styles.acctRowBtn} onClick={() => run(() => window.desktop.google.disconnect(a.id))} title="Sign this account out of Google (keeps the account)">Disconnect</button>
-              )}
-              <button style={styles.acctRowBtnDanger} onClick={() => run(() => window.desktop.accounts.remove(a.id))} title="Remove this account entirely">Remove</button>
+              <div style={styles.acctRowActions}>
+                {a.isActive ? (
+                  <span style={styles.acctActiveBadge}>Active</span>
+                ) : (
+                  <button style={styles.acctRowBtn} onClick={() => void run(() => window.desktop.accounts.setActive(a.id))}>Switch</button>
+                )}
+                <button style={styles.acctRowBtn} onClick={() => setRowRename({ id: a.id, value: a.displayName ?? '' })}>Rename</button>
+                {a.hasGoogleToken && (
+                  <button style={styles.acctRowBtn} onClick={() => run(() => window.desktop.google.disconnect(a.id))} title="Sign this account out of Google (keeps the account)">Disconnect</button>
+                )}
+                <button style={styles.acctRowBtnDanger} onClick={() => run(() => window.desktop.accounts.remove(a.id))} title="Remove this account entirely">Remove</button>
+              </div>
             </div>
           ))}
         </div>
@@ -7324,10 +7326,12 @@ const styles: Record<string, React.CSSProperties> = {
   activeAcctManage: { fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 },
   // Settings → Accounts list rows.
   acctRows: { display: 'flex', flexDirection: 'column', gap: 6 },
-  acctRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', flexWrap: 'wrap' },
+  acctRow: { display: 'flex', alignItems: 'flex-start', gap: 8, padding: '9px 10px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', flexWrap: 'wrap' },
   acctRowActive: { borderColor: 'var(--c-green-border)', background: 'var(--c-green-bg)' },
-  acctRowName: { flex: 1, minWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text)', fontWeight: 500 },
-  acctRowEmail: { color: 'var(--text-muted)', fontWeight: 400 },
+  acctIdentity: { flex: 1, minWidth: 150, display: 'flex', flexDirection: 'column', gap: 1, overflow: 'hidden', paddingTop: 1 },
+  acctRowName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text)', fontWeight: 500, lineHeight: 1.35 },
+  acctRowEmail: { color: 'var(--text-muted)', fontWeight: 400, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  acctRowActions: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingTop: 1 },
   acctActiveBadge: { fontSize: 11, fontWeight: 600, color: 'var(--c-green)', background: 'var(--surface)', border: '1px solid var(--c-green-border)', borderRadius: 20, padding: '2px 10px' },
   acctRowBtn: { background: 'var(--surface-2)', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
   acctRowBtnDanger: { background: 'transparent', color: 'var(--c-red)', border: '1px solid var(--c-red-border)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
