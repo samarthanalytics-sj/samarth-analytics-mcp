@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Sections, type Ga4ReportInput } from '../ga4-report';
+import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Sections, buildGa4Visuals, type Ga4ReportInput } from '../ga4-report';
 import type { Ga4CampaignReport } from '../ga4-campaigns';
 import { auditGa4, type Ga4PropertySnapshot } from '../ga4-audit';
 import { auditGa4DataQuality } from '../ga4-data-quality';
@@ -991,6 +991,25 @@ test('the reliability receipt attributes every missing point to a named gate + f
   const exec = buildGa4ExecSummary(input({ baseline: b, growth: growthOf(b, 'Organic Social') }));
   assert.ok(exec.reliabilityWhy.length >= 3, 'structured receipt present for the panel/PDF');
   assert.ok(exec.reliabilityWhy[0].lostPts >= exec.reliabilityWhy[exec.reliabilityWhy.length - 1].lostPts, 'sorted biggest loss first');
+});
+
+test('metric cards: value + signed delta vs prior + trust verdict; no phantom revenue card', () => {
+  const inp = input();
+  const b = inp.baseline!;
+  const v = buildGa4Visuals(inp);
+  const cards = v.metrics ?? [];
+  assert.ok(cards.length >= 2, 'sessions + key events always present: ' + cards.length);
+  const sessions = cards.find((c) => c.label === 'Sessions')!;
+  assert.equal(sessions.value, Math.round(b.sessions).toLocaleString('en-US'));
+  const expected = ((b.sessions - b.priorSessions) / b.priorSessions) * 100;
+  assert.ok(Math.abs((sessions.deltaPct ?? 0) - expected) < 0.001, 'delta = (cur-prior)/prior');
+  assert.ok(['safe', 'caution', 'unverified', 'do_not_quote'].includes(sessions.verdict), 'verdict from the trust matrix');
+  // Revenue card only when either window recorded revenue.
+  const noRev = buildGa4Visuals(input({ baseline: { ...b, revenue: 0, priorRevenue: 0 } }));
+  assert.ok(!(noRev.metrics ?? []).some((c) => c.label === 'Revenue'), 'lead-gen property gets no revenue card');
+  // Zero prior window -> delta null (no fake infinity).
+  const fresh = buildGa4Visuals(input({ baseline: { ...b, priorSessions: 0 } }));
+  assert.equal((fresh.metrics ?? []).find((c) => c.label === 'Sessions')!.deltaPct, null);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

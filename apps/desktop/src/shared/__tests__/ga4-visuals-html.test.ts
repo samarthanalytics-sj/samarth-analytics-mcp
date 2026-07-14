@@ -198,5 +198,27 @@ test('findChannelSpike catches a burst STRADDLING a bucket boundary (each half <
   ]), null, 'no pair qualifies on steady traffic');
 });
 
+test('metric cards render: green rise, red fall, amber note on unverified metrics', () => {
+  const v = view({
+    metrics: [
+      { label: 'Sessions', value: '45,140', prior: '43,467', deltaPct: 3.85, verdict: 'safe' },
+      { label: 'Key events', value: '801', prior: '851', deltaPct: -5.89, verdict: 'safe' },
+      { label: 'Revenue', value: 'INR 161,000', prior: 'INR 144,000', deltaPct: 11.81, verdict: 'unverified' },
+    ],
+  });
+  const html = ga4VisualsHtml(v);
+  const up = html.indexOf('\u25B2 +3.85%');
+  const down = html.indexOf('\u25BC -5.89%');
+  assert.ok(up >= 0, 'rise rendered with the up arrow and + sign');
+  assert.ok(down >= 0, 'fall rendered with the down arrow and - sign');
+  assert.ok(html.slice(Math.max(0, up - 120), up).includes('#1E7A48'), 'rise is green');
+  assert.ok(html.slice(Math.max(0, down - 120), down).includes('#A63527'), 'fall is red');
+  assert.ok(/unverified - treat with caution/.test(html), 'trust note on the unverified revenue card');
+  assert.ok(html.includes('vs prior (43,467)'), 'prior value stated');
+  // No metrics -> no card row, section still renders.
+  const none = ga4VisualsHtml(view({ metrics: [] }));
+  assert.ok(!/vs prior \(/.test(none));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
