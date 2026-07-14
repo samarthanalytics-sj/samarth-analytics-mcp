@@ -2491,13 +2491,18 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
 export interface ServerContainerSnapshot {
   /** The container's tagging server URL(s) — empty if the host isn't provisioned yet. */
   taggingServerUrls: string[];
-  clients: Array<{ clientId: string; name: string; type: string }>;
+  /** parameter is optional (older callers/tests) — carried so client configs join the
+   *  {{variable}} reference scan. */
+  clients: Array<{ clientId: string; name: string; type: string; parameter?: unknown[] }>;
   tags: AuditTag[];
   /** The server workspace's triggers — needed to compare firing conditions (duplicate
    *  GA4 relays) and to scan filter values (URL-encoded event names). Optional so older
    *  callers/tests that omit it still type-check; treated as [] when absent. */
   triggers?: AuditTrigger[];
-  transformations: Array<{ transformationId: string; name: string; type: string }>;
+  /** The server workspace's variables — enables the unused-variable + dangling-reference
+   *  checks. Optional so older callers/tests still type-check. */
+  variables?: ContainerSnapshot['variables'];
+  transformations: Array<{ transformationId: string; name: string; type: string; parameter?: unknown[] }>;
 }
 
 export const AUDIT_SERVER_BOUNDARY =
@@ -2852,6 +2857,78 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     });
   }
 
+  // ── Clients: legacy UA client + duplicate same-type clients ──
+  for (const c of s.clients) {
+    if (!/(^|_)ua($|_)/i.test(c.type)) continue;
+    push({
+      severity: 'low',
+      category: 'deprecated',
+      message: `Client "${c.name}" is a Universal Analytics client — UA is sunset, so the requests it claims feed a product that no longer reports, and it competes to claim requests ahead of your active clients.`,
+      recommendation: 'Delete the UA client (delete_gtm_client) unless something still deliberately depends on its claiming behavior.',
+      autoFixable: false,
+    });
+  }
+  const clientsByType = new Map<string, typeof s.clients>();
+  for (const c of s.clients) {
+    const arr = clientsByType.get(c.type) ?? [];
+    arr.push(c);
+    clientsByType.set(c.type, arr);
+  }
+  for (const [type, group] of clientsByType) {
+    if (group.length < 2) continue;
+    push({
+      severity: 'low',
+      confidence: 'likely',
+      category: 'unused',
+      message: `${group.length} clients of the same type "${type}" (${group.map((c) => `"${c.name}"`).join(', ')}) — an incoming request is claimed by ONE client (priority order), so a same-type duplicate usually never claims anything: dead weight or an accidental copy.`,
+      recommendation: 'Keep one client per type unless they are deliberately split by path/priority; delete the accidental copy.',
+      autoFixable: false,
+    });
+  }
+
+  // ── Variables: unused + dangling {{references}} — REUSES the web audit's helpers over the server
+  // workspace, with client + transformation parameters added to the reference corpus so a variable
+  // used only by a client/transformation is never called unused. Server-only built-ins are excluded
+  // from the dangling check (the web built-ins list doesn't know them). ──
+  if (s.variables?.length || s.tags.length) {
+    const pseudo: ContainerSnapshot = { tags: s.tags, triggers, variables: s.variables ?? [] };
+    const extraCorpus = JSON.stringify([
+      ...s.clients.map((c) => c.parameter ?? []),
+      ...s.transformations.map((x) => x.parameter ?? []),
+    ]);
+    for (const v of findUnusedVariables(pseudo)) {
+      if (extraCorpus.includes(`{{${v.name}}}`)) continue; // used by a client/transformation
+      push({
+        severity: 'low',
+        category: 'unused',
+        checkId: 'unused-variable',
+        resource: { kind: 'variable', id: v.variableId, name: v.name },
+        message: `Variable "${v.name}" appears unused — no server tag, trigger, client, transformation, or variable in this workspace references it.`,
+        recommendation: 'Delete it if it is truly unused — first confirm it is not relied on by a published version or a field this audit cannot inspect.',
+        autoFixable: false,
+      });
+    }
+    const SERVER_BUILTINS = new Set([
+      'Event Name', 'Client Name', 'Container ID', 'Container Version', 'Debug Mode', 'Environment Name',
+      'Random Number', 'Request Method', 'Request Path', 'Query String', 'Page Location', 'Page Hostname',
+      'Page Path', 'Referrer', 'IP Address', 'User Agent', 'Visitor Region',
+    ]);
+    for (const d of findDanglingVariableReferences(pseudo)) {
+      const missing = d.missing.filter((m) => !SERVER_BUILTINS.has(m) && !m.startsWith('_'));
+      if (!missing.length) continue;
+      const noun = d.resource.kind === 'tag' ? 'Server tag' : d.resource.kind === 'trigger' ? 'Trigger' : 'Variable';
+      push({
+        severity: 'medium',
+        confidence: 'likely',
+        category: 'variable',
+        resource: d.resource,
+        message: `${noun} "${d.resource.name}" references ${missing.map((m) => `{{${m}}}`).join(', ')} which this workspace does not define — the reference resolves to undefined at runtime.`,
+        recommendation: 'Create the missing variable (for server containers usually an Event Data variable reading the incoming field), or fix the reference.',
+        autoFixable: false,
+      });
+    }
+  }
+
   const nameCounts = new Map<string, number>();
   for (const t of s.tags) nameCounts.set(t.name, (nameCounts.get(t.name) ?? 0) + 1);
   for (const [name, c] of nameCounts) if (c > 1) push({ severity: 'medium', category: 'naming', message: `Duplicate server-tag name "${name}" (${c} tags) — hard to tell them apart.`, recommendation: 'Rename so each tag is uniquely identifiable.', autoFixable: false });
@@ -2859,7 +2936,7 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
   const summary = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const f of findings) summary[f.severity]++;
   return {
-    counts: { tags: s.tags.length, triggers: triggers.length, variables: 0, clients: s.clients.length, transformations: s.transformations.length, findings: findings.length },
+    counts: { tags: s.tags.length, triggers: triggers.length, variables: s.variables?.length ?? 0, clients: s.clients.length, transformations: s.transformations.length, findings: findings.length },
     summary,
     findings,
     boundary: AUDIT_SERVER_BOUNDARY,

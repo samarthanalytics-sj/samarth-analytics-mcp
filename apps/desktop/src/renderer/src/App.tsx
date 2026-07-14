@@ -7107,6 +7107,114 @@ function ServerContainerPanel({
           )}
         </>
       )}
+      {Boolean(active?.hasGoogleToken && ctx?.accountId) && <ServerAuditSection accountId={ctx!.accountId!} onError={onError} />}
+    </div>
+  );
+}
+
+/** Audit an EXISTING server container (read-only, config-level): pick the server container +
+ *  workspace, run the sGTM audit engine (clients claiming, duplicate GA4 relays that double-count,
+ *  dead URL-encoded triggers, Meta CAPI pitfalls, legacy/duplicate clients, unused variables,
+ *  dangling references) and render the findings. Never reads server runtime logs. */
+function ServerAuditSection({ accountId, onError }: { accountId: string; onError: (m: string) => void }): JSX.Element {
+  const [containers, setContainers] = useState<GtmContainerView[]>([]);
+  const [containerId, setContainerId] = useState('');
+  const [workspaces, setWorkspaces] = useState<GtmWorkspaceView[]>([]);
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [running, setRunning] = useState(false);
+  const [report, setReport] = useState<AuditReportView | null>(null);
+
+  useEffect(() => {
+    setContainers([]); setContainerId(''); setReport(null);
+    window.desktop.data
+      .listGtmContainers(accountId)
+      .then((list) => {
+        const servers = list.filter((c) => (c.usageContext ?? []).some((u) => /server/i.test(u)));
+        setContainers(servers);
+        if (servers.length === 1) setContainerId(servers[0].containerId);
+      })
+      .catch((e) => onError(e instanceof Error ? e.message : String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId]);
+
+  useEffect(() => {
+    setWorkspaces([]); setWorkspaceId(''); setReport(null);
+    if (!containerId) return;
+    window.desktop.data
+      .listGtmWorkspaces(accountId, containerId)
+      .then((ws) => {
+        setWorkspaces(ws);
+        if (ws.length) setWorkspaceId(ws[0].workspaceId);
+      })
+      .catch((e) => onError(e instanceof Error ? e.message : String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [containerId]);
+
+  async function run(): Promise<void> {
+    if (!containerId || !workspaceId || running) return;
+    onError('');
+    setRunning(true);
+    setReport(null);
+    try {
+      setReport(await window.desktop.gtm.auditServer(accountId, containerId, workspaceId));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const SEV: Record<string, string> = { critical: 'var(--c-red)', high: 'var(--c-red)', medium: 'var(--c-amber)', low: 'var(--text-muted)', info: 'var(--text-faint)' };
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontWeight: 700, fontSize: 15 }}>Audit a server container</div>
+      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        Read-only configuration audit of an EXISTING server container: does a client claim incoming requests, do tags have triggers and destination ids, duplicate GA4 relays (double-counting), dead URL-encoded triggers, Meta CAPI pitfalls (swapped pixel/token, test code left on), legacy or duplicate clients, unused variables and broken {'{{references}}'}. Configuration only — it never reads server runtime logs.
+      </div>
+      {containers.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>No server container found in this GTM account yet — create one above, or check the account picked in the GTM bar.</div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select style={{ ...styles.input, maxWidth: 320 }} value={containerId} onChange={(e) => setContainerId(e.target.value)}>
+            <option value="">Select server container…</option>
+            {containers.map((c) => (
+              <option key={c.containerId} value={c.containerId}>{c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
+            ))}
+          </select>
+          <select style={{ ...styles.input, maxWidth: 220 }} value={workspaceId} disabled={!containerId || !workspaces.length} onChange={(e) => setWorkspaceId(e.target.value)}>
+            {!workspaces.length && <option value="">{containerId ? 'Loading workspaces…' : 'Pick a container first'}</option>}
+            {workspaces.map((w) => (
+              <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
+            ))}
+          </select>
+          <button style={styles.primaryBtn} disabled={!containerId || !workspaceId || running} onClick={() => void run()}>
+            {running ? 'Auditing…' : '▶ Audit server container'}
+          </button>
+        </div>
+      )}
+      {report && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>
+            {report.counts.tags} tag(s) · {report.counts.triggers} trigger(s) · {report.counts.variables} variable(s) · {report.counts.clients ?? 0} client(s) · {report.counts.transformations ?? 0} transformation(s) — <b style={{ color: 'var(--text)' }}>{report.counts.findings} finding(s)</b>
+            {report.counts.findings > 0 && <> ({report.summary.critical} critical · {report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low · {report.summary.info} info)</>}
+          </div>
+          {report.findings.length === 0 && <div style={{ fontSize: 13, color: 'var(--c-green)', fontWeight: 600 }}>✓ No configuration issues found in this server workspace.</div>}
+          {report.findings.map((f, i) => (
+            <div key={i} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: SEV[f.severity] ?? 'var(--text-muted)' }}>{f.severity}</span>
+                {f.resource && <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{f.resource.kind}: {f.resource.name}</span>}
+                {f.confidence && f.confidence !== 'certain' && <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>({f.confidence})</span>}
+              </div>
+              <div style={{ fontSize: 13, lineHeight: 1.5 }}>{f.message}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 4 }}><b>Fix:</b> {f.recommendation}</div>
+            </div>
+          ))}
+          <div style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+            Boundary: this audit reads the container CONFIGURATION via the GTM API. Whether the deployed host receives traffic, and what each destination accepted, need runtime checks (Tag verification / vendor Test Events).
+          </div>
+        </div>
+      )}
     </div>
   );
 }

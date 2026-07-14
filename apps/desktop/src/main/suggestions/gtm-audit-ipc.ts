@@ -16,7 +16,7 @@ import { writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GoogleDataService } from '../google/data-service';
-import { auditWorkspace } from '../google/audit-runner';
+import { auditWorkspace, auditServerWorkspace } from '../google/audit-runner';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-builders';
 import { withQuotaRetry } from '../google/quota-retry';
@@ -50,6 +50,17 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     // The audit READ (list tags/triggers/variables) also trips GTM's per-minute quota
     // during heavy sessions — retry it with backoff so the panel doesn't crash on a 429.
     return withQuotaRetry(() => auditWorkspace(data, { accountId: a, containerId: c, workspaceId: w }));
+  });
+
+  // SERVER container audit (read-only): the sGTM config audit — clients claiming, duplicate GA4
+  // relays, dead URL-encoded triggers, CAPI pitfalls, legacy/duplicate clients, unused variables,
+  // dangling references. Config-level only; never reads server runtime logs.
+  ipcMain.handle('gtm:auditServer', (_e, accountId: unknown, containerId: unknown, workspaceId: unknown) => {
+    const a = String(accountId ?? '');
+    const c = String(containerId ?? '');
+    const w = String(workspaceId ?? '');
+    if (!a || !c || !w) throw new Error('Pick the server container and workspace first.');
+    return withQuotaRetry(() => auditServerWorkspace(data, { accountId: a, containerId: c, workspaceId: w }));
   });
 
   // WORKSPACE COMPARISON (read): diff 2+ workspaces in the same container side by side. Fetches each

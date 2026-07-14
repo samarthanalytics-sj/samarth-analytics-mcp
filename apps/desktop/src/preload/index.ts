@@ -333,6 +333,8 @@ const api = {
 
   // Container audit: surface the existing audit engine + its fixes as a panel.
   gtm: {
+    auditServer: (accountId: string, containerId: string, workspaceId: string): Promise<AuditReportView> =>
+      ipcRenderer.invoke('gtm:auditServer', accountId, containerId, workspaceId),
     audit: (accountId: string, containerId: string, workspaceId: string): Promise<AuditReportView> =>
       ipcRenderer.invoke('gtm:audit', accountId, containerId, workspaceId),
     // The container's EXISTING GA4/base tags translated into verify-engine inputs, so
