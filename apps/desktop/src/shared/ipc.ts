@@ -104,6 +104,8 @@ export interface GtmContainerView {
   name: string;
   publicId: string;
   path: string;
+  /** GTM usage contexts (e.g. ['web'] or ['server']) — lets pickers filter server containers. */
+  usageContext?: string[];
 }
 
 export interface GtmWorkspaceView {

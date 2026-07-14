@@ -1496,6 +1496,51 @@ test('auditServerContainer is quiet on a healthy server container', () => {
   assert.equal(rep.hasGa4Config, true, 'GA4 client present');
 });
 
+test('auditServerContainer: legacy UA client + duplicate same-type clients flagged', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [
+      { clientId: '1', name: 'GA4 Client', type: 'gaaw_client' },
+      { clientId: '2', name: 'GA4 Client copy', type: 'gaaw_client' },
+      { clientId: '3', name: 'Old UA', type: 'ua_client' },
+    ],
+    transformations: [],
+    tags: [{ tagId: '1', name: 'GA4 - Server', type: 'sgtmgaaw', firingTriggerId: ['10'], blockingTriggerId: [], paused: false, parameter: [{ type: 'template', key: 'measurementId', value: 'G-1' }], consentSettings: null }],
+  });
+  const msgs = rep.findings.map((f) => f.message).join(' | ');
+  assert.ok(/Universal Analytics client/i.test(msgs), 'UA client flagged as legacy');
+  assert.ok(/2 clients of the same type "gaaw_client"/i.test(msgs), 'same-type duplicate flagged');
+});
+
+test('auditServerContainer: unused variables + dangling references, client params count as usage, server built-ins excluded', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4 Client', type: 'gaaw_client', parameter: [{ type: 'template', key: 'cookieName', value: '{{used by client}}' }] }],
+    transformations: [],
+    tags: [{
+      tagId: '1', name: 'GA4 - Server', type: 'sgtmgaaw', firingTriggerId: ['10'], blockingTriggerId: [], paused: false,
+      parameter: [
+        { type: 'template', key: 'measurementId', value: '{{const - mid}}' },
+        { type: 'template', key: 'eventName', value: '{{ghost var}}' },
+        { type: 'template', key: 'serverEventName', value: '{{Event Name}}' },
+      ],
+      consentSettings: null,
+    }],
+    variables: [
+      { variableId: 'v1', name: 'const - mid', type: 'c', parameter: [] },
+      { variableId: 'v2', name: 'used by client', type: 'c', parameter: [] },
+      { variableId: 'v3', name: 'truly orphaned', type: 'c', parameter: [] },
+    ],
+  });
+  const msgs = rep.findings.map((f) => f.message).join(' | ');
+  assert.ok(/"truly orphaned" appears unused/i.test(msgs), 'orphan variable flagged');
+  assert.ok(!/"used by client" appears unused/i.test(msgs), 'client parameter usage keeps a variable off the unused list');
+  assert.ok(!/"const - mid" appears unused/i.test(msgs), 'tag-referenced variable not unused');
+  assert.ok(/references \{\{ghost var\}\}/i.test(msgs), 'dangling reference flagged');
+  assert.ok(!/Event Name/.test(rep.findings.filter((f) => f.category === 'variable').map((f) => f.message).join(' | ')), 'server built-in {{Event Name}} not called dangling');
+  assert.equal(rep.counts.variables, 3, 'variable count populated');
+});
+
 // Helpers for the corpus-motivated server checks (Vocal Minority GTM-57RM3QCT reference).
 const clientNameEqualsGa4 = [
   { type: 'EQUALS', parameter: [

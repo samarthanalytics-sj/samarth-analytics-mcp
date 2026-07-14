@@ -295,6 +295,7 @@ export class GoogleDataService {
         name: c.name ?? '(unnamed)',
         publicId: c.publicId ?? '',
         path: c.path ?? '',
+        usageContext: (c.usageContext ?? []).map(String),
       }));
       console.log('[gtm-containers] account %s: %d container(s): %s', accountId, views.length, views.map((c) => `${c.name}${c.publicId ? ' ' + c.publicId : ''}`).join(', ') || '—');
       return views;
@@ -1492,7 +1493,8 @@ export class GoogleDataService {
       (r) => r.data.client,
       (r) => r.data.nextPageToken
     );
-    return clients.map((c) => ({ clientId: c.clientId ?? '', name: c.name ?? '(unnamed)', type: c.type ?? '' }));
+    // parameter is carried so the server audit can scan client configs for {{variable}} references.
+    return clients.map((c) => ({ clientId: c.clientId ?? '', name: c.name ?? '(unnamed)', type: c.type ?? '', parameter: (c.parameter as unknown[] | undefined) ?? [] }));
   }
 
   async createGtmClient(
@@ -1537,7 +1539,7 @@ export class GoogleDataService {
       (r) => r.data.transformation,
       (r) => r.data.nextPageToken
     );
-    return xs.map((t) => ({ transformationId: t.transformationId ?? '', name: t.name ?? '(unnamed)', type: t.type ?? '' }));
+    return xs.map((t) => ({ transformationId: t.transformationId ?? '', name: t.name ?? '(unnamed)', type: t.type ?? '', parameter: (t.parameter as unknown[] | undefined) ?? [] }));
   }
 
   async createGtmTransformation(
@@ -1565,7 +1567,7 @@ export class GoogleDataService {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
-    const [container, rawTags, rawTriggers, clients, transformations] = await Promise.all([
+    const [container, rawTags, rawTriggers, rawVariables, clients, transformations] = await Promise.all([
       gtm.accounts.containers.get({ path: `accounts/${accountId}/containers/${containerId}` }),
       collectPages(
         (pageToken) => gtm.accounts.containers.workspaces.tags.list({ parent, pageToken }),
@@ -1577,15 +1579,21 @@ export class GoogleDataService {
         (r) => r.data.trigger,
         (r) => r.data.nextPageToken
       ),
+      collectPages(
+        (pageToken) => gtm.accounts.containers.workspaces.variables.list({ parent, pageToken }),
+        (r) => r.data.variable,
+        (r) => r.data.nextPageToken
+      ),
       this.listGtmClients(accountId, containerId, workspaceId),
       this.listGtmTransformations(accountId, containerId, workspaceId),
     ]);
-    const { tags, triggers } = toSnapshot(rawTags, rawTriggers, []);
+    const { tags, triggers, variables } = toSnapshot(rawTags, rawTriggers, rawVariables);
     return {
       taggingServerUrls: container.data.taggingServerUrls ?? [],
       clients,
       tags,
       triggers,
+      variables,
       transformations,
     };
   }
