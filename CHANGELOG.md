@@ -1,3 +1,9 @@
+## [1.324.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.324.0...v1.324.1) (2026-07-14)
+
+### Bug Fixes
+
+* **desktop:** clearer Workspace Comparison labels (real workspace names, no em dashes) ([#567](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/567)) ([41775d1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/41775d10d5d498394ec706b54b2ae85a09a18aa3))
+
 ## [1.324.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.323.0...v1.324.0) (2026-07-14)
 
 ### Features
