@@ -375,6 +375,9 @@ const api = {
       ipcRenderer.invoke('gtm:exportWorkspaceDiff', defaultName, content),
     exportWorkspaceDiffPdf: (defaultName: string, result: WorkspaceCompareResultView): Promise<string | null> =>
       ipcRenderer.invoke('gtm:exportWorkspaceDiffPdf', defaultName, result),
+    // Native Excel (.xlsx) — Summary + Common + Uncommon + Detailed-diff sheets with full config values.
+    exportWorkspaceDiffXlsx: (defaultName: string, result: WorkspaceCompareResultView): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportWorkspaceDiffXlsx', defaultName, result),
     ensureGa4Config: (ctx: {
       accountId: string;
       containerId: string;

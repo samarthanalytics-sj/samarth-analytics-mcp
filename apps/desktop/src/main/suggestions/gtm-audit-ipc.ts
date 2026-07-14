@@ -122,6 +122,23 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     }
   });
 
+  // Export the workspace comparison as a native Excel (.xlsx) workbook — Summary + Common + Uncommon +
+  // Detailed-diff sheets, with each row's full config values (no truncation) and colour-coded merge/diff
+  // status. The renderer sends the full compare result; buildWorkspaceDiffXlsx() (exceljs, main-only) makes
+  // the Buffer. Read-only export — no GTM access. Returns the saved path, or null if cancelled.
+  ipcMain.handle('gtm:exportWorkspaceDiffXlsx', async (e, defaultName: unknown, result: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const base = String(defaultName ?? 'GTM workspace comparison')
+      .replace(/[\\/:*?"<>|]/g, '_').replace(/\.xlsx$/i, '').trim() || 'GTM workspace comparison';
+    const r = result as WorkspaceCompareResultView;
+    if (!r || !Array.isArray(r.pairs) || !Array.isArray(r.workspaces) || !r.consolidated) throw new Error('Invalid comparison result.');
+    const opts = { title: 'Export workspace comparison', defaultPath: `${base}.xlsx`, filters: [{ name: 'Excel', extensions: ['xlsx'] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    const { buildWorkspaceDiffXlsx } = await import('../google/workspace-diff-xlsx');
+    return await writeReportFile(filePath, await buildWorkspaceDiffXlsx(r));
+  });
+
   // Save the container-audit findings to a file the user picks (CSV or Markdown — the renderer
   // builds the content; this just writes it). Read-only export, no GTM access. Returns the saved
   // path, or null if cancelled. The dialog filter is inferred from the default filename's extension.

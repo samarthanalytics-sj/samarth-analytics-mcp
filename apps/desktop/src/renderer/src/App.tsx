@@ -5834,7 +5834,7 @@ function WorkspaceComparison({
     }
   }
 
-  async function generateReport(format: 'csv' | 'pdf'): Promise<void> {
+  async function generateReport(format: 'csv' | 'pdf' | 'xlsx'): Promise<void> {
     if (!result || exporting) return;
     setExporting(true);
     setExportNote('');
@@ -5844,6 +5844,8 @@ function WorkspaceComparison({
       let saved: string | null = null;
       if (format === 'pdf') {
         saved = await window.desktop.gtm.exportWorkspaceDiffPdf(`${base}.pdf`, result);
+      } else if (format === 'xlsx') {
+        saved = await window.desktop.gtm.exportWorkspaceDiffXlsx(`${base}.xlsx`, result);
       } else {
         const { workspaceDiffCsv } = await import('../../shared/gtm-workspace-diff-html');
         saved = await window.desktop.gtm.exportWorkspaceDiff(`${base}.csv`, workspaceDiffCsv(result));
@@ -5929,7 +5931,7 @@ function WorkspaceDiffResults({
   setSearch: (s: string) => void;
   exporting: boolean;
   exportNote: string;
-  onReport: (f: 'csv' | 'pdf') => void;
+  onReport: (f: 'csv' | 'pdf' | 'xlsx') => void;
 }): JSX.Element {
   const q = search.trim().toLowerCase();
   const con = result.consolidated;
@@ -6134,8 +6136,9 @@ function WorkspaceDiffResults({
         <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>Report generation</div>
         <div style={{ ...styles.muted, fontSize: 12, margin: '2px 0 8px' }}>Generate a detailed comparison report — summary, common + uncommon items, merge recommendations and differences (separate from the on-screen comparison).</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button style={{ ...styles.primaryBtn, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('xlsx')} disabled={exporting} title="Native Excel workbook — Summary, Common, Uncommon and Detailed-diff sheets with full config values">⬇ Export Excel (.xlsx)</button>
           <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('pdf')} disabled={exporting}>Generate PDF report</button>
-          <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('csv')} disabled={exporting}>Export CSV (Excel)</button>
+          <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('csv')} disabled={exporting}>Export CSV</button>
           {exportNote && <span style={{ ...styles.muted, fontSize: 12 }}>{exportNote}</span>}
         </div>
       </div>
