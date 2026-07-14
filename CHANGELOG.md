@@ -1,3 +1,9 @@
+## [1.318.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.317.0...v1.318.0) (2026-07-14)
+
+### Features
+
+* **desktop:** add Network & Location settings + per-run egress banner ([#560](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/560)) ([edeb6ef](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/edeb6efc55bc82ec0c85efbd650ed75ebfd52682))
+
 ## [1.317.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.316.0...v1.317.0) (2026-07-14)
 
 ### Features
