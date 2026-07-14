@@ -637,13 +637,8 @@ export interface VerifyTagVerdict {
    *  missing browser beacon is expected, not proof it's broken. Filed under a distinct "relayed
    *  server-side" group (always also `inconclusive`), never "not firing". */
   serverRelay?: boolean;
-  /** The event the tag fired on: the dataLayer/trigger event (e.g. "gtm.linkClick") in an authoritative
-   *  monitor run, or the observed GA4 event on the firing hit in a beacon run. */
+  /** The event name observed on the firing hit (GA4). */
   event?: string;
-  /** The GA4 event name CONFIGURED on the tag (its "Event Name" field, e.g. "phone_click") — what the tag
-   *  actually sends to GA4, as opposed to `event` (the event it fired on). Surfaced in the results table +
-   *  exports so the report shows the event we add/use in GTM, not just the trigger. */
-  eventName?: string;
   /** Why it did not fire (always set when fired=false). */
   reason?: string;
   /** For a "fired but wrong event name" verdict: the GA4 event name(s) actually observed on the
@@ -732,8 +727,6 @@ export interface VerifyExportRow {
   status: string;
   /** The tag's name, e.g. "GA4 - Event - Phone Click Tag". */
   tag: string;
-  /** The GA4 event name configured on the tag (its "Event Name", e.g. "phone_click"). */
-  eventName?: string;
   /** The event it fired on (the dataLayer/trigger event, e.g. "gtm.linkClick", in an authoritative run). */
   triggerEvent?: string;
   /** How the fire was observed — the interaction-kind label, e.g. "Tag" / "Click" / "Form". */

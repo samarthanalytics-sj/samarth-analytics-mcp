@@ -1,8 +1,8 @@
 // Tag-verification results export — pure builders for the downloadable report (CSV + a styled HTML body
 // that the IPC turns into a PDF via Electron printToPDF, or writes as .doc with the MS-Office namespaces).
 // Mirrors the on-screen results table: the scorecard counts, the coverage line, and one row per verdict
-// (Status · Tag · GA4 event name · Trigger event · Fired via · Signal · Proof). The PDF/DOC embed each
-// tag's proof SCREENSHOT as an <img> (data-URI); the CSV is text-only (it lists whether proof exists).
+// (Status · Tag · Event · Fired via · Signal · Proof). The PDF/DOC embed each tag's proof SCREENSHOT as
+// an <img> (data-URI); the CSV is text-only (it lists whether proof exists).
 // No I/O, no DOM — safe to run in the main process and unit-testable.
 
 import type { VerifyExportPayload, VerifyExportRow } from './ipc';
@@ -14,11 +14,11 @@ const esc = (s: string): string =>
 // safe inside the quotes. null/undefined → empty. Non-strings are stringified.
 const csvField = (v: unknown): string => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
-const COLUMNS = ['Status', 'Tag', 'GA4 event name', 'Event', 'Fired via', 'Signal', 'Proof'] as const;
+const COLUMNS = ['Status', 'Tag', 'Event', 'Fired via', 'Signal', 'Proof'] as const;
 
 /** The results as a CSV spreadsheet (one row per verdict). A CSV/Excel file cannot embed an image, so the
  *  Proof column notes that a screenshot exists and where to see it — the PDF and DOC exports embed the
- *  actual image. The event name is the tag's configured GA4 event (e.g. "phone_click"). */
+ *  actual image. */
 export function verifyResultsCsv(payload: VerifyExportPayload): string {
   const rows = payload.rows ?? [];
   const lines = [COLUMNS.map(csvField).join(',')];
@@ -27,7 +27,6 @@ export function verifyResultsCsv(payload: VerifyExportPayload): string {
       [
         r.status ?? '',
         r.tag ?? '',
-        r.eventName ?? '',
         r.triggerEvent ?? '',
         r.firedVia ?? '',
         r.signal ?? '',
@@ -72,7 +71,6 @@ function resultRow(r: VerifyExportRow): string {
     '<tr>' +
     cell(statusPill(r.status)) +
     cell(`<span style="font-weight:600;color:#1a1a1a">${text(r.tag)}</span>`) +
-    cell(code(r.eventName)) +
     cell(code(r.triggerEvent)) +
     cell(`<span style="white-space:nowrap">${text(r.firedVia)}</span>`) +
     cell(`<span style="color:#4b5563;font-size:12px">${text(r.signal)}</span>`) +

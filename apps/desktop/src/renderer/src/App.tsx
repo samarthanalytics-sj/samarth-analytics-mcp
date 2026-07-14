@@ -4394,7 +4394,6 @@ function verdictToExportRow(v: VVerdict): VerifyExportRow {
   return {
     status: V_STATUS[verdictStatus(v)].short,
     tag: v.tagName,
-    ...(v.eventName ? { eventName: v.eventName } : {}),
     ...(v.event ? { triggerEvent: v.event } : {}),
     firedVia: verdictKindLabel(v).label,
     signal: verdictSignal(v),
@@ -4531,7 +4530,7 @@ function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: 
       <table style={vStyles.table}>
         <thead>
           <tr>
-            {['Status', 'Tag', 'GA4 event', 'Event', 'Fired via', 'Signal', ...(anyProof ? ['Proof'] : [])].map((h) => (
+            {['Status', 'Tag', 'Event', 'Fired via', 'Signal', ...(anyProof ? ['Proof'] : [])].map((h) => (
               <th key={h} style={vStyles.th}>{h}</th>
             ))}
           </tr>
@@ -4550,7 +4549,6 @@ function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: 
               <tr key={v.tagId} title={hint || undefined}>
                 <td style={vStyles.td}><span style={{ ...vStyles.statusPill, color: m.color, background: m.bg, borderColor: m.border }}>{m.icon} {m.short}</span></td>
                 <td style={{ ...vStyles.td, color: 'var(--text)', fontWeight: 500 }}>{v.tagName}</td>
-                <td style={vStyles.td}>{v.eventName ? <code style={mdStyles.code}>{v.eventName}</code> : <span style={styles.muted}>—</span>}</td>
                 <td style={vStyles.td}>{v.event ? <code style={mdStyles.code}>{v.event}</code> : <span style={styles.muted}>—</span>}</td>
                 <td style={{ ...vStyles.td, whiteSpace: 'nowrap' }}><span title={via.label} aria-hidden>{via.icon}</span> {via.label}</td>
                 <td style={{ ...vStyles.td, color: 'var(--text-muted)', fontSize: 12 }}>{signal}</td>

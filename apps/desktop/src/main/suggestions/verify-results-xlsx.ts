@@ -11,13 +11,12 @@ const IMG_DATA_URI = /^data:image\/(jpeg|jpg|png|gif|webp);base64,([A-Za-z0-9+/=
 const COLUMNS: Array<{ header: string; key: keyof Row; width: number }> = [
   { header: 'Status', key: 'status', width: 12 },
   { header: 'Tag', key: 'tag', width: 46 },
-  { header: 'GA4 event name', key: 'eventName', width: 20 },
   { header: 'Event', key: 'triggerEvent', width: 18 },
   { header: 'Fired via', key: 'firedVia', width: 12 },
   { header: 'Signal', key: 'signal', width: 24 },
   { header: 'Proof', key: 'proof', width: 27 },
 ];
-type Row = { status: string; tag: string; eventName: string; triggerEvent: string; firedVia: string; signal: string; proof: string };
+type Row = { status: string; tag: string; triggerEvent: string; firedVia: string; signal: string; proof: string };
 
 /** Build a self-contained .xlsx workbook of the verification results with proof images embedded. */
 export async function buildVerifyResultsXlsx(payload: VerifyExportPayload): Promise<Buffer> {
@@ -35,7 +34,6 @@ export async function buildVerifyResultsXlsx(payload: VerifyExportPayload): Prom
     const excelRow = ws.addRow({
       status: r.status ?? '',
       tag: r.tag ?? '',
-      eventName: r.eventName ?? '',
       triggerEvent: r.triggerEvent ?? '',
       firedVia: r.firedVia ?? '',
       signal: r.signal ?? '',
@@ -48,8 +46,8 @@ export async function buildVerifyResultsXlsx(payload: VerifyExportPayload): Prom
       const raw = m[1] === 'jpg' ? 'jpeg' : m[1];
       if (raw === 'jpeg' || raw === 'png' || raw === 'gif') {
         const imageId = wb.addImage({ base64: m[2].replace(/\s+/g, ''), extension: raw });
-        // Anchor the image into the Proof cell (0-based col 6) at this row (0-based). Sized to the cell.
-        ws.addImage(imageId, { tl: { col: 6, row: rowNum - 1 }, ext: { width: 184, height: 108 } });
+        // Anchor the image into the Proof cell (0-based col 5) at this row (0-based). Sized to the cell.
+        ws.addImage(imageId, { tl: { col: 5, row: rowNum - 1 }, ext: { width: 184, height: 108 } });
         excelRow.height = 86; // points (~115px) so the 108px image fits with a little padding
       } else {
         excelRow.getCell('proof').value = 'captured (unsupported image type)';
