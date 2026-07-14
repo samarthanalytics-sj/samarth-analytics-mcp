@@ -24,6 +24,7 @@ import type {
   GtmContainerView,
   GtmContext,
   GtmWorkspaceView,
+  ServerCoverageView,
   LlmProvider,
   NetworkLocationView,
   NetworkConnectionType,
@@ -7123,15 +7124,52 @@ function ServerAuditSection({ accountId, onError }: { accountId: string; onError
   const [workspaceId, setWorkspaceId] = useState('');
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<AuditReportView | null>(null);
+  // Web <-> Server coverage: the web side of the comparison + its result.
+  const [allContainers, setAllContainers] = useState<GtmContainerView[]>([]);
+  const [webContainerId, setWebContainerId] = useState('');
+  const [webWorkspaces, setWebWorkspaces] = useState<GtmWorkspaceView[]>([]);
+  const [webWorkspaceId, setWebWorkspaceId] = useState('');
+  const [covRunning, setCovRunning] = useState(false);
+  const [coverage, setCoverage] = useState<ServerCoverageView | null>(null);
+
+  useEffect(() => {
+    setWebWorkspaces([]); setWebWorkspaceId(''); setCoverage(null);
+    if (!webContainerId) return;
+    window.desktop.data
+      .listGtmWorkspaces(accountId, webContainerId)
+      .then((ws) => {
+        setWebWorkspaces(ws);
+        if (ws.length) setWebWorkspaceId(ws[0].workspaceId);
+      })
+      .catch((e) => onError(e instanceof Error ? e.message : String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [webContainerId]);
+
+  async function runCoverage(): Promise<void> {
+    if (!containerId || !workspaceId || !webContainerId || !webWorkspaceId || covRunning) return;
+    onError('');
+    setCovRunning(true);
+    setCoverage(null);
+    try {
+      setCoverage(await window.desktop.gtm.serverCoverage(accountId, webContainerId, webWorkspaceId, containerId, workspaceId));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCovRunning(false);
+    }
+  }
 
   useEffect(() => {
     setContainers([]); setContainerId(''); setReport(null);
     window.desktop.data
       .listGtmContainers(accountId)
       .then((list) => {
+        setAllContainers(list);
         const servers = list.filter((c) => (c.usageContext ?? []).some((u) => /server/i.test(u)));
         setContainers(servers);
         if (servers.length === 1) setContainerId(servers[0].containerId);
+        const webs = list.filter((c) => !(c.usageContext ?? []).some((u) => /server/i.test(u)));
+        if (webs.length === 1) setWebContainerId(webs[0].containerId);
       })
       .catch((e) => onError(e instanceof Error ? e.message : String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -7213,6 +7251,101 @@ function ServerAuditSection({ accountId, onError }: { accountId: string; onError
           <div style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
             Boundary: this audit reads the container CONFIGURATION via the GTM API. Whether the deployed host receives traffic, and what each destination accepted, need runtime checks (Tag verification / vendor Test Events).
           </div>
+        </div>
+      )}
+
+      {/* ── Web ↔ Server coverage: is every web event actually handled server-side? ── */}
+      {containers.length > 0 && (
+        <div style={{ borderTop: '1px dashed var(--border)', marginTop: 6, paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Web ↔ Server coverage</div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            Compares the WEB container's events against the server container selected above: GA4 events are covered as a group by the GA4 client + relay; CAPI destinations (Meta / TikTok / LinkedIn / Pinterest) are matched per event. Also checks the two silent killers: the web Google tag not pointing at the tagging server, and a web/server Measurement ID mismatch.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <select style={{ ...styles.input, maxWidth: 320 }} value={webContainerId} onChange={(e) => setWebContainerId(e.target.value)}>
+              <option value="">Select web container…</option>
+              {allContainers.filter((c) => !(c.usageContext ?? []).some((u) => /server/i.test(u))).map((c) => (
+                <option key={c.containerId} value={c.containerId}>{c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
+              ))}
+            </select>
+            <select style={{ ...styles.input, maxWidth: 220 }} value={webWorkspaceId} disabled={!webContainerId || !webWorkspaces.length} onChange={(e) => setWebWorkspaceId(e.target.value)}>
+              {!webWorkspaces.length && <option value="">{webContainerId ? 'Loading workspaces…' : 'Pick a web container first'}</option>}
+              {webWorkspaces.map((w) => (
+                <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
+              ))}
+            </select>
+            <button style={styles.primaryBtn} disabled={!containerId || !workspaceId || !webContainerId || !webWorkspaceId || covRunning} onClick={() => void runCoverage()}>
+              {covRunning ? 'Comparing…' : '▶ Compare coverage'}
+            </button>
+            {!containerId && <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>pick the server container above first</span>}
+          </div>
+          {coverage && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {/* score strip */}
+              <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px' }}>
+                {[
+                  { label: 'Overall', v: `${coverage.score.overall}` },
+                  { label: 'Configuration', v: `${coverage.score.configuration}` },
+                  { label: 'Coverage', v: coverage.score.coverage == null ? 'n/a' : `${coverage.score.coverage}%` },
+                ].map((k) => (
+                  <div key={k.label}>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)' }}>{k.label}</div>
+                    <div style={{ fontSize: 20, fontWeight: 700 }}>{k.v}</div>
+                  </div>
+                ))}
+                <div style={{ flex: 1 }} />
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'center' }}>
+                  {coverage.summary.covered} covered · {coverage.summary.missing} missing{coverage.summary.notMatchable ? ` · ${coverage.summary.notMatchable} not matchable (excluded from %)` : ''}
+                </div>
+              </div>
+              {/* wiring + id warnings */}
+              {coverage.webWiring.status === 'not_wired' && (
+                <div style={{ fontSize: 12.5, color: 'var(--c-red)', border: '1px solid var(--c-red-border, var(--border))', borderRadius: 8, padding: '8px 12px' }}>
+                  ✗ The web Google tag has NO server_container_url — the web container sends nothing to this server container. Point the Google tag at the tagging server (or use the create flow above).
+                </div>
+              )}
+              {coverage.webWiring.status === 'url_mismatch' && (
+                <div style={{ fontSize: 12.5, color: 'var(--c-amber)', border: '1px solid var(--c-amber-border, var(--border))', borderRadius: 8, padding: '8px 12px' }}>
+                  ⚠ The web Google tag points at {coverage.webWiring.webUrl}, but this server container's tagging URL is {coverage.webWiring.serverUrls.join(', ') || '(unset)'} — different hosts.
+                </div>
+              )}
+              {coverage.ga4.idsMatch === false && (
+                <div style={{ fontSize: 12.5, color: 'var(--c-amber)', border: '1px solid var(--c-amber-border, var(--border))', borderRadius: 8, padding: '8px 12px' }}>
+                  ⚠ Measurement ID mismatch: web sends {coverage.ga4.webMeasurementIds.join(', ')} but the server relay forwards {coverage.ga4.serverMeasurementIds.join(', ')} — events land in a different property.
+                </div>
+              )}
+              {/* coverage table */}
+              <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                  <thead>
+                    <tr>
+                      {['Event', 'Platform', 'Web tag', 'Server', 'Covered by / fix'].map((h) => (
+                        <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-faint)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {coverage.rows.map((r, i) => (
+                      <tr key={i}>
+                        <td style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', fontWeight: 600 }}>{r.event}</td>
+                        <td style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', textTransform: 'uppercase', fontSize: 11 }}>{r.platform}</td>
+                        <td style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>{r.webTag}</td>
+                        <td style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', fontWeight: 700, color: r.status === 'covered' ? 'var(--c-green)' : r.status === 'missing' ? 'var(--c-red)' : 'var(--text-faint)' }}>
+                          {r.status === 'covered' ? '✓ Covered' : r.status === 'missing' ? '✗ Missing' : '— Not matchable'}
+                        </td>
+                        <td style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>{r.by ?? r.recommendation ?? ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {coverage.unusedServer.length > 0 && (
+                <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>
+                  Server tags with no matching web event ({coverage.unusedServer.length}): {coverage.unusedServer.map((u) => `"${u.tag}" (${u.event})`).join(', ')} — server-only by design, or cleanup candidates.
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

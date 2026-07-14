@@ -999,6 +999,16 @@ export interface AuditFindingView {
   autoFixable: boolean;
   fix?: { tool: string; args: Record<string, unknown> };
 }
+/** Web GTM <-> Server GTM coverage comparison (config-level). Mirrors server-coverage.ts. */
+export interface ServerCoverageView {
+  rows: Array<{ platform: string; event: string; webTag: string; status: 'covered' | 'missing' | 'not_matchable'; by?: string; recommendation?: string }>;
+  unusedServer: Array<{ tag: string; platform: string; event: string }>;
+  ga4: { client: boolean; relay: boolean; webMeasurementIds: string[]; serverMeasurementIds: string[]; idsMatch: boolean | null };
+  webWiring: { status: 'wired' | 'not_wired' | 'url_mismatch' | 'unknown'; webUrl: string; serverUrls: string[] };
+  summary: { webEvents: number; covered: number; missing: number; notMatchable: number; coveragePct: number | null };
+  score: { configuration: number; coverage: number | null; overall: number };
+}
+
 export interface AuditReportView {
   counts: { tags: number; triggers: number; variables: number; findings: number; clients?: number; transformations?: number };
   summary: { critical: number; high: number; medium: number; low: number; info: number };

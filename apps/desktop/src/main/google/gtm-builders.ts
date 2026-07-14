@@ -1321,7 +1321,7 @@ function tagParam(tag: Record<string, unknown>, key: string): string {
 
 /** Read one setting (e.g. server_container_url) out of a Google tag's configSettingsTable —
  *  the list-of-maps shape upsertGoogleTagConfig writes. */
-function googleTagConfigValue(tag: Record<string, unknown>, configKey: string): string {
+export function googleTagConfigValue(tag: Record<string, unknown>, configKey: string): string {
   const params = Array.isArray(tag.parameter) ? (tag.parameter as Array<Record<string, unknown>>) : [];
   const table = params.find((p) => p.key === 'configSettingsTable');
   const rows = table && Array.isArray(table.list) ? (table.list as Array<Record<string, unknown>>) : [];
@@ -2519,7 +2519,7 @@ export const AUDIT_SERVER_RUNTIME_REQUIRED: string[] = [
 const GOOGLE_SERVER_TAG_TYPES = new Set(['sgtmgaaw', 'sgtmadsct', 'sgtmadscl', 'sgtmadsremarket']);
 
 /** Read a TEMPLATE param's string value off an audit tag ('' when absent/non-string). PURE. */
-function serverTagParam(t: AuditTag, key: string): string {
+export function serverTagParam(t: AuditTag, key: string): string {
   const params = Array.isArray(t.parameter) ? t.parameter : [];
   const p = params.find((x) => (x as { key?: string }).key === key) as { value?: unknown } | undefined;
   return p && typeof p.value === 'string' ? p.value : '';
@@ -2537,7 +2537,7 @@ function isVariableRef(v: string): boolean {
  *  require a Facebook-distinctive field (generateFbp / actionSource) that TikTok never emits
  *  (it uses generateTtp / eventSource). This keeps the Meta-only swapped-field and test-code
  *  checks from misfiring on a TikTok tag. PURE. */
-function isMetaCapiServerTag(t: AuditTag): boolean {
+export function isMetaCapiServerTag(t: AuditTag): boolean {
   if (!t.type.startsWith('cvt_')) return false;
   const params = Array.isArray(t.parameter) ? t.parameter : [];
   const keys = new Set(params.map((p) => (p as { key?: string }).key));
@@ -2547,7 +2547,7 @@ function isMetaCapiServerTag(t: AuditTag): boolean {
 
 /** The TikTok "Events API" server template ALSO stores pixelId + accessToken, but is distinguished from
  *  Meta by its TikTok-only fields (generateTtp / eventSource, vs Meta's generateFbp / actionSource). PURE. */
-function isTikTokCapiServerTag(t: AuditTag): boolean {
+export function isTikTokCapiServerTag(t: AuditTag): boolean {
   if (!t.type.startsWith('cvt_')) return false;
   const keys = new Set((Array.isArray(t.parameter) ? t.parameter : []).map((p) => (p as { key?: string }).key));
   if (!(keys.has('pixelId') && keys.has('accessToken'))) return false;

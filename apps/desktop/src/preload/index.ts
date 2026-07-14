@@ -3,6 +3,7 @@ import type {
   AccountView,
   AddAccountInput,
   AuditReportView,
+  ServerCoverageView,
   WorkspaceCompareResultView,
   ServerContainerResultView,
   ChatReply,
@@ -335,6 +336,8 @@ const api = {
   gtm: {
     auditServer: (accountId: string, containerId: string, workspaceId: string): Promise<AuditReportView> =>
       ipcRenderer.invoke('gtm:auditServer', accountId, containerId, workspaceId),
+    serverCoverage: (accountId: string, webContainerId: string, webWorkspaceId: string, serverContainerId: string, serverWorkspaceId: string): Promise<ServerCoverageView> =>
+      ipcRenderer.invoke('gtm:serverCoverage', accountId, webContainerId, webWorkspaceId, serverContainerId, serverWorkspaceId),
     audit: (accountId: string, containerId: string, workspaceId: string): Promise<AuditReportView> =>
       ipcRenderer.invoke('gtm:audit', accountId, containerId, workspaceId),
     // The container's EXISTING GA4/base tags translated into verify-engine inputs, so

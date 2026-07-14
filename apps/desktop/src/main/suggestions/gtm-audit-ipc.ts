@@ -17,6 +17,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GoogleDataService } from '../google/data-service';
 import { auditWorkspace, auditServerWorkspace } from '../google/audit-runner';
+import { auditServerContainer } from '../google/gtm-builders';
+import { buildServerCoverage } from '../google/server-coverage';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-builders';
 import { withQuotaRetry } from '../google/quota-retry';
@@ -61,6 +63,23 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     const w = String(workspaceId ?? '');
     if (!a || !c || !w) throw new Error('Pick the server container and workspace first.');
     return withQuotaRetry(() => auditServerWorkspace(data, { accountId: a, containerId: c, workspaceId: w }));
+  });
+
+  // WEB <-> SERVER coverage (read-only, config-level): is every event the web container sends
+  // actually handled by the server container, per destination - plus Measurement-ID match and
+  // whether the web Google tag even points at the tagging server. Pure engine does the comparison.
+  ipcMain.handle('gtm:serverCoverage', async (_e, accountId: unknown, webContainerId: unknown, webWorkspaceId: unknown, serverContainerId: unknown, serverWorkspaceId: unknown) => {
+    const a = String(accountId ?? '');
+    const wc = String(webContainerId ?? '');
+    const ww = String(webWorkspaceId ?? '');
+    const sc = String(serverContainerId ?? '');
+    const sw = String(serverWorkspaceId ?? '');
+    if (!a || !wc || !ww || !sc || !sw) throw new Error('Pick the web container/workspace and the server container/workspace first.');
+    const [webSnap, srvSnap] = await Promise.all([
+      withQuotaRetry(() => data.getGtmContainerSnapshot(a, wc, ww)),
+      withQuotaRetry(() => data.getServerContainerSnapshot(a, sc, sw)),
+    ]);
+    return buildServerCoverage(webSnap, srvSnap, auditServerContainer(srvSnap).summary);
   });
 
   // WORKSPACE COMPARISON (read): diff 2+ workspaces in the same container side by side. Fetches each
