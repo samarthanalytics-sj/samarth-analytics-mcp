@@ -2868,6 +2868,65 @@ export class GoogleDataService {
     return [...present];
   }
 
+  /** Predefined-signal readings for the event-PARAMETER matrix: per-event counts + the eventValue
+   *  metric (the summed `value` parameter), the searchTerm "(not set)" share, and the items* metric
+   *  totals. Follow-up queries fire only when their events actually have data (a lead-gen site never
+   *  pays for an items query). Read-only. */
+  async getGa4EventParamSignals(
+    property: string,
+    startDate: string,
+    endDate: string
+  ): Promise<{
+    events: Array<{ name: string; count: number; value: number }>;
+    searchTermNotSetPct: number | null;
+    items: { viewed: number; addedToCart: number; checkedOut: number; purchased: number } | null;
+  }> {
+    const base = await this.runGa4Report({
+      property,
+      startDate,
+      endDate,
+      dimensions: ['eventName'],
+      metrics: ['eventCount', 'eventValue'],
+      orderBys: [{ metric: { metricName: 'eventCount' }, desc: true }],
+      limit: '500',
+    });
+    const events = base.rows.map((r) => ({
+      name: r.dimensions[0] ?? '',
+      count: Number(r.metrics[0]) || 0,
+      value: Number(r.metrics[1]) || 0,
+    }));
+    const has = (n: string): boolean => events.some((e) => e.name === n && e.count > 0);
+    const wantSearch = has('search');
+    const wantItems = ['view_item', 'add_to_cart', 'begin_checkout', 'purchase'].some(has);
+    const [search, items] = await Promise.all([
+      wantSearch
+        ? this.runGa4Report({ property, startDate, endDate, dimensions: ['searchTerm'], metrics: ['eventCount'], limit: '250' }).catch(() => null)
+        : Promise.resolve(null),
+      wantItems
+        ? this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: ['itemsViewed', 'itemsAddedToCart', 'itemsCheckedOut', 'itemsPurchased'] }).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    let searchTermNotSetPct: number | null = null;
+    if (search) {
+      let total = 0;
+      let notSet = 0;
+      for (const r of search.rows) {
+        const c = Number(r.metrics[0]) || 0;
+        total += c;
+        if ((r.dimensions[0] ?? '').trim() === '(not set)' || (r.dimensions[0] ?? '').trim() === '') notSet += c;
+      }
+      searchTermNotSetPct = total > 0 ? (notSet / total) * 100 : null;
+    }
+    const im = items?.rows?.[0]?.metrics;
+    return {
+      events,
+      searchTermNotSetPct,
+      items: im
+        ? { viewed: Number(im[0]) || 0, addedToCart: Number(im[1]) || 0, checkedOut: Number(im[2]) || 0, purchased: Number(im[3]) || 0 }
+        : null,
+    };
+  }
+
   /** Session counts by channel group and by source/medium over a window — either the last `days`
    *  (default 28) or an explicit { startDate, endDate } custom range — for the pure data-quality
    *  engine. Read-only (analytics.readonly via the Data API). */
