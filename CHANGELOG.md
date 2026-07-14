@@ -1,3 +1,9 @@
+## [1.311.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.310.1...v1.311.0) (2026-07-14)
+
+### Features
+
+* **audit:** consolidated Workspace Comparison — common/uncommon tables, merge status, stats dashboard ([#551](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/551)) ([a5fa40d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a5fa40d41e9879a4a5f9e64d586afc74e18b3033)), closes [#549](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/549)
+
 ## [1.310.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.310.0...v1.310.1) (2026-07-14)
 
 ### Bug Fixes
