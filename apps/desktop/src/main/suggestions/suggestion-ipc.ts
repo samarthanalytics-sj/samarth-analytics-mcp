@@ -58,7 +58,16 @@ function takeVerifyEls(url: string): { els: DetectedElementView[]; pagesCrawled:
   return { els: hit.els, pagesCrawled: hit.pagesCrawled, pagesTotal: hit.pagesTotal };
 }
 
+// Cooperative cancel for a verify run (the Stop button). The renderer runs one verify at a time, so a
+// single module-level flag is enough: each verify-flow handler RESETS it when a fresh run starts, and the
+// crawl / drive loops poll shouldStop() and bail out early with whatever they have.
+let verifyCancelled = false;
+const shouldStopVerify = (): boolean => verifyCancelled;
+
 export function registerSuggestionsIpc(data: GoogleDataService): void {
+  // Stop the in-flight verify scan/drive. Sets the flag the crawl + Tag-Assistant drive loops poll; they
+  // finish the current page and resolve with a partial result. The renderer also stops the orchestration.
+  ipcMain.handle('suggestions:cancelVerify', () => { verifyCancelled = true; });
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
 
   // Read-only: the container's existing tag names + whether a GA4 base/config tag is
@@ -208,6 +217,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       const tagList = (Array.isArray(tags) ? tags : []) as VerifyTagInput[];
       let els = (Array.isArray(elements) ? elements : []) as DetectedElementView[];
       if (tagList.length === 0) return { url: target, injected: false, previewAuth: false, pagesOk: false, error: 'No tags selected to verify.', verdicts: [] };
+      verifyCancelled = false; // fresh run — clear any stale Stop from a previous run
       const o = opts ?? {};
       // Live progress: stream what the run is doing (crawl → drive, or the monitor mint) so the panel
       // isn't a silent spinner through a 50-page crawl. Best-effort — a closed window never breaks verify.
@@ -269,7 +279,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           const scan = await crawlAndSuggest(
             crawlPool[0],
             target,
-            { maxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'], drivers: crawlPool.slice(1), ...(seedUrls.length ? { seedUrls } : {}) },
+            { maxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'], drivers: crawlPool.slice(1), shouldStop: shouldStopVerify, ...(seedUrls.length ? { seedUrls } : {}) },
             (p) => emit({ phase: 'crawl', message: 'Scanning site pages to locate each tag’s trigger', ...(p.page ? { page: p.page } : {}), done: p.scanned, total: crawlTotal }),
           );
           els = scan.inventory.elements as DetectedElementView[];
@@ -307,6 +317,8 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         const taForms: TaFormSubmit[] = (Array.isArray(o.reviewedForms) ? o.reviewedForms : [])
           .map((f) => ({ page: String(f.page ?? ''), formId: String(f.formId ?? ''), formClasses: String(f.formClasses ?? ''), method: String(f.method ?? ''), fields: (f.fields ?? []).map((x) => ({ selector: String(x.selector ?? ''), type: String(x.type ?? ''), value: String(x.value ?? '') })) }))
           .filter((f) => f.page && f.fields.length);
+        // Stop pressed during the crawl → don't even open Tag Assistant; return what we have.
+        if (shouldStopVerify()) return { url: target, injected: false, previewAuth: false, pagesOk: false, verdicts: [] };
         emit({ phase: 'monitor', message: 'Opening Tag Assistant (your Chrome can stay open)...' });
         const publicId = await data.getContainerPublicId(o.monitor.accountId, o.monitor.containerId);
         const ta = await runTaVerify(profileDir, target, routedTags, publicId, {
@@ -320,6 +332,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           onSignInPrompt: () => emit({ phase: 'monitor', message: 'ONE-TIME Tag Assistant sign-in: complete it in the window that just opened (your email is pre-filled). It is saved after this, so verify never asks again.' }),
           onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Driving tags in the Tag Assistant window', page, done, total }),
           onFormProgress: (page, done, total) => emit({ phase: 'drive', message: 'Submitting a form for real in Tag Assistant', page, done, total }),
+          shouldStop: shouldStopVerify,
         });
         const base = { url: target, injected: false, previewAuth: false, pagesOk: ta.pagesOk, verifiedByMonitor: true as const, ...(ta.pagesDriven.length ? { pagesDriven: ta.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}) };
         if (ta.needSignIn || ta.error) return { ...base, verdicts: [], error: ta.error ?? 'Tag Assistant run failed.', ...(ta.needSignIn ? { needTaSignIn: true } : {}) };
@@ -462,6 +475,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     const target = String(url ?? '').trim();
     const verdict = urlAllowed(target, []);
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
+    verifyCancelled = false; // fresh forms scan — clear any stale Stop from a previous run
     const o = (opts ?? {}) as FormTagVerifyPlanOptions;
     // Live crawl progress (this scan can now cover the whole site), so the panel shows "Scanning X/Y" not a
     // silent spinner. Best-effort — a closed window never breaks the scan.
@@ -539,7 +553,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       const scan = await crawlAndSuggest(
         pool[0],
         startUrl,
-        { maxPages, platforms: ['ga4'], drivers: pool.slice(1), ...(seeds.length ? { seedUrls: seeds } : {}) },
+        { maxPages, platforms: ['ga4'], drivers: pool.slice(1), shouldStop: shouldStopVerify, ...(seeds.length ? { seedUrls: seeds } : {}) },
         (p) => emit({ ...(p.page ? { page: p.page } : {}), done: p.scanned, total: crawlTotal }),
         (page, raw) => { for (const v of toFormFillViews(raw, page, locale.id, emailTag)) pagedForms.push({ ...v, page }); },
       );

@@ -4949,6 +4949,10 @@ function VerifyPanel({
   const [vVerifyPages, setVVerifyPages] = useState('');
   const [vVerifying, setVVerifying] = useState(false);
   const [vVerifyKind, setVVerifyKind] = useState<'firing' | 'ta' | null>(null);
+  // Stop button: a ref (read synchronously by the orchestration between the forms scan and the drive) plus a
+  // UI flag. Stop signals the main-process scan/drive to bail early AND stops the renderer from advancing.
+  const vCancelRef = useRef(false);
+  const [vStopping, setVStopping] = useState(false);
   // The operator-reviewed forms (edited values) published up from the Forms panel — submitted for real by
   // the next "Verify with Tag Assistant" run (Phase 2b). A ref so an edit doesn't re-render the buttons.
   const vReviewedFormsRef = useRef<NonNullable<VerifyTagsOptions['reviewedForms']>>([]);
@@ -5018,10 +5022,20 @@ function VerifyPanel({
     return vUrl.trim() || pages.find((u) => /^https?:\/\//i.test(u)) || '';
   }
 
+  // Stop the in-flight run: tell the main-process scan/drive to bail (they resolve with a partial result),
+  // and flip the renderer cancel flag so the orchestration doesn't advance from the scan into the drive.
+  function stopVerify(): void {
+    vCancelRef.current = true;
+    setVStopping(true);
+    setVNote({ kind: 'info', text: 'Stopping — finishing the current page…' });
+    void window.desktop.tags.cancelVerify();
+  }
+
   async function runVerify(snippetOverride?: string, useMonitor = false, withForms = false): Promise<void> {
     if (!ready || !ctx || vVerifying) return;
     const target = verifyTarget();
     if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against (or paste an absolute URL in “Pages to verify”).' }); return; }
+    vCancelRef.current = false; setVStopping(false); // fresh run — clear any prior Stop
     // AUTHORITATIVE mode automates the REAL Tag Assistant — ZERO GTM writes (no version, no workspace,
     // no container). No confirm needed; it may require a one-time Google sign-in (surfaced below).
     const canMonitor = Boolean(ctx.accountId && ctx.containerId && ctx.workspaceId);
@@ -5074,13 +5088,15 @@ function VerifyPanel({
         (p) => setVProgress(p), // live "scanning <url>" / "verifying <url>" feed
       );
       setVResult(res);
-      if (!res.error) setVSetupOpen(false); // run done → collapse the setup form, lead with the results
+      if (vCancelRef.current) setVNote({ kind: 'info', text: 'Verification stopped — showing what was captured before you pressed Stop.' });
+      else if (!res.error) setVSetupOpen(false); // run done → collapse the setup form, lead with the results
     } catch (e) {
       setVNote({ kind: 'error', text: verifyErrorText(e) });
     } finally {
       setVVerifying(false);
       setVVerifyKind(null);
       setVProgress(null);
+      setVStopping(false);
     }
   }
 
@@ -5096,6 +5112,7 @@ function VerifyPanel({
       setVNote({ kind: 'error', text: 'Pick a GTM account, container and workspace first — verification reads that container’s tags.' });
       return;
     }
+    vCancelRef.current = false; setVStopping(false); // fresh run — clear any prior Stop
     setVNote(null); onError(''); setVResult(null);
     vReviewedFormsRef.current = [];
     setVFormStatus({ loading: true, count: null }); // guards the effect from acting on a prior scan's count
@@ -5106,6 +5123,8 @@ function VerifyPanel({
   // Once STEP 1's scan finishes: forms found → open the skip/proceed gate; none → verify click tags only.
   useEffect(() => {
     if (vTaStage !== 'scanning' || vFormStatus.loading) return;
+    // Stop pressed DURING the forms scan → don't advance into the gate / drive.
+    if (vCancelRef.current) { setVTaStage('idle'); setVStopping(false); setVNote({ kind: 'info', text: 'Scan stopped.' }); return; }
     if (vFormStatus.count && vFormStatus.count > 0) setVTaStage('gate');
     else { setVTaStage('idle'); void runVerify(undefined, true, false); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -5347,6 +5366,18 @@ function VerifyPanel({
                   )}
                 </div>
               )}
+              {/* Stop button — abort the scan/drive. The current page finishes, then it resolves with a
+                  partial result (what was captured so far). */}
+              <div style={{ marginTop: 8 }}>
+                <button
+                  onClick={stopVerify}
+                  disabled={vStopping}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, padding: '6px 14px', borderRadius: 8, cursor: vStopping ? 'not-allowed' : 'pointer', border: '1px solid var(--c-red)', background: 'var(--c-red-bg)', color: 'var(--c-red)', opacity: vStopping ? 0.6 : 1 }}
+                  title="Stop the verification — the current page finishes, then it shows what was captured so far"
+                >
+                  {vStopping ? 'Stopping…' : '■ Stop'}
+                </button>
+              </div>
               {/* Switching tabs UNMOUNTS this panel (it is conditionally rendered), which drops the in-flight
                   run's result — warn so the user doesn't lose a minute-long verification. */}
               <div style={{ marginTop: 8, padding: '7px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>

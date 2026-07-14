@@ -88,6 +88,9 @@ export interface ScanOptions {
    *  ≈ N× throughput on a multi-page site. Omitted / empty → the single primary driver → the original
    *  strictly-sequential behaviour (unchanged). All drivers (primary + these) are closed when done. */
   drivers?: PageDriver[];
+  /** Cooperative cancel. Checked at each worker's loop boundary — when it returns true the workers stop
+   *  claiming new pages and the crawl resolves with whatever it scanned so far (a Stop button). */
+  shouldStop?: () => boolean;
 }
 
 /** Streamed after every page is scanned — the RUNNING (full) suggestion list so the
@@ -597,6 +600,7 @@ export async function crawlAndSuggest(
   // this reduces to the original strictly-sequential BFS.
   const worker = async (d: PageDriver): Promise<void> => {
     for (;;) {
+      if (opts.shouldStop?.()) return; // Stop pressed → drain workers; the crawl resolves with what it has
       const item = claimNext();
       if (!item) {
         if (active === 0) return; // queue drained and nobody can still enqueue → done

@@ -269,7 +269,7 @@ export async function runTaVerify(
   url: string,
   tags: VerifyDriverTag[],
   containerPublicId: string,
-  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; previewSnippet?: string; forms?: TaFormSubmit[]; onSignInPrompt?: () => void; onPageProgress?: (page: string, done: number, total: number) => void; onFormProgress?: (page: string, done: number, total: number) => void } = {},
+  opts: { settleMs?: number; navTimeoutMs?: number; loginHint?: string; signInTimeoutMs?: number; previewSnippet?: string; forms?: TaFormSubmit[]; onSignInPrompt?: () => void; onPageProgress?: (page: string, done: number, total: number) => void; onFormProgress?: (page: string, done: number, total: number) => void; shouldStop?: () => boolean } = {},
 ): Promise<TaVerifyResult> {
   const settleMs = opts.settleMs ?? 900;
   const navTimeoutMs = opts.navTimeoutMs ?? 25_000;
@@ -420,6 +420,7 @@ export async function runTaVerify(
     console.log(`[tag-assistant] driving ${tags.length} tag trigger(s) across ${groups.length} page(s)...`);
     let done = 0;
     for (const [pageUrl, groupTags] of groups) {
+      if (opts.shouldStop?.()) { console.log('[tag-assistant] Stop pressed — ending the drive early.'); break; } // cancel between pages
       done += 1;
       console.log(`[tag-assistant]   page ${done}/${groups.length}: ${pageUrl} (${groupTags.length} trigger(s))`);
       try { opts.onPageProgress?.(pageUrl, done, groups.length); } catch { /* progress is a nicety */ }
@@ -495,6 +496,7 @@ export async function runTaVerify(
     // push. Sequential (each submit navigates the page). Screenshots of the TA panel land in Phase 3.
     const forms = opts.forms ?? [];
     for (let i = 0; i < forms.length; i += 1) {
+      if (opts.shouldStop?.()) { console.log('[tag-assistant] Stop pressed — skipping remaining form submits.'); break; } // cancel between form submits
       const form = forms[i];
       console.log(`[tag-assistant] real form submit ${i + 1}/${forms.length}: ${form.page}`);
       try { opts.onFormProgress?.(form.page, i + 1, forms.length); } catch { /* progress is a nicety */ }
