@@ -1,3 +1,9 @@
+## [1.323.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.322.0...v1.323.0) (2026-07-14)
+
+### Features
+
+* **desktop:** expand Workspace Comparison — dependencies, folders, built-ins, per-kind stats ([#565](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/565)) ([5563b41](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5563b4133c9ec3a82bb1c165d9cc47cdcd255f10))
+
 ## [1.322.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.321.0...v1.322.0) (2026-07-14)
 
 ### Features
