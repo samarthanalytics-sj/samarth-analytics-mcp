@@ -1,3 +1,9 @@
+## [1.321.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.320.0...v1.321.0) (2026-07-14)
+
+### Features
+
+* **desktop:** GA4 event-name hygiene audit - naming conventions, cardinality families, silent key events ([da46fb4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/da46fb40af04666435d30d421c6edaaa6c7748e0))
+
 ## [1.320.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.319.0...v1.320.0) (2026-07-14)
 
 ### Features
