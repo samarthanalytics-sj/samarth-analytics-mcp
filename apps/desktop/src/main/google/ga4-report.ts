@@ -92,6 +92,7 @@ const RISK_BY_CATEGORY: Record<string, string> = {
   integrations: 'Cross-product features (Ads, Signals) unavailable',
   benchmarking: 'Industry benchmarks unavailable',
   integrity: 'Event/revenue data may be corrupted (broken tag or double-counted purchases)',
+  hygiene: 'Reports split across event-name variants; GA4 standard reports and integrations miss the traffic',
 };
 
 const pct = (part: number, total: number): number => (total > 0 ? Math.round((part / total) * 100) : 0);
