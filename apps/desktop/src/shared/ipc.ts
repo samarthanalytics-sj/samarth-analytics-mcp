@@ -1279,6 +1279,43 @@ export interface Ga4MonitorStatus extends Ga4MonitorConfig {
   targetStatuses: Ga4MonitorTargetStatus[];
 }
 
+/** How the current outbound connection is classified. `unknown` = we have an IP but not enough signal. */
+export type NetworkConnectionType = 'local' | 'vpn' | 'proxy' | 'unknown';
+
+/**
+ * The public network location the app's own outbound traffic is using — shown in Settings and before/
+ * during an audit so the user can confirm which egress (VPN exit, proxy, or their real ISP) requests
+ * originate from. This reflects THIS app's egress; with a full-tunnel OS VPN it is also the route the
+ * website audits, form submissions, and click events take (they share the OS routing table).
+ */
+export interface NetworkLocationView {
+  /** Public IP as seen by the geolocation service, or null when the check couldn't reach the network. */
+  ip: string | null;
+  country: string | null;
+  /** ISO 3166-1 alpha-2 (e.g. "GB"), used for the flag. */
+  countryCode: string | null;
+  /** Region / state / province. */
+  region: string | null;
+  city: string | null;
+  /** ISP / organization / carrier string from the geo lookup (used for provider inference). */
+  org: string | null;
+  /** Autonomous System number, e.g. "AS9009", when the provider returns it. */
+  asn: string | null;
+  connectionType: NetworkConnectionType;
+  /** Best-effort VPN/proxy provider (e.g. "Surfshark", "NordVPN", "Proton VPN"), or null if not identifiable. */
+  provider: string | null;
+  /** How confident the VPN/provider verdict is. */
+  confidence: 'high' | 'medium' | 'low' | 'none';
+  /** Human-readable signals behind the verdict, e.g. ["network adapter: Surfshark", "IP org: Datacamp"]. */
+  detectedVia: string[];
+  /** Whether the check succeeded (`connected`), found no network (`offline`), or errored. */
+  status: 'connected' | 'offline' | 'error';
+  /** Error/why text when status is not `connected`. */
+  detail: string | null;
+  /** Epoch ms of when this location was last checked. */
+  checkedAt: number;
+}
+
 export interface GoogleClientStatus {
   /** Whether a Google OAuth client (id + secret) is configured. */
   configured: boolean;

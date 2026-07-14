@@ -26,6 +26,7 @@ import { registerGa4AuditIpc, runGa4AuditPipeline } from './google/ga4-audit-ipc
 import { probeConsentSignal } from './suggestions/consent-probe';
 import { Ga4MonitoringService } from './services/ga4-monitoring-service';
 import { registerGa4MonitoringIpc } from './ipc/ga4-monitoring-ipc';
+import { registerNetworkIpc } from './network/network-ipc';
 import type { MonitorAlert, Ga4MonitorRun } from '../shared/ipc';
 
 // Phase 0 scaffold: boot a window, wire a minimal, secure IPC bridge, and prove
@@ -224,6 +225,7 @@ app.whenReady().then(() => {
   registerGtmAuditIpc(dataService);
   registerGa4AuditIpc(dataService);
   registerGa4MonitoringIpc(ga4Monitoring);
+  registerNetworkIpc();
   createWindow();
 
   app.on('activate', () => {
