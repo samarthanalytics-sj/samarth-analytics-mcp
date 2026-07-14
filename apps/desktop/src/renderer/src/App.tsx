@@ -7395,6 +7395,7 @@ function useNetworkLocation(refreshKey?: unknown): { loc: NetworkLocationView | 
   };
   useEffect(() => { void load(false); }, []); // initial cached load
   useEffect(() => { if (refreshKey) void load(true); }, [refreshKey]); // force-recheck when a run starts
+  useEffect(() => window.desktop.network.onChange(setLoc), []); // live pushes while auto-detect is on
   return { loc, loading, refresh: () => load(true) };
 }
 
@@ -7435,6 +7436,15 @@ function NetworkLocationDetail({ loc, loading }: { loc: NetworkLocationView | nu
 // The Settings → Network & Location card.
 function NetworkLocationCard(): JSX.Element {
   const { loc, loading, refresh } = useNetworkLocation();
+  // Auto-detect preference (persisted in the main process). When on, the main process watches for network
+  // changes and pushes updates, which the shared hook applies live to this card and the verify banner.
+  const [auto, setAuto] = useState(false);
+  useEffect(() => { window.desktop.network.getAutoDetect().then(setAuto).catch(() => { /* leave off */ }); }, []);
+  const toggleAuto = (v: boolean): void => {
+    setAuto(v);
+    void window.desktop.network.setAutoDetect(v);
+    if (v) void refresh(); // give an immediate reading when auto-detect is switched on
+  };
   return (
     <section style={styles.card}>
       <h2 style={styles.h2}>Network &amp; Location</h2>
@@ -7450,6 +7460,14 @@ function NetworkLocationCard(): JSX.Element {
         </button>
         {loc && <span style={styles.settingsSub}>Last checked {relTimeAgo(loc.checkedAt)}</span>}
       </div>
+      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 12, cursor: 'pointer' }}>
+        <input type="checkbox" checked={auto} onChange={(e) => toggleAuto(e.target.checked)} style={{ marginTop: 2 }} />
+        <span style={styles.settingsSub}>
+          <b style={{ color: 'var(--text)' }}>Auto-detect network changes.</b> Recheck automatically when your VPN
+          connects, disconnects or switches server. Polls your adapters locally and re-checks your public IP
+          periodically while this is on.
+        </span>
+      </label>
     </section>
   );
 }

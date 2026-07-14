@@ -453,6 +453,16 @@ const api = {
   network: {
     getLocation: (): Promise<NetworkLocationView> => ipcRenderer.invoke('network:getLocation'),
     refreshLocation: (): Promise<NetworkLocationView> => ipcRenderer.invoke('network:refreshLocation'),
+    // Auto-detect: when on, the main process watches for network changes (VPN connect/disconnect or
+    // server switch) and pushes the new location via onChange. Persisted; default off.
+    getAutoDetect: (): Promise<boolean> => ipcRenderer.invoke('network:getAutoDetect'),
+    setAutoDetect: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('network:setAutoDetect', enabled),
+    // Subscribe to pushed location changes (only fire while auto-detect is on); returns an unsubscribe fn.
+    onChange: (cb: (view: NetworkLocationView) => void): (() => void) => {
+      const listener = (_e: unknown, view: NetworkLocationView): void => cb(view);
+      ipcRenderer.on('network:changed', listener);
+      return () => ipcRenderer.removeListener('network:changed', listener);
+    },
   },
 };
 

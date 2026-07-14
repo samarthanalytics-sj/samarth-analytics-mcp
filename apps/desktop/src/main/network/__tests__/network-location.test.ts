@@ -14,8 +14,12 @@ import {
   normalizeGeo,
   fetchGeo,
   getNetworkLocation,
+  adapterFingerprint,
+  locationChanged,
+  startNetworkWatch,
   __resetNetworkCache,
 } from '../network-location';
+import type { NetworkLocationView } from '../../../shared/ipc';
 
 let passed = 0;
 let failed = 0;
@@ -198,10 +202,87 @@ async function run(): Promise<void> {
     const v = await getNetworkLocation({ force: true }, { fetchImpl: f.impl, ifaces: () => ({ 'Wi-Fi': [ext('192.168.0.5')] }), now: () => 7 });
     check('getNetworkLocation: offline no-VPN → unknown/offline', v.status === 'offline' && v.connectionType === 'unknown');
   }
+
+  // ── adapterFingerprint ──────────────────────────────────────────────────────────────────────────
+  {
+    const fpA = adapterFingerprint({ 'Wi-Fi': [ext('192.168.0.5')], 'Loopback': [loop()] });
+    const fpB = adapterFingerprint({ 'Loopback': [loop()], 'Wi-Fi': [ext('192.168.0.5')] });
+    check('fingerprint: order-independent + ignores internal', fpA === fpB && fpA === 'Wi-Fi:192.168.0.5');
+    const fpVpn = adapterFingerprint({ 'Wi-Fi': [ext('192.168.0.5')], 'Surfshark': [ext('10.14.0.2')] });
+    check('fingerprint: adding a VPN adapter changes the fingerprint', fpVpn !== fpA);
+    const fpMoved = adapterFingerprint({ 'Wi-Fi': [ext('192.168.0.9')] });
+    check('fingerprint: a changed address changes the fingerprint', fpMoved !== fpA);
+  }
+
+  // ── locationChanged ─────────────────────────────────────────────────────────────────────────────
+  {
+    const base: NetworkLocationView = { ip: '203.0.113.7', country: 'UK', countryCode: 'GB', region: 'England', city: 'London', org: 'M247', asn: 'AS9009', connectionType: 'vpn', provider: 'Surfshark', confidence: 'high', detectedVia: ['x'], status: 'connected', detail: null, checkedAt: 1 };
+    check('locationChanged: null prev → changed', locationChanged(null, base));
+    check('locationChanged: only checkedAt/detectedVia differ → NOT changed', !locationChanged(base, { ...base, checkedAt: 999, detectedVia: ['y'] }));
+    check('locationChanged: different IP (same-provider server switch) → changed', locationChanged(base, { ...base, ip: '198.51.100.9' }));
+    check('locationChanged: VPN → local → changed', locationChanged(base, { ...base, connectionType: 'local', provider: null }));
+    check('locationChanged: connected → offline → changed', locationChanged(base, { ...base, status: 'offline' }));
+  }
+
+  // ── startNetworkWatch (injected lookup → deterministic, no real network) ─────────────────────────
+  {
+    __resetNetworkCache();
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+    const vpnView: NetworkLocationView = { ip: '203.0.113.7', country: 'UK', countryCode: 'GB', region: 'England', city: 'London', org: 'Datacamp', asn: 'AS9009', connectionType: 'vpn', provider: 'Surfshark', confidence: 'high', detectedVia: ['adapter'], status: 'connected', detail: null, checkedAt: 1 };
+    let lookupCalls = 0;
+    const lookup = async (): Promise<NetworkLocationView> => { lookupCalls += 1; return vpnView; };
+    let ifaceState: Record<string, NetworkInterfaceInfo[]> = { 'Wi-Fi': [ext('192.168.0.5')] };
+    const pushed: NetworkLocationView[] = [];
+
+    const handle = startNetworkWatch({ onChange: (v) => pushed.push(v), adapterPollMs: 5, recheckMs: 1_000_000, ifaces: () => ifaceState, check: lookup });
+    await sleep(25); // adapters stable, recheck interval far away → no trigger
+    check('watch: no lookup/push while the adapter set is stable', lookupCalls === 0 && pushed.length === 0);
+
+    ifaceState = { 'Wi-Fi': [ext('192.168.0.5')], 'Surfshark': [ext('10.14.0.2')] }; // VPN comes up
+    await sleep(30);
+    check('watch: adapter change triggers a lookup + push', pushed.length === 1 && pushed[0]?.provider === 'Surfshark');
+
+    ifaceState = { 'Wi-Fi': [ext('192.168.0.5')], 'Surfshark': [ext('10.99.0.9')] }; // same provider, new tunnel addr
+    await sleep(30);
+    check('watch: identical location on a later trigger is de-duped (no second push)', pushed.length === 1);
+
+    handle.stop();
+    const afterStop = pushed.length;
+    ifaceState = { 'Wi-Fi': [ext('10.0.0.42')] }; // change after stop
+    await sleep(20);
+    check('watch: stop() halts polling (no further pushes)', pushed.length === afterStop);
+  }
+
+  // ── watch dedup baseline stays in SYNC with the pull path (regression for the desync bug) ─────────
+  {
+    __resetNetworkCache();
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+    // 1) Initial getLocation resolves LOCAL and seeds the shared cache (and the watcher's baseline).
+    const fLocal = fakeFetch([{ match: 'ipwho.is', body: { success: true, ip: '103.1.1.1', country: 'India', country_code: 'IN', city: 'Pune', connection: { org: 'Airtel Broadband' } } }]);
+    await getNetworkLocation({ force: true }, { fetchImpl: fLocal.impl, ifaces: () => ({ 'Wi-Fi': [ext('192.168.0.5')] }), now: () => 1 });
+
+    let ifaceState: Record<string, NetworkInterfaceInfo[]> = { 'Wi-Fi': [ext('192.168.0.5')] };
+    const pushed: NetworkLocationView[] = [];
+    const localReading: NetworkLocationView = { ip: '103.1.1.1', country: 'India', countryCode: 'IN', region: null, city: 'Pune', org: 'Airtel Broadband', asn: null, connectionType: 'local', provider: null, confidence: 'none', detectedVia: [], status: 'connected', detail: null, checkedAt: 1 };
+    // The watcher's lookup reports LOCAL (network is on the real ISP again).
+    const handle = startNetworkWatch({ onChange: (v) => pushed.push(v), adapterPollMs: 5, recheckMs: 1_000_000, ifaces: () => ifaceState, check: async () => localReading });
+
+    // 2) A PULL (Refresh / run-start) moves the SHARED cache to VPN without the watcher pushing.
+    const fVpn = fakeFetch([{ match: 'ipwho.is', body: { success: true, ip: '203.0.113.7', country: 'UK', country_code: 'GB', city: 'London', connection: { org: 'Surfshark Ltd' } } }]);
+    await getNetworkLocation({ force: true }, { fetchImpl: fVpn.impl, ifaces: () => ({ 'Wi-Fi': [ext('192.168.0.5')], 'Surfshark': [ext('10.14.0.2')] }), now: () => 2 });
+
+    // 3) Network returns to LOCAL; an adapter change triggers the watcher. Its LOCAL reading differs from
+    //    the CACHE (VPN from the pull), so it MUST push — even though LOCAL equals the watcher's original
+    //    private baseline. A stale private-only baseline would wrongly dedup this and leave the UI on VPN.
+    ifaceState = { 'Wi-Fi': [ext('192.168.0.9')] };
+    await sleep(30);
+    handle.stop();
+    check('watch/desync: pushes LOCAL when the cache was moved to VPN by a pull (no stale-baseline dedup)', pushed.some((v) => v.connectionType === 'local' && v.ip === '103.1.1.1'));
+  }
 }
 
 void run().then(() => {
   console.log(`\nnetwork-location: ${passed} passed, ${failed} failed`);
   if (failed) { console.error(failures.join('\n')); process.exit(1); }
-  if (passed < 30) { console.error(`expected >= 30 checks, got ${passed}`); process.exit(1); }
+  if (passed < 53) { console.error(`expected >= 53 checks, got ${passed}`); process.exit(1); }
 });
