@@ -136,15 +136,17 @@ const pill = (st: EntityDiffView['status']): string => {
 
 const truncate = (s: string, n = 90): string => (s.length > n ? `${s.slice(0, n)}…` : s);
 
-function changesCell(e: EntityDiffView): string {
-  if (e.status === 'added') return '<span style="color:#166534">only in this workspace</span>';
-  if (e.status === 'removed') return '<span style="color:#b91c1c">only in the base</span>';
-  if (e.status !== 'changed' || !e.changes?.length) return '<span style="color:#9ca3af">—</span>';
+// `aName` is the base workspace, `bName` the compared one, so added/removed/changed name the ACTUAL
+// workspace each value lives in (e.g. "only in TBC Workspace") rather than a vague "this workspace".
+function changesCell(e: EntityDiffView, aName: string, bName: string): string {
+  if (e.status === 'added') return `<span style="color:#166534">only in ${esc(bName)}</span>`;
+  if (e.status === 'removed') return `<span style="color:#b91c1c">only in ${esc(aName)}</span>`;
+  if (e.status !== 'changed' || !e.changes?.length) return '<span style="color:#9ca3af">-</span>';
   return e.changes
     .map((c) => {
       const from = c.a === undefined ? '<i style="color:#9ca3af">(none)</i>' : esc(truncate(c.a));
       const to = c.b === undefined ? '<i style="color:#9ca3af">(none)</i>' : esc(truncate(c.b));
-      return `<div style="margin:1px 0"><code style="color:#2563eb">${esc(c.field)}</code>: <span style="color:#b91c1c">${from}</span> → <span style="color:#166534">${to}</span></div>`;
+      return `<div style="margin:1px 0"><code style="color:#2563eb">${esc(c.field)}</code>: <span style="color:#9ca3af">${esc(aName)}:</span> <span style="color:#b91c1c">${from}</span> → <span style="color:#9ca3af">${esc(bName)}:</span> <span style="color:#166534">${to}</span></div>`;
     })
     .join('');
 }
@@ -154,7 +156,7 @@ function pairSection(p: PairwiseDiffView): string {
   const changed = p.entities.filter((e) => e.status !== 'unchanged');
   const summaryLine =
     s.added + s.removed + s.changed === 0
-      ? `<span style="color:#166534;font-weight:600">Identical — no differences.</span>`
+      ? `<span style="color:#166534;font-weight:600">Identical - no differences.</span>`
       : `<b>${s.changed}</b> changed · <b>${s.added}</b> added · <b>${s.removed}</b> removed · ${s.unchanged} unchanged`;
   const rows = changed
     .map(
@@ -163,7 +165,7 @@ function pairSection(p: PairwiseDiffView): string {
         `<td style="padding:6px 8px;vertical-align:top;white-space:nowrap">${pill(e.status)}</td>` +
         `<td style="padding:6px 8px;vertical-align:top;color:#6b7280;white-space:nowrap">${KIND_LABEL[e.kind]}</td>` +
         `<td style="padding:6px 8px;vertical-align:top;font-weight:600;color:#111827">${esc(e.name)}</td>` +
-        `<td style="padding:6px 8px;vertical-align:top;font-size:11px;color:#374151">${changesCell(e)}</td>` +
+        `<td style="padding:6px 8px;vertical-align:top;font-size:11px;color:#374151">${changesCell(e, p.aName, p.bName)}</td>` +
         `</tr>`,
     )
     .join('');
@@ -196,7 +198,7 @@ export function workspaceDiffHtml(r: WorkspaceCompareResultView): string {
   return (
     `<div style="font-size:12px;color:#374151;background:#f8fafc;border:1px solid #eef2f7;border-radius:8px;padding:10px 12px;margin-bottom:14px;line-height:1.5">` +
     `<b>Summary of differences.</b> ${esc(r.headline)}` +
-    `<div style="color:#9ca3af;margin-top:4px;font-size:11px">Note: GTM has no per-workspace permissions or files — user access is account/container-level and identical for every workspace. This compares configuration entities (tags, triggers, variables, folders).</div>` +
+    `<div style="color:#9ca3af;margin-top:4px;font-size:11px">Note: GTM has no per-workspace permissions or files - user access is account/container-level and identical for every workspace. This compares configuration entities (tags, triggers, variables, folders).</div>` +
     `</div>` +
     `<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px"><tbody>${wsRows}</tbody></table>` +
     consolidatedHtml(r) +
