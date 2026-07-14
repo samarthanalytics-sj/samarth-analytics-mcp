@@ -29,6 +29,8 @@ export interface Ga4ReportInput {
   growth: Ga4GrowthResult | null; // null = no baseline → growth not assessed
   attribution: { reportingAttributionModel: string; acquisitionConversionEventLookbackWindow: string; otherConversionEventLookbackWindow: string } | null;
   audienceCount: number | null;
+  /** Audience names + membership durations (when the list was read) — shown in the coverage row. */
+  audienceDetails?: Array<{ displayName: string; membershipDurationDays: number | null }> | null;
   /** Ranked marketing-campaign performance (tagged utm_campaign traffic + untagged share), or null when
    *  the campaign query couldn't run — callers that don't pass it get null. */
   campaigns: Ga4CampaignReport | null;
@@ -514,6 +516,7 @@ function buildAreaRows(
   s: Ga4PropertySnapshot,
   config: Ga4AuditReport,
   audienceCount: number | null,
+  audienceDetails: Array<{ displayName: string; membershipDurationDays: number | null }> | null,
   ecom: boolean,
   ecomV?: EcomVerification | null,
   continuity?: { days: number } | null,
@@ -529,7 +532,10 @@ function buildAreaRows(
     return { area: a.area, statusKey: a.status, evidence: areaEvidence(a.area, s, config) };
   });
   if (audienceCount !== null) {
-    rows.push({ area: 'Audiences', statusKey: audienceCount > 0 ? 'pass' : 'partial', evidence: `${audienceCount} audience(s)` });
+    const named = audienceDetails?.length
+      ? `: ${audienceDetails.slice(0, 4).map((a) => `${a.displayName}${a.membershipDurationDays ? ` (${a.membershipDurationDays}d)` : ''}`).join(', ')}${audienceDetails.length > 4 ? `, +${audienceDetails.length - 4} more` : ''}`
+      : '';
+    rows.push({ area: 'Audiences', statusKey: audienceCount > 0 ? 'pass' : 'partial', evidence: `${audienceCount} audience(s)${named}` });
   }
   if (ecom && ecomV) {
     const pct = ecomV.notSetSharePct.toFixed(1);
@@ -559,7 +565,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
   const ecom = hasEcommerce(s);
   const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts, s);
   const top = allFindings.filter((f) => f.severity !== 'info')[0];
-  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
+  const areaRows = buildAreaRows(s, config, audienceCount, input.audienceDetails ?? null, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const nPartial = areaRows.filter((a) => a.statusKey === 'partial').length;
   const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
   const scoreModel = buildGa4Scorecard({
@@ -595,7 +601,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
   const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
   // Channel-attribution trust comes from the same Data Trust Matrix the Executive Summary uses.
   const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts, s);
-  const areaRows = buildAreaRows(s, config, audienceCount, hasEcommerce(s), input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
+  const areaRows = buildAreaRows(s, config, audienceCount, input.audienceDetails ?? null, hasEcommerce(s), input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
     findings: allFindings.map((f) => ({ severity: f.severity, category: f.category })),
@@ -634,7 +640,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
   const dqAttrib = allFindings.find((f) => f.category === 'data_quality' && f.severity !== 'info' && /source data|Unassigned|\(not set\)/.test(f.message));
-  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
+  const areaRows = buildAreaRows(s, config, audienceCount, input.audienceDetails ?? null, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
@@ -772,7 +778,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   // all-clear as a problem.
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
-  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
+  const areaRows = buildAreaRows(s, config, audienceCount, input.audienceDetails ?? null, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const campaignPerf = campaignPerfView(campaigns);
 
   const windowLabel = auditWindowLabel(dq); // same label as section 1 + the styled section 9 card

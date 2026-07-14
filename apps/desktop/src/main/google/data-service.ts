@@ -745,6 +745,13 @@ export class GoogleDataService {
               streamingExportEnabled: l.streamingExportEnabled ?? false,
             })),
       audiences: audiencesRes === null ? null : audiencesRes.length,
+      audienceDetails:
+        audiencesRes === null
+          ? null
+          : (audiencesRes as Array<{ displayName?: string | null; membershipDurationDays?: number | null }>).slice(0, 50).map((a) => ({
+              displayName: a.displayName ?? '(unnamed)',
+              membershipDurationDays: typeof a.membershipDurationDays === 'number' ? a.membershipDurationDays : null,
+            })),
     };
   }
 
