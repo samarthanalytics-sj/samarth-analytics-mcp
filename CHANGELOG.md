@@ -1,3 +1,9 @@
+## [1.315.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.314.0...v1.315.0) (2026-07-14)
+
+### Features
+
+* **desktop:** remove the "GA4 event" column from tag verification (table + all exports) ([6478fca](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6478fca1fc53a89600c8281c65dada17a581857d)), closes [#552](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/552) [#555](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/555)
+
 ## [1.314.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.313.1...v1.314.0) (2026-07-14)
 
 ### Features
