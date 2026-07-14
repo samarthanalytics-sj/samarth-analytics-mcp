@@ -5247,11 +5247,11 @@ function VerifyPanel({
             </div>
           )}
           <div style={{ ...styles.muted, marginTop: 8 }}>
-            <b>One Verify run</b> drives every tag’s trigger on the live site AND discovers the forms that
-            have a tracking tag — with a screenshot of each. It tests the tags as they’re <b>published</b> on
-            this URL; <b>nothing is created in your container</b> (no version, no preview). The real form
-            submit stays a separate, confirmed step below. To test UNPUBLISHED <b>draft</b> tags, paste a GTM
-            <b> Preview</b> snippet (Tag Assistant) below — that loads your drafts and still creates nothing.
+            <b>Verify with Tag Assistant</b> first scans the site for forms that have a tracking tag, then asks
+            whether to submit those forms too (a real lead each) or just verify the click tags. It then drives
+            every tag on the live site and reads GTM’s <b>own</b> per-event firing — <b>nothing is created in
+            your container</b> (no version, no preview). To test UNPUBLISHED <b>draft</b> tags, paste a GTM
+            <b> Preview</b> snippet below — that loads your drafts and still creates nothing.
           </div>
           <input
             value={vUrl}
@@ -5279,20 +5279,14 @@ function VerifyPanel({
               Verifying only {vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean).length} page(s) — the site crawl is skipped.
             </div>
           )}
+          {/* Single entry point: Verify with Tag Assistant. It scans the site for forms with tags FIRST,
+              then gates on skip/proceed (below), then drives every tag + reads GTM's own firing. */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
             <button
-              style={{ ...styles.primaryBtn, ...(!ready || vVerifying || !verifyTarget() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-              onClick={() => void runVerify()}
-              disabled={!ready || vVerifying || !verifyTarget()}
-              title="Load the live site and verify each tag — nothing is created in your container (no version, no preview)"
-            >
-              {vVerifyKind === 'firing' ? 'Verifying…' : 'Verify firing'}
-            </button>
-            <button
-              style={{ background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--c-blue)', borderRadius: 10, padding: '10px 16px', fontSize: 14, cursor: 'pointer', ...(!ready || vVerifying || vTaStage === 'scanning' || !verifyTarget() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+              style={{ ...styles.primaryBtn, ...(!ready || vVerifying || vTaStage === 'scanning' || !verifyTarget() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
               onClick={() => void startTaFlow()}
               disabled={!ready || vVerifying || vTaStage === 'scanning' || !verifyTarget()}
-              title="Authoritative: automates the REAL Tag Assistant — connects it to the site, drives your tags, and reads GTM's own per-event firing. First it scans the site for forms with tags and asks whether to verify those too. ZERO GTM writes. Signs in to Tag Assistant ONCE (saved after that, so it never asks again) and your normal Chrome can stay open."
+              title="Automates the REAL Tag Assistant — connects it to the site, drives your tags, and reads GTM's own per-event firing. First it scans the site for forms with tags and asks whether to verify those too (a real lead per form) or just the click tags. ZERO GTM writes. Signs in to Tag Assistant ONCE (saved after that, so it never asks again) and your normal Chrome can stay open."
             >
               {vVerifyKind === 'ta' ? 'Verifying with Tag Assistant…' : vTaStage === 'scanning' ? 'Scanning site for forms…' : 'Verify with Tag Assistant'}
             </button>
