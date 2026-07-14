@@ -86,5 +86,6 @@ export function parseCsvUrls(text: string): string[] {
 }
 
 // Cap a CSV import to the scanner's per-run page cap (SCAN_URLS_CAP in main/suggestions/scan-core.ts),
-// so the "Scan N pages" count the UI promises matches what the backend actually scans.
-export const CSV_URL_CAP = 50;
+// so the "Scan N pages" count the UI promises matches what the backend actually scans. Keep these two in
+// sync — SCAN_URLS_CAP is the real backend cap; this mirrors it for the renderer's UI + CSV slicing.
+export const CSV_URL_CAP = 250;
