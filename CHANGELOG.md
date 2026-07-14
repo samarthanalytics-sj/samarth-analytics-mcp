@@ -1,3 +1,9 @@
+## [1.319.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.318.0...v1.319.0) (2026-07-14)
+
+### Features
+
+* **desktop:** auto-detect network changes for the location panel ([#561](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/561)) ([d921e34](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d921e34f69ca10ed95ed70f2a003604246f51e7f))
+
 ## [1.318.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.317.0...v1.318.0) (2026-07-14)
 
 ### Features
