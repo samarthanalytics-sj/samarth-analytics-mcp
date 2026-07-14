@@ -637,8 +637,13 @@ export interface VerifyTagVerdict {
    *  missing browser beacon is expected, not proof it's broken. Filed under a distinct "relayed
    *  server-side" group (always also `inconclusive`), never "not firing". */
   serverRelay?: boolean;
-  /** The event name observed on the firing hit (GA4). */
+  /** The event the tag fired on: the dataLayer/trigger event (e.g. "gtm.linkClick") in an authoritative
+   *  monitor run, or the observed GA4 event on the firing hit in a beacon run. */
   event?: string;
+  /** The GA4 event name CONFIGURED on the tag (its "Event Name" field, e.g. "phone_click") — what the tag
+   *  actually sends to GA4, as opposed to `event` (the event it fired on). Surfaced in the results table +
+   *  exports so the report shows the event we add/use in GTM, not just the trigger. */
+  eventName?: string;
   /** Why it did not fire (always set when fired=false). */
   reason?: string;
   /** For a "fired but wrong event name" verdict: the GA4 event name(s) actually observed on the
@@ -717,6 +722,42 @@ export interface VerifyTagsResult {
   /** Phase 3: DLV-based trigger suggestions for tags that did NOT fire, built from the REAL captured
    *  pushes — so the user can create/align a trigger for anything not firing. */
   taSuggestions?: TaTriggerSuggestion[];
+}
+
+/** One row of the tag-verification results EXPORT (CSV / PDF / DOC). The renderer derives these from the
+ *  verdicts (reusing the same status/label logic the on-screen table uses) so the download matches the UI.
+ *  `screenshot` (a JPEG data-URI) is embedded as an <img> in the PDF/DOC; the CSV omits it (text only). */
+export interface VerifyExportRow {
+  /** Human label of the verdict's status, e.g. "Fired" / "Config OK" / "Server-side" / "Untested" / "Issue". */
+  status: string;
+  /** The tag's name, e.g. "GA4 - Event - Phone Click Tag". */
+  tag: string;
+  /** The GA4 event name configured on the tag (its "Event Name", e.g. "phone_click"). */
+  eventName?: string;
+  /** The event it fired on (the dataLayer/trigger event, e.g. "gtm.linkClick", in an authoritative run). */
+  triggerEvent?: string;
+  /** How the fire was observed — the interaction-kind label, e.g. "Tag" / "Click" / "Form". */
+  firedVia?: string;
+  /** The evidence line, e.g. "GTM monitor: success" or the observed beacon host(s). */
+  signal?: string;
+  /** JPEG data-URI proof screenshot (Tag Assistant tag-detail / driven page). Embedded in PDF/DOC only. */
+  screenshot?: string;
+}
+
+/** Everything the tag-verification export needs, sent from the renderer to the export IPC. Serializable. */
+export interface VerifyExportPayload {
+  /** The site verified (for the report heading + default filename). */
+  url?: string;
+  /** true = an authoritative Tag Assistant / GTM-monitor run (shown as a note in the report). */
+  authoritative?: boolean;
+  /** The scorecard counts, mirroring the on-screen cards. */
+  counts: { fired: number; config: number; server: number; untested: number; issues: number };
+  /** Coverage line: pages driven / crawled / total (each optional). */
+  pagesDriven?: number;
+  pagesCrawled?: number;
+  pagesTotal?: number;
+  /** Every verdict as an export row, in display order (fired → config → server → untested → not-firing). */
+  rows: VerifyExportRow[];
 }
 
 /** One dataLayer event in the Tag-Assistant-style timeline. */
