@@ -1,3 +1,9 @@
+## [1.312.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.311.0...v1.312.0) (2026-07-14)
+
+### Features
+
+* **desktop:** download tag-verification results (CSV/PDF/DOC) + GA4 event-name column ([ab40eb2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ab40eb2c7e45439d2f7c58cd02d11650c45ba8a6))
+
 ## [1.311.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.310.1...v1.311.0) (2026-07-14)
 
 ### Features
