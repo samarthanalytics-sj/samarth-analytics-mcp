@@ -6056,7 +6056,7 @@ function WorkspaceDiffResults({
       <div style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border-2)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--text)', lineHeight: 1.5, marginBottom: 10 }}>
         <b>Summary of differences.</b> {result.headline}
         <div style={{ ...styles.muted, fontSize: 11, marginTop: 4 }}>
-          GTM has no per-workspace permissions or files — access is account/container-level and identical for every workspace. This compares configuration entities.
+          GTM has no per-workspace permissions or files - access is account/container-level and identical for every workspace. This compares configuration entities.
         </div>
       </div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -6225,15 +6225,18 @@ function WorkspaceDiffResults({
                     const c = WS_STATUS_COLOR[e.status];
                     return (
                       <li key={`${e.kind}|${e.name}`} style={{ ...styles.resultRow, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                           <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: c.bg, color: c.fg, whiteSpace: 'nowrap' }}>{c.label}</span>
                           <span style={{ ...styles.muted, fontSize: 11.5 }}>{WS_KIND_LABEL[e.kind]}</span>
                           <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{e.name}</span>
+                          {/* Name the actual workspace each add/remove lives in, not a vague "this workspace". */}
+                          {e.status === 'added' && <span style={{ fontSize: 11.5, color: 'var(--c-green)' }}>only in {p.bName}</span>}
+                          {e.status === 'removed' && <span style={{ fontSize: 11.5, color: 'var(--c-red)' }}>only in {p.aName}</span>}
                         </div>
                         {e.status === 'changed' && e.changes && (
                           <div style={{ marginLeft: 8, fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6 }}>
                             {e.changes.map((ch) => (
-                              <div key={ch.field}><span style={{ color: 'var(--c-blue)' }}>{ch.field}</span>: <span style={{ color: 'var(--c-red)' }}>{ch.a === undefined ? '(none)' : ch.a.slice(0, 60)}</span> → <span style={{ color: 'var(--c-green)' }}>{ch.b === undefined ? '(none)' : ch.b.slice(0, 60)}</span></div>
+                              <div key={ch.field}><span style={{ color: 'var(--c-blue)' }}>{ch.field}</span>: <span style={{ ...styles.muted }}>{p.aName}:</span> <span style={{ color: 'var(--c-red)' }}>{ch.a === undefined ? '(none)' : ch.a.slice(0, 60)}</span> → <span style={{ ...styles.muted }}>{p.bName}:</span> <span style={{ color: 'var(--c-green)' }}>{ch.b === undefined ? '(none)' : ch.b.slice(0, 60)}</span></div>
                             ))}
                           </div>
                         )}
@@ -6250,7 +6253,7 @@ function WorkspaceDiffResults({
       {/* Report Generation — clearly SEPARATE from the comparison above. */}
       <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-2)' }}>
         <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>Report generation</div>
-        <div style={{ ...styles.muted, fontSize: 12, margin: '2px 0 8px' }}>Generate a detailed comparison report — summary, common + uncommon items, merge recommendations and differences (separate from the on-screen comparison).</div>
+        <div style={{ ...styles.muted, fontSize: 12, margin: '2px 0 8px' }}>Generate a detailed comparison report - summary, common + uncommon items, merge recommendations and differences (separate from the on-screen comparison).</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <button style={{ ...styles.primaryBtn, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('xlsx')} disabled={exporting} title="Native Excel workbook — Summary, Common, Uncommon and Detailed-diff sheets with full config values">⬇ Export Excel (.xlsx)</button>
           <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('pdf')} disabled={exporting}>Generate PDF report</button>
