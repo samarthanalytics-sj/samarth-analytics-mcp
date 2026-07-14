@@ -338,6 +338,8 @@ const api = {
       ipcRenderer.invoke('gtm:auditServer', accountId, containerId, workspaceId),
     serverCoverage: (accountId: string, webContainerId: string, webWorkspaceId: string, serverContainerId: string, serverWorkspaceId: string): Promise<ServerCoverageView> =>
       ipcRenderer.invoke('gtm:serverCoverage', accountId, webContainerId, webWorkspaceId, serverContainerId, serverWorkspaceId),
+    exportServerDoc: (accountId: string, containerId: string, workspaceId: string, format: 'md' | 'csv' | 'pdf', names: { containerName?: string; publicId?: string; workspaceName?: string }): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportServerDoc', accountId, containerId, workspaceId, format, names),
     audit: (accountId: string, containerId: string, workspaceId: string): Promise<AuditReportView> =>
       ipcRenderer.invoke('gtm:audit', accountId, containerId, workspaceId),
     // The container's EXISTING GA4/base tags translated into verify-engine inputs, so
