@@ -1,3 +1,9 @@
+## [1.326.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.325.0...v1.326.0) (2026-07-14)
+
+### Features
+
+* **desktop:** server container audit in the Server container tab ([01e7bae](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/01e7bae1927387c00511467cf64dda00527e174a))
+
 ## [1.325.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.324.1...v1.325.0) (2026-07-14)
 
 ### Features
