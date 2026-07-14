@@ -207,9 +207,7 @@ export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent
   const seenEvents = new Set(events.map((e) => e.event).filter(Boolean));
   return reportable.map((tag): VerifyTagVerdict => {
     const m = byId.get(tag.id);
-    // Carry the tag's CONFIGURED GA4 event name (e.g. "phone_click") onto every verdict so the results
-    // table + exports show the event we actually send, not just the dataLayer trigger event.
-    const base = { tagId: tag.id, tagName: tag.tagName, verifiedByMonitor: true, ...(tag.eventName ? { eventName: tag.eventName } : {}) } as const;
+    const base = { tagId: tag.id, tagName: tag.tagName, verifiedByMonitor: true } as const;
     if (m && m.fired) {
       const clean = m.status === 'success';
       return {
@@ -265,7 +263,7 @@ export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent
 function evaluateOne(tag: VerifyTagInput, byId: Map<string, PerTagCapture>, elements: DetectedElementView[]): VerifyTagVerdict {
   {
     const cap = byId.get(tag.id);
-    const base: VerifyTagVerdict = { tagId: tag.id, tagName: tag.tagName, fired: false, ...(tag.eventName ? { eventName: tag.eventName } : {}) };
+    const base: VerifyTagVerdict = { tagId: tag.id, tagName: tag.tagName, fired: false };
 
     if (!cap) {
       return { ...base, reason: 'the tag was not exercised by the driver', interaction: { kind: 'none', targetFound: false, performed: false } };

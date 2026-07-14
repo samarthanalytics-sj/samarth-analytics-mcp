@@ -173,7 +173,7 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
   });
 
   // Export the TAG-VERIFICATION results (the Tag-verification tab's table) to a file the user picks:
-  //   csv → a text spreadsheet (Status · Tag · GA4 event name · Trigger event · Fired via · Signal)
+  //   csv → a text spreadsheet (Status · Tag · Event · Fired via · Signal · Proof)
   //   pdf → the styled results report (scorecard + table) with each tag's PROOF SCREENSHOT embedded
   //   doc → the same HTML written as .doc (Word/Docs open it) — screenshots embedded as data-URIs
   // The renderer sends the derived rows + counts (VerifyExportPayload); the pure builders format them.

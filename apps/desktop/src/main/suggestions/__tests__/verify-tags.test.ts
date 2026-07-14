@@ -81,9 +81,6 @@ const els: DetectedElementView[] = [{ page: '/', kind: 'cta', text: 'Get a Free 
   check('QW1: does not falsely claim "the wrong event"', !/but none for/.test(v[0].reason ?? ''));
   const ve = evaluateVerify([tag({ eventName: '' })], [cap({ hits: [] })], els);
   check('QW1: empty event name is also inconclusive', ve[0].inconclusive === true);
-  // The beacon path also threads the configured GA4 event name onto the verdict (for the export/table).
-  const withName = evaluateVerify([tag({ id: 'en', eventName: 'phone_click' })], [cap({ tagId: 'en', hits: [] })], els);
-  check('beacon: verdict carries the configured GA4 eventName', withName[0].eventName === 'phone_click');
 }
 
 // ── target not found → repair proposed ──────────────────────────────────────────
@@ -329,10 +326,6 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   check('monitor: a tag GTM fired with an ERROR status → fired but reason flags it', by.get('cta')!.fired === true && by.get('cta')!.monitorStatus === 'failure' && /error|failure/i.test(by.get('cta')!.reason ?? ''));
   check('monitor: a DRIVEN tag GTM never fired → genuine not-firing (not inconclusive)', by.get('ghost')!.fired === false && !by.get('ghost')!.inconclusive && /did not fire|exercised/i.test(by.get('ghost')!.reason ?? ''));
   check('monitor: execution time carried', by.get('lead')!.monitorExecutionMs === 9);
-  // The tag's CONFIGURED GA4 event name (e.g. "generate_lead") is threaded onto every verdict, for the
-  // results table + export — distinct from `event`, the dataLayer/trigger event.
-  check('monitor: verdict carries the configured GA4 eventName (fired)', by.get('lead')!.eventName === 'generate_lead');
-  check('monitor: verdict carries the configured GA4 eventName (not-firing)', by.get('ghost')!.eventName === 'x');
 }
 
 // ── verdictsFromMonitor: FORM tags are INCLUDED — credited from the REAL-submit stream ───────────────

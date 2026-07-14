@@ -13,8 +13,8 @@ function check(name: string, cond: boolean, detail?: string): void {
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
 const rows: VerifyExportRow[] = [
-  { status: 'Fired', tag: 'GA4 - Event - Phone Click Tag', eventName: 'phone_click', triggerEvent: 'gtm.linkClick', firedVia: 'Tag', signal: 'GTM monitor: success', screenshot: PNG },
-  { status: 'Issue', tag: 'Meta - Purchase', eventName: 'purchase', triggerEvent: 'gtm.click', firedVia: 'Click', signal: '—' },
+  { status: 'Fired', tag: 'GA4 - Event - Phone Click Tag', triggerEvent: 'gtm.linkClick', firedVia: 'Tag', signal: 'GTM monitor: success', screenshot: PNG },
+  { status: 'Issue', tag: 'Meta - Purchase', triggerEvent: 'gtm.click', firedVia: 'Click', signal: '—' },
 ];
 const payload = (over: Partial<VerifyExportPayload> = {}): VerifyExportPayload => ({
   url: 'https://www.example.com/',
@@ -35,20 +35,20 @@ check('siteLabel of undefined is empty', siteLabel(undefined) === '');
 // ── verifyResultsCsv ─────────────────────────────────────────────────────────────
 const csv = verifyResultsCsv(payload());
 const csvLines = csv.split('\r\n');
-check('csv: header has the 7 columns incl. GA4 event name', csvLines[0] === '"Status","Tag","GA4 event name","Event","Fired via","Signal","Proof"');
+check('csv: header has the 6 columns (no GA4 event)', csvLines[0] === '"Status","Tag","Event","Fired via","Signal","Proof"');
+check('csv: header has no GA4 event column', !csvLines[0].includes('GA4 event'));
 check('csv: one data row per verdict (+ header)', csvLines.length === 3);
-check('csv: row carries the configured GA4 event name', csvLines[1].includes('"phone_click"'));
 check('csv: row carries the trigger event', csvLines[1].includes('"gtm.linkClick"'));
 check('csv: proof column notes a screenshot present + where to see it', csvLines[1].endsWith('"captured (image in PDF/DOC export)"'));
 check('csv: proof column blank when no screenshot', csvLines[2].endsWith('""'));
 
 // CSV escaping: quotes doubled, commas + newlines survive inside quotes.
-const tricky = verifyResultsCsv(payload({ rows: [{ status: 'Fired', tag: 'Tag "A", with comma\nand newline', eventName: 'e' }] }));
+const tricky = verifyResultsCsv(payload({ rows: [{ status: 'Fired', tag: 'Tag "A", with comma\nand newline' }] }));
 check('csv: doubles embedded quotes', tricky.includes('"Tag ""A"", with comma\nand newline"'));
 // The whole data row is RFC-4180: every field quoted, inner quotes doubled, comma+newline safe inside.
 check(
   'csv: every field is fully quoted/escaped',
-  tricky.split('\r\n')[1] === '"Fired","Tag ""A"", with comma\nand newline","e","","","",""',
+  tricky.split('\r\n')[1] === '"Fired","Tag ""A"", with comma\nand newline","","","",""',
   JSON.stringify(tricky.split('\r\n')[1]),
 );
 
@@ -57,8 +57,8 @@ const html = verifyResultsHtml(payload());
 check('html: heading shows the host', html.includes('Tag Verification Report — example.com'));
 check('html: authoritative note present', /Authoritative/.test(html));
 check('html: coverage line reflects pages driven/crawled/total', html.includes('Drove across 8 pages') && html.includes('scanned 226 of 300 site pages'));
-check('html: table header includes GA4 event + Event', html.includes('<th>GA4 event name</th>') && html.includes('<th>Event</th>'));
-check('html: shows the configured GA4 event name', html.includes('<code>phone_click</code>'));
+check('html: table header has Event, and no GA4 event column', html.includes('<th>Event</th>') && !html.includes('GA4 event'));
+check('html: does not show a configured GA4 event name (removed)', !html.includes('<code>phone_click</code>'));
 check('html: embeds the proof screenshot as an <img> data-uri', html.includes(`<img src="${PNG}"`));
 check('html: a row without a screenshot shows a dash, not an img', (html.match(/<img /g) || []).length === 1);
 check('html: scorecard shows Fired + Issues counts', html.includes('>1</div><div style="font-size:12px;color:#374151;margin-top:3px">Fired</div>') || (/Fired/.test(html) && /Issues/.test(html)));
