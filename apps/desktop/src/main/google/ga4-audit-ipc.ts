@@ -11,6 +11,7 @@ import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Visuals, buildGa4Sect
 import { auditGa4Growth } from './ga4-growth';
 import { rankGa4Campaigns } from './ga4-campaigns';
 import { auditGa4EventDeltas, auditGa4Transactions } from './ga4-integrity';
+import { auditGa4EventHygiene } from './ga4-event-hygiene';
 import { auditGa4DeadDimensions } from './ga4-dead-dimensions';
 import { auditGa4EventCoverage, ECOMMERCE_RECOMMENDED_EVENTS } from './ga4-event-coverage';
 import { summarizeGa4Retention } from './ga4-retention';
@@ -83,6 +84,17 @@ export async function runGa4AuditPipeline(
   const integrityFindings = [
     ...(deltas ? auditGa4EventDeltas({ events: deltas.events, keyEventNames: (snap.keyEvents ?? []).map((k) => k.eventName) }) : []),
     ...(txn ? auditGa4Transactions({ hasEcommerce: true, transactions: txn.transactions, notSetShare: txn.notSetShare }) : []),
+    // Event-name HYGIENE over the same fetched deltas (no extra API calls): naming-convention
+    // violations with exact renames, high-cardinality name families, key events that never fired.
+    ...(deltas
+      ? auditGa4EventHygiene({
+          events: deltas.events,
+          keyEventNames: (snap.keyEvents ?? []).map((k) => k.eventName),
+          // The deltas query caps at 500 rows per window - at the cap, absence is not evidence.
+          possiblyTruncated: deltas.events.length >= 500,
+          windowDays: dqCounts.windowDays,
+        })
+      : []),
   ];
   if (integrityFindings.length) {
     const base = dataQuality.findings.filter((f) => !(f.severity === 'info' && /No major data-quality issues/.test(f.message)));
