@@ -337,11 +337,12 @@ async function main(): Promise<void> {
 
   // ── scanUrls: a form page past the cap SURVIVES the priority sort ───────────
   {
-    // 55 plain pages, then a contact form page at the very TAIL (index 55) — beyond SCAN_URLS_CAP (50).
-    // Without the priority sort it would be sliced away; with it, it's pulled to the front and scanned.
+    // (SCAN_URLS_CAP + 5) plain pages, then a contact form page at the very TAIL — beyond the cap, whatever
+    // its value. Without the priority sort it would be sliced away; with it, it's pulled to the front and
+    // scanned. Cap-relative so the test keeps exercising the slice if SCAN_URLS_CAP changes.
     const plain: string[] = [];
     const pages: Record<string, DrivenPage> = {};
-    for (let i = 0; i < 55; i += 1) {
+    for (let i = 0; i < SCAN_URLS_CAP + 5; i += 1) {
       const u = `https://acme.com/p${i}`;
       plain.push(u);
       pages[u] = { ok: true, httpStatus: 200, finalUrl: u, raw: raw([]), rawForms: [] };

@@ -3582,7 +3582,7 @@ function TagReviewPanel({
               <div style={styles.muted}>
                 {discoverMode === 'single'
                   ? 'Scans ONLY this page (no crawl, no sitemap) and shows its tags directly'
-                  : 'First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan (up to 50 pages per scan)'}
+                  : `First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan (up to ${CSV_URL_CAP} pages per scan)`}
                 {' '}— merging Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
                 approve.{' '}
                 <button style={styles.linkBtn} onClick={doQuickScan} disabled={!url.trim() || scanning || discovering}>
@@ -3628,7 +3628,7 @@ function TagReviewPanel({
                 )}
                 <button style={styles.linkBtn} onClick={() => setAllPages(() => false)}>Select none</button>
                 <button style={styles.linkBtn} onClick={() => setAllPages((_u, i) => i < 25)}>First 25</button>
-                <button style={styles.linkBtn} onClick={() => setAllPages((_u, i) => i < 50)}>First 50</button>
+                <button style={styles.linkBtn} onClick={() => setAllPages((_u, i) => i < CSV_URL_CAP)}>First {CSV_URL_CAP}</button>
               </div>
             </div>
             {discovered.note && <div style={{ ...styles.muted, marginTop: 4 }}>{discovered.note}</div>}

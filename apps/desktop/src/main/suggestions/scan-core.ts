@@ -72,7 +72,7 @@ export interface PageDriver {
 }
 
 export interface ScanOptions {
-  /** Pages to open/scan (default 10, hard cap 50). */
+  /** Pages to open/scan (default 10, hard cap 300 — see the clamp in crawlAndSuggest). */
   maxPages?: number;
   /** Link depth from the start URL (default 2, hard cap 4). */
   maxDepth?: number;
@@ -645,8 +645,9 @@ export async function crawlAndSuggest(
   return assembleResult(start, siteHost, pageScans, notScanned, warnings, opened, [], platforms, mergePoolDiagnostics(pool));
 }
 
-/** Max pages a single "scan selected" run (Main website) or CSV import will deep-scan. */
-export const SCAN_URLS_CAP = 50;
+/** Max pages a single "scan selected" run (Main website) or CSV import will deep-scan. Matches the
+ *  crawl budget used by tag verification so suggestions cover the same breadth of the site. */
+export const SCAN_URLS_CAP = 250;
 
 /**
  * Deep-scan a SPECIFIC list of URLs (no BFS) — used after the discover step,

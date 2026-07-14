@@ -19,7 +19,9 @@ export interface DiscoverResult {
 
 const MAX_URLS = 800;
 const MAX_SITEMAPS = 15;
-const MAX_CRAWL = 150;
+// No-sitemap link-crawl budget. Kept >= the deep-scan cap (SCAN_URLS_CAP) so the discover step can list
+// enough pages for the user to select up to that cap even when the site has no sitemap.
+const MAX_CRAWL = 250;
 const LOC_RE = /<loc>\s*([^<\s]+)\s*<\/loc>/gi;
 const HREF_RE = /<a\b[^>]*\bhref\s*=\s*["']([^"'#]+)["']/gi;
 
