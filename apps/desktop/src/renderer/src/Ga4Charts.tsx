@@ -227,6 +227,36 @@ export function Ga4Charts({ visuals: v }: { visuals: Ga4VisualsView }): JSX.Elem
     <div style={{ color: 'var(--text)', lineHeight: 1.5 }}>
       <div style={eyebrow}>The evidence</div>
       <h2 style={{ fontSize: 21, fontWeight: 600, letterSpacing: '-.01em', margin: '2px 0 10px', color: 'var(--text)' }}>Traffic trend &amp; visualisations</h2>
+      {(v.metrics?.length ?? 0) > 0 && (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '0 0 12px' }}>
+          {v.metrics!.map((m) => {
+            const up = (m.deltaPct ?? 0) > 0.05;
+            const down = (m.deltaPct ?? 0) < -0.05;
+            const col = up ? '#1E7A48' : down ? '#A63527' : 'var(--text-faint)';
+            const arrow = up ? '\u25B2' : down ? '\u25BC' : '\u00B7';
+            const fmtDelta = (p: number): string => `${p >= 0 ? '+' : '-'}${Math.abs(p).toFixed(Math.abs(p) >= 100 ? 0 : 2)}%`;
+            return (
+              <div key={m.label} style={{ ...card, flex: '1 1 160px', minWidth: 150, padding: '12px 14px' }}>
+                <div style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>{m.label}</div>
+                <div style={{ fontSize: 22, fontWeight: 700, margin: '2px 0', color: 'var(--text)' }}>{m.value}</div>
+                {m.deltaPct == null ? (
+                  <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>no prior-window data</div>
+                ) : (
+                  <div style={{ fontSize: 12.5 }}>
+                    <span style={{ color: col, fontWeight: 700 }}>{arrow} {fmtDelta(m.deltaPct)}</span>
+                    <span style={{ color: 'var(--text-faint)' }}> vs prior ({m.prior})</span>
+                  </div>
+                )}
+                {m.verdict !== 'safe' && m.verdict !== 'caution' && (
+                  <div style={{ fontSize: 10.5, color: 'var(--c-amber, #9A6206)', marginTop: 2 }}>
+                    {m.verdict === 'do_not_quote' ? 'not safe to quote (see Data Trust Matrix)' : 'unverified - treat with caution'}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 380px', minWidth: 300 }}>
           {(v.daily?.length ?? 0) >= 5 && (

@@ -489,6 +489,40 @@ export function ga4VisualsHtml(v: Ga4VisualsView): string {
   // Charts on the left, the deep-insights panel on the right (matching the on-screen layout). When
   // there is nothing to say, the charts take the full width instead of leaving an empty column.
   const insights = insightsPanelHtml(v);
+  // Headline metric cards: value + green/red delta vs the prior window (lab-report shades), with an
+  // amber trust note when the Data Trust Matrix says the metric is not safe to quote.
+  const GREEN = '#1E7A48';
+  const RED = '#A63527';
+  const fmtDelta = (p: number): string => `${p >= 0 ? '+' : '-'}${Math.abs(p).toFixed(Math.abs(p) >= 100 ? 0 : 2)}%`;
+  const metricCards = v.metrics?.length
+    ? `<table role="presentation" style="border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;margin:0 0 10px"><tbody><tr>` +
+      v.metrics
+        .map((m) => {
+          const up = (m.deltaPct ?? 0) > 0.05;
+          const down = (m.deltaPct ?? 0) < -0.05;
+          const col = up ? GREEN : down ? RED : FAINT;
+          const arrow = up ? '\u25B2' : down ? '\u25BC' : '\u00B7';
+          const deltaLine =
+            m.deltaPct == null
+              ? `<span style="font-size:11.5px;color:${FAINT}">no prior-window data</span>`
+              : `<span style="font-size:12.5px;color:${col};font-weight:700">${arrow} ${fmtDelta(m.deltaPct)}</span> <span style="font-size:11.5px;color:${FAINT}">vs prior (${esc(m.prior)})</span>`;
+          const trustNote =
+            m.verdict === 'safe' || m.verdict === 'caution'
+              ? ''
+              : `<div style="font-size:10.5px;color:var(--c-amber,#9A6206);margin-top:2px">${m.verdict === 'do_not_quote' ? 'not safe to quote (see Data Trust Matrix)' : 'unverified - treat with caution'}</div>`;
+          return (
+            `<td style="vertical-align:top;padding:0 6px 0 0">` +
+            `<div style="border:1px solid ${BORDER};border-radius:4px;padding:12px 14px;background:${SURFACE}">` +
+            `<div style="font-family:${MONO};font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:${FAINT}">${esc(m.label)}</div>` +
+            `<div style="font-size:22px;font-weight:700;color:${TEXT};margin:2px 0">${esc(m.value)}</div>` +
+            `<div>${deltaLine}</div>` +
+            trustNote +
+            `</div></td>`
+          );
+        })
+        .join('') +
+      `</tr></tbody></table>`
+    : '';
   const chartsAndInsights = insights
     ? `<table role="presentation" style="border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed"><tbody><tr>` +
       `<td style="width:60%;vertical-align:top;padding-right:12px">${chartsBlock}</td>` +
@@ -499,6 +533,7 @@ export function ga4VisualsHtml(v: Ga4VisualsView): string {
     `<section style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${TEXT};line-height:1.5">` +
     `<div style="font-family:${MONO};font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:${FAINT};margin:0 0 2px">The evidence</div>` +
     `<h2 style="font-size:21px;font-weight:600;letter-spacing:-.01em;margin:2px 0 10px;color:${TEXT}">Traffic trend &amp; visualisations</h2>` +
+    metricCards +
     chartsAndInsights +
     `<table role="presentation" style="border-collapse:separate;border-spacing:0;width:100%;margin-top:8px;table-layout:fixed"><tbody><tr>` +
     cardTd(label('Device split') + barList(v.devices ?? [])) +

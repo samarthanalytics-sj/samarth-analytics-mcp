@@ -608,6 +608,7 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
     growthAssessed: Boolean(growth?.assessed),
   });
   return {
+    metrics: buildMetricCards(baseline, s.currencyCode, score.trust),
     daily,
     peakIndex: trend.peakIndex,
     trendLabel: trend.patternLabel,
@@ -629,6 +630,30 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
       return { channelTrusted: v === 'safe' || v === 'caution', channelCaveat };
     })(),
   };
+}
+
+/** Headline metric cards: current vs prior window, each carrying its Data Trust Matrix verdict so
+ *  the on-screen/PDF green-or-red delta never over-claims an unverified metric. Revenue only renders
+ *  when either window recorded any (a lead-gen property gets no phantom revenue card). */
+function buildMetricCards(
+  baseline: Ga4ReportInput['baseline'],
+  currencyCode: string | undefined,
+  trust: Array<{ metric: string; verdict: 'safe' | 'caution' | 'unverified' | 'do_not_quote' }>,
+): NonNullable<Ga4VisualsView['metrics']> {
+  if (!baseline) return [];
+  const verdictOf = (metric: string): 'safe' | 'caution' | 'unverified' | 'do_not_quote' =>
+    trust.find((t) => t.metric === metric)?.verdict ?? 'unverified';
+  const num = (x: number): string => Math.round(x).toLocaleString('en-US');
+  const money = (x: number): string => `${currencyCode ? `${currencyCode} ` : ''}${Math.round(x).toLocaleString('en-US')}`;
+  const delta = (cur: number, prior: number): number | null => (prior > 0 ? ((cur - prior) / prior) * 100 : null);
+  const cards: NonNullable<Ga4VisualsView['metrics']> = [
+    { label: 'Sessions', value: num(baseline.sessions), prior: num(baseline.priorSessions), deltaPct: delta(baseline.sessions, baseline.priorSessions), verdict: verdictOf('Sessions, users, engagement rate') },
+    { label: 'Key events', value: num(baseline.keyEvents), prior: num(baseline.priorKeyEvents), deltaPct: delta(baseline.keyEvents, baseline.priorKeyEvents), verdict: verdictOf('Conversion counts') },
+  ];
+  if (baseline.revenue > 0 || baseline.priorRevenue > 0) {
+    cards.push({ label: 'Revenue', value: money(baseline.revenue), prior: money(baseline.priorRevenue), deltaPct: delta(baseline.revenue, baseline.priorRevenue), verdict: verdictOf('Revenue / AOV / ROAS') });
+  }
+  return cards;
 }
 
 /** Structured body sections (2-4) for the designed card panel + styled export. Computed from the same

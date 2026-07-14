@@ -236,6 +236,10 @@ export interface Ga4ExecSummaryView {
 }
 /** Visualisations payload: the daily sessions trend line + colourful device/channel breakdowns. */
 export interface Ga4VisualsView {
+  /** Headline metric cards (current window vs prior): formatted value + signed delta % + the Data
+   *  Trust Matrix verdict for that metric, so a green arrow never over-claims an unverified number.
+   *  deltaPct null = no prior-window data to compare against. */
+  metrics?: Array<{ label: string; value: string; prior: string; deltaPct: number | null; verdict: 'safe' | 'caution' | 'unverified' | 'do_not_quote' }>;
   daily: Array<{ date: string; sessions: number }>;
   peakIndex: number;
   trendLabel: string;
