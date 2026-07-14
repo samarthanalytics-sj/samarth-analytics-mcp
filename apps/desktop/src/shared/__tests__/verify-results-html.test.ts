@@ -39,7 +39,7 @@ check('csv: header has the 7 columns incl. GA4 event name', csvLines[0] === '"St
 check('csv: one data row per verdict (+ header)', csvLines.length === 3);
 check('csv: row carries the configured GA4 event name', csvLines[1].includes('"phone_click"'));
 check('csv: row carries the trigger event', csvLines[1].includes('"gtm.linkClick"'));
-check('csv: proof column marks a screenshot present', csvLines[1].endsWith('"screenshot"'));
+check('csv: proof column notes a screenshot present + where to see it', csvLines[1].endsWith('"captured (image in PDF/DOC export)"'));
 check('csv: proof column blank when no screenshot', csvLines[2].endsWith('""'));
 
 // CSV escaping: quotes doubled, commas + newlines survive inside quotes.
