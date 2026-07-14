@@ -27,6 +27,7 @@ import type {
   MonitorAlert,
   MonitorConfig,
   MonitorStatus,
+  NetworkLocationView,
   Ga4MonitorConfig,
   Ga4MonitorStatus,
   Ga4MonitorRun,
@@ -444,6 +445,14 @@ const api = {
       ipcRenderer.on('ga4monitoring:run', listener);
       return () => ipcRenderer.removeListener('ga4monitoring:run', listener);
     },
+  },
+
+  // Network & Location: the public egress location (IP, country/region/city, VPN/proxy verdict + provider)
+  // the app's website audits, form submissions and click events run from. getLocation is cached (60s);
+  // refreshLocation forces a fresh check (the Refresh button, or after switching VPN server).
+  network: {
+    getLocation: (): Promise<NetworkLocationView> => ipcRenderer.invoke('network:getLocation'),
+    refreshLocation: (): Promise<NetworkLocationView> => ipcRenderer.invoke('network:refreshLocation'),
   },
 };
 

@@ -24,6 +24,8 @@ import type {
   GtmContext,
   GtmWorkspaceView,
   LlmProvider,
+  NetworkLocationView,
+  NetworkConnectionType,
   ProviderStatus,
   ScanProgressView,
   SecretSelfTest,
@@ -5296,6 +5298,10 @@ function VerifyPanel({
               Verifying only {vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean).length} page(s) — the site crawl is skipped.
             </div>
           )}
+          {/* Network & Location: the egress this audit runs from, so the operator can confirm the request
+              originates from the expected network/VPN before (and while) driving the live site. Re-checks
+              automatically when a run starts, so switching VPN server is reflected. */}
+          <NetworkLocationInline refreshKey={vVerifying || vTaStage === 'scanning' ? 'run' : ''} />
           {/* Single entry point: Verify with Tag Assistant. It scans the site for forms with tags FIRST,
               then gates on skip/proceed (below), then drives every tag + reads GTM's own firing. */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
@@ -7349,6 +7355,140 @@ function Ga4AuditPanel({
   );
 }
 
+/* ───────────────────────── Network & Location ───────────────────────── */
+
+// A short "2m ago" style relative time for the last location check.
+function relTimeAgo(ts: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 5) return 'just now';
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  return `${Math.round(m / 60)}h ago`;
+}
+function connTypeLabel(t: NetworkConnectionType): string {
+  return t === 'vpn' ? 'VPN' : t === 'proxy' ? 'Proxy' : t === 'local' ? 'Local network' : 'Unknown';
+}
+function connTypeColor(t: NetworkConnectionType): string {
+  return t === 'vpn' ? 'var(--c-green)' : t === 'proxy' ? 'var(--c-amber)' : t === 'local' ? 'var(--c-blue)' : 'var(--text-muted)';
+}
+// ISO-3166 alpha-2 → regional-indicator flag emoji; falls back to a globe for unknown codes.
+function flagEmoji(cc: string | null): string {
+  if (!cc || cc.length !== 2 || !/^[a-zA-Z]{2}$/.test(cc)) return '🌐';
+  const base = 0x1f1e6;
+  const up = cc.toUpperCase();
+  return String.fromCodePoint(base + up.charCodeAt(0) - 65, base + up.charCodeAt(1) - 65);
+}
+
+/**
+ * Shared loader for the current egress location. Loads the cached value on mount; when `refreshKey`
+ * changes to a truthy value (e.g. a verify run starting) it forces a fresh check so a mid-session VPN
+ * switch is picked up. `refresh()` backs the manual Refresh button.
+ */
+function useNetworkLocation(refreshKey?: unknown): { loc: NetworkLocationView | null; loading: boolean; refresh: () => Promise<void> } {
+  const [loc, setLoc] = useState<NetworkLocationView | null>(null);
+  const [loading, setLoading] = useState(true);
+  const load = (force: boolean): Promise<void> => {
+    setLoading(true);
+    const p = force ? window.desktop.network.refreshLocation() : window.desktop.network.getLocation();
+    return p.then(setLoc).catch(() => { /* keep previous value */ }).finally(() => setLoading(false));
+  };
+  useEffect(() => { void load(false); }, []); // initial cached load
+  useEffect(() => { if (refreshKey) void load(true); }, [refreshKey]); // force-recheck when a run starts
+  return { loc, loading, refresh: () => load(true) };
+}
+
+// Full detail rows for the Settings card.
+function NetworkLocationDetail({ loc, loading }: { loc: NetworkLocationView | null; loading: boolean }): JSX.Element {
+  if (!loc) return <p style={styles.muted}>{loading ? 'Checking your network location…' : 'Location not checked yet.'}</p>;
+  const t = loc.connectionType;
+  return (
+    <>
+      <div style={styles.kv}><span>Public IP</span><b style={{ fontFamily: 'monospace' }}>{loc.ip ?? '—'}</b></div>
+      <div style={styles.kv}><span>Country</span><b>{loc.country ? `${flagEmoji(loc.countryCode)} ${loc.country}` : '—'}</b></div>
+      <div style={styles.kv}><span>Region / State</span><b>{loc.region ?? '—'}</b></div>
+      <div style={styles.kv}><span>City</span><b>{loc.city ?? '—'}</b></div>
+      <div style={styles.kv}><span>Connection</span><b style={{ color: connTypeColor(t) }}>{connTypeLabel(t)}</b></div>
+      <div style={styles.kv}><span>Provider</span><b>{loc.provider ?? (t === 'vpn' ? 'VPN (unidentified)' : '—')}</b></div>
+      {loc.org && (
+        <div style={styles.kv}>
+          <span>Network (ISP / org)</span>
+          <b style={{ fontWeight: 500, color: 'var(--text-dim)', textAlign: 'right' }}>{loc.org}{loc.asn ? ` · ${loc.asn}` : ''}</b>
+        </div>
+      )}
+      <div style={{ ...styles.kv, borderBottom: 'none' }}>
+        <span>Status</span>
+        <b style={{ color: loc.status === 'connected' ? 'var(--c-green)' : loc.status === 'offline' ? 'var(--c-amber)' : 'var(--c-red)' }}>
+          {loc.status === 'connected' ? '● Connected' : loc.status === 'offline' ? '○ Offline' : '✗ Error'}
+        </b>
+      </div>
+      {loc.detail && <p style={{ ...styles.settingsSub, color: 'var(--c-amber)', marginTop: 6 }}>{loc.detail}</p>}
+      {loc.status === 'connected' && loc.detectedVia.length > 0 && (
+        <p style={{ ...styles.settingsSub, marginTop: 6, opacity: 0.8 }}>
+          Detected via {loc.detectedVia.join(' + ')}{loc.confidence !== 'none' ? ` (${loc.confidence} confidence)` : ''}.
+        </p>
+      )}
+    </>
+  );
+}
+
+// The Settings → Network & Location card.
+function NetworkLocationCard(): JSX.Element {
+  const { loc, loading, refresh } = useNetworkLocation();
+  return (
+    <section style={styles.card}>
+      <h2 style={styles.h2}>Network &amp; Location</h2>
+      <p style={styles.settingsSub}>
+        Where this app&apos;s outbound traffic comes from. Website audits, form submissions and click events run from
+        this location, so confirm it is the network or VPN you intend before running an audit. With a full-tunnel VPN
+        this is also the route those browser actions take. Detected by querying a public IP-geolocation service.
+      </p>
+      <NetworkLocationDetail loc={loc} loading={loading} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
+        <button style={styles.ghostBtn} onClick={() => void refresh()} disabled={loading}>
+          {loading ? 'Checking…' : '↻ Refresh location'}
+        </button>
+        {loc && <span style={styles.settingsSub}>Last checked {relTimeAgo(loc.checkedAt)}</span>}
+      </div>
+    </section>
+  );
+}
+
+// A compact one-line "Running from: …" banner for the audit/verify surface, so the operator can confirm
+// the egress before and during a run. Force-rechecks whenever `refreshKey` flips (a run starting).
+function NetworkLocationInline({ refreshKey }: { refreshKey?: unknown }): JSX.Element {
+  const { loc, loading, refresh } = useNetworkLocation(refreshKey);
+  const t = loc?.connectionType ?? 'unknown';
+  const place = loc ? [loc.city, loc.country].filter(Boolean).join(', ') || '—' : '';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface-2)', marginTop: 8, marginBottom: 4 }}>
+      <span aria-hidden>🌐</span>
+      <span style={{ fontWeight: 600, color: 'var(--text-dim)' }}>Running from:</span>
+      {loading && !loc ? (
+        <span style={{ color: 'var(--text-muted)' }}>checking…</span>
+      ) : loc ? (
+        <>
+          <span>{flagEmoji(loc.countryCode)} {place}</span>
+          <span style={{ color: connTypeColor(t), fontWeight: 600 }}>· {connTypeLabel(t)}{loc.provider ? ` (${loc.provider})` : ''}</span>
+          {loc.ip && <span style={{ fontFamily: 'monospace', color: 'var(--text-muted)' }}>· {loc.ip}</span>}
+          {loc.status !== 'connected' && <span style={{ color: 'var(--c-amber)' }}>· {loc.status}</span>}
+          <span style={{ color: 'var(--text-faint)' }}>· checked {relTimeAgo(loc.checkedAt)}</span>
+        </>
+      ) : (
+        <span style={{ color: 'var(--text-muted)' }}>location unavailable</span>
+      )}
+      <button
+        onClick={() => void refresh()}
+        disabled={loading}
+        title="Re-check the current network location"
+        style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--c-blue)', background: 'none', border: 'none', cursor: loading ? 'default' : 'pointer', padding: 0, whiteSpace: 'nowrap' }}
+      >
+        {loading ? '…' : '↻ refresh'}
+      </button>
+    </div>
+  );
+}
+
 /* ─────────────────────────── Settings ─────────────────────────── */
 
 function SettingsView({
@@ -7408,6 +7548,8 @@ function SettingsView({
           </div>
         </div>
       </section>
+
+      <NetworkLocationCard />
 
       <section style={styles.card}>
         <h2 style={styles.h2}>Google sign-in (OAuth client)</h2>
