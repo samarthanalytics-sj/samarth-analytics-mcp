@@ -1,3 +1,9 @@
+## [1.327.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.326.0...v1.327.0) (2026-07-14)
+
+### Features
+
+* **desktop:** Web-Server GTM coverage comparison + health score in the Server container tab ([6c48265](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6c48265ab6d8ff4016a045452f8e8e2771e8949b))
+
 ## [1.326.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.325.0...v1.326.0) (2026-07-14)
 
 ### Features
