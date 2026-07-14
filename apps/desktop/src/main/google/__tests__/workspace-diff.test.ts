@@ -1,5 +1,5 @@
 // Pure tests for the Workspace Comparison engine (no GTM access). Run with tsx.
-import { toWorkspaceInput, diffWorkspaces, compareWorkspaces, pairHeadline, stableStringify } from '../workspace-diff';
+import { toWorkspaceInput, diffWorkspaces, compareWorkspaces, consolidateWorkspaces, pairHeadline, stableStringify } from '../workspace-diff';
 import type { ContainerSnapshot, AuditTag, AuditTrigger, AuditVariable } from '../gtm-builders';
 
 let passed = 0;
@@ -88,6 +88,32 @@ check('stableStringify: key order does not matter', stableStringify({ b: 1, a: 2
   check('headline: changed pair names the counts', /added/i.test(pairHeadline(res.pairs[0])));
 }
 
+// ── consolidation: common (safe/review/conflict) + uncommon + stats ──────────────────────────────────
+{
+  // 3 workspaces. Tag "Shared" identical everywhere (safe). Tag "Edited" differs in 1 ws (review).
+  // Tag "Diverged" has 3 distinct configs (conflict). Tag "OnlySome" missing from ws3 (uncommon → copy).
+  const p = (mid: string) => [{ type: 'template', key: 'measurementId', value: mid }];
+  const w1 = toWorkspaceInput('1', 'WS1', snap({ tags: [tag({ name: 'Shared', tagId: 's', parameter: p('G-X') }), tag({ name: 'Edited', tagId: 'e', parameter: p('G-A') }), tag({ name: 'Diverged', tagId: 'd', parameter: p('G-1') }), tag({ name: 'OnlySome', tagId: 'o' })] }));
+  const w2 = toWorkspaceInput('2', 'WS2', snap({ tags: [tag({ name: 'Shared', tagId: 's', parameter: p('G-X') }), tag({ name: 'Edited', tagId: 'e', parameter: p('G-B') }), tag({ name: 'Diverged', tagId: 'd', parameter: p('G-2') }), tag({ name: 'OnlySome', tagId: 'o' })] }));
+  const w3 = toWorkspaceInput('3', 'WS3', snap({ tags: [tag({ name: 'Shared', tagId: 's', parameter: p('G-X') }), tag({ name: 'Edited', tagId: 'e', parameter: p('G-A') }), tag({ name: 'Diverged', tagId: 'd', parameter: p('G-3') })] }));
+  const con = consolidateWorkspaces([w1, w2, w3]);
+  const byName = new Map(con.common.map((e) => [e.name, e]));
+  check('consolidate: identical common tag → safe (mergeable)', byName.get('Shared')!.mergeStatus === 'safe' && byName.get('Shared')!.identical);
+  check('consolidate: one-off difference → review', byName.get('Edited')!.mergeStatus === 'review' && byName.get('Edited')!.differingFields.includes('param:measurementId'));
+  check('consolidate: 3 divergent versions → conflict', byName.get('Diverged')!.mergeStatus === 'conflict' && byName.get('Diverged')!.variants === 3);
+  const only = con.uncommon.find((e) => e.name === 'OnlySome')!;
+  check('consolidate: a tag missing from one workspace is UNCOMMON', !!only && only.common === false);
+  check('consolidate: uncommon presentIn / missingFrom are correct', only.presentIn.join() === 'WS1,WS2' && only.missingFrom.join() === 'WS3');
+  check('consolidate: uncommon suggested action is copy', only.suggestedAction === 'copy');
+  check('consolidate: stats — 3 common, 1 unique, 1 mergeable, 2 conflicts', con.stats.common === 3 && con.stats.unique === 1 && con.stats.mergeable === 1 && con.stats.conflicts === 2);
+  check('consolidate: stats.missing counts each missing occurrence', con.stats.missing === 1);
+  check('consolidate: byKind tags total = 4', con.stats.byKind.tag.total === 4);
+  check('consolidate: perWorkspace holds each ws field map (null when missing)', only.perWorkspace['1'] !== null && only.perWorkspace['3'] === null);
+  // wired into compareWorkspaces
+  const res = compareWorkspaces('GTM-X', [w1, w2, w3]);
+  check('consolidate: compareWorkspaces includes the consolidation', res.consolidated.common.length === 3 && res.consolidated.uncommon.length === 1);
+}
+
 // ── guard: need >= 2 workspaces ──────────────────────────────────────────────────────────────────────
 {
   let threw = false;
@@ -97,4 +123,4 @@ check('stableStringify: key order does not matter', stableStringify({ b: 1, a: 2
 
 console.log(`\nworkspace-diff: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 20) { console.error(`expected >= 20 checks, got ${passed}`); process.exit(1); }
+if (passed < 30) { console.error(`expected >= 20 checks, got ${passed}`); process.exit(1); }

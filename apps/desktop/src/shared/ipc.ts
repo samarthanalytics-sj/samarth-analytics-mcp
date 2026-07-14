@@ -1003,12 +1003,57 @@ export interface PairwiseDiffView {
   entities: EntityDiffView[];
   summary: WorkspaceDiffSummaryView;
 }
+/** Merge readiness of a COMMON entity (present in every selected workspace). */
+export type MergeStatus = 'safe' | 'review' | 'conflict';
+/** One entity consolidated ACROSS all selected workspaces (the common/uncommon tables). */
+export interface ConsolidatedEntityView {
+  kind: WsEntityKind;
+  name: string;
+  type?: string;
+  /** Workspace names that HAVE this entity. */
+  presentIn: string[];
+  /** Workspace names that are MISSING it. */
+  missingFrom: string[];
+  /** Present in every selected workspace. */
+  common: boolean;
+  /** Its config is identical in every workspace that has it. */
+  identical: boolean;
+  /** Number of DISTINCT config variants among the workspaces that have it. */
+  variants: number;
+  /** Fields that differ across the workspaces that have it. */
+  differingFields: string[];
+  /** safe = identical (mergeable) · review = differs, needs a decision · conflict = 3+ versions / type differs. */
+  mergeStatus: MergeStatus;
+  /** copy = uncommon, copy to the workspaces missing it · review · none = identical common. */
+  suggestedAction: 'copy' | 'review' | 'none';
+  notes: string;
+  /** Per-workspace flat field map (null = the entity is missing there) — for the side-by-side viewer. */
+  perWorkspace: Record<string, Record<string, string> | null>;
+}
+export interface WorkspaceStatsView {
+  workspaces: number;
+  totalEntities: number;
+  common: number;
+  unique: number;
+  mergeable: number;
+  conflicts: number;
+  missing: number;
+  byKind: Record<WsEntityKind, { total: number; common: number; unique: number }>;
+}
+export interface WorkspaceConsolidationView {
+  stats: WorkspaceStatsView;
+  common: ConsolidatedEntityView[];
+  uncommon: ConsolidatedEntityView[];
+}
+
 /** The full multi-workspace comparison result (gtm:compareWorkspaces). */
 export interface WorkspaceCompareResultView {
   containerId: string;
   workspaces: Array<{ workspaceId: string; name: string; counts: Record<WsEntityKind, number> }>;
   baseWorkspaceId: string;
   pairs: PairwiseDiffView[];
+  /** Cross-workspace consolidation: common (in all) + uncommon (missing from some) + stats. */
+  consolidated: WorkspaceConsolidationView;
   headline: string;
 }
 

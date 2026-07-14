@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { ThemeToggle, useTheme } from './ThemeToggle';
 import { ShortcutsOverlay, EmptyState } from './ui';
 import { ChatIcon, GtmLogo, Ga4Logo, PromptsIcon, SettingsIcon } from './NavIcons';
@@ -10,6 +10,8 @@ import type {
   WorkspaceCompareResultView,
   EntityDiffView,
   WsEntityKind,
+  ConsolidatedEntityView,
+  MergeStatus,
   ChatTurn,
   CreateTagOutcome,
   DiscoverResult,
@@ -5664,6 +5666,20 @@ const WS_STATUS_COLOR: Record<EntityDiffView['status'], { fg: string; bg: string
   unchanged: { fg: 'var(--text-muted)', bg: 'var(--surface-2)', label: 'Unchanged' },
 };
 const WS_KIND_LABEL: Record<WsEntityKind, string> = { tag: 'Tag', trigger: 'Trigger', variable: 'Variable', folder: 'Folder' };
+const WS_MERGE_COLOR: Record<MergeStatus, { fg: string; bg: string; label: string }> = {
+  safe: { fg: 'var(--c-green)', bg: 'var(--c-green-bg)', label: '✅ Safe to merge' },
+  review: { fg: 'var(--c-amber)', bg: 'var(--c-amber-bg)', label: '⚠ Review required' },
+  conflict: { fg: 'var(--c-red)', bg: 'var(--c-red-bg)', label: '❌ Cannot merge' },
+};
+// A compact stat tile for the summary dashboard.
+function WsStatTile({ label, value, color }: { label: string; value: number; color?: string }): JSX.Element {
+  return (
+    <div style={{ flex: 1, minWidth: 96, border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', textAlign: 'center', background: 'var(--surface-2)' }}>
+      <div style={{ fontSize: 20, fontWeight: 800, color: color ?? 'var(--text)' }}>{value}</div>
+      <div style={{ ...styles.muted, fontSize: 10.5, marginTop: 1 }}>{label}</div>
+    </div>
+  );
+}
 
 function WorkspaceComparison({
   active,
@@ -5680,7 +5696,6 @@ function WorkspaceComparison({
   const [result, setResult] = useState<WorkspaceCompareResultView | null>(null);
   const [comparing, setComparing] = useState(false);
   const [open, setOpen] = useState(false); // the whole comparison section is collapsed until opened
-  const [fStatus, setFStatus] = useState<Set<EntityDiffView['status']>>(new Set(['added', 'removed', 'changed']));
   const [fKind, setFKind] = useState<Set<WsEntityKind>>(new Set(['tag', 'trigger', 'variable', 'folder']));
   const [search, setSearch] = useState('');
   const [exporting, setExporting] = useState(false);
@@ -5794,7 +5809,7 @@ function WorkspaceComparison({
             </>
           )}
 
-          {result && <WorkspaceDiffResults result={result} fStatus={fStatus} setFStatus={setFStatus} fKind={fKind} setFKind={setFKind} search={search} setSearch={setSearch} exporting={exporting} exportNote={exportNote} onReport={generateReport} />}
+          {result && <WorkspaceDiffResults result={result} fKind={fKind} setFKind={setFKind} search={search} setSearch={setSearch} exporting={exporting} exportNote={exportNote} onReport={generateReport} />}
         </div>
       )}
     </div>
@@ -5803,11 +5818,9 @@ function WorkspaceComparison({
 
 /** The comparison OUTPUT: summary of differences, a filterable per-entity diff, and the separate report step. */
 function WorkspaceDiffResults({
-  result, fStatus, setFStatus, fKind, setFKind, search, setSearch, exporting, exportNote, onReport,
+  result, fKind, setFKind, search, setSearch, exporting, exportNote, onReport,
 }: {
   result: WorkspaceCompareResultView;
-  fStatus: Set<EntityDiffView['status']>;
-  setFStatus: React.Dispatch<React.SetStateAction<Set<EntityDiffView['status']>>>;
   fKind: Set<WsEntityKind>;
   setFKind: React.Dispatch<React.SetStateAction<Set<WsEntityKind>>>;
   search: string;
@@ -5817,88 +5830,210 @@ function WorkspaceDiffResults({
   onReport: (f: 'csv' | 'pdf') => void;
 }): JSX.Element {
   const q = search.trim().toLowerCase();
+  const con = result.consolidated;
+  const stats = con.stats;
+  const [fMerge, setFMerge] = useState<Set<MergeStatus>>(new Set(['safe', 'review', 'conflict']));
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [showDetailed, setShowDetailed] = useState(false);
   const toggle = <T,>(set: React.Dispatch<React.SetStateAction<Set<T>>>, v: T): void =>
     set((s) => { const n = new Set(s); n.has(v) ? n.delete(v) : n.add(v); return n; });
-  const showEntity = (e: EntityDiffView): boolean =>
-    fStatus.has(e.status) && fKind.has(e.kind) && (!q || e.name.toLowerCase().includes(q));
-
   const chip = (on: boolean, label: string, color: string, onClick: () => void): JSX.Element => (
     <button onClick={onClick} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${on ? color : 'var(--border-2)'}`, background: on ? color : 'transparent', color: on ? '#fff' : 'var(--text-muted)' }}>{label}</button>
   );
+  const nameMatch = (name: string): boolean => !q || name.toLowerCase().includes(q);
+  // Per-entity variant number per workspace (1,2,3…) — so the common table shows which workspaces agree.
+  const variantIndex = (e: ConsolidatedEntityView): Record<string, number> => {
+    const seen = new Map<string, number>();
+    const out: Record<string, number> = {};
+    for (const w of result.workspaces) {
+      const f = e.perWorkspace[w.workspaceId];
+      const key = f ? JSON.stringify(Object.entries(f).sort()) : '';
+      if (f && !seen.has(key)) seen.set(key, seen.size + 1);
+      out[w.workspaceId] = f ? seen.get(key)! : 0;
+    }
+    return out;
+  };
+  const commonRows = con.common.filter((e) => fKind.has(e.kind) && fMerge.has(e.mergeStatus) && nameMatch(e.name));
+  const uncommonRows = con.uncommon.filter((e) => fKind.has(e.kind) && nameMatch(e.name));
 
   return (
     <div style={{ marginTop: 14 }}>
-      {/* Summary of differences */}
-      <div style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border-2)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>
+      {/* Summary dashboard */}
+      <div style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border-2)', background: 'var(--surface-2)', fontSize: 13, color: 'var(--text)', lineHeight: 1.5, marginBottom: 10 }}>
         <b>Summary of differences.</b> {result.headline}
         <div style={{ ...styles.muted, fontSize: 11, marginTop: 4 }}>
           GTM has no per-workspace permissions or files — access is account/container-level and identical for every workspace. This compares configuration entities.
         </div>
       </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+        <WsStatTile label="Workspaces" value={stats.workspaces} />
+        <WsStatTile label="Total items" value={stats.totalEntities} />
+        <WsStatTile label="Common" value={stats.common} color="var(--c-blue)" />
+        <WsStatTile label="Unique" value={stats.unique} color="var(--c-amber)" />
+        <WsStatTile label="Mergeable" value={stats.mergeable} color="var(--c-green)" />
+        <WsStatTile label="Conflicts" value={stats.conflicts} color={stats.conflicts ? 'var(--c-red)' : undefined} />
+        <WsStatTile label="Missing items" value={stats.missing} />
+      </div>
 
-      {/* Filters + search */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '10px 0' }}>
-        <span style={{ ...styles.muted, fontSize: 12 }}>Status:</span>
-        {(['changed', 'added', 'removed', 'unchanged'] as const).map((s) => chip(fStatus.has(s), WS_STATUS_COLOR[s].label, WS_STATUS_COLOR[s].fg === 'var(--text-muted)' ? 'var(--c-blue)' : WS_STATUS_COLOR[s].fg, () => toggle(setFStatus, s)))}
+      {/* Filters */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0 10px' }}>
+        <span style={{ ...styles.muted, fontSize: 12 }}>Merge:</span>
+        {(['safe', 'review', 'conflict'] as const).map((m) => chip(fMerge.has(m), WS_MERGE_COLOR[m].label, WS_MERGE_COLOR[m].fg, () => toggle(setFMerge, m)))}
         <span style={{ ...styles.muted, fontSize: 12, marginLeft: 8 }}>Type:</span>
         {(['tag', 'trigger', 'variable', 'folder'] as const).map((k) => chip(fKind.has(k), WS_KIND_LABEL[k], 'var(--c-blue)', () => toggle(setFKind, k)))}
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name…" style={{ ...styles.input, minWidth: 160, marginLeft: 'auto' }} />
       </div>
 
-      {/* Per-pair diff */}
-      {result.pairs.map((p) => {
-        const rows = p.entities.filter(showEntity);
-        return (
-          <div key={p.bWorkspaceId} style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)' }}>
-              {p.bName} <span style={{ ...styles.muted, fontWeight: 400 }}>vs</span> {p.aName} <span style={{ ...styles.muted, fontWeight: 400, fontSize: 11 }}>(base)</span>
-            </div>
-            <div style={{ ...styles.muted, fontSize: 12, margin: '2px 0 6px' }}>
-              {p.summary.added + p.summary.removed + p.summary.changed === 0
-                ? 'Identical — no differences.'
-                : `${p.summary.changed} changed · ${p.summary.added} added · ${p.summary.removed} removed · ${p.summary.unchanged} unchanged`}
-            </div>
-            {rows.length === 0 ? (
-              <div style={{ ...styles.muted, fontSize: 12.5, padding: 8, border: '1px dashed var(--border-2)', borderRadius: 6, textAlign: 'center' }}>No entities match the filters.</div>
-            ) : (
-              <ul style={styles.resultList}>
-                {rows.map((e) => {
-                  const c = WS_STATUS_COLOR[e.status];
-                  return (
-                    <li key={`${e.kind}|${e.name}`} style={{ ...styles.resultRow, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: c.bg, color: c.fg, whiteSpace: 'nowrap' }}>{c.label}</span>
-                        <span style={{ ...styles.muted, fontSize: 11.5, whiteSpace: 'nowrap' }}>{WS_KIND_LABEL[e.kind]}</span>
-                        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{e.name}</span>
-                      </div>
-                      {e.status === 'changed' && e.changes && e.changes.length > 0 && (
-                        <div style={{ marginLeft: 8, marginTop: 2, fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6 }}>
-                          {e.changes.map((ch) => (
-                            <div key={ch.field}>
-                              <span style={{ color: 'var(--c-blue)' }}>{ch.field}</span>:{' '}
-                              <span style={{ color: 'var(--c-red)' }}>{ch.a === undefined ? '(none)' : ch.a.length > 80 ? ch.a.slice(0, 80) + '…' : ch.a}</span>
-                              {' → '}
-                              <span style={{ color: 'var(--c-green)' }}>{ch.b === undefined ? '(none)' : ch.b.length > 80 ? ch.b.slice(0, 80) + '…' : ch.b}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        );
-      })}
+      {/* COMMON items — in all selected workspaces */}
+      <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)', marginTop: 6 }}>
+        Common items <span style={{ ...styles.muted, fontWeight: 400 }}>(in all {stats.workspaces} workspaces) — {commonRows.length} shown</span>
+      </div>
+      {commonRows.length === 0 ? (
+        <div style={{ ...styles.muted, fontSize: 12.5, padding: 8, border: '1px dashed var(--border-2)', borderRadius: 6, textAlign: 'center', marginTop: 4 }}>No common items match the filters.</div>
+      ) : (
+        <div style={{ overflowX: 'auto', marginTop: 4 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
+                {['Type', 'Name', ...result.workspaces.map((w) => w.name), 'Merge status', 'Notes'].map((h, i) => (
+                  <th key={i} style={{ textAlign: 'left', padding: '5px 8px', whiteSpace: 'nowrap', borderBottom: '1px solid var(--border)' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {commonRows.map((e) => {
+                const key = `${e.kind}|${e.name}`;
+                const m = WS_MERGE_COLOR[e.mergeStatus];
+                const vi = variantIndex(e);
+                const isOpen = expanded.has(key);
+                return (
+                  <Fragment key={key}>
+                    <tr style={{ borderBottom: '1px solid var(--border)', cursor: e.identical ? 'default' : 'pointer' }} onClick={() => !e.identical && toggle(setExpanded, key)}>
+                      <td style={{ padding: '5px 8px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{WS_KIND_LABEL[e.kind]}</td>
+                      <td style={{ padding: '5px 8px', fontWeight: 600, color: 'var(--text)' }}>{!e.identical ? (isOpen ? '▾ ' : '▸ ') : ''}{e.name}</td>
+                      {result.workspaces.map((w) => (
+                        <td key={w.workspaceId} style={{ padding: '5px 8px', textAlign: 'center', color: e.identical ? 'var(--c-green)' : vi[w.workspaceId] === 1 ? 'var(--text)' : 'var(--c-amber)' }}>{e.identical ? '✓' : `v${vi[w.workspaceId]}`}</td>
+                      ))}
+                      <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}><span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: m.bg, color: m.fg }}>{m.label}</span></td>
+                      <td style={{ padding: '5px 8px', fontSize: 11.5, color: 'var(--text-dim)' }}>{e.notes}</td>
+                    </tr>
+                    {isOpen && !e.identical && (
+                      <tr>
+                        <td colSpan={4 + result.workspaces.length} style={{ padding: '6px 12px', background: 'var(--surface-2)' }}>
+                          <div style={{ fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6 }}>
+                            {e.differingFields.map((f) => (
+                              <div key={f} style={{ marginBottom: 2 }}>
+                                <span style={{ color: 'var(--c-blue)' }}>{f}</span>:{' '}
+                                {result.workspaces.map((w, i) => {
+                                  const val = e.perWorkspace[w.workspaceId]?.[f];
+                                  return <span key={w.workspaceId}>{i > 0 ? ' · ' : ''}<span style={{ ...styles.muted }}>{w.name}=</span><span style={{ color: 'var(--text)' }}>{val === undefined ? '(none)' : val.length > 60 ? val.slice(0, 60) + '…' : val || '(empty)'}</span></span>;
+                                })}
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-      {/* Report Generation — a clearly SEPARATE step from viewing the comparison above. */}
+      {/* UNCOMMON items — missing from one or more workspaces */}
+      <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)', marginTop: 18 }}>
+        Uncommon items <span style={{ ...styles.muted, fontWeight: 400 }}>(missing from one or more) — {uncommonRows.length} shown</span>
+      </div>
+      {uncommonRows.length === 0 ? (
+        <div style={{ ...styles.muted, fontSize: 12.5, padding: 8, border: '1px dashed var(--border-2)', borderRadius: 6, textAlign: 'center', marginTop: 4 }}>No uncommon items{q || fKind.size < 4 ? ' match the filters' : ' — every item exists in all workspaces'}.</div>
+      ) : (
+        <div style={{ overflowX: 'auto', marginTop: 4 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
+                {['Type', 'Name', 'Present in', 'Missing from', 'Suggested action'].map((h) => (
+                  <th key={h} style={{ textAlign: 'left', padding: '5px 8px', whiteSpace: 'nowrap', borderBottom: '1px solid var(--border)' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {uncommonRows.map((e) => {
+                const key = `u|${e.kind}|${e.name}`;
+                const isOpen = expanded.has(key);
+                return (
+                  <Fragment key={key}>
+                    <tr style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }} onClick={() => toggle(setExpanded, key)}>
+                      <td style={{ padding: '5px 8px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{WS_KIND_LABEL[e.kind]}</td>
+                      <td style={{ padding: '5px 8px', fontWeight: 600, color: 'var(--text)' }}>{isOpen ? '▾ ' : '▸ '}{e.name}</td>
+                      <td style={{ padding: '5px 8px', color: 'var(--c-green)', fontSize: 12 }}>{e.presentIn.join(', ')}</td>
+                      <td style={{ padding: '5px 8px', color: 'var(--c-red)', fontSize: 12 }}>{e.missingFrom.join(', ')}</td>
+                      <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}><span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: 'var(--c-blue-bg)', color: 'var(--c-blue)' }}>Copy to missing</span></td>
+                    </tr>
+                    {isOpen && (
+                      <tr>
+                        <td colSpan={5} style={{ padding: '6px 12px', background: 'var(--surface-2)' }}>
+                          <div style={{ ...styles.muted, fontSize: 11, marginBottom: 3 }}>Configuration (from {e.presentIn[0]}):</div>
+                          <div style={{ fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6 }}>
+                            {Object.entries(Object.values(e.perWorkspace).find((f) => f) ?? {}).map(([f, v]) => (
+                              <div key={f}><span style={{ color: 'var(--c-blue)' }}>{f}</span>: <span style={{ color: 'var(--text)' }}>{v.length > 80 ? v.slice(0, 80) + '…' : v || '(empty)'}</span></div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Detailed base-vs-each diff (opt-in) */}
+      <div style={{ marginTop: 14 }}>
+        <button style={styles.linkBtn} onClick={() => setShowDetailed((o) => !o)}>{showDetailed ? 'hide' : 'show'} detailed base-vs-each diff</button>
+        {showDetailed && result.pairs.map((p) => {
+          const rows = p.entities.filter((e) => e.status !== 'unchanged' && fKind.has(e.kind) && nameMatch(e.name));
+          return (
+            <div key={p.bWorkspaceId} style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{p.bName} <span style={{ ...styles.muted, fontWeight: 400 }}>vs</span> {p.aName} <span style={{ ...styles.muted, fontWeight: 400, fontSize: 11 }}>(base)</span></div>
+              {rows.length === 0 ? <div style={{ ...styles.muted, fontSize: 12 }}>Identical (or filtered out).</div> : (
+                <ul style={styles.resultList}>
+                  {rows.map((e) => {
+                    const c = WS_STATUS_COLOR[e.status];
+                    return (
+                      <li key={`${e.kind}|${e.name}`} style={{ ...styles.resultRow, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: c.bg, color: c.fg, whiteSpace: 'nowrap' }}>{c.label}</span>
+                          <span style={{ ...styles.muted, fontSize: 11.5 }}>{WS_KIND_LABEL[e.kind]}</span>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{e.name}</span>
+                        </div>
+                        {e.status === 'changed' && e.changes && (
+                          <div style={{ marginLeft: 8, fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6 }}>
+                            {e.changes.map((ch) => (
+                              <div key={ch.field}><span style={{ color: 'var(--c-blue)' }}>{ch.field}</span>: <span style={{ color: 'var(--c-red)' }}>{ch.a === undefined ? '(none)' : ch.a.slice(0, 60)}</span> → <span style={{ color: 'var(--c-green)' }}>{ch.b === undefined ? '(none)' : ch.b.slice(0, 60)}</span></div>
+                            ))}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Report Generation — clearly SEPARATE from the comparison above. */}
       <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-2)' }}>
         <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>Report generation</div>
-        <div style={{ ...styles.muted, fontSize: 12, margin: '2px 0 8px' }}>Generate a detailed comparison report of everything that differs (separate from the on-screen comparison).</div>
+        <div style={{ ...styles.muted, fontSize: 12, margin: '2px 0 8px' }}>Generate a detailed comparison report — summary, common + uncommon items, merge recommendations and differences (separate from the on-screen comparison).</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('pdf')} disabled={exporting}>Generate PDF report</button>
-          <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('csv')} disabled={exporting}>Export CSV</button>
+          <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('csv')} disabled={exporting}>Export CSV (Excel)</button>
           {exportNote && <span style={{ ...styles.muted, fontSize: 12 }}>{exportNote}</span>}
         </div>
       </div>

@@ -2,10 +2,96 @@
 // workspaces with their counts, a per-pair summary, and a per-entity table (added / removed / changed) with
 // the field-level changes. Pure string building (no I/O, no DOM) so it is unit-testable and safe in main.
 
-import type { WorkspaceCompareResultView, PairwiseDiffView, EntityDiffView, WsEntityKind } from './ipc';
+import type { WorkspaceCompareResultView, PairwiseDiffView, EntityDiffView, WsEntityKind, ConsolidatedEntityView, MergeStatus } from './ipc';
 
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+// Merge-status palette (print-safe).
+const MERGE: Record<MergeStatus, { fg: string; bg: string; label: string }> = {
+  safe: { fg: '#166534', bg: '#dcfce7', label: '✅ Safe to merge' },
+  review: { fg: '#a16207', bg: '#fef3c7', label: '⚠ Review required' },
+  conflict: { fg: '#b91c1c', bg: '#fee2e2', label: '❌ Cannot merge' },
+};
+
+function statTile(label: string, value: number, color = '#111827'): string {
+  return `<div style="flex:1;min-width:110px;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;text-align:center"><div style="font-size:22px;font-weight:800;color:${color}">${value}</div><div style="font-size:11px;color:#6b7280;margin-top:2px">${esc(label)}</div></div>`;
+}
+
+function consolidatedHtml(r: WorkspaceCompareResultView): string {
+  const c = r.consolidated;
+  const s = c.stats;
+  const dash =
+    `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 16px">` +
+    statTile('Workspaces', s.workspaces) +
+    statTile('Total items', s.totalEntities) +
+    statTile('Common', s.common, '#2563eb') +
+    statTile('Unique', s.unique, '#a16207') +
+    statTile('Mergeable', s.mergeable, '#166534') +
+    statTile('Conflicts', s.conflicts, s.conflicts ? '#b91c1c' : '#111827') +
+    statTile('Missing items', s.missing) +
+    `</div>`;
+  const wsCols = r.workspaces.map((w) => w.name);
+  // Common table: one row per common entity, a cell per workspace (its variant #), merge status + notes.
+  const variantIndex = (e: ConsolidatedEntityView): Record<string, number> => {
+    const seen = new Map<string, number>();
+    const out: Record<string, number> = {};
+    for (const w of r.workspaces) {
+      const f = e.perWorkspace[w.workspaceId];
+      const key = f ? JSON.stringify(Object.entries(f).sort()) : '';
+      if (!seen.has(key)) seen.set(key, seen.size + 1);
+      out[w.workspaceId] = seen.get(key)!;
+    }
+    return out;
+  };
+  const commonRows = c.common
+    .map((e) => {
+      const m = MERGE[e.mergeStatus];
+      const vi = variantIndex(e);
+      const cells = r.workspaces
+        .map((w) => {
+          const v = vi[w.workspaceId];
+          const same = e.identical;
+          return `<td style="padding:5px 8px;text-align:center;color:${same ? '#166534' : v === 1 ? '#374151' : '#b45309'}">${same ? '✓ same' : `v${v}`}</td>`;
+        })
+        .join('');
+      return (
+        `<tr style="border-bottom:1px solid #eef2f7;page-break-inside:avoid">` +
+        `<td style="padding:5px 8px;color:#6b7280;white-space:nowrap">${e.kind}</td>` +
+        `<td style="padding:5px 8px;font-weight:600">${esc(e.name)}</td>` +
+        cells +
+        `<td style="padding:5px 8px;white-space:nowrap"><span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;background:${m.bg};color:${m.fg}">${m.label}</span></td>` +
+        `<td style="padding:5px 8px;font-size:11px;color:#374151">${esc(e.notes)}</td>` +
+        `</tr>`
+      );
+    })
+    .join('');
+  const uncommonRows = c.uncommon
+    .map(
+      (e) =>
+        `<tr style="border-bottom:1px solid #eef2f7;page-break-inside:avoid">` +
+        `<td style="padding:5px 8px;color:#6b7280;white-space:nowrap">${e.kind}</td>` +
+        `<td style="padding:5px 8px;font-weight:600">${esc(e.name)}</td>` +
+        `<td style="padding:5px 8px;color:#166534;font-size:11px">${esc(e.presentIn.join(', '))}</td>` +
+        `<td style="padding:5px 8px;color:#b91c1c;font-size:11px">${esc(e.missingFrom.join(', '))}</td>` +
+        `<td style="padding:5px 8px;white-space:nowrap"><span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;background:#dbeafe;color:#1d4ed8">Copy to missing</span></td>` +
+        `</tr>`,
+    )
+    .join('');
+  const th = (cols: string[]): string =>
+    `<thead><tr style="background:#f8fafc;color:#6b7280">${cols.map((x) => `<th style="text-align:left;padding:6px 8px">${esc(x)}</th>`).join('')}</tr></thead>`;
+  return (
+    dash +
+    (c.common.length
+      ? `<div style="font-size:14px;font-weight:700;margin:14px 0 4px">Common items <span style="color:#9ca3af;font-weight:400">(in all ${s.workspaces} workspaces)</span></div>` +
+        `<table style="width:100%;border-collapse:collapse;font-size:12px">${th(['Type', 'Name', ...wsCols, 'Merge status', 'Notes'])}<tbody>${commonRows}</tbody></table>`
+      : '') +
+    (c.uncommon.length
+      ? `<div style="font-size:14px;font-weight:700;margin:18px 0 4px">Uncommon items <span style="color:#9ca3af;font-weight:400">(missing from one or more workspaces)</span></div>` +
+        `<table style="width:100%;border-collapse:collapse;font-size:12px">${th(['Type', 'Name', 'Present in', 'Missing from', 'Suggested action'])}<tbody>${uncommonRows}</tbody></table>`
+      : '')
+  );
+}
 
 // Print-safe status palette.
 const STATUS: Record<EntityDiffView['status'], { fg: string; bg: string; label: string }> = {
@@ -86,24 +172,23 @@ export function workspaceDiffHtml(r: WorkspaceCompareResultView): string {
     `<div style="color:#9ca3af;margin-top:4px;font-size:11px">Note: GTM has no per-workspace permissions or files — user access is account/container-level and identical for every workspace. This compares configuration entities (tags, triggers, variables, folders).</div>` +
     `</div>` +
     `<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px"><tbody>${wsRows}</tbody></table>` +
+    consolidatedHtml(r) +
+    `<div style="font-size:14px;font-weight:700;margin:20px 0 4px">Detailed differences <span style="color:#9ca3af;font-weight:400">(base vs each)</span></div>` +
     r.pairs.map(pairSection).join('')
   );
 }
 
-/** CSV of every non-unchanged entity across all pairs (the renderer offers this as a separate export). */
+/** CSV of the consolidated common + uncommon items (the "spreadsheet" export — Excel opens it directly). */
 export function workspaceDiffCsv(r: WorkspaceCompareResultView): string {
   const q = (s: string): string => `"${String(s).replace(/"/g, '""')}"`;
-  const rows: string[] = ['Comparison,Status,Type,Name,Field,Base value,Compared value'];
-  for (const p of r.pairs) {
-    const label = `${p.bName} vs ${p.aName}`;
-    for (const e of p.entities) {
-      if (e.status === 'unchanged') continue;
-      if (e.status === 'changed' && e.changes?.length) {
-        for (const c of e.changes) rows.push([label, e.status, e.kind, e.name, c.field, c.a ?? '', c.b ?? ''].map((x) => q(String(x))).join(','));
-      } else {
-        rows.push([label, e.status, e.kind, e.name, '', '', ''].map((x) => q(String(x))).join(','));
-      }
-    }
+  const line = (cells: (string | number)[]): string => cells.map((x) => q(String(x))).join(',');
+  const rows: string[] = [];
+  rows.push(line(['Section', 'Type', 'Name', 'Present in', 'Missing from', 'Merge status', 'Differing fields', 'Suggested action', 'Notes']));
+  for (const e of r.consolidated.common) {
+    rows.push(line(['Common', e.kind, e.name, e.presentIn.join('; '), e.missingFrom.join('; '), e.mergeStatus, e.differingFields.join('; '), e.suggestedAction, e.notes]));
+  }
+  for (const e of r.consolidated.uncommon) {
+    rows.push(line(['Uncommon', e.kind, e.name, e.presentIn.join('; '), e.missingFrom.join('; '), '', '', e.suggestedAction, e.notes]));
   }
   return rows.join('\r\n');
 }
