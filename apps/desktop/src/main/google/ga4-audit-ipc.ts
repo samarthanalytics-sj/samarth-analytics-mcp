@@ -118,7 +118,8 @@ export async function runGa4AuditPipeline(
   // Not Verified, it never fails the audit (config + data quality always return).
   const baseline = await withQuotaRetry(() => data.getGa4Baseline(p, dqCounts.startDate ?? '', dqCounts.endDate ?? '')).catch(() => null);
   const attribution = await data.getGa4AttributionSettings(p).catch(() => null);
-  const audienceCount = await data.listGa4Audiences(p).then((a) => a.length).catch(() => null);
+  const audienceList = await data.listGa4Audiences(p).catch(() => null);
+  const audienceCount = audienceList === null ? null : audienceList.length;
   // Marketing-campaign performance (best-effort): rank the tagged utm_campaign traffic and surface the
   // untagged share. A failed query just leaves the section out (null), never fails the audit.
   const campaigns = await withQuotaRetry(() => data.getGa4CampaignPerformance(p, win)).then(rankGa4Campaigns).catch(() => null);
@@ -178,6 +179,7 @@ export async function runGa4AuditPipeline(
     growth,
     attribution,
     audienceCount,
+    audienceDetails: audienceList === null ? null : audienceList.map((a) => ({ displayName: a.displayName, membershipDurationDays: a.membershipDurationDays ?? null })),
     campaigns,
     retentionSummary,
     ecomVerification,
