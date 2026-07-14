@@ -1,3 +1,9 @@
+## [1.315.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.315.0...v1.315.1) (2026-07-14)
+
+### Bug Fixes
+
+* **verify:** remove the CSV export format from tag-verification results ([#557](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/557)) ([6daa689](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6daa689f1af5ce6ca621dc1d4d4af25f399815cf))
+
 ## [1.315.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.314.0...v1.315.0) (2026-07-14)
 
 ### Features
