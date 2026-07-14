@@ -1,3 +1,9 @@
+## [1.314.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.313.1...v1.314.0) (2026-07-14)
+
+### Features
+
+* **verify:** native Excel (.xlsx) export with proof screenshots embedded ([#555](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/555)) ([e2ba5e3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e2ba5e3b7cdccd0a43f06708e97199c4025c42b8))
+
 ## [1.313.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.313.0...v1.313.1) (2026-07-14)
 
 ### Bug Fixes
