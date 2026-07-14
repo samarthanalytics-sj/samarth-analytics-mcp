@@ -971,6 +971,47 @@ export interface AuditReportView {
   runtimeRequired?: string[];
 }
 
+/** ── Workspace Comparison (Container Audit) — the serializable diff of 2+ workspaces ─────────────────── */
+export type WsEntityKind = 'tag' | 'trigger' | 'variable' | 'folder';
+/** One field that differs between the two sides of a changed entity. */
+export interface FieldChangeView {
+  field: string;
+  a?: string;
+  b?: string;
+}
+/** One entity's status across a workspace pair. */
+export interface EntityDiffView {
+  kind: WsEntityKind;
+  name: string;
+  type?: string;
+  status: 'added' | 'removed' | 'changed' | 'unchanged';
+  changes?: FieldChangeView[];
+}
+export interface WorkspaceDiffSummaryView {
+  added: number;
+  removed: number;
+  changed: number;
+  unchanged: number;
+  byKind: Record<WsEntityKind, { added: number; removed: number; changed: number; unchanged: number }>;
+}
+/** base-vs-other pairwise diff. */
+export interface PairwiseDiffView {
+  aWorkspaceId: string;
+  aName: string;
+  bWorkspaceId: string;
+  bName: string;
+  entities: EntityDiffView[];
+  summary: WorkspaceDiffSummaryView;
+}
+/** The full multi-workspace comparison result (gtm:compareWorkspaces). */
+export interface WorkspaceCompareResultView {
+  containerId: string;
+  workspaces: Array<{ workspaceId: string; name: string; counts: Record<WsEntityKind, number> }>;
+  baseWorkspaceId: string;
+  pairs: PairwiseDiffView[];
+  headline: string;
+}
+
 /** Result of discovering a site's pages (suggestions:discover). */
 export interface DiscoverResult {
   /** Same-site page URLs found (sitemap or link-crawl). */

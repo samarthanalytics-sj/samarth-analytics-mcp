@@ -20,7 +20,7 @@ import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-bu
 import { withQuotaRetry } from '../google/quota-retry';
 import { reportHtmlDocument, dedupedReportPath } from '../google/ga4-report-export';
 import { gtmAuditHtml, type GtmAuditHtmlMeta } from '../../shared/gtm-audit-html';
-import type { AuditReportView } from '../../shared/ipc';
+import type { AuditReportView, WorkspaceCompareResultView } from '../../shared/ipc';
 
 // A prior download of the same report may still be open in a PDF viewer, which locks the file
 // (EBUSY/EPERM/EACCES on Windows). Fall back to a suffixed name so a re-download always succeeds.
@@ -48,6 +48,76 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     // The audit READ (list tags/triggers/variables) also trips GTM's per-minute quota
     // during heavy sessions — retry it with backoff so the panel doesn't crash on a 429.
     return withQuotaRetry(() => auditWorkspace(data, { accountId: a, containerId: c, workspaceId: w }));
+  });
+
+  // WORKSPACE COMPARISON (read): diff 2+ workspaces in the same container side by side. Fetches each
+  // workspace's snapshot (tags/triggers/variables) + folders, flattens them, and returns the base-vs-each
+  // diff + summary. Pure diff engine (workspace-diff.ts) does the comparison; this only gathers the data.
+  // Read-only — never writes. Capped at 10 workspaces per run to bound the GTM read quota.
+  ipcMain.handle('gtm:compareWorkspaces', async (_e, accountId: unknown, containerId: unknown, workspaceIds: unknown) => {
+    const a = String(accountId ?? '');
+    const c = String(containerId ?? '');
+    const ids = (Array.isArray(workspaceIds) ? workspaceIds : []).map((w) => String(w ?? '').trim()).filter(Boolean);
+    const uniqueIds = [...new Set(ids)];
+    if (!a || !c) throw new Error('Pick a GTM account and container first.');
+    if (uniqueIds.length < 2) throw new Error('Pick at least two workspaces to compare.');
+    if (uniqueIds.length > 10) throw new Error('Compare at most 10 workspaces at a time.');
+    const { toWorkspaceInput, compareWorkspaces } = await import('../google/workspace-diff');
+    // Resolve workspace names once (the picker sends ids; the report/labels want names).
+    const wsList = await withQuotaRetry(() => data.listGtmWorkspaces(a, c));
+    const nameById = new Map(wsList.map((w) => [w.workspaceId, w.name] as const));
+    // Fetch each workspace's snapshot + folders. Sequential (not Promise.all) to be gentle on the per-minute
+    // read quota; each call already retries a 429. Order follows the picker so the FIRST id is the base.
+    const inputs = [];
+    for (const wid of uniqueIds) {
+      const [snap, folders] = await Promise.all([
+        withQuotaRetry(() => data.getGtmContainerSnapshot(a, c, wid)),
+        withQuotaRetry(() => data.listGtmFolders(a, c, wid)).catch(() => [] as Array<{ name: string }>),
+      ]);
+      inputs.push(toWorkspaceInput(wid, nameById.get(wid) ?? `Workspace ${wid}`, snap, folders));
+    }
+    return compareWorkspaces(c, inputs);
+  });
+
+  // Export a workspace COMPARISON — separate from the container-audit report. CSV or Markdown built by the
+  // renderer (this just writes the file the user picks). Read-only, no GTM access. Returns the saved path.
+  ipcMain.handle('gtm:exportWorkspaceDiff', async (e, defaultName: unknown, content: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const name = String(defaultName ?? 'workspace-comparison.csv').replace(/[\\/:*?"<>|]/g, '_');
+    const ext = (name.split('.').pop() ?? '').toLowerCase();
+    const filter =
+      ext === 'md' ? { name: 'Markdown', extensions: ['md'] }
+      : ext === 'csv' ? { name: 'CSV', extensions: ['csv'] }
+      : { name: 'All Files', extensions: ['*'] };
+    const opts = { title: 'Export workspace comparison', defaultPath: name, filters: [filter] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    await writeFile(filePath, String(content ?? ''), 'utf8');
+    return filePath;
+  });
+
+  // Export the workspace comparison as a styled PDF (mirrors the on-screen diff). The renderer sends the
+  // full compare result; workspaceDiffHtml() renders the same summary cards + per-entity diff table, printed
+  // in a hidden, script-disabled window — same pipeline as the GA4 / audit reports.
+  ipcMain.handle('gtm:exportWorkspaceDiffPdf', async (e, defaultName: unknown, result: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const base = String(defaultName ?? 'GTM workspace comparison')
+      .replace(/[\\/:*?"<>|]/g, '_').replace(/\.pdf$/i, '').trim() || 'GTM workspace comparison';
+    const r = result as WorkspaceCompareResultView;
+    if (!r || !Array.isArray(r.pairs) || !Array.isArray(r.workspaces)) throw new Error('Invalid comparison result.');
+    const { workspaceDiffHtml } = await import('../../shared/gtm-workspace-diff-html');
+    const opts = { title: 'Export workspace comparison', defaultPath: `${base}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    const pdfWin = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    try {
+      const html = reportHtmlDocument(base, '', { execHtml: workspaceDiffHtml(r) });
+      await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+      const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+      return await writeReportFile(filePath, pdf);
+    } finally {
+      if (!pdfWin.isDestroyed()) pdfWin.destroy();
+    }
   });
 
   // Save the container-audit findings to a file the user picks (CSV or Markdown — the renderer

@@ -3,6 +3,7 @@ import type {
   AccountView,
   AddAccountInput,
   AuditReportView,
+  WorkspaceCompareResultView,
   ServerContainerResultView,
   ChatReply,
   ChatStreamEvent,
@@ -358,6 +359,13 @@ const api = {
     // Save the audit as a styled PDF that mirrors the panel (severity cards, icons, type labels).
     exportAuditPdf: (defaultName: string, report: AuditReportView, meta: { account?: string; container?: string; workspace?: string; generatedAt?: string }): Promise<string | null> =>
       ipcRenderer.invoke('gtm:exportAuditPdf', defaultName, report, meta),
+    // Workspace Comparison: diff 2+ workspaces in the same container (read-only) + export the comparison.
+    compareWorkspaces: (accountId: string, containerId: string, workspaceIds: string[]): Promise<WorkspaceCompareResultView> =>
+      ipcRenderer.invoke('gtm:compareWorkspaces', accountId, containerId, workspaceIds),
+    exportWorkspaceDiff: (defaultName: string, content: string): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportWorkspaceDiff', defaultName, content),
+    exportWorkspaceDiffPdf: (defaultName: string, result: WorkspaceCompareResultView): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportWorkspaceDiffPdf', defaultName, result),
     ensureGa4Config: (ctx: {
       accountId: string;
       containerId: string;
