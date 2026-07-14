@@ -1,3 +1,9 @@
+## [1.313.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.313.0...v1.313.1) (2026-07-14)
+
+### Bug Fixes
+
+* **verify:** CSV export — UTF-8 BOM (fix mojibake) + Proof note points to the image ([#554](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/554)) ([4005d79](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4005d791db8a3efe1cc82f24a7bf4b3046da1eb1))
+
 ## [1.313.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.312.0...v1.313.0) (2026-07-14)
 
 ### Features
