@@ -7204,7 +7204,7 @@ function ServerAuditSection({ accountId, onError }: { accountId: string; onError
 
   const [docExporting, setDocExporting] = useState(false);
   const [docNote, setDocNote] = useState('');
-  async function exportDoc(format: 'md' | 'csv' | 'pdf'): Promise<void> {
+  async function exportDoc(format: 'md' | 'csv' | 'pdf' | 'xlsx'): Promise<void> {
     if (!containerId || !workspaceId || docExporting) return;
     onError('');
     setDocExporting(true);
@@ -7251,7 +7251,7 @@ function ServerAuditSection({ accountId, onError }: { accountId: string; onError
           <button style={styles.primaryBtn} disabled={!containerId || !workspaceId || running} onClick={() => void run()}>
             {running ? 'Auditing…' : '▶ Audit server container'}
           </button>
-          {(['md', 'csv', 'pdf'] as const).map((fmt) => (
+          {(['md', 'csv', 'xlsx', 'pdf'] as const).map((fmt) => (
             <button
               key={fmt}
               style={styles.ghostBtn}
