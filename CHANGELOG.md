@@ -1,3 +1,9 @@
+## [1.338.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.337.0...v1.338.0) (2026-07-15)
+
+### Features
+
+* **desktop:** remove the quick Create/Complete & verify button from the server create page ([#583](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/583)) ([051cdd9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/051cdd9cc70a28070673f73693100d7a8ea6768c))
+
 ## [1.337.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.336.0...v1.337.0) (2026-07-15)
 
 ### Features
