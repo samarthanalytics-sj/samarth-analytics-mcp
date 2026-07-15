@@ -4,8 +4,8 @@
 // values are NEVER written. Main-process only (exceljs); imported lazily by gtm:exportServerDoc.
 
 import ExcelJS from 'exceljs';
-import type { AuditTag, ServerContainerSnapshot } from './gtm-builders';
-import { tagDestination, referencedVars, hasSecret, triggerCondition, type ServerDocMeta } from './server-doc';
+import type { AuditReport, AuditTag, ServerContainerSnapshot } from './gtm-builders';
+import { tagDestination, referencedVars, hasSecret, triggerCondition, buildDestinationRows, type ServerDocMeta } from './server-doc';
 
 const HEADER_FILL = 'FFEEF2F8';
 
@@ -21,7 +21,7 @@ function sheetWithHeader(wb: ExcelJS.Workbook, name: string, columns: Array<{ he
   return ws;
 }
 
-export async function buildServerDocXlsx(s: ServerContainerSnapshot, meta: ServerDocMeta): Promise<Buffer> {
+export async function buildServerDocXlsx(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   const trigById = new Map((s.triggers ?? []).map((t) => [t.triggerId, t]));
   const firesOn = (t: AuditTag): string =>
@@ -42,7 +42,26 @@ export async function buildServerDocXlsx(s: ServerContainerSnapshot, meta: Serve
   kv('Triggers', String((s.triggers ?? []).length));
   kv('Variables', String((s.variables ?? []).length));
   kv('Transformations', String(s.transformations.length));
+  if (meta.liveVersionId) kv('Live version', `${meta.liveVersionId} (this document describes the workspace DRAFT, which may differ)`);
   kv('Note', 'Configuration-level documentation from the GTM API (no runtime data). Credential values are never included.');
+
+  const issues = sheetWithHeader(wb, 'Issues', [
+    { header: 'Severity', key: 'sev', width: 12 },
+    { header: 'Where', key: 'where', width: 34 },
+    { header: 'Issue', key: 'msg', width: 80 },
+    { header: 'Fix', key: 'fix', width: 70 },
+  ]);
+  for (const f of audit?.findings ?? []) {
+    issues.addRow({ sev: f.severity.toUpperCase(), where: f.resource ? `${f.resource.kind} "${f.resource.name}"` : 'container', msg: f.message, fix: f.recommendation });
+  }
+
+  const dests = sheetWithHeader(wb, 'Destinations', [
+    { header: 'Destination', key: 'dest', width: 30 },
+    { header: 'Tag type(s)', key: 'types', width: 24 },
+    { header: 'Tags', key: 'tags', width: 8 },
+    { header: 'Paused', key: 'paused', width: 8 },
+  ]);
+  for (const d of buildDestinationRows(s)) dests.addRow({ dest: d.destination, types: d.types, tags: d.tags, paused: d.paused || '' });
 
   const clients = sheetWithHeader(wb, 'Clients', [
     { header: 'Client', key: 'name', width: 40 },

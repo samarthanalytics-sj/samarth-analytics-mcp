@@ -106,12 +106,19 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     const fmt = format === 'pdf' ? 'pdf' : format === 'csv' ? 'csv' : format === 'xlsx' ? 'xlsx' : 'md';
     if (!a || !c || !w) throw new Error('Pick the server container and workspace first.');
     const meta = (names && typeof names === 'object' ? names : {}) as { containerName?: string; publicId?: string; workspaceName?: string };
-    const snap = await withQuotaRetry(() => data.getServerContainerSnapshot(a, c, w));
+    const [snap, liveVersionId] = await Promise.all([
+      withQuotaRetry(() => data.getServerContainerSnapshot(a, c, w)),
+      // Best-effort: the live-version stamp is a caveat, never a blocker.
+      data.getGtmLiveContainerVersionId(a, c).catch(() => null),
+    ]);
+    // The audit runs on the SAME snapshot - the doc carries the issues, making it a deliverable.
+    const audit = auditServerContainer(snap);
     const docMeta = {
       containerName: meta.containerName || `container ${c}`,
       publicId: meta.publicId,
       workspaceName: meta.workspaceName,
       generatedAt: new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      liveVersionId,
     };
     const base = `${(docMeta.containerName || 'Server container').replace(/[\\/:*?"<>|]/g, '_').replace(/\s{2,}/g, ' ').trim()} - server documentation`;
     const win = BrowserWindow.fromWebContents(e.sender);
@@ -124,10 +131,10 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     if (canceled || !filePath) return null;
     if (fmt === 'xlsx') {
       const { buildServerDocXlsx } = await import('../google/server-doc-xlsx');
-      return writeReportFile(filePath, await buildServerDocXlsx(snap, docMeta));
+      return writeReportFile(filePath, await buildServerDocXlsx(snap, docMeta, audit));
     }
-    if (fmt === 'csv') return writeReportFile(filePath, serverContainerDocCsv(snap, docMeta));
-    const md = serverContainerDocMarkdown(snap, docMeta);
+    if (fmt === 'csv') return writeReportFile(filePath, serverContainerDocCsv(snap, docMeta, audit));
+    const md = serverContainerDocMarkdown(snap, docMeta, audit);
     if (fmt === 'md') return writeReportFile(filePath, md);
     const pdfWin = new BrowserWindow({
       show: false,

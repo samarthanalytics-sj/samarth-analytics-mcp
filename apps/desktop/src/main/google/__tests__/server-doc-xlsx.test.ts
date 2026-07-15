@@ -36,11 +36,22 @@ const snap = (): ServerContainerSnapshot => ({
 
 console.log('\nserver-doc-xlsx:');
 
-test('workbook has all six sheets with the documented rows, and NO secret value anywhere', async () => {
-  const buf = await buildServerDocXlsx(snap(), { containerName: 'Acme - Server', publicId: 'GTM-SRV1', workspaceName: 'Default' });
+test('workbook has all eight sheets with the documented rows, and NO secret value anywhere', async () => {
+  const audit = {
+    counts: { tags: 1, triggers: 1, variables: 1, findings: 1 },
+    summary: { critical: 0, high: 1, medium: 0, low: 0, info: 0 },
+    findings: [{ severity: 'high' as const, category: 'firing', message: 'The container has no tagging server URL', recommendation: 'Set it.', autoFixable: false, confidence: 'likely' as const }],
+    boundary: '', runtimeRequired: [], hasGa4Config: true,
+  };
+  const buf = await buildServerDocXlsx(snap(), { containerName: 'Acme - Server', publicId: 'GTM-SRV1', workspaceName: 'Default', liveVersionId: '7' }, audit as never);
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buf as unknown as ArrayBuffer);
-  assert.deepEqual(wb.worksheets.map((w) => w.name), ['Overview', 'Clients', 'Tags', 'Triggers', 'Variables', 'Transformations']);
+  assert.deepEqual(wb.worksheets.map((w) => w.name), ['Overview', 'Issues', 'Destinations', 'Clients', 'Tags', 'Triggers', 'Variables', 'Transformations']);
+  const issues = wb.getWorksheet('Issues')!;
+  assert.equal(issues.getCell('A2').value, 'HIGH');
+  assert.ok(String(issues.getCell('C2').value).includes('no tagging server URL'));
+  const dests = wb.getWorksheet('Destinations')!;
+  assert.equal(dests.getCell('A2').value, 'pixel 123456789012345');
   const tags = wb.getWorksheet('Tags')!;
   assert.equal(tags.getCell('A2').value, 'Meta CAPI - Lead');
   assert.equal(tags.getCell('C2').value, 'pixel 123456789012345', 'destination is the id, not the credential');
