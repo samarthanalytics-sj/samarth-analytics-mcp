@@ -33,7 +33,6 @@ import type {
   ProviderStatus,
   ScanProgressView,
   SecretSelfTest,
-  ServerContainerResultView,
   SuggestPlatform,
   SuggestedTagView,
   TagScanResult,
@@ -7002,9 +7001,6 @@ function ServerContainerPanel({
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId);
   const [name, setName] = useState('');
   const [serverUrl, setServerUrl] = useState('');
-  const [running, setRunning] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [result, setResult] = useState<ServerContainerResultView | null>(null);
   // '' = create new; otherwise COMPLETE this existing server container (add whatever is missing).
   const [targetId, setTargetId] = useState('');
   const [serverList, setServerList] = useState<GtmContainerView[]>([]);
@@ -7086,35 +7082,6 @@ function ServerContainerPanel({
     }
   }
 
-  async function create(): Promise<void> {
-    if (!ready || !ctx || running || (!targetId && !name.trim())) return;
-    onError('');
-    setRunning(true);
-    setConfirming(false);
-    setResult(null);
-    setPostAudit(null);
-    try {
-      const r = await window.desktop.gtm.createServerContainer({
-        accountId: ctx.accountId!,
-        webContainerId: ctx.containerId!,
-        name: (completing?.name ?? name).trim(),
-        serverUrl: serverUrl.trim() || undefined,
-        ...(targetId ? { serverContainerId: targetId } : {}),
-      });
-      setResult(r);
-      // ONE CLICK = create/complete AND prove it: run the read-only audit on the result immediately.
-      try {
-        setPostAudit(await window.desktop.gtm.auditServer(ctx.accountId!, r.serverContainer.containerId, r.workspaceId));
-      } catch {
-        /* verification is best-effort - the creation result stands on its own */
-      }
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRunning(false);
-    }
-  }
-
   const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 };
   const row: React.CSSProperties = { border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13 };
 
@@ -7162,7 +7129,7 @@ function ServerContainerPanel({
           {serverList.length > 0 && (
             <label>
               <span style={lbl}>Target</span>
-              <select style={styles.input} value={targetId} onChange={(e) => { setTargetId(e.target.value); setResult(null); setPostAudit(null); }}>
+              <select style={styles.input} value={targetId} onChange={(e) => { setTargetId(e.target.value); setPostAudit(null); }}>
                 <option value="">＋ Create a new server container</option>
                 {serverList.map((c) => (
                   <option key={c.containerId} value={c.containerId}>Complete existing: {c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
@@ -7178,7 +7145,7 @@ function ServerContainerPanel({
           )}
           {targetId && (
             <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-              One click adds whatever “{completing?.name}” is missing - GA4 client, all-events trigger, GA4 relay (from the web container's Measurement ID), first-party GTM client, event-data variables - and wires the URL below when given. Existing pieces are reused, never duplicated.
+              The audit below shows whatever “{completing?.name}” is missing - GA4 client, all-events trigger, GA4 relay (from the web container's Measurement ID), first-party GTM client, event-data variables - pick the fixes to apply. Existing pieces are reused, never duplicated.
             </div>
           )}
           <label>
@@ -7312,6 +7279,21 @@ function ServerContainerPanel({
                       {summary.failed.map((x) => (
                         <div key={x.id} style={{ color: 'var(--c-red)' }}>Failed {byId.get(x.id)?.name ?? x.id}: {x.error}</div>
                       ))}
+                      {postAudit && (
+                        <div style={{ ...row, borderColor: postAudit.counts.findings === 0 ? 'var(--c-green-border)' : 'var(--c-amber-border)', background: postAudit.counts.findings === 0 ? 'var(--c-green-bg)' : 'var(--c-amber-bg)' }}>
+                          {postAudit.counts.findings === 0 ? (
+                            <>✓ <b>Verified:</b> the configuration audit came back clean - {postAudit.counts.clients ?? 0} client(s), {postAudit.counts.tags} tag(s), {postAudit.counts.triggers} trigger(s), {postAudit.counts.variables} variable(s).</>
+                          ) : (
+                            <>
+                              <b>Verified with {postAudit.counts.findings} finding{postAudit.counts.findings === 1 ? '' : 's'}</b> ({postAudit.summary.critical} critical · {postAudit.summary.high} high · {postAudit.summary.medium} medium · {postAudit.summary.low} low): {postAudit.findings.slice(0, 2).map((f) => f.message.split(' - ')[0]).join('; ')}
+                              {postAudit.counts.findings > 2 ? '…' : ''} - open the Audit service for the full list.
+                            </>
+                          )}
+                        </div>
+                      )}
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                        Open GTM to review &amp; publish the server container. Deploy the tagging-server host (Cloud Run / Stape) if you haven&apos;t, then verify it answers before relying on it.
+                      </div>
                     </div>
                   )}
                 </>
@@ -7319,65 +7301,6 @@ function ServerContainerPanel({
             })()}
           </div>
 
-          {!confirming ? (
-            <button style={styles.primaryBtn} disabled={running || (!targetId && !name.trim())} onClick={() => setConfirming(true)}>
-              {running ? (targetId ? 'Completing…' : 'Creating…') : result ? 'Run again' : targetId ? 'Complete & verify' : 'Create & verify'}
-            </button>
-          ) : (
-            <div style={{ ...styles.confirm }}>
-              <div style={{ ...styles.muted, marginBottom: 8, color: 'var(--c-amber)' }}>
-                {targetId
-                  ? <>Complete “{completing?.name}” (add any missing GA4 client / trigger / relay / variables{serverUrl.trim() ? `, record ${serverUrl.trim()} and point ${ctx!.containerName} at it` : ''})? Existing pieces are reused. Draft-only - not published.</>
-                  : <>Create a NEW server container “{name.trim()}” in this account{serverUrl.trim() ? ` and point ${ctx!.containerName} at ${serverUrl.trim()}` : ''}? Draft-only - not published.</>}
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button style={styles.primaryBtn} disabled={running} onClick={create}>{running ? 'Working…' : targetId ? 'Confirm & complete' : 'Confirm & create'}</button>
-                <button style={styles.ghostBtn} disabled={running} onClick={() => setConfirming(false)}>Cancel</button>
-              </div>
-            </div>
-          )}
-          {result && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-              <div style={{ ...row, borderColor: 'var(--c-green-border)', background: 'var(--c-green-bg)' }}>
-                ✓ Created server container <b>{result.serverContainer.name}</b>{' '}
-                <b style={{ color: 'var(--c-green)' }}>{result.serverContainer.publicId}</b>
-              </div>
-              <div style={row}>
-                Built: GA4 client <b>{result.created.client}</b>, trigger <b>{result.created.trigger}</b>, GA4 relay tag <b>{result.created.serverTag}</b> → relaying <code style={mdStyles.code}>{result.measurementId}</code>.
-              </div>
-              <div style={row}>
-                {result.serverUrlSet
-                  ? <>Tagging server URL recorded on the server container{result.webWired ? <> and the web Google tag <b>{result.webWired.name}</b> now points at it.</> : <> (no Google tag found in the web container to point at it - set server_container_url on your web GA4 tag manually).</>}</>
-                  : <>No server URL set yet - deploy your tagging-server host, then set its URL on the container (and point the web Google tag at it) to start sending.</>}
-              </div>
-              {result.webNonGa4.length > 0 && (
-                <div style={{ ...row, borderColor: 'var(--c-amber-border)', background: 'var(--c-amber-bg)' }}>
-                  <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--c-amber)' }}>Needs a server-side tag built by hand ({result.webNonGa4.length}):</div>
-                  {result.webNonGa4.slice(0, 20).map((t, i) => (
-                    <div key={i} style={{ fontSize: 12 }}>• {t.kind}: <b>{t.name}</b> <span style={{ color: 'var(--text-faint)' }}>({t.detail})</span></div>
-                  ))}
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-                    Ask the chat to add these server-side (Google Ads → create_server_tag; Meta → create_meta_capi_server_tag; TikTok → create_tiktok_capi_server_tag).
-                  </div>
-                </div>
-              )}
-              {postAudit && (
-                <div style={{ ...row, borderColor: postAudit.counts.findings === 0 ? 'var(--c-green-border)' : 'var(--c-amber-border)', background: postAudit.counts.findings === 0 ? 'var(--c-green-bg)' : 'var(--c-amber-bg)' }}>
-                  {postAudit.counts.findings === 0 ? (
-                    <>✓ <b>Verified:</b> the configuration audit came back clean - {postAudit.counts.clients ?? 0} client(s), {postAudit.counts.tags} tag(s), {postAudit.counts.triggers} trigger(s), {postAudit.counts.variables} variable(s).</>
-                  ) : (
-                    <>
-                      <b>Verified with {postAudit.counts.findings} finding{postAudit.counts.findings === 1 ? '' : 's'}</b> ({postAudit.summary.critical} critical · {postAudit.summary.high} high · {postAudit.summary.medium} medium · {postAudit.summary.low} low): {postAudit.findings.slice(0, 2).map((f) => f.message.split(' - ')[0]).join('; ')}
-                      {postAudit.counts.findings > 2 ? '…' : ''} - open the Audit service for the full list.
-                    </>
-                  )}
-                </div>
-              )}
-              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                Open GTM to review &amp; publish the {targetId ? 'completed' : 'new'} server container. Deploy the tagging-server host (Cloud Run / Stape) if you haven&apos;t, then verify it answers before relying on it.
-              </div>
-            </div>
-          )}
         </>
             )}
           </div>
