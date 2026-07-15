@@ -1013,7 +1013,7 @@ export interface ServerPlanView {
     defaultSelected: boolean;
     executable: boolean;
   }>;
-  detected: { measurementId: string | null; serverUrl: string | null; webWiredUrl: string | null };
+  detected: { measurementId: string | null; serverUrl: string | null; webWiredUrl: string | null; dataTag: 'configured' | 'misconfigured' | 'not_installed' };
   inventory: {
     clients: Array<{ name: string; type: string }>;
     tags: Array<{ name: string; type: string; paused: boolean }>;

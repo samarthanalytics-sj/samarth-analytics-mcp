@@ -47,7 +47,13 @@ export interface ServerPlanValues {
 
 export interface ServerPlan {
   items: ServerPlanItem[];
-  detected: { measurementId: string | null; serverUrl: string | null; webWiredUrl: string | null };
+  detected: {
+    measurementId: string | null;
+    serverUrl: string | null;
+    webWiredUrl: string | null;
+    /** Stape Data Tag pipeline (web Data Tag -> server Data Client), config-level verdict. */
+    dataTag: 'configured' | 'misconfigured' | 'not_installed';
+  };
   /** The existing-asset inventory (the "what's already there" half of the audit). */
   inventory: {
     clients: Array<{ name: string; type: string }>;
@@ -59,6 +65,37 @@ export interface ServerPlan {
 }
 
 const norm = (s: string): string => s.trim().toLowerCase();
+
+// ── Stape Data Tag pipeline (verified against stape-io/data-tag + data-client template.tpl) ──
+// The WEB Data Tag posts event payloads to <gtm_server_domain><request_path> (default /data); the
+// SERVER Data Client claims that path and turns the payload into a server event. Detection is by
+// PARAMETER SIGNATURE (the template's own field keys), not by tag name.
+const paramValueOf = (parameter: unknown[] | undefined, key: string): string => {
+  for (const p of parameter ?? []) {
+    if ((p as { key?: string }).key === key) return String((p as { value?: unknown }).value ?? '');
+  }
+  return '';
+};
+/** The web Stape Data Tag: a custom-template tag carrying the gtm_server_domain field. */
+export function findStapeDataTag(web: ContainerSnapshot | null): AuditTag | null {
+  for (const t of web?.tags ?? []) {
+    if (!t.type.startsWith('cvt_')) continue;
+    if ((t.parameter ?? []).some((p) => (p as { key?: string }).key === 'gtm_server_domain')) return t;
+  }
+  return null;
+}
+/** The server Stape Data Client: matched by its own field keys, falling back to the name. */
+export function findStapeDataClient(server: ServerContainerSnapshot | null): { clientId: string; name: string; parameter?: unknown[] } | null {
+  for (const c of server?.clients ?? []) {
+    const keys = new Set((c.parameter ?? []).map((p) => String((p as { key?: string }).key ?? '')));
+    if (keys.has('generateClientId') || keys.has('prolongCookies') || keys.has('acceptMultipleEvents')) return c;
+    if (/data\s*client/i.test(c.name)) return c;
+  }
+  return null;
+}
+const hostOf = (u: string): string => {
+  try { return new URL(u).hostname.toLowerCase(); } catch { return ''; }
+};
 
 /** First literal {{_event}} equals/contains condition on a trigger. */
 function eventOfTrigger(tr: AuditTrigger | undefined): string | null {
@@ -281,6 +318,92 @@ export function buildServerPlan(input: ServerPlanInput): ServerPlan {
     });
   }
 
+  // ── Stape Data Tag pipeline (web Data Tag -> server Data Client) ──
+  const dataTag = findStapeDataTag(input.web);
+  const dataClient = findStapeDataClient(s ?? null);
+  const dtUrl = dataTag ? paramValueOf(dataTag.parameter, 'gtm_server_domain').trim() : '';
+  const dtPath = dataTag ? paramValueOf(dataTag.parameter, 'request_path').trim() || '/data' : '/data';
+  const dtActive = Boolean(dataTag && !dataTag.paused && (dataTag.firingTriggerId ?? []).length > 0);
+  const urlsMatch = dtUrl && taggingUrls.length ? taggingUrls.some((u) => hostOf(u) && hostOf(u) === hostOf(dtUrl)) : null;
+  const dataTagStatus: 'configured' | 'misconfigured' | 'not_installed' = !dataTag
+    ? 'not_installed'
+    : dtActive && dtUrl && urlsMatch !== false
+      ? 'configured'
+      : 'misconfigured';
+
+  if (!dataTag) {
+    // Optional recommendation (never pre-checked): richer web->server transport than GA4 hits alone.
+    push({
+      id: 'data_tag',
+      category: 'low',
+      status: 'missing',
+      kind: 'tag',
+      name: 'Stape Data Tag (web container)',
+      description: 'Optional: sends full event payloads (dataLayer, user data, consent state) from the web container to the server\u2019s /data endpoint - richer than relaying GA4 hits alone. Creates the tag (stape-io/data-tag template) firing on All Pages, pointed at the tagging server URL.',
+      dependsOn: ['data_client'],
+      requires: ['serverUrl'],
+      defaultSelected: false,
+      executable: true,
+    });
+  } else if (dataTagStatus === 'misconfigured') {
+    const why = !dtActive
+      ? dataTag.paused
+        ? 'the tag is PAUSED'
+        : 'the tag has no firing trigger'
+      : !dtUrl
+        ? 'its server URL (gtm_server_domain) is empty'
+        : 'its server URL points at a different host than the container\u2019s tagging URL';
+    push({
+      id: 'data_tag_url',
+      category: 'high',
+      status: 'missing',
+      kind: 'config',
+      name: 'Fix the Stape Data Tag',
+      description: `The web container HAS a Data Tag ("${dataTag.name}") but ${why}. ${!dtActive ? 'Un-pause it / give it a trigger in GTM (config fix cannot decide the trigger for you).' : 'One click points it at the tagging server URL below.'}`,
+      dependsOn: [],
+      requires: dtActive ? ['serverUrl'] : [],
+      defaultSelected: false,
+      executable: dtActive, // pause/trigger issues need a human decision in GTM
+    });
+  }
+  {
+    const clientMissing = !dataClient;
+    const needed = Boolean(dataTag); // a web Data Tag with no server Data Client = data sent, nothing claims it
+    push({
+      id: 'data_client',
+      category: clientMissing ? (needed ? 'high' : 'low') : 'info',
+      status: clientMissing ? 'missing' : 'existing',
+      kind: 'client',
+      name: 'Stape Data Client (server container)',
+      description: clientMissing
+        ? needed
+          ? `The web Data Tag posts to ${dtPath} but NO Data Client claims it - those requests are dropped. Installs stape-io/data-client (claims ${dtPath}).`
+          : 'Optional: claims /data requests from a Stape Data Tag (installed together with it).'
+        : `Exists ("${dataClient!.name}") - claims Data Tag requests.`,
+      dependsOn: [],
+      requires: [],
+      defaultSelected: clientMissing && needed,
+      executable: true,
+    });
+  }
+  if (dataTag && dataClient) {
+    push({
+      id: 'data_pipeline',
+      category: dataTagStatus === 'configured' ? 'info' : 'high',
+      status: dataTagStatus === 'configured' ? 'existing' : 'missing',
+      kind: 'config',
+      name: 'Data Tag \u2194 Data Client pipeline',
+      description:
+        dataTagStatus === 'configured'
+          ? `Configured: "${dataTag.name}" -> ${dtUrl}${dtPath} -> "${dataClient.name}". Config-level check only - prove the live round-trip with a Tag Verification run.`
+          : 'The pieces exist but the config does not line up (see the fix above). Runtime proof lives in Tag Verification.',
+      dependsOn: [],
+      requires: [],
+      defaultSelected: false,
+      executable: false,
+    });
+  }
+
   // ── Detected values ──
   const webIds = input.web ? resolveGa4MeasurementIds(input.web).ids : [];
   return {
@@ -289,6 +412,7 @@ export function buildServerPlan(input: ServerPlanInput): ServerPlan {
       measurementId: input.derivedMeasurementId ?? (webIds.length === 1 ? webIds[0] : null),
       serverUrl: taggingUrls[0] ?? null,
       webWiredUrl: input.webGoogleTagServerUrl || null,
+      dataTag: dataTagStatus,
     },
     inventory: {
       clients: clients.map((c) => ({ name: c.name, type: c.type })),

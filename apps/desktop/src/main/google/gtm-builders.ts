@@ -3444,6 +3444,29 @@ export function tikTokStandardEvent(event: string): string | null {
   return null;
 }
 
+/** Build a Stape DATA TAG (WEB container; gallery template stape-io/data-tag, `type` = its cvt_
+ *  code). Field keys verified against the template: gtm_server_domain (the tagging server URL),
+ *  request_path (default /data), event_type standard|custom, add_data_layer / add_common /
+ *  add_consent_state checkboxes. Defaults: standard page_view event on All Pages, full dataLayer +
+ *  common page data + consent state included. PURE. */
+export function buildStapeDataTag(type: string, name: string, serverUrl: string, opts?: { requestPath?: string; firingTriggerId?: string[] }): GtmTagResource {
+  return {
+    name,
+    type,
+    parameter: [
+      { type: 'template', key: 'event_type', value: 'standard' },
+      { type: 'template', key: 'event_name_standard', value: 'page_view' },
+      { type: 'template', key: 'gtm_server_domain', value: serverUrl },
+      { type: 'template', key: 'request_path', value: opts?.requestPath ?? '/data' },
+      { type: 'boolean', key: 'add_data_layer', value: 'true' },
+      { type: 'boolean', key: 'add_common', value: 'true' },
+      { type: 'boolean', key: 'add_consent_state', value: 'true' },
+    ],
+    // 2147479553 = the web container's built-in All Pages (pageview) trigger id.
+    firingTriggerId: opts?.firingTriggerId ?? ['2147479553'],
+  } as unknown as GtmTagResource;
+}
+
 /** Build a Stape "TikTok Events API" SERVER tag (gallery template stape-io/tiktok-tag; `type` = its
  *  cvt_ code), tuned for match quality: Event Enhancement ON, generate _ttp ON. A TikTok STANDARD
  *  event sets eventType='standard' + eventName=<canonical>; anything else sets eventType='custom' +
