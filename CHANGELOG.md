@@ -1,3 +1,9 @@
+## [1.333.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.332.0...v1.333.0) (2026-07-15)
+
+### Features
+
+* **desktop:** Server container tab as a service launcher - pick, select a service, open its own page ([8f62452](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8f6245262df8f49a5bf3582a29a77e6744538ae9))
+
 ## [1.332.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.331.0...v1.332.0) (2026-07-15)
 
 ### Features
