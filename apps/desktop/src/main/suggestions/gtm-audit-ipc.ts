@@ -19,7 +19,7 @@ import type { GoogleDataService } from '../google/data-service';
 import { auditWorkspace, auditServerWorkspace } from '../google/audit-runner';
 import { auditServerContainer } from '../google/gtm-builders';
 import { buildServerCoverage } from '../google/server-coverage';
-import { serverContainerDocMarkdown, serverContainerDocCsv } from '../google/server-doc';
+import { serverContainerDocMarkdown, serverContainerDocCsv, buildServerDocView } from '../google/server-doc';
 import { serverCoverageToCsv, serverCoverageToHtml, type CoverageExportMeta } from '../google/server-coverage-export';
 import { buildServerPlan } from '../google/server-plan';
 import { googleTagConfigValue } from '../google/gtm-builders';
@@ -179,6 +179,28 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     } finally {
       if (!pdfWin.isDestroyed()) pdfWin.destroy();
     }
+  });
+
+  // SERVER container DOCUMENTATION view (read): the documentation rendered ON-SCREEN. Same
+  // snapshot + audit + builders as the export below, returned as JSON instead of a file.
+  ipcMain.handle('gtm:serverDoc', async (_e, accountId: unknown, containerId: unknown, workspaceId: unknown, names: unknown) => {
+    const a = String(accountId ?? '');
+    const c = String(containerId ?? '');
+    const w = String(workspaceId ?? '');
+    if (!a || !c || !w) throw new Error('Pick the server container and workspace first.');
+    const meta = (names && typeof names === 'object' ? names : {}) as { containerName?: string; publicId?: string; workspaceName?: string };
+    const [snap, liveVersionId] = await Promise.all([
+      withQuotaRetry(() => data.getServerContainerSnapshot(a, c, w)),
+      data.getGtmLiveContainerVersionId(a, c).catch(() => null),
+    ]);
+    const audit = auditServerContainer(snap);
+    return buildServerDocView(snap, {
+      containerName: meta.containerName || `container ${c}`,
+      publicId: meta.publicId,
+      workspaceName: meta.workspaceName,
+      generatedAt: new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      liveVersionId,
+    }, audit);
   });
 
   // SERVER container DOCUMENTATION export (md / csv / pdf): clients, tags (destination + firing

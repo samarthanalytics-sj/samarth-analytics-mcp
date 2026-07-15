@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { serverContainerDocMarkdown, serverContainerDocCsv, buildServerFlowLines, buildDestinationRows } from '../server-doc';
+import { serverContainerDocMarkdown, serverContainerDocCsv, buildServerFlowLines, buildDestinationRows, buildServerDocView } from '../server-doc';
 import type { AuditTag, AuditTrigger, ServerContainerSnapshot } from '../gtm-builders';
 
 let passed = 0;
@@ -120,6 +120,39 @@ test('request flow: orphan tags called out; clean audit says clean; no audit -> 
   const noAudit = serverContainerDocMarkdown(snap(), { containerName: 'A' });
   assert.ok(!noAudit.includes('## Configuration issues'), 'no audit passed -> no issues section');
   assert.equal(buildDestinationRows(snap()).length, 2, 'two distinct destinations');
+});
+
+
+test('on-screen view: same content as the exports (counts, destinations, flow, fires-on, condition)', () => {
+  const c = snap();
+  const v = buildServerDocView(c, { containerName: 'Acme - Server', publicId: 'GTM-SRV1', workspaceName: 'Default', generatedAt: 'now', liveVersionId: '7' });
+  assert.equal(v.meta.liveVersionId, '7');
+  assert.deepEqual(v.overview.counts, { clients: 1, tags: 2, triggers: 2, variables: 1, transformations: 1 });
+  assert.deepEqual(v.destinations, buildDestinationRows(c), 'destinations identical to the export builder');
+  assert.deepEqual(v.flowLines, buildServerFlowLines(c), 'flow identical to the export builder');
+  const meta = v.tags.find((t) => t.name === 'Meta CAPI - Lead')!;
+  assert.equal(meta.destination, 'pixel 123456789012345');
+  assert.equal(meta.firesOn, 'ce - lead');
+  assert.ok(meta.vars.includes('ed - email'));
+  assert.equal(v.triggers.find((t) => t.name === 'ce - lead')!.condition, '{{_event}} equals "generate_lead"');
+});
+
+test('SECURITY: the on-screen view never carries secret values - only the pinned presence note', () => {
+  const v = buildServerDocView(snap(), { containerName: 'Acme - Server' });
+  const json = JSON.stringify(v);
+  assert.ok(!json.includes('EAA-super-secret-token-value'), 'token value must not reach the renderer');
+  const meta = v.tags.find((t) => t.name === 'Meta CAPI - Lead')!;
+  assert.ok(meta.notes.includes('credential configured (value not shown)'));
+  assert.ok(meta.notes.includes('PAUSED'));
+});
+
+test('on-screen view: audit findings mapped with a readable where', () => {
+  const v = buildServerDocView(snap(), { containerName: 'X' }, {
+    findings: [{ severity: 'high', message: 'm', recommendation: 'r', resource: { kind: 'tag', name: 'T' } }],
+    summary: { critical: 0, high: 1, medium: 0, low: 0, info: 0 },
+  } as never);
+  assert.deepEqual(v.findings, [{ severity: 'high', where: 'tag "T"', message: 'm', recommendation: 'r' }]);
+  assert.deepEqual(buildServerDocView(snap(), { containerName: 'X' }).findings, [], 'no audit -> no findings, never fabricated');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

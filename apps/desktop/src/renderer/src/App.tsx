@@ -27,6 +27,7 @@ import type {
   ServerCoverageView,
   ServerPlanView,
   ServerPlanApplyResultView,
+  ServerDocView,
   LlmProvider,
   NetworkLocationView,
   NetworkConnectionType,
@@ -7461,6 +7462,25 @@ function ServerAuditSection({
 
   const [docExporting, setDocExporting] = useState(false);
   const [docNote, setDocNote] = useState('');
+  const [doc, setDoc] = useState<ServerDocView | null>(null);
+  const [docLoading, setDocLoading] = useState(false);
+  // Opening the Documentation page loads the doc itself - the data shows ON the page,
+  // downloads are the same content as files.
+  useEffect(() => {
+    if (view !== 'docs' || !containerId || !workspaceId) return;
+    let cancelled = false;
+    setDocLoading(true);
+    setDoc(null);
+    const cont = containers.find((c) => c.containerId === containerId);
+    const ws = workspaces.find((x) => x.workspaceId === workspaceId);
+    window.desktop.gtm
+      .serverDoc(accountId, containerId, workspaceId, { containerName: cont?.name, publicId: cont?.publicId, workspaceName: ws?.name })
+      .then((d) => { if (!cancelled) setDoc(d); })
+      .catch((e) => { if (!cancelled) onError(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (!cancelled) setDocLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, containerId, workspaceId]);
   async function exportDoc(format: 'md' | 'csv' | 'pdf' | 'xlsx'): Promise<void> {
     if (!containerId || !workspaceId || docExporting) return;
     onError('');
@@ -7553,7 +7573,7 @@ function ServerAuditSection({
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'stretch' }}>
                     {tile('Audit configuration', 'Clients, relays, triggers, variables, CAPI pitfalls - read-only, never touches runtime.', () => setView('audit'), picked)}
                     {tile('Web ↔ Server coverage', `Is every web event handled server-side? Compares against ${webCtx?.containerName ?? 'your web container'}.`, () => setView('coverage'), picked)}
-                    {tile('Documentation', 'Full container doc with issues, destinations and request flow - MD / CSV / XLSX / PDF.', () => setView('docs'), picked)}
+                    {tile('Documentation', 'The full container doc on the page - issues, destinations, request flow - plus MD / CSV / XLSX / PDF download.', () => setView('docs'), picked)}
                     {tile('＋ Create a new server container', 'Build a fresh sGTM container from the web container in the GTM bar (draft-only).', () => onOpenCreate?.(), true)}
                   </div>
                   {!picked && <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Pick the server container and workspace above to open a service.</div>}
@@ -7613,11 +7633,40 @@ function ServerAuditSection({
           );
         }
 
+        const docTable = (title: string, head: string[], rows: string[][], emptyNote: string): JSX.Element => (
+          <div key={title} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ fontWeight: 700, fontSize: 13.5 }}>{title}</div>
+            {rows.length ? (
+              <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+                <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
+                  <thead>
+                    <tr>
+                      {head.map((h) => (
+                        <th key={h} style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r, i) => (
+                      <tr key={i}>
+                        {r.map((cell, j) => (
+                          <td key={j} style={{ padding: '6px 10px', borderBottom: i === rows.length - 1 ? 'none' : '1px solid var(--border)', verticalAlign: 'top', lineHeight: 1.45 }}>{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>{emptyNote}</div>
+            )}
+          </div>
+        );
         return (
           <>
             {backRow('Documentation')}
             <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-              One document with the container overview, configuration issues (the audit runs inside the export), destinations, the request flow, and every client / tag / trigger / variable / transformation. Credentials are never written to the file; the doc describes the workspace draft and states the live version when readable.
+              The container overview, configuration issues (the audit runs on the same snapshot), destinations, the request flow, and every client / tag / trigger / variable / transformation - shown below and downloadable as a file with the same content. Credentials are never shown or written; the doc describes the workspace draft and states the live version when readable.
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
               {(['md', 'csv', 'xlsx', 'pdf'] as const).map((fmt) => (
@@ -7627,6 +7676,67 @@ function ServerAuditSection({
               ))}
               {docNote && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{docNote}</span>}
             </div>
+            {docLoading && <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>Reading the container configuration…</div>}
+            {doc && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 2 }}>
+                <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13.5 }}>
+                    {doc.meta.containerName}{doc.meta.publicId ? <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}> ({doc.meta.publicId})</span> : null}
+                  </div>
+                  <div style={{ color: 'var(--text-muted)' }}>
+                    {doc.meta.workspaceName ? `Workspace: ${doc.meta.workspaceName} · ` : ''}Generated: {doc.meta.generatedAt} · configuration-level (GTM API, no runtime data)
+                  </div>
+                  <div>
+                    Tagging server URL(s): {doc.overview.taggingServerUrls.length ? <b>{doc.overview.taggingServerUrls.join(', ')}</b> : <span style={{ color: 'var(--c-amber)' }}>(not set - host not wired yet)</span>}
+                  </div>
+                  <div style={{ color: 'var(--text-muted)' }}>
+                    {doc.overview.counts.clients} client(s) · {doc.overview.counts.tags} tag(s) · {doc.overview.counts.triggers} trigger(s) · {doc.overview.counts.variables} variable(s) · {doc.overview.counts.transformations} transformation(s)
+                  </div>
+                  {doc.meta.liveVersionId && (
+                    <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+                      Live (published) version: {doc.meta.liveVersionId}. This page describes the workspace DRAFT, which may differ from what is live.
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13.5 }}>Configuration issues</div>
+                  {doc.findings.length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: 'var(--c-green)', fontWeight: 600 }}>✓ None found - the configuration audit came back clean.</div>
+                  ) : (
+                    doc.findings.map((f, i) => (
+                      <div key={i} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5 }}>
+                        <span style={{ fontWeight: 700, textTransform: 'uppercase', fontSize: 10.5, letterSpacing: 0.4, color: SEV[f.severity] ?? 'var(--text-muted)' }}>{f.severity}</span>
+                        <span style={{ color: 'var(--text-faint)' }}> {f.where}</span>
+                        <div style={{ lineHeight: 1.5, marginTop: 2 }}>{f.message}</div>
+                        <div style={{ color: 'var(--text-muted)', marginTop: 2 }}><b>Fix:</b> {f.recommendation}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                {docTable('Destinations (where data goes)', ['Destination', 'Tag type(s)', 'Tags', 'Notes'],
+                  doc.destinations.map((d) => [d.destination, d.types, String(d.tags), d.paused ? `${d.paused} paused` : '']),
+                  'None - no server tag forwards data anywhere yet.')}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13.5 }}>Request flow</div>
+                  <pre style={{ margin: 0, border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', fontSize: 12, lineHeight: 1.55, overflowX: 'auto', fontFamily: 'ui-monospace, monospace' }}>{doc.flowLines.join('\n')}</pre>
+                </div>
+                {docTable('Clients (what claims incoming requests)', ['Client', 'Type'],
+                  doc.clients.map((c) => [c.name, c.type]),
+                  'None - nothing claims incoming requests, so no server tag can run.')}
+                {docTable('Server tags', ['Tag', 'Type', 'Destination', 'Fires on', 'Uses variables', 'Notes'],
+                  doc.tags.map((t) => [t.name, t.type, t.destination, t.firesOn, t.vars, t.notes]),
+                  'None.')}
+                {docTable('Triggers', ['Trigger', 'Type', 'Condition'],
+                  doc.triggers.map((tr) => [tr.name, tr.type, tr.condition]),
+                  'None.')}
+                {docTable('Variables', ['Variable', 'Type'],
+                  doc.variables.map((v) => [v.name, v.type]),
+                  'None.')}
+                {docTable('Transformations', ['Transformation', 'Type'],
+                  doc.transformations.map((x) => [x.name, x.type]),
+                  'None configured - events pass through to destinations unmodified.')}
+              </div>
+            )}
           </>
         );
       })()}

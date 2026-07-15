@@ -1031,6 +1031,22 @@ export interface ServerPlanApplyResultView {
   failed: Array<{ id: string; error: string }>;
 }
 
+/** Server container documentation for ON-SCREEN rendering. Mirrors server-doc.ts
+ *  buildServerDocView - the same helpers the MD/CSV/XLSX/PDF exports use, so what's shown
+ *  on the page and what's written to a file can't diverge. Secret values never appear. */
+export interface ServerDocView {
+  meta: { containerName: string; publicId?: string; workspaceName?: string; generatedAt: string; liveVersionId: string | null };
+  overview: { taggingServerUrls: string[]; counts: { clients: number; tags: number; triggers: number; variables: number; transformations: number } };
+  findings: Array<{ severity: string; where: string; message: string; recommendation: string }>;
+  destinations: Array<{ destination: string; types: string; tags: number; paused: number }>;
+  flowLines: string[];
+  clients: Array<{ name: string; type: string }>;
+  tags: Array<{ name: string; type: string; destination: string; firesOn: string; vars: string; notes: string }>;
+  triggers: Array<{ name: string; type: string; condition: string }>;
+  variables: Array<{ name: string; type: string }>;
+  transformations: Array<{ name: string; type: string }>;
+}
+
 /** Web GTM <-> Server GTM coverage comparison (config-level). Mirrors server-coverage.ts. */
 export interface ServerCoverageView {
   rows: Array<{ platform: string; event: string; webTag: string; status: 'covered' | 'missing' | 'not_matchable'; by?: string; recommendation?: string; template?: { tagId: string; name: string } }>;
