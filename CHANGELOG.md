@@ -1,3 +1,9 @@
+## [1.332.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.331.0...v1.332.0) (2026-07-15)
+
+### Features
+
+* **desktop:** server documentation becomes a deliverable - issues, destinations, request flow, draft-vs-live caveat ([ad5772d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ad5772d90fad7209bf22103f982280b5fdf53c6c))
+
 ## [1.331.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.330.0...v1.331.0) (2026-07-15)
 
 ### Features
