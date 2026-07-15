@@ -60,5 +60,17 @@ test('coverage n/a renders honestly in both formats', () => {
   assert.ok(serverCoverageToHtml(v, { webName: 'W', serverName: 'S' }).includes('<b>n/a</b>'));
 });
 
+
+test('house style: coverage CSV and HTML never carry em/en dashes', () => {
+  const v = view();
+  v.rows[0] = { ...v.rows[0], webTag: 'Meta — Lead Tag' };
+  const meta = { webName: 'Web — Site', serverName: 'Server – One', generatedAt: 'now' };
+  const csv = serverCoverageToCsv(v, meta);
+  const html = serverCoverageToHtml(v, meta);
+  for (const out of [csv, html]) {
+    assert.ok(!/[\u2014\u2013]/.test(out), 'em/en dash leaked into the coverage export');
+  }
+  assert.ok(csv.includes('Meta - Lead Tag'));
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -4,7 +4,7 @@
 // (access tokens, API secrets) are NEVER echoed - only their presence is noted.
 
 import type { AuditReport, AuditTag, AuditTrigger, ServerContainerSnapshot } from './gtm-builders';
-import { serverTagParam } from './gtm-builders';
+import { serverTagParam, plainDashes } from './gtm-builders';
 
 export interface ServerDocMeta {
   containerName: string;
@@ -283,7 +283,7 @@ export function serverContainerDocMarkdown(s: ServerContainerSnapshot, meta: Ser
     lines.push('None configured - events pass through to destinations unmodified.');
   }
   lines.push('');
-  return lines.join('\n');
+  return plainDashes(lines.join('\n'));
 }
 
 const csvCell = (v: unknown): string => {
@@ -315,5 +315,5 @@ export function serverContainerDocCsv(s: ServerContainerSnapshot, meta: ServerDo
   for (const tr of s.triggers ?? []) lines.push(['Trigger', tr.name, tr.type, '', triggerCondition(tr), '', ''].map(csvCell).join(','));
   for (const v of s.variables ?? []) lines.push(['Variable', v.name, v.type, '', '', '', ''].map(csvCell).join(','));
   for (const x of s.transformations) lines.push(['Transformation', x.name, x.type, '', '', '', ''].map(csvCell).join(','));
-  return lines.join('\r\n') + '\r\n';
+  return plainDashes(lines.join('\r\n') + '\r\n');
 }

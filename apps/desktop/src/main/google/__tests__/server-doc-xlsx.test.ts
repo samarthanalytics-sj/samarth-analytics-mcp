@@ -36,6 +36,29 @@ const snap = (): ServerContainerSnapshot => ({
 
 console.log('\nserver-doc-xlsx:');
 
+test('house style: no em/en dash in any workbook cell, even from entity names', async () => {
+  const c = snap();
+  c.tags[0] = { ...c.tags[0], name: 'Meta CAPI — Lead – v2' };
+  const buf = await buildServerDocXlsx(c, { containerName: 'Acme — Server' });
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf as unknown as ArrayBuffer);
+  const bad: string[] = [];
+  wb.eachSheet((ws) => {
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        if (typeof cell.value === 'string' && /[\u2014\u2013]/.test(cell.value)) bad.push(`${ws.name}: ${cell.value}`);
+      });
+    });
+  });
+  assert.deepEqual(bad, [], 'em/en dash leaked into xlsx cells: ' + bad.join(' | '));
+  let seen = false;
+  wb.eachSheet((ws) => ws.eachRow({ includeEmpty: false }, (row) => row.eachCell({ includeEmpty: false }, (cell) => {
+    if (typeof cell.value === 'string' && cell.value.includes('Meta CAPI - Lead - v2')) seen = true;
+  })));
+  assert.ok(seen, 'renamed tag present with plain hyphens');
+});
+
+
 test('workbook has all eight sheets with the documented rows, and NO secret value anywhere', async () => {
   const audit = {
     counts: { tags: 1, triggers: 1, variables: 1, findings: 1 },

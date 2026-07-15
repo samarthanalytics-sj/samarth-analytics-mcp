@@ -6,6 +6,7 @@ import { ipcMain, dialog, BrowserWindow } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from './data-service';
 import { auditGa4 } from './ga4-audit';
+import { plainDashes } from './gtm-builders';
 import { auditGa4DataQuality } from './ga4-data-quality';
 import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Visuals, buildGa4Sections } from './ga4-report';
 import { auditGa4Growth } from './ga4-growth';
@@ -31,7 +32,8 @@ async function writeReportFile(filePath: string, data: string | Uint8Array): Pro
   for (let i = 0; i <= 50; i++) {
     const target = dedupedReportPath(filePath, i);
     try {
-      await writeFile(target, data);
+      // Text exports (md/csv/doc-html) follow house style: plain hyphens, never em/en dashes.
+      await writeFile(target, typeof data === 'string' ? plainDashes(data) : data);
       return target;
     } catch (err) {
       const code = (err as { code?: string }).code ?? '';
