@@ -404,6 +404,8 @@ const api = {
       webContainerId: string;
       name: string;
       serverUrl?: string;
+      /** Complete THIS existing server container instead of creating a new one. */
+      serverContainerId?: string;
     }): Promise<ServerContainerResultView> => ipcRenderer.invoke('gtm:createServerContainer', ctx),
   },
 

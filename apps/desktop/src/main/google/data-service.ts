@@ -1889,7 +1889,9 @@ export class GoogleDataService {
     accountId: string,
     webContainerId: string,
     name: string,
-    serverUrl?: string
+    serverUrl?: string,
+    /** Complete THIS existing server container (add whatever is missing) instead of creating one. */
+    existingServerContainerId?: string
   ): Promise<{
     serverContainer: { containerId: string; publicId: string; name: string; taggingServerUrls: string[] };
     workspaceId: string;
@@ -1923,7 +1925,21 @@ export class GoogleDataService {
     // hit the quota before finishing), REUSE it and ensure the baseline instead of creating a
     // duplicate ("Found entity with duplicate name"). Combined with per-sub-call quota-retry, the
     // whole flow completes on a retry rather than erroring.
-    const existingServer = await this.findServerContainerByName(accountId, containerName);
+    let existingServer: { containerId: string; publicId: string; name: string; taggingServerUrls: string[] } | null = null;
+    if (existingServerContainerId) {
+      // Explicit target: COMPLETE this container regardless of its name (the shell-container case -
+      // a partially-created container whose name differs from the derived default was previously
+      // unreachable by the name-match resume).
+      const c = await this.q(() => gtm0.accounts.containers.get({ path: `accounts/${accountId}/containers/${existingServerContainerId}` }));
+      existingServer = {
+        containerId: c.data.containerId ?? existingServerContainerId,
+        publicId: c.data.publicId ?? '',
+        name: c.data.name ?? containerName,
+        taggingServerUrls: c.data.taggingServerUrls ?? [],
+      };
+    } else {
+      existingServer = await this.findServerContainerByName(accountId, containerName);
+    }
     const boot = existingServer
       ? await this.ensureServerBaseline(accountId, existingServer, measurementId)
       : await this.bootstrapServerSideTagging(accountId, containerName, measurementId);

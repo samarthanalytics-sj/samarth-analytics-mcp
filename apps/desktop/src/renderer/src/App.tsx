@@ -7003,26 +7003,51 @@ function ServerContainerPanel({
   const [running, setRunning] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [result, setResult] = useState<ServerContainerResultView | null>(null);
+  // '' = create new; otherwise COMPLETE this existing server container (add whatever is missing).
+  const [targetId, setTargetId] = useState('');
+  const [serverList, setServerList] = useState<GtmContainerView[]>([]);
+  // The one-click proof: the audit runs automatically on the resulting container.
+  const [postAudit, setPostAudit] = useState<AuditReportView | null>(null);
 
   // Default the new container's name from the web container ("<web> - Server"), once, when it loads.
   useEffect(() => {
     if (ctx?.containerName) setName((n) => n || `${ctx.containerName} - Server`);
   }, [ctx?.containerName]);
 
+  // Existing server containers -> the "complete existing" option (the shell-container case).
+  useEffect(() => {
+    if (!ctx?.accountId) return;
+    window.desktop.data
+      .listGtmContainers(ctx.accountId)
+      .then((list) => setServerList(list.filter((c) => (c.usageContext ?? []).some((u) => /server/i.test(u)))))
+      .catch(() => setServerList([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctx?.accountId]);
+
+  const completing = serverList.find((c) => c.containerId === targetId) ?? null;
+
   async function create(): Promise<void> {
-    if (!ready || !ctx || running || !name.trim()) return;
+    if (!ready || !ctx || running || (!targetId && !name.trim())) return;
     onError('');
     setRunning(true);
     setConfirming(false);
     setResult(null);
+    setPostAudit(null);
     try {
       const r = await window.desktop.gtm.createServerContainer({
         accountId: ctx.accountId!,
         webContainerId: ctx.containerId!,
-        name: name.trim(),
+        name: (completing?.name ?? name).trim(),
         serverUrl: serverUrl.trim() || undefined,
+        ...(targetId ? { serverContainerId: targetId } : {}),
       });
       setResult(r);
+      // ONE CLICK = create/complete AND prove it: run the read-only audit on the result immediately.
+      try {
+        setPostAudit(await window.desktop.gtm.auditServer(ctx.accountId!, r.serverContainer.containerId, r.workspaceId));
+      } catch {
+        /* verification is best-effort - the creation result stands on its own */
+      }
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -7074,10 +7099,28 @@ function ServerContainerPanel({
             Base web container: <b style={{ color: 'var(--text)' }}>{ctx!.containerName}</b>
             {ctx!.containerPublicId ? <span style={{ color: 'var(--text-faint)' }}> ({ctx!.containerPublicId})</span> : null}
           </div>
-          <label>
-            <span style={lbl}>New server container name</span>
-            <input style={styles.input} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. example.com - Server" />
-          </label>
+          {serverList.length > 0 && (
+            <label>
+              <span style={lbl}>Target</span>
+              <select style={styles.input} value={targetId} onChange={(e) => { setTargetId(e.target.value); setResult(null); setPostAudit(null); }}>
+                <option value="">＋ Create a new server container</option>
+                {serverList.map((c) => (
+                  <option key={c.containerId} value={c.containerId}>Complete existing: {c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {!targetId && (
+            <label>
+              <span style={lbl}>New server container name</span>
+              <input style={styles.input} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. example.com - Server" />
+            </label>
+          )}
+          {targetId && (
+            <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              One click adds whatever “{completing?.name}” is missing - GA4 client, all-events trigger, GA4 relay (from the web container's Measurement ID), first-party GTM client, event-data variables - and wires the URL below when given. Existing pieces are reused, never duplicated.
+            </div>
+          )}
           <label>
             <span style={lbl}>Tagging server URL - optional (from Cloud Run / Stape / your host)</span>
             <input style={styles.input} value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} placeholder="https://sgtm.example.com" />
@@ -7086,17 +7129,18 @@ function ServerContainerPanel({
             Leave the URL blank to create the container now and wire it later (after you deploy the host). You can set it any time from the chat with set_server_container_tagging_url.
           </div>
           {!confirming ? (
-            <button style={styles.primaryBtn} disabled={running || !name.trim()} onClick={() => setConfirming(true)}>
-              {running ? 'Creating…' : result ? 'Create another' : 'Create server container'}
+            <button style={styles.primaryBtn} disabled={running || (!targetId && !name.trim())} onClick={() => setConfirming(true)}>
+              {running ? (targetId ? 'Completing…' : 'Creating…') : result ? 'Run again' : targetId ? 'Complete & verify' : 'Create & verify'}
             </button>
           ) : (
             <div style={{ ...styles.confirm }}>
               <div style={{ ...styles.muted, marginBottom: 8, color: 'var(--c-amber)' }}>
-                Create a NEW server container “{name.trim()}” in this account
-                {serverUrl.trim() ? ` and point ${ctx!.containerName} at ${serverUrl.trim()}` : ''}? Draft-only - not published.
+                {targetId
+                  ? <>Complete “{completing?.name}” (add any missing GA4 client / trigger / relay / variables{serverUrl.trim() ? `, record ${serverUrl.trim()} and point ${ctx!.containerName} at it` : ''})? Existing pieces are reused. Draft-only - not published.</>
+                  : <>Create a NEW server container “{name.trim()}” in this account{serverUrl.trim() ? ` and point ${ctx!.containerName} at ${serverUrl.trim()}` : ''}? Draft-only - not published.</>}
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button style={styles.primaryBtn} disabled={running} onClick={create}>{running ? 'Creating…' : 'Confirm & create'}</button>
+                <button style={styles.primaryBtn} disabled={running} onClick={create}>{running ? 'Working…' : targetId ? 'Confirm & complete' : 'Confirm & create'}</button>
                 <button style={styles.ghostBtn} disabled={running} onClick={() => setConfirming(false)}>Cancel</button>
               </div>
             </div>
@@ -7126,8 +7170,20 @@ function ServerContainerPanel({
                   </div>
                 </div>
               )}
+              {postAudit && (
+                <div style={{ ...row, borderColor: postAudit.counts.findings === 0 ? 'var(--c-green-border)' : 'var(--c-amber-border)', background: postAudit.counts.findings === 0 ? 'var(--c-green-bg)' : 'var(--c-amber-bg)' }}>
+                  {postAudit.counts.findings === 0 ? (
+                    <>✓ <b>Verified:</b> the configuration audit came back clean - {postAudit.counts.clients ?? 0} client(s), {postAudit.counts.tags} tag(s), {postAudit.counts.triggers} trigger(s), {postAudit.counts.variables} variable(s).</>
+                  ) : (
+                    <>
+                      <b>Verified with {postAudit.counts.findings} finding{postAudit.counts.findings === 1 ? '' : 's'}</b> ({postAudit.summary.critical} critical · {postAudit.summary.high} high · {postAudit.summary.medium} medium · {postAudit.summary.low} low): {postAudit.findings.slice(0, 2).map((f) => f.message.split(' - ')[0]).join('; ')}
+                      {postAudit.counts.findings > 2 ? '…' : ''} - open the Audit service for the full list.
+                    </>
+                  )}
+                </div>
+              )}
               <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                Open GTM to review &amp; publish the new server container. Deploy the tagging-server host (Cloud Run / Stape) if you haven&apos;t, then verify it answers before relying on it.
+                Open GTM to review &amp; publish the {targetId ? 'completed' : 'new'} server container. Deploy the tagging-server host (Cloud Run / Stape) if you haven&apos;t, then verify it answers before relying on it.
               </div>
             </div>
           )}
