@@ -1,3 +1,9 @@
+## [1.331.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.330.0...v1.331.0) (2026-07-15)
+
+### Features
+
+* **desktop:** Server container tab restructured into a simple pick-once -> act flow ([65b181f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/65b181fcbe536cbdc6ef16efefdfbb7e9449babf))
+
 ## [1.330.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.329.0...v1.330.0) (2026-07-15)
 
 ### Features
