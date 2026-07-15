@@ -1,3 +1,9 @@
+## [1.333.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.333.0...v1.333.1) (2026-07-15)
+
+### Bug Fixes
+
+* **desktop:** no em/en dashes anywhere in the renderer UI - simple hyphens only ([86b0dff](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/86b0dff8cbd613023f26ebf358ab4d84ff549a2c)), closes [#577](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/577)
+
 ## [1.333.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.332.0...v1.333.0) (2026-07-15)
 
 ### Features
