@@ -1,5 +1,5 @@
 // Light/dark theming via CSS custom properties. The styles object references var(--…) for ALL
-// colors — structural (backgrounds, surfaces, text, borders) AND semantic accents (blue/cyan/amber/
+// colors - structural (backgrounds, surfaces, text, borders) AND semantic accents (blue/cyan/amber/
 // red/green, each with a text / soft-bg / soft-border variant). Switching a theme just rewrites
 // these variables on :root, which updates every inline var() instantly (no React re-render).
 // The dark accent values are the originals; the light ones are darker text on tinted backgrounds so
@@ -22,7 +22,7 @@ const VARS: Record<Theme, Record<string, string>> = {
     '--text-dim': '#cbd5e1',
     '--text-muted': '#9ca3af',
     '--text-faint': '#6b7280',
-    // semantic accents — text / soft background / soft border
+    // semantic accents - text / soft background / soft border
     '--c-blue': '#93c5fd',
     '--c-blue-bg': '#1e3a5f',
     '--c-blue-border': '#1e3a5f',
@@ -51,7 +51,7 @@ const VARS: Record<Theme, Record<string, string>> = {
     '--text-dim': '#334155',
     '--text-muted': '#5b6776',
     '--text-faint': '#94a3b8',
-    // semantic accents — darker text on a tinted bg so they read on a light surface
+    // semantic accents - darker text on a tinted bg so they read on a light surface
     '--c-blue': '#1d4ed8',
     '--c-blue-bg': '#dbeafe',
     '--c-blue-border': '#bfdbfe',
@@ -82,7 +82,7 @@ export function saveTheme(theme: Theme): void {
   try {
     localStorage.setItem(STORAGE_KEY, theme);
   } catch {
-    /* storage unavailable — non-fatal */
+    /* storage unavailable - non-fatal */
   }
 }
 

@@ -9,7 +9,7 @@ const line = {
   'aria-hidden': true, style: { flexShrink: 0 } as const,
 };
 
-/** Chat — a message bubble. */
+/** Chat - a message bubble. */
 export function ChatIcon(): JSX.Element {
   return (
     <svg {...line}>
@@ -18,7 +18,7 @@ export function ChatIcon(): JSX.Element {
   );
 }
 
-/** Prompts — an open book. */
+/** Prompts - an open book. */
 export function PromptsIcon(): JSX.Element {
   return (
     <svg {...line}>
@@ -28,7 +28,7 @@ export function PromptsIcon(): JSX.Element {
   );
 }
 
-/** Settings — a gear. */
+/** Settings - a gear. */
 export function SettingsIcon(): JSX.Element {
   return (
     <svg {...line}>
@@ -38,7 +38,7 @@ export function SettingsIcon(): JSX.Element {
   );
 }
 
-/** Google Tag Manager — the blue tag mark (two-tone diamond). */
+/** Google Tag Manager - the blue tag mark (two-tone diamond). */
 export function GtmLogo(): JSX.Element {
   return (
     <svg width={SZ} height={SZ} viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0 }}>
@@ -48,7 +48,7 @@ export function GtmLogo(): JSX.Element {
   );
 }
 
-/** Google Analytics — the orange bar-chart mark. */
+/** Google Analytics - the orange bar-chart mark. */
 export function Ga4Logo(): JSX.Element {
   return (
     <svg width={SZ} height={SZ} viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0 }}>
