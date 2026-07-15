@@ -1,3 +1,9 @@
+## [1.339.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.338.0...v1.339.0) (2026-07-15)
+
+### Features
+
+* **desktop:** show the server documentation on the page, not just as downloads ([#584](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/584)) ([ba853a1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ba853a15cc1361d88eead5e8d7ffc9e6ca9f37ad))
+
 ## [1.338.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.337.0...v1.338.0) (2026-07-15)
 
 ### Features
