@@ -1,3 +1,9 @@
+## [1.341.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.340.0...v1.341.0) (2026-07-15)
+
+### Features
+
+* **desktop:** GA4 audit report gains restated totals, change drivers, and product performance ([#588](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/588)) ([6041c8a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6041c8aeea1da3fb7b7658854f7832fc7e141df7))
+
 ## [1.340.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.339.2...v1.340.0) (2026-07-15)
 
 ### Features
