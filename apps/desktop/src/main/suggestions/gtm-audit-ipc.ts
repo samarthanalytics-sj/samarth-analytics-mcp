@@ -182,45 +182,73 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     }
   });
 
+  // Everything the documentation needs, fetched once: server snapshot, live version id, version
+  // history (best-effort), the audit, and - only when a WEB container ref was provided - the
+  // web<->server coverage link. Never guesses: any best-effort piece that fails is simply absent.
+  async function serverDocData(a: string, c: string, w: string, web: unknown): Promise<{
+    snap: Awaited<ReturnType<typeof data.getServerContainerSnapshot>>;
+    liveVersionId: string | null;
+    audit: ReturnType<typeof auditServerContainer>;
+    extras: { versions: Array<{ versionId: string; name: string; numTags: number; numTriggers: number; numVariables: number; deleted: boolean; live: boolean }> | null; coverage: ReturnType<typeof buildServerCoverage> | null };
+  }> {
+    const [snap, liveVersionId, versionsRaw] = await Promise.all([
+      withQuotaRetry(() => data.getServerContainerSnapshot(a, c, w)),
+      data.getGtmLiveContainerVersionId(a, c).catch(() => null),
+      data.listGtmVersions(a, c).catch(() => null),
+    ]);
+    const audit = auditServerContainer(snap);
+    let coverage: ReturnType<typeof buildServerCoverage> | null = null;
+    const webRef = (web && typeof web === 'object' ? web : null) as { containerId?: string; workspaceId?: string } | null;
+    const wc = String(webRef?.containerId ?? '');
+    const ww = String(webRef?.workspaceId ?? '');
+    if (wc && ww) {
+      try {
+        const webSnap = await withQuotaRetry(() => data.getGtmContainerSnapshot(a, wc, ww));
+        coverage = buildServerCoverage(webSnap, snap, audit.summary);
+      } catch {
+        coverage = null; // the doc stands without the web link
+      }
+    }
+    const versions = versionsRaw
+      ? versionsRaw
+          .slice()
+          .sort((x, y) => Number(y.versionId) - Number(x.versionId))
+          .slice(0, 10)
+          .map((v) => ({ ...v, live: liveVersionId != null && v.versionId === liveVersionId }))
+      : null;
+    return { snap, liveVersionId, audit, extras: { versions, coverage } };
+  }
+
   // SERVER container DOCUMENTATION view (read): the documentation rendered ON-SCREEN. Same
   // snapshot + audit + builders as the export below, returned as JSON instead of a file.
-  ipcMain.handle('gtm:serverDoc', async (_e, accountId: unknown, containerId: unknown, workspaceId: unknown, names: unknown) => {
+  ipcMain.handle('gtm:serverDoc', async (_e, accountId: unknown, containerId: unknown, workspaceId: unknown, names: unknown, web: unknown) => {
     const a = String(accountId ?? '');
     const c = String(containerId ?? '');
     const w = String(workspaceId ?? '');
     if (!a || !c || !w) throw new Error('Pick the server container and workspace first.');
     const meta = (names && typeof names === 'object' ? names : {}) as { containerName?: string; publicId?: string; workspaceName?: string };
-    const [snap, liveVersionId] = await Promise.all([
-      withQuotaRetry(() => data.getServerContainerSnapshot(a, c, w)),
-      data.getGtmLiveContainerVersionId(a, c).catch(() => null),
-    ]);
-    const audit = auditServerContainer(snap);
+    const { snap, liveVersionId, audit, extras } = await serverDocData(a, c, w, web);
     return buildServerDocView(snap, {
       containerName: meta.containerName || `container ${c}`,
       publicId: meta.publicId,
       workspaceName: meta.workspaceName,
       generatedAt: new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
       liveVersionId,
-    }, audit);
+    }, audit, extras);
   });
 
   // SERVER container DOCUMENTATION export (md / csv / pdf): clients, tags (destination + firing
   // triggers + referenced variables), triggers, variables, transformations - from the same config
   // snapshot the audit reads. Secret-shaped values are never written to the document.
-  ipcMain.handle('gtm:exportServerDoc', async (e, accountId: unknown, containerId: unknown, workspaceId: unknown, format: unknown, names: unknown) => {
+  ipcMain.handle('gtm:exportServerDoc', async (e, accountId: unknown, containerId: unknown, workspaceId: unknown, format: unknown, names: unknown, web: unknown) => {
     const a = String(accountId ?? '');
     const c = String(containerId ?? '');
     const w = String(workspaceId ?? '');
     const fmt = format === 'pdf' ? 'pdf' : format === 'csv' ? 'csv' : format === 'xlsx' ? 'xlsx' : 'md';
     if (!a || !c || !w) throw new Error('Pick the server container and workspace first.');
     const meta = (names && typeof names === 'object' ? names : {}) as { containerName?: string; publicId?: string; workspaceName?: string };
-    const [snap, liveVersionId] = await Promise.all([
-      withQuotaRetry(() => data.getServerContainerSnapshot(a, c, w)),
-      // Best-effort: the live-version stamp is a caveat, never a blocker.
-      data.getGtmLiveContainerVersionId(a, c).catch(() => null),
-    ]);
     // The audit runs on the SAME snapshot - the doc carries the issues, making it a deliverable.
-    const audit = auditServerContainer(snap);
+    const { snap, liveVersionId, audit, extras } = await serverDocData(a, c, w, web);
     const docMeta = {
       containerName: meta.containerName || `container ${c}`,
       publicId: meta.publicId,
@@ -239,10 +267,10 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     if (canceled || !filePath) return null;
     if (fmt === 'xlsx') {
       const { buildServerDocXlsx } = await import('../google/server-doc-xlsx');
-      return writeReportFile(filePath, await buildServerDocXlsx(snap, docMeta, audit));
+      return writeReportFile(filePath, await buildServerDocXlsx(snap, docMeta, audit, extras));
     }
-    if (fmt === 'csv') return writeReportFile(filePath, serverContainerDocCsv(snap, docMeta, audit));
-    const md = serverContainerDocMarkdown(snap, docMeta, audit);
+    if (fmt === 'csv') return writeReportFile(filePath, serverContainerDocCsv(snap, docMeta, audit, extras));
+    const md = serverContainerDocMarkdown(snap, docMeta, audit, extras);
     if (fmt === 'md') return writeReportFile(filePath, md);
     const pdfWin = new BrowserWindow({
       show: false,

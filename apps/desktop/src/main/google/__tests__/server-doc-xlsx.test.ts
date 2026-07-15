@@ -36,6 +36,28 @@ const snap = (): ServerContainerSnapshot => ({
 
 console.log('\nserver-doc-xlsx:');
 
+test('extras add a Versions sheet and the Variables Used-by column', async () => {
+  const c = snap();
+  c.tags[0] = { ...c.tags[0], parameter: [...(c.tags[0].parameter ?? []), { type: 'template', key: 'userData', value: '{{ed - email}}' }] } as AuditTag;
+  const buf = await buildServerDocXlsx(c, { containerName: 'Acme' }, undefined, {
+    versions: [{ versionId: '3', name: 'CAPI rollout', numTags: 4, numTriggers: 2, numVariables: 6, deleted: false, live: true }],
+    coverage: null,
+  });
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf as unknown as ArrayBuffer);
+  const vs = wb.getWorksheet('Versions')!;
+  assert.ok(vs, 'Versions sheet present when history is available');
+  assert.equal(vs.getRow(2).getCell(1).value, '#3');
+  assert.equal(vs.getRow(2).getCell(6).value, 'LIVE');
+  const vars = wb.getWorksheet('Variables')!;
+  assert.equal(vars.getRow(1).getCell(3).value, 'Used by');
+  assert.equal(vars.getRow(2).getCell(3).value, 'tag "Meta CAPI - Lead"');
+  const noExtras = new ExcelJS.Workbook();
+  await noExtras.xlsx.load((await buildServerDocXlsx(snap(), { containerName: 'Acme' })) as unknown as ArrayBuffer);
+  assert.ok(!noExtras.getWorksheet('Versions'), 'no fabricated Versions sheet when history is unavailable');
+});
+
+
 test('house style: no em/en dash in any workbook cell, even from entity names', async () => {
   const c = snap();
   c.tags[0] = { ...c.tags[0], name: 'Meta CAPI — Lead – v2' };

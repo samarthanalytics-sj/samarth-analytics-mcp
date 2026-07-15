@@ -5,7 +5,8 @@
 
 import ExcelJS from 'exceljs';
 import type { AuditReport, AuditTag, ServerContainerSnapshot } from './gtm-builders';
-import { tagDestination, referencedVars, hasSecret, triggerCondition, buildDestinationRows, type ServerDocMeta } from './server-doc';
+import { tagDestination, referencedVars, hasSecret, triggerCondition, buildDestinationRows, variableUsedBy, webLinkSummaryLines, type ServerDocMeta, type ServerDocExtras } from './server-doc';
+import { configurationScore } from './server-coverage';
 
 const HEADER_FILL = 'FFEEF2F8';
 
@@ -21,7 +22,7 @@ function sheetWithHeader(wb: ExcelJS.Workbook, name: string, columns: Array<{ he
   return ws;
 }
 
-export async function buildServerDocXlsx(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport): Promise<Buffer> {
+export async function buildServerDocXlsx(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport, extras?: ServerDocExtras): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   const trigById = new Map((s.triggers ?? []).map((t) => [t.triggerId, t]));
   const firesOn = (t: AuditTag): string =>
@@ -42,6 +43,8 @@ export async function buildServerDocXlsx(s: ServerContainerSnapshot, meta: Serve
   kv('Triggers', String((s.triggers ?? []).length));
   kv('Variables', String((s.variables ?? []).length));
   kv('Transformations', String(s.transformations.length));
+  if (audit) kv('Configuration score', `${configurationScore(audit.summary)}/100 (100 - 25 per critical - 10 per high - 3 per medium - 1 per low)`);
+  for (const l of extras?.coverage ? webLinkSummaryLines(extras.coverage) : []) kv('Web link', l);
   if (meta.liveVersionId) kv('Live version', `${meta.liveVersionId} (this document describes the workspace DRAFT, which may differ)`);
   kv('Note', 'Configuration-level documentation from the GTM API (no runtime data). Credential values are never included.');
 
@@ -98,14 +101,29 @@ export async function buildServerDocXlsx(s: ServerContainerSnapshot, meta: Serve
   const vars = sheetWithHeader(wb, 'Variables', [
     { header: 'Variable', key: 'name', width: 44 },
     { header: 'Type', key: 'type', width: 20 },
+    { header: 'Used by', key: 'usedBy', width: 60 },
   ]);
-  for (const v of s.variables ?? []) vars.addRow({ name: v.name, type: v.type });
+  for (const v of s.variables ?? []) vars.addRow({ name: v.name, type: v.type, usedBy: variableUsedBy(s, v.name).join(', ') });
 
   const xf = sheetWithHeader(wb, 'Transformations', [
     { header: 'Transformation', key: 'name', width: 44 },
     { header: 'Type', key: 'type', width: 24 },
   ]);
   for (const x of s.transformations) xf.addRow({ name: x.name, type: x.type });
+
+  if (extras?.versions?.length) {
+    const vs = sheetWithHeader(wb, 'Versions', [
+      { header: 'Version', key: 'id', width: 12 },
+      { header: 'Name', key: 'name', width: 44 },
+      { header: 'Tags', key: 'tags', width: 10 },
+      { header: 'Triggers', key: 'triggers', width: 10 },
+      { header: 'Variables', key: 'variables', width: 10 },
+      { header: 'Notes', key: 'notes', width: 24 },
+    ]);
+    for (const v of extras.versions) {
+      vs.addRow({ id: `#${v.versionId}`, name: v.name, tags: v.numTags, triggers: v.numTriggers, variables: v.numVariables, notes: [v.live ? 'LIVE' : '', v.deleted ? 'deleted' : ''].filter(Boolean).join(' / ') });
+    }
+  }
 
   plainDashesWorkbook(wb);
   return Buffer.from(await wb.xlsx.writeBuffer());

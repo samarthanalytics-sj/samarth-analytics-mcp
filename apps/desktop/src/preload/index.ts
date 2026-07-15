@@ -345,10 +345,10 @@ const api = {
       ipcRenderer.invoke('gtm:createServerTagForEvent', accountId, containerId, workspaceId, templateTagId, eventName, tagName),
     exportServerCoverage: (format: 'csv' | 'pdf', coverage: ServerCoverageView, names: { webName?: string; serverName?: string; webWorkspace?: string; serverWorkspace?: string }): Promise<string | null> =>
       ipcRenderer.invoke('gtm:exportServerCoverage', format, coverage, names),
-    exportServerDoc: (accountId: string, containerId: string, workspaceId: string, format: 'md' | 'csv' | 'pdf' | 'xlsx', names: { containerName?: string; publicId?: string; workspaceName?: string }): Promise<string | null> =>
-      ipcRenderer.invoke('gtm:exportServerDoc', accountId, containerId, workspaceId, format, names),
-    serverDoc: (accountId: string, containerId: string, workspaceId: string, names: { containerName?: string; publicId?: string; workspaceName?: string }): Promise<ServerDocView> =>
-      ipcRenderer.invoke('gtm:serverDoc', accountId, containerId, workspaceId, names),
+    exportServerDoc: (accountId: string, containerId: string, workspaceId: string, format: 'md' | 'csv' | 'pdf' | 'xlsx', names: { containerName?: string; publicId?: string; workspaceName?: string }, web?: { containerId: string; workspaceId: string }): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportServerDoc', accountId, containerId, workspaceId, format, names, web),
+    serverDoc: (accountId: string, containerId: string, workspaceId: string, names: { containerName?: string; publicId?: string; workspaceName?: string }, web?: { containerId: string; workspaceId: string }): Promise<ServerDocView> =>
+      ipcRenderer.invoke('gtm:serverDoc', accountId, containerId, workspaceId, names, web),
     audit: (accountId: string, containerId: string, workspaceId: string): Promise<AuditReportView> =>
       ipcRenderer.invoke('gtm:audit', accountId, containerId, workspaceId),
     // The container's EXISTING GA4/base tags translated into verify-engine inputs, so

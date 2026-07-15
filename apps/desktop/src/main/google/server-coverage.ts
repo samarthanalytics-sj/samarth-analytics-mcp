@@ -109,6 +109,12 @@ const CAPI_TOOL: Record<Exclude<CoveragePlatform, 'ga4'>, string> = {
   pinterest: 'create_pinterest_capi_server_tag',
 };
 
+/** Configuration subscore from audit severity counts - the STATED formula (100 - 25/critical -
+ *  10/high - 3/medium - 1/low, floored at 0). Shared with the documentation header. PURE. */
+export function configurationScore(sm: { critical: number; high: number; medium: number; low: number }): number {
+  return Math.max(0, 100 - 25 * sm.critical - 10 * sm.high - 3 * sm.medium - 1 * sm.low);
+}
+
 export function buildServerCoverage(
   web: ContainerSnapshot,
   server: ServerContainerSnapshot,
@@ -228,10 +234,7 @@ export function buildServerCoverage(
   const notMatchable = rows.filter((r) => r.status === 'not_matchable').length;
   const denom = covered + missing;
   const coveragePct = denom > 0 ? Math.round((covered / denom) * 1000) / 10 : null;
-  const configuration = Math.max(
-    0,
-    100 - 25 * serverAuditSummary.critical - 10 * serverAuditSummary.high - 3 * serverAuditSummary.medium - 1 * serverAuditSummary.low,
-  );
+  const configuration = configurationScore(serverAuditSummary);
   const parts = [configuration, ...(coveragePct == null ? [] : [coveragePct])];
   const overall = Math.round(parts.reduce((a, b) => a + b, 0) / parts.length);
 

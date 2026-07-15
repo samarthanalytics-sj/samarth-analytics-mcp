@@ -5,6 +5,27 @@
 
 import type { AuditReport, AuditTag, AuditTrigger, ServerContainerSnapshot } from './gtm-builders';
 import { serverTagParam, plainDashes } from './gtm-builders';
+import { configurationScore, type ServerCoverageReport } from './server-coverage';
+
+/** A published container version row for the doc's Versions section (header list only - the
+ *  GTM version list carries NO publish dates; we never fabricate them). */
+export interface ServerDocVersionRow {
+  versionId: string;
+  name: string;
+  numTags: number;
+  numTriggers: number;
+  numVariables: number;
+  deleted: boolean;
+  /** True when this is the container's LIVE (published) version. */
+  live: boolean;
+}
+
+/** Optional doc enrichments fetched by the IPC layer: version history and the web<->server
+ *  coverage link (only when a web container was provided - never guessed). */
+export interface ServerDocExtras {
+  versions?: ServerDocVersionRow[] | null;
+  coverage?: ServerCoverageReport | null;
+}
 
 export interface ServerDocMeta {
   containerName: string;
@@ -32,6 +53,47 @@ export function referencedVars(t: AuditTag): string[] {
   const out = new Set<string>();
   for (const m of JSON.stringify(t.parameter ?? []).matchAll(/\{\{([^}]+)\}\}/g)) out.add(m[1].trim());
   return [...out].sort();
+}
+
+/** Which entities reference {{name}} - the inverse of referencedVars, for the Variables table. */
+export function variableUsedBy(s: ServerContainerSnapshot, name: string): string[] {
+  const token = `{{${name}}}`;
+  const has = (parameter: unknown[] | undefined): boolean => JSON.stringify(parameter ?? []).includes(token);
+  const out: string[] = [];
+  for (const t of s.tags) if (has(t.parameter)) out.push(`tag "${t.name}"`);
+  for (const c of s.clients) if (has((c as { parameter?: unknown[] }).parameter)) out.push(`client "${c.name}"`);
+  for (const x of s.transformations) if (has((x as { parameter?: unknown[] }).parameter)) out.push(`transformation "${x.name}"`);
+  for (const v of s.variables ?? []) if (v.name !== name && has((v as { parameter?: unknown[] }).parameter)) out.push(`variable "${v.name}"`);
+  return out;
+}
+
+/** The web<->server linkage summarized as plain sentences (shared by MD/CSV/XLSX and the
+ *  on-screen view so every surface says the same thing). PURE. */
+export function webLinkSummaryLines(cov: ServerCoverageReport): string[] {
+  const L: string[] = [];
+  const w = cov.webWiring;
+  L.push(
+    w.status === 'wired'
+      ? `Web Google tag points at this server (server_container_url matches ${w.serverUrls.join(', ') || w.webUrl}).`
+      : w.status === 'url_mismatch'
+        ? `MISMATCH: the web Google tag points at ${w.webUrl}, but this container's tagging URL is ${w.serverUrls.join(', ') || '(unset)'}.`
+        : w.status === 'not_wired'
+          ? 'The web Google tag has NO server_container_url - the web container sends nothing to this server yet.'
+          : 'Web wiring unknown - no web Google tag found to inspect.',
+  );
+  if (cov.ga4.idsMatch === true) L.push(`Measurement IDs match (${cov.ga4.webMeasurementIds.join(', ')}).`);
+  else if (cov.ga4.idsMatch === false)
+    L.push(`Measurement ID MISMATCH: web sends ${cov.ga4.webMeasurementIds.join(', ')}, the server relay forwards ${cov.ga4.serverMeasurementIds.join(', ')} - events land in a different property.`);
+  L.push(
+    cov.summary.coveragePct == null
+      ? 'Coverage: no matchable web events to compare.'
+      : `Coverage: ${cov.summary.covered} of ${cov.summary.covered + cov.summary.missing} web events covered (${cov.summary.coveragePct}%)${cov.summary.notMatchable ? `; ${cov.summary.notMatchable} not matchable from config (never guessed)` : ''}.`,
+  );
+  const miss = cov.rows.filter((r) => r.status === 'missing').slice(0, 10);
+  if (miss.length)
+    L.push(`Missing server-side: ${miss.map((r) => `${r.platform} ${r.event}`).join(', ')}${cov.summary.missing > miss.length ? ` and ${cov.summary.missing - miss.length} more` : ''}.`);
+  L.push(`Score: configuration ${cov.score.configuration}${cov.score.coverage == null ? '' : ` / coverage ${cov.score.coverage}`} / overall ${cov.score.overall} out of 100.`);
+  return L;
 }
 
 /** Whether the tag carries any secret-shaped parameter (documented as present, value never shown). */
@@ -121,18 +183,21 @@ export function buildServerFlowLines(s: ServerContainerSnapshot): string[] {
  *  shared/ipc.ts). Built from the SAME helpers the MD/CSV/XLSX exports use - destination,
  *  fires-on, referenced variables, flow lines - so the page and the files can't diverge.
  *  Secret-shaped values are never included; only the pinned presence note. PURE. */
-export function buildServerDocView(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport): {
+export function buildServerDocView(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport, extras?: ServerDocExtras): {
   meta: { containerName: string; publicId?: string; workspaceName?: string; generatedAt: string; liveVersionId: string | null };
-  overview: { taggingServerUrls: string[]; counts: { clients: number; tags: number; triggers: number; variables: number; transformations: number } };
+  overview: { taggingServerUrls: string[]; counts: { clients: number; tags: number; triggers: number; variables: number; transformations: number }; configScore: number | null };
   findings: Array<{ severity: string; where: string; message: string; recommendation: string }>;
   destinations: Array<{ destination: string; types: string; tags: number; paused: number }>;
   flowLines: string[];
   clients: Array<{ name: string; type: string }>;
   tags: Array<{ name: string; type: string; destination: string; firesOn: string; vars: string; notes: string }>;
   triggers: Array<{ name: string; type: string; condition: string }>;
-  variables: Array<{ name: string; type: string }>;
+  variables: Array<{ name: string; type: string; usedBy: string }>;
   transformations: Array<{ name: string; type: string }>;
+  versions: Array<{ versionId: string; name: string; tags: number; triggers: number; variables: number; live: boolean; deleted: boolean }>;
+  webLink: { wiring: 'wired' | 'not_wired' | 'url_mismatch' | 'unknown'; idsMatch: boolean | null; coveragePct: number | null; score: { configuration: number; coverage: number | null; overall: number }; lines: string[] } | null;
 } {
+  const cov = extras?.coverage ?? null;
   const trigById = new Map((s.triggers ?? []).map((t) => [t.triggerId, t]));
   const firesOn = (t: AuditTag): string =>
     (t.firingTriggerId ?? []).map((id) => trigById.get(id)?.name ?? `#${id}`).join(', ') || '(none - never fires)';
@@ -153,6 +218,7 @@ export function buildServerDocView(s: ServerContainerSnapshot, meta: ServerDocMe
         variables: (s.variables ?? []).length,
         transformations: s.transformations.length,
       },
+      configScore: audit ? configurationScore(audit.summary) : null,
     },
     findings: (audit?.findings ?? []).map((f) => ({
       severity: f.severity,
@@ -172,12 +238,16 @@ export function buildServerDocView(s: ServerContainerSnapshot, meta: ServerDocMe
       notes: [t.paused ? 'PAUSED' : '', hasSecret(t) ? 'credential configured (value not shown)' : ''].filter(Boolean).join('; '),
     })),
     triggers: (s.triggers ?? []).map((tr) => ({ name: tr.name, type: tr.type, condition: triggerCondition(tr) })),
-    variables: (s.variables ?? []).map((v) => ({ name: v.name, type: v.type })),
+    variables: (s.variables ?? []).map((v) => ({ name: v.name, type: v.type, usedBy: variableUsedBy(s, v.name).join(', ') })),
     transformations: s.transformations.map((x) => ({ name: x.name, type: x.type })),
+    versions: (extras?.versions ?? []).map((v) => ({ versionId: v.versionId, name: v.name, tags: v.numTags, triggers: v.numTriggers, variables: v.numVariables, live: v.live, deleted: v.deleted })),
+    webLink: cov
+      ? { wiring: cov.webWiring.status, idsMatch: cov.ga4.idsMatch, coveragePct: cov.summary.coveragePct, score: cov.score, lines: webLinkSummaryLines(cov) }
+      : null,
   };
 }
 
-export function serverContainerDocMarkdown(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport): string {
+export function serverContainerDocMarkdown(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport, extras?: ServerDocExtras): string {
   const trigById = new Map((s.triggers ?? []).map((t) => [t.triggerId, t]));
   const firesOn = (t: AuditTag): string =>
     (t.firingTriggerId ?? []).map((id) => trigById.get(id)?.name ?? `#${id}`).join(', ') || '(none - never fires)';
@@ -194,6 +264,7 @@ export function serverContainerDocMarkdown(s: ServerContainerSnapshot, meta: Ser
   lines.push('');
   lines.push(`- Tagging server URL(s): ${s.taggingServerUrls.length ? s.taggingServerUrls.join(', ') : '(not set - host not wired yet)'}`);
   lines.push(`- Clients: ${s.clients.length} · Tags: ${s.tags.length} · Triggers: ${(s.triggers ?? []).length} · Variables: ${(s.variables ?? []).length} · Transformations: ${s.transformations.length}`);
+  if (audit) lines.push(`- Configuration score: ${configurationScore(audit.summary)}/100 (100 - 25 per critical - 10 per high - 3 per medium - 1 per low)`);
   lines.push('');
   if (audit) {
     const sm = audit.summary;
@@ -230,6 +301,24 @@ export function serverContainerDocMarkdown(s: ServerContainerSnapshot, meta: Ser
   lines.push(...buildServerFlowLines(s));
   lines.push('```');
   lines.push('');
+  if (extras?.coverage) {
+    lines.push('## Web link (web container <-> this server)');
+    lines.push('');
+    for (const l of webLinkSummaryLines(extras.coverage)) lines.push(`- ${l}`);
+    lines.push('');
+  }
+  if (extras?.versions?.length) {
+    lines.push('## Versions');
+    lines.push('');
+    lines.push('Version history from the GTM API (newest first; the version list carries no publish dates).');
+    lines.push('');
+    lines.push('| Version | Name | Tags | Triggers | Variables | Notes |');
+    lines.push('| --- | --- | --- | --- | --- | --- |');
+    for (const v of extras.versions) {
+      lines.push(`| #${v.versionId} | ${mdCell(v.name)} | ${v.numTags} | ${v.numTriggers} | ${v.numVariables} | ${[v.live ? 'LIVE' : '', v.deleted ? 'deleted' : ''].filter(Boolean).join(' · ')} |`);
+    }
+    lines.push('');
+  }
   lines.push('## Clients (what claims incoming requests)');
   lines.push('');
   if (s.clients.length) {
@@ -266,9 +355,9 @@ export function serverContainerDocMarkdown(s: ServerContainerSnapshot, meta: Ser
   lines.push('## Variables');
   lines.push('');
   if ((s.variables ?? []).length) {
-    lines.push('| Variable | Type |');
-    lines.push('| --- | --- |');
-    for (const v of s.variables ?? []) lines.push(`| ${mdCell(v.name)} | ${mdCell(v.type)} |`);
+    lines.push('| Variable | Type | Used by |');
+    lines.push('| --- | --- | --- |');
+    for (const v of s.variables ?? []) lines.push(`| ${mdCell(v.name)} | ${mdCell(v.type)} | ${mdCell(variableUsedBy(s, v.name).join(', '))} |`);
   } else {
     lines.push('None.');
   }
@@ -291,12 +380,14 @@ const csvCell = (v: unknown): string => {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
-export function serverContainerDocCsv(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport): string {
+export function serverContainerDocCsv(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport, extras?: ServerDocExtras): string {
   const trigById = new Map((s.triggers ?? []).map((t) => [t.triggerId, t]));
   const lines: string[] = [];
   lines.push(['Server container documentation', meta.containerName, meta.publicId ?? ''].map(csvCell).join(','));
   if (meta.workspaceName) lines.push(['Workspace', meta.workspaceName].map(csvCell).join(','));
   lines.push(['Tagging server URL(s)', s.taggingServerUrls.join(' ')].map(csvCell).join(','));
+  if (audit) lines.push(['Configuration score', `${configurationScore(audit.summary)}/100`].map(csvCell).join(','));
+  for (const l of extras?.coverage ? webLinkSummaryLines(extras.coverage) : []) lines.push(['Web link', l].map(csvCell).join(','));
   lines.push('');
   lines.push(['Kind', 'Name', 'Type', 'Destination', 'Fires on', 'Uses variables', 'Notes'].join(','));
   for (const f of audit?.findings ?? []) {
@@ -306,6 +397,9 @@ export function serverContainerDocCsv(s: ServerContainerSnapshot, meta: ServerDo
   for (const d of buildDestinationRows(s)) {
     lines.push(['Destination', d.destination, d.types, '', '', '', `${d.tags} tag(s)${d.paused ? `, ${d.paused} paused` : ''}`].map(csvCell).join(','));
   }
+  for (const v of extras?.versions ?? []) {
+    lines.push(['Version', v.name, `#${v.versionId}`, '', '', '', [`${v.numTags} tags`, `${v.numTriggers} triggers`, `${v.numVariables} variables`, v.live ? 'LIVE' : '', v.deleted ? 'deleted' : ''].filter(Boolean).join('; ')].map(csvCell).join(','));
+  }
   for (const c of s.clients) lines.push(['Client', c.name, c.type, '', '', '', ''].map(csvCell).join(','));
   for (const t of s.tags) {
     const firesOn = (t.firingTriggerId ?? []).map((id) => trigById.get(id)?.name ?? `#${id}`).join('; ');
@@ -313,7 +407,10 @@ export function serverContainerDocCsv(s: ServerContainerSnapshot, meta: ServerDo
     lines.push(['Tag', t.name, t.type, tagDestination(t), firesOn, referencedVars(t).join('; '), notes].map(csvCell).join(','));
   }
   for (const tr of s.triggers ?? []) lines.push(['Trigger', tr.name, tr.type, '', triggerCondition(tr), '', ''].map(csvCell).join(','));
-  for (const v of s.variables ?? []) lines.push(['Variable', v.name, v.type, '', '', '', ''].map(csvCell).join(','));
+  for (const v of s.variables ?? []) {
+    const ub = variableUsedBy(s, v.name);
+    lines.push(['Variable', v.name, v.type, '', '', '', ub.length ? `used by: ${ub.join('; ')}` : 'no references in this workspace'].map(csvCell).join(','));
+  }
   for (const x of s.transformations) lines.push(['Transformation', x.name, x.type, '', '', '', ''].map(csvCell).join(','));
   return plainDashes(lines.join('\r\n') + '\r\n');
 }
