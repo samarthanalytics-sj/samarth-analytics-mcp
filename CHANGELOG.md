@@ -1,3 +1,9 @@
+## [1.335.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.334.0...v1.335.0) (2026-07-15)
+
+### Features
+
+* **desktop:** one-click server container creation - complete-or-create + automatic verification ([f73136f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f73136f73eb619fa543ef9a5461b60d845ec2ddb))
+
 ## [1.334.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.333.1...v1.334.0) (2026-07-15)
 
 ### Features
