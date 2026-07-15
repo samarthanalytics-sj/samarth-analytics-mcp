@@ -1557,6 +1557,72 @@ export class GoogleDataService {
     return { transformationId: res.data.transformationId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
+  /** Create a server tag for ONE event by CLONING an existing same-platform server tag: the
+   *  template's type + parameters (credentials, variable references) carry over unchanged; only the
+   *  firing trigger is new (a Custom Event trigger for the event, reused when an identical one
+   *  already exists). DRAFT-ONLY - workspace change, nothing published. The caller confirms first.
+   *  NOTE: any outgoing event-name parameter still holds the template's value - the UI tells the
+   *  user to review it in GTM before publishing. */
+  async createServerTagForEvent(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    templateTagId: string,
+    eventName: string,
+    tagName: string
+  ): Promise<{ tagId: string; name: string; triggerName: string; triggerReused: boolean }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const tpl = (await gtm.accounts.containers.workspaces.tags.get({ path: `${parent}/tags/${templateTagId}` })).data;
+    if (!tpl.type) throw new Error('Template tag could not be read.');
+    // Reuse an existing trigger whose only event condition is {{_event}} equals <eventName>.
+    const existing = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.triggers.list({ parent, pageToken }),
+      (r) => r.data.trigger,
+      (r) => r.data.nextPageToken
+    );
+    const matches = (tr: (typeof existing)[number]): boolean => {
+      const fs = tr.customEventFilter ?? [];
+      if (tr.type !== 'customEvent' || fs.length !== 1) return false;
+      const params = fs[0].parameter ?? [];
+      const arg0 = String(params.find((p) => p.key === 'arg0')?.value ?? '');
+      const arg1 = String(params.find((p) => p.key === 'arg1')?.value ?? '');
+      return arg0 === '{{_event}}' && arg1 === eventName && String(fs[0].type ?? '').toLowerCase() === 'equals';
+    };
+    const reuse = existing.find(matches);
+    let triggerId = reuse?.triggerId ?? '';
+    let triggerName = reuse?.name ?? '';
+    if (!triggerId) {
+      const baseName = `ce - ${eventName}`;
+      const taken = new Set(existing.map((t) => t.name ?? ''));
+      triggerName = taken.has(baseName) ? `${baseName} (server)` : baseName;
+      const created = await gtm.accounts.containers.workspaces.triggers.create({
+        parent,
+        requestBody: {
+          name: triggerName,
+          type: 'customEvent',
+          customEventFilter: [
+            { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: eventName }] },
+          ],
+        },
+      });
+      triggerId = created.data.triggerId ?? '';
+      if (!triggerId) throw new Error('Trigger creation returned no id.');
+    }
+    const res = await gtm.accounts.containers.workspaces.tags.create({
+      parent,
+      requestBody: {
+        name: tagName,
+        type: tpl.type,
+        parameter: tpl.parameter ?? [],
+        firingTriggerId: [triggerId],
+        ...(tpl.consentSettings ? { consentSettings: tpl.consentSettings } : {}),
+      },
+    });
+    return { tagId: res.data.tagId ?? '', name: res.data.name ?? tagName, triggerName, triggerReused: Boolean(reuse) };
+  }
+
   /** Snapshot a SERVER container for auditServerContainer: its tagging server URL(s),
    *  clients, server tags (as AuditTags), and transformations. */
   async getServerContainerSnapshot(

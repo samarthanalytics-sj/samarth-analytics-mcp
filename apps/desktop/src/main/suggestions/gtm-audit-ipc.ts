@@ -83,6 +83,19 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     return buildServerCoverage(webSnap, srvSnap, auditServerContainer(srvSnap).summary);
   });
 
+  // One-click coverage fix (WRITE, draft-only, confirmed in the UI): clone an existing same-platform
+  // server tag for a missing event - template credentials carry over, only the trigger is new.
+  ipcMain.handle('gtm:createServerTagForEvent', (_e, accountId: unknown, containerId: unknown, workspaceId: unknown, templateTagId: unknown, eventName: unknown, tagName: unknown) => {
+    const a = String(accountId ?? '');
+    const c = String(containerId ?? '');
+    const w = String(workspaceId ?? '');
+    const t = String(templateTagId ?? '');
+    const ev = String(eventName ?? '').trim();
+    const name = String(tagName ?? '').trim();
+    if (!a || !c || !w || !t || !ev || !name) throw new Error('Missing event or template for the server-tag create.');
+    return withQuotaRetry(() => data.createServerTagForEvent(a, c, w, t, ev, name));
+  });
+
   // SERVER container DOCUMENTATION export (md / csv / pdf): clients, tags (destination + firing
   // triggers + referenced variables), triggers, variables, transformations - from the same config
   // snapshot the audit reads. Secret-shaped values are never written to the document.

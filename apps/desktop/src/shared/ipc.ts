@@ -1001,7 +1001,7 @@ export interface AuditFindingView {
 }
 /** Web GTM <-> Server GTM coverage comparison (config-level). Mirrors server-coverage.ts. */
 export interface ServerCoverageView {
-  rows: Array<{ platform: string; event: string; webTag: string; status: 'covered' | 'missing' | 'not_matchable'; by?: string; recommendation?: string }>;
+  rows: Array<{ platform: string; event: string; webTag: string; status: 'covered' | 'missing' | 'not_matchable'; by?: string; recommendation?: string; template?: { tagId: string; name: string } }>;
   unusedServer: Array<{ tag: string; platform: string; event: string }>;
   ga4: { client: boolean; relay: boolean; webMeasurementIds: string[]; serverMeasurementIds: string[]; idsMatch: boolean | null };
   webWiring: { status: 'wired' | 'not_wired' | 'url_mismatch' | 'unknown'; webUrl: string; serverUrls: string[] };

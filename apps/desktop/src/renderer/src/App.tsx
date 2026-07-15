@@ -7145,6 +7145,20 @@ function ServerAuditSection({ accountId, onError }: { accountId: string; onError
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [webContainerId]);
 
+  // One-click create for a MISSING coverage row (clone the template server tag; draft-only).
+  const [rowCreate, setRowCreate] = useState<Record<number, { state: 'idle' | 'confirm' | 'creating' | 'done' | 'err'; msg?: string }>>({});
+  async function createFromRow(i: number, row: NonNullable<ServerCoverageView['rows'][number]>): Promise<void> {
+    if (!row.template || !containerId || !workspaceId) return;
+    setRowCreate((m) => ({ ...m, [i]: { state: 'creating' } }));
+    try {
+      const platformLabel = row.platform === 'meta' ? 'Meta' : row.platform === 'tiktok' ? 'TikTok' : row.platform === 'linkedin' ? 'LinkedIn' : row.platform === 'pinterest' ? 'Pinterest' : row.platform;
+      const r = await window.desktop.gtm.createServerTagForEvent(accountId, containerId, workspaceId, row.template.tagId, row.event, `${platformLabel} CAPI - ${row.event}`);
+      setRowCreate((m) => ({ ...m, [i]: { state: 'done', msg: `✓ Created draft "${r.name}" on trigger "${r.triggerName}"${r.triggerReused ? ' (reused)' : ''} - review its outgoing event-name field in GTM, then publish.` } }));
+    } catch (e) {
+      setRowCreate((m) => ({ ...m, [i]: { state: 'err', msg: e instanceof Error ? e.message : String(e) } }));
+    }
+  }
+
   async function runCoverage(): Promise<void> {
     if (!containerId || !workspaceId || !webContainerId || !webWorkspaceId || covRunning) return;
     onError('');
@@ -7368,7 +7382,30 @@ function ServerAuditSection({ accountId, onError }: { accountId: string; onError
                         <td style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', fontWeight: 700, color: r.status === 'covered' ? 'var(--c-green)' : r.status === 'missing' ? 'var(--c-red)' : 'var(--text-faint)' }}>
                           {r.status === 'covered' ? '✓ Covered' : r.status === 'missing' ? '✗ Missing' : '— Not matchable'}
                         </td>
-                        <td style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>{r.by ?? r.recommendation ?? ''}</td>
+                        <td style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                          {r.by ?? r.recommendation ?? ''}
+                          {r.status === 'missing' && r.template && (
+                            <div style={{ marginTop: 4 }}>
+                              {(rowCreate[i]?.state ?? 'idle') === 'idle' && (
+                                <button style={{ ...styles.ghostBtn, color: 'var(--c-blue)' }} onClick={() => setRowCreate((m) => ({ ...m, [i]: { state: 'confirm' } }))}>
+                                  ＋ Create from “{r.template.name}”
+                                </button>
+                              )}
+                              {rowCreate[i]?.state === 'confirm' && (
+                                <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                                  <span style={{ color: 'var(--c-amber)', fontSize: 12 }}>
+                                    Create DRAFT server tag for “{r.event}” cloning “{r.template.name}” (credentials carry over; nothing published)?
+                                  </span>
+                                  <button style={styles.primaryBtn} onClick={() => void createFromRow(i, r)}>Confirm</button>
+                                  <button style={styles.ghostBtn} onClick={() => setRowCreate((m) => ({ ...m, [i]: { state: 'idle' } }))}>Cancel</button>
+                                </span>
+                              )}
+                              {rowCreate[i]?.state === 'creating' && <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>Creating draft…</span>}
+                              {rowCreate[i]?.state === 'done' && <span style={{ fontSize: 12, color: 'var(--c-green)' }}>{rowCreate[i]!.msg}</span>}
+                              {rowCreate[i]?.state === 'err' && <span style={{ fontSize: 12, color: 'var(--c-red)' }}>{rowCreate[i]!.msg}</span>}
+                            </div>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
