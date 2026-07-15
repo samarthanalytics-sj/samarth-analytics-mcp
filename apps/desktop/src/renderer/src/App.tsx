@@ -25,6 +25,8 @@ import type {
   GtmContext,
   GtmWorkspaceView,
   ServerCoverageView,
+  ServerPlanView,
+  ServerPlanApplyResultView,
   LlmProvider,
   NetworkLocationView,
   NetworkConnectionType,
@@ -7026,6 +7028,64 @@ function ServerContainerPanel({
 
   const completing = serverList.find((c) => c.containerId === targetId) ?? null;
 
+  // ── Audit-first PLAN flow: plan -> select -> collect values -> apply -> summary ──
+  const [plan, setPlan] = useState<ServerPlanView | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [sel, setSel] = useState<Record<string, boolean>>({});
+  const [vals, setVals] = useState<Record<string, string>>({});
+  const [applying, setApplying] = useState(false);
+  const [applyConfirm, setApplyConfirm] = useState(false);
+  const [summary, setSummary] = useState<ServerPlanApplyResultView | null>(null);
+
+  async function loadPlan(): Promise<void> {
+    if (!ready || !ctx || planLoading) return;
+    onError('');
+    setPlanLoading(true);
+    setPlan(null);
+    setSummary(null);
+    setApplyConfirm(false);
+    try {
+      const pl = await window.desktop.gtm.planServer(ctx.accountId!, ctx.containerId!, targetId || undefined);
+      setPlan(pl);
+      const defaults: Record<string, boolean> = {};
+      for (const it of pl.items) if (it.status === 'missing' && it.executable) defaults[it.id] = it.defaultSelected;
+      setSel(defaults);
+      setVals((v) => ({ ...v, serverUrl: v.serverUrl || pl.detected.serverUrl || pl.detected.webWiredUrl || serverUrl.trim() || '' }));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPlanLoading(false);
+    }
+  }
+
+  async function applyPlan(): Promise<void> {
+    if (!ready || !ctx || !plan || applying) return;
+    const selected = Object.keys(sel).filter((k) => sel[k]);
+    if (!selected.length) return;
+    onError('');
+    setApplying(true);
+    setApplyConfirm(false);
+    setSummary(null);
+    setPostAudit(null);
+    try {
+      const r = await window.desktop.gtm.applyServerPlan({
+        accountId: ctx.accountId!,
+        webContainerId: ctx.containerId!,
+        ...(targetId ? { serverContainerId: targetId } : { newName: name.trim() }),
+        selected,
+        values: { ...vals, serverUrl: (vals.serverUrl ?? serverUrl).trim() },
+      });
+      setSummary(r);
+      try {
+        setPostAudit(await window.desktop.gtm.auditServer(ctx.accountId!, r.serverContainer.containerId, r.workspaceId));
+      } catch { /* best-effort */ }
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApplying(false);
+    }
+  }
+
   async function create(): Promise<void> {
     if (!ready || !ctx || running || (!targetId && !name.trim())) return;
     onError('');
@@ -7128,6 +7188,134 @@ function ServerContainerPanel({
           <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>
             Leave the URL blank to create the container now and wire it later (after you deploy the host). You can set it any time from the chat with set_server_container_tagging_url.
           </div>
+
+          {/* ── Audit-first plan: see everything, pick exactly what to create, then apply ── */}
+          <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 700, fontSize: 13.5 }}>Audit first, then apply selected fixes</span>
+              <span style={{ flex: 1 }} />
+              <button style={{ ...styles.ghostBtn, color: 'var(--c-blue)' }} disabled={planLoading || (!targetId && !name.trim())} onClick={() => void loadPlan()}>
+                {planLoading ? 'Auditing…' : plan ? '↻ Re-plan' : '▶ Audit & plan'}
+              </button>
+            </div>
+            {plan && (() => {
+              const missing = plan.items.filter((i) => i.status === 'missing');
+              const existing = plan.items.filter((i) => i.status === 'existing');
+              const byId = new Map(plan.items.map((i) => [i.id, i]));
+              const selectedIds = Object.keys(sel).filter((k) => sel[k]);
+              const value = (k: string): string => (k === 'serverUrl' ? (vals.serverUrl ?? serverUrl) : vals[k] ?? '');
+              const missingValueKeys = [...new Set(selectedIds.flatMap((id) => byId.get(id)?.requires ?? []))];
+              const notReady = selectedIds
+                .map((id) => byId.get(id)!)
+                .filter((i) => i && (i.requires.some((k) => !value(k).trim()) || i.dependsOn.some((d) => byId.get(d)?.status === 'missing' && !sel[d])));
+              const anyMeta = plan.items.some((i) => i.id.startsWith('meta_capi:') && i.status === 'missing');
+              const anyTikTok = plan.items.some((i) => i.id.startsWith('tiktok_capi:') && i.status === 'missing');
+              const CAT_COLOR: Record<string, string> = { critical: 'var(--c-red)', high: 'var(--c-red)', medium: 'var(--c-amber)', low: 'var(--text-muted)' };
+              const setAll = (on: boolean): void => {
+                const next: Record<string, boolean> = {};
+                for (const it of missing) if (it.executable) next[it.id] = on;
+                setSel(next);
+              };
+              return (
+                <>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+                    <span style={{ color: 'var(--text-muted)' }}>{missing.length} fix(es) available · {existing.length} piece(s) already in place</span>
+                    <span style={{ flex: 1 }} />
+                    <button style={styles.ghostBtn} onClick={() => setAll(true)}>Select all</button>
+                    <button style={styles.ghostBtn} onClick={() => setAll(false)}>Deselect all</button>
+                  </div>
+                  {(['critical', 'high', 'medium', 'low'] as const).map((cat) => {
+                    const items = missing.filter((i) => i.category === cat);
+                    if (!items.length) return null;
+                    return (
+                      <div key={cat} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: CAT_COLOR[cat] }}>{cat}</div>
+                        {items.map((it) => (
+                          <label key={it.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5, cursor: it.executable ? 'pointer' : 'default', opacity: it.executable ? 1 : 0.75 }}>
+                            <input type="checkbox" style={{ marginTop: 2 }} disabled={!it.executable} checked={Boolean(sel[it.id])} onChange={(e) => setSel((m) => ({ ...m, [it.id]: e.target.checked }))} />
+                            <span style={{ lineHeight: 1.45 }}>
+                              <b>{it.name}</b> <span style={{ fontSize: 10.5, color: 'var(--text-faint)', textTransform: 'uppercase' }}>{it.kind}</span>
+                              <br />
+                              <span style={{ color: 'var(--text-muted)' }}>{it.description}</span>
+                              {it.dependsOn.length > 0 && (
+                                <span style={{ color: 'var(--text-faint)' }}> Requires: {it.dependsOn.map((d) => byId.get(d)?.name ?? d).join(', ')}.</span>
+                              )}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    );
+                  })}
+                  {existing.length > 0 && (
+                    <div style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+                      Already in place: {existing.map((i) => i.name).join(' · ')}
+                    </div>
+                  )}
+                  {(missingValueKeys.length > 0 || anyMeta || anyTikTok) && (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', borderTop: '1px dashed var(--border)', paddingTop: 10 }}>
+                      {missingValueKeys.includes('measurementId') && (
+                        <input style={{ ...styles.input, flex: '1 1 170px' }} placeholder="GA4 Measurement ID (G-…)" value={vals.measurementId ?? ''} onChange={(e) => setVals((v) => ({ ...v, measurementId: e.target.value }))} />
+                      )}
+                      {(missingValueKeys.includes('serverUrl') || plan.detected.serverUrl == null) && (
+                        <input style={{ ...styles.input, flex: '1 1 220px' }} placeholder="https://sgtm.example.com" value={vals.serverUrl ?? serverUrl} onChange={(e) => setVals((v) => ({ ...v, serverUrl: e.target.value }))} />
+                      )}
+                      {anyMeta && (
+                        <>
+                          <input style={{ ...styles.input, flex: '1 1 150px' }} placeholder="Meta Pixel ID" value={vals.metaPixelId ?? ''} onChange={(e) => setVals((v) => ({ ...v, metaPixelId: e.target.value }))} />
+                          <input style={{ ...styles.input, flex: '1 1 190px' }} type="password" placeholder="Meta CAPI access token" value={vals.metaAccessToken ?? ''} onChange={(e) => setVals((v) => ({ ...v, metaAccessToken: e.target.value }))} />
+                        </>
+                      )}
+                      {anyTikTok && (
+                        <>
+                          <input style={{ ...styles.input, flex: '1 1 150px' }} placeholder="TikTok Pixel ID" value={vals.tiktokPixelId ?? ''} onChange={(e) => setVals((v) => ({ ...v, tiktokPixelId: e.target.value }))} />
+                          <input style={{ ...styles.input, flex: '1 1 190px' }} type="password" placeholder="TikTok access token" value={vals.tiktokAccessToken ?? ''} onChange={(e) => setVals((v) => ({ ...v, tiktokAccessToken: e.target.value }))} />
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {notReady.length > 0 && (
+                    <div style={{ fontSize: 11.5, color: 'var(--c-amber)' }}>
+                      Not ready (missing a value or an unchecked dependency): {notReady.map((i) => i.name).join(', ')} - these will be SKIPPED, not guessed.
+                    </div>
+                  )}
+                  {!applyConfirm ? (
+                    <button style={styles.primaryBtn} disabled={applying || selectedIds.length === 0} onClick={() => setApplyConfirm(true)}>
+                      {applying ? 'Applying…' : `Apply ${selectedIds.length} selected fix(es)`}
+                    </button>
+                  ) : (
+                    <div style={styles.confirm}>
+                      <div style={{ ...styles.muted, marginBottom: 8, color: 'var(--c-amber)' }}>
+                        Apply {selectedIds.length} selected fix(es) to {targetId ? `“${completing?.name}”` : `new container “${name.trim()}”`}? Existing pieces are reused; unchecked items are untouched. Draft-only - not published.
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button style={styles.primaryBtn} disabled={applying} onClick={() => void applyPlan()}>{applying ? 'Applying…' : 'Confirm & apply'}</button>
+                        <button style={styles.ghostBtn} disabled={applying} onClick={() => setApplyConfirm(false)}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                  {summary && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5 }}>
+                      <div style={{ ...row, borderColor: summary.failed.length ? 'var(--c-amber-border)' : 'var(--c-green-border)', background: summary.failed.length ? 'var(--c-amber-bg)' : 'var(--c-green-bg)' }}>
+                        ✓ Applied {summary.applied.length} · reused {summary.reused.length}
+                        {summary.skipped.length > 0 && <> · skipped {summary.skipped.length}</>}
+                        {summary.failed.length > 0 && <> · failed {summary.failed.length}</>}
+                        {' '}on <b>{summary.serverContainer.name}</b> {summary.serverContainer.publicId}
+                      </div>
+                      {summary.applied.length > 0 && <div><b>Applied:</b> {summary.applied.map((id) => byId.get(id)?.name ?? id).join(', ')}</div>}
+                      {summary.reused.length > 0 && <div style={{ color: 'var(--text-muted)' }}><b>Reused existing:</b> {summary.reused.map((id) => byId.get(id)?.name ?? id).join(', ')}</div>}
+                      {summary.skipped.map((x) => (
+                        <div key={x.id} style={{ color: 'var(--c-amber)' }}>Skipped {byId.get(x.id)?.name ?? x.id}: {x.reason}</div>
+                      ))}
+                      {summary.failed.map((x) => (
+                        <div key={x.id} style={{ color: 'var(--c-red)' }}>Failed {byId.get(x.id)?.name ?? x.id}: {x.error}</div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+
           {!confirming ? (
             <button style={styles.primaryBtn} disabled={running || (!targetId && !name.trim())} onClick={() => setConfirming(true)}>
               {running ? (targetId ? 'Completing…' : 'Creating…') : result ? 'Run again' : targetId ? 'Complete & verify' : 'Create & verify'}

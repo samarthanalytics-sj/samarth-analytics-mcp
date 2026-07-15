@@ -4,6 +4,8 @@ import type {
   AddAccountInput,
   AuditReportView,
   ServerCoverageView,
+  ServerPlanView,
+  ServerPlanApplyResultView,
   WorkspaceCompareResultView,
   ServerContainerResultView,
   ChatReply,
@@ -399,6 +401,10 @@ const api = {
     }): Promise<{ created: boolean; present: boolean; existingTag?: string; variableCreated?: boolean; variableName: string; measurementId: string; tagName: string }> =>
       ipcRenderer.invoke('gtm:ensureGa4Config', ctx),
     // Create a complete SERVER container FROM a web container (+ optionally wire a server URL).
+    planServer: (accountId: string, webContainerId: string, serverContainerId?: string): Promise<ServerPlanView> =>
+      ipcRenderer.invoke('gtm:planServer', accountId, webContainerId, serverContainerId),
+    applyServerPlan: (payload: { accountId: string; webContainerId: string; serverContainerId?: string; newName?: string; selected: string[]; values: Record<string, string> }): Promise<ServerPlanApplyResultView> =>
+      ipcRenderer.invoke('gtm:applyServerPlan', payload),
     createServerContainer: (ctx: {
       accountId: string;
       webContainerId: string;
