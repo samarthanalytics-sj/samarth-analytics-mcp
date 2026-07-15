@@ -90,7 +90,7 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     const a = String(accountId ?? '');
     const c = String(containerId ?? '');
     const w = String(workspaceId ?? '');
-    const fmt = format === 'pdf' ? 'pdf' : format === 'csv' ? 'csv' : 'md';
+    const fmt = format === 'pdf' ? 'pdf' : format === 'csv' ? 'csv' : format === 'xlsx' ? 'xlsx' : 'md';
     if (!a || !c || !w) throw new Error('Pick the server container and workspace first.');
     const meta = (names && typeof names === 'object' ? names : {}) as { containerName?: string; publicId?: string; workspaceName?: string };
     const snap = await withQuotaRetry(() => data.getServerContainerSnapshot(a, c, w));
@@ -105,10 +105,14 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     const opts = {
       title: 'Export server container documentation',
       defaultPath: `${base}.${fmt}`,
-      filters: [fmt === 'pdf' ? { name: 'PDF', extensions: ['pdf'] } : fmt === 'csv' ? { name: 'CSV', extensions: ['csv'] } : { name: 'Markdown', extensions: ['md'] }],
+      filters: [fmt === 'pdf' ? { name: 'PDF', extensions: ['pdf'] } : fmt === 'csv' ? { name: 'CSV', extensions: ['csv'] } : fmt === 'xlsx' ? { name: 'Excel workbook', extensions: ['xlsx'] } : { name: 'Markdown', extensions: ['md'] }],
     };
     const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (canceled || !filePath) return null;
+    if (fmt === 'xlsx') {
+      const { buildServerDocXlsx } = await import('../google/server-doc-xlsx');
+      return writeReportFile(filePath, await buildServerDocXlsx(snap, docMeta));
+    }
     if (fmt === 'csv') return writeReportFile(filePath, serverContainerDocCsv(snap, docMeta));
     const md = serverContainerDocMarkdown(snap, docMeta);
     if (fmt === 'md') return writeReportFile(filePath, md);

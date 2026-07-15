@@ -2929,6 +2929,29 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     }
   }
 
+  // ── PII-named event data → CAPI tags, with ZERO transformations in the workspace. Deliberately
+  // LOW + runtime-required: the official/stape CAPI templates hash user data THEMSELVES, so a missing
+  // transformation is not proof of raw PII leaving the server - but it is the one config-visible
+  // state worth a manual look (a custom template or auto-map-off tag may forward raw values).
+  if (s.transformations.length === 0) {
+    const PII_VAR = /email|phone|first.?name|last.?name|full.?name|address|zip|postal/i;
+    const piiVars = (s.variables ?? []).filter((v) => PII_VAR.test(v.name));
+    const capiTags = s.tags.filter(
+      (t) => !t.paused && (isMetaCapiServerTag(t) || isTikTokCapiServerTag(t) || /linkedin|pinterest|snap|capi|conversions?\s*api/i.test(t.name)),
+    );
+    const flowing = piiVars.filter((v) => capiTags.some((t) => JSON.stringify(t.parameter ?? []).includes(`{{${v.name}}}`)));
+    if (flowing.length) {
+      push({
+        severity: 'low',
+        confidence: 'runtime-required',
+        category: 'security',
+        message: `PII-named variable${flowing.length === 1 ? '' : 's'} (${flowing.map((v) => `"${v.name}"`).join(', ')}) flow into CAPI server tags and this workspace has NO transformations. The official/stape CAPI templates hash user data themselves, so this is not proof of a leak - but a custom template or a tag with auto-mapping off may forward the raw values.`,
+        recommendation: 'Verify in the vendor Events Manager (Test Events) or sGTM preview that these fields arrive HASHED; if they arrive raw, add a transformation that SHA-256 hashes them before forwarding, or fix the tag template.',
+        autoFixable: false,
+      });
+    }
+  }
+
   const nameCounts = new Map<string, number>();
   for (const t of s.tags) nameCounts.set(t.name, (nameCounts.get(t.name) ?? 0) + 1);
   for (const [name, c] of nameCounts) if (c > 1) push({ severity: 'medium', category: 'naming', message: `Duplicate server-tag name "${name}" (${c} tags) — hard to tell them apart.`, recommendation: 'Rename so each tag is uniquely identifiable.', autoFixable: false });

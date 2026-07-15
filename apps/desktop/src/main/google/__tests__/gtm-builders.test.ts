@@ -1541,6 +1541,35 @@ test('auditServerContainer: unused variables + dangling references, client param
   assert.equal(rep.counts.variables, 3, 'variable count populated');
 });
 
+test('auditServerContainer: PII-named vars feeding CAPI tags with zero transformations -> one LOW look-here; silent with a transformation or when unreferenced', () => {
+  const base = {
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4 Client', type: 'gaaw_client' }],
+    tags: [{
+      tagId: 't1', name: 'Meta CAPI - Lead', type: 'cvt_x_1', firingTriggerId: ['9'], blockingTriggerId: [], paused: false,
+      parameter: [{ type: 'template', key: 'pixelId', value: '123456789012345' }, { type: 'template', key: 'userData', value: '{{ed - email}}' }],
+      consentSettings: null,
+    }],
+    variables: [
+      { variableId: 'v1', name: 'ed - email', type: 'ed', parameter: [] },
+      { variableId: 'v2', name: 'ed - page_location', type: 'ed', parameter: [] },
+    ],
+  };
+  const rep = auditServerContainer({ ...base, transformations: [] });
+  const f = rep.findings.find((x) => /PII-named variable/.test(x.message));
+  assert.ok(f, 'finding fires');
+  assert.equal(f!.severity, 'low');
+  assert.equal(f!.confidence, 'runtime-required');
+  assert.ok(/"ed - email"/.test(f!.message) && !/page_location/.test(f!.message), 'only the PII-named var listed');
+  assert.ok(/hash user data themselves/i.test(f!.message), 'honest: templates hash by default, not proof of a leak');
+
+  const withXf = auditServerContainer({ ...base, transformations: [{ transformationId: 'x1', name: 'Hash', type: 'hash' }] });
+  assert.ok(!withXf.findings.some((x) => /PII-named variable/.test(x.message)), 'a transformation silences it');
+
+  const unref = auditServerContainer({ ...base, tags: [{ ...base.tags[0], parameter: [{ type: 'template', key: 'pixelId', value: '123456789012345' }] }], transformations: [] });
+  assert.ok(!unref.findings.some((x) => /PII-named variable/.test(x.message)), 'a PII-named var not feeding a CAPI tag is not flagged');
+});
+
 // Helpers for the corpus-motivated server checks (Vocal Minority GTM-57RM3QCT reference).
 const clientNameEqualsGa4 = [
   { type: 'EQUALS', parameter: [

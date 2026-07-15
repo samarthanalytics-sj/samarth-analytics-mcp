@@ -16,7 +16,7 @@ export interface ServerDocMeta {
 const SECRET_KEYS = /token|secret|password|credential/i;
 
 /** Human destination for a server tag - the id the tag forwards TO, never a credential. */
-function tagDestination(t: AuditTag): string {
+export function tagDestination(t: AuditTag): string {
   if (t.type === 'sgtmgaaw') return serverTagParam(t, 'measurementId').trim() || '(no Measurement ID)';
   const pixel = serverTagParam(t, 'pixelId').trim();
   if (pixel) return `pixel ${pixel}`;
@@ -26,14 +26,14 @@ function tagDestination(t: AuditTag): string {
 }
 
 /** {{Variable}} names referenced anywhere in the tag's parameters. */
-function referencedVars(t: AuditTag): string[] {
+export function referencedVars(t: AuditTag): string[] {
   const out = new Set<string>();
   for (const m of JSON.stringify(t.parameter ?? []).matchAll(/\{\{([^}]+)\}\}/g)) out.add(m[1].trim());
   return [...out].sort();
 }
 
 /** Whether the tag carries any secret-shaped parameter (documented as present, value never shown). */
-function hasSecret(t: AuditTag): boolean {
+export function hasSecret(t: AuditTag): boolean {
   return (t.parameter ?? []).some((p) => {
     const key = String((p as { key?: unknown }).key ?? '');
     const value = String((p as { value?: unknown }).value ?? '');
@@ -42,7 +42,7 @@ function hasSecret(t: AuditTag): boolean {
 }
 
 /** First literal event-name condition on a trigger, for the doc's "fires on" column. */
-function triggerCondition(tr: AuditTrigger): string {
+export function triggerCondition(tr: AuditTrigger): string {
   for (const arr of [tr.customEventFilter, tr.filter]) {
     for (const f of arr ?? []) {
       const params = ((f as { parameter?: Array<{ key?: string; value?: unknown }> }).parameter) ?? [];
