@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
 
@@ -1555,6 +1555,262 @@ export class GoogleDataService {
       requestBody: transformation,
     });
     return { transformationId: res.data.transformationId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
+  }
+
+  /** Execute ONLY the selected server-plan items (server-plan.ts): every step reuses an existing
+   *  matching asset (reported 'reused') and creates only what is missing; a selected item whose
+   *  required value is absent is SKIPPED with the reason - never guessed. Draft-only. */
+  async applyServerPlan(
+    accountId: string,
+    webContainerId: string,
+    target: { serverContainerId?: string; newName?: string },
+    selectedIds: string[],
+    values: { measurementId?: string; serverUrl?: string; metaPixelId?: string; metaAccessToken?: string; tiktokPixelId?: string; tiktokAccessToken?: string }
+  ): Promise<{
+    serverContainer: { containerId: string; publicId: string; name: string };
+    workspaceId: string;
+    applied: string[];
+    reused: string[];
+    skipped: Array<{ id: string; reason: string }>;
+    failed: Array<{ id: string; error: string }>;
+  }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+    const nrm = (x: string): string => x.trim().toLowerCase();
+    const selected = new Set(selectedIds);
+    const applied: string[] = [];
+    const reused: string[] = [];
+    const skipped: Array<{ id: string; reason: string }> = [];
+    const failed: Array<{ id: string; error: string }> = [];
+
+    // Container: complete the chosen one, or create-by-name (idempotent via the name match).
+    let container: { containerId: string; publicId: string; name: string };
+    if (target.serverContainerId) {
+      const c = await this.q(() => gtm.accounts.containers.get({ path: `accounts/${accountId}/containers/${target.serverContainerId}` }));
+      container = { containerId: c.data.containerId ?? target.serverContainerId, publicId: c.data.publicId ?? '', name: c.data.name ?? '' };
+      reused.push('container');
+    } else {
+      const newName = (target.newName ?? '').trim();
+      if (!newName) throw new Error('Give the new server container a name.');
+      const existing = await this.findServerContainerByName(accountId, newName);
+      if (existing) {
+        container = existing;
+        reused.push('container');
+      } else {
+        container = await this.q(() => this.createServerContainer(accountId, newName));
+        applied.push('container');
+      }
+    }
+    const cid = container.containerId;
+    const workspaceId = await this.q(() => this.defaultWorkspaceId(accountId, cid));
+    const parent = `accounts/${accountId}/containers/${cid}/workspaces/${workspaceId}`;
+
+    const [clients, triggers, tags, variables, builtIns] = await Promise.all([
+      this.q(() => this.listGtmClients(accountId, cid, workspaceId)).catch(() => []),
+      this.q(() => this.listGtmTriggers(accountId, cid, workspaceId)).catch(() => []),
+      this.q(() => this.listGtmTags(accountId, cid, workspaceId)).catch(() => []),
+      this.q(() => this.listGtmVariables(accountId, cid, workspaceId)).catch(() => []),
+      this.q(() => this.listGtmEnabledBuiltInVariables(accountId, cid, workspaceId)).catch(() => []),
+    ]);
+
+    // 1 · GA4 client
+    let ga4Client = clients.find((c) => c.type === 'gaaw_client') ?? null;
+    if (selected.has('ga4_client')) {
+      if (ga4Client) reused.push('ga4_client');
+      else {
+        try {
+          const cr = await this.q(() => gtm.accounts.containers.workspaces.clients.create({ parent, requestBody: buildGa4Client('GA4') }));
+          ga4Client = { clientId: cr.data.clientId ?? '', name: cr.data.name ?? 'GA4', type: 'gaaw_client' };
+          applied.push('ga4_client');
+        } catch (e) {
+          failed.push({ id: 'ga4_client', error: msg(e) });
+        }
+      }
+    }
+
+    // 2 · First-party GTM client
+    if (selected.has('gtm_client')) {
+      const existing = clients.find((c) => c.type === 'gtm_client');
+      if (existing) reused.push('gtm_client');
+      else {
+        try {
+          const web = await this.q(() => gtm.accounts.containers.get({ path: `accounts/${accountId}/containers/${webContainerId}` }));
+          const webPublicId = web.data.publicId ?? '';
+          if (!webPublicId) skipped.push({ id: 'gtm_client', reason: 'Could not read the web container public id.' });
+          else {
+            await this.q(() => this.createGtmClient(accountId, cid, workspaceId, buildGtmClient('GTM Web Container', [webPublicId]) as unknown as Record<string, unknown>));
+            applied.push('gtm_client');
+          }
+        } catch (e) {
+          failed.push({ id: 'gtm_client', error: msg(e) });
+        }
+      }
+    }
+
+    // 3 · Client Name built-in
+    if (selected.has('builtin_client_name')) {
+      if (builtIns.some((b) => nrm(b.type) === 'clientname')) reused.push('builtin_client_name');
+      else {
+        try {
+          await this.q(() => this.enableGtmBuiltInVariables(accountId, cid, workspaceId, ['clientName']));
+          applied.push('builtin_client_name');
+        } catch (e) {
+          failed.push({ id: 'builtin_client_name', error: msg(e) });
+        }
+      }
+    }
+
+    // 4 · All Events trigger
+    let allEventsTriggerId = triggers.find((t) => nrm(t.name) === 'all events')?.triggerId ?? '';
+    if (selected.has('all_events_trigger')) {
+      if (allEventsTriggerId) reused.push('all_events_trigger');
+      else {
+        try {
+          const tr = await this.q(() => gtm.accounts.containers.workspaces.triggers.create({ parent, requestBody: buildServerAllEventsTrigger('All Events', ga4Client?.name ?? 'GA4') as unknown as Record<string, unknown> }));
+          allEventsTriggerId = tr.data.triggerId ?? '';
+          applied.push('all_events_trigger');
+        } catch (e) {
+          failed.push({ id: 'all_events_trigger', error: msg(e) });
+        }
+      }
+    }
+
+    // 5 · Event Data variables
+    for (const spec of [
+      { id: 'var:ed - event_id', v: buildVariable({ name: 'ed - event_id', kind: 'event_data', keyPath: 'event_id' }) },
+      { id: 'var:ed - page_location', v: buildVariable({ name: 'ed - page_location', kind: 'event_data', keyPath: 'page_location' }) },
+    ]) {
+      if (!selected.has(spec.id)) continue;
+      if (variables.some((x) => nrm(x.name) === nrm(String((spec.v as { name?: unknown }).name ?? '')))) {
+        reused.push(spec.id);
+        continue;
+      }
+      try {
+        await this.q(() => this.createGtmVariable(accountId, cid, workspaceId, spec.v as unknown as Record<string, unknown>));
+        applied.push(spec.id);
+      } catch (e) {
+        failed.push({ id: spec.id, error: msg(e) });
+      }
+    }
+
+    // 6 · GA4 relay
+    if (selected.has('ga4_relay')) {
+      const existing = tags.find((t) => t.type === 'sgtmgaaw');
+      if (existing) reused.push('ga4_relay');
+      else {
+        let mid = (values.measurementId ?? '').trim();
+        if (!mid) mid = await this.q(() => this.deriveWebContainerMeasurementId(accountId, webContainerId)).catch(() => '');
+        if (!mid) skipped.push({ id: 'ga4_relay', reason: 'No Measurement ID (not derivable from the web container and none provided).' });
+        else if (!allEventsTriggerId) skipped.push({ id: 'ga4_relay', reason: 'No All Events trigger (create it first - the relay never fires without one).' });
+        else {
+          try {
+            await this.q(() => gtm.accounts.containers.workspaces.tags.create({ parent, requestBody: buildGa4ServerTag('GA4 - Server', mid, undefined, [allEventsTriggerId]) }));
+            applied.push('ga4_relay');
+          } catch (e) {
+            failed.push({ id: 'ga4_relay', error: msg(e) });
+          }
+        }
+      }
+    }
+
+    // 7 · Tagging URL + web wiring
+    const url = (values.serverUrl ?? '').trim();
+    if (selected.has('tagging_url')) {
+      if (!url) skipped.push({ id: 'tagging_url', reason: 'No server URL provided.' });
+      else {
+        try {
+          await this.q(() => this.setServerContainerTaggingUrl(accountId, cid, [url]));
+          applied.push('tagging_url');
+        } catch (e) {
+          failed.push({ id: 'tagging_url', error: msg(e) });
+        }
+      }
+    }
+    if (selected.has('web_wiring')) {
+      if (!url) skipped.push({ id: 'web_wiring', reason: 'No server URL provided.' });
+      else {
+        try {
+          const webWs = await this.q(() => this.defaultWorkspaceId(accountId, webContainerId));
+          const webSnap = await this.q(() => this.getGtmContainerSnapshot(accountId, webContainerId, webWs));
+          const googleTag = webSnap.tags.find((t) => t.type === 'googtag' && !t.paused);
+          if (!googleTag) skipped.push({ id: 'web_wiring', reason: 'No Google tag (googtag) found in the web container to point at the server.' });
+          else {
+            await this.q(() => this.setWebServerContainerUrl(accountId, webContainerId, webWs, googleTag.tagId, url));
+            applied.push('web_wiring');
+          }
+        } catch (e) {
+          failed.push({ id: 'web_wiring', error: msg(e) });
+        }
+      }
+    }
+
+    // 8 · CAPI tags (Meta / TikTok) - one per selected event; template imported once per platform.
+    const capiIds = selectedIds.filter((id) => id.startsWith('meta_capi:') || id.startsWith('tiktok_capi:'));
+    let metaType = '';
+    let tiktokType = '';
+    let metaVarsDone = false;
+    let tiktokVarsDone = false;
+    const localTriggers = triggers.slice();
+    const localTags = tags.slice();
+    const ensureEventTrigger = async (eventName: string): Promise<string> => {
+      const hit = localTriggers.find((tr) => {
+        if (tr.type !== 'customEvent') return false;
+        const fs = (tr as { customEventFilter?: Array<{ type?: string; parameter?: Array<{ key?: string; value?: unknown }> }> }).customEventFilter ?? [];
+        if (fs.length !== 1) return false;
+        const ps = fs[0].parameter ?? [];
+        return String(ps.find((x) => x.key === 'arg0')?.value ?? '') === '{{_event}}' && String(ps.find((x) => x.key === 'arg1')?.value ?? '') === eventName;
+      });
+      if (hit) return hit.triggerId;
+      const baseName = `ce - ${eventName}`;
+      const taken = new Set(localTriggers.map((t) => t.name));
+      const trName = taken.has(baseName) ? `${baseName} (server)` : baseName;
+      const created = await this.q(() => gtm.accounts.containers.workspaces.triggers.create({
+        parent,
+        requestBody: { name: trName, type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: eventName }] }] },
+      }));
+      const id = created.data.triggerId ?? '';
+      localTriggers.push({ triggerId: id, name: trName, type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ key: 'arg0', value: '{{_event}}' }, { key: 'arg1', value: eventName }] }], filter: [], autoEventFilter: [], parameter: [] } as unknown as (typeof localTriggers)[number]);
+      return id;
+    };
+    for (const id of capiIds) {
+      const isMeta = id.startsWith('meta_capi:');
+      const event = id.slice(id.indexOf(':') + 1);
+      const pixelId = (isMeta ? values.metaPixelId : values.tiktokPixelId)?.trim() ?? '';
+      const token = (isMeta ? values.metaAccessToken : values.tiktokAccessToken)?.trim() ?? '';
+      if (!pixelId || !token) {
+        skipped.push({ id, reason: `Missing ${isMeta ? 'Meta' : 'TikTok'} pixel id / access token.` });
+        continue;
+      }
+      const tagName = `${isMeta ? 'Meta CAPI' : 'TikTok CAPI'} - ${event}`;
+      if (localTags.some((t) => nrm(t.name) === nrm(tagName))) {
+        reused.push(id);
+        continue;
+      }
+      try {
+        if (isMeta && !metaType) metaType = (await this.q(() => this.importGalleryTemplate(accountId, cid, workspaceId, 'stape-io', 'facebook-tag'))).type;
+        if (!isMeta && !tiktokType) tiktokType = (await this.q(() => this.importGalleryTemplate(accountId, cid, workspaceId, 'stape-io', 'tiktok-tag'))).type;
+        if (isMeta && !metaVarsDone) {
+          await this.q(() => this.createMetaEmqVariables(accountId, cid, workspaceId)).catch(() => null);
+          metaVarsDone = true;
+        }
+        if (!isMeta && !tiktokVarsDone) {
+          await this.q(() => this.createTikTokEmqVariables(accountId, cid, workspaceId)).catch(() => null);
+          tiktokVarsDone = true;
+        }
+        const triggerId = await ensureEventTrigger(event);
+        const body = isMeta
+          ? buildMetaCapiServerTag(metaType, tagName, pixelId, token, event, { firingTriggerId: [triggerId] })
+          : buildTikTokCapiServerTag(tiktokType, tagName, pixelId, token, event, { firingTriggerId: [triggerId] });
+        await this.q(() => this.createGtmTag(accountId, cid, workspaceId, body as unknown as Record<string, unknown>));
+        localTags.push({ tagId: '', name: tagName, type: isMeta ? metaType : tiktokType, firingTriggerId: [triggerId], blockingTriggerId: [], paused: false, parameter: [], consentSettings: null } as unknown as (typeof localTags)[number]);
+        applied.push(id);
+      } catch (e) {
+        failed.push({ id, error: msg(e) });
+      }
+    }
+
+    return { serverContainer: container, workspaceId, applied, reused, skipped, failed };
   }
 
   /** Create a server tag for ONE event by CLONING an existing same-platform server tag: the

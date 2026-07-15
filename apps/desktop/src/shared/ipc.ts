@@ -999,6 +999,38 @@ export interface AuditFindingView {
   autoFixable: boolean;
   fix?: { tool: string; args: Record<string, unknown> };
 }
+/** Server-container remediation PLAN (mirrors server-plan.ts). */
+export interface ServerPlanView {
+  items: Array<{
+    id: string;
+    category: 'critical' | 'high' | 'medium' | 'low' | 'info';
+    status: 'existing' | 'missing';
+    kind: 'client' | 'trigger' | 'tag' | 'variable' | 'builtin' | 'config';
+    name: string;
+    description: string;
+    dependsOn: string[];
+    requires: string[];
+    defaultSelected: boolean;
+    executable: boolean;
+  }>;
+  detected: { measurementId: string | null; serverUrl: string | null; webWiredUrl: string | null };
+  inventory: {
+    clients: Array<{ name: string; type: string }>;
+    tags: Array<{ name: string; type: string; paused: boolean }>;
+    triggers: Array<{ name: string; type: string }>;
+    variables: Array<{ name: string; type: string }>;
+    enabledBuiltIns: string[];
+  };
+}
+export interface ServerPlanApplyResultView {
+  serverContainer: { containerId: string; publicId: string; name: string };
+  workspaceId: string;
+  applied: string[];
+  reused: string[];
+  skipped: Array<{ id: string; reason: string }>;
+  failed: Array<{ id: string; error: string }>;
+}
+
 /** Web GTM <-> Server GTM coverage comparison (config-level). Mirrors server-coverage.ts. */
 export interface ServerCoverageView {
   rows: Array<{ platform: string; event: string; webTag: string; status: 'covered' | 'missing' | 'not_matchable'; by?: string; recommendation?: string; template?: { tagId: string; name: string } }>;

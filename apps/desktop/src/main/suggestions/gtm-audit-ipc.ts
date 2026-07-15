@@ -21,6 +21,8 @@ import { auditServerContainer } from '../google/gtm-builders';
 import { buildServerCoverage } from '../google/server-coverage';
 import { serverContainerDocMarkdown, serverContainerDocCsv } from '../google/server-doc';
 import { serverCoverageToCsv, serverCoverageToHtml, type CoverageExportMeta } from '../google/server-coverage-export';
+import { buildServerPlan } from '../google/server-plan';
+import { googleTagConfigValue } from '../google/gtm-builders';
 import type { ServerCoverageView } from '../../shared/ipc';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-builders';
@@ -96,6 +98,50 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     const name = String(tagName ?? '').trim();
     if (!a || !c || !w || !t || !ev || !name) throw new Error('Missing event or template for the server-tag create.');
     return withQuotaRetry(() => data.createServerTagForEvent(a, c, w, t, ev, name));
+  });
+
+  // REMEDIATION PLAN (read-only): audit the target server container (or a blank one) against the
+  // web container and return the categorized, selectable fix list + detected values + inventory.
+  ipcMain.handle('gtm:planServer', async (_e, accountId: unknown, webContainerId: unknown, serverContainerId: unknown) => {
+    const a = String(accountId ?? '');
+    const wc = String(webContainerId ?? '');
+    const sc = serverContainerId != null ? String(serverContainerId).trim() : '';
+    if (!a || !wc) throw new Error('Pick a GTM account and the web container first.');
+    const webWsList = await withQuotaRetry(() => data.listGtmWorkspaces(a, wc)).catch(() => []);
+    const webWs = webWsList[0]?.workspaceId ?? '';
+    const web = webWs ? await withQuotaRetry(() => data.getGtmContainerSnapshot(a, wc, webWs)).catch(() => null) : null;
+    const googleTag = web?.tags.find((t) => t.type === 'googtag' && !t.paused);
+    const webGoogleTagServerUrl = googleTag ? googleTagConfigValue(googleTag as unknown as Record<string, unknown>, 'server_container_url').trim() : '';
+    const derivedMeasurementId = await withQuotaRetry(() => data.deriveWebContainerMeasurementId(a, wc)).catch(() => null);
+    let server = null;
+    let enabledBuiltIns: string[] = [];
+    if (sc) {
+      const srvWsList = await withQuotaRetry(() => data.listGtmWorkspaces(a, sc)).catch(() => []);
+      const srvWs = srvWsList[0]?.workspaceId ?? '';
+      if (srvWs) {
+        server = await withQuotaRetry(() => data.getServerContainerSnapshot(a, sc, srvWs)).catch(() => null);
+        enabledBuiltIns = (await withQuotaRetry(() => data.listGtmEnabledBuiltInVariables(a, sc, srvWs)).catch(() => [])).map((b) => b.type);
+      }
+    }
+    return buildServerPlan({ web, server, enabledBuiltIns, derivedMeasurementId, webGoogleTagServerUrl });
+  });
+
+  // APPLY the selected plan items (WRITE, confirmed in the UI, draft-only). Idempotent per item.
+  ipcMain.handle('gtm:applyServerPlan', async (_e, payload: unknown) => {
+    const o = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    const a = String(o.accountId ?? '');
+    const wc = String(o.webContainerId ?? '');
+    const sc = o.serverContainerId != null ? String(o.serverContainerId).trim() : '';
+    const newName = o.newName != null ? String(o.newName).trim() : '';
+    const selected = Array.isArray(o.selected) ? o.selected.map(String) : [];
+    const values = (o.values && typeof o.values === 'object' ? o.values : {}) as Record<string, string>;
+    if (!a || !wc) throw new Error('Pick a GTM account and the web container first.');
+    if (!sc && !newName) throw new Error('Pick a server container to complete, or name a new one.');
+    if (!selected.length) throw new Error('Select at least one fix to apply.');
+    return withQuotaRetry(
+      () => data.applyServerPlan(a, wc, { serverContainerId: sc || undefined, newName: newName || undefined }, selected, values),
+      { maxRetries: 2 }
+    );
   });
 
   // COVERAGE report export (CSV / PDF): the renderer passes the coverage result it already holds
