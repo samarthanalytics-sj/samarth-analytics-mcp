@@ -1,3 +1,9 @@
+## [1.337.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.336.0...v1.337.0) (2026-07-15)
+
+### Features
+
+* **desktop:** detect and support the Stape Data Tag pipeline in the server plan workflow ([#582](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/582)) ([adde0bb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/adde0bb5ab589838963e334589d3beb46d272ce0))
+
 ## [1.336.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.335.0...v1.336.0) (2026-07-15)
 
 ### Features
