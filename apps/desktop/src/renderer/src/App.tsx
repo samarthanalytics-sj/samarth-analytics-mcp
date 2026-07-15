@@ -7205,6 +7205,28 @@ function ServerAuditSection({
     }
   }
 
+  const [covExporting, setCovExporting] = useState(false);
+  const [covNote, setCovNote] = useState('');
+  async function exportCoverage(format: 'csv' | 'pdf'): Promise<void> {
+    if (!coverage || covExporting) return;
+    onError('');
+    setCovExporting(true);
+    setCovNote('');
+    try {
+      const saved = await window.desktop.gtm.exportServerCoverage(format, coverage, {
+        webName: allContainers.find((c) => c.containerId === webContainerId)?.name,
+        serverName: containers.find((c) => c.containerId === containerId)?.name,
+        webWorkspace: webWorkspaces.find((w) => w.workspaceId === webWorkspaceId)?.name,
+        serverWorkspace: workspaces.find((w) => w.workspaceId === workspaceId)?.name,
+      });
+      setCovNote(saved ? `✓ Saved to ${saved}` : 'Save cancelled.');
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCovExporting(false);
+    }
+  }
+
   async function runCoverage(): Promise<void> {
     if (!containerId || !workspaceId || !webContainerId || !webWorkspaceId || covRunning) return;
     onError('');
@@ -7465,7 +7487,15 @@ function ServerAuditSection({
       {/* ── Coverage results (on the coverage page) ── */}
       {view === 'coverage' && containers.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {coverage && <div style={{ fontWeight: 700, fontSize: 14, marginTop: 2 }}>Coverage result</div>}
+          {coverage && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+              <span style={{ fontWeight: 700, fontSize: 14 }}>Coverage result</span>
+              <span style={{ flex: 1 }} />
+              <button style={styles.ghostBtn} disabled={covExporting} onClick={() => void exportCoverage('csv')}>⬇ CSV</button>
+              <button style={styles.ghostBtn} disabled={covExporting} onClick={() => void exportCoverage('pdf')}>⬇ PDF</button>
+              {covNote && <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{covNote}</span>}
+            </div>
+          )}
           {coverage && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {/* score strip */}

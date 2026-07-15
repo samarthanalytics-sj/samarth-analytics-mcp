@@ -20,6 +20,8 @@ import { auditWorkspace, auditServerWorkspace } from '../google/audit-runner';
 import { auditServerContainer } from '../google/gtm-builders';
 import { buildServerCoverage } from '../google/server-coverage';
 import { serverContainerDocMarkdown, serverContainerDocCsv } from '../google/server-doc';
+import { serverCoverageToCsv, serverCoverageToHtml, type CoverageExportMeta } from '../google/server-coverage-export';
+import type { ServerCoverageView } from '../../shared/ipc';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-builders';
 import { withQuotaRetry } from '../google/quota-retry';
@@ -94,6 +96,43 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     const name = String(tagName ?? '').trim();
     if (!a || !c || !w || !t || !ev || !name) throw new Error('Missing event or template for the server-tag create.');
     return withQuotaRetry(() => data.createServerTagForEvent(a, c, w, t, ev, name));
+  });
+
+  // COVERAGE report export (CSV / PDF): the renderer passes the coverage result it already holds
+  // (same pattern as ga4:exportReport) plus display names; pure builders render it.
+  ipcMain.handle('gtm:exportServerCoverage', async (e, format: unknown, coverage: unknown, names: unknown) => {
+    const fmt = format === 'pdf' ? 'pdf' : 'csv';
+    const v = coverage as ServerCoverageView;
+    if (!v || !Array.isArray(v.rows) || !v.score || !v.summary) throw new Error('Run the coverage comparison first.');
+    const meta = (names && typeof names === 'object' ? names : {}) as Partial<CoverageExportMeta>;
+    const docMeta: CoverageExportMeta = {
+      webName: meta.webName || 'web container',
+      serverName: meta.serverName || 'server container',
+      webWorkspace: meta.webWorkspace,
+      serverWorkspace: meta.serverWorkspace,
+      generatedAt: new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    };
+    const base = `${docMeta.webName} vs ${docMeta.serverName} - coverage`.replace(/[\\/:*?"<>|]/g, '_').replace(/\s{2,}/g, ' ').trim();
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const opts = {
+      title: 'Export coverage report',
+      defaultPath: `${base}.${fmt}`,
+      filters: [fmt === 'pdf' ? { name: 'PDF', extensions: ['pdf'] } : { name: 'CSV', extensions: ['csv'] }],
+    };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    if (fmt === 'csv') return writeReportFile(filePath, serverCoverageToCsv(v, docMeta));
+    const pdfWin = new BrowserWindow({
+      show: false,
+      webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    try {
+      await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(serverCoverageToHtml(v, docMeta)));
+      const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+      return await writeReportFile(filePath, pdf);
+    } finally {
+      if (!pdfWin.isDestroyed()) pdfWin.destroy();
+    }
   });
 
   // SERVER container DOCUMENTATION export (md / csv / pdf): clients, tags (destination + firing
