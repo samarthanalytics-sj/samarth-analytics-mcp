@@ -10,7 +10,7 @@ interface State {
 
 // Catches render-time exceptions anywhere in the tree so one bad component shows a recoverable
 // panel instead of white-screening the whole app. (A single undefined prop used to take the
-// entire window down — see the Markdown guard.) `error` is typed `unknown` because React passes
+// entire window down - see the Markdown guard.) `error` is typed `unknown` because React passes
 // the thrown value verbatim, which is not guaranteed to be an Error; a separate `hasError` flag
 // avoids mis-reading a falsy throw (e.g. throw 0) as "no error".
 export class ErrorBoundary extends Component<Props, State> {
@@ -57,7 +57,7 @@ export class ErrorBoundary extends Component<Props, State> {
           {message}
         </pre>
         <p style={{ fontSize: 13, color: 'var(--text-muted, #9a9a9a)' }}>
-          If you just pulled new code, fully close the app and restart <code>npm run dev</code> — the
+          If you just pulled new code, fully close the app and restart <code>npm run dev</code> - the
           Electron main process doesn&rsquo;t hot-reload, so its data can be out of sync with the UI.
         </p>
         <div style={{ display: 'flex', gap: 8 }}>

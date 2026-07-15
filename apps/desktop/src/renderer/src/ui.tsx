@@ -9,7 +9,7 @@ export function Skeleton({ width = '100%', height = 14, radius = 8, style }: { w
   return <div className="skeleton" style={{ width, height, borderRadius: radius, ...style }} aria-hidden />;
 }
 
-/** A few skeleton lines (last one shorter) — a loading stand-in for a paragraph / list row. */
+/** A few skeleton lines (last one shorter) - a loading stand-in for a paragraph / list row. */
 export function SkeletonText({ lines = 3, gap = 8 }: { lines?: number; gap?: number }): JSX.Element {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap }} aria-hidden>
@@ -20,7 +20,7 @@ export function SkeletonText({ lines = 3, gap = 8 }: { lines?: number; gap?: num
   );
 }
 
-/** A loading card matching the app's card metrics — title bar + body lines. */
+/** A loading card matching the app's card metrics - title bar + body lines. */
 export function SkeletonCard({ lines = 3 }: { lines?: number }): JSX.Element {
   return (
     <div style={{ background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 16 }}>
@@ -44,7 +44,7 @@ export function SkeletonStats({ count = 4 }: { count?: number }): JSX.Element {
   );
 }
 
-/** A polished empty state — big soft icon, title, one-line hint, optional call-to-action. */
+/** A polished empty state - big soft icon, title, one-line hint, optional call-to-action. */
 export function EmptyState({ icon = '✨', title, hint, action, compact }: { icon?: ReactNode; title: string; hint?: string; action?: ReactNode; compact?: boolean }): JSX.Element {
   return (
     <div className="pop-in" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 8, padding: compact ? '24px 16px' : '48px 24px', color: 'var(--text-dim)' }}>

@@ -1,5 +1,5 @@
 /**
- * Pure formatters for the "Download" option on the Container audit panel — turn an
+ * Pure formatters for the "Download" option on the Container audit panel - turn an
  * AuditReportView into a CSV (a findings spreadsheet) or a Markdown report (shareable).
  * No React / DOM here so they are unit-testable with tsx.
  */
@@ -45,7 +45,7 @@ export interface AuditExportMeta {
   container?: string;
   workspace?: string;
   account?: string;
-  /** ISO/human timestamp — passed in (the renderer stamps it; keeps this pure). */
+  /** ISO/human timestamp - passed in (the renderer stamps it; keeps this pure). */
   generatedAt?: string;
 }
 
@@ -61,9 +61,9 @@ export function auditToMarkdown(report: AuditReportView, meta: AuditExportMeta =
   if (scope) L.push(`**Container:** ${scope}  `);
   if (meta.generatedAt) L.push(`**Generated:** ${meta.generatedAt}  `);
   L.push(`**Scope:** ${c.tags} tags · ${c.triggers} triggers · ${c.variables} variables  `);
-  L.push(`**Findings:** ${c.findings} — ${s.critical} critical · ${s.high} high · ${s.medium} medium · ${s.low} low · ${s.info} info`);
+  L.push(`**Findings:** ${c.findings} - ${s.critical} critical · ${s.high} high · ${s.medium} medium · ${s.low} low · ${s.info} info`);
   L.push('');
-  L.push('> Container-only audit: proves CONFIGURATION, not firing behaviour, dataLayer reality, PII in hits, or consent timing — those need runtime verification.');
+  L.push('> Container-only audit: proves CONFIGURATION, not firing behaviour, dataLayer reality, PII in hits, or consent timing - those need runtime verification.');
   L.push('');
   if (report.findings.length === 0) {
     L.push('No issues found. The container is configurationally clean.');
