@@ -19,6 +19,7 @@ import type { GoogleDataService } from '../google/data-service';
 import { auditWorkspace, auditServerWorkspace } from '../google/audit-runner';
 import { auditServerContainer } from '../google/gtm-builders';
 import { buildServerCoverage } from '../google/server-coverage';
+import { serverContainerDocMarkdown, serverContainerDocCsv } from '../google/server-doc';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import { buildVariable, findGa4BaseTag, ga4VariablePlan } from '../google/gtm-builders';
 import { withQuotaRetry } from '../google/quota-retry';
@@ -80,6 +81,49 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
       withQuotaRetry(() => data.getServerContainerSnapshot(a, sc, sw)),
     ]);
     return buildServerCoverage(webSnap, srvSnap, auditServerContainer(srvSnap).summary);
+  });
+
+  // SERVER container DOCUMENTATION export (md / csv / pdf): clients, tags (destination + firing
+  // triggers + referenced variables), triggers, variables, transformations - from the same config
+  // snapshot the audit reads. Secret-shaped values are never written to the document.
+  ipcMain.handle('gtm:exportServerDoc', async (e, accountId: unknown, containerId: unknown, workspaceId: unknown, format: unknown, names: unknown) => {
+    const a = String(accountId ?? '');
+    const c = String(containerId ?? '');
+    const w = String(workspaceId ?? '');
+    const fmt = format === 'pdf' ? 'pdf' : format === 'csv' ? 'csv' : 'md';
+    if (!a || !c || !w) throw new Error('Pick the server container and workspace first.');
+    const meta = (names && typeof names === 'object' ? names : {}) as { containerName?: string; publicId?: string; workspaceName?: string };
+    const snap = await withQuotaRetry(() => data.getServerContainerSnapshot(a, c, w));
+    const docMeta = {
+      containerName: meta.containerName || `container ${c}`,
+      publicId: meta.publicId,
+      workspaceName: meta.workspaceName,
+      generatedAt: new Date().toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    };
+    const base = `${(docMeta.containerName || 'Server container').replace(/[\\/:*?"<>|]/g, '_').replace(/\s{2,}/g, ' ').trim()} - server documentation`;
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const opts = {
+      title: 'Export server container documentation',
+      defaultPath: `${base}.${fmt}`,
+      filters: [fmt === 'pdf' ? { name: 'PDF', extensions: ['pdf'] } : fmt === 'csv' ? { name: 'CSV', extensions: ['csv'] } : { name: 'Markdown', extensions: ['md'] }],
+    };
+    const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+    if (canceled || !filePath) return null;
+    if (fmt === 'csv') return writeReportFile(filePath, serverContainerDocCsv(snap, docMeta));
+    const md = serverContainerDocMarkdown(snap, docMeta);
+    if (fmt === 'md') return writeReportFile(filePath, md);
+    const pdfWin = new BrowserWindow({
+      show: false,
+      webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    try {
+      const html = reportHtmlDocument(base, md);
+      await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+      const pdf = await pdfWin.webContents.printToPDF({ printBackground: true });
+      return await writeReportFile(filePath, pdf);
+    } finally {
+      if (!pdfWin.isDestroyed()) pdfWin.destroy();
+    }
   });
 
   // WORKSPACE COMPARISON (read): diff 2+ workspaces in the same container side by side. Fetches each

@@ -7202,6 +7202,29 @@ function ServerAuditSection({ accountId, onError }: { accountId: string; onError
     }
   }
 
+  const [docExporting, setDocExporting] = useState(false);
+  const [docNote, setDocNote] = useState('');
+  async function exportDoc(format: 'md' | 'csv' | 'pdf'): Promise<void> {
+    if (!containerId || !workspaceId || docExporting) return;
+    onError('');
+    setDocExporting(true);
+    setDocNote('');
+    try {
+      const cont = containers.find((c) => c.containerId === containerId);
+      const ws = workspaces.find((w) => w.workspaceId === workspaceId);
+      const saved = await window.desktop.gtm.exportServerDoc(accountId, containerId, workspaceId, format, {
+        containerName: cont?.name,
+        publicId: cont?.publicId,
+        workspaceName: ws?.name,
+      });
+      setDocNote(saved ? `✓ Saved to ${saved}` : 'Save cancelled.');
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDocExporting(false);
+    }
+  }
+
   const SEV: Record<string, string> = { critical: 'var(--c-red)', high: 'var(--c-red)', medium: 'var(--c-amber)', low: 'var(--text-muted)', info: 'var(--text-faint)' };
   return (
     <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -7228,6 +7251,18 @@ function ServerAuditSection({ accountId, onError }: { accountId: string; onError
           <button style={styles.primaryBtn} disabled={!containerId || !workspaceId || running} onClick={() => void run()}>
             {running ? 'Auditing…' : '▶ Audit server container'}
           </button>
+          {(['md', 'csv', 'pdf'] as const).map((fmt) => (
+            <button
+              key={fmt}
+              style={styles.ghostBtn}
+              disabled={!containerId || !workspaceId || docExporting}
+              title="Generate the container documentation (clients, tags, triggers, variables, transformations). Credentials are never written to the file."
+              onClick={() => void exportDoc(fmt)}
+            >
+              ⬇ Doc {fmt.toUpperCase()}
+            </button>
+          ))}
+          {docNote && <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{docNote}</span>}
         </div>
       )}
       {report && (
