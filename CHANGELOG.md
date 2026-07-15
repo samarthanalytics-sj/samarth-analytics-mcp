@@ -1,3 +1,9 @@
+## [1.330.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.329.0...v1.330.0) (2026-07-15)
+
+### Features
+
+* **desktop:** one-click create for missing server-tag coverage (clone from a same-platform template) ([843a98a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/843a98a0cc62d6f503d25fcac7b6f6839cc09c19))
+
 ## [1.329.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.328.0...v1.329.0) (2026-07-15)
 
 ### Features
