@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { serverContainerDocMarkdown, serverContainerDocCsv } from '../server-doc';
+import { serverContainerDocMarkdown, serverContainerDocCsv, buildServerFlowLines, buildDestinationRows } from '../server-doc';
 import type { AuditTag, AuditTrigger, ServerContainerSnapshot } from '../gtm-builders';
 
 let passed = 0;
@@ -83,6 +83,43 @@ test('empty container documents honestly (no fabricated sections)', () => {
   assert.ok(md.includes('(not set - host not wired yet)'));
   assert.ok(md.includes('None - nothing claims incoming requests'));
   assert.ok(md.includes('None configured - events pass through to destinations unmodified.'));
+});
+
+test('deliverable sections: configuration issues, destinations, request flow, draft-vs-live caveat', () => {
+  const audit = {
+    counts: { tags: 2, triggers: 1, variables: 1, findings: 1 },
+    summary: { critical: 0, high: 1, medium: 0, low: 0, info: 0 },
+    findings: [{ severity: 'high' as const, category: 'firing', message: 'The container has no tagging server URL', recommendation: 'Set it with set_server_container_tagging_url.', autoFixable: false, confidence: 'likely' as const }],
+    boundary: '', runtimeRequired: [], hasGa4Config: true,
+  };
+  const md = serverContainerDocMarkdown(snap(), { containerName: 'Acme - Server', workspaceName: 'Default', liveVersionId: '7' }, audit as never);
+  assert.ok(md.includes('Live (published) version: 7.') && md.includes('DRAFT, which may differ'), 'draft-vs-live caveat');
+  assert.ok(md.includes('## Configuration issues'), 'issues section present');
+  assert.ok(/\| HIGH \| container \| The container has no tagging server URL/.test(md), 'finding row with severity + where');
+  assert.ok(md.includes('## Destinations (where data goes)'), 'destinations section');
+  assert.ok(/\| G-ABC1234 \| sgtmgaaw \| 1 \|/.test(md), 'GA4 destination row');
+  assert.ok(/\| pixel 123456789012345 \|.*\| 1 \| 1 paused \|/.test(md), 'Meta destination with paused note');
+  assert.ok(md.includes('## Request flow'), 'flow section');
+  assert.ok(md.includes('-> GA4 Relay (G-ABC1234)'), 'flow shows trigger -> tag -> destination');
+
+  const csv = serverContainerDocCsv(snap(), { containerName: 'Acme - Server' }, audit as never);
+  assert.ok(/Finding,container,HIGH/.test(csv), 'finding row in csv');
+  assert.ok(/Destination,G-ABC1234,sgtmgaaw/.test(csv), 'destination row in csv');
+});
+
+test('request flow: orphan tags called out; clean audit says clean; no audit -> no issues section', () => {
+  const s2 = snap();
+  s2.tags = [{ ...s2.tags[0], firingTriggerId: [] }];
+  const flow = buildServerFlowLines(s2).join('\n');
+  assert.ok(/tags with NO trigger \(never fire\): "GA4 Relay"/.test(flow), flow);
+  const noClients = buildServerFlowLines({ ...snap(), clients: [] }).join('\n');
+  assert.ok(/no client - nothing claims requests/.test(noClients));
+  const cleanAudit = { counts: { tags: 0, triggers: 0, variables: 0, findings: 0 }, summary: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, findings: [], boundary: '', runtimeRequired: [], hasGa4Config: true };
+  const md = serverContainerDocMarkdown(snap(), { containerName: 'A' }, cleanAudit as never);
+  assert.ok(/None found - the configuration audit came back clean/.test(md));
+  const noAudit = serverContainerDocMarkdown(snap(), { containerName: 'A' });
+  assert.ok(!noAudit.includes('## Configuration issues'), 'no audit passed -> no issues section');
+  assert.equal(buildDestinationRows(snap()).length, 2, 'two distinct destinations');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

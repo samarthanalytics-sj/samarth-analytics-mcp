@@ -1623,6 +1623,19 @@ export class GoogleDataService {
     return { tagId: res.data.tagId ?? '', name: res.data.name ?? tagName, triggerName, triggerReused: Boolean(reuse) };
   }
 
+  /** The container's LIVE (published) version id, or null when none is published / unreadable.
+   *  Read-only; used as the draft-vs-live caveat on the server documentation. */
+  async getGtmLiveContainerVersionId(accountId: string, containerId: string): Promise<string | null> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    try {
+      const res = await gtm.accounts.containers.versions.live({ parent: `accounts/${accountId}/containers/${containerId}` });
+      return res.data.containerVersionId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Snapshot a SERVER container for auditServerContainer: its tagging server URL(s),
    *  clients, server tags (as AuditTags), and transformations. */
   async getServerContainerSnapshot(

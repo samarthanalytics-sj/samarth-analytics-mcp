@@ -3,7 +3,7 @@
 // variables), triggers, variables, transformations. SECURITY: secret-shaped parameter values
 // (access tokens, API secrets) are NEVER echoed - only their presence is noted.
 
-import type { AuditTag, AuditTrigger, ServerContainerSnapshot } from './gtm-builders';
+import type { AuditReport, AuditTag, AuditTrigger, ServerContainerSnapshot } from './gtm-builders';
 import { serverTagParam } from './gtm-builders';
 
 export interface ServerDocMeta {
@@ -11,6 +11,8 @@ export interface ServerDocMeta {
   publicId?: string;
   workspaceName?: string;
   generatedAt?: string;
+  /** The container's LIVE (published) version id, when readable — the doc describes the DRAFT. */
+  liveVersionId?: string | null;
 }
 
 const SECRET_KEYS = /token|secret|password|credential/i;
@@ -57,7 +59,65 @@ export function triggerCondition(tr: AuditTrigger): string {
 
 const mdCell = (s: string): string => s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
-export function serverContainerDocMarkdown(s: ServerContainerSnapshot, meta: ServerDocMeta): string {
+/** Where data GOES from this container: distinct destinations with their feeding-tag counts. */
+export function buildDestinationRows(s: ServerContainerSnapshot): Array<{ destination: string; types: string; tags: number; paused: number }> {
+  const byDest = new Map<string, { types: Set<string>; tags: number; paused: number }>();
+  for (const t of s.tags) {
+    const dest = tagDestination(t);
+    if (!dest || dest.startsWith('(no ')) continue;
+    const d = byDest.get(dest) ?? { types: new Set<string>(), tags: 0, paused: 0 };
+    d.types.add(t.type);
+    d.tags += 1;
+    if (t.paused) d.paused += 1;
+    byDest.set(dest, d);
+  }
+  return [...byDest.entries()].map(([destination, d]) => ({ destination, types: [...d.types].sort().join(', '), tags: d.tags, paused: d.paused }));
+}
+
+/** The container's request flow as indented plain-text lines (renders identically in MD/PDF/Word):
+ *  client claims -> trigger (condition) -> tags (destination). Orphan tags are called out. PURE. */
+export function buildServerFlowLines(s: ServerContainerSnapshot): string[] {
+  const lines: string[] = [];
+  const url = s.taggingServerUrls[0] ?? '(tagging URL not set)';
+  lines.push(`incoming request -> ${url}`);
+  if (!s.clients.length) {
+    lines.push('  (no client - nothing claims requests, the flow stops here)');
+    return lines;
+  }
+  for (const c of s.clients) lines.push(`  client "${c.name}" (${c.type}) claims the request`);
+  const triggers = s.triggers ?? [];
+  const tagsByTrigger = new Map<string, AuditTag[]>();
+  const orphans: AuditTag[] = [];
+  for (const t of s.tags) {
+    const ids = t.firingTriggerId ?? [];
+    if (!ids.length) {
+      orphans.push(t);
+      continue;
+    }
+    for (const id of ids) {
+      const arr = tagsByTrigger.get(id) ?? [];
+      arr.push(t);
+      tagsByTrigger.set(id, arr);
+    }
+  }
+  for (const tr of triggers) {
+    const firing = tagsByTrigger.get(tr.triggerId) ?? [];
+    lines.push(`    trigger "${tr.name}" - ${triggerCondition(tr)}`);
+    if (firing.length) {
+      for (const t of firing) {
+        const dest = tagDestination(t);
+        lines.push(`      -> ${t.name}${dest ? ` (${dest})` : ''}${t.paused ? ' [PAUSED]' : ''}`);
+      }
+    } else {
+      lines.push('      (fires no tag)');
+    }
+  }
+  if (orphans.length) lines.push(`    tags with NO trigger (never fire): ${orphans.map((t) => `"${t.name}"`).join(', ')}`);
+  if (!s.tags.length) lines.push('    (no server tags - claimed events are dropped, nothing is forwarded)');
+  return lines;
+}
+
+export function serverContainerDocMarkdown(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport): string {
   const trigById = new Map((s.triggers ?? []).map((t) => [t.triggerId, t]));
   const firesOn = (t: AuditTag): string =>
     (t.firingTriggerId ?? []).map((id) => trigById.get(id)?.name ?? `#${id}`).join(', ') || '(none - never fires)';
@@ -65,11 +125,50 @@ export function serverContainerDocMarkdown(s: ServerContainerSnapshot, meta: Ser
   lines.push(`# Server container documentation: ${meta.containerName}${meta.publicId ? ` (${meta.publicId})` : ''}`);
   lines.push('');
   lines.push(`${meta.workspaceName ? `Workspace: ${meta.workspaceName} · ` : ''}${meta.generatedAt ? `Generated: ${meta.generatedAt} · ` : ''}Configuration-level documentation from the GTM API (no runtime data).`);
+  if (meta.liveVersionId) {
+    lines.push('');
+    lines.push(`Live (published) version: ${meta.liveVersionId}. This document describes the ${meta.workspaceName ? `"${meta.workspaceName}"` : 'workspace'} DRAFT, which may differ from what is live.`);
+  }
   lines.push('');
   lines.push('## Overview');
   lines.push('');
   lines.push(`- Tagging server URL(s): ${s.taggingServerUrls.length ? s.taggingServerUrls.join(', ') : '(not set - host not wired yet)'}`);
   lines.push(`- Clients: ${s.clients.length} · Tags: ${s.tags.length} · Triggers: ${(s.triggers ?? []).length} · Variables: ${(s.variables ?? []).length} · Transformations: ${s.transformations.length}`);
+  lines.push('');
+  if (audit) {
+    const sm = audit.summary;
+    lines.push('## Configuration issues');
+    lines.push('');
+    if (!audit.findings.length) {
+      lines.push('None found - the configuration audit came back clean.');
+    } else {
+      lines.push(`${audit.findings.length} finding${audit.findings.length === 1 ? '' : 's'}: ${sm.critical} critical · ${sm.high} high · ${sm.medium} medium · ${sm.low} low · ${sm.info} info`);
+      lines.push('');
+      lines.push('| Severity | Where | Issue | Fix |');
+      lines.push('| --- | --- | --- | --- |');
+      for (const f of audit.findings) {
+        const where = f.resource ? `${f.resource.kind} "${f.resource.name}"` : 'container';
+        lines.push(`| ${f.severity.toUpperCase()} | ${mdCell(where)} | ${mdCell(f.message)} | ${mdCell(f.recommendation)} |`);
+      }
+    }
+    lines.push('');
+  }
+  const dests = buildDestinationRows(s);
+  lines.push('## Destinations (where data goes)');
+  lines.push('');
+  if (dests.length) {
+    lines.push('| Destination | Tag type(s) | Tags | Notes |');
+    lines.push('| --- | --- | --- | --- |');
+    for (const d of dests) lines.push(`| ${mdCell(d.destination)} | ${mdCell(d.types)} | ${d.tags} | ${d.paused ? `${d.paused} paused` : ''} |`);
+  } else {
+    lines.push('None - no server tag forwards data anywhere yet.');
+  }
+  lines.push('');
+  lines.push('## Request flow');
+  lines.push('');
+  lines.push('```text');
+  lines.push(...buildServerFlowLines(s));
+  lines.push('```');
   lines.push('');
   lines.push('## Clients (what claims incoming requests)');
   lines.push('');
@@ -132,7 +231,7 @@ const csvCell = (v: unknown): string => {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
-export function serverContainerDocCsv(s: ServerContainerSnapshot, meta: ServerDocMeta): string {
+export function serverContainerDocCsv(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport): string {
   const trigById = new Map((s.triggers ?? []).map((t) => [t.triggerId, t]));
   const lines: string[] = [];
   lines.push(['Server container documentation', meta.containerName, meta.publicId ?? ''].map(csvCell).join(','));
@@ -140,6 +239,13 @@ export function serverContainerDocCsv(s: ServerContainerSnapshot, meta: ServerDo
   lines.push(['Tagging server URL(s)', s.taggingServerUrls.join(' ')].map(csvCell).join(','));
   lines.push('');
   lines.push(['Kind', 'Name', 'Type', 'Destination', 'Fires on', 'Uses variables', 'Notes'].join(','));
+  for (const f of audit?.findings ?? []) {
+    const where = f.resource ? `${f.resource.kind} "${f.resource.name}"` : 'container';
+    lines.push(['Finding', where, f.severity.toUpperCase(), '', '', '', `${f.message} FIX: ${f.recommendation}`].map(csvCell).join(','));
+  }
+  for (const d of buildDestinationRows(s)) {
+    lines.push(['Destination', d.destination, d.types, '', '', '', `${d.tags} tag(s)${d.paused ? `, ${d.paused} paused` : ''}`].map(csvCell).join(','));
+  }
   for (const c of s.clients) lines.push(['Client', c.name, c.type, '', '', '', ''].map(csvCell).join(','));
   for (const t of s.tags) {
     const firesOn = (t.firingTriggerId ?? []).map((id) => trigById.get(id)?.name ?? `#${id}`).join('; ');
