@@ -34,6 +34,8 @@ function idsLine(v: ServerCoverageView): string | null {
   return `Measurement ID mismatch: web sends ${v.ga4.webMeasurementIds.join(', ')} but the server relay forwards ${v.ga4.serverMeasurementIds.join(', ')} - events land in a different property.`;
 }
 
+import { plainDashes } from './gtm-builders';
+
 export function serverCoverageToCsv(v: ServerCoverageView, meta: CoverageExportMeta): string {
   const lines: string[] = [];
   lines.push(['Web <-> Server coverage', `${meta.webName} vs ${meta.serverName}`].map(csvCell).join(','));
@@ -54,7 +56,7 @@ export function serverCoverageToCsv(v: ServerCoverageView, meta: CoverageExportM
   for (const u of v.unusedServer) {
     lines.push([u.event, u.platform.toUpperCase(), '', 'Server-only', `server tag "${u.tag}" matches no web event - server-only by design, or a cleanup candidate`].map(csvCell).join(','));
   }
-  return lines.join('\r\n') + '\r\n';
+  return plainDashes(lines.join('\r\n') + '\r\n');
 }
 
 const escHtml = (x: unknown): string =>
@@ -64,6 +66,10 @@ const STATUS_COLOR: Record<string, string> = { covered: '#15803d', missing: '#dc
 
 /** Self-contained print-styled document (light theme, no scripts) for the printToPDF pipeline. */
 export function serverCoverageToHtml(v: ServerCoverageView, meta: CoverageExportMeta): string {
+  return plainDashes(serverCoverageToHtmlRaw(v, meta));
+}
+
+function serverCoverageToHtmlRaw(v: ServerCoverageView, meta: CoverageExportMeta): string {
   const warn = [wiringLine(v), idsLine(v)].filter(Boolean) as string[];
   const rows = v.rows
     .map(

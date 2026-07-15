@@ -13,7 +13,7 @@
 import { ipcMain, dialog, BrowserWindow, app } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
-import { findGa4BaseTag } from '../google/gtm-builders';
+import { findGa4BaseTag, plainDashes } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
 import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, VerifyProgressView, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult, SuggestionScreenshotResult } from '../../shared/ipc';
@@ -111,7 +111,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (canceled || !filePath) return null;
     if (fmt === 'md') {
-      await writeFile(filePath, String(markdown ?? ''), 'utf8');
+      await writeFile(filePath, plainDashes(String(markdown ?? '')), 'utf8');
       return filePath;
     }
     // PDF — render the runbook HTML in a hidden, script-disabled window and print it to PDF.

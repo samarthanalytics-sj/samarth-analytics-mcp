@@ -86,5 +86,15 @@ test('HTML: healthy run says none-open honestly instead of an empty section', ()
   assert.ok(html.includes('None - every check that ran came back clean.'));
 });
 
+
+test('house style: monitoring CSV and HTML never carry em/en dashes', () => {
+  const r = run({ summary: 'Revenue — broken – badly' });
+  const csv = monitorRunToCsv(r);
+  const html = monitorRunToHtml(r);
+  for (const out of [csv, html]) {
+    assert.ok(!/[\u2014\u2013]/.test(out), 'em/en dash leaked into the monitoring export');
+  }
+  assert.ok(csv.includes('Revenue - broken - badly'));
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

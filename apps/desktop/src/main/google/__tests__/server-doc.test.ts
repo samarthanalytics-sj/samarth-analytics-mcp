@@ -155,5 +155,16 @@ test('on-screen view: audit findings mapped with a readable where', () => {
   assert.deepEqual(buildServerDocView(snap(), { containerName: 'X' }).findings, [], 'no audit -> no findings, never fabricated');
 });
 
+
+test('house style: doc MD and CSV never carry em/en dashes, even from entity names', () => {
+  const c = snap();
+  c.tags[0] = { ...c.tags[0], name: 'GA4 — Relay – v2' };
+  const md = serverContainerDocMarkdown(c, { containerName: 'Acme — Server' });
+  const csv = serverContainerDocCsv(c, { containerName: 'Acme — Server' });
+  for (const out of [md, csv]) {
+    assert.ok(!/[\u2014\u2013]/.test(out), 'em/en dash leaked into the doc');
+  }
+  assert.ok(md.includes('GA4 - Relay - v2'), 'names hyphenated, not dropped');
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

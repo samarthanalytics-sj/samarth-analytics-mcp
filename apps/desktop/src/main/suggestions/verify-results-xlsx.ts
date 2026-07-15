@@ -55,6 +55,8 @@ export async function buildVerifyResultsXlsx(payload: VerifyExportPayload): Prom
     }
   });
 
+  const { plainDashesWorkbook } = await import('../google/server-doc-xlsx');
+  plainDashesWorkbook(wb);
   const buf = await wb.xlsx.writeBuffer();
   return Buffer.from(buf as ArrayBuffer);
 }

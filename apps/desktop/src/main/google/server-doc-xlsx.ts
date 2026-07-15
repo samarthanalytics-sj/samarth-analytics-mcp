@@ -107,5 +107,20 @@ export async function buildServerDocXlsx(s: ServerContainerSnapshot, meta: Serve
   ]);
   for (const x of s.transformations) xf.addRow({ name: x.name, type: x.type });
 
+  plainDashesWorkbook(wb);
   return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+/** House style post-pass for EVERY xlsx export: no em/en dashes in any string cell,
+ *  whatever the text's origin (engine messages, static labels, or entity names). */
+export function plainDashesWorkbook(wb: ExcelJS.Workbook): void {
+  wb.eachSheet((ws) => {
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        if (typeof cell.value === 'string' && /[\u2014\u2013]/.test(cell.value)) {
+          cell.value = cell.value.replace(/[\u2014\u2013]/g, '-');
+        }
+      });
+    });
+  });
 }

@@ -211,6 +211,8 @@ export async function buildWorkspaceDiffXlsx(result: WorkspaceCompareResultView)
   buildUncommonSheet(wb, result);
   buildDetailedSheet(wb, result);
   buildDependenciesSheet(wb, result);
+  const { plainDashesWorkbook } = await import('./server-doc-xlsx');
+  plainDashesWorkbook(wb);
   const buf = await wb.xlsx.writeBuffer();
   return Buffer.from(buf as ArrayBuffer);
 }

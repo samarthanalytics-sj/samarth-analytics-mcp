@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GoogleDataService } from '../google/data-service';
 import { auditWorkspace, auditServerWorkspace } from '../google/audit-runner';
-import { auditServerContainer } from '../google/gtm-builders';
+import { auditServerContainer, plainDashes } from '../google/gtm-builders';
 import { buildServerCoverage } from '../google/server-coverage';
 import { serverContainerDocMarkdown, serverContainerDocCsv, buildServerDocView } from '../google/server-doc';
 import { serverCoverageToCsv, serverCoverageToHtml, type CoverageExportMeta } from '../google/server-coverage-export';
@@ -38,7 +38,8 @@ async function writeReportFile(filePath: string, data: string | Uint8Array): Pro
   for (let i = 0; i <= 50; i++) {
     const target = dedupedReportPath(filePath, i);
     try {
-      await writeFile(target, data);
+      // Text exports (md/csv/doc-html) follow house style: plain hyphens, never em/en dashes.
+      await writeFile(target, typeof data === 'string' ? plainDashes(data) : data);
       return target;
     } catch (err) {
       const code = (err as { code?: string }).code ?? '';
@@ -301,7 +302,7 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     const opts = { title: 'Export workspace comparison', defaultPath: name, filters: [filter] };
     const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (canceled || !filePath) return null;
-    await writeFile(filePath, String(content ?? ''), 'utf8');
+    await writeFile(filePath, plainDashes(String(content ?? '')), 'utf8');
     return filePath;
   });
 
@@ -362,7 +363,7 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     const opts = { title: 'Export container audit', defaultPath: name, filters: [filter] };
     const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (canceled || !filePath) return null;
-    await writeFile(filePath, String(content ?? ''), 'utf8');
+    await writeFile(filePath, plainDashes(String(content ?? '')), 'utf8');
     return filePath;
   });
 

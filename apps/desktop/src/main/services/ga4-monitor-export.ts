@@ -16,6 +16,8 @@ const fmtWhen = (at: number): string =>
 
 /** One CSV with a metadata preamble, then a flat row per check and per alert. Alerts carry BOTH
  *  voices: the plain consequence line in "What we found", the analyst prose in "Technical detail". */
+import { plainDashes } from '../google/gtm-builders';
+
 export function monitorRunToCsv(run: Ga4MonitorRun): string {
   const lines: string[] = [];
   lines.push(['GA4 monitoring report', run.propertyLabel].map(csvCell).join(','));
@@ -32,7 +34,7 @@ export function monitorRunToCsv(run: Ga4MonitorRun): string {
   for (const c of run.checks) {
     lines.push(['Check', CHECK_LABELS[c.status] ?? c.status, c.label, c.detail, '', ''].map(csvCell).join(','));
   }
-  return lines.join('\r\n') + '\r\n';
+  return plainDashes(lines.join('\r\n') + '\r\n');
 }
 
 const escHtml = (v: unknown): string =>
@@ -45,6 +47,10 @@ const STATUS_COLOR: Record<string, string> = { pass: '#15803d', warn: '#b45309',
  *  tab: health verdict up top, each alert with the plain consequence lead + the technical detail
  *  underneath, then the full health-check table so coverage is visible, not only problems. */
 export function monitorRunToHtml(run: Ga4MonitorRun): string {
+  return plainDashes(monitorRunToHtmlRaw(run));
+}
+
+function monitorRunToHtmlRaw(run: Ga4MonitorRun): string {
   const pid = run.property.replace(/^properties\//, '');
   const healthColor = run.health === 'critical' ? '#dc2626' : run.health === 'warning' ? '#b45309' : '#15803d';
   const alertBlocks = run.alerts

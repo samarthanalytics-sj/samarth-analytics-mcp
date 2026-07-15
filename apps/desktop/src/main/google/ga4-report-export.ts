@@ -121,7 +121,11 @@ export function reportHtmlDocument(title: string, md: string, opts: { word?: boo
     ? " xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'"
     : '';
   const body = `${opts.execHtml ?? ''}${markdownToHtml(md)}`;
-  return `<!DOCTYPE html><html${ns}><head><meta charset="utf-8"><title>${esc(title)}</title><style>${REPORT_CSS}</style></head><body>${body}</body></html>`;
+  // House style: no em/en dashes in ANY exported document (user rule). Applied here so every
+  // PDF/DOC pipeline that uses this wrapper inherits it, whatever the text's origin.
+  return `<!DOCTYPE html><html${ns}><head><meta charset="utf-8"><title>${esc(title)}</title><style>${REPORT_CSS}</style></head><body>${body}</body></html>`
+    .replace(/&mdash;|&ndash;/g, '-')
+    .replace(/[\u2014\u2013]/g, '-');
 }
 
 /** The i-th candidate save path: i<=0 → the chosen path unchanged; i>=1 → "name (i).ext" (the counter

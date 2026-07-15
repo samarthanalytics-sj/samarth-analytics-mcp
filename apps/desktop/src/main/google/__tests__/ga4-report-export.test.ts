@@ -76,5 +76,12 @@ test('dedupedReportPath: a dot in a DIRECTORY name is not mistaken for the exten
   assert.equal(dedupedReportPath('/var/v1.2/report', 3), '/var/v1.2/report (3)');
 });
 
+
+test('house style: reportHtmlDocument never emits em/en dashes (chars or entities)', () => {
+  const html = reportHtmlDocument('Title — dashed', 'Body — text – more &mdash; entity &ndash; too');
+  assert.ok(!/[\u2014\u2013]/.test(html), 'raw em/en dash leaked');
+  assert.ok(!/&mdash;|&ndash;/.test(html), 'dash entity leaked');
+  assert.ok(html.includes('Title - dashed'), 'em dash became a plain hyphen');
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
