@@ -447,11 +447,13 @@ export function registerGtmAuditIpc(data: GoogleDataService): void {
     const webContainerId = String(o.webContainerId ?? '');
     const name = String(o.name ?? '').trim();
     const serverUrl = o.serverUrl != null ? String(o.serverUrl).trim() : '';
+    const serverContainerId = o.serverContainerId != null ? String(o.serverContainerId).trim() : '';
     if (!accountId || !webContainerId) throw new Error('Pick a GTM account and the web container to base the server container on.');
-    if (!name) throw new Error('Give the new server container a name.');
+    if (!name && !serverContainerId) throw new Error('Give the new server container a name, or pick an existing one to complete.');
     // The bootstrap fires several writes (container + client + trigger + tag + URL wiring) and can
-    // trip the per-minute quota; retry the whole flow with backoff (it is name-idempotent).
-    return withQuotaRetry(() => data.createServerContainerFromWeb(accountId, webContainerId, name, serverUrl || undefined), { maxRetries: 3 });
+    // trip the per-minute quota; retry the whole flow with backoff (it is idempotent: by target id
+    // when completing an existing container, by name otherwise).
+    return withQuotaRetry(() => data.createServerContainerFromWeb(accountId, webContainerId, name, serverUrl || undefined, serverContainerId || undefined), { maxRetries: 3 });
   });
 
   // Ensure a GA4 base/config tag exists. If none is present, store the Measurement
