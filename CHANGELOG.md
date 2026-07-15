@@ -1,3 +1,9 @@
+## [1.334.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.333.1...v1.334.0) (2026-07-15)
+
+### Features
+
+* **desktop:** download the Web-Server coverage report (CSV / PDF) ([6077468](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6077468ed7b0b45d94010c2b5189ee0fa0456768))
+
 ## [1.333.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.333.0...v1.333.1) (2026-07-15)
 
 ### Bug Fixes
