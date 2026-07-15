@@ -340,6 +340,8 @@ const api = {
       ipcRenderer.invoke('gtm:serverCoverage', accountId, webContainerId, webWorkspaceId, serverContainerId, serverWorkspaceId),
     createServerTagForEvent: (accountId: string, containerId: string, workspaceId: string, templateTagId: string, eventName: string, tagName: string): Promise<{ tagId: string; name: string; triggerName: string; triggerReused: boolean }> =>
       ipcRenderer.invoke('gtm:createServerTagForEvent', accountId, containerId, workspaceId, templateTagId, eventName, tagName),
+    exportServerCoverage: (format: 'csv' | 'pdf', coverage: ServerCoverageView, names: { webName?: string; serverName?: string; webWorkspace?: string; serverWorkspace?: string }): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportServerCoverage', format, coverage, names),
     exportServerDoc: (accountId: string, containerId: string, workspaceId: string, format: 'md' | 'csv' | 'pdf' | 'xlsx', names: { containerName?: string; publicId?: string; workspaceName?: string }): Promise<string | null> =>
       ipcRenderer.invoke('gtm:exportServerDoc', accountId, containerId, workspaceId, format, names),
     audit: (accountId: string, containerId: string, workspaceId: string): Promise<AuditReportView> =>
