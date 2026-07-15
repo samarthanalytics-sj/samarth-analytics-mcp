@@ -7033,17 +7033,45 @@ function ServerContainerPanel({
   const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', display: 'block', marginBottom: 4 };
   const row: React.CSSProperties = { border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13 };
 
+  const [showCreate, setShowCreate] = useState(false);
+  const [serverCount, setServerCount] = useState<number | null>(null);
+  // First run (no server container in the account yet): creating one IS the main action - open it.
+  useEffect(() => {
+    if (serverCount === 0) setShowCreate(true);
+  }, [serverCount]);
+
   return (
-    <div style={{ padding: '12px 20px', display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-      <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-        Create a NEW server-side (sGTM) container from the web container above. It builds the container + GA4 client + firing trigger + GA4 relay tag (relaying this web container&apos;s GA4 Measurement ID). Paste your tagging-server URL (from Cloud Run, Stape, or your own host) to also record it on the server container and point this web container&apos;s Google tag at it. Draft-only &mdash; nothing is published, and GTM does not deploy the host.
-      </div>
-      {!ready && (
+    <div style={{ padding: '12px 20px', display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}>
+      {Boolean(active?.hasGoogleToken && ctx?.accountId) ? (
+        <ServerAuditSection accountId={ctx!.accountId!} onError={onError} webCtx={ctx} onServersLoaded={setServerCount} />
+      ) : (
         <div style={{ color: 'var(--c-amber)', fontSize: 13 }}>
-          {!active?.hasGoogleToken ? 'Sign this account into Google first.' : 'Pick a GTM account and the web container in the GTM bar above, then return here.'}
+          {!active?.hasGoogleToken ? 'Sign this account into Google first.' : 'Pick a GTM account (and your web container) in the GTM bar above, then return here.'}
         </div>
       )}
-      {ready && (
+
+      {/* ── Create wizard: collapsed once a server container exists; the first-run main action otherwise ── */}
+      <div style={{ border: '1px solid var(--border)', borderRadius: 8 }}>
+        <button
+          onClick={() => setShowCreate((v) => !v)}
+          style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', padding: '11px 14px', fontSize: 13.5, fontWeight: 700, color: 'var(--text)', textAlign: 'left' }}
+          aria-expanded={showCreate}
+        >
+          <span style={{ color: 'var(--text-faint)' }}>{showCreate ? '▾' : '▸'}</span>
+          ＋ Create a new server container
+          {serverCount === 0 && <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--c-amber)' }}>none exists yet — start here</span>}
+        </button>
+        {showCreate && (
+          <div style={{ padding: '0 14px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              Builds a NEW server-side (sGTM) container from the web container in the GTM bar: container + GA4 client + firing trigger + GA4 relay tag (relaying that web container&apos;s GA4 Measurement ID). Paste your tagging-server URL (Cloud Run / Stape / your host) to also record it and point the web Google tag at it. Draft-only &mdash; nothing is published, and GTM does not deploy the host.
+            </div>
+            {!ready && (
+              <div style={{ color: 'var(--c-amber)', fontSize: 13 }}>
+                {!active?.hasGoogleToken ? 'Sign this account into Google first.' : 'Pick a GTM account and the web container in the GTM bar above, then return here.'}
+              </div>
+            )}
+            {ready && (
         <>
           <div style={{ fontSize: 13 }}>
             Base web container: <b style={{ color: 'var(--text)' }}>{ctx!.containerName}</b>
@@ -7107,8 +7135,10 @@ function ServerContainerPanel({
             </div>
           )}
         </>
-      )}
-      {Boolean(active?.hasGoogleToken && ctx?.accountId) && <ServerAuditSection accountId={ctx!.accountId!} onError={onError} />}
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -7117,7 +7147,19 @@ function ServerContainerPanel({
  *  workspace, run the sGTM audit engine (clients claiming, duplicate GA4 relays that double-count,
  *  dead URL-encoded triggers, Meta CAPI pitfalls, legacy/duplicate clients, unused variables,
  *  dangling references) and render the findings. Never reads server runtime logs. */
-function ServerAuditSection({ accountId, onError }: { accountId: string; onError: (m: string) => void }): JSX.Element {
+function ServerAuditSection({
+  accountId,
+  onError,
+  webCtx,
+  onServersLoaded,
+}: {
+  accountId: string;
+  onError: (m: string) => void;
+  /** The GTM bar's web-container selection — the coverage comparison defaults to it. */
+  webCtx?: GtmContext;
+  /** Lets the parent auto-open the create wizard when the account has no server container yet. */
+  onServersLoaded?: (count: number) => void;
+}): JSX.Element {
   const [containers, setContainers] = useState<GtmContainerView[]>([]);
   const [containerId, setContainerId] = useState('');
   const [workspaces, setWorkspaces] = useState<GtmWorkspaceView[]>([]);
@@ -7139,7 +7181,9 @@ function ServerAuditSection({ accountId, onError }: { accountId: string; onError
       .listGtmWorkspaces(accountId, webContainerId)
       .then((ws) => {
         setWebWorkspaces(ws);
-        if (ws.length) setWebWorkspaceId(ws[0].workspaceId);
+        // Prefer the GTM bar's workspace when comparing the bar's own container.
+        const barWs = webCtx?.workspaceId && webContainerId === webCtx.containerId && ws.some((w) => w.workspaceId === webCtx.workspaceId) ? webCtx.workspaceId : '';
+        setWebWorkspaceId(barWs || (ws.length ? ws[0].workspaceId : ''));
       })
       .catch((e) => onError(e instanceof Error ? e.message : String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -7181,9 +7225,14 @@ function ServerAuditSection({ accountId, onError }: { accountId: string; onError
         setAllContainers(list);
         const servers = list.filter((c) => (c.usageContext ?? []).some((u) => /server/i.test(u)));
         setContainers(servers);
+        onServersLoaded?.(servers.length);
         if (servers.length === 1) setContainerId(servers[0].containerId);
+        // The coverage comparison defaults to the web container already picked in the GTM bar —
+        // don't make the user pick it twice. Falls back to a sole web container.
         const webs = list.filter((c) => !(c.usageContext ?? []).some((u) => /server/i.test(u)));
-        if (webs.length === 1) setWebContainerId(webs[0].containerId);
+        const barWeb = webCtx?.containerId && webs.some((c) => c.containerId === webCtx.containerId) ? webCtx.containerId : '';
+        if (barWeb) setWebContainerId(barWeb);
+        else if (webs.length === 1) setWebContainerId(webs[0].containerId);
       })
       .catch((e) => onError(e instanceof Error ? e.message : String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -7242,42 +7291,84 @@ function ServerAuditSection({ accountId, onError }: { accountId: string; onError
   const SEV: Record<string, string> = { critical: 'var(--c-red)', high: 'var(--c-red)', medium: 'var(--c-amber)', low: 'var(--text-muted)', info: 'var(--text-faint)' };
   return (
     <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ fontWeight: 700, fontSize: 15 }}>Audit a server container</div>
-      <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-        Read-only configuration audit of an EXISTING server container: does a client claim incoming requests, do tags have triggers and destination ids, duplicate GA4 relays (double-counting), dead URL-encoded triggers, Meta CAPI pitfalls (swapped pixel/token, test code left on), legacy or duplicate clients, unused variables and broken {'{{references}}'}. Configuration only — it never reads server runtime logs.
-      </div>
+      <div style={{ fontWeight: 700, fontSize: 15 }}>Server container</div>
       {containers.length === 0 ? (
-        <div style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>No server container found in this GTM account yet — create one above, or check the account picked in the GTM bar.</div>
+        <div style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>No server container in this GTM account yet — open “＋ Create a new server container” below to build one, or check the account picked in the GTM bar.</div>
       ) : (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <select style={{ ...styles.input, maxWidth: 320 }} value={containerId} onChange={(e) => setContainerId(e.target.value)}>
-            <option value="">Select server container…</option>
-            {containers.map((c) => (
-              <option key={c.containerId} value={c.containerId}>{c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
-            ))}
-          </select>
-          <select style={{ ...styles.input, maxWidth: 220 }} value={workspaceId} disabled={!containerId || !workspaces.length} onChange={(e) => setWorkspaceId(e.target.value)}>
-            {!workspaces.length && <option value="">{containerId ? 'Loading workspaces…' : 'Pick a container first'}</option>}
-            {workspaces.map((w) => (
-              <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
-            ))}
-          </select>
-          <button style={styles.primaryBtn} disabled={!containerId || !workspaceId || running} onClick={() => void run()}>
-            {running ? 'Auditing…' : '▶ Audit server container'}
-          </button>
-          {(['md', 'csv', 'xlsx', 'pdf'] as const).map((fmt) => (
-            <button
-              key={fmt}
-              style={styles.ghostBtn}
-              disabled={!containerId || !workspaceId || docExporting}
-              title="Generate the container documentation (clients, tags, triggers, variables, transformations). Credentials are never written to the file."
-              onClick={() => void exportDoc(fmt)}
-            >
-              ⬇ Doc {fmt.toUpperCase()}
-            </button>
-          ))}
-          {docNote && <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{docNote}</span>}
-        </div>
+        <>
+          {/* Step 1: pick ONCE — audit, coverage and docs all work on this selection. */}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <label>
+              <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', display: 'block', marginBottom: 3 }}>1 · Server container</span>
+              <select style={{ ...styles.input, maxWidth: 320 }} value={containerId} onChange={(e) => setContainerId(e.target.value)}>
+                <option value="">Select server container…</option>
+                {containers.map((c) => (
+                  <option key={c.containerId} value={c.containerId}>{c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', display: 'block', marginBottom: 3 }}>Workspace</span>
+              <select style={{ ...styles.input, maxWidth: 220 }} value={workspaceId} disabled={!containerId || !workspaces.length} onChange={(e) => setWorkspaceId(e.target.value)}>
+                {!workspaces.length && <option value="">{containerId ? 'Loading…' : 'Pick a container first'}</option>}
+                {workspaces.map((w) => (
+                  <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {/* Step 2: three actions, one card each — no hunting through sections. */}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'stretch' }}>
+            <div style={{ flex: '1 1 220px', minWidth: 210, border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontWeight: 700, fontSize: 13.5 }}>2 · Audit configuration</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.45, flex: 1 }}>
+                Clients, relays, triggers, variables, CAPI pitfalls — read-only, never touches runtime.
+              </div>
+              <button style={styles.primaryBtn} disabled={!containerId || !workspaceId || running} onClick={() => void run()}>
+                {running ? 'Auditing…' : '▶ Audit'}
+              </button>
+            </div>
+            <div style={{ flex: '1 1 280px', minWidth: 260, border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontWeight: 700, fontSize: 13.5 }}>Web ↔ Server coverage</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                Is every web event handled server-side? Compares against{' '}
+                {webContainerId && webContainerId === webCtx?.containerId ? <b style={{ color: 'var(--text)' }}>{webCtx?.containerName ?? 'the GTM-bar container'}</b> : 'the web container below'}.
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <select style={{ ...styles.input, flex: '1 1 140px', fontSize: 12 }} value={webContainerId} onChange={(e) => setWebContainerId(e.target.value)}>
+                  <option value="">Select web container…</option>
+                  {allContainers.filter((c) => !(c.usageContext ?? []).some((u) => /server/i.test(u))).map((c) => (
+                    <option key={c.containerId} value={c.containerId}>{c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
+                  ))}
+                </select>
+                <select style={{ ...styles.input, flex: '1 1 110px', fontSize: 12 }} value={webWorkspaceId} disabled={!webContainerId || !webWorkspaces.length} onChange={(e) => setWebWorkspaceId(e.target.value)}>
+                  {!webWorkspaces.length && <option value="">{webContainerId ? 'Loading…' : 'Web container first'}</option>}
+                  {webWorkspaces.map((w) => (
+                    <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
+                  ))}
+                </select>
+              </div>
+              <button style={styles.primaryBtn} disabled={!containerId || !workspaceId || !webContainerId || !webWorkspaceId || covRunning} onClick={() => void runCoverage()}>
+                {covRunning ? 'Comparing…' : '▶ Compare'}
+              </button>
+            </div>
+            <div style={{ flex: '1 1 200px', minWidth: 190, border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontWeight: 700, fontSize: 13.5 }}>Documentation</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.45, flex: 1 }}>
+                Full container doc — credentials never written to the file.
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {(['md', 'csv', 'xlsx', 'pdf'] as const).map((fmt) => (
+                  <button key={fmt} style={styles.ghostBtn} disabled={!containerId || !workspaceId || docExporting} onClick={() => void exportDoc(fmt)}>
+                    ⬇ {fmt.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              {docNote && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{docNote}</span>}
+            </div>
+          </div>
+        </>
       )}
       {report && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -7303,31 +7394,10 @@ function ServerAuditSection({ accountId, onError }: { accountId: string; onError
         </div>
       )}
 
-      {/* ── Web ↔ Server coverage: is every web event actually handled server-side? ── */}
+      {/* ── Coverage results (the picker lives in the action card above) ── */}
       {containers.length > 0 && (
-        <div style={{ borderTop: '1px dashed var(--border)', marginTop: 6, paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>Web ↔ Server coverage</div>
-          <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-            Compares the WEB container's events against the server container selected above: GA4 events are covered as a group by the GA4 client + relay; CAPI destinations (Meta / TikTok / LinkedIn / Pinterest) are matched per event. Also checks the two silent killers: the web Google tag not pointing at the tagging server, and a web/server Measurement ID mismatch.
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <select style={{ ...styles.input, maxWidth: 320 }} value={webContainerId} onChange={(e) => setWebContainerId(e.target.value)}>
-              <option value="">Select web container…</option>
-              {allContainers.filter((c) => !(c.usageContext ?? []).some((u) => /server/i.test(u))).map((c) => (
-                <option key={c.containerId} value={c.containerId}>{c.name}{c.publicId ? ` (${c.publicId})` : ''}</option>
-              ))}
-            </select>
-            <select style={{ ...styles.input, maxWidth: 220 }} value={webWorkspaceId} disabled={!webContainerId || !webWorkspaces.length} onChange={(e) => setWebWorkspaceId(e.target.value)}>
-              {!webWorkspaces.length && <option value="">{webContainerId ? 'Loading workspaces…' : 'Pick a web container first'}</option>}
-              {webWorkspaces.map((w) => (
-                <option key={w.workspaceId} value={w.workspaceId}>{w.name}</option>
-              ))}
-            </select>
-            <button style={styles.primaryBtn} disabled={!containerId || !workspaceId || !webContainerId || !webWorkspaceId || covRunning} onClick={() => void runCoverage()}>
-              {covRunning ? 'Comparing…' : '▶ Compare coverage'}
-            </button>
-            {!containerId && <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>pick the server container above first</span>}
-          </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {coverage && <div style={{ fontWeight: 700, fontSize: 14, marginTop: 2 }}>Coverage result</div>}
           {coverage && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {/* score strip */}
