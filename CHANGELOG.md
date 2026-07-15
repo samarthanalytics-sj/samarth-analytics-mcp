@@ -1,3 +1,9 @@
+## [1.329.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.328.0...v1.329.0) (2026-07-15)
+
+### Features
+
+* **desktop:** server doc Excel export + PII-transformation look-here check ([f5cf7c3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f5cf7c36ed12c8dd77be4ef69034ea5597f890a2))
+
 ## [1.328.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.327.0...v1.328.0) (2026-07-15)
 
 ### Features
