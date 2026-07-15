@@ -1,3 +1,9 @@
+## [1.328.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.327.0...v1.328.0) (2026-07-15)
+
+### Features
+
+* **desktop:** server container documentation export (MD / CSV / PDF) ([a888d1e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a888d1e47fd380b60b2b599f140793cdd338357e))
+
 ## [1.327.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.326.0...v1.327.0) (2026-07-14)
 
 ### Features
