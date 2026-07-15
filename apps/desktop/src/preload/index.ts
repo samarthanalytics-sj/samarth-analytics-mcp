@@ -4,6 +4,7 @@ import type {
   AddAccountInput,
   AuditReportView,
   ServerCoverageView,
+  ServerDocView,
   ServerPlanView,
   ServerPlanApplyResultView,
   WorkspaceCompareResultView,
@@ -346,6 +347,8 @@ const api = {
       ipcRenderer.invoke('gtm:exportServerCoverage', format, coverage, names),
     exportServerDoc: (accountId: string, containerId: string, workspaceId: string, format: 'md' | 'csv' | 'pdf' | 'xlsx', names: { containerName?: string; publicId?: string; workspaceName?: string }): Promise<string | null> =>
       ipcRenderer.invoke('gtm:exportServerDoc', accountId, containerId, workspaceId, format, names),
+    serverDoc: (accountId: string, containerId: string, workspaceId: string, names: { containerName?: string; publicId?: string; workspaceName?: string }): Promise<ServerDocView> =>
+      ipcRenderer.invoke('gtm:serverDoc', accountId, containerId, workspaceId, names),
     audit: (accountId: string, containerId: string, workspaceId: string): Promise<AuditReportView> =>
       ipcRenderer.invoke('gtm:audit', accountId, containerId, workspaceId),
     // The container's EXISTING GA4/base tags translated into verify-engine inputs, so

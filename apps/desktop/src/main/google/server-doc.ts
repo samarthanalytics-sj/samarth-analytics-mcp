@@ -117,6 +117,66 @@ export function buildServerFlowLines(s: ServerContainerSnapshot): string[] {
   return lines;
 }
 
+/** JSON-safe documentation view for ON-SCREEN rendering (shape mirrors ServerDocView in
+ *  shared/ipc.ts). Built from the SAME helpers the MD/CSV/XLSX exports use - destination,
+ *  fires-on, referenced variables, flow lines - so the page and the files can't diverge.
+ *  Secret-shaped values are never included; only the pinned presence note. PURE. */
+export function buildServerDocView(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport): {
+  meta: { containerName: string; publicId?: string; workspaceName?: string; generatedAt: string; liveVersionId: string | null };
+  overview: { taggingServerUrls: string[]; counts: { clients: number; tags: number; triggers: number; variables: number; transformations: number } };
+  findings: Array<{ severity: string; where: string; message: string; recommendation: string }>;
+  destinations: Array<{ destination: string; types: string; tags: number; paused: number }>;
+  flowLines: string[];
+  clients: Array<{ name: string; type: string }>;
+  tags: Array<{ name: string; type: string; destination: string; firesOn: string; vars: string; notes: string }>;
+  triggers: Array<{ name: string; type: string; condition: string }>;
+  variables: Array<{ name: string; type: string }>;
+  transformations: Array<{ name: string; type: string }>;
+} {
+  const trigById = new Map((s.triggers ?? []).map((t) => [t.triggerId, t]));
+  const firesOn = (t: AuditTag): string =>
+    (t.firingTriggerId ?? []).map((id) => trigById.get(id)?.name ?? `#${id}`).join(', ') || '(none - never fires)';
+  return {
+    meta: {
+      containerName: meta.containerName,
+      publicId: meta.publicId,
+      workspaceName: meta.workspaceName,
+      generatedAt: meta.generatedAt ?? '',
+      liveVersionId: meta.liveVersionId ?? null,
+    },
+    overview: {
+      taggingServerUrls: s.taggingServerUrls,
+      counts: {
+        clients: s.clients.length,
+        tags: s.tags.length,
+        triggers: (s.triggers ?? []).length,
+        variables: (s.variables ?? []).length,
+        transformations: s.transformations.length,
+      },
+    },
+    findings: (audit?.findings ?? []).map((f) => ({
+      severity: f.severity,
+      where: f.resource ? `${f.resource.kind} "${f.resource.name}"` : 'container',
+      message: f.message,
+      recommendation: f.recommendation,
+    })),
+    destinations: buildDestinationRows(s),
+    flowLines: buildServerFlowLines(s),
+    clients: s.clients.map((c) => ({ name: c.name, type: c.type })),
+    tags: s.tags.map((t) => ({
+      name: t.name,
+      type: t.type,
+      destination: tagDestination(t),
+      firesOn: firesOn(t),
+      vars: referencedVars(t).join(', '),
+      notes: [t.paused ? 'PAUSED' : '', hasSecret(t) ? 'credential configured (value not shown)' : ''].filter(Boolean).join('; '),
+    })),
+    triggers: (s.triggers ?? []).map((tr) => ({ name: tr.name, type: tr.type, condition: triggerCondition(tr) })),
+    variables: (s.variables ?? []).map((v) => ({ name: v.name, type: v.type })),
+    transformations: s.transformations.map((x) => ({ name: x.name, type: x.type })),
+  };
+}
+
 export function serverContainerDocMarkdown(s: ServerContainerSnapshot, meta: ServerDocMeta, audit?: AuditReport): string {
   const trigById = new Map((s.triggers ?? []).map((t) => [t.triggerId, t]));
   const firesOn = (t: AuditTag): string =>
