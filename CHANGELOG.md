@@ -1,3 +1,9 @@
+## [1.339.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.339.1...v1.339.2) (2026-07-15)
+
+### Bug Fixes
+
+* **desktop:** no em/en dashes in ANY export - enforced at every export boundary ([#586](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/586)) ([fae9b33](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fae9b33d4fcd2f836a24ef8c6731c546e76ead89))
+
 ## [1.339.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.339.0...v1.339.1) (2026-07-15)
 
 ### Bug Fixes
