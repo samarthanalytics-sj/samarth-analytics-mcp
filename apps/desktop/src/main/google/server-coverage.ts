@@ -29,6 +29,9 @@ export interface ServerCoverageRow {
   /** What covers it (server tag / client names). */
   by?: string;
   recommendation?: string;
+  /** For a MISSING CAPI event when a same-platform server tag exists: the clone source for the
+   *  one-click create (credentials/variable refs come from the template; only the trigger is new). */
+  template?: { tagId: string; name: string };
 }
 
 export interface ServerCoverageReport {
@@ -163,13 +166,23 @@ export function buildServerCoverage(
       webEventNamesByPlatform.set(platform, set);
     }
     const hit = handlerFor(platform, event);
+    // Clone source for the one-click create: any ACTIVE same-platform server tag (its credentials
+    // and variable references carry over; only the firing trigger differs).
+    const templateTag = !hit && event ? activeServerTags.find((st) => serverPlatformOf(st) === platform) : undefined;
     rows.push({
       platform,
       event: event ?? t.name,
       webTag: t.name,
       status: hit ? 'covered' : event ? 'missing' : 'not_matchable',
       ...(hit ? { by: hit === 'all' ? 'an all-events server tag' : `server tag "${hit.tag}"` } : {}),
-      ...(!hit && event ? { recommendation: `No server tag handles "${event}" for ${platform}. Ask the chat: ${CAPI_TOOL[platform]} for this event.` } : {}),
+      ...(!hit && event
+        ? {
+            recommendation: templateTag
+              ? `No server tag handles "${event}" for ${platform}. Create one from "${templateTag.name}" (same credentials, new trigger).`
+              : `No server tag handles "${event}" for ${platform}, and no ${platform} server tag exists to copy credentials from. Ask the chat: ${CAPI_TOOL[platform]} for this event.`,
+          }
+        : {}),
+      ...(templateTag ? { template: { tagId: templateTag.tagId, name: templateTag.name } } : {}),
       ...(!hit && !event ? { recommendation: 'This pixel fires on a non-custom-event trigger, so there is no event name to match against server triggers - verify it manually (or route it through a named dataLayer event).' } : {}),
     });
   }

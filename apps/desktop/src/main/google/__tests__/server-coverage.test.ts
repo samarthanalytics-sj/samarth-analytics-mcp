@@ -77,15 +77,24 @@ test('no GA4 client → every web GA4 event reads missing, with the fix', () => 
   assert.ok(/GA4 client/.test(ga4.recommendation ?? ''));
 });
 
-test('web Meta event with no matching server trigger → missing with the exact CAPI tool', () => {
+test('web Meta event with no matching server trigger → missing, with the clone template attached', () => {
   const srv = server({ triggers: [clientTrigger('90'), evTrigger('91', 'some_other_event')] });
   const r = buildServerCoverage(web(), srv, AUDIT_OK);
   const meta = r.rows.find((x) => x.platform === 'meta')!;
   assert.equal(meta.status, 'missing');
-  assert.ok(/create_meta_capi_server_tag/.test(meta.recommendation ?? ''), meta.recommendation);
+  assert.deepEqual(meta.template, { tagId: 's2', name: 'Meta CAPI - Lead' }, 'clone source = the existing Meta server tag');
+  assert.ok(/Create one from "Meta CAPI - Lead"/.test(meta.recommendation ?? ''), meta.recommendation);
   // ...and the server's unmatched event surfaces as unused.
   assert.deepEqual(r.unusedServer, [{ tag: 'Meta CAPI - Lead', platform: 'meta', event: 'some_other_event' }]);
   assert.equal(r.summary.coveragePct, 50);
+});
+
+test('no same-platform server tag at all → no template; the chat-builder tool is the recommendation', () => {
+  const none = buildServerCoverage(web(), server({ tags: [], triggers: [] }), AUDIT_OK);
+  const meta = none.rows.find((x) => x.platform === 'meta')!;
+  assert.equal(meta.status, 'missing');
+  assert.equal(meta.template, undefined);
+  assert.ok(/create_meta_capi_server_tag/.test(meta.recommendation ?? ''), meta.recommendation);
 });
 
 test('an all-events server tag covers a pixel with no extractable event name', () => {
