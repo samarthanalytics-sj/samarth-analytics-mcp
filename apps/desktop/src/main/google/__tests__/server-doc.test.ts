@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { serverContainerDocMarkdown, serverContainerDocCsv, buildServerFlowLines, buildDestinationRows, buildServerDocView } from '../server-doc';
+import { serverContainerDocMarkdown, serverContainerDocCsv, buildServerFlowLines, buildDestinationRows, buildServerDocView, variableUsedBy, webLinkSummaryLines, type ServerDocExtras } from '../server-doc';
+import type { ServerCoverageReport } from '../server-coverage';
 import type { AuditTag, AuditTrigger, ServerContainerSnapshot } from '../gtm-builders';
 
 let passed = 0;
@@ -166,5 +167,76 @@ test('house style: doc MD and CSV never carry em/en dashes, even from entity nam
   }
   assert.ok(md.includes('GA4 - Relay - v2'), 'names hyphenated, not dropped');
 });
+
+const covFixture = (): ServerCoverageReport => ({
+  rows: [
+    { platform: 'ga4', event: '(all GA4 events)', webTag: 'GA4 - Config', status: 'covered', by: 'client + relay "GA4 Relay"' },
+    { platform: 'meta', event: 'generate_lead', webTag: 'Meta - Lead', status: 'missing', recommendation: 'create_meta_capi_server_tag' },
+  ],
+  unusedServer: [],
+  ga4: { client: true, relay: true, webMeasurementIds: ['G-ABC1234'], serverMeasurementIds: ['G-ABC1234'], idsMatch: true },
+  webWiring: { status: 'wired', webUrl: 'https://sgtm.example.com', serverUrls: ['https://sgtm.example.com'] },
+  summary: { webEvents: 2, covered: 1, missing: 1, notMatchable: 0, coveragePct: 50 },
+  score: { configuration: 90, coverage: 50, overall: 70 },
+} as unknown as ServerCoverageReport);
+const extrasFixture = (): ServerDocExtras => ({
+  versions: [
+    { versionId: '3', name: 'CAPI rollout', numTags: 4, numTriggers: 2, numVariables: 6, deleted: false, live: true },
+    { versionId: '2', name: 'initial', numTags: 1, numTriggers: 1, numVariables: 2, deleted: false, live: false },
+  ],
+  coverage: covFixture(),
+});
+
+test('variables carry a Used-by map (inverse references), honest when nothing references them', () => {
+  const c = snap();
+  assert.deepEqual(variableUsedBy(c, 'ed - email'), ['tag "Meta CAPI - Lead"']);
+  const v = buildServerDocView(c, { containerName: 'X' });
+  assert.equal(v.variables.find((x) => x.name === 'ed - email')!.usedBy, 'tag "Meta CAPI - Lead"');
+  const md = serverContainerDocMarkdown(c, { containerName: 'X' });
+  assert.ok(md.includes('| Variable | Type | Used by |'));
+  assert.ok(md.includes('tag "Meta CAPI - Lead"'));
+  const csv = serverContainerDocCsv(c, { containerName: 'X' });
+  assert.ok(csv.includes('used by: tag ""Meta CAPI - Lead""'), 'csv notes the usage (quoted)');
+});
+
+test('configuration score in the overview, formula stated, only when the audit ran', () => {
+  const audit = {
+    counts: { tags: 2, triggers: 2, variables: 1, findings: 1 },
+    summary: { critical: 0, high: 1, medium: 0, low: 0, info: 0 },
+    findings: [], boundary: '', runtimeRequired: [],
+  };
+  const v = buildServerDocView(snap(), { containerName: 'X' }, audit as never);
+  assert.equal(v.overview.configScore, 90);
+  assert.equal(buildServerDocView(snap(), { containerName: 'X' }).overview.configScore, null, 'no audit -> no score, never fabricated');
+  const md = serverContainerDocMarkdown(snap(), { containerName: 'X' }, audit as never);
+  assert.ok(md.includes('- Configuration score: 90/100 (100 - 25 per critical - 10 per high - 3 per medium - 1 per low)'));
+});
+
+test('versions section: newest-first table with the LIVE marker; absent without extras', () => {
+  const md = serverContainerDocMarkdown(snap(), { containerName: 'X' }, undefined, extrasFixture());
+  assert.ok(md.includes('## Versions'));
+  assert.ok(md.includes('| #3 | CAPI rollout | 4 | 2 | 6 | LIVE |'));
+  assert.ok(md.includes('no publish dates'), 'honest about what the version list lacks');
+  assert.ok(!serverContainerDocMarkdown(snap(), { containerName: 'X' }).includes('## Versions'));
+  const v = buildServerDocView(snap(), { containerName: 'X' }, undefined, extrasFixture());
+  assert.equal(v.versions.length, 2);
+  assert.equal(v.versions[0].live, true);
+});
+
+test('web link section: wiring + IDs + coverage + missing list; only when a web container was given', () => {
+  const lines = webLinkSummaryLines(covFixture());
+  assert.ok(lines[0].includes('points at this server'));
+  assert.ok(lines.some((l) => l.includes('Measurement IDs match (G-ABC1234)')));
+  assert.ok(lines.some((l) => l.includes('Coverage: 1 of 2 web events covered (50%)')));
+  assert.ok(lines.some((l) => l.includes('Missing server-side: meta generate_lead')));
+  const md = serverContainerDocMarkdown(snap(), { containerName: 'X' }, undefined, extrasFixture());
+  assert.ok(md.includes('## Web link (web container <-> this server)'));
+  assert.ok(!serverContainerDocMarkdown(snap(), { containerName: 'X' }).includes('## Web link'), 'no web ref -> no section, never guessed');
+  const v = buildServerDocView(snap(), { containerName: 'X' }, undefined, extrasFixture());
+  assert.equal(v.webLink!.wiring, 'wired');
+  assert.equal(v.webLink!.score.overall, 70);
+  assert.equal(buildServerDocView(snap(), { containerName: 'X' }).webLink, null);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

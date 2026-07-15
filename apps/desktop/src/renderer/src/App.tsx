@@ -7473,14 +7473,15 @@ function ServerAuditSection({
     setDoc(null);
     const cont = containers.find((c) => c.containerId === containerId);
     const ws = workspaces.find((x) => x.workspaceId === workspaceId);
+    const webRef = webContainerId && webWorkspaceId ? { containerId: webContainerId, workspaceId: webWorkspaceId } : undefined;
     window.desktop.gtm
-      .serverDoc(accountId, containerId, workspaceId, { containerName: cont?.name, publicId: cont?.publicId, workspaceName: ws?.name })
+      .serverDoc(accountId, containerId, workspaceId, { containerName: cont?.name, publicId: cont?.publicId, workspaceName: ws?.name }, webRef)
       .then((d) => { if (!cancelled) setDoc(d); })
       .catch((e) => { if (!cancelled) onError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setDocLoading(false); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, containerId, workspaceId]);
+  }, [view, containerId, workspaceId, webContainerId, webWorkspaceId]);
   async function exportDoc(format: 'md' | 'csv' | 'pdf' | 'xlsx'): Promise<void> {
     if (!containerId || !workspaceId || docExporting) return;
     onError('');
@@ -7493,7 +7494,7 @@ function ServerAuditSection({
         containerName: cont?.name,
         publicId: cont?.publicId,
         workspaceName: ws?.name,
-      });
+      }, webContainerId && webWorkspaceId ? { containerId: webContainerId, workspaceId: webWorkspaceId } : undefined);
       setDocNote(saved ? `✓ Saved to ${saved}` : 'Save cancelled.');
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -7692,6 +7693,13 @@ function ServerAuditSection({
                   <div style={{ color: 'var(--text-muted)' }}>
                     {doc.overview.counts.clients} client(s) · {doc.overview.counts.tags} tag(s) · {doc.overview.counts.triggers} trigger(s) · {doc.overview.counts.variables} variable(s) · {doc.overview.counts.transformations} transformation(s)
                   </div>
+                  {doc.overview.configScore != null && (
+                    <div>
+                      Configuration score: <b style={{ color: doc.overview.configScore >= 90 ? 'var(--c-green)' : doc.overview.configScore >= 70 ? 'var(--c-amber)' : 'var(--c-red)' }}>{doc.overview.configScore}/100</b>
+                      {doc.webLink && <> · coverage {doc.webLink.coveragePct == null ? 'n/a' : `${doc.webLink.coveragePct}%`} · overall <b>{doc.webLink.score.overall}/100</b></>}
+                      <span style={{ color: 'var(--text-faint)' }}> (100 - 25 per critical - 10 per high - 3 per medium - 1 per low)</span>
+                    </div>
+                  )}
                   {doc.meta.liveVersionId && (
                     <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
                       Live (published) version: {doc.meta.liveVersionId}. This page describes the workspace DRAFT, which may differ from what is live.
@@ -7713,6 +7721,21 @@ function ServerAuditSection({
                     ))
                   )}
                 </div>
+                {doc.webLink && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13.5 }}>Web link (web container ↔ this server)</div>
+                    <div style={{
+                      border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5,
+                      display: 'flex', flexDirection: 'column', gap: 4,
+                      borderColor: doc.webLink.wiring === 'wired' && doc.webLink.idsMatch !== false ? 'var(--c-green-border)' : 'var(--c-amber-border)',
+                      background: doc.webLink.wiring === 'wired' && doc.webLink.idsMatch !== false ? 'var(--c-green-bg)' : 'var(--c-amber-bg)',
+                    }}>
+                      {doc.webLink.lines.map((l, i) => (
+                        <div key={i} style={{ lineHeight: 1.5 }}>{l}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {docTable('Destinations (where data goes)', ['Destination', 'Tag type(s)', 'Tags', 'Notes'],
                   doc.destinations.map((d) => [d.destination, d.types, String(d.tags), d.paused ? `${d.paused} paused` : '']),
                   'None - no server tag forwards data anywhere yet.')}
@@ -7720,6 +7743,9 @@ function ServerAuditSection({
                   <div style={{ fontWeight: 700, fontSize: 13.5 }}>Request flow</div>
                   <pre style={{ margin: 0, border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', fontSize: 12, lineHeight: 1.55, overflowX: 'auto', fontFamily: 'ui-monospace, monospace' }}>{doc.flowLines.join('\n')}</pre>
                 </div>
+                {doc.versions.length > 0 && docTable('Versions (newest first)', ['Version', 'Name', 'Tags', 'Triggers', 'Variables', 'Notes'],
+                  doc.versions.map((v) => [`#${v.versionId}`, v.name, String(v.tags), String(v.triggers), String(v.variables), [v.live ? 'LIVE' : '', v.deleted ? 'deleted' : ''].filter(Boolean).join(' · ')]),
+                  '')}
                 {docTable('Clients (what claims incoming requests)', ['Client', 'Type'],
                   doc.clients.map((c) => [c.name, c.type]),
                   'None - nothing claims incoming requests, so no server tag can run.')}
@@ -7729,8 +7755,8 @@ function ServerAuditSection({
                 {docTable('Triggers', ['Trigger', 'Type', 'Condition'],
                   doc.triggers.map((tr) => [tr.name, tr.type, tr.condition]),
                   'None.')}
-                {docTable('Variables', ['Variable', 'Type'],
-                  doc.variables.map((v) => [v.name, v.type]),
+                {docTable('Variables', ['Variable', 'Type', 'Used by'],
+                  doc.variables.map((v) => [v.name, v.type, v.usedBy]),
                   'None.')}
                 {docTable('Transformations', ['Transformation', 'Type'],
                   doc.transformations.map((x) => [x.name, x.type]),

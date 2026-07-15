@@ -1036,15 +1036,19 @@ export interface ServerPlanApplyResultView {
  *  on the page and what's written to a file can't diverge. Secret values never appear. */
 export interface ServerDocView {
   meta: { containerName: string; publicId?: string; workspaceName?: string; generatedAt: string; liveVersionId: string | null };
-  overview: { taggingServerUrls: string[]; counts: { clients: number; tags: number; triggers: number; variables: number; transformations: number } };
+  overview: { taggingServerUrls: string[]; counts: { clients: number; tags: number; triggers: number; variables: number; transformations: number }; configScore: number | null };
   findings: Array<{ severity: string; where: string; message: string; recommendation: string }>;
   destinations: Array<{ destination: string; types: string; tags: number; paused: number }>;
   flowLines: string[];
   clients: Array<{ name: string; type: string }>;
   tags: Array<{ name: string; type: string; destination: string; firesOn: string; vars: string; notes: string }>;
   triggers: Array<{ name: string; type: string; condition: string }>;
-  variables: Array<{ name: string; type: string }>;
+  variables: Array<{ name: string; type: string; usedBy: string }>;
   transformations: Array<{ name: string; type: string }>;
+  /** Published version history (newest first, max 10). Header list only - no publish dates. */
+  versions: Array<{ versionId: string; name: string; tags: number; triggers: number; variables: number; live: boolean; deleted: boolean }>;
+  /** Web<->server linkage summary - present only when a web container was provided. */
+  webLink: { wiring: 'wired' | 'not_wired' | 'url_mismatch' | 'unknown'; idsMatch: boolean | null; coveragePct: number | null; score: { configuration: number; coverage: number | null; overall: number }; lines: string[] } | null;
 }
 
 /** Web GTM <-> Server GTM coverage comparison (config-level). Mirrors server-coverage.ts. */
