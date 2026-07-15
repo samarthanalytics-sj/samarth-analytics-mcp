@@ -187,6 +187,13 @@ export interface Ga4Baseline {
    *  is an event-COVERAGE approximation (each step counts users independently, no order enforced), not a
    *  strict sequential funnel; the report labels it as such and omits it when there is no view_item. */
   funnelSteps: Array<{ event: string; users: number }>;
+  /** PRIOR-window sessions per channel (top 15) - powers the "what changed by channel"
+   *  decomposition of the headline delta. Optional: absent on older callers/fixtures,
+   *  and the drivers block simply doesn't render. */
+  priorChannelSessions?: Array<{ channel: string; sessions: number }>;
+  /** Top PRODUCTS by item revenue (ITEM-scoped metrics: itemsViewed / itemsAddedToCart /
+   *  itemsPurchased / itemRevenue). Empty/absent on non-ecommerce properties or query failure. */
+  itemPerformance?: Array<{ item: string; viewed: number; addedToCart: number; purchased: number; revenue: number }>;
 }
 
 export interface GtmWorkspaceView {
@@ -2943,7 +2950,7 @@ export class GoogleDataService {
     // NEWEST-FIRST at limit 1000, then reversed to chronological — so a custom range longer than the cap
     // keeps the MOST-RECENT days (what spike/trend cares about), not the oldest. Country = top-N (250).
     const emptyResult: Ga4ReportResult = { dimensionHeaders: [], metricHeaders: [], rows: [] };
-    const [curTotal, priorTotal, byEngagement, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage, byDevicePerf, byGeoPerf, byFunnel, byLlmSource] = await Promise.all([
+    const [curTotal, priorTotal, byEngagement, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage, byDevicePerf, byGeoPerf, byFunnel, byLlmSource, byPriorChannel, byItems] = await Promise.all([
       this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: TREND_METRICS }),
       // Engagement totals (0=userEngagementDuration sec, 1=engagementRate 0-1, 2=engagedSessionsPerUser).
@@ -2979,6 +2986,12 @@ export class GoogleDataService {
       // referrals. NOTE: this is a systematic UNDERCOUNT (app/in-app browsers + copied links land in
       // Direct); the report says so.
       this.runGa4Report({ property, startDate, endDate, dimensions: ['sessionSource'], metrics: ['sessions', 'keyEvents', 'sessionKeyEventRate', 'totalRevenue', 'engagementRate'], dimensionFilter: { filter: { fieldName: 'sessionSource', inListFilter: { values: LLM_TRAFFIC_SOURCES } } }, orderBys: byMetricDesc, limit: '20' }).catch(() => emptyResult),
+      // PRIOR-window per-channel sessions (top 15): the "what changed by channel" decomposition joins
+      // these against the current channelPerformance rows. Best-effort.
+      this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: ['sessionDefaultChannelGroup'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '15' }).catch(() => emptyResult),
+      // Top PRODUCTS by item revenue. ITEM-scoped metrics (a session that views 3 products counts once
+      // per product) - the report's caveat says so. Empty on non-ecommerce properties. Best-effort.
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['itemName'], metrics: ['itemsViewed', 'itemsAddedToCart', 'itemsPurchased', 'itemRevenue'], orderBys: [{ metric: { metricName: 'itemRevenue' }, desc: true }], limit: '15' }).catch(() => emptyResult),
     ]);
     // Build the per-step user counts. This is an event-COVERAGE funnel (distinct users who fired each
     // event at all in the window), NOT a strict sequential path — GA4's true ordered funnel is
@@ -3094,6 +3107,16 @@ export class GoogleDataService {
         engagementRate: Number(r.metrics[4]) || 0, // 0-1
       })),
       funnelSteps: FUNNEL_EVENTS.map((event) => ({ event, users: funnelUsers.get(event) ?? 0 })),
+      priorChannelSessions: byPriorChannel.rows.map((r) => ({ channel: r.dimensions[0] || '(not set)', sessions: n(r.metrics[0]) })),
+      itemPerformance: byItems.rows
+        .map((r) => ({
+          item: r.dimensions[0] || '(not set)',
+          viewed: n(r.metrics[0]),
+          addedToCart: n(r.metrics[1]),
+          purchased: n(r.metrics[2]),
+          revenue: n(r.metrics[3]),
+        }))
+        .filter((x) => x.viewed > 0 || x.addedToCart > 0 || x.purchased > 0 || x.revenue > 0),
     };
   }
 

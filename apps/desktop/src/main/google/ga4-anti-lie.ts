@@ -43,6 +43,21 @@ const PAID_CHANNEL_RE = /^(paid[\s_]|cross[\s_-]*network|display$)/i;
 // already fetched; the finding always shows MASKED examples so the report never re-leaks the PII.
 const PII_EMAIL_RE = /[a-z0-9._%+-]+(?:@|%40)[a-z0-9.-]+\.[a-z]{2,}/i;
 const PII_PARAM_RE = /[?&](email|e-?mail|phone|tel|mobile|first_?name|last_?name|full_?name|address|postcode|zip_?code)=([^&#]+)/i;
+/** The RESTATED window total once a single-bucket channel burst is excluded: plain arithmetic
+ *  (window sessions minus that channel's peak-bucket sessions), clearly labeled - the number a
+ *  reader may quote while the burst is unexplained. Same spike detector as the finding and the
+ *  evidence chart, so all three agree. null when no spike fires. PURE. */
+export function restatedWithoutSpike(baseline: Ga4Baseline): { channel: string; peakLabel: string; excluded: number; sessions: number; restatedDeltaPct: number | null; headlineDeltaPct: number | null } | null {
+  if (!baseline.channelDaily?.length) return null;
+  const gran = granularityFor(baseline.dailySessions?.length ?? 0);
+  const anchor = baseline.dailySessions?.[0]?.date ?? '';
+  const spike = findChannelSpike(baseline.channelDaily.map((c) => ({ channel: c.channel, points: groupSeries(c.series, gran, anchor) })));
+  if (!spike) return null;
+  const restated = Math.max(0, baseline.sessions - spike.peakValue);
+  const d = (cur: number): number | null => (baseline.priorSessions > 0 ? Math.round(((cur - baseline.priorSessions) / baseline.priorSessions) * 100) : null);
+  return { channel: spike.channel, peakLabel: spike.peakLabel, excluded: spike.peakValue, sessions: restated, restatedDeltaPct: d(restated), headlineDeltaPct: d(baseline.sessions) };
+}
+
 export const maskPii = (page: string): string =>
   page
     .replace(new RegExp(PII_EMAIL_RE.source, 'gi'), '***@***')
@@ -81,13 +96,19 @@ export function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQual
       const period = gran === 'day' ? 'day' : gran === 'week' ? 'week' : 'month';
       spikePeriod = period;
       const span = spike.periods === 2 ? `two adjacent ${period}s` : `a single ${period}`;
+      // The restated total: the same arithmetic the reader is being told to do, done for them.
+      const restated = Math.max(0, baseline.sessions - spike.peakValue);
+      const sgn = (x: number): string => `${x >= 0 ? '+' : ''}${x}%`;
+      const rd = baseline.priorSessions > 0 ? Math.round(((restated - baseline.priorSessions) / baseline.priorSessions) * 100) : null;
+      const hd = baseline.priorSessions > 0 ? Math.round(((baseline.sessions - baseline.priorSessions) / baseline.priorSessions) * 100) : null;
+      const restatedTxt = ` Restated without that bucket: ${restated.toLocaleString('en-US')} sessions${rd !== null && hd !== null ? ` (${sgn(rd)} vs prior, instead of the headline ${sgn(hd)})` : ''} - the quotable window total while the burst is unexplained.`;
       out.push({
         severity: 'high',
         category: 'concentration',
         area: 'Data quality',
-        message: `${spike.peakSharePct}% of ${spike.channel} sessions arrived in ${span} (${spike.peakLabel}: ${spike.peakValue.toLocaleString('en-US')} vs ${spike.restValue.toLocaleString('en-US')} across every other ${period}), and ${spike.channel} is ${spike.channelSharePct}% of all sessions - that is an event (a bot burst, a scrape, or an untagged campaign), not a channel baseline, and it distorts the headline session count and the prior-period comparison.`,
+        message: `${spike.peakSharePct}% of ${spike.channel} sessions arrived in ${span} (${spike.peakLabel}: ${spike.peakValue.toLocaleString('en-US')} vs ${spike.restValue.toLocaleString('en-US')} across every other ${period}), and ${spike.channel} is ${spike.channelSharePct}% of all sessions - that is an event (a bot burst, a scrape, or an untagged campaign), not a channel baseline, and it distorts the headline session count and the prior-period comparison.${restatedTxt}`,
         recommendation: `Identify what drove ${spike.channel} in ${spike.peakLabel} (source/medium + landing pages for that traffic); segment or exclude it before quoting ${spike.channel} numbers or window totals.`,
-        plain: `Most of your ${spike.channel} traffic (${spike.peakSharePct}%) arrived in ${span}: the headline visitor numbers describe a one-off event, not your normal business.`,
+        plain: `Most of your ${spike.channel} traffic (${spike.peakSharePct}%) arrived in ${span}: the headline visitor numbers describe a one-off event, not your normal business. Without that burst you had ${restated.toLocaleString('en-US')} visits${rd !== null ? ` (${sgn(rd)} vs the prior period)` : ''} - use that number until the burst is explained.`,
         state: 'confirmed',
         businessRisk: 'Headline sessions and trend comparisons describe a one-off event, not the business',
       });
@@ -125,7 +146,7 @@ export function antiLieFindings(baseline: Ga4Baseline | null, dqCounts: DataQual
           severity: sharePct >= 10 ? 'high' : 'medium',
           category: 'invalid_traffic',
           area: 'Data quality',
-          message: `Suspected invalid traffic: ${clusters.low.map((r) => `${r.name} (${r.pct}% engagement)`).join(', ')} sit ${clusters.gap} points below your other markets (${highMin}%+) - a split this clean separates real users from bot/proxy/junk traffic, and those markets carry ${lowSessions.toLocaleString('en-US')} sessions (${sharePct.toFixed(1)}% of the listed markets' total).`,
+          message: `Suspected invalid traffic: ${clusters.low.map((r) => `${r.name} (${r.pct}% engagement)`).join(', ')} sit ${clusters.gap} points below your other markets (${highMin}%+) - a split this clean separates real users from bot/proxy/junk traffic, and those markets carry ${lowSessions.toLocaleString('en-US')} sessions (${sharePct.toFixed(1)}% of the listed markets' total). Sessions excluding these markets: ${Math.max(0, baseline.sessions - lowSessions).toLocaleString('en-US')} (headline ${baseline.sessions.toLocaleString('en-US')}).`,
           recommendation: `Check the source/medium and hostnames behind ${clusters.low.map((r) => r.name).join(', ')}; if it is bot or proxy traffic, exclude it (internal-traffic rules or a segment) before quoting session totals or market comparisons.`,
           plain: `About ${lowSessions.toLocaleString('en-US')} visits (${sharePct.toFixed(1)}% of your listed markets) look like bot or junk traffic that cannot buy: your visitor totals are inflated by traffic that is not customers.`,
           state: 'confirmed',

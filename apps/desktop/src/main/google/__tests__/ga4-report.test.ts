@@ -1012,5 +1012,101 @@ test('metric cards: value + signed delta vs prior + trust verdict; no phantom re
   assert.equal((fresh.metrics ?? []).find((c) => c.label === 'Sessions')!.deltaPct, null);
 });
 
+
+// ── Report additions: restated baseline, change drivers, suspect-traffic restated, products ──
+
+test('concentration finding carries the RESTATED total (the arithmetic done for the reader)', () => {
+  const b = baseline({
+    channelDaily: [
+      { channel: 'Direct', series: [
+        { date: '20260610', sessions: 300 }, { date: '20260611', sessions: 22362 }, { date: '20260612', sessions: 310 },
+        { date: '20260613', sessions: 305 }, { date: '20260614', sessions: 300 },
+      ] },
+      { channel: 'Organic Search', series: [
+        { date: '20260610', sessions: 700 }, { date: '20260611', sessions: 750 }, { date: '20260612', sessions: 720 },
+        { date: '20260613', sessions: 730 }, { date: '20260614', sessions: 705 },
+      ] },
+    ],
+  });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  // sessions 77,506 - the 22,362 burst bucket = 55,144; prior 70,000 -> -21% instead of +11%.
+  assert.ok(md.includes('Restated without that bucket: 55,144 sessions (-21% vs prior, instead of the headline +11%)'), 'finding message carries the restated arithmetic');
+  assert.ok(/\*\*Restated \(burst excluded\):\*\* Excluding Direct/.test(md), 'Section 3 shows the restated line');
+  assert.ok(md.includes('55,144 sessions, -21% vs prior instead of the headline +11%'), 'S3 numbers match the finding');
+  const sections = buildGa4Sections(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(sections.outcomes!.restated!.includes('55,144'), 'structured view carries the same restated total');
+  // No spike -> no restated line anywhere (never fabricated).
+  assert.equal(buildGa4Sections(input()).outcomes!.restated, null);
+});
+
+test('what changed by channel: the headline delta decomposed into top movers', () => {
+  const b = baseline({
+    priorChannelSessions: [
+      { channel: 'Organic Search', sessions: 50000 },
+      { channel: 'Direct', sessions: 10000 },
+      { channel: 'Email', sessions: 10000 },
+    ],
+    channelPerformance: [
+      { channel: 'Organic Search', sessions: 30000, keyEvents: 100, convRate: 0.1, revenue: 0, engagementRate: 0.9 },
+      { channel: 'Direct', sessions: 40000, keyEvents: 100, convRate: 0.1, revenue: 0, engagementRate: 0.9 },
+      { channel: 'Paid Social', sessions: 7506, keyEvents: 100, convRate: 0.1, revenue: 0, engagementRate: 0.9 },
+    ],
+  });
+  const sections = buildGa4Sections(input({ baseline: b, growth: growthOf(b) }));
+  const drivers = sections.outcomes!.drivers;
+  assert.equal(drivers[0].channel, 'Direct', 'largest mover first');
+  assert.equal(drivers[0].delta, '+30,000');
+  assert.equal(drivers[0].deltaPct, 300);
+  assert.equal(drivers[1].channel, 'Organic Search');
+  assert.equal(drivers[1].delta, '-20,000');
+  const nw = drivers.find((d) => d.channel === 'Paid Social')!;
+  assert.equal(nw.deltaPct, null, 'a channel with no prior traffic reads as new, never a fabricated %');
+  const gone = drivers.find((d) => d.channel === 'Email')!;
+  assert.equal(gone.to, '0', 'a channel that disappeared still shows');
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(md.includes('**What changed by channel**'), 'markdown renders the section');
+  assert.ok(/\| Direct \| 10,000 \| 40,000 \| \+30,000 \| \+300% \|/.test(md), 'markdown row matches');
+  // No prior slice (older baseline) -> no drivers, never guessed.
+  assert.deepEqual(buildGa4Sections(input()).outcomes!.drivers, []);
+});
+
+test('invalid-traffic finding carries the sessions-excluding-suspects restated number', () => {
+  const b = baseline({
+    sessions: 100000,
+    geoPerformance: [
+      { country: 'India', sessions: 70000, keyEvents: 100, convRate: 0.5, revenue: 100, engagementRate: 0.95 },
+      { country: 'United States', sessions: 9000, keyEvents: 10, convRate: 0.5, revenue: 10, engagementRate: 0.9 },
+      { country: 'Germany', sessions: 6000, keyEvents: 10, convRate: 0.5, revenue: 10, engagementRate: 0.92 },
+      { country: 'Vietnam', sessions: 15000, keyEvents: 0, convRate: 0, revenue: 0, engagementRate: 0.04 },
+    ],
+  });
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(/Suspected invalid traffic/.test(md), 'finding fires');
+  assert.ok(md.includes('Sessions excluding these markets: 85,000 (headline 100,000).'), 'restated number stated');
+});
+
+test('product performance: item-scoped table only when items exist, with the mandatory caveat', () => {
+  const b = baseline({
+    itemPerformance: [
+      { item: 'Emery Diamond Earrings', viewed: 6000, addedToCart: 300, purchased: 120, revenue: 212070 },
+      { item: 'Adriana Diamond Earrings', viewed: 2500, addedToCart: 100, purchased: 40, revenue: 41230 },
+      { item: 'Zero Buyer Bangle', viewed: 900, addedToCart: 10, purchased: 0, revenue: 0 },
+    ],
+  });
+  const sections = buildGa4Sections(input({ baseline: b, growth: growthOf(b) }));
+  const pp = sections.productPerformance!;
+  assert.equal(pp.rows.length, 3);
+  assert.equal(pp.rows[0].item, 'Emery Diamond Earrings');
+  assert.equal(pp.rows[0].viewToBuy, '2.0%', 'view-to-buy = purchased/viewed');
+  assert.equal(pp.rows[2].revenue, '—', 'zero revenue reads as em-dash placeholder, never 0 currency');
+  assert.ok(/item views, not sessions/.test(pp.caveat), 'caveat pinned');
+  const md = buildGa4AuditReport(input({ baseline: b, growth: growthOf(b) }));
+  assert.ok(md.includes('**Product performance**'), 'markdown renders the table');
+  assert.ok(/\| Emery Diamond Earrings \| 6,000 \| 300 \| 120 \| 2\.0% \|/.test(md), 'markdown row matches');
+  // Non-ecommerce (no item rows) -> section absent everywhere.
+  assert.equal(buildGa4Sections(input()).productPerformance, null);
+  assert.ok(!buildGa4AuditReport(input()).includes('**Product performance**'));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
