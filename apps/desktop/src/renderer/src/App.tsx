@@ -7220,6 +7220,9 @@ function ServerContainerPanel({
                 <>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
                     <span style={{ color: 'var(--text-muted)' }}>{missing.length} fix(es) available · {existing.length} piece(s) already in place</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: plan.detected.dataTag === 'configured' ? 'var(--c-green)' : plan.detected.dataTag === 'misconfigured' ? 'var(--c-amber)' : 'var(--text-faint)' }}>
+                      Stape Data Tag: {plan.detected.dataTag === 'configured' ? '✓ configured' : plan.detected.dataTag === 'misconfigured' ? '⚠ misconfigured' : 'not installed'}
+                    </span>
                     <span style={{ flex: 1 }} />
                     <button style={styles.ghostBtn} onClick={() => setAll(true)}>Select all</button>
                     <button style={styles.ghostBtn} onClick={() => setAll(false)}>Deselect all</button>

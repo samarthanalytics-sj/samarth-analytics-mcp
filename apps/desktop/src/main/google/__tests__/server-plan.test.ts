@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { buildServerPlan, planReadiness, type ServerPlanInput } from '../server-plan';
+import { buildServerPlan, planReadiness, findStapeDataTag, findStapeDataClient, type ServerPlanInput } from '../server-plan';
+import { buildStapeDataTag } from '../gtm-builders';
 import type { AuditTag, AuditTrigger, ContainerSnapshot, ServerContainerSnapshot } from '../gtm-builders';
 
 let passed = 0;
@@ -89,7 +90,7 @@ test('complete container: baseline items existing (info) and unchecked; detected
     transformations: [],
   };
   const plan = buildServerPlan(emptyInput({ server, enabledBuiltIns: ['clientName'], webGoogleTagServerUrl: 'https://sgtm.example.com' }));
-  const missingBaseline = plan.items.filter((i) => i.status === 'missing' && !i.id.includes('_capi:'));
+  const missingBaseline = plan.items.filter((i) => i.status === 'missing' && !i.id.includes('_capi:') && !i.id.startsWith('data_'));
   assert.deepEqual(missingBaseline, [], 'nothing baseline missing: ' + missingBaseline.map((i) => i.id).join(','));
   assert.ok(plan.items.filter((i) => i.status === 'existing').every((i) => i.category === 'info' && !i.defaultSelected));
   assert.equal(plan.detected.serverUrl, 'https://sgtm.example.com');
@@ -125,6 +126,100 @@ test('planReadiness: missing values and unchecked dependencies surface; satisfie
   // Meta CAPI without credentials is flagged.
   r = planReadiness(items, new Set(['meta_capi:generate_lead', 'ga4_client']), {});
   assert.ok(r.some((x) => x.id === 'meta_capi:generate_lead' && x.missingValues.length === 2));
+});
+
+
+// ── Stape Data Tag pipeline ──
+
+const dataClientClient = { clientId: 'c9', name: 'Data Client', type: 'cvt_x_dc', parameter: [{ type: 'boolean', key: 'generateClientId', value: 'true' }] };
+const stapeWebTag = (over: Partial<AuditTag> = {}): AuditTag =>
+  tag({ tagId: 'w9', name: 'Stape Data Tag', type: 'cvt_abc_dt', firingTriggerId: ['2147479553'], parameter: [
+    { type: 'template', key: 'gtm_server_domain', value: 'https://sgtm.example.com' },
+    { type: 'template', key: 'request_path', value: '/data' },
+  ], ...over });
+const serverWith = (clients: unknown[], urls: string[] = ['https://sgtm.example.com']): ServerContainerSnapshot => ({
+  taggingServerUrls: urls,
+  clients: clients as ServerContainerSnapshot['clients'],
+  tags: [], triggers: [], variables: [], transformations: [],
+});
+
+test('no Data Tag anywhere: not_installed; optional low items, never pre-checked', () => {
+  const plan = buildServerPlan(emptyInput());
+  assert.equal(plan.detected.dataTag, 'not_installed');
+  const dt = plan.items.find((i) => i.id === 'data_tag')!;
+  assert.equal(dt.category, 'low');
+  assert.equal(dt.defaultSelected, false);
+  assert.deepEqual(dt.requires, ['serverUrl']);
+  assert.deepEqual(dt.dependsOn, ['data_client']);
+  const dc = plan.items.find((i) => i.id === 'data_client')!;
+  assert.equal(dc.category, 'low');
+  assert.equal(dc.defaultSelected, false);
+  assert.ok(!plan.items.some((i) => i.id === 'data_pipeline'), 'no pipeline row without both pieces');
+});
+
+test('Data Tag + Data Client with matching hosts: configured, pipeline row is info', () => {
+  const w = web(); w.tags.push(stapeWebTag());
+  const plan = buildServerPlan(emptyInput({ web: w, server: serverWith([{ clientId: 'c1', name: 'GA4', type: 'gaaw_client' }, dataClientClient]) }));
+  assert.equal(plan.detected.dataTag, 'configured');
+  assert.equal(plan.items.find((i) => i.id === 'data_client')!.status, 'existing');
+  const pipe = plan.items.find((i) => i.id === 'data_pipeline')!;
+  assert.equal(pipe.category, 'info');
+  assert.equal(pipe.status, 'existing');
+  assert.ok(/Tag Verification/.test(pipe.description), 'runtime proof deferred to Tag Verification');
+  assert.ok(!plan.items.some((i) => i.id === 'data_tag_url'), 'no fix item when configured');
+});
+
+test('Data Tag pointing at the wrong host: misconfigured, one-click URL fix offered', () => {
+  const w = web();
+  w.tags.push(stapeWebTag({ parameter: [{ type: 'template', key: 'gtm_server_domain', value: 'https://old-server.example.net' }] }));
+  const plan = buildServerPlan(emptyInput({ web: w, server: serverWith([dataClientClient]) }));
+  assert.equal(plan.detected.dataTag, 'misconfigured');
+  const fix = plan.items.find((i) => i.id === 'data_tag_url')!;
+  assert.equal(fix.category, 'high');
+  assert.equal(fix.executable, true);
+  assert.deepEqual(fix.requires, ['serverUrl']);
+  assert.ok(/different host/.test(fix.description));
+  assert.equal(plan.items.find((i) => i.id === 'data_pipeline')!.category, 'high');
+});
+
+test('paused Data Tag: misconfigured but NOT one-click (a human must decide in GTM)', () => {
+  const w = web(); w.tags.push(stapeWebTag({ paused: true }));
+  const plan = buildServerPlan(emptyInput({ web: w, server: serverWith([dataClientClient]) }));
+  assert.equal(plan.detected.dataTag, 'misconfigured');
+  const fix = plan.items.find((i) => i.id === 'data_tag_url')!;
+  assert.equal(fix.executable, false);
+  assert.ok(/PAUSED/.test(fix.description));
+});
+
+test('web Data Tag with NO server Data Client: data_client is high and pre-checked (requests dropped)', () => {
+  const w = web(); w.tags.push(stapeWebTag());
+  const plan = buildServerPlan(emptyInput({ web: w, server: serverWith([{ clientId: 'c1', name: 'GA4', type: 'gaaw_client' }]) }));
+  const dc = plan.items.find((i) => i.id === 'data_client')!;
+  assert.equal(dc.category, 'high');
+  assert.equal(dc.status, 'missing');
+  assert.equal(dc.defaultSelected, true);
+  assert.ok(/dropped/.test(dc.description));
+});
+
+test('detection is by parameter signature, not name; client falls back to name', () => {
+  const w = web();
+  w.tags.push(tag({ tagId: 'w8', name: 'Totally Custom Thing', type: 'cvt_zz', firingTriggerId: ['1'], parameter: [{ type: 'template', key: 'gtm_server_domain', value: 'https://sgtm.example.com' }] }));
+  assert.ok(findStapeDataTag(w), 'gtm_server_domain param key identifies the Data Tag');
+  assert.ok(!findStapeDataTag(web()), 'plain pixels are not Data Tags');
+  assert.ok(findStapeDataClient(serverWith([{ clientId: 'c2', name: 'My Data Client', type: 'cvt_q', parameter: [] }])), 'name fallback');
+  assert.equal(findStapeDataClient(serverWith([{ clientId: 'c1', name: 'GA4', type: 'gaaw_client' }])), null);
+});
+
+test('buildStapeDataTag: verified template field keys, All Pages default trigger', () => {
+  const t = buildStapeDataTag('cvt_abc_dt', 'Stape Data Tag', 'https://sgtm.example.com') as unknown as AuditTag;
+  const get = (k: string) => (t.parameter ?? []).find((p) => (p as { key?: string }).key === k) as { value?: string } | undefined;
+  assert.equal(get('gtm_server_domain')!.value, 'https://sgtm.example.com');
+  assert.equal(get('request_path')!.value, '/data');
+  assert.equal(get('event_type')!.value, 'standard');
+  assert.equal(get('event_name_standard')!.value, 'page_view');
+  assert.equal(get('add_data_layer')!.value, 'true');
+  assert.equal(get('add_consent_state')!.value, 'true');
+  assert.deepEqual(t.firingTriggerId, ['2147479553']);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

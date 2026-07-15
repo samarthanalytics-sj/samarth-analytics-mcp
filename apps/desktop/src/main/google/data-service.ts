@@ -5,7 +5,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
 
@@ -1741,6 +1741,56 @@ export class GoogleDataService {
           }
         } catch (e) {
           failed.push({ id: 'web_wiring', error: msg(e) });
+        }
+      }
+    }
+
+    // 7b · Stape Data Tag pipeline
+    if (selected.has('data_client')) {
+      const { findStapeDataClient } = await import('./server-plan');
+      const existingClient = findStapeDataClient({ taggingServerUrls: [], clients, tags: [], transformations: [] });
+      if (existingClient) reused.push('data_client');
+      else {
+        try {
+          const tmpl = await this.q(() => this.importGalleryTemplate(accountId, cid, workspaceId, 'stape-io', 'data-client'));
+          if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Data Client template type (got "${tmpl.type}").`);
+          await this.q(() => this.createGtmClient(accountId, cid, workspaceId, { name: 'Data Client', type: tmpl.type } as unknown as Record<string, unknown>));
+          applied.push('data_client');
+        } catch (e) {
+          failed.push({ id: 'data_client', error: msg(e) });
+        }
+      }
+    }
+    if (selected.has('data_tag') || selected.has('data_tag_url')) {
+      const itemId = selected.has('data_tag') ? 'data_tag' : 'data_tag_url';
+      const dtUrl = (values.serverUrl ?? '').trim();
+      if (!dtUrl) skipped.push({ id: itemId, reason: 'No server URL provided.' });
+      else {
+        try {
+          const webWs = await this.q(() => this.defaultWorkspaceId(accountId, webContainerId));
+          const webSnap = await this.q(() => this.getGtmContainerSnapshot(accountId, webContainerId, webWs));
+          const { findStapeDataTag } = await import('./server-plan');
+          const existingDt = findStapeDataTag(webSnap);
+          if (itemId === 'data_tag_url') {
+            if (!existingDt) skipped.push({ id: itemId, reason: 'No Data Tag found in the web container any more.' });
+            else {
+              const path = `accounts/${accountId}/containers/${webContainerId}/workspaces/${webWs}/tags/${existingDt.tagId}`;
+              const current = (await this.q(() => gtm.accounts.containers.workspaces.tags.get({ path }))).data;
+              const params = (current.parameter ?? []).filter((p) => p.key !== 'gtm_server_domain');
+              params.push({ type: 'template', key: 'gtm_server_domain', value: dtUrl });
+              await this.q(() => gtm.accounts.containers.workspaces.tags.update({ path, requestBody: { ...current, parameter: params } }));
+              applied.push('data_tag_url');
+            }
+          } else if (existingDt) {
+            reused.push('data_tag');
+          } else {
+            const tmpl = await this.q(() => this.importGalleryTemplate(accountId, webContainerId, webWs, 'stape-io', 'data-tag'));
+            if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Data Tag template type (got "${tmpl.type}").`);
+            await this.q(() => this.createGtmTag(accountId, webContainerId, webWs, buildStapeDataTag(tmpl.type, 'Data Tag - All Pages', dtUrl) as unknown as Record<string, unknown>));
+            applied.push('data_tag');
+          }
+        } catch (e) {
+          failed.push({ id: itemId, error: msg(e) });
         }
       }
     }
