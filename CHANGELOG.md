@@ -1,3 +1,9 @@
+## [1.340.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.339.2...v1.340.0) (2026-07-15)
+
+### Features
+
+* **desktop:** server documentation gains variable usage, version history, config score, and the web link ([#587](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/587)) ([efcc3cd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/efcc3cdbb7eb0502d0326c4d6bb8afd4c1a41722))
+
 ## [1.339.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.339.1...v1.339.2) (2026-07-15)
 
 ### Bug Fixes
