@@ -59,7 +59,7 @@ test('auditToMarkdown: header, counts, severity summary, boundary, findings tabl
   assert.ok(md.includes('**Container:** Acct › example.com › Default'));
   assert.ok(md.includes('**Generated:** 2026-07-03'));
   assert.ok(md.includes('5 tags · 3 triggers · 2 variables'));
-  assert.ok(md.includes('1 — 0 critical · 1 high · 0 medium · 0 low · 0 info'));
+  assert.ok(md.includes('1 - 0 critical · 1 high · 0 medium · 0 low · 0 info'));
   assert.ok(md.includes('Container-only audit: proves CONFIGURATION'), 'boundary statement present');
   assert.ok(md.includes('| 1 | high |'), 'finding row numbered');
   assert.ok(md.includes('My\\|Tag (html)'), 'pipe in resource name escaped');

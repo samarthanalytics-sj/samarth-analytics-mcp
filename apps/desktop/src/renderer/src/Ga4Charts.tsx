@@ -1,14 +1,14 @@
 // Interactive on-screen GA4 charts: the daily/weekly/monthly trend line + the per-channel multi-line
 // chart, rendered as React SVG with a custom hover tooltip (a styled card that follows the cursor and
 // shows each series' value for the pointed date/period). The PDF export keeps the static SVG string
-// (shared/ga4-visuals-html.ts) — both share the grouping logic AND the lab-report template language
+// (shared/ga4-visuals-html.ts) - both share the grouping logic AND the lab-report template language
 // (mono eyebrows, 4px cards, muted palette, callout-voice insights) so the two surfaces read the same.
 
 import { useRef, useState, type CSSProperties } from 'react';
 import type { Ga4VisualsView } from '../../shared/ipc';
 import { granularityFor, granLabel, groupSeries, buildTrendInsights, findChannelSpike, type Gran, type GPoint, type TrendInsight } from '../../shared/ga4-visuals-html';
 
-// Lab-report palette — identical to shared/ga4-visuals-html.ts so on-screen and PDF colours never diverge.
+// Lab-report palette - identical to shared/ga4-visuals-html.ts so on-screen and PDF colours never diverge.
 const PALETTE = ['#4F7BD1', '#1FA5B8', '#2E9E5E', '#D98A38', '#8E63C4', '#A63527', '#9A6206', '#6A6F78'];
 const LINE = '#4F7BD1';
 const PEAK = '#A63527';
@@ -115,7 +115,7 @@ function InteractiveChart({ series, area, peakLabel }: { series: Series[]; area?
   );
 }
 
-// Template primitives — the same voice ga4-visuals-html.ts / ga4-sections-html.ts use.
+// Template primitives - the same voice ga4-visuals-html.ts / ga4-sections-html.ts use.
 const eyebrow: CSSProperties = { fontFamily: MONO, fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--text-faint, #8A8F98)' };
 const lbl: CSSProperties = { fontFamily: MONO, fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--text-faint, #8A8F98)', marginBottom: 6 };
 const card: CSSProperties = { border: '1px solid var(--border, #E3E3DC)', borderRadius: 4, padding: '16px 18px 12px', background: 'var(--surface, #FFFFFF)', boxSizing: 'border-box' };
@@ -130,7 +130,7 @@ const INSIGHT_TONE: Record<TrendInsight['tone'], { bar: string; bg: string }> = 
 };
 
 // The deep-insights panel that sits beside the charts: peak, what drove it, concentration, device skew.
-// Each insight is a template callout — left accent bar, mono eyebrow title, square-ish corners.
+// Each insight is a template callout - left accent bar, mono eyebrow title, square-ish corners.
 function InsightsPanel({ items }: { items: TrendInsight[] }): JSX.Element | null {
   if (!items.length) return null;
   return (
@@ -213,7 +213,7 @@ export function Ga4Charts({ visuals: v }: { visuals: Ga4VisualsView }): JSX.Elem
   const trendPoints = groupSeries(v.daily ?? [], gran, anchor);
   const peakLabel = gran === 'day' ? 'peak' : 'busiest';
   const channelGrouped = (v.channelDaily ?? []).map((c) => ({ channel: c.channel || '(not set)', points: groupSeries(c.series, gran, anchor) }));
-  // Filter first, THEN assign palette colours by filtered index — matches the PDF (multiLineChartSvg /
+  // Filter first, THEN assign palette colours by filtered index - matches the PDF (multiLineChartSvg /
   // legendHtml colour after the >=2-points filter) so the on-screen and downloaded colours never diverge.
   const channelSeries: Series[] = channelGrouped
     .filter((s) => s.points.length >= 2)

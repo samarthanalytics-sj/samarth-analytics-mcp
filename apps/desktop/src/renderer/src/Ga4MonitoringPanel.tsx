@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import type { AccountView, Ga4MonitorStatus, Ga4MonitorRun, Ga4MonitorTargetStatus, Ga4MonitorAlertView, Ga4MonitorCheckView, Ga4PropertyListItem } from '../../shared/ipc';
 
-// GA4 Monitoring tab — a dashboard-per-property layout that answers, top to bottom:
+// GA4 Monitoring tab - a dashboard-per-property layout that answers, top to bottom:
 //   What is the problem? → the CRITICAL ALERT hero (the single worst finding, or an all-clear).
 //   How serious / how much? → the OVERVIEW KPI cards (open issues, checks passing, needs attention, last check).
 //   Why? → the AI SUMMARY card (the engine's plain-language read + the recommended next step).
 //   What next? → the HEALTH CHECK cards (every check as a pass/warn/fail tile) + the full alert list.
 // The "Monitor a GA4 property" card sits at the TOP (add a property + schedule) so adding one is the
 // first action; below it, one TAB per monitored property renders the dashboard above for the selection.
-// Every value shown here traces to a real field on the monitor run (Ga4MonitoringService in main) —
+// Every value shown here traces to a real field on the monitor run (Ga4MonitoringService in main) -
 // no derived "confidence" scores or metrics the engine does not actually produce.
 
 const SEV_COLOR: Record<string, string> = {
@@ -17,7 +17,7 @@ const SEV_COLOR: Record<string, string> = {
 const SEV_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
 // Solid accent colours for white-text surfaces (primary buttons + the hero severity badge). The theme
 // --c-* accents INVERT to light pastels in dark mode (see memory: never put white on var(--c-*)), so
-// these fixed mid-dark solids are used wherever white text sits on a filled accent — readable in BOTH modes.
+// these fixed mid-dark solids are used wherever white text sits on a filled accent - readable in BOTH modes.
 const SOLID_BLUE = '#2563eb';
 const SEV_SOLID: Record<string, string> = { critical: '#dc2626', high: '#dc2626', medium: '#b45309', low: '#b45309', info: '#475569' };
 const HEALTH: Record<string, { color: string; bg: string; label: string; icon: string }> = {
@@ -31,7 +31,7 @@ const CHECK_PILL: Record<string, { label: string; color: string }> = {
   fail: { label: 'Issue', color: 'var(--c-red)' },
   skip: { label: 'Not run', color: 'var(--text-muted)' },
 };
-/** Status tone for a KPI tile — colours the big number and the thin left accent border.
+/** Status tone for a KPI tile - colours the big number and the thin left accent border.
  *  `neutral` has no status (border falls back to the default). */
 const TONE: Record<'red' | 'amber' | 'green' | 'neutral', { color: string }> = {
   red: { color: 'var(--c-red)' },
@@ -41,7 +41,7 @@ const TONE: Record<'red' | 'amber' | 'green' | 'neutral', { color: string }> = {
 };
 
 /** The Slack mark (official four-colour logo), inlined as SVG so it renders crisply at any size and
- *  needs no external asset. Decorative — the adjacent text labels it. */
+ *  needs no external asset. Decorative - the adjacent text labels it. */
 function SlackMark({ size = 15 }: { size?: number }): JSX.Element {
   return (
     <svg viewBox="0 0 122.8 122.8" width={size} height={size} aria-hidden="true" style={{ flexShrink: 0, display: 'block' }}>
@@ -54,7 +54,7 @@ function SlackMark({ size = 15 }: { size?: number }): JSX.Element {
 }
 
 /** A monochrome line icon per health-check TYPE (keyed by the engine's check id), so each row is
- *  scannable by category at a glance. Drawn with currentColor — the caller sets the (status) colour. */
+ *  scannable by category at a glance. Drawn with currentColor - the caller sets the (status) colour. */
 const CHECK_ICON: Record<string, JSX.Element> = {
   data_flow: <><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>,
   events: <><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1.5" /></>,
@@ -140,7 +140,7 @@ function NotifyPicker({ value, onChange, disabled }: { value: NotifyPrefs; onCha
 
 function fmtTime(ms: number | null): string {
   if (!ms) return 'never';
-  try { return new Date(ms).toLocaleString(); } catch { return '—'; }
+  try { return new Date(ms).toLocaleString(); } catch { return '-'; }
 }
 /** Compact relative time ("just now", "12 min ago", "3 hr ago", then a date). */
 function fmtAgo(ms: number | null): string {
@@ -151,11 +151,11 @@ function fmtAgo(ms: number | null): string {
   if (m < 60) return `${m} min ago`;
   const h = Math.floor(m / 60);
   if (h < 24) return `${h} hr ago`;
-  try { return new Date(ms).toLocaleDateString(); } catch { return '—'; }
+  try { return new Date(ms).toLocaleDateString(); } catch { return '-'; }
 }
 
 const INTERVAL_PRESETS = [15, 30, 60, 120, 240, 720, 1440];
-/** "45 min", "1 hr", "2 hr 30 min" — never a fractional-hour label, whatever the persisted value. */
+/** "45 min", "1 hr", "2 hr 30 min" - never a fractional-hour label, whatever the persisted value. */
 function fmtInterval(min: number): string {
   if (min < 60) return `${min} min`;
   const h = Math.floor(min / 60);
@@ -176,7 +176,7 @@ function tallyChecks(checks: Ga4MonitorCheckView[]): Record<'pass' | 'warn' | 'f
   return c;
 }
 
-/** One overview metric — label + number + one line of context, in a plain (box-less) column. A thin
+/** One overview metric - label + number + one line of context, in a plain (box-less) column. A thin
  *  vertical rule separates it from the previous metric (skip on the first). Colour lives only on the
  *  number (status tone). */
 function Kpi({ heading, value, sub, tone = 'neutral', divider = false }: { heading: string; value: React.ReactNode; sub?: string; tone?: 'red' | 'amber' | 'green' | 'neutral'; divider?: boolean }): JSX.Element {
@@ -190,7 +190,7 @@ function Kpi({ heading, value, sub, tone = 'neutral', divider = false }: { headi
   );
 }
 
-/** THE HERO — the one thing the operator should look at first: the worst open finding, or an
+/** THE HERO - the one thing the operator should look at first: the worst open finding, or an
  *  all-clear when the run is healthy. Answers "what is the problem, and how serious is it?" */
 function HeroCard({ run, isRunning, disabled, onRun }: { run: Ga4MonitorRun; isRunning: boolean; disabled: boolean; onRun: () => void }): JSX.Element {
   const top = topAlert(run);
@@ -201,7 +201,7 @@ function HeroCard({ run, isRunning, disabled, onRun }: { run: Ga4MonitorRun; isR
       <div style={{ ...card, borderColor: 'var(--c-green)', background: 'var(--c-green-bg, rgba(34,197,94,.08))', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 26, lineHeight: 1 }}>🟢</div>
         <div style={{ flex: 1, minWidth: 220 }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-green)' }}>All clear — no issues detected</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-green)' }}>All clear - no issues detected</div>
           <div style={{ fontSize: 13.5, color: 'var(--text-dim)', marginTop: 4, lineHeight: 1.5 }}>{run.summary}</div>
         </div>
         <button style={{ ...ghostBtn, color: 'var(--c-blue)', alignSelf: 'flex-start' }} disabled={disabled} onClick={onRun}>{isRunning ? 'Checking…' : '↻ Run check again'}</button>
@@ -237,7 +237,7 @@ function HeroCard({ run, isRunning, disabled, onRun }: { run: Ga4MonitorRun; isR
  *  run.summary (always present) and the top alert's recommendation (when there is one). */
 function AiSummary({ run }: { run: Ga4MonitorRun }): JSX.Element {
   const top = topAlert(run);
-  const nextStep = top?.recommendation || (top ? `Investigate: ${top.title}.` : 'No action needed — keep the background monitor running so a new issue pages you the moment it appears.');
+  const nextStep = top?.recommendation || (top ? `Investigate: ${top.title}.` : 'No action needed - keep the background monitor running so a new issue pages you the moment it appears.');
   const h = HEALTH[run.health] ?? HEALTH.healthy;
   return (
     <div style={{ ...card, padding: 20 }}>
@@ -258,7 +258,7 @@ function AiSummary({ run }: { run: Ga4MonitorRun }): JSX.Element {
   );
 }
 
-/** Plain-language "what this check verifies and why" per check type — revealed when a tile is expanded,
+/** Plain-language "what this check verifies and why" per check type - revealed when a tile is expanded,
  *  so the operator's obvious next step (understand the signal) is one click away. */
 const CHECK_EXPLAIN: Record<string, string> = {
   data_flow: 'Confirms sessions and users are still being recorded, so an outage or broken tag shows up as missing data.',
@@ -270,16 +270,16 @@ const CHECK_EXPLAIN: Record<string, string> = {
   transactions: 'Looks for duplicate or unlabelled purchase transactions that would inflate or distort reported revenue.',
   access: 'Verifies the monitor can still read this property’s reporting data (permissions, API access, quota).',
   reconciliation: 'Cross-checks campaign-reported revenue against channel-reported revenue; a big gap usually means paid traffic is landing in the wrong bucket (untagged) or being double-counted.',
-  concentration: 'Flags when a single day, week or month dominates the totals — a sign of a spike, a backfill or a tracking glitch rather than steady traffic.',
+  concentration: 'Flags when a single day, week or month dominates the totals - a sign of a spike, a backfill or a tracking glitch rather than steady traffic.',
   untagged: 'Measures the share of sessions with no campaign tags; a high share means paid or email traffic is being misattributed to organic or direct.',
   invalid_traffic: 'Looks for bot / invalid-traffic signatures (engagement patterns that do not look human) inflating your session counts.',
   referral_hygiene: 'Checks referral sources for self-referrals and payment-gateway domains that break attribution and pad referral traffic.',
-  pii: 'Scans page paths for personal data (emails, names, ids) in URLs — a privacy risk that also fragments your reports.',
+  pii: 'Scans page paths for personal data (emails, names, ids) in URLs - a privacy risk that also fragments your reports.',
   channel_shift: 'Watches for a large shift in the channel mix versus the prior window, which can signal a tagging change rather than a real audience shift.',
 };
 
-// Bold the key figure in an insight — a percentage ("55% higher", "down 12%") or a currency amount
-// ("INR 378,400", "$1,204") — so it jumps out of the sentence. Purely presentational; wording is untouched.
+// Bold the key figure in an insight - a percentage ("55% higher", "down 12%") or a currency amount
+// ("INR 378,400", "$1,204") - so it jumps out of the sentence. Purely presentational; wording is untouched.
 const FIGURE = /((?:INR|Rs\.?|₹|\$|€|£)\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?%)/g;
 const FIGURE_ONE = /^(?:(?:INR|Rs\.?|₹|\$|€|£)\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?%)$/;
 function emphasize(text: string): React.ReactNode {
@@ -329,7 +329,7 @@ function CheckRow({ c, last }: { c: Ga4MonitorCheckView; last: boolean }): JSX.E
   );
 }
 
-/** The full alert list (below the hero) — one compact row per alert, worst first, so nothing hides. */
+/** The full alert list (below the hero) - one compact row per alert, worst first, so nothing hides. */
 function AlertList({ run }: { run: Ga4MonitorRun }): JSX.Element {
   const newIds = new Set(run.newAlertIds);
   const alerts = [...run.alerts].sort((a, b) => (SEV_RANK[b.severity] ?? 0) - (SEV_RANK[a.severity] ?? 0));
@@ -428,7 +428,7 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
             </>
           ) : (
             <span style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>
-              no channel connected — this property will not alert Slack until you connect one
+              no channel connected - this property will not alert Slack until you connect one
             </span>
           )}
           <span style={{ flex: 1 }} />
@@ -475,7 +475,7 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
               <NotifyPicker value={chanNotify} onChange={setChanNotify} disabled={busy} />
             </div>
             <span style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.4 }}>
-              One property, one channel: everything selected above posts here. The URL is stored encrypted in your OS keychain. (How to get a webhook URL — see the Slack alerts card below.)
+              One property, one channel: everything selected above posts here. The URL is stored encrypted in your OS keychain. (How to get a webhook URL - see the Slack alerts card below.)
             </span>
           </div>
         )}
@@ -486,7 +486,7 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
           {/* ── What is the problem? ── */}
           <HeroCard run={run} isRunning={isRunning} disabled={runDisabled} onRun={onRun} />
 
-          {/* ── How serious / how much? — a plain, box-less metric row ── */}
+          {/* ── How serious / how much? - a plain, box-less metric row ── */}
           <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 0, rowGap: 12, padding: '4px 0' }}>
             <Kpi
               heading="Open issues"
@@ -514,7 +514,7 @@ function PropertyPanel({ t, runningId, busy, onRun, onTogglePause, onRemove, onS
           {/* ── Why? ── */}
           <AiSummary run={run} />
 
-          {/* ── What next? — the checks as a table ── */}
+          {/* ── What next? - the checks as a table ── */}
           <div>
             <div style={sectionTitle}>Health checks</div>
             <div style={{ fontSize: 11.5, color: 'var(--text-muted)', margin: '2px 0 8px', lineHeight: 1.5 }}>
@@ -592,7 +592,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
     try { setStatus(await window.desktop.ga4monitoring.configure(patch)); } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
 
-  /** Add a property — and, when the optional Slack fields were filled in the same step, connect its
+  /** Add a property - and, when the optional Slack fields were filled in the same step, connect its
    *  own channel first (setWebhook validates the URL, so a bad link aborts BEFORE the property is
    *  added and nothing half-configured is left behind). */
   async function addProperty(): Promise<void> {
@@ -637,7 +637,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
     setRunningId(propertyId ?? '*'); onError(''); setNote('');
     try {
       const runs = await window.desktop.ga4monitoring.runNow(propertyId);
-      if (!runs.length) setNote('Nothing to check — add a property and make sure the account is signed in to Google.');
+      if (!runs.length) setNote('Nothing to check - add a property and make sure the account is signed in to Google.');
       else {
         const sent = runs.reduce((s, r) => s + r.slackSent, 0);
         const err = runs.map((r) => r.slackError).find(Boolean);
@@ -657,20 +657,20 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       setStatus(await window.desktop.ga4monitoring.configure({
         targets: status.targets.map((t) => (t.propertyId === propertyId ? { ...t, slackLabel: lbl || undefined, notify } : t)),
       }));
-      setNote(url ? 'Property channel saved (encrypted) — new issues for this property will post there.' : 'Channel name saved.');
+      setNote(url ? 'Property channel saved (encrypted) - new issues for this property will post there.' : 'Channel name saved.');
       return true;
     } catch (e) { onError(e instanceof Error ? e.message : String(e)); return false; } finally { setBusy(false); }
   }
   async function removePropertyChannel(propertyId: string): Promise<void> {
     setBusy(true); onError(''); setNote('');
-    try { setStatus(await window.desktop.ga4monitoring.clearWebhook(propertyId)); setNote('Property channel removed — its alerts fall back to the default channel.'); }
+    try { setStatus(await window.desktop.ga4monitoring.clearWebhook(propertyId)); setNote('Property channel removed - its alerts fall back to the default channel.'); }
     catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
   async function testPropertyChannel(propertyId: string): Promise<void> {
     setBusy(true); onError(''); setNote('');
     try {
       const r = await window.desktop.ga4monitoring.sendTest(propertyId);
-      setNote(r.ok ? 'Test sent — check Slack to confirm which channel this property alerts.' : `Test failed: ${r.error ?? 'unknown error'}`);
+      setNote(r.ok ? 'Test sent - check Slack to confirm which channel this property alerts.' : `Test failed: ${r.error ?? 'unknown error'}`);
     } catch (e) { onError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
 
@@ -706,7 +706,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
           <div style={{ color: 'var(--text-muted)', fontSize: 13.5 }}>
             {targets.length
               ? <>Watching <b>{targets.length}</b> propert{targets.length === 1 ? 'y' : 'ies'} · <b style={{ color: openIssues ? 'var(--c-red)' : 'var(--c-green)' }}>{openIssues}</b> open issue{openIssues === 1 ? '' : 's'} across all.</>
-              : 'Background health checks for your GA4 properties — data flow, key events, spikes/drops, conversion tracking and revenue integrity.'}
+              : 'Background health checks for your GA4 properties - data flow, key events, spikes/drops, conversion tracking and revenue integrity.'}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
@@ -723,7 +723,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       </div>
 
       {note && <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>{note}</div>}
-      {status?.lastError && <div style={{ fontSize: 12.5, color: 'var(--c-red)' }}>Last sweep error — {status.lastError}</div>}
+      {status?.lastError && <div style={{ fontSize: 12.5, color: 'var(--c-red)' }}>Last sweep error - {status.lastError}</div>}
 
       {/* ── Monitor a GA4 property (top of page): add a property (+ its optional Slack channel) and
              the shared schedule. Placed above the dashboard so adding a property is the first action,
@@ -745,7 +745,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
             {addId && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 2 }}>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <input style={{ ...input, flex: 2, minWidth: 220, fontSize: 12 }} type="password" placeholder="Slack webhook for this property (optional — connect later from its tab)" value={addChanUrl} onChange={(e) => setAddChanUrl(e.target.value)} />
+                  <input style={{ ...input, flex: 2, minWidth: 220, fontSize: 12 }} type="password" placeholder="Slack webhook for this property (optional - connect later from its tab)" value={addChanUrl} onChange={(e) => setAddChanUrl(e.target.value)} />
                   <input style={{ ...input, flex: 1, minWidth: 130, fontSize: 12 }} type="text" placeholder="#channel name" value={addChanLabel} onChange={(e) => setAddChanLabel(e.target.value)} />
                 </div>
                 <div style={{ background: 'var(--surface)', border: '1px dashed var(--border)', borderRadius: 8, padding: '8px 12px' }}>
@@ -782,7 +782,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
           <span style={{ fontSize: 30 }}>📡</span>
           <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text)' }}>No properties monitored yet</div>
           <div style={{ fontSize: 13, textAlign: 'center', maxWidth: 460, lineHeight: 1.5 }}>
-            Pick a GA4 property in the <b>Monitor a GA4 property</b> panel above and click <b>＋ Add</b>. Each check verifies data flow, key events, spikes/drops, conversion tracking and revenue integrity — and can alert your Slack channel when something breaks.
+            Pick a GA4 property in the <b>Monitor a GA4 property</b> panel above and click <b>＋ Add</b>. Each check verifies data flow, key events, spikes/drops, conversion tracking and revenue integrity - and can alert your Slack channel when something breaks.
           </div>
         </div>
       ) : (
@@ -807,7 +807,7 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
                     fontWeight: on ? 700 : 500,
                     opacity: t.enabled ? 1 : 0.55,
                   }}
-                  title={`${t.propertyLabel || t.propertyId} (${t.propertyId.replace('properties/', '')})${t.enabled ? '' : ' — paused'}`}
+                  title={`${t.propertyLabel || t.propertyId} (${t.propertyId.replace('properties/', '')})${t.enabled ? '' : ' - paused'}`}
                 >
                   <span style={{ fontSize: 12 }}>{h ? h.icon : '⚪'}</span>
                   <span style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.propertyLabel || t.propertyId.replace('properties/', '')}</span>
@@ -837,19 +837,19 @@ export function Ga4MonitoringPanel({ active, onError }: { active: AccountView | 
       )}
 
       {/* ── Slack alerts how-to: each property has its OWN channel (connect it from the property's
-             dashboard above) — there is no shared default channel. ── */}
+             dashboard above) - there is no shared default channel. ── */}
       <div style={box}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontWeight: 600 }}><SlackMark size={16} /> Slack alerts</span>
         </div>
         <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 8 }}>
-          One property, one channel: connect each property's Slack channel from its dashboard above (<b>＋ Connect channel</b> / <b>✎ Edit channel</b>) and pick <b>what it receives</b> there — new issue alerts, the weekly health digest, and/or the weekly audit summary. How to get a webhook URL for a channel:
+          One property, one channel: connect each property's Slack channel from its dashboard above (<b>＋ Connect channel</b> / <b>✎ Edit channel</b>) and pick <b>what it receives</b> there - new issue alerts, the weekly health digest, and/or the weekly audit summary. How to get a webhook URL for a channel:
         </div>
         <ol style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, margin: 0, paddingLeft: 18 }}>
           <li>Open <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer" style={{ color: 'var(--c-blue)' }}>api.slack.com/apps</a> → <b>Create New App</b> → <b>From scratch</b> (or pick an existing app), then choose your workspace.</li>
           <li>In the app’s left menu open <b>Incoming Webhooks</b> and toggle <b>Activate Incoming Webhooks</b> to <b>On</b>.</li>
-          <li>Click <b>Add New Webhook to Workspace</b>, pick the <b>channel</b> the alerts should post to, then <b>Allow</b>. (The channel is baked into the URL — that’s how you pick where alerts land.)</li>
-          <li>Copy the generated <b>Webhook URL</b> — it starts with <code style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>https://hooks.slack.com/services/</code>.</li>
+          <li>Click <b>Add New Webhook to Workspace</b>, pick the <b>channel</b> the alerts should post to, then <b>Allow</b>. (The channel is baked into the URL - that’s how you pick where alerts land.)</li>
+          <li>Copy the generated <b>Webhook URL</b> - it starts with <code style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>https://hooks.slack.com/services/</code>.</li>
         </ol>
         <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 8 }}>The URL is stored encrypted in your OS keychain (never synced or logged). An ongoing issue is posted once per property, not on every check.</div>
       </div>

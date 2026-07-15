@@ -67,7 +67,7 @@ const DEFAULT_MODEL: Record<LlmProvider, string> = {
 const CUSTOM_MODEL = '__custom__';
 
 /** Curated model choices per provider for the Settings picker. The FIRST entry doubles as the sensible
- *  default. This list only saves users from typing exact ids — any model the provider accepts still
+ *  default. This list only saves users from typing exact ids - any model the provider accepts still
  *  works via "Custom…", so it never restricts what can run. Keep DEFAULT_MODEL pointing at a listed id. */
 const MODEL_OPTIONS: Record<LlmProvider, Array<{ id: string; label: string }>> = {
   anthropic: [
@@ -167,7 +167,7 @@ function prettyParamLabel(key: string): string {
   );
 }
 
-/* Editable fields for a proposed write — names, types, key config. Each apply()
+/* Editable fields for a proposed write - names, types, key config. Each apply()
    writes back into a (cloned) copy of the proposal args before it's sent. */
 function buildEditFields(tool: string, details: Record<string, unknown>): EditField[] {
   const fields: EditField[] = [];
@@ -214,7 +214,7 @@ function buildEditFields(tool: string, details: Record<string, unknown>): EditFi
 
   if (details.tag) {
     // Only surface fields the args actually carry. A partial update (e.g. just a
-    // parameter change) has no name/type — showing a blank box and applying it would
+    // parameter change) has no name/type - showing a blank box and applying it would
     // BLANK the tag's real name on save. Guarded like the audit-fix path above.
     if (tag.name !== undefined) fields.push({ key: 'tagName', label: 'Tag name', initial: String(tag.name ?? ''), apply: (d, v) => { const t = asObj(d.tag); t.name = v; d.tag = t; } });
     if (tag.type !== undefined) fields.push({ key: 'tagType', label: 'Tag type (code)', initial: String(tag.type ?? ''), apply: (d, v) => { const t = asObj(d.tag); t.type = v; d.tag = t; } });
@@ -341,8 +341,8 @@ function summarizeProposal(tool: string, details: Record<string, unknown>): Arra
 }
 
 /* ───────── Minimal Markdown renderer (dependency-free, XSS-safe) ─────────
-   Renders what the assistant emits — GFM tables, headings, bold/italic, inline
-   code, fenced code blocks, and bullet/ordered lists — as real elements so
+   Renders what the assistant emits - GFM tables, headings, bold/italic, inline
+   code, fenced code blocks, and bullet/ordered lists - as real elements so
    tables show as proper bordered tables instead of raw `|` text. All text is
    placed via React children (escaped), so there is no raw-HTML injection. */
 const mdStyles: Record<string, React.CSSProperties> = {
@@ -366,7 +366,7 @@ const mdStyles: Record<string, React.CSSProperties> = {
 
 function renderInline(text: string, kp: string): Array<string | JSX.Element> {
   const out: Array<string | JSX.Element> = [];
-  // **bold** | `code` | *italic* | [label](url) — bold is tried before italic.
+  // **bold** | `code` | *italic* | [label](url) - bold is tried before italic.
   const re = /\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*|\[([^\]]+)\]\(([^)]+)\)/g;
   let last = 0;
   let k = 0;
@@ -376,7 +376,7 @@ function renderInline(text: string, kp: string): Array<string | JSX.Element> {
     if (m[1] != null) out.push(<strong key={`${kp}b${k}`}>{m[1]}</strong>);
     else if (m[2] != null) out.push(<code key={`${kp}c${k}`} style={mdStyles.code}>{m[2]}</code>);
     else if (m[3] != null) out.push(<em key={`${kp}i${k}`}>{m[3]}</em>);
-    else if (m[4] != null) out.push(<span key={`${kp}l${k}`}>{m[4]}</span>); // link label only — no in-app navigation
+    else if (m[4] != null) out.push(<span key={`${kp}l${k}`}>{m[4]}</span>); // link label only - no in-app navigation
     last = re.lastIndex;
     k++;
   }
@@ -559,7 +559,7 @@ function ConfirmCard({
   return (
     <div style={proposal.destructive ? styles.confirmDanger : styles.confirm}>
       <div style={styles.confirmHead}>
-        {proposal.destructive ? '🗑 Delete — approve this action?' : '⚠ Approve this change to your GTM?'}
+        {proposal.destructive ? '🗑 Delete - approve this action?' : '⚠ Approve this change to your GTM?'}
       </div>
 
       {fields.length > 0 ? (
@@ -618,10 +618,10 @@ function ConfirmCard({
       </div>
       <div style={styles.confirmNote}>
         {needType
-          ? `Type “${needType}” above to enable this — the final confirmation. Applies to a draft workspace — not published.`
+          ? `Type “${needType}” above to enable this - the final confirmation. Applies to a draft workspace - not published.`
           : proposal.destructive
-            ? 'Delete needs two approvals. Applies to a draft workspace — not published.'
-            : 'Edit any field above if needed. Applies to a draft workspace only — not published.'}
+            ? 'Delete needs two approvals. Applies to a draft workspace - not published.'
+            : 'Edit any field above if needed. Applies to a draft workspace only - not published.'}
       </div>
     </div>
   );
@@ -644,7 +644,7 @@ export function App(): JSX.Element {
   const [error, setError] = useState('');
   // Cross-tab GA4 monitoring banner: a background run with NEW issues surfaces here on any tab.
   const [monitorAlert, setMonitorAlert] = useState<Ga4MonitorRun | null>(null);
-  // Accounts whose Google token expired/was revoked this session (backend cleared them) — one
+  // Accounts whose Google token expired/was revoked this session (backend cleared them) - one
   // dismissible "Re-connect" banner each. Rendering filters to accounts still disconnected, so a
   // successful reconnect auto-hides its banner and a cancelled one keeps it (no premature clear).
   const [reauthIds, setReauthIds] = useState<string[]>([]);
@@ -661,7 +661,7 @@ export function App(): JSX.Element {
     window.desktop.google.status().then(setGoogle).catch((e) => setError(String(e)));
     window.desktop.secrets.selfTest().then(setSelfTest).catch((e) => setError(String(e)));
     refresh().catch((e) => setError(String(e)));
-    // The chat can switch the active workspace/container — re-fetch so the GTM bar follows.
+    // The chat can switch the active workspace/container - re-fetch so the GTM bar follows.
     const off = window.desktop.accounts.onChanged(() => {
       refresh().catch((e) => setError(String(e)));
     });
@@ -670,7 +670,7 @@ export function App(): JSX.Element {
     const offRun = window.desktop.ga4monitoring.onRun((run) => {
       if (run.newAlertIds.length > 0 && run.health !== 'healthy') setMonitorAlert(run);
     });
-    // A dead Google token (invalid_grant) was just cleared by the backend — surface a
+    // A dead Google token (invalid_grant) was just cleared by the backend - surface a
     // reconnect prompt for that account (refresh() already ran via accounts:changed).
     const offReauth = window.desktop.accounts.onAuthExpired(({ id }) => setReauthIds((prev) => (prev.includes(id) ? prev : [...prev, id])));
     return () => { off(); offRun(); offReauth(); };
@@ -694,7 +694,7 @@ export function App(): JSX.Element {
       await refresh();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // A user-initiated cancel isn't an error — don't surface it as one.
+      // A user-initiated cancel isn't an error - don't surface it as one.
       if (!/cancel/i.test(msg)) setError(msg);
     } finally {
       setConnecting(false);
@@ -749,7 +749,7 @@ export function App(): JSX.Element {
         <button
           style={styles.activeAcct}
           onClick={() => setView('settings')}
-          title={active ? `${active.email} — manage accounts in Settings` : 'Add an account in Settings'}
+          title={active ? `${active.email} - manage accounts in Settings` : 'Add an account in Settings'}
         >
           {active ? (
             <>
@@ -762,7 +762,7 @@ export function App(): JSX.Element {
           )}
         </button>
         {google && !google.configured && (
-          <div style={styles.sideWarn}>OAuth client not set — see Settings.</div>
+          <div style={styles.sideWarn}>OAuth client not set - see Settings.</div>
         )}
 
         <div style={{ flex: 1 }} />
@@ -803,7 +803,7 @@ export function App(): JSX.Element {
         {monitorAlert && (
           <div style={monitorAlert.health === 'critical' ? styles.monitorBarCrit : styles.monitorBarWarn}>
             <span style={{ flex: 1 }}>
-              {monitorAlert.health === 'critical' ? '🔴' : '🟠'} GA4 Monitor · <b>{monitorAlert.propertyLabel}</b>: {monitorAlert.newAlertIds.length} new issue{monitorAlert.newAlertIds.length === 1 ? '' : 's'} — {monitorAlert.alerts.find((a) => monitorAlert.newAlertIds.includes(a.id))?.title ?? monitorAlert.summary}
+              {monitorAlert.health === 'critical' ? '🔴' : '🟠'} GA4 Monitor · <b>{monitorAlert.propertyLabel}</b>: {monitorAlert.newAlertIds.length} new issue{monitorAlert.newAlertIds.length === 1 ? '' : 's'} - {monitorAlert.alerts.find((a) => monitorAlert.newAlertIds.includes(a.id))?.title ?? monitorAlert.summary}
             </span>
             <button style={styles.monitorBarBtn} onClick={() => { setView('ga4'); setGa4Tab('monitoring'); setMonitorAlert(null); }}>View</button>
             <button style={styles.errorClose} onClick={() => setMonitorAlert(null)}>✕</button>
@@ -816,7 +816,7 @@ export function App(): JSX.Element {
           .map((a) => (
             <div key={a.id} style={styles.monitorBarCrit}>
               <span style={{ flex: 1 }}>
-                🔑 Google session expired for <b>{a.email}</b> — reads/writes will fail until you re-connect. Testing-mode consent screens expire tokens every 7 days.
+                🔑 Google session expired for <b>{a.email}</b> - reads/writes will fail until you re-connect. Testing-mode consent screens expire tokens every 7 days.
               </span>
               <button
                 style={styles.monitorBarBtn}
@@ -835,7 +835,7 @@ export function App(): JSX.Element {
           <ChatView key={active?.id ?? 'none'} active={active} onError={setError} refresh={refresh} seed={chatSeed} />
         </div>
         {/* Keyed by view so each switch replays the fade+lift entrance (smooth page transition). Chat is
-            excluded — it lives in the always-mounted div above so its stream survives tab switches. */}
+            excluded - it lives in the always-mounted div above so its stream survives tab switches. */}
         {view !== 'chat' && (
           <div key={view} className="view-enter" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
         {view === 'gtm' ? (
@@ -894,7 +894,7 @@ interface ChatMessage {
   /** Tool failures surfaced in the UI even if the model doesn't mention them. */
   toolErrors?: Array<{ name: string; error: string }>;
   /** Epoch ms when the message was created (a query's send time / a reply's start time).
-   *  Optional — messages stored before this field existed simply render without a timestamp. */
+   *  Optional - messages stored before this field existed simply render without a timestamp. */
   ts?: number;
 }
 
@@ -931,7 +931,7 @@ function saveChatThread(key: string, messages: ChatMessage[]): void {
     else delete all[key];
     localStorage.setItem(CHAT_THREADS_KEY, JSON.stringify(all));
   } catch {
-    /* storage full/unavailable — non-fatal */
+    /* storage full/unavailable - non-fatal */
   }
 }
 
@@ -1161,7 +1161,7 @@ function ChatView({
                     <div style={styles.toolErrors}>
                       {m.toolErrors.map((te, j) => (
                         <div key={j} style={styles.toolErrorLine}>
-                          ⚠️ <strong>{te.name}</strong> failed — {te.error}
+                          ⚠️ <strong>{te.name}</strong> failed - {te.error}
                         </div>
                       ))}
                     </div>
@@ -1275,7 +1275,7 @@ function ChatView({
  *  shown after the label (e.g. a container's GTM-XXXX public id) that is ALSO matched by the search. */
 interface SearchOption { value: string; label: string; hint?: string }
 
-/** A native-<select> replacement with a type-to-filter search box — so picking from dozens of GTM
+/** A native-<select> replacement with a type-to-filter search box - so picking from dozens of GTM
  *  accounts / containers / workspaces doesn't mean scrolling a long native list. Opens a popover with an
  *  autofocused search input + a filtered, keyboard-navigable list (↑/↓/Enter, Esc/outside-click closes).
  *  Purely presentational: value/onChange are controlled by the caller exactly like the <select> it
@@ -1437,9 +1437,9 @@ function GtmContextBar({
     try {
       const list = await window.desktop.data.listGtmContainers(accountId);
       setContainers(list);
-      // A silent empty dropdown looks broken — tell the user WHY nothing populated.
+      // A silent empty dropdown looks broken - tell the user WHY nothing populated.
       if (list.length === 0) {
-        onError('No GTM containers found for this account. This Google sign-in may not have access to its containers — check you picked the right account, or re-connect Google in Settings.');
+        onError('No GTM containers found for this account. This Google sign-in may not have access to its containers - check you picked the right account, or re-connect Google in Settings.');
       }
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -1459,7 +1459,7 @@ function GtmContextBar({
     }
   };
 
-  // THE FIX: load containers whenever an account is selected — a MANUAL pick OR an account carried over
+  // THE FIX: load containers whenever an account is selected - a MANUAL pick OR an account carried over
   // from the saved context (the dropdown shows it, but NO onChange fires, so the fetch never ran → the
   // container dropdown stayed empty). Ref-guarded so each account fetches once (also dedupes React
   // StrictMode's double-mount). Same for workspaces once a container is selected.
@@ -1486,7 +1486,7 @@ function GtmContextBar({
     setSel({ accountId, accountName: acc?.name });
     setContainers([]);
     setWorkspaces([]);
-    // containers load via the effect above — the single fetch path (also covers a pre-selected account)
+    // containers load via the effect above - the single fetch path (also covers a pre-selected account)
   }
 
   function pickContainer(containerId: string): void {
@@ -1582,7 +1582,7 @@ function GtmContextBar({
   );
 }
 
-/** Which GA4 property the GA4 chat works against — the GA4 mirror of GtmContextBar, so the active
+/** Which GA4 property the GA4 chat works against - the GA4 mirror of GtmContextBar, so the active
  *  target is always visible above the conversation. ONE dropdown (every reachable property, grouped
  *  by GA4 account, name + numeric id) + the same summary-pill-with-Change pattern. Persisted on the
  *  account (ga4Context) and injected into the chat system prompt so the model never asks "which
@@ -1601,7 +1601,7 @@ function Ga4ContextBar({
   const [props, setProps] = useState<Ga4PropertyListItem[]>([]);
   const [sel, setSel] = useState<string>(ctx?.property ?? '');
   const [loading, setLoading] = useState(false);
-  // Free-text filter over the property list (name, account, or numeric id) — accounts with many
+  // Free-text filter over the property list (name, account, or numeric id) - accounts with many
   // properties make an unfiltered dropdown unusable.
   const [query, setQuery] = useState('');
 
@@ -1616,9 +1616,9 @@ function Ga4ContextBar({
         .listProperties()
         .then((list) => {
           setProps(list);
-          // A silent empty dropdown looks broken — tell the user WHY nothing populated.
+          // A silent empty dropdown looks broken - tell the user WHY nothing populated.
           if (list.length === 0) {
-            onError('No GA4 properties found for this account. This Google sign-in may not have access to any GA4 property — check you picked the right account, or re-connect Google in Settings.');
+            onError('No GA4 properties found for this account. This Google sign-in may not have access to any GA4 property - check you picked the right account, or re-connect Google in Settings.');
           }
         })
         .catch((e) => onError(e instanceof Error ? e.message : String(e)))
@@ -1649,7 +1649,7 @@ function Ga4ContextBar({
     }
     return [...m.entries()];
   }, [filtered]);
-  // Typing down to exactly ONE match selects it — Enter/✓ then confirms without touching the dropdown.
+  // Typing down to exactly ONE match selects it - Enter/✓ then confirms without touching the dropdown.
   useEffect(() => {
     if (query.trim() && filtered.length === 1) setSel(filtered[0].property);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1753,13 +1753,13 @@ function triggerCondition(s: SuggestedTagView): string {
     return t.kind === 'all_clicks' ? 'fires on every click'
       : t.kind === 'form_submit' ? 'fires on every form submit'
       : t.kind === 'youtube_video' ? 'fires on YouTube video start / progress (25/50/75/90%) / complete'
-      : '—';
+      : '-';
   return parts.join(' AND ');
 }
 
 // The suggested tags rendered in the "GTM Structure - GA4 Events" template layout:
 // one block per tag (tag + trigger on the first row; one row per event parameter /
-// trigger condition). Same data the CSV download writes — via suggestionToGroup.
+// trigger condition). Same data the CSV download writes - via suggestionToGroup.
 const tplStyles: Record<string, React.CSSProperties> = {
   // The table is its OWN scroll viewport in BOTH axes: maxWidth:100% keeps it inside the flex column,
   // maxHeight caps it so the horizontal scrollbar sits at the bottom of the VISIBLE table (always
@@ -1779,7 +1779,7 @@ const tplStyles: Record<string, React.CSSProperties> = {
   pager: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 13, color: 'var(--text-muted)' },
   pagerBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 7, padding: '4px 12px', fontSize: 13, cursor: 'pointer' },
   // ── "How to install" panel (the site-side requirements a suggestion's trigger needs to fire) ──
-  // A status chip (colour-coded by install status) doubles as the expand toggle — background/border/
+  // A status chip (colour-coded by install status) doubles as the expand toggle - background/border/
   // colour are set inline per status so it reads at a glance without opening the panel.
   installChip: { display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 4, fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20, border: '1px solid transparent', cursor: 'pointer', lineHeight: 1.3 },
   installTd: { padding: 0, borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' },
@@ -1794,15 +1794,15 @@ const tplStyles: Record<string, React.CSSProperties> = {
   installActions: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' },
   installCreateBtn: { background: 'var(--c-blue)', color: '#fff', border: 'none', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' },
   installCreateBtnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
-  // An OPTIONAL improvement (html-attribute) — a quiet muted row, NOT a mandatory-looking box, so it
+  // An OPTIONAL improvement (html-attribute) - a quiet muted row, NOT a mandatory-looking box, so it
   // never contradicts a "fires natively" line above it.
   installOptional: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', marginBottom: 8, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 },
   optionalPill: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', background: 'var(--surface-3)', border: '1px solid var(--border)', borderRadius: 20, padding: '1px 8px', flexShrink: 0 },
   installOptionalText: { fontSize: 12, color: 'var(--text-dim)', flex: 1, lineHeight: 1.4 },
   installInfo: { fontSize: 13, color: 'var(--text-muted)', cursor: 'help', flexShrink: 0 },
-  // "Show code" disclosure — collapses a listener/site-code snippet so the panel stays short.
+  // "Show code" disclosure - collapses a listener/site-code snippet so the panel stays short.
   installDisclosure: { background: 'transparent', border: 'none', color: 'var(--c-blue)', cursor: 'pointer', fontSize: 11, padding: '2px 0', marginTop: 4 },
-  // "Mark done" check-off on site-code / optional rows — a manual toggle the user ticks once the work is
+  // "Mark done" check-off on site-code / optional rows - a manual toggle the user ticks once the work is
   // done on their site (the app can't verify site-side code), turning the row + the row chip green.
   installCheck: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-dim)', cursor: 'pointer', marginTop: 8, userSelect: 'none' },
   installDoneText: { color: 'var(--c-green)', fontWeight: 600 },
@@ -1854,7 +1854,7 @@ function GrowCell({ value, disabled, onChange, ariaLabel }: { value: string; dis
 // Read-only surface for a suggestion's structured install plan: the site-side
 // requirement(s) a tag's trigger needs to actually fire (a listener tag / an HTML
 // attribute / site code), or a green "nothing to install" when GTM's native
-// trigger already sees the event. Show/copy only — no create button in this phase.
+// trigger already sees the event. Show/copy only - no create button in this phase.
 type InstallPlanView = NonNullable<SuggestedTagView['install']>;
 type InstallReqView = InstallPlanView['requires'][number];
 
@@ -1865,7 +1865,7 @@ const FIRES_LABEL: Record<Extract<InstallReqView, { kind: 'listener-tag' }>['tag
   window_loaded: 'Window Loaded',
 };
 
-/** A "Show code" disclosure — keeps a listener/site-code snippet collapsed by default so the panel stays
+/** A "Show code" disclosure - keeps a listener/site-code snippet collapsed by default so the panel stays
  *  short; the CodeBlock (with its own copy button) appears only on demand. */
 function CollapsibleCode({ code, ariaLabel }: { code: string; ariaLabel: string }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -1887,7 +1887,7 @@ function installChipView(p: InstallProgress): { label: string; bg: string; borde
   const BLUE = { bg: 'var(--c-blue-bg)', border: 'var(--c-blue-border)', color: 'var(--c-blue)' };
   const AMBER = { bg: 'var(--c-amber-bg)', border: 'var(--c-amber-border)', color: 'var(--c-amber)' };
   const optLeft = p.optionalTotal - p.optionalDone;
-  // Nothing actionable (defensive — the chip isn't rendered for a pure-ready plan).
+  // Nothing actionable (defensive - the chip isn't rendered for a pure-ready plan).
   if (p.requiredTotal === 0 && p.optionalTotal === 0) return { label: 'Ready to fire', ...GREEN };
   // Required steps still outstanding → the demanding chip (amber site code beats blue listener).
   if (p.requiredTotal > 0 && !p.allRequiredDone) {
@@ -1903,7 +1903,7 @@ function installChipView(p: InstallProgress): { label: string; bg: string; borde
 
 /** The row-cell status chip that doubles as the "How to install" expand toggle. Its colour + label
  *  summarise the whole plan (against the live "done" check-offs) so the user can triage without opening
- *  the panel — and it turns green "✓ Done" once every required step is checked off. */
+ *  the panel - and it turns green "✓ Done" once every required step is checked off. */
 function InstallChip({ install, done, open, onClick, tagName }: { install: InstallPlanView; done: Record<number, boolean>; open: boolean; onClick: () => void; tagName: string }): JSX.Element {
   const view = installChipView(installPlanProgress(install, done));
   return (
@@ -1923,7 +1923,7 @@ function InstallChip({ install, done, open, onClick, tagName }: { install: Insta
 /** Render one install requirement, styled by kind. A 'listener-tag' gets a "Create listener tag" button
  *  (wired by InstallPanel) that creates it in the active DRAFT workspace on explicit click; 'site-code'
  *  and the optional 'html-attribute' get a manual "mark done" check-off (the app can't verify site-side
- *  work) that turns the row — and the row's status chip — green. */
+ *  work) that turns the row - and the row's status chip - green. */
 function InstallRequirementRow({
   req,
   targetReady,
@@ -1933,7 +1933,7 @@ function InstallRequirementRow({
   onCreate,
 }: {
   req: InstallReqView;
-  /** Whether a GTM account/container/workspace is selected — gates the create button. */
+  /** Whether a GTM account/container/workspace is selected - gates the create button. */
   targetReady: boolean;
   /** This requirement's create status (idle unless a listener-tag create was attempted). */
   status: ListenerCreateStatus;
@@ -1980,7 +1980,7 @@ function InstallRequirementRow({
           )}
           <div style={tplStyles.installDetail}>{req.detail}</div>
           {/* Actionable create: drop this Custom HTML listener into the active DRAFT workspace on an
-              explicit click (draft-only, never published — same posture as the ✓ create-tags flow). */}
+              explicit click (draft-only, never published - same posture as the ✓ create-tags flow). */}
           <div style={tplStyles.installActions}>
             <button
               type="button"
@@ -2001,7 +2001,7 @@ function InstallRequirementRow({
       );
     }
     case 'html-attribute':
-      // OPTIONAL improvement — the tag already fires; this only sharpens scoping. A quiet muted row (not
+      // OPTIONAL improvement - the tag already fires; this only sharpens scoping. A quiet muted row (not
       // a mandatory-looking box), with the long "why" tucked into the ⓘ tooltip and a "mark applied" tick.
       return (
         <div style={{ ...tplStyles.installOptional, ...(done ? { borderColor: 'var(--c-green-border)' } : {}) }}>
@@ -2032,7 +2032,7 @@ function InstallRequirementRow({
         </div>
       );
     default: {
-      // Exhaustiveness guard — a new requirement kind should force a compile error here.
+      // Exhaustiveness guard - a new requirement kind should force a compile error here.
       const _never: never = req;
       return <>{String(_never)}</>;
     }
@@ -2071,7 +2071,7 @@ function InstallPanel({ plan, gtmTarget, done, onToggleDone }: { plan: InstallPl
             ? { state: 'exists' }
             : { state: 'err', msg: o.error ?? 'failed' },
       }));
-      // A created OR already-existing listener is "done" — record it in the parent so the row's chip
+      // A created OR already-existing listener is "done" - record it in the parent so the row's chip
       // turns green even after the panel is collapsed (which resets the transient status above).
       if (o.ok || o.existing) onToggleDone(index, true);
     } catch (e) {
@@ -2082,7 +2082,7 @@ function InstallPanel({ plan, gtmTarget, done, onToggleDone }: { plan: InstallPl
   return (
     <div style={tplStyles.installPanel}>
       {/* The status chip in the row already carries the summary, so the panel goes straight to the
-          per-requirement rows — no duplicated summary line. */}
+          per-requirement rows - no duplicated summary line. */}
       {plan.requires.map((req, i) => (
         <InstallRequirementRow
           key={i}
@@ -2101,7 +2101,7 @@ function InstallPanel({ plan, gtmTarget, done, onToggleDone }: { plan: InstallPl
 // The template table is interactive (parity with the Cards view): a leading checkbox selects a tag
 // to create in GTM, and the Tag name / GA4 event / trigger-Value cells are inline-editable (writing
 // into the same `edits`/`selected` state the Cards view + the create flow use). Rows already in the
-// container (or just created) lock — no checkbox, no edit — so a tag can't be re-created.
+// container (or just created) lock - no checkbox, no edit - so a tag can't be re-created.
 function SuggestionTemplateTable({
   suggestions,
   edits,
@@ -2140,7 +2140,7 @@ function SuggestionTemplateTable({
   const toggleInstall = (id: string): void => setInstallOpen((o) => ({ ...o, [id]: !o[id] }));
   // Per-suggestion "done" check-offs for its install requirements (keyed by suggestion id → requirement
   // index). Owned here (not in InstallPanel) so a mark survives the panel collapsing AND feeds the row's
-  // status chip. Session-scoped — a manual acknowledgement that site-side work is done, not persisted.
+  // status chip. Session-scoped - a manual acknowledgement that site-side work is done, not persisted.
   const [installDone, setInstallDone] = useState<Record<string, Record<number, boolean>>>({});
   const setReqDone = (sid: string, index: number, value: boolean): void =>
     setInstallDone((m) => ({ ...m, [sid]: { ...(m[sid] ?? {}), [index]: value } }));
@@ -2162,7 +2162,7 @@ function SuggestionTemplateTable({
             const exists = alreadyExists(s);
             const st = statuses[s.id];
             const created = st?.state === 'ok';
-            // Inputs stay editable unless the tag was just created (or a create is running) — NOT gated
+            // Inputs stay editable unless the tag was just created (or a create is running) - NOT gated
             // on `exists`, so typing a name that happens to match a container tag doesn't yank the input
             // out from under the cursor mid-keystroke. Renaming an "exists" row to a unique name re-shows
             // its checkbox. Selection itself still respects `exists` (shows "✓ exists", no checkbox).
@@ -2181,7 +2181,7 @@ function SuggestionTemplateTable({
               onEdit(s.id, { params: paramRows.map((row, j) => (j === idx ? { ...row, ...patch } : row)) });
             const editWhen = (idx: number, patch: Partial<TriggerWhen>): void =>
               onEdit(s.id, { whens: whenRows.map((row, j) => (j === idx ? { ...row, ...patch } : row)) });
-            // Add a SECOND trigger condition (ANDed) — e.g. scope a form/click tag to a specific
+            // Add a SECOND trigger condition (ANDed) - e.g. scope a form/click tag to a specific
             // {{Page Path}} when several forms share a name. Pre-fills the first unused variable; a
             // blank-value row is dropped on create (applyWhensToTrigger), so an unfilled row is harmless.
             const usedWhenVars = new Set(whenRows.map((r) => r.variable));
@@ -2189,7 +2189,7 @@ function SuggestionTemplateTable({
             const addWhen = (): void => {
               if (freeWhenVar) onEdit(s.id, { whens: [...whenRows, { variable: freeWhenVar, condition: 'equals', value: '' }] });
             };
-            // Remove a condition — lets the user undo an added "when" (or drop any condition they don't
+            // Remove a condition - lets the user undo an added "when" (or drop any condition they don't
             // want) if they change their mind. Writes the reduced list as the edit overlay; on create,
             // applyWhensToTrigger rebuilds the trigger from exactly the remaining rows.
             const removeWhen = (idx: number): void => onEdit(s.id, { whens: whenRows.filter((_, j) => j !== idx) });
@@ -2227,7 +2227,7 @@ function SuggestionTemplateTable({
                   {first && (
                     <td rowSpan={rowCount} style={{ ...tplStyles.td, whiteSpace: 'nowrap' }}>
                       {editable ? <GrowCell value={s.page} disabled={creating} onChange={(v) => onEdit(s.id, { page: v })} ariaLabel="Page" /> : <span style={{ color: 'var(--text-dim)' }}>{s.page}</span>}
-                      {/* Install-status chip — only when the plan asks the user to add something site-side
+                      {/* Install-status chip - only when the plan asks the user to add something site-side
                           (a listener tag / HTML attribute / site code). Hidden for native GTM triggers
                           (clicks, pageviews) and already-tracked events, where nothing installs. The chip's
                           colour + label triage the plan at a glance; click to expand the detail. */}
@@ -2261,7 +2261,7 @@ function SuggestionTemplateTable({
                   {first && (
                     <td rowSpan={rowCount} style={tplStyles.td}>
                       {editable ? <GrowCell value={g.eventName} disabled={creating} onChange={(v) => onEdit(s.id, { eventName: v })} ariaLabel="Event name" />
-                        : g.eventName ? <code style={mdStyles.code}>{g.eventName}</code> : <span style={{ color: 'var(--text-faint)' }}>—</span>}
+                        : g.eventName ? <code style={mdStyles.code}>{g.eventName}</code> : <span style={{ color: 'var(--text-faint)' }}>-</span>}
                     </td>
                   )}
                   <td style={tplStyles.td}>{p ? (editable ? <GrowCell value={p.name} disabled={creating} onChange={(v) => editParam(i, { name: v })} ariaLabel="Parameter name" /> : p.name) : ''}</td>
@@ -2274,7 +2274,7 @@ function SuggestionTemplateTable({
                   {/* Trigger Type (the trigger KIND) is read-only: changing the kind strands the old
                       kind's filter fields (which the new kind's builder ignores → fires on everything) and
                       the conditions can't be re-specified in this table. Edit the kind in GTM instead. */}
-                  {first && <td rowSpan={rowCount} style={tplStyles.td} title="Trigger type is structural — change it in GTM, or pick a suggestion of the right type">{g.triggerType}</td>}
+                  {first && <td rowSpan={rowCount} style={tplStyles.td} title="Trigger type is structural - change it in GTM, or pick a suggestion of the right type">{g.triggerType}</td>}
                   <td style={tplStyles.td}>{w ? (whensEditable ? <CellSelect value={w.variable} options={varOptions} disabled={creating} onChange={(v) => editWhen(i, { variable: v })} ariaLabel="Trigger when variable" /> : <code style={mdStyles.code}>{w.variable}</code>) : ''}</td>
                   <td style={tplStyles.td}>{w ? (whensEditable ? <CellSelect value={w.condition} options={CONDITION_OPTIONS} disabled={creating} onChange={(v) => editWhen(i, { condition: v })} ariaLabel="Trigger when condition" /> : w.condition) : ''}</td>
                   <td style={tplStyles.td}>
@@ -2282,7 +2282,7 @@ function SuggestionTemplateTable({
                       whensEditable ? (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                           <GrowCell value={w.value} disabled={creating} onChange={(v) => editWhen(i, { value: v })} ariaLabel="Trigger when value" />
-                          {/* Remove THIS condition — undo an added "when" or drop one that's not wanted. */}
+                          {/* Remove THIS condition - undo an added "when" or drop one that's not wanted. */}
                           <button
                             type="button"
                             onClick={() => removeWhen(i)}
@@ -2303,7 +2303,7 @@ function SuggestionTemplateTable({
                         type="button"
                         onClick={addWhen}
                         disabled={creating}
-                        title="Add another trigger condition (ANDed) — e.g. scope this tag to a specific Page Path"
+                        title="Add another trigger condition (ANDed) - e.g. scope this tag to a specific Page Path"
                         style={{ marginTop: 4, padding: '1px 7px', fontSize: 11, lineHeight: 1.6, color: 'var(--c-blue)', background: 'none', border: '1px dashed var(--border-2)', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap' }}
                       >
                         + condition
@@ -2364,9 +2364,9 @@ function kindCountsLabel(elements: Array<{ kind: string }>): string {
 }
 
 // The grouped "GTM" workspace: one shared account/container/workspace picker
-// (GtmContextBar) over two sub-tabs — Tag suggestions and Container audit — so both
+// (GtmContextBar) over two sub-tabs - Tag suggestions and Container audit - so both
 // GTM-container tools share the same target instead of each finding it on its own.
-// GA4 tools — the two GA4 surfaces (Audit + Monitoring) under one sidebar entry, mirroring GTM Tools'
+// GA4 tools - the two GA4 surfaces (Audit + Monitoring) under one sidebar entry, mirroring GTM Tools'
 // sub-tab pattern. The active tab is owned by App (passed in) so the cross-tab monitor alert banner
 // can deep-link straight to the Monitoring sub-tab.
 function Ga4ToolsView({
@@ -2446,7 +2446,7 @@ function GtmToolsView({
   );
 }
 
-// Sample prompts grouped by task — a quick reference + launcher for the chat. Replace the
+// Sample prompts grouped by task - a quick reference + launcher for the chat. Replace the
 // placeholder ids/names/URLs (G-…, container names, https URLs) with the user's own.
 const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4'; prompts: string[] }> = [
   {
@@ -2454,7 +2454,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
     icon: '🔍',
     prompts: [
       'Audit my GTM container and list the findings by severity, worst first.',
-      'What changed in my container since the last audit — any regressions?',
+      'What changed in my container since the last audit - any regressions?',
       'Give me a scorecard for this container.',
       'Diff my draft workspace against the live published version.',
       'Compare my last two container versions.',
@@ -2534,7 +2534,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
       'Pause the GA4 - Config tag.',
       'Unpause the GA4 - Purchase tag.',
       'Update the GA4 - Config tag to use the {{GA4 Variable}} for its Measurement ID.',
-      'Reuse the existing trigger and variable if they already exist — do not create duplicates.',
+      'Reuse the existing trigger and variable if they already exist - do not create duplicates.',
     ],
   },
   {
@@ -2581,7 +2581,7 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
     ],
   },
   {
-    title: 'Meta — Pixel, CAPI & advanced matching',
+    title: 'Meta - Pixel, CAPI & advanced matching',
     icon: '📘',
     prompts: [
       'Import the Meta Pixel community template and create a Meta pixel base tag with my Pixel ID.',
@@ -2621,10 +2621,10 @@ const PROMPT_GROUPS: Array<{ title: string; icon: string; product?: 'gtm' | 'ga4
     product: 'ga4', // runs the evidence-based GA4 audit framework via the read-only GA4 tools
     prompts: [
       'Run a full GA4 property audit of this property. Gather the real config + last-90-days data via the GA4 tools, then output the templated audit: area-status table (Pass / Partial / Fail / Not Verified), property baseline, decision readiness, parameter-coverage bars, and findings sorted by severity with evidence, business risk and the exact fix.',
-      "Audit this GA4 property's data quality for the last 28 days — (not set) / Unassigned / (direct) bloat and any anomalies — with real values and a Pass / Partial / Fail / Not Verified status, worst first.",
+      "Audit this GA4 property's data quality for the last 28 days - (not set) / Unassigned / (direct) bloat and any anomalies - with real values and a Pass / Partial / Fail / Not Verified status, worst first.",
       'Decision readiness: can this GA4 property answer which campaigns generate revenue, CAC by channel, abandonment, lead quality, LTV, refund rate, and repeat/churn within 90 days? Mark each Answerable / Partial / Not answerable, and list what it cannot measure and the missing input.',
       'Audit the ecommerce setup: which funnel steps fire (view_item → add_to_cart → begin_checkout → purchase), purchase parameter coverage (value, transaction_id, currency, items) as bars, plus any duplicate-transaction or revenue-gap risk.',
-      'Score this GA4 property 0–100 with a letter grade, the reasons behind the score, and the top 3 fixes.',
+      'Score this GA4 property 0-100 with a letter grade, the reasons behind the score, and the top 3 fixes.',
     ],
   },
   {
@@ -2748,14 +2748,14 @@ function TagReviewPanel({
   const [pasteText, setPasteText] = useState('');
   const [suggestions, setSuggestions] = useState<SuggestedTagView[]>([]);
   const [meta, setMeta] = useState<TagScanResult['summary'] | null>(null);
-  // The scanned site + scan time (from the scan result) — surfaced in the install-runbook header.
+  // The scanned site + scan time (from the scan result) - surfaced in the install-runbook header.
   const [scanMeta, setScanMeta] = useState<{ site?: string; scannedAt?: string }>({});
   const [warnings, setWarnings] = useState<string[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [edits, setEdits] = useState<Record<string, TagEdit>>({});
   // Locate-only PROOF screenshots for the creatable suggestions (tagId → JPEG data-URI), captured
   // after each scan by reusing the verify driver (ring the element + shot). `shotStatus` drives the
-  // "capturing…" line; `sLightbox` is the image shown full-screen. Best-effort — never blocks the panel.
+  // "capturing…" line; `sLightbox` is the image shown full-screen. Best-effort - never blocks the panel.
   const [sShots, setSShots] = useState<Record<string, string>>({});
   const [shotStatus, setShotStatus] = useState<{ loading: boolean; done: number; total?: number; current?: string } | null>(null);
   // Live per-tag capture progress pushed from main. Only applied while a capture is actually
@@ -2774,7 +2774,7 @@ function TagReviewPanel({
   // never which ids are selected/created.
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'click' | 'form' | 'other'>('all');
-  // Filter the suggestion list by ad PLATFORM (GA4 / Meta / Google Ads / TikTok / …) — only shown when a
+  // Filter the suggestion list by ad PLATFORM (GA4 / Meta / Google Ads / TikTok / …) - only shown when a
   // scan produced more than one platform (e.g. a "Both" or multi-select scan). 'all' = no platform filter.
   const [platformFilter, setPlatformFilter] = useState<SuggestPlatform | 'all'>('all');
   // Review table is paginated at 10 tags/page. Reset to the first page whenever a filter narrows the list
@@ -2795,11 +2795,11 @@ function TagReviewPanel({
   const [healMeta, setHealMeta] = useState<{ injected: boolean; previewAuth: boolean }>({ injected: false, previewAuth: false });
   const [healSkipped, setHealSkipped] = useState<Record<string, boolean>>({});
   const [healNote, setHealNote] = useState('');
-  // Corrected triggers already applied to the draft, keyed by tag id — fed into the NEXT round's
+  // Corrected triggers already applied to the draft, keyed by tag id - fed into the NEXT round's
   // verify input so re-verify drives the FIXED interaction (not the stale original) and can converge.
   const [appliedTriggers, setAppliedTriggers] = useState<Record<string, VerifyTagInput['trigger']>>({});
   // The CURRENT editable workspace for the heal loop. Minting a preview SUBMITS the workspace (it goes
-  // read-only) and GTM auto-creates a fresh one — we switch to it so later fixes/mints don't fail
+  // read-only) and GTM auto-creates a fresh one - we switch to it so later fixes/mints don't fail
   // "already submitted". A ref (not state) so the value is current synchronously inside a round.
   const healWsRef = useRef<string>('');
   const [settleMs, setSettleMs] = useState('2500');
@@ -2807,8 +2807,8 @@ function TagReviewPanel({
   const effSettleMs = (): number | undefined => (settleAuto ? undefined : Number(settleMs) || undefined);
   // Pre-scan platform choice: a MULTI-SELECT of ad platforms to generate tags for. GA4 is the default;
   // any subset of the others may be toggled. Each non-GA4 platform's tags are derived from the GA4 ones
-  // so every platform's tag shares one trigger per detection. Never send an empty array — a scan with
-  // no platform makes no sense — so deselecting the last one falls back to ['ga4'] (see togglePlatform).
+  // so every platform's tag shares one trigger per detection. Never send an empty array - a scan with
+  // no platform makes no sense - so deselecting the last one falls back to ['ga4'] (see togglePlatform).
   const [platforms, setPlatforms] = useState<SuggestPlatform[]>(['ga4']);
   const togglePlatform = (p: SuggestPlatform): void =>
     setPlatforms((prev) => {
@@ -2818,7 +2818,7 @@ function TagReviewPanel({
   const [scanLog, setScanLog] = useState<{ pages: TagScanResult['pages']; notScanned: TagScanResult['notScanned']; inventory: TagScanResult['inventory']; installed: TagScanResult['installed'] } | null>(null);
   const [showLog, setShowLog] = useState(false);
   // Browser-driver diagnostics (separate "show debug" toggle): per-page form-probe
-  // DOM counts + console/page errors — why a scan found nothing.
+  // DOM counts + console/page errors - why a scan found nothing.
   const [scanDebug, setScanDebug] = useState<TagScanResult['debug'] | null>(null);
   const [showDebug, setShowDebug] = useState(false);
   const [discovering, setDiscovering] = useState(false);
@@ -2832,7 +2832,7 @@ function TagReviewPanel({
   // them in the scan. Off by default.
   const [skipBlog, setSkipBlog] = useState(false);
   const [exportNote, setExportNote] = useState('');
-  // The container's existing tags — so suggestions already present are marked
+  // The container's existing tags - so suggestions already present are marked
   // "already exists" and skipped (no duplicate-name failure, no wasted API quota).
   const [existing, setExisting] = useState<{ names: Set<string>; hasGa4Base: boolean }>({ names: new Set(), hasGa4Base: false });
 
@@ -2893,13 +2893,13 @@ function TagReviewPanel({
     // (form) tags of a screenshot even though they were locatable.
     const deduped = dedupeViewsByGtmName(res.suggestions);
     loadSuggestions(deduped);
-    // Fill in a proof screenshot per creatable tag (the element it would track, ringed) — async +
+    // Fill in a proof screenshot per creatable tag (the element it would track, ringed) - async +
     // best-effort so the suggestion list is usable immediately and screenshots appear as they arrive.
     void captureSuggestionShots(deduped, res.site || res.siteHost || url);
   }
 
   // Reuse the verify driver's ring + capture (locate-only) to grab a proof screenshot of WHERE each
-  // suggested tag would fire. Never blocks the panel — screenshots are a nicety layered onto the list.
+  // suggested tag would fire. Never blocks the panel - screenshots are a nicety layered onto the list.
   async function captureSuggestionShots(list: SuggestedTagView[], base: string): Promise<void> {
     const target = (base || url || '').trim();
     setSShots({});
@@ -2912,7 +2912,7 @@ function TagReviewPanel({
       setSShots(map);
       setShotStatus({ loading: false, done: Object.keys(map).length });
     } catch {
-      setShotStatus(null); // best-effort — a screenshot failure never breaks the suggestions
+      setShotStatus(null); // best-effort - a screenshot failure never breaks the suggestions
     }
   }
 
@@ -3097,7 +3097,7 @@ function TagReviewPanel({
   const filterQuery = search.trim().toLowerCase();
   const searchMatches = suggestions.filter((s) => {
     if (!filterQuery) return true;
-    // Match on the RAW suggestion, not the effective (edited) one — otherwise renaming a tag so its new
+    // Match on the RAW suggestion, not the effective (edited) one - otherwise renaming a tag so its new
     // text stops matching the query would drop the row and unmount the input mid-keystroke.
     return `${s.tagName} ${s.eventName} ${s.page} ${s.label} ${triggerCondition(s)} ${s.note ?? ''}`
       .toLowerCase()
@@ -3150,16 +3150,16 @@ function TagReviewPanel({
     setSelected((prev) => ({ ...prev, ...Object.fromEntries(visible.map((s) => [s.id, pred(s) && !alreadyExists(s)])) }));
 
   // Every inline edit (all table cells) is merged back into the effective tag by the shared, unit-tested
-  // applyTagEdit — the create flow, dedup, and merge grouping all read this effective view.
+  // applyTagEdit - the create flow, dedup, and merge grouping all read this effective view.
   const effective = (s: SuggestedTagView): SuggestedTagView => applyTagEdit(s, edits[s.id]);
 
   // A suggestion already exists in the container if a tag of its (effective) name is
-  // there, or — for the GA4 Configuration — if any GA4 base tag is already present.
+  // there, or - for the GA4 Configuration - if any GA4 base tag is already present.
   const alreadyExists = (s: SuggestedTagView): boolean =>
     existing.names.has(effective(s).tagName.trim().toLowerCase()) || (s.platform === 'google_tag' && existing.hasGa4Base);
 
   // Mergeable groups: >=2 click tags sending the SAME event from different {{Click Text}} equals
-  // triggers (e.g. "Learn More" vs "LEARN MORE"). Offered as an opt-in merge — rows already in the
+  // triggers (e.g. "Learn More" vs "LEARN MORE"). Offered as an opt-in merge - rows already in the
   // container (or already created this session) are excluded, since their tags can't be rewritten.
   // Grouping runs on the EFFECTIVE view (inline edits applied), so an edited event/trigger text moves
   // a row between groups instead of being silently reverted by the merge.
@@ -3171,7 +3171,7 @@ function TagReviewPanel({
   function doMergeGroup(g: MergeGroup): void {
     const merged = mergeGroup(g);
     // If a DIFFERENT suggestion (outside the group) already carries the derived common name, pick the
-    // distinct "Variants" name — the create flow matches existing tags/triggers by name, so a collision
+    // distinct "Variants" name - the create flow matches existing tags/triggers by name, so a collision
     // would dead-end at "already exists" or cross-wire.
     const memberIds = new Set(g.tags.map((t) => t.id));
     if (suggestions.some((s) => !memberIds.has(s.id) && effective(s).tagName.trim().toLowerCase() === merged.tagName.trim().toLowerCase())) {
@@ -3328,7 +3328,7 @@ function TagReviewPanel({
   const HEAL_MAX_ROUNDS = 5;
   function healErrorText(e: unknown): string {
     const m = e instanceof Error ? e.message : String(e);
-    if (/invalid_grant|expired or revoked|AUTH_EXPIRED/i.test(m)) return 'Your Google connection expired — re-connect (the banner up top) and retry.';
+    if (/invalid_grant|expired or revoked|AUTH_EXPIRED/i.test(m)) return 'Your Google connection expired - re-connect (the banner up top) and retry.';
     if (/ETIMEDOUT|fetch failed|network|getaddrinfo/i.test(m)) return 'Could not reach Google (network). Check your connection and retry.';
     return m;
   }
@@ -3341,7 +3341,7 @@ function TagReviewPanel({
     const notFired = activeV.filter((v) => !v.fired);
     // Inconclusive-with-no-fix = "couldn't auto-test here" (CTA on another page / needs a real
     // submit). Re-running rounds will never flip these, so they must NOT keep the loop paused
-    // forever — they don't block "done", and they're reported separately from genuine failures.
+    // forever - they don't block "done", and they're reported separately from genuine failures.
     const inconclusive = notFired.filter((v) => v.inconclusive && !v.suggestedTrigger);
     const genuine = notFired.filter((v) => !(v.inconclusive && !v.suggestedTrigger));
     const fixable = genuine.filter((v) => v.suggestedTrigger);
@@ -3350,7 +3350,7 @@ function TagReviewPanel({
     if (genuine.length === 0) {
       setHealPhase('done');
       setHealNote(inconclusive.length
-        ? `✅ All testable tag(s) fire.${tail} (their CTA/form is on another page or needs a real submit — verify those in GTM Preview).`
+        ? `✅ All testable tag(s) fire.${tail} (their CTA/form is on another page or needs a real submit - verify those in GTM Preview).`
         : `✅ All ${activeV.length} tag(s) fire.`);
     } else if (fixable.length > 0) {
       setHealPhase('review');
@@ -3380,14 +3380,14 @@ function TagReviewPanel({
     healWsRef.current = newWorkspaceId;
     try {
       await window.desktop.accounts.setGtmContext(active.id, { ...ctx, workspaceId: newWorkspaceId, workspaceName: 'Workspace (auto)' });
-    } catch { /* best-effort — the loop still uses healWsRef */ }
+    } catch { /* best-effort - the loop still uses healWsRef */ }
   }
   async function runHealRound(roundNo: number, skipped: Record<string, boolean>, overrides: Record<string, VerifyTagInput['trigger']>): Promise<void> {
     if (!targetReady || !ctx) { setHealPhase('idle'); setHealNote('Pick a GTM account, container and draft workspace first.'); return; }
     const target = url.trim();
     if (!target) { setHealPhase('idle'); setHealNote('Enter the site URL to verify against (the Main website / Single page field).'); return; }
     const created = healableTags();
-    if (created.length === 0) { setHealPhase('idle'); setHealNote('Create some tags first — there are none in the container to verify.'); return; }
+    if (created.length === 0) { setHealPhase('idle'); setHealNote('Create some tags first - there are none in the container to verify.'); return; }
     setHealPhase('busy');
     setHealNote(`Round ${roundNo}: minting a preview & verifying ${created.length} tag(s)…`);
     try {
@@ -3443,7 +3443,7 @@ function TagReviewPanel({
     if (next > HEAL_MAX_ROUNDS) {
       await runHealRound(healRound, healSkipped, applied);
       setHealPhase('done');
-      setHealNote(`Stopped after ${HEAL_MAX_ROUNDS} rounds — re-verified; see what remains.`);
+      setHealNote(`Stopped after ${HEAL_MAX_ROUNDS} rounds - re-verified; see what remains.`);
       return;
     }
     await runHealRound(next, healSkipped, applied);
@@ -3492,7 +3492,7 @@ function TagReviewPanel({
             ))}
             {discoverMode === 'csv' && <span style={styles.muted}>scan a list of landing-page URLs directly (no crawl)</span>}
           </div>
-          {/* Pre-scan platform choice: a MULTI-SELECT — toggle any subset of ad platforms. Each selected
+          {/* Pre-scan platform choice: a MULTI-SELECT - toggle any subset of ad platforms. Each selected
               platform generates its own tags from the same detected elements, sharing one trigger. */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={styles.muted}>Create tags for:</span>
@@ -3520,7 +3520,7 @@ function TagReviewPanel({
             <>
               <textarea
                 style={styles.pasteArea}
-                placeholder={'Paste landing-page URLs — one per line (or "url,label" per row):\nhttps://example.com/pricing\nhttps://example.com/demo, Demo page\nexample.com/contact'}
+                placeholder={'Paste landing-page URLs - one per line (or "url,label" per row):\nhttps://example.com/pricing\nhttps://example.com/demo, Demo page\nexample.com/contact'}
                 value={csvText}
                 disabled={scanning}
                 onChange={(e) => setCsvText(e.target.value)}
@@ -3550,7 +3550,7 @@ function TagReviewPanel({
               </div>
               <div style={{ ...styles.muted, marginTop: 8 }}>
                 Scans each listed landing page directly (no crawl), merging Electron’s browser <i>and</i> a static parse
-                (Cheerio) — up to {CSV_URL_CAP} pages per scan. Read-only; nothing is created until you approve.
+                (Cheerio) - up to {CSV_URL_CAP} pages per scan. Read-only; nothing is created until you approve.
               </div>
             </>
           ) : (
@@ -3587,7 +3587,7 @@ function TagReviewPanel({
                 {discoverMode === 'single'
                   ? 'Scans ONLY this page (no crawl, no sitemap) and shows its tags directly'
                   : `First lists every page (sitemap if available, else a quick link-crawl) so you can pick which to deep-scan (up to ${CSV_URL_CAP} pages per scan)`}
-                {' '}— merging Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
+                {' '}- merging Electron's browser <i>and</i> a static parse (Cheerio). Read-only; nothing is created until you
                 approve.{' '}
                 <button style={styles.linkBtn} onClick={doQuickScan} disabled={!url.trim() || scanning || discovering}>
                   quick scan (~25 pages)
@@ -3668,8 +3668,8 @@ function TagReviewPanel({
             ) : (
               <div style={{ ...styles.muted, marginTop: 6 }}>
                 {skipBlog && blogCount > 0
-                  ? `All ${blogCount} discovered page${blogCount === 1 ? ' is a blog page' : 's are blog pages'} — untick "Skip blog pages" to include them.`
-                  : 'No pages found — try the quick scan above, or check the URL.'}
+                  ? `All ${blogCount} discovered page${blogCount === 1 ? ' is a blog page' : 's are blog pages'} - untick "Skip blog pages" to include them.`
+                  : 'No pages found - try the quick scan above, or check the URL.'}
               </div>
             )}
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
@@ -3677,7 +3677,7 @@ function TagReviewPanel({
                 {scanning ? 'Scanning…' : `Scan selected (${selectedPageCount})`}
               </button>
               <span style={{ color: selectedPageCount > CSV_URL_CAP ? 'var(--c-amber)' : 'var(--text-muted)', fontSize: 13 }}>
-                {selectedPageCount > CSV_URL_CAP ? `Up to ${CSV_URL_CAP} pages are scanned per run — the first ${CSV_URL_CAP} of your ${selectedPageCount} selected.` : `Up to ${CSV_URL_CAP} pages per scan.`}
+                {selectedPageCount > CSV_URL_CAP ? `Up to ${CSV_URL_CAP} pages are scanned per run - the first ${CSV_URL_CAP} of your ${selectedPageCount} selected.` : `Up to ${CSV_URL_CAP} pages per scan.`}
               </span>
             </div>
           </div>
@@ -3698,43 +3698,43 @@ function TagReviewPanel({
             </div>
           )}
           <div style={{ ...styles.muted, marginTop: 6 }}>
-            measurementId defaults to the <code style={mdStyles.code}>{'{{GA4 Measurement ID}}'}</code> variable — make
+            measurementId defaults to the <code style={mdStyles.code}>{'{{GA4 Measurement ID}}'}</code> variable - make
             sure it exists in this container, or edit a row to a real G-XXXX id.
           </div>
           {platforms.includes('meta') && (
             <div style={{ ...styles.muted, marginTop: 6 }}>
-              Meta tags use the <code style={mdStyles.code}>{'{{Meta Pixel ID}}'}</code> variable — set it in the
+              Meta tags use the <code style={mdStyles.code}>{'{{Meta Pixel ID}}'}</code> variable - set it in the
               container (or edit the Pixel ID per row).
             </div>
           )}
           {platforms.includes('pinterest') && (
             <div style={{ ...styles.muted, marginTop: 6 }}>
-              Pinterest tags use the <code style={mdStyles.code}>{'{{Pinterest Tag ID}}'}</code> variable — set it in
+              Pinterest tags use the <code style={mdStyles.code}>{'{{Pinterest Tag ID}}'}</code> variable - set it in
               the container (or edit the Tag ID per row).
             </div>
           )}
           {platforms.includes('tiktok') && (
             <div style={{ ...styles.muted, marginTop: 6 }}>
-              TikTok tags use the <code style={mdStyles.code}>{'{{TikTok Pixel ID}}'}</code> variable — set it in the
+              TikTok tags use the <code style={mdStyles.code}>{'{{TikTok Pixel ID}}'}</code> variable - set it in the
               container (or edit the Pixel ID per row).
             </div>
           )}
           {platforms.includes('linkedin') && (
             <div style={{ ...styles.muted, marginTop: 6 }}>
-              LinkedIn tags use the <code style={mdStyles.code}>{'{{LinkedIn Partner ID}}'}</code> variable — set it in
+              LinkedIn tags use the <code style={mdStyles.code}>{'{{LinkedIn Partner ID}}'}</code> variable - set it in
               the container (or edit the Partner ID per row).
             </div>
           )}
           {platforms.includes('reddit') && (
             <div style={{ ...styles.muted, marginTop: 6 }}>
-              Reddit tags use the <code style={mdStyles.code}>{'{{Reddit Pixel ID}}'}</code> variable — set it in the
+              Reddit tags use the <code style={mdStyles.code}>{'{{Reddit Pixel ID}}'}</code> variable - set it in the
               container (or edit the Pixel ID per row).
             </div>
           )}
           {platforms.includes('google_ads') && (
             <div style={{ ...styles.muted, marginTop: 6 }}>
               Google Ads conversions use the <code style={mdStyles.code}>{'{{Google Ads Conversion ID}}'}</code> and{' '}
-              <code style={mdStyles.code}>{'{{Google Ads Conversion Label}}'}</code> variables — set them in the
+              <code style={mdStyles.code}>{'{{Google Ads Conversion Label}}'}</code> variables - set them in the
               container (or edit each row).
             </div>
           )}
@@ -3790,7 +3790,7 @@ function TagReviewPanel({
                         <td style={styles.invTd}>{f.page}</td>
                         <td style={styles.invTd}>{f.purpose}</td>
                         <td style={styles.invTd}>{f.provider}</td>
-                        <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{f.action || '—'}</td>
+                        <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{f.action || '-'}</td>
                       </tr>
                     ))}
                     {scanLog.inventory.forms.length === 0 && (
@@ -3808,7 +3808,7 @@ function TagReviewPanel({
                   All trackable elements ({scanLog.inventory.elements.length})
                   {scanLog.inventory.elements.length > 0 && (
                     <span style={{ textTransform: 'none', color: 'var(--text-faint)', fontWeight: 400, letterSpacing: 0 }}>
-                      {' '}— {kindCountsLabel(scanLog.inventory.elements)}
+                      {' '}- {kindCountsLabel(scanLog.inventory.elements)}
                     </span>
                   )}
                 </div>
@@ -3827,8 +3827,8 @@ function TagReviewPanel({
                         <tr key={i}>
                           <td style={styles.invTd}>{e.page}</td>
                           <td style={styles.invTd}>{e.kind}</td>
-                          <td style={styles.invTd}>{(e.text || '—').slice(0, 80)}</td>
-                          <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{e.href || '—'}</td>
+                          <td style={styles.invTd}>{(e.text || '-').slice(0, 80)}</td>
+                          <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{e.href || '-'}</td>
                         </tr>
                       ))}
                       {scanLog.inventory.elements.length === 0 && (
@@ -3846,7 +3846,7 @@ function TagReviewPanel({
                 <ul style={styles.resultList}>
                   {scanLog.pages.map((p, i) => (
                     <li key={i} style={styles.resultRow}>
-                      {p.page} — {p.forms} form(s), {p.elements} element(s)
+                      {p.page} - {p.forms} form(s), {p.elements} element(s)
                     </li>
                   ))}
                   {scanLog.pages.length === 0 && <li style={styles.resultRow}>none</li>}
@@ -3857,7 +3857,7 @@ function TagReviewPanel({
                     <ul style={styles.resultList}>
                       {scanLog.notScanned.slice(0, 40).map((n, i) => (
                         <li key={i} style={styles.resultRow}>
-                          {n.url} — {n.reason}
+                          {n.url} - {n.reason}
                         </li>
                       ))}
                       {scanLog.notScanned.length > 40 && <li style={styles.resultRow}>…and {scanLog.notScanned.length - 40} more</li>}
@@ -3899,9 +3899,9 @@ function TagReviewPanel({
                       {scanDebug.pages.map((p, i) => (
                         <tr key={i}>
                           <td style={{ ...styles.invTd, wordBreak: 'break-all' }}>{p.url}</td>
-                          <td style={styles.invTd}>{p.httpStatus ?? '—'}</td>
-                          <td style={styles.invTd}>{p.probe ? `${p.probe.forms}/${p.probe.inputs}/${p.probe.submitish}` : '—'}</td>
-                          <td style={styles.invTd}>{p.probe ? p.probe.extracted : '—'}</td>
+                          <td style={styles.invTd}>{p.httpStatus ?? '-'}</td>
+                          <td style={styles.invTd}>{p.probe ? `${p.probe.forms}/${p.probe.inputs}/${p.probe.submitish}` : '-'}</td>
+                          <td style={styles.invTd}>{p.probe ? p.probe.extracted : '-'}</td>
                           <td style={{ ...styles.invTd, color: 'var(--text-faint)' }}>{p.error ?? ''}</td>
                         </tr>
                       ))}
@@ -3937,7 +3937,7 @@ function TagReviewPanel({
                 )}
                 {scanDebug.consoleErrors.length === 0 && scanDebug.pageErrors.length === 0 && (
                   <div style={{ ...styles.muted, marginTop: 10 }}>
-                    No browser console or page errors captured — the pages loaded cleanly. If suggestions are still missing, the
+                    No browser console or page errors captured - the pages loaded cleanly. If suggestions are still missing, the
                     elements likely aren&apos;t standard DOM (custom widgets) or the page needs more settle time.
                   </div>
                 )}
@@ -3947,13 +3947,13 @@ function TagReviewPanel({
         )}
 
 
-        {/* Crawl progress — the FULL de-duplicated list appears when the scan finishes (not streamed). */}
+        {/* Crawl progress - the FULL de-duplicated list appears when the scan finishes (not streamed). */}
         {scanning && (
           <div style={styles.scanBanner}>
             ⏳ Scanning all pages…{scanProgress ? ` ${scanProgress.scanned} read` : ' starting'}
             {scanProgress && scanProgress.queued > 0 ? ` · ${scanProgress.queued} queued` : ''}
             {scanProgress ? ` · ${scanProgress.found} unique tag(s) found` : ''}
-            {' '}— the full, de-duplicated list appears when the scan finishes.
+            {' '}- the full, de-duplicated list appears when the scan finishes.
           </div>
         )}
 
@@ -3965,7 +3965,7 @@ function TagReviewPanel({
               ? 'Scanning all pages… the de-duplicated tag list appears here when the scan finishes (progress above).'
               : scanLog
               ? 'No trackable forms or clicks were found on the scanned pages. Try increasing pages/depth, or open the scan log above to see what was covered.'
-              : 'Scan a website to see the GA4 event tags worth creating — form submissions (with the form provider), email & phone clicks, file downloads, outbound links and CTAs.'}
+              : 'Scan a website to see the GA4 event tags worth creating - form submissions (with the form provider), email & phone clicks, file downloads, outbound links and CTAs.'}
           </div>
         ) : (
           <>
@@ -4029,7 +4029,7 @@ function TagReviewPanel({
                     </button>
                   ))}
                 </span>
-                {/* Platform filter — only when a scan produced more than one ad platform. */}
+                {/* Platform filter - only when a scan produced more than one ad platform. */}
                 {platformsPresent.length > 1 && (
                   <select
                     value={activePlatformFilter}
@@ -4078,14 +4078,14 @@ function TagReviewPanel({
             {visible.length === 0 ? null : (
               <>
                 <div style={{ ...styles.muted, marginTop: -4 }}>
-                  Tick a row to create it in GTM; edit fields inline (trigger type is fixed). Showing {curPage * PAGE_SIZE + 1}–{Math.min(visible.length, curPage * PAGE_SIZE + PAGE_SIZE)} of {visible.length} ({PAGE_SIZE} per page).
+                  Tick a row to create it in GTM; edit fields inline (trigger type is fixed). Showing {curPage * PAGE_SIZE + 1}-{Math.min(visible.length, curPage * PAGE_SIZE + PAGE_SIZE)} of {visible.length} ({PAGE_SIZE} per page).
                 </div>
                 {shotStatus?.loading ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 13px', background: 'var(--c-blue-bg, rgba(59,130,246,.12))', border: '1px solid var(--c-blue-bg, rgba(59,130,246,.25))', borderRadius: 8 }}>
                     <span style={{ fontSize: 16 }}>📸</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>
-                        Capturing proof screenshots{shotStatus.total ? ` — ${Math.min(shotStatus.done + 1, shotStatus.total)} of ${shotStatus.total}` : '…'}
+                        Capturing proof screenshots{shotStatus.total ? ` - ${Math.min(shotStatus.done + 1, shotStatus.total)} of ${shotStatus.total}` : '…'}
                       </div>
                       {shotStatus.current && (
                         <div style={{ fontSize: 11.5, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -4098,7 +4098,7 @@ function TagReviewPanel({
                     </div>
                   </div>
                 ) : shotStatus && shotStatus.done > 0 ? (
-                  <div style={{ ...styles.muted, fontSize: 12 }}>📸 Captured {shotStatus.done} location screenshot(s) — click a thumbnail under “Page” to view.</div>
+                  <div style={{ ...styles.muted, fontSize: 12 }}>📸 Captured {shotStatus.done} location screenshot(s) - click a thumbnail under “Page” to view.</div>
                 ) : null}
                 <SuggestionTemplateTable
                   suggestions={pageItems.map(effective)}
@@ -4129,10 +4129,10 @@ function TagReviewPanel({
               <div style={styles.confirm}>
                 <div style={styles.confirmHead}>Create {selectedIds.length} draft tag(s)?</div>
                 <div style={{ ...styles.muted, margin: '6px 0', color: 'var(--c-amber)' }}>
-                  Into {ctx?.containerName} › {ctx?.workspaceName}. Applies to a DRAFT workspace only — not published. You
+                  Into {ctx?.containerName} › {ctx?.workspaceName}. Applies to a DRAFT workspace only - not published. You
                   publish in GTM yourself.
                   {selectedHasEmOverlap && ' Some selected tags duplicate GA4 Enhanced Measurement auto-tracking.'}
-                  {selectedUsesVar && ' Some tags use the {{GA4 Measurement ID}} variable — verify it exists in this container.'}
+                  {selectedUsesVar && ' Some tags use the {{GA4 Measurement ID}} variable - verify it exists in this container.'}
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button style={styles.primaryBtn} onClick={confirmCreate} disabled={creating}>
@@ -4162,7 +4162,7 @@ function TagReviewPanel({
                   <span style={{ color: done.failed ? 'var(--c-amber)' : 'var(--c-green)', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     {done.created} of {done.total} created
                     {done.existing ? ` · ${done.existing} already existed` : ''}
-                    {done.failed ? ` · ${done.failed} failed` : ''} — open GTM to review &amp; publish.
+                    {done.failed ? ` · ${done.failed} failed` : ''} - open GTM to review &amp; publish.
                     {done.created > 0 && (
                       <span style={{ color: 'var(--text-muted)' }}>
                         Verify &amp; auto-fix them below, or in the <b>✅ Tag verification</b> tab.
@@ -4202,7 +4202,7 @@ function TagReviewPanel({
                 )}
                 {healMeta.injected && !healMeta.previewAuth && (
                   <div style={{ ...styles.muted, color: 'var(--c-amber)', marginTop: 4 }}>
-                    ⚠ The preview had no draft auth (gtm_auth/gtm_preview) — the published container loaded, so draft tags won&apos;t fire. Re-connect with the &ldquo;edit container versions&rdquo; permission.
+                    ⚠ The preview had no draft auth (gtm_auth/gtm_preview) - the published container loaded, so draft tags won&apos;t fire. Re-connect with the &ldquo;edit container versions&rdquo; permission.
                   </div>
                 )}
                 {healVerdicts.length > 0 && (() => {
@@ -4222,7 +4222,7 @@ function TagReviewPanel({
                             {fired.map((v) => (
                               <li key={v.tagId} style={styles.resultRow}>
                                 <span style={{ fontWeight: 600, color: 'var(--c-green)' }}>FIRED</span> {v.tagName}
-                                {v.event ? <span style={styles.muted}> — {v.event}</span> : null}
+                                {v.event ? <span style={styles.muted}> - {v.event}</span> : null}
                               </li>
                             ))}
                           </ul>
@@ -4257,7 +4257,7 @@ function TagReviewPanel({
                                 {v.reason ? <div style={{ ...styles.muted, marginLeft: 8 }}>Why: {v.reason}</div> : null}
                                 <div style={{ marginLeft: 8, marginTop: 2 }}>
                                   <button style={styles.linkBtn} onClick={() => skipHealTag(v.tagId)}>skip</button>
-                                  <span style={{ ...styles.muted, marginLeft: 8 }}>— or fix it in GTM, then Restart.</span>
+                                  <span style={{ ...styles.muted, marginLeft: 8 }}>- or fix it in GTM, then Restart.</span>
                                 </div>
                               </li>
                             ))}
@@ -4267,7 +4267,7 @@ function TagReviewPanel({
                       {untestable.length > 0 && (
                         <>
                           <div style={{ ...styles.h2, color: 'var(--c-amber)', marginTop: 10 }}>⏭ Couldn’t auto-test here ({untestable.length})</div>
-                          <div style={{ ...styles.muted, fontSize: 12 }}>Not broken — their CTA/form is on another page or needs a real submit. Verify in GTM Preview.</div>
+                          <div style={{ ...styles.muted, fontSize: 12 }}>Not broken - their CTA/form is on another page or needs a real submit. Verify in GTM Preview.</div>
                           <ul style={styles.resultList}>
                             {untestable.map((v) => (
                               <li key={v.tagId} style={{ ...styles.resultRow, display: 'block' }}>
@@ -4315,25 +4315,25 @@ function verdictKindLabel(v: VerifyTagsResult['verdicts'][number]): { label: str
 }
 
 // "How to actually verify this one" for an INCONCLUSIVE verdict (couldn't auto-test here). These
-// tags aren't broken — they just need the right page or a real interaction, not an operator change.
+// tags aren't broken - they just need the right page or a real interaction, not an operator change.
 function verdictHowToTest(v: VerifyTagsResult['verdicts'][number]): string {
   const k = v.interaction?.kind;
   const found = v.interaction?.targetFound;
   if (k === 'custom_event') {
-    return 'This tag fires on a dataLayer event a synthetic push can’t fully reproduce (a form’s own data, or a page / Custom-JS condition). If it’s a FORM tag, verify it in the “Forms — verified by a real submit” section below — it submits each matched form for real and re-checks this tag. Otherwise trigger the event in GTM Preview. If the tag is still a DRAFT, paste your GTM Preview snippet above so it loads.';
+    return 'This tag fires on a dataLayer event a synthetic push can’t fully reproduce (a form’s own data, or a page / Custom-JS condition). If it’s a FORM tag, verify it in the “Forms - verified by a real submit” section below - it submits each matched form for real and re-checks this tag. Otherwise trigger the event in GTM Preview. If the tag is still a DRAFT, paste your GTM Preview snippet above so it loads.';
   }
   // Element WAS found + interacted, but no beacon we recognise fired → an undecodable Custom Template /
   // Custom HTML (pixel) tag, not a wrong-page problem.
   if ((k === 'click' || k === 'submit') && found) {
-    return 'This is a Custom Template / Custom HTML (pixel) tag we can’t decode. The interaction happened but no recognised pixel beacon fired — it may beacon to a host we don’t classify, run server-side, or be consent-gated. Confirm in GTM Preview or your browser’s Network tab (look for the vendor’s request).';
+    return 'This is a Custom Template / Custom HTML (pixel) tag we can’t decode. The interaction happened but no recognised pixel beacon fired - it may beacon to a host we don’t classify, run server-side, or be consent-gated. Confirm in GTM Preview or your browser’s Network tab (look for the vendor’s request).';
   }
   if (k === 'click' || k === 'submit') {
-    return 'The matching CTA/form isn’t on the page we drove — it likely lives on another page (e.g. careers, blog, a service page), or its exact label differs. Re-run Verify with that page’s URL, or confirm the button’s exact text.';
+    return 'The matching CTA/form isn’t on the page we drove - it likely lives on another page (e.g. careers, blog, a service page), or its exact label differs. Re-run Verify with that page’s URL, or confirm the button’s exact text.';
   }
   return 'Re-verify against the page this trigger’s element lives on, or exercise it with a real interaction in GTM Preview.';
 }
 
-// "What to change" for a NOT-FIRED verdict — actionable even without a scan inventory, derived from
+// "What to change" for a NOT-FIRED verdict - actionable even without a scan inventory, derived from
 // the interaction kind + reason. The engine's own fixNote (when present) always wins.
 function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
   if (v.fixNote) return v.fixNote;
@@ -4358,10 +4358,10 @@ function verdictHowToFix(v: VerifyTagsResult['verdicts'][number]): string {
   if (k === 'navigate') {
     return 'The base/config tag didn’t fire on load. Make sure the container is actually injected (use “Auto” or a Preview snippet), and that Consent Mode isn’t denying analytics_storage.';
   }
-  // Monitor-verified runs read from GTM itself — the container is PROVEN to be on the page, so
+  // Monitor-verified runs read from GTM itself - the container is PROVEN to be on the page, so
   // "confirm the container is injected" would be wrong advice (and contradicts the run's own evidence).
   if (v.verifiedByMonitor) {
-    return 'The container IS on this page (GTM itself reported this run), so injection is not the problem. Open this tag’s trigger in GTM and compare each condition — event name, form name / id, page path — with what the page really sent (see the dataLayer log above). If the trigger looks right, check for a blocking exception trigger or a Consent Mode gate.';
+    return 'The container IS on this page (GTM itself reported this run), so injection is not the problem. Open this tag’s trigger in GTM and compare each condition - event name, form name / id, page path - with what the page really sent (see the dataLayer log above). If the trigger looks right, check for a blocking exception trigger or a Consent Mode gate.';
   }
   return 'Confirm the container is injected (Auto / Preview snippet) and the trigger’s conditions match this page.';
 }
@@ -4376,7 +4376,7 @@ function verdictStatus(v: VVerdict): VStatus {
   if (v.inconclusive) return 'untested';
   return 'issue';
 }
-// Semantic colour per status — green success, amber caveat, blue server, gray neutral, red error.
+// Semantic colour per status - green success, amber caveat, blue server, gray neutral, red error.
 const V_STATUS: Record<VStatus, { short: string; icon: string; color: string; bg: string; border: string }> = {
   fired: { short: 'Fired', icon: '✅', color: 'var(--c-green)', bg: 'var(--c-green-bg)', border: 'var(--c-green-border)' },
   config: { short: 'Config OK', icon: '⚙', color: 'var(--c-amber)', bg: 'var(--c-amber-bg)', border: 'var(--c-amber-border)' },
@@ -4384,12 +4384,12 @@ const V_STATUS: Record<VStatus, { short: string; icon: string; color: string; bg
   untested: { short: 'Untested', icon: '⏭', color: 'var(--text-muted)', bg: 'var(--surface-3)', border: 'var(--border-2)' },
   issue: { short: 'Issue', icon: '⚠', color: 'var(--c-red)', bg: 'var(--c-red-bg)', border: 'var(--c-red-border)' },
 };
-// The evidence line for a verdict — GTM's own monitor report when authoritative, else the observed
+// The evidence line for a verdict - GTM's own monitor report when authoritative, else the observed
 // beacon host(s). Shared by the results table AND the export so the download matches the screen.
 function verdictSignal(v: VVerdict): string {
   return v.verifiedByMonitor
-    ? (v.fired ? `GTM monitor: ${v.monitorStatus ?? 'fired'}${typeof v.monitorExecutionMs === 'number' ? ` · ${v.monitorExecutionMs}ms` : ''}` : '—')
-    : v.observedBeacons?.length ? v.observedBeacons.join(', ') : v.fired ? 'GA4 hit' : '—';
+    ? (v.fired ? `GTM monitor: ${v.monitorStatus ?? 'fired'}${typeof v.monitorExecutionMs === 'number' ? ` · ${v.monitorExecutionMs}ms` : ''}` : '-')
+    : v.observedBeacons?.length ? v.observedBeacons.join(', ') : v.fired ? 'GA4 hit' : '-';
 }
 // One verdict → an export row, reusing the same status/label/signal logic the on-screen table uses, so
 // the CSV/PDF/DOC download is a faithful copy of what's shown. `eventName` is the tag's configured GA4
@@ -4405,7 +4405,7 @@ function verdictToExportRow(v: VVerdict): VerifyExportRow {
   };
 }
 
-/** The result scorecard — big-number stat cards, one per meaningful outcome. */
+/** The result scorecard - big-number stat cards, one per meaningful outcome. */
 function VerifyScorecard({ fired, config, server, untested, issues }: { fired: number; config: number; server: number; untested: number; issues: number }): JSX.Element {
   const cards: Array<{ label: string; n: number; s: VStatus }> = [
     { label: 'Fired', n: fired, s: 'fired' },
@@ -4429,7 +4429,7 @@ function VerifyScorecard({ fired, config, server, untested, issues }: { fired: n
   );
 }
 
-/** Phase 3: the Tag-Assistant-style EVENT TIMELINE — one card per dataLayer event GTM processed, with the
+/** Phase 3: the Tag-Assistant-style EVENT TIMELINE - one card per dataLayer event GTM processed, with the
  *  exact push (API Call), resolved variables, and the tags it fired. This is the "show it in detail" view,
  *  rendered inside the app from the authoritative Tag Assistant debug stream. */
 function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taEvents']> }): JSX.Element {
@@ -4464,7 +4464,7 @@ function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taE
                 <div style={{ padding: '2px 10px 10px 30px', display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {apiEntries.length > 0 && (
                     <div>
-                      <div style={{ fontSize: 11, fontWeight: 700, ...styles.muted, marginBottom: 3 }}>API CALL — dataLayer.push</div>
+                      <div style={{ fontSize: 11, fontWeight: 700, ...styles.muted, marginBottom: 3 }}>API CALL - dataLayer.push</div>
                       <div style={{ fontFamily: 'monospace', fontSize: 11.5, background: 'var(--surface-3)', borderRadius: 6, padding: '6px 8px', lineHeight: 1.6, overflowX: 'auto' }}>
                         {apiEntries.map(([k, v]) => (
                           <div key={k}><span style={{ color: 'var(--c-blue)' }}>{k}</span>: <span>{typeof v === 'string' ? v : JSON.stringify(v)}</span></div>
@@ -4497,7 +4497,7 @@ function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taE
                   {ev.screenshot && (
                     <div>
                       <div style={{ fontSize: 11, fontWeight: 700, ...styles.muted, marginBottom: 3 }}>TAG ASSISTANT PANEL</div>
-                      <ProofThumb screenshot={ev.screenshot} name={`Tag Assistant — ${ev.eventName}`} onOpen={() => setShot({ src: ev.screenshot!, name: `Tag Assistant — ${ev.eventName}` })} />
+                      <ProofThumb screenshot={ev.screenshot} name={`Tag Assistant - ${ev.eventName}`} onOpen={() => setShot({ src: ev.screenshot!, name: `Tag Assistant - ${ev.eventName}` })} />
                     </div>
                   )}
                 </div>
@@ -4511,10 +4511,10 @@ function TaEventTimeline({ events }: { events: NonNullable<VerifyTagsResult['taE
   );
 }
 
-/** A clickable screenshot thumbnail (opens the full image in a lightbox) — the visual proof cell.
+/** A clickable screenshot thumbnail (opens the full image in a lightbox) - the visual proof cell.
  *  Shared by tag verification AND the tag-suggestion panel (both pass a JPEG data-URI + a name). */
 function ProofThumb({ screenshot, name, onOpen }: { screenshot?: string; name: string; onOpen: () => void }): JSX.Element {
-  if (!screenshot) return <span style={styles.muted}>—</span>;
+  if (!screenshot) return <span style={styles.muted}>-</span>;
   return (
     <button
       onClick={onOpen}
@@ -4544,8 +4544,8 @@ function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: 
             const st = verdictStatus(v);
             const m = V_STATUS[st];
             const via = verdictKindLabel(v);
-            // For an authoritative (monitor) verdict the "signal" is GTM's own report — its status +
-            // execution time — not a sniffed beacon. Otherwise fall back to the observed beacon host(s).
+            // For an authoritative (monitor) verdict the "signal" is GTM's own report - its status +
+            // execution time - not a sniffed beacon. Otherwise fall back to the observed beacon host(s).
             const signal = verdictSignal(v);
             // Keep the per-tag "why / how to verify" guidance on hover so the compact table doesn't lose it.
             const hint = st === 'untested' ? verdictHowToTest(v) : v.reason ?? '';
@@ -4553,7 +4553,7 @@ function VerifyResultsTable({ rows, onProof }: { rows: VVerdict[]; onProof: (v: 
               <tr key={v.tagId} title={hint || undefined}>
                 <td style={vStyles.td}><span style={{ ...vStyles.statusPill, color: m.color, background: m.bg, borderColor: m.border }}>{m.icon} {m.short}</span></td>
                 <td style={{ ...vStyles.td, color: 'var(--text)', fontWeight: 500 }}>{v.tagName}</td>
-                <td style={vStyles.td}>{v.event ? <code style={mdStyles.code}>{v.event}</code> : <span style={styles.muted}>—</span>}</td>
+                <td style={vStyles.td}>{v.event ? <code style={mdStyles.code}>{v.event}</code> : <span style={styles.muted}>-</span>}</td>
                 <td style={{ ...vStyles.td, whiteSpace: 'nowrap' }}><span title={via.label} aria-hidden>{via.icon}</span> {via.label}</td>
                 <td style={{ ...vStyles.td, color: 'var(--text-muted)', fontSize: 12 }}>{signal}</td>
                 {anyProof ? <td style={vStyles.td}><ProofThumb screenshot={v.screenshot} name={v.tagName} onOpen={() => onProof(v)} /></td> : null}
@@ -4579,7 +4579,7 @@ function ProofLightbox({ shot, onClose }: { shot: { src: string; name: string };
       onClick={onClose}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, cursor: 'zoom-out' }}
     >
-      {/* Explicit close button (top-right) — some users don't discover click-anywhere/Esc. */}
+      {/* Explicit close button (top-right) - some users don't discover click-anywhere/Esc. */}
       <button
         type="button"
         aria-label="Close screenshot"
@@ -4625,13 +4625,13 @@ const vStyles: Record<string, React.CSSProperties> = {
 };
 
 // Real-submit form review (Phase 1b): fetch a page's forms + their OWN fields (Option 2) and show
-// each with a locale-appropriate, EDITABLE test value + a Location picker. READ-ONLY — nothing is
+// each with a locale-appropriate, EDITABLE test value + a Location picker. READ-ONLY - nothing is
 // submitted here; the actual submit + tag-firing check is Phase 2.
 // Container-tag-driven form verification: from the site's MAIN url, crawl to find forms, keep only the
 // ones that HAVE a container form tag, collapse their fields into ONE de-duplicated data-entry set;
 // the operator fills once, then every matched form is submitted for real and each tag is verified (with
-// a fix suggestion when it doesn't fire). Real submits — an explicit warning + confirm gate them.
-// Rendered INSIDE VerifyPanel — shares the same URL + Preview snippet as tag verification (one panel,
+// a fix suggestion when it doesn't fire). Real submits - an explicit warning + confirm gate them.
+// Rendered INSIDE VerifyPanel - shares the same URL + Preview snippet as tag verification (one panel,
 // one URL). This subsection does the container-tag-driven REAL-submit form check.
 function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal, onStatus, onReviewedForms, showFields = true, onSubmitForms, firedTags, onScanProgress }: { url: string; verifyPages?: string[]; snippet: string; active: AccountView | undefined; onError: (m: string) => void; runSignal: number; onStatus?: (s: { loading: boolean; count: number | null }) => void; onReviewedForms?: (forms: NonNullable<VerifyTagsOptions['reviewedForms']>) => void; showFields?: boolean; onSubmitForms?: () => void; firedTags?: Set<string>; onScanProgress?: (p: VerifyProgressView) => void }): JSX.Element {
   const ctx = active?.gtmContext;
@@ -4653,14 +4653,14 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
   const setShrd = (k: string, v: string): void => { setTouched(true); setShared((s) => ({ ...s, [k]: v })); };
 
   // Auto-discover forms-with-tags whenever a tag-verify runs above (parent bumps runSignal). This is
-  // what replaces a separate "Find forms with tags" button — one verify action does both. Skips the
+  // what replaces a separate "Find forms with tags" button - one verify action does both. Skips the
   // initial mount (runSignal 0); fetchPlan itself no-ops with a note if the URL / GTM target isn't ready.
   useEffect(() => {
     if (runSignal > 0) void fetchPlan();
-  }, [runSignal]); // intentionally only on the verify signal — not on url edits
+  }, [runSignal]); // intentionally only on the verify signal - not on url edits
 
   // Publish the operator-reviewed forms (matched forms + the edited shared values applied) UP to the
-  // parent so the NEXT "Verify with Tag Assistant" run submits exactly these — Phase 2b. Recomputes
+  // parent so the NEXT "Verify with Tag Assistant" run submits exactly these - Phase 2b. Recomputes
   // whenever the plan or an edited value changes.
   useEffect(() => {
     if (!onReviewedForms) return;
@@ -4680,7 +4680,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
   async function fetchPlan(): Promise<void> {
     const target = url.trim();
     if (!target) { setNote('Enter your site’s main URL.'); return; }
-    if (!ready || !ctx) { setNote('Pick a GTM account, container and workspace in the GTM bar above first — that’s the container whose form tags we verify.'); return; }
+    if (!ready || !ctx) { setNote('Pick a GTM account, container and workspace in the GTM bar above first - that’s the container whose form tags we verify.'); return; }
     setLoading(true); setNote(null); onError(''); setResults({}); setPlan(null); setTouched(false);
     onStatus?.({ loading: true, count: null }); // this run's form-discovery is now in flight
     let count: number | null = null;
@@ -4691,7 +4691,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
       for (const f of res.sharedFields) sv[f.key] = f.value;
       setShared(sv);
       if (res.error) setNote(res.error);
-      else if (res.matched.length === 0) setNote(`Crawled ${res.pagesCrawled} page(s) but found no site form matching your container’s form tags — the forms may be on pages we didn’t reach, render late, or their names differ from the tags.`);
+      else if (res.matched.length === 0) setNote(`Crawled ${res.pagesCrawled} page(s) but found no site form matching your container’s form tags - the forms may be on pages we didn’t reach, render late, or their names differ from the tags.`);
       count = res.error ? null : res.matched.length;
     } catch (e) {
       setNote(e instanceof Error ? e.message : String(e));
@@ -4721,11 +4721,11 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
     if (!r.submitted) return `The form couldn’t be submitted (${r.note ?? 'no form/submit control found'}). Check the form’s fields/selectors, then retry.`;
     const isPixel = !(tag.platform === 'ga4_event' || tag.platform === 'google_tag');
     if (isPixel) {
-      if (r.beacons.length === 0) return `The form submitted but this ${tag.platform.replace(/_/g, ' ')} tag sent NO beacon — check it isn’t paused / blocked by an exception, its Consent Mode gate (ad_storage) isn’t denying it, and its pixel/conversion id is set. For DRAFT tags, paste a Preview snippet above.`;
-      return `The form beaconed to [${r.beacons.join(', ')}] but not this tag’s vendor — the tag’s trigger/condition may not match this form, or it’s configured for a different pixel.`;
+      if (r.beacons.length === 0) return `The form submitted but this ${tag.platform.replace(/_/g, ' ')} tag sent NO beacon - check it isn’t paused / blocked by an exception, its Consent Mode gate (ad_storage) isn’t denying it, and its pixel/conversion id is set. For DRAFT tags, paste a Preview snippet above.`;
+      return `The form beaconed to [${r.beacons.join(', ')}] but not this tag’s vendor - the tag’s trigger/condition may not match this form, or it’s configured for a different pixel.`;
     }
-    if (r.events.length === 0) return `The form submitted but pushed NO GA4 event — the site isn’t emitting its form_submission dataLayer event. Add the form’s listener (a Custom HTML tag that pushes the event on submit-success), or, for DRAFT tags, paste a GTM Preview snippet above. Confirm in GTM Preview.`;
-    return `The form fired [${r.events.join(', ')}] but not “${tag.eventName}”. Either this tag’s trigger condition (form name / id / page) doesn’t match this form, or its GA4 Event Name differs — align the tag’s Event Name to one of the fired events, or fix its form-name condition.`;
+    if (r.events.length === 0) return `The form submitted but pushed NO GA4 event - the site isn’t emitting its form_submission dataLayer event. Add the form’s listener (a Custom HTML tag that pushes the event on submit-success), or, for DRAFT tags, paste a GTM Preview snippet above. Confirm in GTM Preview.`;
+    return `The form fired [${r.events.join(', ')}] but not “${tag.eventName}”. Either this tag’s trigger condition (form name / id / page) doesn’t match this form, or its GA4 Event Name differs - align the tag’s Event Name to one of the fired events, or fix its form-name condition.`;
   };
 
   const matched = plan?.matched ?? [];
@@ -4733,14 +4733,14 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
   return (
     <>
       <div style={{ borderTop: '1px solid rgba(128,128,128,0.22)', marginTop: 14, paddingTop: 12 }}>
-        <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--text)' }}>Forms — verified by a real submit</div>
+        <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--text)' }}>Forms - verified by a real submit</div>
         <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 2, marginBottom: 6 }}>
-          When you run <b>Verify with Tag Assistant</b>, we first scan the site and match its forms to your container’s form tags. If you choose to verify them, edit the shared data once below and submit — each form is submitted for real inside the Tag Assistant session and its form_submission (and the tags it fired) show in the results above. Real submits create a real lead per form.
+          When you run <b>Verify with Tag Assistant</b>, we first scan the site and match its forms to your container’s form tags. If you choose to verify them, edit the shared data once below and submit - each form is submitted for real inside the Tag Assistant session and its form_submission (and the tags it fired) show in the results above. Real submits create a real lead per form.
         </div>
       </div>
       <div style={styles.card}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* No separate "find forms" button — the tag-verify above triggers discovery. */}
+          {/* No separate "find forms" button - the tag-verify above triggers discovery. */}
           {loading ? (
             <span style={{ ...styles.muted, fontSize: 12.5 }}>Crawling &amp; matching forms…</span>
           ) : plan ? (
@@ -4753,7 +4753,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
         </div>
         {showFields && (
           <div style={{ ...styles.muted, fontSize: 12, marginTop: 6 }}>
-            Each field is pre-filled with a generic, editable test value (name “Test”, email test@gmail.com) — edit any of them below.
+            Each field is pre-filled with a generic, editable test value (name “Test”, email test@gmail.com) - edit any of them below.
           </div>
         )}
           {note && (
@@ -4767,7 +4767,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
             <div style={styles.card}>
               <div style={styles.h2}>Enter the data once ({plan.sharedFields.length} field(s))</div>
               <div style={{ ...styles.muted, fontSize: 12, marginBottom: 6 }}>
-                Fields are de-duplicated across the {matched.length} form(s) — this data fills every one of them. Edit anything, then submit.
+                Fields are de-duplicated across the {matched.length} form(s) - this data fills every one of them. Edit anything, then submit.
               </div>
               <ul style={styles.resultList}>
                 {plan.sharedFields.map((f) => (
@@ -4792,7 +4792,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
                 confirming ? (
                   <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--c-red)', background: 'rgba(220,60,60,0.08)', fontSize: 13 }}>
                     <div style={{ color: 'var(--text)' }}>
-                      ⚠ This <b>really submits all {matched.length} form(s)</b> — a real submission / lead is created for each in your CRM / inbox and can trigger
+                      ⚠ This <b>really submits all {matched.length} form(s)</b> - a real submission / lead is created for each in your CRM / inbox and can trigger
                       autoresponders, Slack/Zapier automations, or sales-rep assignment. GA4 and known ad-pixel hits are captured (not sent), but a less-common
                       pixel or server-side automation may still fire for real. Continue?
                     </div>
@@ -4809,7 +4809,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
                   </button>
                 )
               ) : (
-                <div style={{ ...styles.muted, fontSize: 12 }}>Review / edit the data above — the Submit button appears once you enter it.</div>
+                <div style={{ ...styles.muted, fontSize: 12 }}>Review / edit the data above - the Submit button appears once you enter it.</div>
               )}
             </div>
             )}
@@ -4820,7 +4820,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
               // tag is listed twice (the per-form grid used to repeat all of them here).
               <div style={styles.card}>
                 <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                  {matched.length} form(s) were submitted for real. Each form tag’s fired / not-fired result is shown once in the <b style={{ color: 'var(--c-green)' }}>Tags Fired</b> table and the <b style={{ color: 'var(--c-red)' }}>Not firing</b> section above — not repeated here.
+                  {matched.length} form(s) were submitted for real. Each form tag’s fired / not-fired result is shown once in the <b style={{ color: 'var(--c-green)' }}>Tags Fired</b> table and the <b style={{ color: 'var(--c-red)' }}>Not firing</b> section above - not repeated here.
                 </div>
               </div>
             ) : matched.map((form, i) => {
@@ -4833,7 +4833,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
                     <span style={{ ...styles.muted, fontSize: 12 }}>{form.page.replace(/^https?:\/\//, '').slice(0, 60)}</span>
                     {form.method === 'js' ? <span style={{ ...styles.muted, fontSize: 12 }}>(JS/div widget)</span> : null}
                   </div>
-                  {/* Pre-run review only (post-run this whole grid collapses to a summary — see above), so
+                  {/* Pre-run review only (post-run this whole grid collapses to a summary - see above), so
                       just list the tags this form is expected to fire. */}
                   <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 4 }}>Tag(s) expected to fire: {form.expectedTags.map((t) => t.tagName).join(', ')}</div>
                   {r && (
@@ -4845,7 +4845,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
                           <div style={{ ...styles.muted }}>
                             {r.submitted ? `Submitted (${r.filled} field(s)).` : `Not submitted: ${r.note ?? 'no form/submit control'}.`}
                             {r.events.length > 0 ? ` Fired: ${r.events.join(', ')}.` : ''}
-                            {r.injected && !r.previewAuth ? ' (snippet had no preview auth — published container loaded)' : ''}
+                            {r.injected && !r.previewAuth ? ' (snippet had no preview auth - published container loaded)' : ''}
                           </div>
                           {r.screenshot ? (
                             <button
@@ -4870,7 +4870,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
                                 {form.expectedTags.map((t) => {
                                   const fired = (r.firedTags ?? []).some((ft) => ft.tagName === t.tagName);
                                   // A pixel tag fed server-side (CAPI): no browser beacon, but the form relayed to
-                                  // the first-party sGTM. Expected, not a failure — same rule as the synthetic path.
+                                  // the first-party sGTM. Expected, not a failure - same rule as the synthetic path.
                                   const serverSide = !fired && (r.serverRelayTags ?? []).some((n) => n === t.tagName);
                                   return (
                                     <tr key={t.tagName} style={{ borderBottom: '1px solid var(--border)' }}>
@@ -4882,7 +4882,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
                                       <td style={{ padding: '5px 8px', verticalAlign: 'top', fontWeight: 600 }}>{t.tagName}</td>
                                       <td style={{ padding: '5px 8px', verticalAlign: 'top', color: 'var(--text-dim)' }}>
                                         {fired ? 'Browser beacon captured on the real submit.'
-                                          : serverSide ? 'No browser beacon — relayed server-side to your sGTM (CAPI). Confirm in the vendor’s Events Manager → Test Events.'
+                                          : serverSide ? 'No browser beacon - relayed server-side to your sGTM (CAPI). Confirm in the vendor’s Events Manager → Test Events.'
                                           : fixFor(r, t)}
                                       </td>
                                     </tr>
@@ -4904,7 +4904,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
         {plan && plan.unmatchedTags.length > 0 && (() => {
           // A form tag can be UNMATCHED (we found no site form for it) yet still FIRE during the run (its
           // form is named differently, shares a page, or another submit triggered it). Those are NOT a
-          // problem — only tags that neither matched a form NOR fired need manual checking. Before a run
+          // problem - only tags that neither matched a form NOR fired need manual checking. Before a run
           // (no firedTags) we can't split, so show the plain unmatched list.
           const firedUnmatched = firedTags ? plan.unmatchedTags.filter((n) => firedTags.has(n)) : [];
           const openUnmatched = firedTags ? plan.unmatchedTags.filter((n) => !firedTags.has(n)) : plan.unmatchedTags;
@@ -4913,7 +4913,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
               {firedUnmatched.length > 0 && (
                 <div style={styles.card}>
                   <div style={{ ...styles.h2, color: 'var(--c-green)' }}>Form tags that fired without a matched form ({firedUnmatched.length})</div>
-                  <div style={{ ...styles.muted, fontSize: 12 }}>These form tags fired during the run even though we didn’t pair them to a specific site form (the form is likely named differently or shares a page). They ARE firing — no action needed.</div>
+                  <div style={{ ...styles.muted, fontSize: 12 }}>These form tags fired during the run even though we didn’t pair them to a specific site form (the form is likely named differently or shares a page). They ARE firing - no action needed.</div>
                   <ul style={styles.resultList}>
                     {firedUnmatched.map((n) => (<li key={n} style={{ ...styles.resultRow, display: 'flex', gap: 8, alignItems: 'center' }}><span style={{ color: 'var(--c-green)', fontWeight: 600, fontSize: 12.5 }}>✅ Fired</span><span style={{ fontSize: 12.5 }}>{n}</span></li>))}
                   </ul>
@@ -4922,7 +4922,7 @@ function FormFillReview({ url, verifyPages, snippet, active, onError, runSignal,
               {openUnmatched.length > 0 && (
                 <div style={styles.card}>
                   <div style={{ ...styles.h2, color: 'var(--c-amber)' }}>{firedTags ? `Not found and not fired (${openUnmatched.length})` : `Form tags with no matching form (${openUnmatched.length})`}</div>
-                  <div style={{ ...styles.muted, fontSize: 12 }}>{firedTags ? 'These form tags neither matched a form we found NOR fired during the run — the form may be on an un-crawled / behind-login page, render late, or its name differs from the tag. Verify those manually.' : 'These container form tags matched no form we found on the site — the form may be on an un-crawled/behind-login page, render late, or its name differs from the tag. Verify those manually.'}</div>
+                  <div style={{ ...styles.muted, fontSize: 12 }}>{firedTags ? 'These form tags neither matched a form we found NOR fired during the run - the form may be on an un-crawled / behind-login page, render late, or its name differs from the tag. Verify those manually.' : 'These container form tags matched no form we found on the site - the form may be on an un-crawled/behind-login page, render late, or its name differs from the tag. Verify those manually.'}</div>
                   <ul style={styles.resultList}>
                     {openUnmatched.map((n) => (<li key={n} style={styles.resultRow}>{n}</li>))}
                   </ul>
@@ -4957,7 +4957,7 @@ function VerifyPanel({
   // UI flag. Stop signals the main-process scan/drive to bail early AND stops the renderer from advancing.
   const vCancelRef = useRef(false);
   const [vStopping, setVStopping] = useState(false);
-  // The operator-reviewed forms (edited values) published up from the Forms panel — submitted for real by
+  // The operator-reviewed forms (edited values) published up from the Forms panel - submitted for real by
   // the next "Verify with Tag Assistant" run (Phase 2b). A ref so an edit doesn't re-render the buttons.
   const vReviewedFormsRef = useRef<NonNullable<VerifyTagsOptions['reviewedForms']>>([]);
   const [vProgress, setVProgress] = useState<VerifyProgressView | null>(null);
@@ -4970,9 +4970,9 @@ function VerifyPanel({
   // collapsed secondary detail (users found the side-by-side table easier to read).
   const [vShowTimeline, setVShowTimeline] = useState(false);
   // Whether the LAST run actually submitted the forms (Proceed), so the Forms section shows per-form
-  // fired/not-fired only when they were really tested — a Skip run must not show forms as "not fired".
+  // fired/not-fired only when they were really tested - a Skip run must not show forms as "not fired".
   const [vFormsVerified, setVFormsVerified] = useState(false);
-  // Collapse the (tall) setup form once a run completes — the results table becomes the focus; a compact
+  // Collapse the (tall) setup form once a run completes - the results table becomes the focus; a compact
   // bar shows the URL(s) used + a "Start new tag verification" button that re-opens the form.
   const [vSetupOpen, setVSetupOpen] = useState(true);
   // Results filters (empty set = show all): status (fired/untested/notfired), interaction type
@@ -4985,7 +4985,7 @@ function VerifyPanel({
   const [vLightbox, setVLightbox] = useState<{ src: string; name: string } | null>(null);
   const showProof = (v: VVerdict): void => { if (v.screenshot) setVLightbox({ src: v.screenshot, name: v.tagName }); };
   // The embedded form-discovery's status (bubbled up) so this ONE Verify run shows a single combined
-  // state — tags + forms — instead of two independent-looking passes.
+  // state - tags + forms - instead of two independent-looking passes.
   const [vFormStatus, setVFormStatus] = useState<{ loading: boolean; count: number | null }>({ loading: false, count: null });
   // The Tag-Assistant wizard stage: idle → scanning (crawl + match forms) → gate (skip/proceed) →
   // filling (edit the shared data). The actual Tag Assistant run (click tags [+ real form submits]) fires
@@ -4993,7 +4993,7 @@ function VerifyPanel({
   const [vTaStage, setVTaStage] = useState<'idle' | 'scanning' | 'gate' | 'filling'>('idle');
   const [vNote, setVNote] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   // Bumped whenever a tag-verify runs; the embedded Forms subsection watches it and auto-discovers the
-  // site's forms-with-tags in the same pass — so there's ONE action, not a separate "find forms" button.
+  // site's forms-with-tags in the same pass - so there's ONE action, not a separate "find forms" button.
   const [vRunSignal, setVRunSignal] = useState(0);
   // Event-name aligns applied this session (tagId → new event name), so the row shows "✓ aligned".
   const [aligned, setAligned] = useState<Record<string, string>>({});
@@ -5003,7 +5003,7 @@ function VerifyPanel({
   const [vExportNote, setVExportNote] = useState('');
   // The CURRENT editable workspace. "Auto" mints a preview which SUBMITS the workspace (now read-only)
   // and hands back a fresh one; a later "Align Event Name" write must target THAT, not the stale
-  // context prop (which lags a render behind) — otherwise "Workspace is already submitted".
+  // context prop (which lags a render behind) - otherwise "Workspace is already submitted".
   const vWsRef = useRef<string>(ctx?.workspaceId ?? '');
   useEffect(() => { vWsRef.current = ctx?.workspaceId ?? ''; }, [ctx?.workspaceId]);
 
@@ -5018,7 +5018,7 @@ function VerifyPanel({
     return m;
   }
 
-  // The site URL to verify against: the top "live site" field, or — when that's left empty — the first
+  // The site URL to verify against: the top "live site" field, or - when that's left empty - the first
   // ABSOLUTE URL in the "Pages to verify" box, so a single absolute page there can stand on its own (no need
   // to type the site twice). A relative page (e.g. "/contact") still needs the top field to resolve against.
   function verifyTarget(): string {
@@ -5031,7 +5031,7 @@ function VerifyPanel({
   function stopVerify(): void {
     vCancelRef.current = true;
     setVStopping(true);
-    setVNote({ kind: 'info', text: 'Stopping — finishing the current page…' });
+    setVNote({ kind: 'info', text: 'Stopping - finishing the current page…' });
     void window.desktop.tags.cancelVerify();
   }
 
@@ -5039,12 +5039,12 @@ function VerifyPanel({
     if (!ready || !ctx || vVerifying) return;
     const target = verifyTarget();
     if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against (or paste an absolute URL in “Pages to verify”).' }); return; }
-    vCancelRef.current = false; setVStopping(false); // fresh run — clear any prior Stop
-    // AUTHORITATIVE mode automates the REAL Tag Assistant — ZERO GTM writes (no version, no workspace,
+    vCancelRef.current = false; setVStopping(false); // fresh run - clear any prior Stop
+    // AUTHORITATIVE mode automates the REAL Tag Assistant - ZERO GTM writes (no version, no workspace,
     // no container). No confirm needed; it may require a one-time Google sign-in (surfaced below).
     const canMonitor = Boolean(ctx.accountId && ctx.containerId && ctx.workspaceId);
     if (useMonitor && !canMonitor) {
-      setVNote({ kind: 'error', text: 'Pick a GTM account, container and workspace first — verification reads that container’s tags.' });
+      setVNote({ kind: 'error', text: 'Pick a GTM account, container and workspace first - verification reads that container’s tags.' });
       return;
     }
     setVTaStage('idle'); // a run supersedes the scan/gate/fill wizard
@@ -5067,13 +5067,13 @@ function VerifyPanel({
           kind: 'info',
           text:
             skipped.length > 0
-              ? `None of this container's ${skipped.length} tag(s) map to a drivable trigger (click / form / custom-event / page load) — see “not verifiable” below.`
-              : "This container has no readable tags. If it should have tags, your Google connection has likely expired — re-connect and retry.",
+              ? `None of this container's ${skipped.length} tag(s) map to a drivable trigger (click / form / custom-event / page load) - see “not verifiable” below.`
+              : "This container has no readable tags. If it should have tags, your Google connection has likely expired - re-connect and retry.",
         });
         return;
       }
       const snippet = (snippetOverride ?? vSnippet).trim();
-      // "Pages to verify" — one URL per line. When present, verify drives every tag on each of these pages
+      // "Pages to verify" - one URL per line. When present, verify drives every tag on each of these pages
       // (skips the auto-crawl), so forms/tags on pages the crawl missed get exercised.
       const verifyPages = vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
       const res = await window.desktop.tags.verify(
@@ -5092,7 +5092,7 @@ function VerifyPanel({
         (p) => setVProgress(p), // live "scanning <url>" / "verifying <url>" feed
       );
       setVResult(res);
-      if (vCancelRef.current) setVNote({ kind: 'info', text: 'Verification stopped — showing what was captured before you pressed Stop.' });
+      if (vCancelRef.current) setVNote({ kind: 'info', text: 'Verification stopped - showing what was captured before you pressed Stop.' });
       else if (!res.error) setVSetupOpen(false); // run done → collapse the setup form, lead with the results
     } catch (e) {
       setVNote({ kind: 'error', text: verifyErrorText(e) });
@@ -5113,10 +5113,10 @@ function VerifyPanel({
     const target = verifyTarget();
     if (!target) { setVNote({ kind: 'error', text: 'Enter the site URL to verify against (or paste an absolute URL in “Pages to verify”).' }); return; }
     if (!(ctx.accountId && ctx.containerId && ctx.workspaceId)) {
-      setVNote({ kind: 'error', text: 'Pick a GTM account, container and workspace first — verification reads that container’s tags.' });
+      setVNote({ kind: 'error', text: 'Pick a GTM account, container and workspace first - verification reads that container’s tags.' });
       return;
     }
-    vCancelRef.current = false; setVStopping(false); // fresh run — clear any prior Stop
+    vCancelRef.current = false; setVStopping(false); // fresh run - clear any prior Stop
     setVNote(null); onError(''); setVResult(null);
     vReviewedFormsRef.current = [];
     setVFormStatus({ loading: true, count: null }); // guards the effect from acting on a prior scan's count
@@ -5158,19 +5158,19 @@ function VerifyPanel({
   const firedReal = fired.filter((v) => !v.synthetic);
   const firedSynthetic = fired.filter((v) => v.synthetic);
   // A tag we couldn't actually exercise on this run (CTA/form on another page, or a shared
-  // dataLayer event that needs form-specific data) is NOT a failure — separate it from genuine
+  // dataLayer event that needs form-specific data) is NOT a failure - separate it from genuine
   // "not firing" so a working tag is never mislabelled broken.
   // Server-side pixels (Meta/TikTok/… fed via the Conversion API) relay to the first-party sGTM and
-  // send NO browser beacon — that's expected, not broken. Give them their own group so they never sit
+  // send NO browser beacon - that's expected, not broken. Give them their own group so they never sit
   // under ❌ "not firing" NOR the "couldn't reach it" note (which would misdescribe why).
   const serverRelayed = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive && v.serverRelay) ?? [];
   const inconclusive = vResult?.verdicts.filter((v) => !v.fired && v.inconclusive && !v.serverRelay) ?? [];
   const notFired = vResult?.verdicts.filter((v) => !v.fired && !v.inconclusive) ?? [];
   // Concrete DLV trigger suggestion per tag, so each not-firing tag shows ITS OWN "create this trigger"
-  // inline — no separate, repetitive suggestions section listing the same tags again.
+  // inline - no separate, repetitive suggestions section listing the same tags again.
   const suggByTag = new Map((vResult?.taSuggestions ?? []).map((s) => [s.tagName, s] as const));
 
-  // Download the FULL results (every verdict, in display order — fired → config → server → untested →
+  // Download the FULL results (every verdict, in display order - fired → config → server → untested →
   // not-firing) as CSV, PDF or DOC. The PDF/DOC embed each tag's proof screenshot. Independent of the
   // on-screen filters so the report is always the complete run. Read-only; no GTM access.
   async function downloadVerify(format: 'xlsx' | 'pdf' | 'doc'): Promise<void> {
@@ -5237,7 +5237,7 @@ function VerifyPanel({
       <div style={styles.chatHeader}>
         <div>
           <div style={styles.chatTitle}>Tag verification</div>
-          <div style={styles.chatSub}>Prove the container’s tags &amp; forms actually fire when their trigger runs — nothing real is sent (hits are captured &amp; aborted).</div>
+          <div style={styles.chatSub}>Prove the container’s tags &amp; forms actually fire when their trigger runs - nothing real is sent (hits are captured &amp; aborted).</div>
         </div>
       </div>
 
@@ -5270,34 +5270,34 @@ function VerifyPanel({
           <div style={{ ...styles.muted, marginTop: 8 }}>
             <b>Verify with Tag Assistant</b> first scans the site for forms that have a tracking tag, then asks
             whether to submit those forms too (a real lead each) or just verify the click tags. It then drives
-            every tag on the live site and reads GTM’s <b>own</b> per-event firing — <b>nothing is created in
+            every tag on the live site and reads GTM’s <b>own</b> per-event firing - <b>nothing is created in
             your container</b> (no version, no preview). To test UNPUBLISHED <b>draft</b> tags, paste a GTM
-            <b> Preview</b> snippet below — that loads your drafts and still creates nothing.
+            <b> Preview</b> snippet below - that loads your drafts and still creates nothing.
           </div>
           <input
             value={vUrl}
             onChange={(e) => setVUrl(e.target.value)}
-            placeholder="https://www.example.com — the live site whose pages carry this container"
+            placeholder="https://www.example.com - the live site whose pages carry this container"
             style={{ ...styles.input, width: '100%', marginTop: 8 }}
             disabled={!ready}
           />
           <textarea
             value={vSnippet}
             onChange={(e) => setVSnippet(e.target.value)}
-            placeholder="Paste your GTM PREVIEW snippet (with gtm_auth & gtm_preview). Required for 'Verify with Tag Assistant' to see your GTM container's tags — in GTM click Preview, then Share/Copy the snippet. Creates no version/environment."
+            placeholder="Paste your GTM PREVIEW snippet (with gtm_auth & gtm_preview). Required for 'Verify with Tag Assistant' to see your GTM container's tags - in GTM click Preview, then Share/Copy the snippet. Creates no version/environment."
             style={{ ...styles.input, width: '100%', minHeight: 52, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
             disabled={!ready}
           />
           <textarea
             value={vVerifyPages}
             onChange={(e) => setVVerifyPages(e.target.value)}
-            placeholder="Pages to verify (optional) — one URL per line. When set, verify SKIPS the auto-crawl and drives every tag on ONLY these pages, so forms/tags on pages the crawl missed still get tested. e.g. https://www.example.com/contact"
+            placeholder="Pages to verify (optional) - one URL per line. When set, verify SKIPS the auto-crawl and drives every tag on ONLY these pages, so forms/tags on pages the crawl missed still get tested. e.g. https://www.example.com/contact"
             style={{ ...styles.input, width: '100%', minHeight: 52, marginTop: 8, fontFamily: 'monospace', fontSize: 12 }}
             disabled={!ready}
           />
           {vVerifyPages.trim() && (
             <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
-              Verifying only {vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean).length} page(s) — the site crawl is skipped.
+              Verifying only {vVerifyPages.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean).length} page(s) - the site crawl is skipped.
             </div>
           )}
           {/* Network & Location: the egress this audit runs from, so the operator can confirm the request
@@ -5311,12 +5311,12 @@ function VerifyPanel({
               style={{ ...styles.primaryBtn, ...(!ready || vVerifying || vTaStage === 'scanning' || !verifyTarget() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
               onClick={() => void startTaFlow()}
               disabled={!ready || vVerifying || vTaStage === 'scanning' || !verifyTarget()}
-              title="Automates the REAL Tag Assistant — connects it to the site, drives your tags, and reads GTM's own per-event firing. First it scans the site for forms with tags and asks whether to verify those too (a real lead per form) or just the click tags. ZERO GTM writes. Signs in to Tag Assistant ONCE (saved after that, so it never asks again) and your normal Chrome can stay open."
+              title="Automates the REAL Tag Assistant - connects it to the site, drives your tags, and reads GTM's own per-event firing. First it scans the site for forms with tags and asks whether to verify those too (a real lead per form) or just the click tags. ZERO GTM writes. Signs in to Tag Assistant ONCE (saved after that, so it never asks again) and your normal Chrome can stay open."
             >
               {vVerifyKind === 'ta' ? 'Verifying with Tag Assistant…' : vTaStage === 'scanning' ? 'Scanning site for forms…' : 'Verify with Tag Assistant'}
             </button>
           </div>
-          {/* STEP 2 — the skip/proceed gate, shown once the up-front form scan finds forms with tags. */}
+          {/* STEP 2 - the skip/proceed gate, shown once the up-front form scan finds forms with tags. */}
           {vTaStage === 'gate' && (
             <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-blue)', background: 'rgba(70,130,240,0.06)' }}>
               <div style={{ fontSize: 13, color: 'var(--text)', marginBottom: 8, lineHeight: 1.45 }}>
@@ -5324,7 +5324,7 @@ function VerifyPanel({
               </div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <button style={styles.primaryBtn} onClick={() => setVTaStage('filling')}>Proceed with form verification</button>
-                <button style={styles.toggleOff} onClick={() => { setVTaStage('idle'); void runVerify(undefined, true, false); }}>Skip forms — verify click tags only</button>
+                <button style={styles.toggleOff} onClick={() => { setVTaStage('idle'); void runVerify(undefined, true, false); }}>Skip forms - verify click tags only</button>
               </div>
             </div>
           )}
@@ -5343,10 +5343,10 @@ function VerifyPanel({
                       </>}
                 </span>
               </div>
-              {/* Indeterminate bar — no % is known (the driver loads + drives every page), so an animated
+              {/* Indeterminate bar - no % is known (the driver loads + drives every page), so an animated
                   sliver signals "working" without a false percentage. */}
               <div className="vf-progress" role="progressbar" aria-label="Verification in progress" aria-busy="true" style={{ marginTop: 8 }} />
-              {/* Live feed: the page being scanned/driven right now — low-opacity + fading so it reads as
+              {/* Live feed: the page being scanned/driven right now - low-opacity + fading so it reads as
                   "work in flight", with a phase label and (for the crawl/drive) an honest done/total. */}
               {vProgress && (
                 <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, minWidth: 0 }}>
@@ -5374,23 +5374,23 @@ function VerifyPanel({
                   )}
                 </div>
               )}
-              {/* Stop button — abort the scan/drive. The current page finishes, then it resolves with a
+              {/* Stop button - abort the scan/drive. The current page finishes, then it resolves with a
                   partial result (what was captured so far). */}
               <div style={{ marginTop: 8 }}>
                 <button
                   onClick={stopVerify}
                   disabled={vStopping}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, padding: '6px 14px', borderRadius: 8, cursor: vStopping ? 'not-allowed' : 'pointer', border: '1px solid var(--c-red)', background: 'var(--c-red-bg)', color: 'var(--c-red)', opacity: vStopping ? 0.6 : 1 }}
-                  title="Stop the verification — the current page finishes, then it shows what was captured so far"
+                  title="Stop the verification - the current page finishes, then it shows what was captured so far"
                 >
                   {vStopping ? 'Stopping…' : '■ Stop'}
                 </button>
               </div>
               {/* Switching tabs UNMOUNTS this panel (it is conditionally rendered), which drops the in-flight
-                  run's result — warn so the user doesn't lose a minute-long verification. */}
+                  run's result - warn so the user doesn't lose a minute-long verification. */}
               <div style={{ marginTop: 8, padding: '7px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-amber)', background: 'rgba(230,160,30,0.08)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>
                 <span aria-hidden>⚠️</span>
-                <span>Keep this tab open until it finishes — it loads and drives every page, which can take a minute on a larger site. Leaving or switching tabs cancels the run and you'll have to start over.</span>
+                <span>Keep this tab open until it finishes - it loads and drives every page, which can take a minute on a larger site. Leaving or switching tabs cancels the run and you'll have to start over.</span>
               </div>
             </div>
           ) : (vResult && !vResult.error && vTaStage === 'idle' && vFormStatus.count !== null && vFormStatus.count > 0) ? (
@@ -5417,26 +5417,26 @@ function VerifyPanel({
           <div style={styles.card}>
             {vResult.injected && !vResult.previewAuth && (
               <div style={{ ...styles.muted, color: 'var(--c-amber)', marginBottom: 6 }}>
-                ⚠ The snippet has no preview auth (gtm_auth/gtm_preview) — it loaded the PUBLISHED container, so DRAFT tags won’t fire. Use “Auto”, or paste the GTM Preview / Environment snippet.
+                ⚠ The snippet has no preview auth (gtm_auth/gtm_preview) - it loaded the PUBLISHED container, so DRAFT tags won’t fire. Use “Auto”, or paste the GTM Preview / Environment snippet.
               </div>
             )}
             {!vResult.injected && (
               <div style={{ ...styles.muted, color: 'var(--c-amber)', marginBottom: 6 }}>
-                ⚠ Tested the page as-is (no container injected) — a tag can only fire if its container is already published on this URL. Use “Auto” or a Preview snippet to load DRAFT tags.
+                ⚠ Tested the page as-is (no container injected) - a tag can only fire if its container is already published on this URL. Use “Auto” or a Preview snippet to load DRAFT tags.
               </div>
             )}
             {/* GTM debug signal (Phase B): the #1 cause of "0 fired" is the container never loading. */}
             {vResult.gtmDebug && !vResult.gtmDebug.containerLoaded && vResult.injected && (
               <div style={{ ...styles.muted, color: 'var(--c-red)', marginBottom: 6 }}>
-                ⚠ GTM debug: no GTM-XXXX container was detected on the page — the container didn’t load, so nothing could fire. Check the preview snippet / auth, or that the site isn’t blocking googletagmanager.com.
+                ⚠ GTM debug: no GTM-XXXX container was detected on the page - the container didn’t load, so nothing could fire. Check the preview snippet / auth, or that the site isn’t blocking googletagmanager.com.
               </div>
             )}
             {/* AUTHORITATIVE run: results came from GTM's OWN monitor (addEventCallback), like Tag
-                Assistant — the fired/not-fired below is exactly what GTM did, not beacon inference. */}
+                Assistant - the fired/not-fired below is exactly what GTM did, not beacon inference. */}
             {vResult.verifiedByMonitor && !vResult.error && (
               <div style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 8, fontSize: 12.5, lineHeight: 1.45, border: '1px solid var(--c-green)', background: 'rgba(60,180,90,0.08)', color: 'var(--text)', display: 'flex', gap: 6, alignItems: 'flex-start' }}>
                 <span aria-hidden>✓</span>
-                <span><b>Authoritative</b> — read from the real Tag Assistant debug stream: each tag below is exactly what GTM fired on the driven events, not inferred from network hits. Nothing was created in your container (no version, no workspace).</span>
+                <span><b>Authoritative</b> - read from the real Tag Assistant debug stream: each tag below is exactly what GTM fired on the driven events, not inferred from network hits. Nothing was created in your container (no version, no workspace).</span>
               </div>
             )}
             {vResult.error ? (
@@ -5444,7 +5444,7 @@ function VerifyPanel({
             ) : (
               <VerifyScorecard fired={firedReal.length} config={firedSynthetic.length} server={serverRelayed.length} untested={inconclusive.length} issues={notFired.length} />
             )}
-            {/* Download the full results (every verdict) — CSV spreadsheet, or a styled PDF / Word doc that
+            {/* Download the full results (every verdict) - CSV spreadsheet, or a styled PDF / Word doc that
                 embeds each tag's proof screenshot. Independent of the on-screen filters. */}
             {!vResult.error && vResult.verdicts.length > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
@@ -5463,7 +5463,7 @@ function VerifyPanel({
                 {vExportNote && <span style={{ ...styles.muted, fontSize: 12 }}>{vExportNote}</span>}
               </div>
             )}
-            {/* Filter + search bar for the results below — status / interaction type / platform / free text. */}
+            {/* Filter + search bar for the results below - status / interaction type / platform / free text. */}
             {!vResult.error && vResult.verdicts.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginTop: 10, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border-2)', background: 'var(--surface-2)' }}>
                 <input
@@ -5497,7 +5497,7 @@ function VerifyPanel({
             {filtersActive && !vResult.error && ((showStatus('fired') ? fFiredReal.length + fFiredSynthetic.length + fServerRelayed.length : 0) + (showStatus('untested') ? fInconclusive.length : 0) + (showStatus('notfired') ? fNotFired.length : 0)) === 0 && (
               <div style={{ ...styles.muted, fontSize: 13, marginTop: 12, padding: 12, textAlign: 'center', border: '1px dashed var(--border-2)', borderRadius: 8 }}>No tags match the current filters.</div>
             )}
-            {/* Phase 3: the Tag-Assistant-style detail — the event timeline (API Call + tags fired per
+            {/* Phase 3: the Tag-Assistant-style detail - the event timeline (API Call + tags fired per
                 event). Collapsed by default: the results TABLE below now carries the per-tag screenshots,
                 so it's the primary at-a-glance view; the timeline is opt-in detail. */}
             {!vResult.error && vResult.taEvents && vResult.taEvents.length > 0 && (
@@ -5511,16 +5511,16 @@ function VerifyPanel({
             {vResult.pagesDriven?.length && !vResult.error ? (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
                 Drove across {vResult.pagesDriven.length} page(s)
-                {vResult.pagesCrawled ? ` (scanned ${vResult.pagesCrawled}${vResult.pagesTotal && vResult.pagesTotal > vResult.pagesCrawled ? ` of ${vResult.pagesTotal}` : ''} site page(s) from the sitemap to locate each CTA)` : ''} — each click tag is
+                {vResult.pagesCrawled ? ` (scanned ${vResult.pagesCrawled}${vResult.pagesTotal && vResult.pagesTotal > vResult.pagesCrawled ? ` of ${vResult.pagesTotal}` : ''} site page(s) from the sitemap to locate each CTA)` : ''} - each click tag is
                 driven on the page its CTA actually lives on.
                 {vResult.pagesTotal && vResult.pagesCrawled && vResult.pagesTotal > vResult.pagesCrawled
-                  ? ` The site has ${vResult.pagesTotal} pages; we scanned the ${vResult.pagesCrawled} highest-priority ones (forms/CTAs first) — a tag whose CTA lives only on an un-scanned page shows “untested here”.`
+                  ? ` The site has ${vResult.pagesTotal} pages; we scanned the ${vResult.pagesCrawled} highest-priority ones (forms/CTAs first) - a tag whose CTA lives only on an un-scanned page shows “untested here”.`
                   : ''}
               </div>
             ) : null}
             {vResult.gtmDebug && vResult.gtmDebug.containerLoaded && (
               <div style={{ ...styles.muted, fontSize: 12, marginTop: 2 }}>
-                GTM debug: container {vResult.gtmDebug.containerIds.join(', ') || 'loaded'} · events seen: {vResult.gtmDebug.dataLayerEvents.slice(0, 12).join(', ') || '—'}
+                GTM debug: container {vResult.gtmDebug.containerIds.join(', ') || 'loaded'} · events seen: {vResult.gtmDebug.dataLayerEvents.slice(0, 12).join(', ') || '-'}
               </div>
             )}
 
@@ -5545,7 +5545,7 @@ function VerifyPanel({
                         ))}
                       </ul>
                       <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 2 }}>
-                        Browser-side only (captured then aborted — nothing was delivered). {hasSgtm ? 'A /g/collect to your sGTM means the web→server relay fired; ' : ''}the server-side Meta CAPI call (graph.facebook.com) is not visible here — confirm it in sGTM Preview / Events Manager → Test Events.
+                        Browser-side only (captured then aborted - nothing was delivered). {hasSgtm ? 'A /g/collect to your sGTM means the web→server relay fired; ' : ''}the server-side Meta CAPI call (graph.facebook.com) is not visible here - confirm it in sGTM Preview / Events Manager → Test Events.
                       </div>
                     </div>
                   )}
@@ -5573,7 +5573,7 @@ function VerifyPanel({
                         ))}
                       </ul>
                       <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 2 }}>
-                        What your site actually pushed to the dataLayer. Use the event name + params as the trigger condition (e.g. a tag that keys off <code>form_name</code> should match the exact value shown here). Amber rows were pushed by the verifier to test a custom-event tag — not proof the site fires them.
+                        What your site actually pushed to the dataLayer. Use the event name + params as the trigger condition (e.g. a tag that keys off <code>form_name</code> should match the exact value shown here). Amber rows were pushed by the verifier to test a custom-event tag - not proof the site fires them.
                       </div>
                     </div>
                   )}
@@ -5586,8 +5586,8 @@ function VerifyPanel({
                 <VerifyResultsTable rows={[...fFiredReal, ...fFiredSynthetic, ...fServerRelayed]} onProof={showProof} />
                 {(fFiredSynthetic.length > 0 || fServerRelayed.length > 0) && (
                   <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 8, lineHeight: 1.55, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    {fFiredSynthetic.length > 0 && <span>⚙ <b style={{ color: 'var(--c-amber)' }}>Config-verified</b> — fired on a synthetic dataLayer push (trigger is wired right), NOT a real submit. Confirm with a real submit in GTM Preview.</span>}
-                    {fServerRelayed.length > 0 && <span>🛰 <b style={{ color: 'var(--c-blue)' }}>Server-side</b> — no browser beacon, but relayed to your sGTM (normal for Conversion-API destinations).</span>}
+                    {fFiredSynthetic.length > 0 && <span>⚙ <b style={{ color: 'var(--c-amber)' }}>Config-verified</b> - fired on a synthetic dataLayer push (trigger is wired right), NOT a real submit. Confirm with a real submit in GTM Preview.</span>}
+                    {fServerRelayed.length > 0 && <span>🛰 <b style={{ color: 'var(--c-blue)' }}>Server-side</b> - no browser beacon, but relayed to your sGTM (normal for Conversion-API destinations).</span>}
                   </div>
                 )}
               </div>
@@ -5595,12 +5595,12 @@ function VerifyPanel({
 
             {/* UNTESTED = we never exercised the trigger here (its CTA wasn't on a page we drove, or its form
                 wasn't submitted). NOT the same as "not firing". Show, per tag, WHY it wasn't tested + how to
-                test it — visibly, not just on hover — so the operator knows these were skipped, not broken. */}
+                test it - visibly, not just on hover - so the operator knows these were skipped, not broken. */}
             {showStatus('untested') && fInconclusive.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <div style={{ ...styles.h2, color: 'var(--text-dim)' }}>⏭ Untested here ({fInconclusive.length}{filtersActive && fInconclusive.length !== inconclusive.length ? ` of ${inconclusive.length}` : ''})</div>
                 <div style={{ ...styles.muted, fontSize: 12, marginBottom: 6, lineHeight: 1.5 }}>
-                  We didn’t exercise these tags’ triggers in this run — this is <b>not</b> “not firing”. Either the CTA/link they listen to wasn’t on a page we drove, or (for a form tag) its form wasn’t among the ones submitted. Below is why each one, and how to actually test it.
+                  We didn’t exercise these tags’ triggers in this run - this is <b>not</b> “not firing”. Either the CTA/link they listen to wasn’t on a page we drove, or (for a form tag) its form wasn’t among the ones submitted. Below is why each one, and how to actually test it.
                 </div>
                 <ul style={styles.resultList}>
                   {fInconclusive.map((v) => {
@@ -5621,7 +5621,7 @@ function VerifyPanel({
               <div style={{ marginTop: 12 }}>
                 <div style={{ ...styles.h2, color: 'var(--c-red)' }}>❌ Not firing ({fNotFired.length}{filtersActive && fNotFired.length !== notFired.length ? ` of ${notFired.length}` : ''})</div>
                 <div style={{ ...styles.muted, fontSize: 12, marginBottom: 6, lineHeight: 1.5 }}>
-                  We <b>did</b> exercise these — drove the click / submitted the form — but GTM did not fire the tag. That means a <b>trigger condition doesn’t match</b> what the page sent. Compare each condition (event name, form name / id, page path) against the dataLayer below.
+                  We <b>did</b> exercise these - drove the click / submitted the form - but GTM did not fire the tag. That means a <b>trigger condition doesn’t match</b> what the page sent. Compare each condition (event name, form name / id, page path) against the dataLayer below.
                 </div>
                 <ul style={styles.resultList}>
                   {fNotFired.map((v) => {
@@ -5640,7 +5640,7 @@ function VerifyPanel({
                         )}
                         {(() => {
                           // Prefer the CONCRETE, per-tag trigger suggestion (built from the real push, scoped to
-                          // this tag's own form page) over the generic fix text — this is what replaces the old
+                          // this tag's own form page) over the generic fix text - this is what replaces the old
                           // separate, repetitive "DLV suggestions" section.
                           const sug = suggByTag.get(v.tagName);
                           if (sug && sug.conditions.length > 0) {
@@ -5660,7 +5660,7 @@ function VerifyPanel({
                         {v.observedEvents && v.observedEvents.length > 0 && (
                           <div style={{ marginLeft: 8, marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                             {aligned[v.tagId] ? (
-                              <span style={{ color: 'var(--c-green)', fontSize: 12.5 }}>✓ Event Name set to {aligned[v.tagId]} — re-verify to confirm.</span>
+                              <span style={{ color: 'var(--c-green)', fontSize: 12.5 }}>✓ Event Name set to {aligned[v.tagId]} - re-verify to confirm.</span>
                             ) : (
                               v.observedEvents.map((ev) => (
                                 <button
@@ -5696,7 +5696,7 @@ function VerifyPanel({
               <ul style={styles.resultList}>
                 {vSkipped.map((s) => (
                   <li key={s.tagId} style={styles.resultRow}>
-                    <b style={{ color: 'var(--text)' }}>{s.name}</b> <span style={styles.muted}>— {s.reason}</span>
+                    <b style={{ color: 'var(--text)' }}>{s.name}</b> <span style={styles.muted}>- {s.reason}</span>
                   </li>
                 ))}
               </ul>
@@ -5740,7 +5740,7 @@ const AUDIT_SEVERITIES: Array<[string, string]> = [
   ['info', 'Info'],
 ];
 
-/** Human label for the active audit filter value — used in the "nothing matches" empty state. */
+/** Human label for the active audit filter value - used in the "nothing matches" empty state. */
 function auditFilterLabel(v: string): string {
   if (v === UNUSED_TRIGGER_FILTER) return 'unused trigger';
   if (v === UNUSED_VAR_FILTER) return 'unused variable';
@@ -5797,7 +5797,7 @@ function WorkspaceComparison({
   const ready = Boolean(active?.hasGoogleToken && ctx?.accountId && ctx?.containerId);
   const [workspaces, setWorkspaces] = useState<GtmWorkspaceView[]>([]);
   const [wsLoading, setWsLoading] = useState(false);
-  const [selected, setSelected] = useState<string[]>([]); // ORDERED — first is the base
+  const [selected, setSelected] = useState<string[]>([]); // ORDERED - first is the base
   const [result, setResult] = useState<WorkspaceCompareResultView | null>(null);
   const [comparing, setComparing] = useState(false);
   const [open, setOpen] = useState(false); // the whole comparison section is collapsed until opened
@@ -5871,7 +5871,7 @@ function WorkspaceComparison({
         <div>
           <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)' }}>Workspace Comparison</div>
           <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 2 }}>
-            Compare two or more workspaces in this container side by side — configuration, tags, triggers, variables and folders.
+            Compare two or more workspaces in this container side by side - configuration, tags, triggers, variables and folders.
             This is separate from the audit and its report.
           </div>
         </div>
@@ -5884,7 +5884,7 @@ function WorkspaceComparison({
             <div style={styles.muted}>Loading workspaces…</div>
           ) : !canCompare ? (
             <div style={{ color: 'var(--c-amber)', fontSize: 13 }}>
-              This container has {workspaces.length} workspace(s). Workspace Comparison needs at least two — create a draft workspace, then compare.
+              This container has {workspaces.length} workspace(s). Workspace Comparison needs at least two - create a draft workspace, then compare.
             </div>
           ) : (
             <>
@@ -5954,7 +5954,7 @@ function WsDependencySection({ result }: { result: WorkspaceCompareResultView })
         <div style={{ fontSize: 12.5, color: 'var(--c-green)', marginTop: 4 }}>✅ No cross-workspace dependency gaps detected. Variable dependencies are fully checked; any firing-trigger drift shows in the detailed diff below.</div>
       ) : (
         <div style={{ marginTop: 6 }}>
-          <div style={{ fontSize: 12, color: 'var(--c-red)', fontWeight: 600, marginBottom: 4 }}>⚠ {miss.length} cross-workspace dependency gap{miss.length > 1 ? 's' : ''} — resolve before merging.</div>
+          <div style={{ fontSize: 12, color: 'var(--c-red)', fontWeight: 600, marginBottom: 4 }}>⚠ {miss.length} cross-workspace dependency gap{miss.length > 1 ? 's' : ''} - resolve before merging.</div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
@@ -6036,7 +6036,7 @@ function WorkspaceDiffResults({
     <button onClick={onClick} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 999, cursor: 'pointer', border: `1px solid ${on ? color : 'var(--border-2)'}`, background: on ? color : 'transparent', color: on ? '#fff' : 'var(--text-muted)' }}>{label}</button>
   );
   const nameMatch = (name: string): boolean => !q || name.toLowerCase().includes(q);
-  // Per-entity variant number per workspace (1,2,3…) — so the common table shows which workspaces agree.
+  // Per-entity variant number per workspace (1,2,3…) - so the common table shows which workspaces agree.
   const variantIndex = (e: ConsolidatedEntityView): Record<string, number> => {
     const seen = new Map<string, number>();
     const out: Record<string, number> = {};
@@ -6070,7 +6070,7 @@ function WorkspaceDiffResults({
         <WsStatTile label="Missing items" value={stats.missing} />
       </div>
 
-      {/* Per-kind statistics — Tags / Triggers / Variables / Built-in / Folders, each Total·Common·Unique.
+      {/* Per-kind statistics - Tags / Triggers / Variables / Built-in / Folders, each Total·Common·Unique.
           Click a card to focus the tables on that one type (a dedicated per-kind comparison). */}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
         {WS_KINDS.map((k) => {
@@ -6102,9 +6102,9 @@ function WorkspaceDiffResults({
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name…" style={{ ...styles.input, minWidth: 160, marginLeft: 'auto' }} />
       </div>
 
-      {/* COMMON items — in all selected workspaces */}
+      {/* COMMON items - in all selected workspaces */}
       <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)', marginTop: 6 }}>
-        Common items <span style={{ ...styles.muted, fontWeight: 400 }}>(in all {stats.workspaces} workspaces) — {commonRows.length} shown</span>
+        Common items <span style={{ ...styles.muted, fontWeight: 400 }}>(in all {stats.workspaces} workspaces) - {commonRows.length} shown</span>
       </div>
       {commonRows.length === 0 ? (
         <div style={{ ...styles.muted, fontSize: 12.5, padding: 8, border: '1px dashed var(--border-2)', borderRadius: 6, textAlign: 'center', marginTop: 4 }}>No common items match the filters.</div>
@@ -6160,12 +6160,12 @@ function WorkspaceDiffResults({
         </div>
       )}
 
-      {/* UNCOMMON items — missing from one or more workspaces */}
+      {/* UNCOMMON items - missing from one or more workspaces */}
       <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)', marginTop: 18 }}>
-        Uncommon items <span style={{ ...styles.muted, fontWeight: 400 }}>(missing from one or more) — {uncommonRows.length} shown</span>
+        Uncommon items <span style={{ ...styles.muted, fontWeight: 400 }}>(missing from one or more) - {uncommonRows.length} shown</span>
       </div>
       {uncommonRows.length === 0 ? (
-        <div style={{ ...styles.muted, fontSize: 12.5, padding: 8, border: '1px dashed var(--border-2)', borderRadius: 6, textAlign: 'center', marginTop: 4 }}>No uncommon items{q || fKind.size < WS_KINDS.length ? ' match the filters' : ' — every item exists in all workspaces'}.</div>
+        <div style={{ ...styles.muted, fontSize: 12.5, padding: 8, border: '1px dashed var(--border-2)', borderRadius: 6, textAlign: 'center', marginTop: 4 }}>No uncommon items{q || fKind.size < WS_KINDS.length ? ' match the filters' : ' - every item exists in all workspaces'}.</div>
       ) : (
         <div style={{ overflowX: 'auto', marginTop: 4 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
@@ -6251,12 +6251,12 @@ function WorkspaceDiffResults({
         })}
       </div>
 
-      {/* Report Generation — clearly SEPARATE from the comparison above. */}
+      {/* Report Generation - clearly SEPARATE from the comparison above. */}
       <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-2)' }}>
         <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>Report generation</div>
         <div style={{ ...styles.muted, fontSize: 12, margin: '2px 0 8px' }}>Generate a detailed comparison report - summary, common + uncommon items, merge recommendations and differences (separate from the on-screen comparison).</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button style={{ ...styles.primaryBtn, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('xlsx')} disabled={exporting} title="Native Excel workbook — Summary, Common, Uncommon and Detailed-diff sheets with full config values">⬇ Export Excel (.xlsx)</button>
+          <button style={{ ...styles.primaryBtn, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('xlsx')} disabled={exporting} title="Native Excel workbook - Summary, Common, Uncommon and Detailed-diff sheets with full config values">⬇ Export Excel (.xlsx)</button>
           <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('pdf')} disabled={exporting}>Generate PDF report</button>
           <button style={{ ...styles.toggleOff, ...(exporting ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} onClick={() => onReport('csv')} disabled={exporting}>Export CSV</button>
           {exportNote && <span style={{ ...styles.muted, fontSize: 12 }}>{exportNote}</span>}
@@ -6314,7 +6314,7 @@ function ContainerAuditPanel({
     }
   }
 
-  // Download the FULL audit (all findings, worst-first) to a file the user picks — CSV
+  // Download the FULL audit (all findings, worst-first) to a file the user picks - CSV
   // (a findings spreadsheet), Markdown (a shareable report), or a styled PDF (the Markdown
   // rendered through the same print pipeline as the GA4 report). Read-only; no GTM access.
   async function downloadAudit(format: 'csv' | 'md' | 'pdf'): Promise<void> {
@@ -6358,7 +6358,7 @@ function ContainerAuditPanel({
     override?: { tool: string; args: Record<string, unknown> },
     opts?: { skipConfirm?: boolean }
   ): Promise<void> {
-    if (fix[i]?.state === 'fixing') return; // already in flight — never double-issue a write
+    if (fix[i]?.state === 'fixing') return; // already in flight - never double-issue a write
     const toRun = override ?? f.fix;
     if (!toRun) return;
     const destructive = toRun.tool.startsWith('delete');
@@ -6427,9 +6427,9 @@ function ContainerAuditPanel({
   };
 
   // Bulk apply: every non-destructive auto-fix not already applied (and matching the active
-  // type filter). Deletes are EXCLUDED from THIS batch — they have their own confirmed bulk path
+  // type filter). Deletes are EXCLUDED from THIS batch - they have their own confirmed bulk path
   // (applyDeleteBatch / the "Bulk delete" toolbar) plus a per-row two-click confirm. Consent fixes
-  // apply their default ("require consent" — conservative, reversible); use a row's "No extra
+  // apply their default ("require consent" - conservative, reversible); use a row's "No extra
   // consent" for the exceptions.
   const bulkFixable = findings.filter(
     (f, i) => typeMatches(f) && f.autoFixable && f.fix && !f.fix.tool.startsWith('delete') && fix[i]?.state !== 'done'
@@ -6437,21 +6437,21 @@ function ContainerAuditPanel({
   const isConsentFix = (f: AuditFindingView): boolean => f.fix?.tool === 'set_gtm_tag_consent';
   // "Require consent" batch includes ad pixels (gating a pixel is the safe direction).
   const consentFixable = findings.filter((f, i) => typeMatches(f) && f.autoFixable && isConsentFix(f) && fix[i]?.state !== 'done').length;
-  // "No extra consent" batch EXCLUDES B6 ad pixels — one-click un-gating an ad pixel is a
+  // "No extra consent" batch EXCLUDES B6 ad pixels - one-click un-gating an ad pixel is a
   // compliance regression, so those keep their per-row choice.
   const noExtraFixable = findings.filter(
     (f, i) => typeMatches(f) && f.autoFixable && isConsentFix(f) && f.checkId !== 'B6-ad-pixel-consent' && fix[i]?.state !== 'done'
   ).length;
   // Unpausing a paused tag is non-destructive (set_gtm_tag_paused → paused:false), so it
-  // applies with NO confirmation — offered as its own one-click batch.
+  // applies with NO confirmation - offered as its own one-click batch.
   const isUnpauseFix = (f: AuditFindingView): boolean => f.fix?.tool === 'set_gtm_tag_paused';
   const pausedFixable = findings.filter((f, i) => typeMatches(f) && f.autoFixable && isUnpauseFix(f) && fix[i]?.state !== 'done').length;
-  // Rows to render — keep each finding's ORIGINAL index so the per-row fix state still aligns.
+  // Rows to render - keep each finding's ORIGINAL index so the per-row fix state still aligns.
   const visible = findings.map((f, i) => ({ f, i })).filter(({ f }) => typeMatches(f));
 
   // ── Bulk delete (unused triggers + unused variables) ──────────────────────
-  // The audit's two destructive fixes — delete_gtm_trigger (unused triggers) and
-  // delete_gtm_variable (unused variables) — get selection checkboxes plus "Delete selected" /
+  // The audit's two destructive fixes - delete_gtm_trigger (unused triggers) and
+  // delete_gtm_variable (unused variables) - get selection checkboxes plus "Delete selected" /
   // "Delete all" buttons. Both scope to the current filter + search via `visible`, exactly like the
   // non-destructive batches. Single deletes keep their per-row two-click confirm; a bulk delete
   // asks ONE combined confirmation instead.
@@ -6461,12 +6461,12 @@ function ContainerAuditPanel({
     .filter(({ f, i }) => isDeletable(f) && fix[i]?.state !== 'done' && fix[i]?.state !== 'fixing')
     .map(({ i }) => i);
   const selectedDelTargets = deletableTargets.filter((i) => selectedDel[i]);
-  // True while any per-row delete is mid-flight — used to disable the bulk entry points so a single
+  // True while any per-row delete is mid-flight - used to disable the bulk entry points so a single
   // in-flight delete can't be re-issued by a bulk run (applyDeleteBatch also re-validates at run time).
   const anyFixing = Object.values(fix).some((s) => s?.state === 'fixing');
   const delTriggerCount = (idxs: number[]): number => idxs.filter((i) => findings[i].fix?.tool === 'delete_gtm_trigger').length;
   const delVariableCount = (idxs: number[]): number => idxs.filter((i) => findings[i].fix?.tool === 'delete_gtm_variable').length;
-  // "X unused trigger(s) · Y unused variable(s)" — the kind breakdown for a set of delete targets.
+  // "X unused trigger(s) · Y unused variable(s)" - the kind breakdown for a set of delete targets.
   const delBreakdown = (idxs: number[]): string =>
     [
       delTriggerCount(idxs) > 0 ? `${delTriggerCount(idxs)} unused trigger(s)` : '',
@@ -6523,7 +6523,7 @@ function ContainerAuditPanel({
 
   // Delete every finding in `indices` (already resolved from the visible set + user-confirmed),
   // sequentially, reusing applyBatch's pacing / m-of-n counter / Cancel. This is the ONLY path that
-  // runs destructive fixes in bulk, so it never auto-includes anything — the caller passes an
+  // runs destructive fixes in bulk, so it never auto-includes anything - the caller passes an
   // explicit list and each delete runs with skipConfirm (the batch was confirmed once already).
   async function applyDeleteBatch(indices: number[]): Promise<void> {
     // Re-validate at execution time (mirrors applyBatch): drop any captured index already deleted or
@@ -6553,7 +6553,7 @@ function ContainerAuditPanel({
     }
   }
 
-  // A disabled button keeps its inline background, so Chromium won't auto-fade it — apply this when
+  // A disabled button keeps its inline background, so Chromium won't auto-fade it - apply this when
   // a control is disabled so destructive buttons never look armed when they're inert.
   const disabledStyle = (d: boolean): React.CSSProperties => (d ? { opacity: 0.5, cursor: 'not-allowed' } : {});
 
@@ -6593,7 +6593,7 @@ function ContainerAuditPanel({
           </div>
         </div>
 
-        {/* Workspace Comparison — a distinct functionality within Container Audit (separate from Run audit
+        {/* Workspace Comparison - a distinct functionality within Container Audit (separate from Run audit
             and its report). Compares 2+ workspaces side by side with its own report generation. */}
         <WorkspaceComparison active={active} onError={onError} />
 
@@ -6616,7 +6616,7 @@ function ContainerAuditPanel({
               <div style={{ marginTop: 6 }}>
                 <div style={styles.h2}>Run context</div>
                 <div style={styles.muted}>
-                  account {ctx?.accountId ?? '—'} · container {ctx?.containerId ?? '—'} · workspace {ctx?.workspaceId ?? '—'} · tags{' '}
+                  account {ctx?.accountId ?? '-'} · container {ctx?.containerId ?? '-'} · workspace {ctx?.workspaceId ?? '-'} · tags{' '}
                   {report.counts.tags} · triggers {report.counts.triggers} · variables {report.counts.variables}
                   {report.counts.clients != null ? ` · clients ${report.counts.clients}` : ''}
                   {report.counts.transformations != null ? ` · transformations ${report.counts.transformations}` : ''} · GA4 base config{' '}
@@ -6642,7 +6642,7 @@ function ContainerAuditPanel({
                   const fixes = report.findings.filter((f) => f.fix);
                   return (
                     <>
-                      <div style={{ ...styles.h2, marginTop: 12 }}>Fix preview ({fixes.length}) — the exact tool + args “Apply fix” calls</div>
+                      <div style={{ ...styles.h2, marginTop: 12 }}>Fix preview ({fixes.length}) - the exact tool + args “Apply fix” calls</div>
                       {fixes.length === 0 ? (
                         <div style={styles.muted}>No auto-fixable findings.</div>
                       ) : (
@@ -6695,7 +6695,7 @@ function ContainerAuditPanel({
                   value={typeFilter}
                   onChange={(e) => { setTypeFilter(e.target.value); setDelConfirm(null); }}
                   style={styles.select}
-                  title="Filter findings — and scope the batch fixes — by severity, issue type, tag type, or fixability"
+                  title="Filter findings - and scope the batch fixes - by severity, issue type, tag type, or fixability"
                 >
                   <option value="all">All findings ({findings.length})</option>
                   {sevOptions.map(([k, label]) => (
@@ -6764,7 +6764,7 @@ function ContainerAuditPanel({
                       )
                     }
                     disabled={applyingAll}
-                    title="Declare 'no additional consent required' on every consent finding at once — for tags that rely on Consent Mode at the Google-tag level. Advertising pixels are EXCLUDED (un-gating them is a compliance risk); use a pixel's own buttons."
+                    title="Declare 'no additional consent required' on every consent finding at once - for tags that rely on Consent Mode at the Google-tag level. Advertising pixels are EXCLUDED (un-gating them is a compliance risk); use a pixel's own buttons."
                   >
                     {applyingAll ? 'Applying…' : `No extra consent on all (${noExtraFixable})`}
                   </button>
@@ -6774,7 +6774,7 @@ function ContainerAuditPanel({
                     style={styles.ghostBtn}
                     onClick={() => applyBatch(isUnpauseFix)}
                     disabled={applyingAll}
-                    title="Unpause every paused tag at once (set it live). No confirmation — unpausing is non-destructive."
+                    title="Unpause every paused tag at once (set it live). No confirmation - unpausing is non-destructive."
                   >
                     {applyingAll ? 'Applying…' : `Unpause all paused (${pausedFixable})`}
                   </button>
@@ -6784,7 +6784,7 @@ function ContainerAuditPanel({
                     style={styles.dangerGhost}
                     onClick={cancelBatch}
                     disabled={canceling}
-                    title="Stop the batch — the fix in progress finishes, then no more are applied. Already-applied fixes stay."
+                    title="Stop the batch - the fix in progress finishes, then no more are applied. Already-applied fixes stay."
                   >
                     {canceling ? 'Stopping…' : 'Cancel'}
                   </button>
@@ -6794,7 +6794,7 @@ function ContainerAuditPanel({
                     ? canceling
                       ? `Stopping after the current fix… (${batchProgress?.done ?? 0}/${batchProgress?.total ?? 0})`
                       : `Applying ${batchProgress?.done ?? 0}/${batchProgress?.total ?? 0}… click Cancel to stop after the current fix.`
-                    : 'Non-destructive fixes only — bulk delete for unused triggers / variables is below; “No extra consent” skips ad pixels.'}
+                    : 'Non-destructive fixes only - bulk delete for unused triggers / variables is below; “No extra consent” skips ad pixels.'}
                 </span>
               </div>
             )}
@@ -6805,7 +6805,7 @@ function ContainerAuditPanel({
                   style={{ ...styles.dangerSolid, ...disabledStyle(applyingAll || anyFixing || selectedDelTargets.length === 0) }}
                   disabled={applyingAll || anyFixing || selectedDelTargets.length === 0}
                   onClick={() => setDelConfirm({ indices: selectedDelTargets })}
-                  title="Delete the checked unused triggers / variables — one confirmation, then each is removed from the draft workspace."
+                  title="Delete the checked unused triggers / variables - one confirmation, then each is removed from the draft workspace."
                 >
                   Delete selected ({selectedDelTargets.length})
                 </button>
@@ -6844,7 +6844,7 @@ function ContainerAuditPanel({
                   {delVariableCount(delConfirm.indices) > 0 && (
                     <>
                       {' '}<b>Note on variables:</b> GTM refuses to delete a trigger still referenced by a tag, but it does{' '}
-                      <b>not</b> refuse a referenced variable — one used only in a published version or a field the audit
+                      <b>not</b> refuse a referenced variable - one used only in a published version or a field the audit
                       can't read will look unused. Review before deleting.
                     </>
                   )}
@@ -6873,7 +6873,7 @@ function ContainerAuditPanel({
         {report && findings.length === 0 && (
           <div style={styles.empty}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
-            No issues found — every tag has a trigger, nothing's mis-paused, nothing unused. Looks clean.
+            No issues found - every tag has a trigger, nothing's mis-paused, nothing unused. Looks clean.
           </div>
         )}
 
@@ -6910,12 +6910,12 @@ function ContainerAuditPanel({
                     <div style={{ ...styles.reviewEvidence, fontSize: 13, color: 'var(--text-dim)', fontStyle: 'normal', lineHeight: 1.55, background: 'var(--surface-2)', padding: '6px 9px', borderRadius: 6, marginTop: 6 }}>{f.recommendation}</div>
                     {st && st.state !== 'idle' && st.state !== 'confirm' && (
                       <div style={{ fontSize: 12, marginTop: 4, color: st.state === 'done' ? 'var(--c-green)' : st.state === 'err' ? 'var(--c-red)' : 'var(--text-muted)' }}>
-                        {st.state === 'fixing' ? 'Applying…' : st.state === 'done' ? '✓ applied — re-run to confirm' : `✗ ${st.msg}`}
+                        {st.state === 'fixing' ? 'Applying…' : st.state === 'done' ? '✓ applied - re-run to confirm' : `✗ ${st.msg}`}
                       </div>
                     )}
                   </div>
                   {f.autoFixable && f.fix && !done && f.fix.tool === 'set_gtm_tag_consent' ? (
-                    // Consent has two valid answers — let the user pick rather than
+                    // Consent has two valid answers - let the user pick rather than
                     // silently forcing "require consent" (which would block GA4 under denial).
                     <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                       <button
@@ -6986,8 +6986,8 @@ const GA4_AREA_STATUS: Record<string, { label: string; style: React.CSSPropertie
 };
 
 // Create a complete SERVER-side (sGTM) container FROM the selected web container: the container +
-// GA4 client + trigger + GA4 relay tag (relaying the web container's GA4 Measurement ID), and — when
-// a tagging-server URL is given — records it on the server container and points the web Google tag at
+// GA4 client + trigger + GA4 relay tag (relaying the web container's GA4 Measurement ID), and - when
+// a tagging-server URL is given - records it on the server container and points the web Google tag at
 // it. Draft-only, confirmation-gated; the host (Cloud Run / Stape) is deployed by the user separately.
 function ServerContainerPanel({
   active,
@@ -7057,11 +7057,11 @@ function ServerContainerPanel({
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <button style={styles.ghostBtn} onClick={() => setShowCreate(false)}>← Back</button>
             <span style={{ fontWeight: 700, fontSize: 15 }}>Create a new server container</span>
-            {serverCount === 0 && <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--c-amber)' }}>none exists yet — start here</span>}
+            {serverCount === 0 && <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--c-amber)' }}>none exists yet - start here</span>}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-              Builds a NEW server-side (sGTM) container from the web container in the GTM bar: container + GA4 client + firing trigger + GA4 relay tag (relaying that web container&apos;s GA4 Measurement ID). Paste your tagging-server URL (Cloud Run / Stape / your host) to also record it and point the web Google tag at it. Draft-only &mdash; nothing is published, and GTM does not deploy the host.
+              Builds a NEW server-side (sGTM) container from the web container in the GTM bar: container + GA4 client + firing trigger + GA4 relay tag (relaying that web container&apos;s GA4 Measurement ID). Paste your tagging-server URL (Cloud Run / Stape / your host) to also record it and point the web Google tag at it. Draft-only - nothing is published, and GTM does not deploy the host.
             </div>
             {!ready && (
               <div style={{ color: 'var(--c-amber)', fontSize: 13 }}>
@@ -7079,7 +7079,7 @@ function ServerContainerPanel({
             <input style={styles.input} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. example.com - Server" />
           </label>
           <label>
-            <span style={lbl}>Tagging server URL — optional (from Cloud Run / Stape / your host)</span>
+            <span style={lbl}>Tagging server URL - optional (from Cloud Run / Stape / your host)</span>
             <input style={styles.input} value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} placeholder="https://sgtm.example.com" />
           </label>
           <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>
@@ -7093,7 +7093,7 @@ function ServerContainerPanel({
             <div style={{ ...styles.confirm }}>
               <div style={{ ...styles.muted, marginBottom: 8, color: 'var(--c-amber)' }}>
                 Create a NEW server container “{name.trim()}” in this account
-                {serverUrl.trim() ? ` and point ${ctx!.containerName} at ${serverUrl.trim()}` : ''}? Draft-only — not published.
+                {serverUrl.trim() ? ` and point ${ctx!.containerName} at ${serverUrl.trim()}` : ''}? Draft-only - not published.
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button style={styles.primaryBtn} disabled={running} onClick={create}>{running ? 'Creating…' : 'Confirm & create'}</button>
@@ -7112,8 +7112,8 @@ function ServerContainerPanel({
               </div>
               <div style={row}>
                 {result.serverUrlSet
-                  ? <>Tagging server URL recorded on the server container{result.webWired ? <> and the web Google tag <b>{result.webWired.name}</b> now points at it.</> : <> (no Google tag found in the web container to point at it — set server_container_url on your web GA4 tag manually).</>}</>
-                  : <>No server URL set yet — deploy your tagging-server host, then set its URL on the container (and point the web Google tag at it) to start sending.</>}
+                  ? <>Tagging server URL recorded on the server container{result.webWired ? <> and the web Google tag <b>{result.webWired.name}</b> now points at it.</> : <> (no Google tag found in the web container to point at it - set server_container_url on your web GA4 tag manually).</>}</>
+                  : <>No server URL set yet - deploy your tagging-server host, then set its URL on the container (and point the web Google tag at it) to start sending.</>}
               </div>
               {result.webNonGa4.length > 0 && (
                 <div style={{ ...row, borderColor: 'var(--c-amber-border)', background: 'var(--c-amber-bg)' }}>
@@ -7153,7 +7153,7 @@ function ServerAuditSection({
 }: {
   accountId: string;
   onError: (m: string) => void;
-  /** The GTM bar's web-container selection — the coverage comparison defaults to it. */
+  /** The GTM bar's web-container selection - the coverage comparison defaults to it. */
   webCtx?: GtmContext;
   /** Lets the parent auto-open the create wizard when the account has no server container yet. */
   onServersLoaded?: (count: number) => void;
@@ -7229,7 +7229,7 @@ function ServerAuditSection({
         setContainers(servers);
         onServersLoaded?.(servers.length);
         if (servers.length === 1) setContainerId(servers[0].containerId);
-        // The coverage comparison defaults to the web container already picked in the GTM bar —
+        // The coverage comparison defaults to the web container already picked in the GTM bar -
         // don't make the user pick it twice. Falls back to a sole web container.
         const webs = list.filter((c) => !(c.usageContext ?? []).some((u) => /server/i.test(u)));
         const barWeb = webCtx?.containerId && webs.some((c) => c.containerId === webCtx.containerId) ? webCtx.containerId : '';
@@ -7359,9 +7359,9 @@ function ServerAuditSection({
                 <>
                   <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-faint)', marginTop: 2 }}>2 · Pick a service</div>
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'stretch' }}>
-                    {tile('Audit configuration', 'Clients, relays, triggers, variables, CAPI pitfalls — read-only, never touches runtime.', () => setView('audit'), picked)}
+                    {tile('Audit configuration', 'Clients, relays, triggers, variables, CAPI pitfalls - read-only, never touches runtime.', () => setView('audit'), picked)}
                     {tile('Web ↔ Server coverage', `Is every web event handled server-side? Compares against ${webCtx?.containerName ?? 'your web container'}.`, () => setView('coverage'), picked)}
-                    {tile('Documentation', 'Full container doc with issues, destinations and request flow — MD / CSV / XLSX / PDF.', () => setView('docs'), picked)}
+                    {tile('Documentation', 'Full container doc with issues, destinations and request flow - MD / CSV / XLSX / PDF.', () => setView('docs'), picked)}
                     {tile('＋ Create a new server container', 'Build a fresh sGTM container from the web container in the GTM bar (draft-only).', () => onOpenCreate?.(), true)}
                   </div>
                   {!picked && <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>Pick the server container and workspace above to open a service.</div>}
@@ -7441,7 +7441,7 @@ function ServerAuditSection({
       {view === 'audit' && report && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>
-            {report.counts.tags} tag(s) · {report.counts.triggers} trigger(s) · {report.counts.variables} variable(s) · {report.counts.clients ?? 0} client(s) · {report.counts.transformations ?? 0} transformation(s) — <b style={{ color: 'var(--text)' }}>{report.counts.findings} finding(s)</b>
+            {report.counts.tags} tag(s) · {report.counts.triggers} trigger(s) · {report.counts.variables} variable(s) · {report.counts.clients ?? 0} client(s) · {report.counts.transformations ?? 0} transformation(s) - <b style={{ color: 'var(--text)' }}>{report.counts.findings} finding(s)</b>
             {report.counts.findings > 0 && <> ({report.summary.critical} critical · {report.summary.high} high · {report.summary.medium} medium · {report.summary.low} low · {report.summary.info} info)</>}
           </div>
           {report.findings.length === 0 && <div style={{ fontSize: 13, color: 'var(--c-green)', fontWeight: 600 }}>✓ No configuration issues found in this server workspace.</div>}
@@ -7488,17 +7488,17 @@ function ServerAuditSection({
               {/* wiring + id warnings */}
               {coverage.webWiring.status === 'not_wired' && (
                 <div style={{ fontSize: 12.5, color: 'var(--c-red)', border: '1px solid var(--c-red-border, var(--border))', borderRadius: 8, padding: '8px 12px' }}>
-                  ✗ The web Google tag has NO server_container_url — the web container sends nothing to this server container. Point the Google tag at the tagging server (or use the create flow above).
+                  ✗ The web Google tag has NO server_container_url - the web container sends nothing to this server container. Point the Google tag at the tagging server (or use the create flow above).
                 </div>
               )}
               {coverage.webWiring.status === 'url_mismatch' && (
                 <div style={{ fontSize: 12.5, color: 'var(--c-amber)', border: '1px solid var(--c-amber-border, var(--border))', borderRadius: 8, padding: '8px 12px' }}>
-                  ⚠ The web Google tag points at {coverage.webWiring.webUrl}, but this server container's tagging URL is {coverage.webWiring.serverUrls.join(', ') || '(unset)'} — different hosts.
+                  ⚠ The web Google tag points at {coverage.webWiring.webUrl}, but this server container's tagging URL is {coverage.webWiring.serverUrls.join(', ') || '(unset)'} - different hosts.
                 </div>
               )}
               {coverage.ga4.idsMatch === false && (
                 <div style={{ fontSize: 12.5, color: 'var(--c-amber)', border: '1px solid var(--c-amber-border, var(--border))', borderRadius: 8, padding: '8px 12px' }}>
-                  ⚠ Measurement ID mismatch: web sends {coverage.ga4.webMeasurementIds.join(', ')} but the server relay forwards {coverage.ga4.serverMeasurementIds.join(', ')} — events land in a different property.
+                  ⚠ Measurement ID mismatch: web sends {coverage.ga4.webMeasurementIds.join(', ')} but the server relay forwards {coverage.ga4.serverMeasurementIds.join(', ')} - events land in a different property.
                 </div>
               )}
               {/* coverage table */}
@@ -7518,7 +7518,7 @@ function ServerAuditSection({
                         <td style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', textTransform: 'uppercase', fontSize: 11 }}>{r.platform}</td>
                         <td style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>{r.webTag}</td>
                         <td style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', fontWeight: 700, color: r.status === 'covered' ? 'var(--c-green)' : r.status === 'missing' ? 'var(--c-red)' : 'var(--text-faint)' }}>
-                          {r.status === 'covered' ? '✓ Covered' : r.status === 'missing' ? '✗ Missing' : '— Not matchable'}
+                          {r.status === 'covered' ? '✓ Covered' : r.status === 'missing' ? '✗ Missing' : '- Not matchable'}
                         </td>
                         <td style={{ padding: '7px 12px', borderBottom: '1px solid var(--border)', color: 'var(--text-muted)' }}>
                           {r.by ?? r.recommendation ?? ''}
@@ -7551,7 +7551,7 @@ function ServerAuditSection({
               </div>
               {coverage.unusedServer.length > 0 && (
                 <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>
-                  Server tags with no matching web event ({coverage.unusedServer.length}): {coverage.unusedServer.map((u) => `"${u.tag}" (${u.event})`).join(', ')} — server-only by design, or cleanup candidates.
+                  Server tags with no matching web event ({coverage.unusedServer.length}): {coverage.unusedServer.map((u) => `"${u.tag}" (${u.event})`).join(', ')} - server-only by design, or cleanup candidates.
                 </div>
               )}
             </div>
@@ -7564,7 +7564,7 @@ function ServerAuditSection({
 
 // Pick a GA4 property (search across all accessible accounts), choose a data window,
 // and run the read-only config + data-quality audit (the same ga4-audit / data-quality
-// engines the chat tools use) — coverage + findings by severity. Mirrors ContainerAuditPanel,
+// engines the chat tools use) - coverage + findings by severity. Mirrors ContainerAuditPanel,
 // but GA4 has no auto-fixes (every finding is advisory).
 function Ga4AuditPanel({
   active,
@@ -7578,7 +7578,7 @@ function Ga4AuditPanel({
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<{ property: string; displayName: string } | null>(null);
   const [days, setDays] = useState(28);
-  // Custom date range (data-quality window) — used instead of `days` when `custom` is on.
+  // Custom date range (data-quality window) - used instead of `days` when `custom` is on.
   const [custom, setCustom] = useState(false);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -7610,7 +7610,7 @@ function Ga4AuditPanel({
   const signedIn = Boolean(active?.hasGoogleToken);
   // A custom range needs both bounds, start on/before end; a preset window is always valid.
   const windowValid = !custom || Boolean(startDate && endDate && startDate <= endDate);
-  const todayIso = new Date().toISOString().slice(0, 10); // cap the pickers — GA4 has no future data
+  const todayIso = new Date().toISOString().slice(0, 10); // cap the pickers - GA4 has no future data
 
   async function loadProps(): Promise<void> {
     if (!signedIn) return;
@@ -7710,7 +7710,7 @@ function Ga4AuditPanel({
           <div style={{ color: 'var(--c-amber)', fontSize: 13 }}>Sign this account into Google first (Settings).</div>
         ) : (
           <>
-            {/* Property picker — a dropdown/combobox: the trigger shows the current selection; opening
+            {/* Property picker - a dropdown/combobox: the trigger shows the current selection; opening
                 it reveals the search box + the property list. */}
             <div style={styles.card}>
               <div style={styles.h2}>Property</div>
@@ -7871,7 +7871,7 @@ function Ga4AuditPanel({
                   </div>
                 </div>
 
-                {/* Coverage — what was checked + its status (Pass / Partial / Fail / Not Verified). */}
+                {/* Coverage - what was checked + its status (Pass / Partial / Fail / Not Verified). */}
                 <div style={styles.card}>
                   <div style={{ ...styles.muted, marginBottom: 8 }}>Coverage</div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -7978,12 +7978,12 @@ function NetworkLocationDetail({ loc, loading }: { loc: NetworkLocationView | nu
   const t = loc.connectionType;
   return (
     <>
-      <div style={styles.kv}><span>Public IP</span><b style={{ fontFamily: 'monospace' }}>{loc.ip ?? '—'}</b></div>
-      <div style={styles.kv}><span>Country</span><b>{loc.country ? `${flagEmoji(loc.countryCode)} ${loc.country}` : '—'}</b></div>
-      <div style={styles.kv}><span>Region / State</span><b>{loc.region ?? '—'}</b></div>
-      <div style={styles.kv}><span>City</span><b>{loc.city ?? '—'}</b></div>
+      <div style={styles.kv}><span>Public IP</span><b style={{ fontFamily: 'monospace' }}>{loc.ip ?? '-'}</b></div>
+      <div style={styles.kv}><span>Country</span><b>{loc.country ? `${flagEmoji(loc.countryCode)} ${loc.country}` : '-'}</b></div>
+      <div style={styles.kv}><span>Region / State</span><b>{loc.region ?? '-'}</b></div>
+      <div style={styles.kv}><span>City</span><b>{loc.city ?? '-'}</b></div>
       <div style={styles.kv}><span>Connection</span><b style={{ color: connTypeColor(t) }}>{connTypeLabel(t)}</b></div>
-      <div style={styles.kv}><span>Provider</span><b>{loc.provider ?? (t === 'vpn' ? 'VPN (unidentified)' : '—')}</b></div>
+      <div style={styles.kv}><span>Provider</span><b>{loc.provider ?? (t === 'vpn' ? 'VPN (unidentified)' : '-')}</b></div>
       {loc.org && (
         <div style={styles.kv}>
           <span>Network (ISP / org)</span>
@@ -8050,7 +8050,7 @@ function NetworkLocationCard(): JSX.Element {
 function NetworkLocationInline({ refreshKey }: { refreshKey?: unknown }): JSX.Element {
   const { loc, loading, refresh } = useNetworkLocation(refreshKey);
   const t = loc?.connectionType ?? 'unknown';
-  const place = loc ? [loc.city, loc.country].filter(Boolean).join(', ') || '—' : '';
+  const place = loc ? [loc.city, loc.country].filter(Boolean).join(', ') || '-' : '';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface-2)', marginTop: 8, marginBottom: 4 }}>
       <span aria-hidden>🌐</span>
@@ -8109,7 +8109,7 @@ function SettingsView({
 }): JSX.Element {
   const [theme, setTheme] = useTheme();
   // Single source of truth for app-level provider keys so the Language-model hint and the Providers editor
-  // never disagree — a key change in one updates the other immediately, and a probe failure surfaces.
+  // never disagree - a key change in one updates the other immediately, and a probe failure surfaces.
   const [provStatus, setProvStatus] = useState<ProviderStatus | null>(null);
   // Inline rename of the active account's display name (null = viewing; a string = editing that draft).
   // Reuses the same accounts.rename IPC as the sidebar pencil; an empty name restores the Google name/email.
@@ -8147,13 +8147,13 @@ function SettingsView({
         <OAuthClientCard google={google} />
       </section>
 
-      {/* Accounts — the full switcher + management that used to live in the sidebar. Switch the active
+      {/* Accounts - the full switcher + management that used to live in the sidebar. Switch the active
           account, rename it, disconnect its Google token, remove it, or connect a new one. */}
       <section style={styles.card}>
         <h2 style={styles.h2}>Accounts</h2>
         <p style={styles.settingsSub}>Switch which Google account is active, rename it, or connect another. The active account is used across GTM Tools, GA4 Tools and Chat.</p>
         <div style={styles.acctRows}>
-          {accounts.length === 0 && <p style={styles.muted}>No accounts yet — connect one below.</p>}
+          {accounts.length === 0 && <p style={styles.muted}>No accounts yet - connect one below.</p>}
           {accounts.map((a) => (
             <div key={a.id} style={{ ...styles.acctRow, ...(a.isActive ? styles.acctRowActive : {}) }}>
               <span style={{ ...styles.dot, marginTop: 6, background: a.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
@@ -8323,7 +8323,7 @@ function LlmEditor({
   onError,
 }: {
   account: AccountView;
-  /** Shared app-level key status (single source of truth from SettingsView) — null until loaded. */
+  /** Shared app-level key status (single source of truth from SettingsView) - null until loaded. */
   provStatus: ProviderStatus | null;
   onChange: () => Promise<void>;
   onError: (m: string) => void;
@@ -8332,7 +8332,7 @@ function LlmEditor({
   const initialModel = account.llm?.model ?? DEFAULT_MODEL[initialProvider];
   const [provider, setProvider] = useState<LlmProvider>(initialProvider);
   const [model, setModel] = useState(initialModel);
-  // Custom-vs-preset is STICKY state, not derived — so typing a custom id that transiently equals a preset
+  // Custom-vs-preset is STICKY state, not derived - so typing a custom id that transiently equals a preset
   // (e.g. "gpt-4o" on the way to "gpt-4o-2024-11-20") never collapses the input mid-edit.
   const [customMode, setCustomMode] = useState(
     () => initialModel.trim() !== '' && !MODEL_OPTIONS[initialProvider].some((o) => o.id === initialModel)
@@ -8492,7 +8492,7 @@ function OAuthClientCard({ google }: { google: GoogleClientStatus | null }): JSX
     );
   }
   const source = google.source === 'env' ? 'Environment variable' : google.source === 'file' ? 'Config file' : 'unknown';
-  // The client id itself is intentionally not shown. When its shape looks off we still warn — without
+  // The client id itself is intentionally not shown. When its shape looks off we still warn - without
   // rendering the value.
   const shapeOff = google.clientIdLooksValid === false;
   return (
@@ -8599,7 +8599,7 @@ const styles: Record<string, React.CSSProperties> = {
   chatWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
   chatHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid var(--border)' },
   // Segmented control (chat GTM/GA4 switch + Settings theme): inner padding + gap so the active
-  // option reads as a distinct blue pill inside the track — the selected side is unmistakable.
+  // option reads as a distinct blue pill inside the track - the selected side is unmistakable.
   toggle: { display: 'inline-flex', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 9, overflow: 'hidden', padding: 2, gap: 2 },
   toggleBtn: { background: 'transparent', color: 'var(--text-dim)', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', borderRadius: 7 },
   toggleActive: { background: '#2563eb', color: '#fff', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', borderRadius: 7, boxShadow: '0 1px 3px rgba(37,99,235,0.45)' },
@@ -8632,7 +8632,7 @@ const styles: Record<string, React.CSSProperties> = {
   toolErrors: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 },
   toolErrorLine: { background: 'var(--c-red-bg)', border: '1px solid var(--c-red-border)', color: 'var(--c-red)', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
   composer: { display: 'flex', gap: 8, padding: 16, borderTop: '1px solid var(--border)', alignItems: 'flex-end' },
-  // Slash-command autocomplete menu — floats above the composer.
+  // Slash-command autocomplete menu - floats above the composer.
   slashMenu: { position: 'absolute', bottom: 'calc(100% - 6px)', left: 16, right: 16, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 12, boxShadow: '0 12px 32px rgba(2,6,23,0.22)', padding: 6, zIndex: 30, maxHeight: 300, overflowY: 'auto' },
   slashMenuHead: { fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text-faint)', padding: '4px 8px 6px' },
   slashItem: { display: 'flex', flexDirection: 'column', gap: 1, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderRadius: 8, padding: '7px 9px', cursor: 'pointer', color: 'var(--text)' },
@@ -8676,7 +8676,7 @@ const styles: Record<string, React.CSSProperties> = {
   viewToggleOn: { background: 'var(--c-blue-bg)', color: 'var(--text)', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
   viewToggleOff: { background: 'transparent', color: 'var(--c-blue)', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
 
-  // Settings fills the available width as a responsive card grid (2–3 columns on wide screens, 1 on
+  // Settings fills the available width as a responsive card grid (2-3 columns on wide screens, 1 on
   // narrow) instead of a fixed 720px column that left half the window empty. rowGap:0 because each card
   // already carries marginBottom:16; the title spans the full width above the grid (see settingsTitle).
   // Settings scrolls vertically; the CARDS live in an inner masonry (settingsCols) so short cards don't
@@ -8688,7 +8688,7 @@ const styles: Record<string, React.CSSProperties> = {
   settingsCols: { columnWidth: 340, columnGap: 16 },
   settingsSub: { color: 'var(--text-muted)', fontSize: 13, margin: '-2px 0 14px', lineHeight: 1.55 },
   card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 16, flexShrink: 0, breakInside: 'avoid' },
-  // Section heading — a real 15px/600 heading (design level) rather than the old tiny all-caps label.
+  // Section heading - a real 15px/600 heading (design level) rather than the old tiny all-caps label.
   h2: { fontSize: 15, fontWeight: 600, letterSpacing: -0.2, color: 'var(--text)', margin: '0 0 12px' },
   kv: { display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border)', fontSize: 14 },
   warn: { background: 'var(--c-amber-bg)', border: '1px solid var(--c-amber-border)', borderRadius: 10, padding: 14, marginBottom: 16, color: 'var(--c-amber)', lineHeight: 1.5 },
@@ -8708,7 +8708,7 @@ const styles: Record<string, React.CSSProperties> = {
   muted: { color: 'var(--text-faint)', fontSize: 13 },
   dot: { width: 9, height: 9, borderRadius: 999, display: 'inline-block', flexShrink: 0 },
   linkBtn: { background: 'transparent', border: 'none', color: 'var(--c-blue)', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' },
-  // "Download the full audit" bar — a tinted, bordered strip so the export is an obvious call to
+  // "Download the full audit" bar - a tinted, bordered strip so the export is an obvious call to
   // action rather than a faint text link. Its buttons are solid but a touch smaller than primaryBtn
   // so the "Apply all fixes" CTA still reads as the primary action.
   downloadBar: { marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '11px 14px', background: 'rgba(37,99,235,0.1)', border: '1px solid rgba(37,99,235,0.55)', borderRadius: 10 },
@@ -8759,7 +8759,7 @@ const styles: Record<string, React.CSSProperties> = {
   pageRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', fontSize: 12.5, cursor: 'pointer' },
   pagePath: { fontFamily: 'ui-monospace, monospace', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 
-  // GA4 Audit panel — property picker list.
+  // GA4 Audit panel - property picker list.
   ga4PropList: { maxHeight: 260, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, marginTop: 8, display: 'flex', flexDirection: 'column' },
   ga4PropRow: { display: 'flex', flexDirection: 'column', gap: 2, textAlign: 'left', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', padding: '8px 12px', cursor: 'pointer', color: 'var(--text)', fontSize: 13 },
   ga4PropRowOn: { background: 'var(--c-blue-bg)' },
