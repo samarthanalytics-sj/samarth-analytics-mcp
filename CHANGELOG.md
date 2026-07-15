@@ -1,3 +1,9 @@
+## [1.336.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.335.0...v1.336.0) (2026-07-15)
+
+### Features
+
+* **desktop:** audit-first plan/select/apply workflow for server container creation ([cd9c344](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cd9c3441e94f3abfed94f0c52e069673354af8ae))
+
 ## [1.335.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.334.0...v1.335.0) (2026-07-15)
 
 ### Features
