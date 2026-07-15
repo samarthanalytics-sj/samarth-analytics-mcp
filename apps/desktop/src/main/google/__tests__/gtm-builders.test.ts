@@ -89,6 +89,7 @@ import {
   ga4VariablePlan,
   planTriggerRetarget,
 } from '../gtm-builders';
+import type { AuditTag as TAuditTag, ContainerSnapshot as TContainerSnapshot, ServerContainerSnapshot as TServerContainerSnapshot } from '../gtm-builders';
 import { classifyPixel } from '../pixel-signatures';
 
 let passed = 0;
@@ -3271,6 +3272,29 @@ test('snapEventType + buildSnapPixelTag: event mapping + flat advanced-matching 
     assert.throws(() => planTriggerRetarget(s2 as never, 'CTA Tag', corrected), /no firing trigger/);
   });
 }
+
+
+test('house style: audit finding text never carries em/en dashes (web + server engines)', () => {
+  // Fixtures chosen to produce findings whose source strings contained em dashes.
+  const webReport = auditContainer({
+    tags: [{ tagId: '1', name: 'Lonely Tag', type: 'gaawe', firingTriggerId: [], blockingTriggerId: [], paused: false, parameter: [], consentSettings: null } as unknown as TAuditTag],
+    triggers: [],
+    variables: [{ variableId: 'v1', name: 'unused var', type: 'v', parameter: [] }],
+  } as unknown as TContainerSnapshot);
+  const serverReport = auditServerContainer({
+    taggingServerUrls: [],
+    clients: [],
+    tags: [],
+    triggers: [],
+    variables: [{ variableId: 'v1', name: 'ed - event_id', type: 'ed', parameter: [] }],
+    transformations: [],
+  } as unknown as TServerContainerSnapshot);
+  assert.ok(webReport.findings.length > 0 && serverReport.findings.length > 0, 'fixtures must produce findings');
+  for (const r of [webReport, serverReport]) {
+    const visible = JSON.stringify([r.findings.map((f) => [f.message, f.recommendation]), r.boundary, r.runtimeRequired]);
+    assert.ok(!/[\u2014\u2013]/.test(visible), 'em/en dash leaked into audit output: ' + (visible.match(/.{0,60}[\u2014\u2013].{0,60}/) ?? [''])[0]);
+  }
+});
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
