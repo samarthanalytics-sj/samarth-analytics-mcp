@@ -1558,17 +1558,22 @@ export interface AuditFinding {
 }
 
 /** Container-only boundary statement — what a config audit proves and what it cannot. */
+/** House style for ALL user-visible generated audit text: plain hyphens, never em/en
+ *  dashes. Applied at the audit-report boundary so the UI, the on-screen documentation,
+ *  and every export (MD/CSV/XLSX/PDF) inherit it without each sanitizing separately. */
+export const plainDashes = (t: string): string => t.replace(/[\u2014\u2013]/g, '-');
+
 export const AUDIT_BOUNDARY =
-  'Container-only audit: this proves CONFIGURATION, not runtime behaviour. It cannot confirm firing timing, dataLayer contents, PII in actual hits, or live consent behaviour — verify those in Tag Assistant / Network, GA4 DebugView, and your CMP.';
+  'Container-only audit: this proves CONFIGURATION, not runtime behaviour. It cannot confirm firing timing, dataLayer contents, PII in actual hits, or live consent behaviour - verify those in Tag Assistant / Network, GA4 DebugView, and your CMP.';
 
 /** Checks a container export CANNOT settle — surfaced so no one assumes they passed. */
 export const AUDIT_RUNTIME_REQUIRED: string[] = [
-  'Consent timing — load the site with no prior consent and watch the network: do GA4/Ads requests fire BEFORE the user chooses?',
-  'Double-firing — does any event (page_view, purchase, …) appear twice in GA4 DebugView for one interaction?',
-  'PII in hits — inspect actual /collect requests for email/phone/name in the page path, query params, or event parameters.',
-  'dataLayer reality — do custom-event triggers’ events actually push during the real user journey?',
-  'Ecommerce integrity — is the items array well-formed (currency/value) in the collect request?',
-  'Cross-domain & server IP — correct linker behaviour, and (server-side) the real client IP rather than the edge IP.',
+  'Consent timing - load the site with no prior consent and watch the network: do GA4/Ads requests fire BEFORE the user chooses?',
+  'Double-firing - does any event (page_view, purchase, …) appear twice in GA4 DebugView for one interaction?',
+  'PII in hits - inspect actual /collect requests for email/phone/name in the page path, query params, or event parameters.',
+  'dataLayer reality - do custom-event triggers’ events actually push during the real user journey?',
+  'Ecommerce integrity - is the items array well-formed (currency/value) in the collect request?',
+  'Cross-domain & server IP - correct linker behaviour, and (server-side) the real client IP rather than the edge IP.',
 ];
 
 /** Audit Brain confidence per finding category. Most container findings are provable
@@ -2464,6 +2469,8 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
   // Add the Audit Brain confidence + resource type to each finding in one pass.
   const withConfidence: AuditFinding[] = deduped.map((f) => ({
     ...f,
+    message: plainDashes(f.message),
+    recommendation: plainDashes(f.recommendation),
     confidence: f.confidence ?? confidenceFor(f.category),
     resource: f.resource ? { ...f.resource, type: typeById.get(`${f.resource.kind}:${f.resource.id}`) } : f.resource,
   }));
@@ -2506,12 +2513,12 @@ export interface ServerContainerSnapshot {
 }
 
 export const AUDIT_SERVER_BOUNDARY =
-  'Server-container audit: this proves the server CONFIGURATION (a client to claim requests, server tags with their destination ids, no silent gaps) — NOT that the tagging server is deployed/reachable or that data actually flows. Confirm the live server with verify_server_endpoint, the web container\'s server_container_url, and GTM Preview on the server container.';
+  'Server-container audit: this proves the server CONFIGURATION (a client to claim requests, server tags with their destination ids, no silent gaps) - NOT that the tagging server is deployed/reachable or that data actually flows. Confirm the live server with verify_server_endpoint, the web container\'s server_container_url, and GTM Preview on the server container.';
 
 export const AUDIT_SERVER_RUNTIME_REQUIRED: string[] = [
-  'Server reachable — is the tagging-server host deployed and responding (GET <url>/healthy)?',
-  'Web→server flow — is the web Google tag\'s server_container_url pointed at this server, so requests actually arrive?',
-  'Client claim — on a live request, does the GA4 client claim it and do the server tags fire (GTM Preview on the server container)?',
+  'Server reachable - is the tagging-server host deployed and responding (GET <url>/healthy)?',
+  'Web→server flow - is the web Google tag\'s server_container_url pointed at this server, so requests actually arrive?',
+  'Client claim - on a live request, does the GA4 client claim it and do the server tags fire (GTM Preview on the server container)?',
 ];
 
 /** The Google destination server-tag types — each depends on the GA4 (gaaw) client
@@ -2956,12 +2963,13 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
   for (const t of s.tags) nameCounts.set(t.name, (nameCounts.get(t.name) ?? 0) + 1);
   for (const [name, c] of nameCounts) if (c > 1) push({ severity: 'medium', category: 'naming', message: `Duplicate server-tag name "${name}" (${c} tags) — hard to tell them apart.`, recommendation: 'Rename so each tag is uniquely identifiable.', autoFixable: false });
 
+  const cleanFindings = findings.map((f) => ({ ...f, message: plainDashes(f.message), recommendation: plainDashes(f.recommendation) }));
   const summary = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-  for (const f of findings) summary[f.severity]++;
+  for (const f of cleanFindings) summary[f.severity]++;
   return {
     counts: { tags: s.tags.length, triggers: triggers.length, variables: s.variables?.length ?? 0, clients: s.clients.length, transformations: s.transformations.length, findings: findings.length },
     summary,
-    findings,
+    findings: cleanFindings,
     boundary: AUDIT_SERVER_BOUNDARY,
     runtimeRequired: AUDIT_SERVER_RUNTIME_REQUIRED,
     hasGa4Config: hasGa4Client,
