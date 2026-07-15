@@ -189,6 +189,21 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
     if (o.trendPattern) {
       s3 += `<div style="font-size:12.5px;color:${MUTED};margin:2px 0 0;line-height:1.45"><span style="font-weight:700;color:${TEXT}">Trend pattern:</span> ${esc(o.trendPattern)}</div>`;
     }
+    // Restated total (burst excluded): the quotable number while the burst is unexplained - same
+    // arithmetic as the concentration finding, so the two can never disagree.
+    if (o.restated) {
+      s3 += `<div style="margin:10px 0 0;padding:11px 14px;border-left:3px solid ${GREEN};background:${v('--c-green-bg', '#F1F8F3')};font-size:12.5px;color:${TEXT};border-radius:0 3px 3px 0;line-height:1.5"><b style="font-weight:600">Restated (burst excluded):</b> ${esc(o.restated)}</div>`;
+    }
+    // "What changed by channel": the headline delta decomposed into its top channel movers.
+    if (o.drivers && o.drivers.length) {
+      const dRows = o.drivers
+        .map((d) => `<tr><td ${TD}><span style="font-weight:600">${esc(d.channel)}</span></td><td ${TDR}>${esc(d.from)}</td><td ${TDR}>${esc(d.to)}</td><td ${TDR}>${esc(d.delta)}</td><td ${TDR}>${d.deltaPct === null ? 'new' : `${d.deltaPct >= 0 ? '+' : ''}${d.deltaPct}%`}</td></tr>`)
+        .join('');
+      s3 +=
+        tableCaption('What changed by channel', '(top movers vs the prior period - the headline delta decomposed)') +
+        `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+        `<table style="border-collapse:collapse;width:100%;min-width:380px"><thead><tr><th ${TH}>Channel</th><th ${THR}>Prior</th><th ${THR}>Now</th><th ${THR}>Change</th><th ${THR}>%</th></tr></thead><tbody>${dRows}</tbody></table></div>`;
+    }
   }
 
   // ── Section 4 · All findings ──
@@ -324,6 +339,21 @@ export function ga4SectionsHtml(x: Ga4SectionsView): string {
       tableCaption('Landing pages', '(top entry pages: which convert and which leak)') +
       `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
       `<table style="border-collapse:collapse;width:100%;min-width:460px"><thead><tr><th ${TH}>Landing page</th><th ${THR}>Sessions</th><th ${THR}>Conv. rate</th><th ${THR}>Revenue</th><th ${THR}>Engagement</th></tr></thead><tbody>${lRows}</tbody></table></div>` + provNote;
+  }
+  // Product performance table — top products by ITEM revenue: what people view, add, and actually buy.
+  if (x.productPerformance && x.productPerformance.rows.length) {
+    const pRows = x.productPerformance.rows
+      .map(
+        (p) =>
+          `<tr><td ${TD}><span style="font-weight:600;word-break:break-word">${esc(p.item)}</span></td><td ${TDR}>${esc(p.viewed)}</td><td ${TDR}>${esc(p.addedToCart)}</td><td ${TDR}>${esc(p.purchased)}</td><td ${TDP}>${esc(p.viewToBuy)}</td><td ${TDP}>${esc(p.revenue)}</td></tr>`,
+      )
+      .join('');
+    s6 +=
+      tableCaption('Product performance', '(top products by item revenue - what people view, add, and actually buy)') +
+      `<div style="border:1px solid ${BORDER};border-radius:4px;background:${SURFACE};overflow-x:auto;margin:2px 0">` +
+      `<table style="border-collapse:collapse;width:100%;min-width:520px"><thead><tr><th ${TH}>Product</th><th ${THR}>Items viewed</th><th ${THR}>Added to cart</th><th ${THR}>Purchased</th><th ${THR}>View&rarr;buy</th><th ${THR}>Item revenue</th></tr></thead><tbody>${pRows}</tbody></table></div>` +
+      `<div style="font-family:${MONO};font-size:11px;color:${FAINT};margin:4px 2px 8px;line-height:1.55">${esc(x.productPerformance.caveat)}</div>` +
+      provNote;
   }
   // Device performance table — how each device type converts and spends.
   if (x.devicePerformance && x.devicePerformance.length) {

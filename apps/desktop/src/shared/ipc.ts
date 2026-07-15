@@ -309,6 +309,12 @@ export interface Ga4SectionsView {
     quoteNote: string | null;
     read: string;
     trendPattern: string | null;
+    /** One-line RESTATED window total with the single-bucket burst excluded (the quotable number
+     *  while the burst is unexplained); null when no concentration spike fired. */
+    restated: string | null;
+    /** "What changed by channel": top movers vs the prior period - the headline delta decomposed.
+     *  Empty when the prior per-channel slice is unavailable. deltaPct null = channel is new. */
+    drivers: Array<{ channel: string; from: string; to: string; delta: string; deltaPct: number | null }>;
   } | null;
   /** Section 4 — every finding, highest severity first. */
   findings: Ga4FindingCardView[];
@@ -347,6 +353,9 @@ export interface Ga4SectionsView {
   campaignPerformance: { rows: Array<{ campaign: string; sessions: string; conversions: string; purchases: string; revenue: string; engagement: string }>; best: string | null; untaggedShare: string; caveat: string } | null;
   /** Section 6 — AI/LLM referral-traffic performance + its share of all sessions. null = no AI traffic. */
   llmTraffic: { rows: Array<{ source: string; sessions: string; convRate: string; revenue: string; engagement: string }>; share: string } | null;
+  /** Section 6 — top products by ITEM revenue (item-scoped metrics; the caveat is mandatory).
+   *  null = non-ecommerce property or the item query returned nothing. */
+  productPerformance: { rows: Array<{ item: string; viewed: string; addedToCart: string; purchased: string; viewToBuy: string; revenue: string }>; caveat: string } | null;
   /** Section 6 — rule-based "Key insights" bullets (peaks/lows, top performers, the near-100%-conv flag). */
   insights: string[];
   /** Section 6 — true when the conversion-rate/revenue columns of the performance tables lean on a
