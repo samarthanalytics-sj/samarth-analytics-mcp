@@ -1,3 +1,9 @@
+## [1.341.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.341.0...v1.341.1) (2026-07-16)
+
+### Bug Fixes
+
+* **desktop:** recover from an empty GTM container list in the picker ([917155e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/917155e742a23528f3f74430d83a4e36712bcf37))
+
 ## [1.341.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.340.0...v1.341.0) (2026-07-15)
 
 ### Features
