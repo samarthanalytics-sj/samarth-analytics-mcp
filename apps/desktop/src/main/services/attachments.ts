@@ -34,7 +34,9 @@ export async function extractAttachmentText(filePath: string): Promise<Attachmen
   if (TEXT_EXTS.has(ext)) raw = await readFile(filePath, 'utf8');
   else if (ext === '.xlsx') raw = await readXlsx(filePath);
   else if (ext === '.pdf') raw = await readPdf(filePath);
-  else throw new Error(`Unsupported file type "${ext || '(no extension)'}". Supported: pdf, xlsx, csv, tsv, txt, md, json, log, html, xml, yaml.`);
+  else if (ext === '.docx') raw = await readDocx(filePath);
+  else if (ext === '.doc') raw = await readDoc(filePath);
+  else throw new Error(`Unsupported file type "${ext || '(no extension)'}". Supported: pdf, docx, doc, xlsx, csv, tsv, txt, md, json, log, html, xml, yaml.`);
   raw = raw.replace(/\u0000/g, '').trim();
   if (!raw) throw new Error('No readable text found in this file.');
   const truncated = raw.length > MAX_ATTACHMENT_CHARS;
@@ -78,4 +80,24 @@ async function readPdf(filePath: string): Promise<string> {
   const data = await readFile(filePath);
   const res = await pdfParse(data);
   return res.text ?? '';
+}
+
+/** .docx -> text (mammoth extractRawText: paragraphs preserved, styling/images dropped). */
+async function readDocx(filePath: string): Promise<string> {
+  const mammoth = await import('mammoth');
+  const res = await mammoth.extractRawText({ path: filePath });
+  return res.value ?? '';
+}
+
+/** .doc -> text. TWO real formats hide behind this extension: this app's own ".doc" exports are
+ *  HTML documents (Word opens them), while genuine legacy Word files are the OLE binary format.
+ *  Sniff the first bytes: HTML-looking content is read as text; everything else goes through
+ *  word-extractor's binary parser. */
+async function readDoc(filePath: string): Promise<string> {
+  const data = await readFile(filePath);
+  const head = data.subarray(0, 512).toString('utf8').trimStart().toLowerCase();
+  if (head.startsWith('<') || head.includes('<html')) return data.toString('utf8');
+  const { default: WordExtractor } = await import('word-extractor');
+  const doc = await new WordExtractor().extract(data);
+  return doc.getBody() ?? '';
 }
