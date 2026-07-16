@@ -3,6 +3,8 @@ import type { GoogleDataService } from '../google/data-service';
 import type { ProviderKeyStore } from '../storage/provider-keys';
 import type { AuditHistoryStore } from '../storage/audit-history';
 import type { ManifestStore } from '../storage/manifest-store';
+import type { MemoryStore } from '../storage/memory-store';
+import { selectRelevantMemories, formatMemoriesForPrompt } from '../../shared/chat-memory';
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
@@ -111,8 +113,26 @@ export class ChatService {
     /** Called after a chat tool switches the active GTM context, so the UI refreshes. */
     private readonly notifyContextChanged?: () => void,
     /** Records what setup tools create, so re-runs are safe and drift is detectable. */
-    private readonly manifests?: ManifestStore
+    private readonly manifests?: ManifestStore,
+    /** Per-account "remember what I told you" notes, injected into the system prompt each turn. */
+    private readonly memory?: MemoryStore
   ) {}
+
+  /** The REMEMBERED-CONTEXT block for this turn: the account's memories scoped to the active client
+   *  (GTM container / GA4 property) and ranked against the message. Empty when there are none.
+   *  PRODUCT-GATED: a container-scoped memory only applies in a GTM turn and a property-scoped one only in a
+   *  GA4 turn (gtmContext / ga4Context are independent per-account fields, so the inactive product's context
+   *  can be stale and point at a DIFFERENT client — using it would leak one client's notes into another's chat). */
+  private memoryBlock(active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string } }, product: GoogleProduct, message: string): string {
+    if (!this.memory) return '';
+    const all = this.memory.list(active.id);
+    if (!all.length) return '';
+    const ctx = {
+      containerId: product === 'gtm' ? active.gtmContext?.containerId : undefined,
+      property: product === 'ga4' ? active.ga4Context?.property : undefined,
+    };
+    return formatMemoriesForPrompt(selectRelevantMemories(all, ctx, message));
+  }
 
   /** Non-streaming: returns the final reply only. */
   chat(history: ChatTurn[], message: string, product: GoogleProduct): Promise<ChatReply> {
@@ -294,6 +314,7 @@ export class ChatService {
           'Use THIS property id for every GA4 tool call (audits, reports, data quality) - do not ask ' +
           'which property and do not re-list properties unless the user asks to switch. '
         : '') +
+      this.memoryBlock(active, product, message) +
       dateContextLine(new Date()) +
       'Call tools when asked; never invent ids. When the user asks to list or count ' +
       'tags, triggers, variables, accounts, containers, or workspaces, the tools already ' +
