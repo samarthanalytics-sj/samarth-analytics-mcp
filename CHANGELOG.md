@@ -1,3 +1,9 @@
+## [1.349.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.348.0...v1.349.0) (2026-07-16)
+
+### Features
+
+* **desktop:** chat memory tools — the model remembers/forgets from natural language (replaces the per-message button) ([623aa25](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/623aa2550b8f974cd3b238bcfd94ebe344a4a7b1))
+
 ## [1.348.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.347.0...v1.348.0) (2026-07-16)
 
 ### Features
