@@ -1817,7 +1817,7 @@ const tplStyles: Record<string, React.CSSProperties> = {
   installMeta: { fontSize: 12, color: 'var(--text-dim)', margin: '2px 0' },
   // "Create listener tag" action row on a listener-tag requirement.
   installActions: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' },
-  installCreateBtn: { background: 'var(--c-blue)', color: '#fff', border: 'none', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' },
+  installCreateBtn: { background: 'var(--primary)', color: 'var(--on-primary)', border: 'none', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' },
   installCreateBtnDisabled: { opacity: 0.5, cursor: 'not-allowed' },
   // An OPTIONAL improvement (html-attribute) - a quiet muted row, NOT a mandatory-looking box, so it
   // never contradicts a "fires natively" line above it.
@@ -4118,7 +4118,7 @@ function TagReviewPanel({
                         </div>
                       )}
                       <div style={{ height: 4, background: 'var(--surface-3)', borderRadius: 2, marginTop: 6, overflow: 'hidden' }}>
-                        <div style={{ height: '100%', borderRadius: 2, background: 'var(--c-blue)', transition: 'width .3s ease', width: shotStatus.total ? `${Math.round((shotStatus.done / Math.max(1, shotStatus.total)) * 100)}%` : '8%' }} />
+                        <div style={{ height: '100%', borderRadius: 2, background: 'var(--primary)', transition: 'width .3s ease', width: shotStatus.total ? `${Math.round((shotStatus.done / Math.max(1, shotStatus.total)) * 100)}%` : '8%' }} />
                       </div>
                     </div>
                   </div>
@@ -8878,12 +8878,12 @@ const styles: Record<string, React.CSSProperties> = {
     height: '100vh',
     position: 'relative',
     margin: 0,
-    fontFamily: "'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+    fontFamily: 'var(--font-sans)',
     color: 'var(--text)',
     background: 'var(--bg)',
   },
   sidebar: {
-    width: 248,
+    width: 'clamp(200px, 22vw, 248px)',
     flexShrink: 0,
     background: 'var(--surface)',
     borderRight: '1px solid var(--border)',
@@ -8893,7 +8893,7 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: 'border-box',
   },
   brand: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 },
-  logo: { width: 34, height: 34, borderRadius: 9, background: '#2563eb', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 },
+  logo: { width: 34, height: 34, borderRadius: 9, background: 'var(--primary)', color: 'var(--on-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 },
   brandName: { fontWeight: 700 },
   brandSub: { fontSize: 11, color: 'var(--text-faint)' },
   sideLabel: { fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-faint)', margin: '4px 0 8px' },
@@ -8919,7 +8919,7 @@ const styles: Record<string, React.CSSProperties> = {
   acctRowBtn: { background: 'var(--surface-2)', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
   acctRowBtnDanger: { background: 'transparent', color: 'var(--c-red)', border: '1px solid var(--c-red-border)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
   acctRenameInput: { flex: 1, minWidth: 0, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '3px 7px', fontSize: 13, fontFamily: 'inherit' },
-  connectBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer', marginTop: 8 },
+  connectBtn: { background: 'var(--primary)', color: 'var(--on-primary)', border: 'none', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer', marginTop: 8 },
   connectRow: { display: 'flex', gap: 6, marginTop: 8, alignItems: 'stretch' },
   cancelBtn: { background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer' },
   sideWarn: { color: 'var(--c-amber)', fontSize: 11, marginTop: 8 },
@@ -8930,7 +8930,7 @@ const styles: Record<string, React.CSSProperties> = {
 
   main: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 },
   gtmWorkspace: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
-  subTabs: { display: 'flex', gap: 8, padding: '10px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 },
+  subTabs: { display: 'flex', gap: 8, padding: '10px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0, flexWrap: 'wrap' },
   subTabOn: { background: 'var(--c-blue-bg)', color: 'var(--text)', border: '1px solid var(--c-blue-bg)', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
   subTabOff: { background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13 },
   betaBadge: { marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase', color: 'var(--c-amber)', background: 'var(--c-amber-bg)', border: '1px solid var(--c-amber-border)', borderRadius: 6, padding: '1px 5px', verticalAlign: 'middle' },
@@ -8947,7 +8947,7 @@ const styles: Record<string, React.CSSProperties> = {
   promptCard: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' },
   promptText: { fontSize: 13, color: 'var(--text)', lineHeight: 1.45 },
   promptActions: { display: 'flex', gap: 6, flexShrink: 0 },
-  promptUse: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' },
+  promptUse: { background: 'var(--primary)', color: 'var(--on-primary)', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' },
   promptCopy: { background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer' },
   errorBar: { background: 'var(--c-red-bg)', borderBottom: '1px solid var(--c-red-border)', color: 'var(--c-red)', padding: '10px 52px 10px 16px', display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 },
   errorClose: { background: 'transparent', border: 'none', color: 'var(--c-red)', cursor: 'pointer' },
@@ -8961,7 +8961,7 @@ const styles: Record<string, React.CSSProperties> = {
   // option reads as a distinct blue pill inside the track - the selected side is unmistakable.
   toggle: { display: 'inline-flex', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 9, overflow: 'hidden', padding: 2, gap: 2 },
   toggleBtn: { background: 'transparent', color: 'var(--text-dim)', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', borderRadius: 7 },
-  toggleActive: { background: '#2563eb', color: '#fff', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', borderRadius: 7, boxShadow: '0 1px 3px rgba(37,99,235,0.45)' },
+  toggleActive: { background: 'var(--primary)', color: 'var(--on-primary)', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', borderRadius: 7, boxShadow: '0 1px 3px var(--ring)' },
   chatTitle: { fontWeight: 600, fontSize: 19, color: 'var(--text)', letterSpacing: -0.3 },
   chatSub: { fontSize: 12.5, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.5 },
   ctxBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 20px', background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text-dim)' },
@@ -8980,11 +8980,11 @@ const styles: Record<string, React.CSSProperties> = {
   ctxField: { display: 'flex', flexDirection: 'column', gap: 3 },
   ctxFieldLabel: { fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', fontWeight: 600 },
   ctxSelectChosen: { borderColor: 'var(--c-blue)', boxShadow: '0 0 0 1px var(--c-blue)' },
-  ctxUseBtn: { background: 'var(--c-blue)', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
+  ctxUseBtn: { background: 'var(--primary)', color: 'var(--on-primary)', border: 'none', borderRadius: 7, padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
   ctxUseBtnDisabled: { opacity: 0.45, cursor: 'not-allowed' },
   chatLog: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 10 },
   empty: { color: 'var(--text-faint)', textAlign: 'center', maxWidth: 420, margin: '60px auto', lineHeight: 1.6, flexShrink: 0 },
-  userMsg: { alignSelf: 'flex-end', background: '#2563eb', color: '#fff', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14 },
+  userMsg: { alignSelf: 'flex-end', background: 'var(--primary)', color: 'var(--on-primary)', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14 },
   asstMsg: { alignSelf: 'flex-start', background: 'var(--surface-2)', color: 'var(--text)', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14, border: '1px solid var(--border)' },
   msgTime: { fontSize: 11, color: 'var(--text-faint)', margin: '3px 4px 0', userSelect: 'none' },
   toolTrace: { color: 'var(--c-blue)', fontSize: 11, marginBottom: 4 },
@@ -8992,7 +8992,7 @@ const styles: Record<string, React.CSSProperties> = {
   toolErrorLine: { background: 'var(--c-red-bg)', border: '1px solid var(--c-red-border)', color: 'var(--c-red)', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
   composer: { display: 'flex', gap: 8, padding: 16, borderTop: '1px solid var(--border)', alignItems: 'flex-end' },
   // Slash-command autocomplete menu - floats above the composer.
-  slashMenu: { position: 'absolute', bottom: 'calc(100% - 6px)', left: 16, right: 16, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 12, boxShadow: '0 12px 32px rgba(2,6,23,0.22)', padding: 6, zIndex: 30, maxHeight: 300, overflowY: 'auto' },
+  slashMenu: { position: 'absolute', bottom: 'calc(100% - 6px)', left: 16, right: 16, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 12, boxShadow: 'var(--shadow-3)', padding: 6, zIndex: 30, maxHeight: 300, overflowY: 'auto' },
   slashMenuHead: { fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text-faint)', padding: '4px 8px 6px' },
   slashItem: { display: 'flex', flexDirection: 'column', gap: 1, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderRadius: 8, padding: '7px 9px', cursor: 'pointer', color: 'var(--text)' },
   slashItemActive: { background: 'var(--c-blue-bg)' },
@@ -9015,8 +9015,8 @@ const styles: Record<string, React.CSSProperties> = {
     maxHeight: 160,
     boxSizing: 'border-box',
   },
-  sendBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
-  stopBtn: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
+  sendBtn: { background: 'var(--primary)', color: 'var(--on-primary)', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
+  stopBtn: { background: 'var(--danger)', color: 'var(--on-danger)', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
   revertBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', margin: '0 0 8px', background: 'var(--border)', border: '1px solid var(--border)', borderRadius: 10 },
   revertText: { fontSize: 13, color: 'var(--text-dim)' },
   revertBtn: { background: 'transparent', color: 'var(--c-amber)', border: '1px solid var(--c-amber)', borderRadius: 8, padding: '6px 12px', fontSize: 13, cursor: 'pointer' },
@@ -9046,7 +9046,7 @@ const styles: Record<string, React.CSSProperties> = {
   // OUTER `settings` scrolls vertically instead of the columns spilling sideways on a fixed-height box.
   settingsCols: { columnWidth: 340, columnGap: 16 },
   settingsSub: { color: 'var(--text-muted)', fontSize: 13, margin: '-2px 0 14px', lineHeight: 1.55 },
-  card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 16, flexShrink: 0, breakInside: 'avoid' },
+  card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 16, flexShrink: 0, breakInside: 'avoid', boxShadow: 'var(--shadow-1)' },
   // Section heading - a real 15px/600 heading (design level) rather than the old tiny all-caps label.
   h2: { fontSize: 15, fontWeight: 600, letterSpacing: -0.2, color: 'var(--text)', margin: '0 0 12px' },
   kv: { display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid var(--border)', fontSize: 14 },
@@ -9056,12 +9056,12 @@ const styles: Record<string, React.CSSProperties> = {
   formRow: { display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
   select: { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
   input: { flex: 1, minWidth: 120, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
-  primaryBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
+  primaryBtn: { background: 'var(--primary)', color: 'var(--on-primary)', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
   ghostBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 10, padding: '9px 14px', fontSize: 13, cursor: 'pointer' },
-  toggleOn: { background: '#1d4ed8', color: '#fff', border: '1px solid #2563eb', borderRadius: 10, padding: '8px 14px', fontSize: 13, cursor: 'pointer' },
+  toggleOn: { background: 'var(--primary-active)', color: 'var(--on-primary)', border: '1px solid var(--primary)', borderRadius: 10, padding: '8px 14px', fontSize: 13, cursor: 'pointer' },
   toggleOff: { background: 'transparent', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 10, padding: '8px 14px', fontSize: 13, cursor: 'pointer' },
   dangerGhost: { background: 'transparent', color: 'var(--c-red)', border: '1px solid var(--c-red-border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
-  dangerSolid: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
+  dangerSolid: { background: 'var(--danger)', color: 'var(--on-danger)', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
   resultList: { listStyle: 'none', margin: '12px 0 0', padding: 0 },
   resultRow: { padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 13, fontFamily: 'ui-monospace, monospace' },
   muted: { color: 'var(--text-faint)', fontSize: 13 },
@@ -9070,8 +9070,8 @@ const styles: Record<string, React.CSSProperties> = {
   // "Download the full audit" bar - a tinted, bordered strip so the export is an obvious call to
   // action rather than a faint text link. Its buttons are solid but a touch smaller than primaryBtn
   // so the "Apply all fixes" CTA still reads as the primary action.
-  downloadBar: { marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '11px 14px', background: 'rgba(37,99,235,0.1)', border: '1px solid rgba(37,99,235,0.55)', borderRadius: 10 },
-  downloadBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 15px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 },
+  downloadBar: { marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '11px 14px', background: 'var(--primary-soft)', border: '1px solid var(--primary-soft-border)', borderRadius: 10 },
+  downloadBtn: { background: 'var(--primary)', color: 'var(--on-primary)', border: 'none', borderRadius: 8, padding: '8px 15px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 },
 
   // Tag-suggestion review panel.
   reviewWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
