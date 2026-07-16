@@ -1012,6 +1012,102 @@ function MessageRememberButton({ text, product, active, onError }: {
   );
 }
 
+/** Phase 2b — auto-suggest: run an LLM pass over the current conversation to PROPOSE durable memories, then
+ *  let the user approve / edit / skip each one. Human-in-the-loop by design: nothing is saved until "Keep". */
+function MemorySuggestBar({ active, product, messages, onError }: {
+  active: AccountView | undefined; product: 'gtm' | 'ga4'; messages: ChatMessage[]; onError: (m: string) => void;
+}): JSX.Element | null {
+  const [busy, setBusy] = useState(false);
+  const [cands, setCands] = useState<Array<{ id: number; kind: MemoryKind; text: string; scopeClient: boolean }> | null>(null);
+  const [savedCount, setSavedCount] = useState(0);
+  const [savingId, setSavingId] = useState<number | null>(null); // the candidate whose save is in flight (guards double-click)
+
+  const containerId = active?.gtmContext?.containerId;
+  const property = active?.ga4Context?.property;
+  const canClient = product === 'gtm' ? Boolean(containerId) : Boolean(property);
+  const clientLabel = product === 'gtm' ? (active?.gtmContext?.containerName ?? containerId ?? '') : (active?.ga4Context?.propertyName ?? property ?? '');
+  const hasChat = messages.filter((m) => (m.text ?? '').trim()).length >= 2;
+
+  if (!active || !hasChat) return null;
+
+  async function run(): Promise<void> {
+    setBusy(true); setSavedCount(0);
+    try {
+      const history = messages.filter((m) => (m.text ?? '').trim()).map((m) => ({ role: m.role, text: m.text ?? '' }));
+      const res = await window.desktop.memory.suggest(history);
+      setCands(res.map((c, idx) => ({ id: idx, kind: c.kind, text: c.text, scopeClient: canClient })));
+    } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  }
+  // Handlers key on the candidate's stable id (NOT its render-time index), so a save/skip that resolves
+  // after the list has changed never touches a different, unreviewed candidate.
+  const edit = (id: number, patch: Partial<{ kind: MemoryKind; text: string; scopeClient: boolean }>): void =>
+    setCands((cs) => (cs ? cs.map((c) => (c.id === id ? { ...c, ...patch } : c)) : cs));
+  const drop = (id: number): void => setCands((cs) => (cs ? cs.filter((c) => c.id !== id) : cs));
+  async function keep(id: number): Promise<void> {
+    const c = cands?.find((x) => x.id === id);
+    if (!c || savingId !== null) return; // in-flight guard: ignore a second click while a save is pending
+    setSavingId(id);
+    try {
+      const scope = c.scopeClient && canClient
+        ? (product === 'gtm'
+            ? { containerId: containerId!, ...(active?.gtmContext?.containerName ? { label: active.gtmContext.containerName } : {}) }
+            : { property: property!, ...(active?.ga4Context?.propertyName ? { label: active.ga4Context.propertyName } : {}) })
+        : {};
+      await window.desktop.memory.add({ kind: c.kind, text: c.text, scope, source: 'auto' });
+      setSavedCount((n) => n + 1);
+      drop(id);
+    } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
+    finally { setSavingId(null); }
+  }
+
+  const smallBtn: React.CSSProperties = { padding: '3px 9px', fontSize: 12, borderRadius: 6, cursor: 'pointer', border: '1px solid var(--border-2)', background: 'var(--surface-2)', color: 'var(--text-dim)' };
+  return (
+    <div style={{ margin: '0 0 6px' }}>
+      <button style={{ ...smallBtn, ...(busy ? { opacity: 0.6, cursor: 'wait' } : {}) }} disabled={busy} onClick={() => void run()} title="Read this conversation and propose notes worth remembering (you approve each)">
+        {busy ? 'Reviewing chat…' : '🧠 Suggest memories from this chat'}
+      </button>
+      {cands !== null && (
+        cands.length === 0 ? (
+          <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 6 }}>Nothing new worth remembering here{savedCount ? `; saved ${savedCount}` : ''}. <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => setCands(null)}>dismiss</button></div>
+        ) : (
+          <div className="sheet-in" style={{ marginTop: 6, padding: 10, border: '1px solid var(--c-blue-border)', borderRadius: 10, background: 'var(--c-blue-bg)' }}>
+            <div style={{ fontSize: 12.5, color: 'var(--text)', marginBottom: 8 }}>
+              <b>Review before saving.</b> These are proposals from this chat. Nothing is stored until you click <b>Keep</b>. Edit or skip anything.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {cands.map((c) => {
+                const disabled = !c.text.trim() || savingId !== null;
+                return (
+                  <div key={c.id} style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: 8, border: '1px solid var(--border-2)', borderRadius: 8, background: 'var(--surface)' }}>
+                    <textarea value={c.text} maxLength={500} onChange={(e) => edit(c.id, { text: e.target.value })} style={{ ...styles.input, width: '100%', minHeight: 40, fontSize: 12.5, resize: 'vertical' }} />
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <select value={c.kind} onChange={(e) => edit(c.id, { kind: e.target.value as MemoryKind })} style={{ ...styles.input, padding: '3px 6px', fontSize: 12 }}>
+                        {MEMORY_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+                      </select>
+                      {canClient && (
+                        <label style={{ fontSize: 11.5, display: 'flex', gap: 4, alignItems: 'center', color: 'var(--text-dim)' }}>
+                          <input type="checkbox" checked={c.scopeClient} onChange={(e) => edit(c.id, { scopeClient: e.target.checked })} /> only {clientLabel}
+                        </label>
+                      )}
+                      <button style={{ ...styles.primaryBtn, padding: '3px 10px', fontSize: 12, ...(disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} disabled={disabled} onClick={() => void keep(c.id)}>{savingId === c.id ? 'Saving…' : 'Keep'}</button>
+                      <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => drop(c.id)}>Skip</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+              {savedCount > 0 && <span style={{ fontSize: 12, color: 'var(--c-green)' }}>✓ Saved {savedCount}</span>}
+              <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => setCands(null)}>Dismiss the rest</button>
+            </div>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
 function ChatView({
   active,
   onError,
@@ -1321,6 +1417,8 @@ function ChatView({
           </button>
         </div>
       )}
+
+      <MemorySuggestBar active={active} product={product} messages={messages} onError={onError} />
 
       <div style={{ ...styles.composer, position: 'relative' }}>
         {slashMatches.length > 0 && (

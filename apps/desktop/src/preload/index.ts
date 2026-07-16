@@ -60,6 +60,7 @@ import type {
   SuggestionScreenshotResult,
 } from '../shared/ipc';
 import type { Memory, MemoryInput, MemoryPatch, AddMemoryResult } from '../shared/chat-memory';
+import type { MemoryCandidate } from '../shared/memory-extract';
 
 // Tracks the in-flight streaming chat so llm.stop() can abort the right one.
 let activeChatRequestId: string | null = null;
@@ -189,6 +190,9 @@ const api = {
     update: (id: string, patch: MemoryPatch): Promise<Memory | null> => ipcRenderer.invoke('memory:update', id, patch),
     remove: (id: string): Promise<boolean> => ipcRenderer.invoke('memory:remove', id),
     clear: (): Promise<number> => ipcRenderer.invoke('memory:clear'),
+    // Phase 2b: propose durable memories from a conversation (LLM extraction). Returns candidates to REVIEW
+    // — nothing is saved until the user approves each one via memory.add.
+    suggest: (history: ChatTurn[]): Promise<MemoryCandidate[]> => ipcRenderer.invoke('memory:suggest', history),
   },
 
   // Tag suggestions ("measurement plan from a URL"): scan a site (or paste a

@@ -90,21 +90,33 @@ export function openaiStreamAccumulator(onDelta: (t: string) => void): StreamAcc
   };
 }
 
+/** Build the /v1/chat/completions request body. Only sends tools/tool_choice when there ARE tools —
+ *  OpenAI rejects an empty `tools: []` (and a `tool_choice` with no tools) with a non-retryable 400, which
+ *  a plain completion (e.g. the chat-memory suggest pass) would otherwise hit. Mirrors the guard in
+ *  gemini.ts. Exported for testing. */
+export function openaiChatBody(input: LlmChatInput): Record<string, unknown> {
+  return {
+    model: input.model,
+    messages: toOpenAiMessages(input.system, input.messages),
+    ...(input.tools.length
+      ? {
+          tools: input.tools.map((t) => ({
+            type: 'function',
+            function: { name: t.name, description: t.description, parameters: t.inputSchema },
+          })),
+          tool_choice: 'auto',
+        }
+      : {}),
+    stream: true,
+  };
+}
+
 export const openaiClient: LlmClient = {
   async chatStream(input: LlmChatInput, onDelta: (t: string) => void): Promise<LlmReply> {
     const res = await startStream(
       'https://api.openai.com/v1/chat/completions',
       { authorization: `Bearer ${input.apiKey}` },
-      {
-        model: input.model,
-        messages: toOpenAiMessages(input.system, input.messages),
-        tools: input.tools.map((t) => ({
-          type: 'function',
-          function: { name: t.name, description: t.description, parameters: t.inputSchema },
-        })),
-        tool_choice: 'auto',
-        stream: true,
-      },
+      openaiChatBody(input),
       'OpenAI',
       input.signal
     );

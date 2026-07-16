@@ -5,6 +5,7 @@ import type { AuditHistoryStore } from '../storage/audit-history';
 import type { ManifestStore } from '../storage/manifest-store';
 import type { MemoryStore } from '../storage/memory-store';
 import { selectRelevantMemories, formatMemoriesForPrompt } from '../../shared/chat-memory';
+import { MEMORY_EXTRACT_SYSTEM, buildExtractionTranscript, parseMemoryCandidates, type MemoryCandidate } from '../../shared/memory-extract';
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
@@ -153,6 +154,26 @@ export class ChatService {
     signal?: AbortSignal
   ): Promise<ChatReply> {
     return this.run(history, message, product, emit, confirm, signal);
+  }
+
+  /** Phase 2b: propose durable memories from a conversation. Runs ONE plain LLM completion (no tools) with
+   *  the extraction prompt, then parses/validates/redacts/dedupes the reply against what's already saved.
+   *  Proposals are NOT persisted here — the renderer reviews them and the user approves each via memory:add. */
+  async suggestMemories(history: ChatTurn[], signal?: AbortSignal): Promise<MemoryCandidate[]> {
+    const active = this.registry.getActiveView();
+    if (!active) throw new Error('No active account. Connect and activate a Google account.');
+    if (!active.llm) throw new Error('Choose an LLM provider and model in Settings first.');
+    const apiKey = this.providerKeys.getKey(active.llm.provider);
+    if (!apiKey) throw new Error(`Add an API key for ${active.llm.provider} in Settings → Providers.`);
+    const transcript = buildExtractionTranscript(history);
+    if (!transcript.trim()) return [];
+    const client = createProvider(active.llm.provider);
+    const reply = await client.chatStream(
+      { system: MEMORY_EXTRACT_SYSTEM, model: active.llm.model, apiKey, tools: [], messages: [{ role: 'user', text: `Conversation:\n\n${transcript}` }], signal },
+      () => {},
+    );
+    const existing = this.memory ? this.memory.list(active.id) : [];
+    return parseMemoryCandidates(reply.text ?? '', existing);
   }
 
   private async run(
