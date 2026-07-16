@@ -1,3 +1,9 @@
+## [1.345.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.344.0...v1.345.0) (2026-07-16)
+
+### Features
+
+* **desktop:** chat memory Phase 2a — in-chat "Remember this" ([c6ca337](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c6ca33796534d9f1a9aee5cecb6649c49b4cfe13))
+
 ## [1.344.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.343.0...v1.344.0) (2026-07-16)
 
 ### Features
