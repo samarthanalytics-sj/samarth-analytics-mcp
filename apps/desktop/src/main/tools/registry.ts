@@ -24,6 +24,7 @@ import {
   buildClickTextLookupVariable,
   buildLookupTableVariable,
   buildRegexTableVariable,
+  buildGoogleTagEventSettingsVariable,
   buildFormNameVariable,
   findExistingTrigger,
   customEventNameOf,
@@ -1840,14 +1841,14 @@ export function buildToolRegistry(
     {
       name: 'create_gtm_variable_typed',
       description:
-        'Create a GTM variable with the correct structure (you do not write raw JSON). kind: "constant" (value), "data_layer" (dataLayerName), "javascript" (javascript — a Custom JavaScript variable, e.g. "function(){return document.title;}" for page title), "event_data" (SERVER container only — reads keyPath from the incoming event, e.g. keyPath "items" or "x-ga-mp1-tt"; optional defaultValue), "request_header" (SERVER container only — reads one HTTP header off the request via headerName, e.g. "X-Geo-Country" / "X-Device-Os" that the tagging host injects), "lookup_table" (input = the {{variable}} to match EXACTLY, rows = [{key,value}], optional defaultValue), or "regex_table" (same fields; each row key is a REGEX matched against input — use when many inputs map to one value, e.g. {{Page Path}} "^/services/" → a section name). Requires accountId, containerId, workspaceId, kind, name.',
+        'Create a GTM variable with the correct structure (you do not write raw JSON). kind: "constant" (value), "data_layer" (dataLayerName), "javascript" (javascript — a Custom JavaScript variable, e.g. "function(){return document.title;}" for page title), "event_data" (SERVER container only — reads keyPath from the incoming event, e.g. keyPath "items" or "x-ga-mp1-tt"; optional defaultValue), "request_header" (SERVER container only — reads one HTTP header off the request via headerName, e.g. "X-Geo-Country" / "X-Device-Os" that the tagging host injects), "lookup_table" (input = the {{variable}} to match EXACTLY, rows = [{key,value}], optional defaultValue), or "regex_table" (same fields; each row key is a REGEX matched against input — use when many inputs map to one value, e.g. {{Page Path}} "^/services/" → a section name), or "google_tag_event_settings" (a REUSABLE "Google Tag: Event Settings" parameter table, type gtes - rows = [{key,value}] event parameters, e.g. click_text → {{Click Text}}; GA4 event tags reference it in their Event Settings field. ALWAYS use this kind for a shared event-parameter variable - never a Custom JavaScript object). Requires accountId, containerId, workspaceId, kind, name.',
       inputSchema: {
         type: 'object',
         properties: {
           accountId: { type: 'string' },
           containerId: { type: 'string' },
           workspaceId: { type: 'string' },
-          kind: { type: 'string', enum: ['constant', 'data_layer', 'javascript', 'event_data', 'request_header', 'lookup_table', 'regex_table'] },
+          kind: { type: 'string', enum: ['constant', 'data_layer', 'javascript', 'event_data', 'request_header', 'lookup_table', 'regex_table', 'google_tag_event_settings'] },
           name: { type: 'string' },
           value: { type: 'string' },
           dataLayerName: { type: 'string' },
@@ -1858,7 +1859,7 @@ export function buildToolRegistry(
           input: { type: 'string', description: 'lookup_table / regex_table only — the input {{variable}}, e.g. "{{Page Path}}" or "{{Click Text}}".' },
           rows: {
             type: 'array',
-            description: 'lookup_table / regex_table only — the mapping rows (key → value; regex_table keys are regexes).',
+            description: 'lookup_table / regex_table / google_tag_event_settings — the rows (key → value; regex_table keys are regexes; google_tag_event_settings keys are event-parameter names).',
             items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'string' } }, required: ['key', 'value'] },
           },
         },
@@ -1871,7 +1872,11 @@ export function buildToolRegistry(
       handler: (a) => {
         const kind = s(a.kind);
         let resource: Record<string, unknown>;
-        if (kind === 'lookup_table' || kind === 'regex_table') {
+        if (kind === 'google_tag_event_settings') {
+          const rows = Array.isArray(a.rows) ? a.rows.map((r) => ({ key: s(obj(r).key), value: s(obj(r).value) })).filter((r) => r.key) : [];
+          if (!rows.length) throw new Error('kind "google_tag_event_settings" requires rows ([{key,value}, …] - the event parameters, e.g. {key:"click_text", value:"{{Click Text}}"}).');
+          resource = buildGoogleTagEventSettingsVariable(s(a.name), rows) as unknown as Record<string, unknown>;
+        } else if (kind === 'lookup_table' || kind === 'regex_table') {
           const input = s(a.input).trim();
           const rows = Array.isArray(a.rows) ? a.rows.map((r) => ({ key: s(obj(r).key), value: s(obj(r).value) })).filter((r) => r.key) : [];
           if (!input || !rows.length) throw new Error(`kind "${kind}" requires input (the {{variable}} to match) and rows ([{key,value}, …]).`);
