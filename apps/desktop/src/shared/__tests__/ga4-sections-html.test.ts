@@ -32,6 +32,8 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     sessionsPct: 276,
     keyEventsPct: 112,
     revenuePct: 69,
+    restated: null,
+    drivers: [],
     sessionsFrom: '8,904', sessionsTo: '33,453',
     keyEventsFrom: '500', keyEventsTo: '1,060',
     revenueFrom: 'INR 100,000', revenueTo: 'INR 169,000',
@@ -93,6 +95,7 @@ const view = (over: Partial<Ga4SectionsView> = {}): Ga4SectionsView => ({
     untaggedShare: '60.0%',
     caveat: '"Key events" counts every configured key event (product views, add-to-carts, sign-ups, ...), NOT sales - Purchases is the real transaction count. Revenue here is campaign-attributed and will not match the channel table 1:1.',
   },
+  productPerformance: null,
   llmTraffic: {
     rows: [
       { source: 'claude.ai', sessions: '3,000', convRate: '6.0%', revenue: 'INR 90,000', engagement: '68%' },

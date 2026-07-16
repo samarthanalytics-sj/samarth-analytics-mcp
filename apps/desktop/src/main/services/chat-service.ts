@@ -3,6 +3,9 @@ import type { GoogleDataService } from '../google/data-service';
 import type { ProviderKeyStore } from '../storage/provider-keys';
 import type { AuditHistoryStore } from '../storage/audit-history';
 import type { ManifestStore } from '../storage/manifest-store';
+import type { MemoryStore } from '../storage/memory-store';
+import { selectRelevantMemories, formatMemoriesForPrompt } from '../../shared/chat-memory';
+import { MEMORY_EXTRACT_SYSTEM, buildExtractionTranscript, parseMemoryCandidates, type MemoryCandidate } from '../../shared/memory-extract';
 import { buildToolRegistry } from '../tools/registry';
 import type { ConfirmFn } from '../tools/registry';
 import { createProvider, runChat } from '../llm/gateway';
@@ -71,6 +74,15 @@ export const GA4_PROPERTY_AUDIT =
   '6) DECISION READINESS: for the key business questions (which campaigns generate revenue; abandonment by product/page; CAC by channel; lead quality; LTV; refund/return rate; repeat/churn within 90 days) mark each Answerable / Partial / Not answerable with the data required, then list what the property CANNOT measure at all and the missing input (e.g. LTV — no User-ID/server data). ' +
   '7) OUTPUT this fixed template, with NO free-form prose outside it: header (property + id, date window + comparison + retention, access level, data limitations) -> Executive summary -> Area-status table (Collection, Configuration, Events, Custom definitions, Ecommerce, Attribution, Audiences, Integrations, Consent, Identity, Marketing readiness, Reporting; each = Status + Confidence + evidence note) -> Property baseline (trend vs comparison, peak/low day, channel-mix shift, new vs returning, device split, geo flags) -> Decision-readiness table -> Parameter coverage (Unicode bars + JSON) -> Funnel if ecommerce is in scope (mark missing steps MISSING) -> Findings sorted by severity (each: evidence, observed-vs-inferred, cause + cause-confidence, business risk, data-loss bar + reports affected, fix) -> Not Verified list -> summary counts (Critical/High/Medium/Low + top 3 to fix). Only if the user demands a single headline number, compute it by rule (Pass=2, Partial=1, Fail=0 over SCORED areas only; score = points / (2 x scored areas) x 100, rounded) and ALWAYS print the count of Not Verified areas beside it; otherwise omit it. ';
 
+/** Guidance for "when did data last arrive / when was the last active session" freshness questions, so
+ *  the model finds the ACTUAL last active date instead of stopping at an empty 28-day aggregate and
+ *  over-alarming. Composed into the GA4 system prompt. Exported for testing. */
+export const GA4_DATA_FRESHNESS =
+  'DATA FRESHNESS / "WHEN WAS THE LAST …" — when the user asks WHEN data was last recorded, when the last active session / user / event was, whether data is STILL coming in, or "did tracking stop / when did it break", you MUST answer with a SPECIFIC DATE — never stop at a single empty 28-day aggregate and never conclude "no data" from that alone. Do this: ' +
+  '(1) FIND THE LAST ACTIVE DAY: call run_ga4_report with dimensions ["date"] and metrics ["sessions","activeUsers","eventCount"], endDate "today" and startDate as far back as the data allows — up to "365daysAgo", but NEVER earlier than the property\'s data-retention window (call get_ga4_data_retention first; a standard property keeps only 2 or 14 months of this data). Read the returned daily rows and report the MOST RECENT date whose metric is > 0 as the last active day, plus how many days ago that was. If EVERY day in the retention window is 0, say data appears to have stopped before <window start> (older than retention — the exact date is unknowable). ' +
+  '(2) REAL-TIME IS ONLY THE LAST 30 MINUTES: run_ga4_realtime_report shows current activity only — "0 active users right now" is NORMAL for a low-traffic site, off-hours, or a quiet moment, and is NOT evidence that data stopped. NEVER present an empty realtime result as "no data" or a collection problem; use step 1 for recency. ' +
+  '(3) INTERPRET HONESTLY, DO NOT OVER-ALARM: if the last active day is today or yesterday, data is flowing — say so plainly (allow for the normal 1–2 day processing lag on the most recent days). If it is several+ days ago after a healthy history, state that data appears to have stopped around <that date> and that a collection break is POSSIBLE (confidence Likely, runtime-required) — recommend confirming in GA4 DebugView / that the GA4 tag still fires — but do NOT assert "critical, tagging is broken" as fact from reporting numbers alone. Lead with the DATE and the plain finding first; the caveat and any fix come after. ';
+
 /**
  * A system-prompt line telling the model the ACTUAL current date. Without this
  * the model assumes its training-cutoff date (e.g. "October 2023"), which breaks
@@ -102,8 +114,26 @@ export class ChatService {
     /** Called after a chat tool switches the active GTM context, so the UI refreshes. */
     private readonly notifyContextChanged?: () => void,
     /** Records what setup tools create, so re-runs are safe and drift is detectable. */
-    private readonly manifests?: ManifestStore
+    private readonly manifests?: ManifestStore,
+    /** Per-account "remember what I told you" notes, injected into the system prompt each turn. */
+    private readonly memory?: MemoryStore
   ) {}
+
+  /** The REMEMBERED-CONTEXT block for this turn: the account's memories scoped to the active client
+   *  (GTM container / GA4 property) and ranked against the message. Empty when there are none.
+   *  PRODUCT-GATED: a container-scoped memory only applies in a GTM turn and a property-scoped one only in a
+   *  GA4 turn (gtmContext / ga4Context are independent per-account fields, so the inactive product's context
+   *  can be stale and point at a DIFFERENT client — using it would leak one client's notes into another's chat). */
+  private memoryBlock(active: { id: string; gtmContext?: GtmContext; ga4Context?: { property?: string } }, product: GoogleProduct, message: string): string {
+    if (!this.memory) return '';
+    const all = this.memory.list(active.id);
+    if (!all.length) return '';
+    const ctx = {
+      containerId: product === 'gtm' ? active.gtmContext?.containerId : undefined,
+      property: product === 'ga4' ? active.ga4Context?.property : undefined,
+    };
+    return formatMemoriesForPrompt(selectRelevantMemories(all, ctx, message));
+  }
 
   /** Non-streaming: returns the final reply only. */
   chat(history: ChatTurn[], message: string, product: GoogleProduct): Promise<ChatReply> {
@@ -124,6 +154,26 @@ export class ChatService {
     signal?: AbortSignal
   ): Promise<ChatReply> {
     return this.run(history, message, product, emit, confirm, signal);
+  }
+
+  /** Phase 2b: propose durable memories from a conversation. Runs ONE plain LLM completion (no tools) with
+   *  the extraction prompt, then parses/validates/redacts/dedupes the reply against what's already saved.
+   *  Proposals are NOT persisted here — the renderer reviews them and the user approves each via memory:add. */
+  async suggestMemories(history: ChatTurn[], signal?: AbortSignal): Promise<MemoryCandidate[]> {
+    const active = this.registry.getActiveView();
+    if (!active) throw new Error('No active account. Connect and activate a Google account.');
+    if (!active.llm) throw new Error('Choose an LLM provider and model in Settings first.');
+    const apiKey = this.providerKeys.getKey(active.llm.provider);
+    if (!apiKey) throw new Error(`Add an API key for ${active.llm.provider} in Settings → Providers.`);
+    const transcript = buildExtractionTranscript(history);
+    if (!transcript.trim()) return [];
+    const client = createProvider(active.llm.provider);
+    const reply = await client.chatStream(
+      { system: MEMORY_EXTRACT_SYSTEM, model: active.llm.model, apiKey, tools: [], messages: [{ role: 'user', text: `Conversation:\n\n${transcript}` }], signal },
+      () => {},
+    );
+    const existing = this.memory ? this.memory.list(active.id) : [];
+    return parseMemoryCandidates(reply.text ?? '', existing);
   }
 
   private async run(
@@ -263,6 +313,7 @@ export class ChatService {
             '(today, yesterday, NdaysAgo) or explicit YYYY-MM-DD computed from the current date above — ' +
             'never assume the year. GA4 has NO data for dates after today, and the most recent 1–2 days ' +
             'may still be processing (partial); report dates resolve in the property\'s timezone. ' +
+            GA4_DATA_FRESHNESS +
             (confirm
               ? GA4_WRITE_GUIDANCE
               : 'GA4 is READ-ONLY — you cannot apply fixes; give the user ' +
@@ -278,6 +329,13 @@ export class ChatService {
           '. Use THESE ids for all GTM operations — do not ask which account/container/workspace and ' +
           'do not re-list them unless the user asks to switch. '
         : '') +
+      (product === 'ga4' && active.ga4Context?.property
+        ? `The user is working in GA4 property ${active.ga4Context.property} ` +
+          `("${active.ga4Context.propertyName ?? ''}"${active.ga4Context.accountName ? `, account "${active.ga4Context.accountName}"` : ''}). ` +
+          'Use THIS property id for every GA4 tool call (audits, reports, data quality) - do not ask ' +
+          'which property and do not re-list properties unless the user asks to switch. '
+        : '') +
+      this.memoryBlock(active, product, message) +
       dateContextLine(new Date()) +
       'Call tools when asked; never invent ids. When the user asks to list or count ' +
       'tags, triggers, variables, accounts, containers, or workspaces, the tools already ' +

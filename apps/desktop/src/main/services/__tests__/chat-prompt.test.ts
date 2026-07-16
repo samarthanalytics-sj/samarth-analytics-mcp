@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE, GTM_DECISION_RULES } from '../chat-service';
+import { dateContextLine, GTM_AUDIT_METHODOLOGY, GA4_TAG_NAMING, GA4_ECOMMERCE_REFERENCE, GTM_CREATION_METHODOLOGY, GTM_TRIGGER_VARIABLE_REFERENCE, GTM_DECISION_RULES, GA4_DATA_FRESHNESS } from '../chat-service';
 
 let passed = 0;
 let failed = 0;
@@ -100,6 +100,18 @@ test('GTM_DECISION_RULES carries the expert decision rules from the GTM guide (f
   assert.ok(/\{\{Click ID\}\}[\s\S]*\{\{Click Text\}\} \/ \{\{Click Classes\}\} LAST/i.test(m), 'click-field stability preference');
   assert.ok(/data-layer success event[\s\S]*Element Visibility[\s\S]*native Form Submission/i.test(m), 'form reliability order');
   assert.ok(/MISTAKES TO AVOID/i.test(m) && /no firing trigger/i.test(m), 'the common-mistakes guards');
+});
+
+test('GA4_DATA_FRESHNESS teaches "when did data last arrive" — widen the window, find the last active day, no over-alarm', () => {
+  const m = GA4_DATA_FRESHNESS;
+  // Must answer with a specific date via a date-dimension report over a wide, retention-bounded window.
+  assert.ok(/last active day/i.test(m) && /run_ga4_report/.test(m) && /\["date"\]/.test(m), 'find the last active day with a date-dimension report');
+  assert.ok(/365daysAgo/.test(m) && /get_ga4_data_retention/.test(m), 'widen the window but respect the retention limit');
+  assert.ok(/MOST RECENT date/i.test(m), 'report the most recent non-zero date');
+  // Real-time is only the last 30 minutes — an empty realtime result is not "no data".
+  assert.ok(/run_ga4_realtime_report/.test(m) && /last 30 minutes/i.test(m) && /NOT evidence that data stopped/i.test(m), 'realtime ≠ recency');
+  // Do not over-alarm: a gap is POSSIBLE / Likely / runtime-required, not asserted "critical/broken".
+  assert.ok(/do NOT (assert|over-alarm)/i.test(m) && /POSSIBLE/.test(m) && /DebugView/.test(m), 'no over-alarm; confirm at runtime');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

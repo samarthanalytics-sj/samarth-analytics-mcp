@@ -3,7 +3,7 @@ import { applyTheme, loadTheme, saveTheme, type Theme } from './theme';
 
 // A shared light/dark control. `useTheme` is a tiny event-synced store so multiple toggles (the
 // fixed header button + the Settings toggle) always agree: whoever flips the theme applies + persists
-// it and broadcasts a window event, and every other consumer updates in lockstep — no lifted state,
+// it and broadcasts a window event, and every other consumer updates in lockstep - no lifted state,
 // no prop threading through the (large) App tree.
 
 const THEME_EVENT = 'samarth-theme-change';

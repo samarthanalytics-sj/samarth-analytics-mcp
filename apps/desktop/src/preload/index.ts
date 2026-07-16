@@ -3,10 +3,16 @@ import type {
   AccountView,
   AddAccountInput,
   AuditReportView,
+  ServerCoverageView,
+  ServerDocView,
+  ServerPlanView,
+  ServerPlanApplyResultView,
+  WorkspaceCompareResultView,
   ServerContainerResultView,
   ChatReply,
   ChatStreamEvent,
   ChatTurn,
+  ChatAttachmentView,
   CreateTagOutcome,
   Ga4AccountView,
   Ga4AuditWindow,
@@ -19,12 +25,14 @@ import type {
   GoogleProduct,
   GtmAccountView,
   GtmContainerView,
+  Ga4Context,
   GtmContext,
   GtmWorkspaceView,
   LlmProvider,
   MonitorAlert,
   MonitorConfig,
   MonitorStatus,
+  NetworkLocationView,
   Ga4MonitorConfig,
   Ga4MonitorStatus,
   Ga4MonitorRun,
@@ -39,6 +47,8 @@ import type {
   VerifyTagInput,
   VerifyTagsOptions,
   VerifyTagsResult,
+  VerifyExportPayload,
+  VerifyProgressView,
   FormsForFillOptions,
   FormsForFillResult,
   FormTagVerifyPlanOptions,
@@ -49,6 +59,8 @@ import type {
   DetectedElementView,
   SuggestionScreenshotResult,
 } from '../shared/ipc';
+import type { Memory, MemoryInput, MemoryPatch, AddMemoryResult } from '../shared/chat-memory';
+import type { MemoryCandidate } from '../shared/memory-extract';
 
 // Tracks the in-flight streaming chat so llm.stop() can abort the right one.
 let activeChatRequestId: string | null = null;
@@ -73,6 +85,8 @@ const api = {
       ipcRenderer.invoke('accounts:setLlmConfig', id, provider, model),
     setGtmContext: (id: string, ctx: GtmContext): Promise<AccountView> =>
       ipcRenderer.invoke('accounts:setGtmContext', id, ctx),
+    setGa4Context: (id: string, ctx: Ga4Context): Promise<AccountView> =>
+      ipcRenderer.invoke('accounts:setGa4Context', id, ctx),
     // Fired when the chat switches the active GTM context — re-fetch to update the bar.
     onChanged: (cb: () => void): (() => void) => {
       const listener = (): void => cb();
@@ -127,6 +141,9 @@ const api = {
     chat: (history: ChatTurn[], message: string, product: GoogleProduct): Promise<ChatReply> =>
       ipcRenderer.invoke('llm:chat', history, message, product),
 
+    // OS file picker + main-process text extraction for a chat attachment (null = cancelled).
+    pickAttachment: (): Promise<ChatAttachmentView | null> => ipcRenderer.invoke('llm:pickAttachment'),
+
     // Streaming chat. `onEvent` fires for text chunks + tool calls as they arrive;
     // the returned promise resolves with the final reply (or rejects on error).
     chatStream: (
@@ -163,6 +180,19 @@ const api = {
     // (possibly edited) args to apply, or null to decline.
     confirm: (confirmId: string, result: Record<string, unknown> | null): Promise<void> =>
       ipcRenderer.invoke('llm:confirm:respond', confirmId, result),
+  },
+
+  // Chat memory ("remember what I told you"): CRUD over the ACTIVE account's saved notes, which the chat
+  // injects into its system prompt each turn. Text is secret-redacted in the main process before storage.
+  memory: {
+    list: (): Promise<Memory[]> => ipcRenderer.invoke('memory:list'),
+    add: (input: MemoryInput): Promise<AddMemoryResult> => ipcRenderer.invoke('memory:add', input),
+    update: (id: string, patch: MemoryPatch): Promise<Memory | null> => ipcRenderer.invoke('memory:update', id, patch),
+    remove: (id: string): Promise<boolean> => ipcRenderer.invoke('memory:remove', id),
+    clear: (): Promise<number> => ipcRenderer.invoke('memory:clear'),
+    // Phase 2b: propose durable memories from a conversation (LLM extraction). Returns candidates to REVIEW
+    // — nothing is saved until the user approves each one via memory.add.
+    suggest: (history: ChatTurn[]): Promise<MemoryCandidate[]> => ipcRenderer.invoke('memory:suggest', history),
   },
 
   // Tag suggestions ("measurement plan from a URL"): scan a site (or paste a
@@ -237,15 +267,49 @@ const api = {
       tags: VerifyTagInput[],
       elements: DetectedElementView[],
       opts?: VerifyTagsOptions,
-    ): Promise<VerifyTagsResult> => ipcRenderer.invoke('suggestions:verifyTags', url, tags, elements, opts),
+      onProgress?: (p: VerifyProgressView) => void,
+    ): Promise<VerifyTagsResult> => {
+      // Correlate the live progress stream (suggestions:verify:event) to THIS call, mirroring scanStream.
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const listener = (_e: unknown, payload: { requestId: string } & VerifyProgressView): void => {
+        if (payload?.requestId !== requestId) return;
+        const { requestId: _drop, ...p } = payload;
+        onProgress?.(p);
+      };
+      if (onProgress) ipcRenderer.on('suggestions:verify:event', listener);
+      return ipcRenderer
+        .invoke('suggestions:verifyTags', requestId, url, tags, elements, opts)
+        .finally(() => { if (onProgress) ipcRenderer.removeListener('suggestions:verify:event', listener); });
+    },
+    // Stop the in-flight verify scan/drive (the Stop button). The crawl + Tag-Assistant drive finish the
+    // current page and resolve with a partial result; the renderer also stops the orchestration.
+    cancelVerify: (): Promise<void> => ipcRenderer.invoke('suggestions:cancelVerify'),
+    // Save the tag-verification RESULTS table to a user-chosen file — 'xlsx' (spreadsheet with embedded
+    // proof images), 'pdf' or 'doc' (a styled report with each tag's proof screenshot). Returns path or null.
+    exportVerifyResults: (format: 'xlsx' | 'pdf' | 'doc', defaultName: string, payload: VerifyExportPayload): Promise<string | null> =>
+      ipcRenderer.invoke('verify:exportResults', format, defaultName, payload),
     // Real-submit form review: read a page's forms + their OWN fields, return a locale fill plan the
     // operator edits before Phase 2 submits. Read-only (fills/submits nothing).
     formsForFill: (url: string, opts?: FormsForFillOptions): Promise<FormsForFillResult> =>
       ipcRenderer.invoke('suggestions:formsForFill', url, opts),
     // Container-tag-driven plan: crawl a site, keep only forms that HAVE a container tag, de-dup their
-    // fields into one data-entry set. Read-only.
-    formTagVerifyPlan: (url: string, opts: FormTagVerifyPlanOptions): Promise<FormTagVerifyPlanResult> =>
-      ipcRenderer.invoke('suggestions:formTagVerifyPlan', url, opts),
+    // fields into one data-entry set. Read-only. onProgress streams the crawl (this now scans the whole site).
+    formTagVerifyPlan: (
+      url: string,
+      opts: FormTagVerifyPlanOptions,
+      onProgress?: (p: VerifyProgressView) => void,
+    ): Promise<FormTagVerifyPlanResult> => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const listener = (_e: unknown, payload: { requestId: string } & VerifyProgressView): void => {
+        if (payload?.requestId !== requestId) return;
+        const { requestId: _drop, ...p } = payload;
+        onProgress?.(p);
+      };
+      if (onProgress) ipcRenderer.on('suggestions:formPlan:event', listener);
+      return ipcRenderer
+        .invoke('suggestions:formTagVerifyPlan', requestId, url, opts)
+        .finally(() => { if (onProgress) ipcRenderer.removeListener('suggestions:formPlan:event', listener); });
+    },
     // Phase 2 — REAL submit: fill the reviewed values + submit one form for real; reports the analytics
     // events it fired. The form POST is delivered (a real lead); analytics hits are captured, not sent.
     submitFormAndVerify: (
@@ -292,6 +356,18 @@ const api = {
 
   // Container audit: surface the existing audit engine + its fixes as a panel.
   gtm: {
+    auditServer: (accountId: string, containerId: string, workspaceId: string): Promise<AuditReportView> =>
+      ipcRenderer.invoke('gtm:auditServer', accountId, containerId, workspaceId),
+    serverCoverage: (accountId: string, webContainerId: string, webWorkspaceId: string, serverContainerId: string, serverWorkspaceId: string): Promise<ServerCoverageView> =>
+      ipcRenderer.invoke('gtm:serverCoverage', accountId, webContainerId, webWorkspaceId, serverContainerId, serverWorkspaceId),
+    createServerTagForEvent: (accountId: string, containerId: string, workspaceId: string, templateTagId: string, eventName: string, tagName: string): Promise<{ tagId: string; name: string; triggerName: string; triggerReused: boolean }> =>
+      ipcRenderer.invoke('gtm:createServerTagForEvent', accountId, containerId, workspaceId, templateTagId, eventName, tagName),
+    exportServerCoverage: (format: 'csv' | 'pdf', coverage: ServerCoverageView, names: { webName?: string; serverName?: string; webWorkspace?: string; serverWorkspace?: string }): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportServerCoverage', format, coverage, names),
+    exportServerDoc: (accountId: string, containerId: string, workspaceId: string, format: 'md' | 'csv' | 'pdf' | 'xlsx', names: { containerName?: string; publicId?: string; workspaceName?: string }, web?: { containerId: string; workspaceId: string }): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportServerDoc', accountId, containerId, workspaceId, format, names, web),
+    serverDoc: (accountId: string, containerId: string, workspaceId: string, names: { containerName?: string; publicId?: string; workspaceName?: string }, web?: { containerId: string; workspaceId: string }): Promise<ServerDocView> =>
+      ipcRenderer.invoke('gtm:serverDoc', accountId, containerId, workspaceId, names, web),
     audit: (accountId: string, containerId: string, workspaceId: string): Promise<AuditReportView> =>
       ipcRenderer.invoke('gtm:audit', accountId, containerId, workspaceId),
     // The container's EXISTING GA4/base tags translated into verify-engine inputs, so
@@ -327,6 +403,16 @@ const api = {
     // Save the audit as a styled PDF that mirrors the panel (severity cards, icons, type labels).
     exportAuditPdf: (defaultName: string, report: AuditReportView, meta: { account?: string; container?: string; workspace?: string; generatedAt?: string }): Promise<string | null> =>
       ipcRenderer.invoke('gtm:exportAuditPdf', defaultName, report, meta),
+    // Workspace Comparison: diff 2+ workspaces in the same container (read-only) + export the comparison.
+    compareWorkspaces: (accountId: string, containerId: string, workspaceIds: string[]): Promise<WorkspaceCompareResultView> =>
+      ipcRenderer.invoke('gtm:compareWorkspaces', accountId, containerId, workspaceIds),
+    exportWorkspaceDiff: (defaultName: string, content: string): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportWorkspaceDiff', defaultName, content),
+    exportWorkspaceDiffPdf: (defaultName: string, result: WorkspaceCompareResultView): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportWorkspaceDiffPdf', defaultName, result),
+    // Native Excel (.xlsx) — Summary + Common + Uncommon + Detailed-diff sheets with full config values.
+    exportWorkspaceDiffXlsx: (defaultName: string, result: WorkspaceCompareResultView): Promise<string | null> =>
+      ipcRenderer.invoke('gtm:exportWorkspaceDiffXlsx', defaultName, result),
     ensureGa4Config: (ctx: {
       accountId: string;
       containerId: string;
@@ -337,11 +423,17 @@ const api = {
     }): Promise<{ created: boolean; present: boolean; existingTag?: string; variableCreated?: boolean; variableName: string; measurementId: string; tagName: string }> =>
       ipcRenderer.invoke('gtm:ensureGa4Config', ctx),
     // Create a complete SERVER container FROM a web container (+ optionally wire a server URL).
+    planServer: (accountId: string, webContainerId: string, serverContainerId?: string): Promise<ServerPlanView> =>
+      ipcRenderer.invoke('gtm:planServer', accountId, webContainerId, serverContainerId),
+    applyServerPlan: (payload: { accountId: string; webContainerId: string; serverContainerId?: string; newName?: string; selected: string[]; values: Record<string, string> }): Promise<ServerPlanApplyResultView> =>
+      ipcRenderer.invoke('gtm:applyServerPlan', payload),
     createServerContainer: (ctx: {
       accountId: string;
       webContainerId: string;
       name: string;
       serverUrl?: string;
+      /** Complete THIS existing server container instead of creating a new one. */
+      serverContainerId?: string;
     }): Promise<ServerContainerResultView> => ipcRenderer.invoke('gtm:createServerContainer', ctx),
   },
 
@@ -388,11 +480,32 @@ const api = {
     clearWebhook: (propertyId?: string): Promise<Ga4MonitorStatus> => ipcRenderer.invoke('ga4monitoring:clearWebhook', propertyId),
     /** Test the default channel, or (with propertyId) that property's effective channel. */
     sendTest: (propertyId?: string): Promise<{ ok: boolean; error: string | null }> => ipcRenderer.invoke('ga4monitoring:sendTest', propertyId),
+    // Save the property's latest run to disk; resolves with the path, or null when cancelled.
+    exportRun: (propertyId: string, format: 'pdf' | 'csv'): Promise<string | null> =>
+      ipcRenderer.invoke('ga4monitoring:exportRun', propertyId, format),
     // Subscribe to pushed runs (background + on-demand); returns an unsubscribe function.
     onRun: (cb: (run: Ga4MonitorRun) => void): (() => void) => {
       const listener = (_e: unknown, run: Ga4MonitorRun): void => cb(run);
       ipcRenderer.on('ga4monitoring:run', listener);
       return () => ipcRenderer.removeListener('ga4monitoring:run', listener);
+    },
+  },
+
+  // Network & Location: the public egress location (IP, country/region/city, VPN/proxy verdict + provider)
+  // the app's website audits, form submissions and click events run from. getLocation is cached (60s);
+  // refreshLocation forces a fresh check (the Refresh button, or after switching VPN server).
+  network: {
+    getLocation: (): Promise<NetworkLocationView> => ipcRenderer.invoke('network:getLocation'),
+    refreshLocation: (): Promise<NetworkLocationView> => ipcRenderer.invoke('network:refreshLocation'),
+    // Auto-detect: when on, the main process watches for network changes (VPN connect/disconnect or
+    // server switch) and pushes the new location via onChange. Persisted; default off.
+    getAutoDetect: (): Promise<boolean> => ipcRenderer.invoke('network:getAutoDetect'),
+    setAutoDetect: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('network:setAutoDetect', enabled),
+    // Subscribe to pushed location changes (only fire while auto-detect is on); returns an unsubscribe fn.
+    onChange: (cb: (view: NetworkLocationView) => void): (() => void) => {
+      const listener = (_e: unknown, view: NetworkLocationView): void => cb(view);
+      ipcRenderer.on('network:changed', listener);
+      return () => ipcRenderer.removeListener('network:changed', listener);
     },
   },
 };

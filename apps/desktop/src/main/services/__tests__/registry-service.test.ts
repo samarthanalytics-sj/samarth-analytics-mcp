@@ -123,5 +123,18 @@ test('secretSelfTest ok with available crypto, fails when unavailable', () => {
 });
 
 rmSync(dir, { recursive: true, force: true });
+test('setGa4Context persists the GA4 chat property target and round-trips in the view', () => {
+  const { service } = makeService();
+  const v = service.addAccount({ email: 'g@example.com' });
+  const updated = service.setGa4Context(v.id, { property: 'properties/123', propertyName: 'Acme Web', accountName: 'Acme' });
+  assert.deepEqual(updated.ga4Context, { property: 'properties/123', propertyName: 'Acme Web', accountName: 'Acme' });
+  // The active view (what the chat service reads) carries it too.
+  assert.equal(service.getActiveView()?.ga4Context?.property, 'properties/123');
+  // Re-setting replaces (a property switch must not merge leftovers).
+  const switched = service.setGa4Context(v.id, { property: 'properties/456', propertyName: 'Acme App', accountName: 'Acme' });
+  assert.equal(switched.ga4Context?.property, 'properties/456');
+  assert.throws(() => service.setGa4Context('nope', {}), /account not found/);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

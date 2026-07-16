@@ -14,7 +14,7 @@ import type { Ga4Baseline } from './data-service';
 import { buildGa4Scorecard } from './ga4-scorecard';
 import { analyzeGa4Trend } from './ga4-trend';
 import { deriveGa4Insights } from './ga4-insights';
-import { antiLieFindings, maskPii } from './ga4-anti-lie';
+import { antiLieFindings, maskPii, restatedWithoutSpike } from './ga4-anti-lie';
 import type { Ga4ExecSummaryView, Ga4VisualsView, Ga4SectionsView } from '../../shared/ipc';
 
 export interface Ga4ReportInput {
@@ -29,6 +29,8 @@ export interface Ga4ReportInput {
   growth: Ga4GrowthResult | null; // null = no baseline → growth not assessed
   attribution: { reportingAttributionModel: string; acquisitionConversionEventLookbackWindow: string; otherConversionEventLookbackWindow: string } | null;
   audienceCount: number | null;
+  /** Audience names + membership durations (when the list was read) — shown in the coverage row. */
+  audienceDetails?: Array<{ displayName: string; membershipDurationDays: number | null }> | null;
   /** Ranked marketing-campaign performance (tagged utm_campaign traffic + untagged share), or null when
    *  the campaign query couldn't run — callers that don't pass it get null. */
   campaigns: Ga4CampaignReport | null;
@@ -92,6 +94,8 @@ const RISK_BY_CATEGORY: Record<string, string> = {
   integrations: 'Cross-product features (Ads, Signals) unavailable',
   benchmarking: 'Industry benchmarks unavailable',
   integrity: 'Event/revenue data may be corrupted (broken tag or double-counted purchases)',
+  hygiene: 'Reports split across event-name variants; GA4 standard reports and integrations miss the traffic',
+  params: 'Events fire but the reports built on their parameters (revenue, items, search terms) stay empty',
 };
 
 const pct = (part: number, total: number): number => (total > 0 ? Math.round((part / total) * 100) : 0);
@@ -280,6 +284,59 @@ function funnelView(baseline: Ga4Baseline | null): { steps: Array<{ label: strin
   });
   const last = raw[raw.length - 1]?.users ?? 0;
   return { steps, overall: `${((last / entry) * 100).toFixed(1)}%` };
+}
+
+// "What changed by channel": the top movers vs the prior period - joins the current channel table
+// against the prior-window per-channel sessions so the headline delta is decomposed into the channels
+// that caused it. Empty when the prior slice wasn't fetched (older baseline) or either side is empty.
+// Both sides are top-15 queries, so a channel outside both top-15s is absent - top movers only.
+function changeDrivers(baseline: Ga4Baseline | null): Array<{ channel: string; from: string; to: string; delta: string; deltaPct: number | null }> {
+  const prior = baseline?.priorChannelSessions ?? [];
+  const cur = baseline?.channelPerformance ?? [];
+  if (!prior.length || !cur.length) return [];
+  const pm = new Map(prior.map((p) => [p.channel || '(not set)', p.sessions]));
+  const cm = new Map(cur.map((c) => [c.channel || '(not set)', c.sessions]));
+  const rows = [...new Set([...pm.keys(), ...cm.keys()])]
+    .map((ch) => ({ channel: ch, fromN: pm.get(ch) ?? 0, toN: cm.get(ch) ?? 0 }))
+    .filter((r) => r.fromN > 0 || r.toN > 0);
+  rows.sort((a, b) => Math.abs(b.toN - b.fromN) - Math.abs(a.toN - a.fromN));
+  return rows.slice(0, 6).map((r) => {
+    const d = r.toN - r.fromN;
+    return {
+      channel: r.channel,
+      from: num(r.fromN),
+      to: num(r.toN),
+      delta: `${d >= 0 ? '+' : ''}${num(d)}`,
+      deltaPct: r.fromN > 0 ? Math.round((d / r.fromN) * 100) : null,
+    };
+  });
+}
+
+// Product performance (ITEM-scoped): what people view, add, and actually buy - top products by item
+// revenue. null on non-ecommerce properties (no item rows), so no surface renders an empty table.
+function productPerfView(baseline: Ga4Baseline | null, currency: string): { rows: Array<{ item: string; viewed: string; addedToCart: string; purchased: string; viewToBuy: string; revenue: string }>; caveat: string } | null {
+  const raw = (baseline?.itemPerformance ?? []).slice(0, 10);
+  if (!raw.length) return null;
+  const cur = currency ? `${currency} ` : '';
+  const rows = raw.map((p) => ({
+    item: p.item,
+    viewed: num(p.viewed),
+    addedToCart: num(p.addedToCart),
+    purchased: num(p.purchased),
+    viewToBuy: p.viewed > 0 ? `${((p.purchased / p.viewed) * 100).toFixed(1)}%` : '—',
+    revenue: p.revenue > 0 ? `${cur}${num(Math.round(p.revenue))}` : '—',
+  }));
+  return { rows, caveat: 'Item-scoped metrics (top products by item revenue): "viewed" counts item views, not sessions, and item revenue excludes shipping/tax - totals will not match the session tables 1:1.' };
+}
+
+// The one-line restated total for Section 3 - the SAME arithmetic as the concentration finding
+// (shared restatedWithoutSpike), formatted once so every surface says the same number.
+function restatedLine(baseline: Ga4Baseline | null): string | null {
+  if (!baseline) return null;
+  const r = restatedWithoutSpike(baseline);
+  if (!r) return null;
+  const sgn = (x: number): string => `${x >= 0 ? '+' : ''}${x}%`;
+  return `Excluding ${r.channel}'s ${r.peakLabel} burst (${num(r.excluded)} sessions): ${num(r.sessions)} sessions${r.restatedDeltaPct !== null && r.headlineDeltaPct !== null ? `, ${sgn(r.restatedDeltaPct)} vs prior instead of the headline ${sgn(r.headlineDeltaPct)}` : ''} - the quotable total while the burst is unexplained.`;
 }
 
 function areaEvidence(area: string, s: Ga4PropertySnapshot, config: Ga4AuditReport): string {
@@ -512,6 +569,7 @@ function buildAreaRows(
   s: Ga4PropertySnapshot,
   config: Ga4AuditReport,
   audienceCount: number | null,
+  audienceDetails: Array<{ displayName: string; membershipDurationDays: number | null }> | null,
   ecom: boolean,
   ecomV?: EcomVerification | null,
   continuity?: { days: number } | null,
@@ -527,7 +585,10 @@ function buildAreaRows(
     return { area: a.area, statusKey: a.status, evidence: areaEvidence(a.area, s, config) };
   });
   if (audienceCount !== null) {
-    rows.push({ area: 'Audiences', statusKey: audienceCount > 0 ? 'pass' : 'partial', evidence: `${audienceCount} audience(s)` });
+    const named = audienceDetails?.length
+      ? `: ${audienceDetails.slice(0, 4).map((a) => `${a.displayName}${a.membershipDurationDays ? ` (${a.membershipDurationDays}d)` : ''}`).join(', ')}${audienceDetails.length > 4 ? `, +${audienceDetails.length - 4} more` : ''}`
+      : '';
+    rows.push({ area: 'Audiences', statusKey: audienceCount > 0 ? 'pass' : 'partial', evidence: `${audienceCount} audience(s)${named}` });
   }
   if (ecom && ecomV) {
     const pct = ecomV.notSetSharePct.toFixed(1);
@@ -557,7 +618,7 @@ export function buildGa4ExecSummary(input: Ga4ReportInput): Ga4ExecSummaryView {
   const ecom = hasEcommerce(s);
   const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts, s);
   const top = allFindings.filter((f) => f.severity !== 'info')[0];
-  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
+  const areaRows = buildAreaRows(s, config, audienceCount, input.audienceDetails ?? null, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const nPartial = areaRows.filter((a) => a.statusKey === 'partial').length;
   const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
   const scoreModel = buildGa4Scorecard({
@@ -593,13 +654,14 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
   const trend = analyzeGa4Trend({ dailySessions: daily, peakDayChannels: baseline?.peakDayChannels ?? null, windowChannels: dqCounts.channelGroups, todayYmd: dqCounts.todayYmd });
   // Channel-attribution trust comes from the same Data Trust Matrix the Executive Summary uses.
   const allFindings = buildAllFindings(config, dq, growth, campaigns, baseline, dqCounts, s);
-  const areaRows = buildAreaRows(s, config, audienceCount, hasEcommerce(s), input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
+  const areaRows = buildAreaRows(s, config, audienceCount, input.audienceDetails ?? null, hasEcommerce(s), input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
     findings: allFindings.map((f) => ({ severity: f.severity, category: f.category })),
     growthAssessed: Boolean(growth?.assessed),
   });
   return {
+    metrics: buildMetricCards(baseline, s.currencyCode, score.trust),
     daily,
     peakIndex: trend.peakIndex,
     trendLabel: trend.patternLabel,
@@ -623,6 +685,30 @@ export function buildGa4Visuals(input: Ga4ReportInput): Ga4VisualsView {
   };
 }
 
+/** Headline metric cards: current vs prior window, each carrying its Data Trust Matrix verdict so
+ *  the on-screen/PDF green-or-red delta never over-claims an unverified metric. Revenue only renders
+ *  when either window recorded any (a lead-gen property gets no phantom revenue card). */
+function buildMetricCards(
+  baseline: Ga4ReportInput['baseline'],
+  currencyCode: string | undefined,
+  trust: Array<{ metric: string; verdict: 'safe' | 'caution' | 'unverified' | 'do_not_quote' }>,
+): NonNullable<Ga4VisualsView['metrics']> {
+  if (!baseline) return [];
+  const verdictOf = (metric: string): 'safe' | 'caution' | 'unverified' | 'do_not_quote' =>
+    trust.find((t) => t.metric === metric)?.verdict ?? 'unverified';
+  const num = (x: number): string => Math.round(x).toLocaleString('en-US');
+  const money = (x: number): string => `${currencyCode ? `${currencyCode} ` : ''}${Math.round(x).toLocaleString('en-US')}`;
+  const delta = (cur: number, prior: number): number | null => (prior > 0 ? ((cur - prior) / prior) * 100 : null);
+  const cards: NonNullable<Ga4VisualsView['metrics']> = [
+    { label: 'Sessions', value: num(baseline.sessions), prior: num(baseline.priorSessions), deltaPct: delta(baseline.sessions, baseline.priorSessions), verdict: verdictOf('Sessions, users, engagement rate') },
+    { label: 'Key events', value: num(baseline.keyEvents), prior: num(baseline.priorKeyEvents), deltaPct: delta(baseline.keyEvents, baseline.priorKeyEvents), verdict: verdictOf('Conversion counts') },
+  ];
+  if (baseline.revenue > 0 || baseline.priorRevenue > 0) {
+    cards.push({ label: 'Revenue', value: money(baseline.revenue), prior: money(baseline.priorRevenue), deltaPct: delta(baseline.revenue, baseline.priorRevenue), verdict: verdictOf('Revenue / AOV / ROAS') });
+  }
+  return cards;
+}
+
 /** Structured body sections (2-4) for the designed card panel + styled export. Computed from the same
  *  pure builders the markdown report uses, so the two surfaces can't drift. */
 export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
@@ -632,7 +718,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
   const dqAttrib = allFindings.find((f) => f.category === 'data_quality' && f.severity !== 'info' && /source data|Unassigned|\(not set\)/.test(f.message));
-  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
+  const areaRows = buildAreaRows(s, config, audienceCount, input.audienceDetails ?? null, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const nNotVerified = areaRows.filter((a) => a.statusKey === 'not_verified').length;
   const score = buildGa4Scorecard({
     areas: areaRows.map((a) => ({ area: a.area, statusKey: a.statusKey })),
@@ -684,11 +770,13 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
           keyEventsFrom: num(baseline.priorKeyEvents), keyEventsTo: num(baseline.keyEvents),
           revenueFrom: oMoney(baseline.priorRevenue), revenueTo: oMoney(baseline.revenue),
           keSafe, revSafe, sesSafe, quoteNote, read: growthReadLine(growth.findings[0], growth.sessionsTrendPct), trendPattern,
+          restated: restatedLine(baseline), drivers: changeDrivers(baseline),
         }
       : {
           assessed: false, sessionsPct: null, keyEventsPct: null, revenuePct: null,
           sessionsFrom: null, sessionsTo: null, keyEventsFrom: null, keyEventsTo: null, revenueFrom: null, revenueTo: null,
           keSafe, revSafe, sesSafe, quoteNote, read: 'Not enough prior traffic to assess growth for this window.', trendPattern,
+          restated: restatedLine(baseline), drivers: [],
         };
 
   const findings = allFindings.map((f) => ({ severity: f.severity, area: f.area, message: f.message, businessRisk: riskFor(f), recommendation: f.recommendation ?? '—', state: f.state ?? 'confirmed' }));
@@ -752,7 +840,7 @@ export function buildGa4Sections(input: Ga4ReportInput): Ga4SectionsView {
     footer: 'Read-only — GA4 has no auto-fixes; apply each change in the GA4 Admin UI.',
   };
 
-  return { topFinding, noIssueNote, outcomes, findings, blocked, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), campaignPerformance: campaignPerfView(campaigns), llmTraffic: llmTrafficView(baseline, s.currencyCode), funnel: funnelView(baseline), insights: deriveGa4Insights(baseline, s.currencyCode, { convSafe: keSafe, revSafe }), perfProvisional: !keSafe || !revSafe, decisions, notVerified: { gate, items: nv }, scope };
+  return { topFinding, noIssueNote, outcomes, findings, blocked, actionableCount: actionable.length, areas, baseline: baselineView, channelPerformance: channelPerfRows(baseline, s.currencyCode), landingPages: landingPageRows(baseline, s.currencyCode), devicePerformance: devicePerfRows(baseline, s.currencyCode), geoPerformance: geoPerfRows(baseline, s.currencyCode), campaignPerformance: campaignPerfView(campaigns), llmTraffic: llmTrafficView(baseline, s.currencyCode), productPerformance: productPerfView(baseline, s.currencyCode), funnel: funnelView(baseline), insights: deriveGa4Insights(baseline, s.currencyCode, { convSafe: keSafe, revSafe }), perfProvisional: !keSafe || !revSafe, decisions, notVerified: { gate, items: nv }, scope };
 }
 
 export function buildGa4AuditReport(input: Ga4ReportInput): string {
@@ -770,7 +858,7 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
   // all-clear as a problem.
   const actionable = allFindings.filter((f) => f.severity !== 'info');
   const top = actionable[0];
-  const areaRows = buildAreaRows(s, config, audienceCount, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
+  const areaRows = buildAreaRows(s, config, audienceCount, input.audienceDetails ?? null, ecom, input.ecomVerification, collectionContinuity(baseline, dqCounts.windowDays));
   const campaignPerf = campaignPerfView(campaigns);
 
   const windowLabel = auditWindowLabel(dq); // same label as section 1 + the styled section 9 card
@@ -900,6 +988,23 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
     L.push('');
     L.push(`**Trend pattern:** ${trend.patternLabel}. ${trend.summary}`);
   }
+  // Restated total (burst excluded): the arithmetic the concentration finding tells the reader to
+  // do, done for them - the number they may quote while the burst is unexplained.
+  const restatedS3 = restatedLine(baseline);
+  if (restatedS3) {
+    L.push('');
+    L.push(`**Restated (burst excluded):** ${restatedS3}`);
+  }
+  // "What changed by channel": decompose the headline delta into its top channel movers.
+  const driversS3 = growth && growth.assessed ? changeDrivers(baseline) : [];
+  if (driversS3.length) {
+    L.push('');
+    L.push('**What changed by channel** (top movers vs the prior period - the headline delta decomposed)');
+    L.push('');
+    L.push('| Channel | Prior | Now | Change | % |');
+    L.push('|---|--:|--:|--:|--:|');
+    for (const d of driversS3) L.push(`| ${cell(d.channel)} | ${d.from} | ${d.to} | ${d.delta} | ${d.deltaPct === null ? 'new' : `${d.deltaPct >= 0 ? '+' : ''}${d.deltaPct}%`} |`);
+  }
   L.push('');
 
   // ── 4 · All findings (severity high → low) ──
@@ -991,6 +1096,17 @@ export function buildGa4AuditReport(input: Ga4ReportInput): string {
       L.push('| Landing page | Sessions | Conv. rate | Revenue | Engagement |');
       L.push('|---|--:|--:|--:|--:|');
       for (const p of lpRows) L.push(`| ${cell(p.page)} | ${p.sessions} | ${p.convRate} | ${p.revenue} | ${p.engagement} |`);
+      L.push('');
+    }
+    const prodView = productPerfView(baseline, s.currencyCode);
+    if (prodView) {
+      L.push('**Product performance** (top products by item revenue — what people view, add, and actually buy)');
+      L.push('');
+      L.push('| Product | Items viewed | Added to cart | Purchased | View→buy | Item revenue |');
+      L.push('|---|--:|--:|--:|--:|--:|');
+      for (const p of prodView.rows) L.push(`| ${cell(p.item)} | ${p.viewed} | ${p.addedToCart} | ${p.purchased} | ${p.viewToBuy} | ${p.revenue} |`);
+      L.push('');
+      L.push(`_${prodView.caveat}_`);
       L.push('');
     }
     const dpRows = devicePerfRows(baseline, s.currencyCode);

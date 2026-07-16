@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { toOpenAiMessages, parseOpenAiReply } from '../openai';
+import { toOpenAiMessages, parseOpenAiReply, openaiChatBody } from '../openai';
 import { toAnthropicMessages, parseAnthropicReply } from '../anthropic';
 import { toGeminiContents, parseGeminiReply, geminiFunctionDecl, stripGeminiUnsupported } from '../gemini';
 import type { LlmTurn } from '../types';
@@ -130,6 +130,16 @@ test('Gemini: geminiFunctionDecl emits clean params, omits parameters for no-arg
   assert.equal(JSON.stringify(withArgs).includes('additionalProperties'), false);
   const noArgs = geminiFunctionDecl({ name: 'x', description: 'd', inputSchema: { type: 'object', properties: {} } });
   assert.equal('parameters' in noArgs, false, 'parameters omitted for a no-arg tool');
+});
+
+test('OpenAI: request body OMITS tools/tool_choice when there are no tools (empty-array 400 guard)', () => {
+  const base = { system: 's', model: 'gpt', apiKey: 'k', messages: [{ role: 'user', text: 'hi' } as LlmTurn] };
+  const empty = openaiChatBody({ ...base, tools: [] });
+  assert.equal('tools' in empty, false, 'no tools field when empty');
+  assert.equal('tool_choice' in empty, false, 'no tool_choice when no tools');
+  const withTool = openaiChatBody({ ...base, tools: [{ name: 't', description: 'd', inputSchema: { type: 'object' } }] });
+  assert.ok(Array.isArray(withTool.tools) && (withTool.tools as unknown[]).length === 1, 'tools present when supplied');
+  assert.equal(withTool.tool_choice, 'auto', 'tool_choice auto when tools present');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

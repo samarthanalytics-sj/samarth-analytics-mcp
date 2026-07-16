@@ -5,9 +5,10 @@ import type { OAuth2Client } from 'google-auth-library';
 import type { AccountClientManager } from './account-clients';
 import type { RegistryService } from '../services/registry-service';
 import type { ContainerSnapshot, ServerContainerSnapshot } from './gtm-builders';
-import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
+import { applyTriggerWaitDefaults, buildEnvironmentSnippet, normalizeTimerTrigger, normalizeCustomEventTrigger, normalizeTriggerType, setCustomEventName, customEventNameOf, buildGa4Client, buildGa4ServerTag, buildMetaCapiServerTag, buildTikTokCapiServerTag, buildStapeDataTag, buildServerAllEventsTrigger, buildServerEventTrigger, buildAdsConversionServerTag, buildMetaEmqVariables, buildTikTokEmqVariables, buildEcommerceDlvVariables, buildGa4EventTag, buildTrigger, planTriggerRetarget, type TriggerInput, buildGtmClient, buildVariable, sanitizeName, matchesServerContainer, customTemplateType, upsertGoogleTagConfig, triggerUsageBreakdown, detectMetaTags, evaluateTrackingSetup, GA4_ECOMMERCE_FUNNEL_EVENTS, type TrackingSetupReport, type TrackingSetupCheck } from './gtm-builders';
 import { resolveGa4MeasurementIds } from './gtm-ga4-check';
 import { withQuotaRetry } from './quota-retry';
+
 import type { Ga4PropertySnapshot } from './ga4-audit';
 import type { DataQualityCounts } from './ga4-data-quality';
 import { windowDates } from './ga4-data-quality';
@@ -49,6 +50,7 @@ interface RawTag {
   paused?: boolean | null;
   parameter?: unknown;
   consentSettings?: unknown;
+  parentFolderId?: string | null;
 }
 interface RawTrigger {
   triggerId?: string | null;
@@ -58,12 +60,14 @@ interface RawTrigger {
   autoEventFilter?: unknown;
   customEventFilter?: unknown;
   parameter?: unknown;
+  parentFolderId?: string | null;
 }
 interface RawVariable {
   variableId?: string | null;
   name?: string | null;
   type?: string | null;
   parameter?: unknown;
+  parentFolderId?: string | null;
 }
 
 const asList = (v: unknown): Array<Record<string, unknown>> =>
@@ -90,6 +94,7 @@ function toSnapshot(tags: RawTag[], triggers: RawTrigger[], variables: RawVariab
       paused: t.paused ?? false,
       parameter: asList(t.parameter),
       consentSettings: (t.consentSettings ?? null) as { consentStatus?: string; consentType?: unknown } | null,
+      ...(t.parentFolderId ? { parentFolderId: t.parentFolderId } : {}),
     })),
     triggers: triggers.map((t) => ({
       triggerId: t.triggerId ?? '',
@@ -99,12 +104,14 @@ function toSnapshot(tags: RawTag[], triggers: RawTrigger[], variables: RawVariab
       autoEventFilter: asList(t.autoEventFilter),
       customEventFilter: asList(t.customEventFilter),
       parameter: asList(t.parameter),
+      ...(t.parentFolderId ? { parentFolderId: t.parentFolderId } : {}),
     })),
     variables: variables.map((v) => ({
       variableId: v.variableId ?? '',
       name: v.name ?? '(unnamed)',
       type: v.type ?? '',
       parameter: asList(v.parameter),
+      ...(v.parentFolderId ? { parentFolderId: v.parentFolderId } : {}),
     })),
   };
 }
@@ -180,6 +187,13 @@ export interface Ga4Baseline {
    *  is an event-COVERAGE approximation (each step counts users independently, no order enforced), not a
    *  strict sequential funnel; the report labels it as such and omits it when there is no view_item. */
   funnelSteps: Array<{ event: string; users: number }>;
+  /** PRIOR-window sessions per channel (top 15) - powers the "what changed by channel"
+   *  decomposition of the headline delta. Optional: absent on older callers/fixtures,
+   *  and the drivers block simply doesn't render. */
+  priorChannelSessions?: Array<{ channel: string; sessions: number }>;
+  /** Top PRODUCTS by item revenue (ITEM-scoped metrics: itemsViewed / itemsAddedToCart /
+   *  itemsPurchased / itemRevenue). Empty/absent on non-ecommerce properties or query failure. */
+  itemPerformance?: Array<{ item: string; viewed: number; addedToCart: number; purchased: number; revenue: number }>;
 }
 
 export interface GtmWorkspaceView {
@@ -242,6 +256,14 @@ export class GoogleDataService {
     return this.clients.getClient(active.id);
   }
 
+  /** Identity of the currently-active connected Google account — used to key the per-account Tag
+   *  Assistant browser profile (so switching to a different Gmail uses that Gmail's own TA session, not
+   *  a shared one) and to steer its Google sign-in to the right account. Null if none is active. */
+  activeAccountIdentity(): { id: string; email: string } | null {
+    const active = this.registry.getActiveView();
+    return active ? { id: active.id, email: active.email } : null;
+  }
+
   async listGtmAccounts(): Promise<GtmAccountView[]> {
     // Cast at the boundary: @googleapis/* bundle their own google-auth-library
     // types, so our OAuth2Client is a structural-but-not-nominal match.
@@ -280,6 +302,7 @@ export class GoogleDataService {
         name: c.name ?? '(unnamed)',
         publicId: c.publicId ?? '',
         path: c.path ?? '',
+        usageContext: (c.usageContext ?? []).map(String),
       }));
       console.log('[gtm-containers] account %s: %d container(s): %s', accountId, views.length, views.map((c) => `${c.name}${c.publicId ? ' ' + c.publicId : ''}`).join(', ') || '—');
       return views;
@@ -377,8 +400,23 @@ export class GoogleDataService {
     return folders.map((f) => ({ folderId: f.folderId ?? '', name: f.name ?? '(unnamed)', path: f.path ?? '' }));
   }
 
+  /** List the ENABLED built-in variables in a workspace (read-only; the create path enables them). Used
+   *  by Workspace Comparison to compare which built-ins each workspace has turned on. Returns type (stable
+   *  match key, e.g. 'clickUrl') + display name (e.g. 'Click URL'). */
+  async listGtmEnabledBuiltInVariables(accountId: string, containerId: string, workspaceId: string): Promise<Array<{ type: string; name: string }>> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const vars = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.built_in_variables.list({ parent, pageToken }),
+      (r) => r.data.builtInVariable,
+      (r) => r.data.nextPageToken
+    );
+    return vars.map((v) => ({ type: v.type ?? '', name: v.name ?? v.type ?? '(unnamed)' }));
+  }
+
   /** The container's public id (GTM-XXXXXX) — needed to build install snippets. */
-  private async getContainerPublicId(accountId: string, containerId: string): Promise<string> {
+  async getContainerPublicId(accountId: string, containerId: string): Promise<string> {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const res = await gtm.accounts.containers.get({ path: `accounts/${accountId}/containers/${containerId}` });
@@ -715,6 +753,13 @@ export class GoogleDataService {
               streamingExportEnabled: l.streamingExportEnabled ?? false,
             })),
       audiences: audiencesRes === null ? null : audiencesRes.length,
+      audienceDetails:
+        audiencesRes === null
+          ? null
+          : (audiencesRes as Array<{ displayName?: string | null; membershipDurationDays?: number | null }>).slice(0, 50).map((a) => ({
+              displayName: a.displayName ?? '(unnamed)',
+              membershipDurationDays: typeof a.membershipDurationDays === 'number' ? a.membershipDurationDays : null,
+            })),
     };
   }
 
@@ -737,6 +782,15 @@ export class GoogleDataService {
       name: res.data.name ?? name,
       path: res.data.path ?? '',
     };
+  }
+
+  /** Delete a draft workspace. Draft-level ONLY: a workspace holds unpublished edits, so removing it
+   *  never affects the live/published container or any other workspace. */
+  async deleteGtmWorkspace(accountId: string, containerId: string, workspaceId: string): Promise<{ deleted: boolean }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    await gtm.accounts.containers.workspaces.delete({ path: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}` });
+    return { deleted: true };
   }
 
   /** Create a folder in a draft workspace (organisational only — no effect on firing). */
@@ -893,8 +947,8 @@ export class GoogleDataService {
     return { tagId: res.data.tagId ?? tagId, name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
-  /** Add event parameters (`epToAdd`) and/or user properties (`upToAdd`) to a SERVER GA4 tag
-   *  (`sgtmgaaw`) — the "Parameters/Properties to Add / Edit" sections. Read-modify-write, so the
+  /** Add event parameters (`eventParameters`) and/or user properties (`userProperties`) to a SERVER
+   *  GA4 tag (`sgtmgaaw`) — the "Parameters/Properties to Add / Edit" sections. Read-modify-write, so the
    *  measurementId / eventName / include-all dropdowns / triggers are preserved and a repeated name
    *  updates its value rather than duplicating. Rejects non-sgtmgaaw tags. (For a straight relay the
    *  incoming event's own params already flow via "Include: All" — use this for ENRICHMENT.) */
@@ -1446,7 +1500,8 @@ export class GoogleDataService {
       (r) => r.data.client,
       (r) => r.data.nextPageToken
     );
-    return clients.map((c) => ({ clientId: c.clientId ?? '', name: c.name ?? '(unnamed)', type: c.type ?? '' }));
+    // parameter is carried so the server audit can scan client configs for {{variable}} references.
+    return clients.map((c) => ({ clientId: c.clientId ?? '', name: c.name ?? '(unnamed)', type: c.type ?? '', parameter: (c.parameter as unknown[] | undefined) ?? [] }));
   }
 
   async createGtmClient(
@@ -1491,7 +1546,7 @@ export class GoogleDataService {
       (r) => r.data.transformation,
       (r) => r.data.nextPageToken
     );
-    return xs.map((t) => ({ transformationId: t.transformationId ?? '', name: t.name ?? '(unnamed)', type: t.type ?? '' }));
+    return xs.map((t) => ({ transformationId: t.transformationId ?? '', name: t.name ?? '(unnamed)', type: t.type ?? '', parameter: (t.parameter as unknown[] | undefined) ?? [] }));
   }
 
   async createGtmTransformation(
@@ -1509,6 +1564,391 @@ export class GoogleDataService {
     return { transformationId: res.data.transformationId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
   }
 
+  /** Execute ONLY the selected server-plan items (server-plan.ts): every step reuses an existing
+   *  matching asset (reported 'reused') and creates only what is missing; a selected item whose
+   *  required value is absent is SKIPPED with the reason - never guessed. Draft-only. */
+  async applyServerPlan(
+    accountId: string,
+    webContainerId: string,
+    target: { serverContainerId?: string; newName?: string },
+    selectedIds: string[],
+    values: { measurementId?: string; serverUrl?: string; metaPixelId?: string; metaAccessToken?: string; tiktokPixelId?: string; tiktokAccessToken?: string }
+  ): Promise<{
+    serverContainer: { containerId: string; publicId: string; name: string };
+    workspaceId: string;
+    applied: string[];
+    reused: string[];
+    skipped: Array<{ id: string; reason: string }>;
+    failed: Array<{ id: string; error: string }>;
+  }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+    const nrm = (x: string): string => x.trim().toLowerCase();
+    const selected = new Set(selectedIds);
+    const applied: string[] = [];
+    const reused: string[] = [];
+    const skipped: Array<{ id: string; reason: string }> = [];
+    const failed: Array<{ id: string; error: string }> = [];
+
+    // Container: complete the chosen one, or create-by-name (idempotent via the name match).
+    let container: { containerId: string; publicId: string; name: string };
+    if (target.serverContainerId) {
+      const c = await this.q(() => gtm.accounts.containers.get({ path: `accounts/${accountId}/containers/${target.serverContainerId}` }));
+      container = { containerId: c.data.containerId ?? target.serverContainerId, publicId: c.data.publicId ?? '', name: c.data.name ?? '' };
+      reused.push('container');
+    } else {
+      const newName = (target.newName ?? '').trim();
+      if (!newName) throw new Error('Give the new server container a name.');
+      const existing = await this.findServerContainerByName(accountId, newName);
+      if (existing) {
+        container = existing;
+        reused.push('container');
+      } else {
+        container = await this.q(() => this.createServerContainer(accountId, newName));
+        applied.push('container');
+      }
+    }
+    const cid = container.containerId;
+    const workspaceId = await this.q(() => this.defaultWorkspaceId(accountId, cid));
+    const parent = `accounts/${accountId}/containers/${cid}/workspaces/${workspaceId}`;
+
+    const [clients, triggers, tags, variables, builtIns] = await Promise.all([
+      this.q(() => this.listGtmClients(accountId, cid, workspaceId)).catch(() => []),
+      this.q(() => this.listGtmTriggers(accountId, cid, workspaceId)).catch(() => []),
+      this.q(() => this.listGtmTags(accountId, cid, workspaceId)).catch(() => []),
+      this.q(() => this.listGtmVariables(accountId, cid, workspaceId)).catch(() => []),
+      this.q(() => this.listGtmEnabledBuiltInVariables(accountId, cid, workspaceId)).catch(() => []),
+    ]);
+
+    // 1 · GA4 client
+    let ga4Client = clients.find((c) => c.type === 'gaaw_client') ?? null;
+    if (selected.has('ga4_client')) {
+      if (ga4Client) reused.push('ga4_client');
+      else {
+        try {
+          const cr = await this.q(() => gtm.accounts.containers.workspaces.clients.create({ parent, requestBody: buildGa4Client('GA4') }));
+          ga4Client = { clientId: cr.data.clientId ?? '', name: cr.data.name ?? 'GA4', type: 'gaaw_client' };
+          applied.push('ga4_client');
+        } catch (e) {
+          failed.push({ id: 'ga4_client', error: msg(e) });
+        }
+      }
+    }
+
+    // 2 · First-party GTM client
+    if (selected.has('gtm_client')) {
+      const existing = clients.find((c) => c.type === 'gtm_client');
+      if (existing) reused.push('gtm_client');
+      else {
+        try {
+          const web = await this.q(() => gtm.accounts.containers.get({ path: `accounts/${accountId}/containers/${webContainerId}` }));
+          const webPublicId = web.data.publicId ?? '';
+          if (!webPublicId) skipped.push({ id: 'gtm_client', reason: 'Could not read the web container public id.' });
+          else {
+            await this.q(() => this.createGtmClient(accountId, cid, workspaceId, buildGtmClient('GTM Web Container', [webPublicId]) as unknown as Record<string, unknown>));
+            applied.push('gtm_client');
+          }
+        } catch (e) {
+          failed.push({ id: 'gtm_client', error: msg(e) });
+        }
+      }
+    }
+
+    // 3 · Client Name built-in
+    if (selected.has('builtin_client_name')) {
+      if (builtIns.some((b) => nrm(b.type) === 'clientname')) reused.push('builtin_client_name');
+      else {
+        try {
+          await this.q(() => this.enableGtmBuiltInVariables(accountId, cid, workspaceId, ['clientName']));
+          applied.push('builtin_client_name');
+        } catch (e) {
+          failed.push({ id: 'builtin_client_name', error: msg(e) });
+        }
+      }
+    }
+
+    // 4 · All Events trigger
+    let allEventsTriggerId = triggers.find((t) => nrm(t.name) === 'all events')?.triggerId ?? '';
+    if (selected.has('all_events_trigger')) {
+      if (allEventsTriggerId) reused.push('all_events_trigger');
+      else {
+        try {
+          const tr = await this.q(() => gtm.accounts.containers.workspaces.triggers.create({ parent, requestBody: buildServerAllEventsTrigger('All Events', ga4Client?.name ?? 'GA4') as unknown as Record<string, unknown> }));
+          allEventsTriggerId = tr.data.triggerId ?? '';
+          applied.push('all_events_trigger');
+        } catch (e) {
+          failed.push({ id: 'all_events_trigger', error: msg(e) });
+        }
+      }
+    }
+
+    // 5 · Event Data variables
+    for (const spec of [
+      { id: 'var:ed - event_id', v: buildVariable({ name: 'ed - event_id', kind: 'event_data', keyPath: 'event_id' }) },
+      { id: 'var:ed - page_location', v: buildVariable({ name: 'ed - page_location', kind: 'event_data', keyPath: 'page_location' }) },
+    ]) {
+      if (!selected.has(spec.id)) continue;
+      if (variables.some((x) => nrm(x.name) === nrm(String((spec.v as { name?: unknown }).name ?? '')))) {
+        reused.push(spec.id);
+        continue;
+      }
+      try {
+        await this.q(() => this.createGtmVariable(accountId, cid, workspaceId, spec.v as unknown as Record<string, unknown>));
+        applied.push(spec.id);
+      } catch (e) {
+        failed.push({ id: spec.id, error: msg(e) });
+      }
+    }
+
+    // 6 · GA4 relay
+    if (selected.has('ga4_relay')) {
+      const existing = tags.find((t) => t.type === 'sgtmgaaw');
+      if (existing) reused.push('ga4_relay');
+      else {
+        let mid = (values.measurementId ?? '').trim();
+        if (!mid) mid = await this.q(() => this.deriveWebContainerMeasurementId(accountId, webContainerId)).catch(() => '');
+        if (!mid) skipped.push({ id: 'ga4_relay', reason: 'No Measurement ID (not derivable from the web container and none provided).' });
+        else if (!allEventsTriggerId) skipped.push({ id: 'ga4_relay', reason: 'No All Events trigger (create it first - the relay never fires without one).' });
+        else {
+          try {
+            await this.q(() => gtm.accounts.containers.workspaces.tags.create({ parent, requestBody: buildGa4ServerTag('GA4 - Server', mid, undefined, [allEventsTriggerId]) }));
+            applied.push('ga4_relay');
+          } catch (e) {
+            failed.push({ id: 'ga4_relay', error: msg(e) });
+          }
+        }
+      }
+    }
+
+    // 7 · Tagging URL + web wiring
+    const url = (values.serverUrl ?? '').trim();
+    if (selected.has('tagging_url')) {
+      if (!url) skipped.push({ id: 'tagging_url', reason: 'No server URL provided.' });
+      else {
+        try {
+          await this.q(() => this.setServerContainerTaggingUrl(accountId, cid, [url]));
+          applied.push('tagging_url');
+        } catch (e) {
+          failed.push({ id: 'tagging_url', error: msg(e) });
+        }
+      }
+    }
+    if (selected.has('web_wiring')) {
+      if (!url) skipped.push({ id: 'web_wiring', reason: 'No server URL provided.' });
+      else {
+        try {
+          const webWs = await this.q(() => this.defaultWorkspaceId(accountId, webContainerId));
+          const webSnap = await this.q(() => this.getGtmContainerSnapshot(accountId, webContainerId, webWs));
+          const googleTag = webSnap.tags.find((t) => t.type === 'googtag' && !t.paused);
+          if (!googleTag) skipped.push({ id: 'web_wiring', reason: 'No Google tag (googtag) found in the web container to point at the server.' });
+          else {
+            await this.q(() => this.setWebServerContainerUrl(accountId, webContainerId, webWs, googleTag.tagId, url));
+            applied.push('web_wiring');
+          }
+        } catch (e) {
+          failed.push({ id: 'web_wiring', error: msg(e) });
+        }
+      }
+    }
+
+    // 7b · Stape Data Tag pipeline
+    if (selected.has('data_client')) {
+      const { findStapeDataClient } = await import('./server-plan');
+      const existingClient = findStapeDataClient({ taggingServerUrls: [], clients, tags: [], transformations: [] });
+      if (existingClient) reused.push('data_client');
+      else {
+        try {
+          const tmpl = await this.q(() => this.importGalleryTemplate(accountId, cid, workspaceId, 'stape-io', 'data-client'));
+          if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Data Client template type (got "${tmpl.type}").`);
+          await this.q(() => this.createGtmClient(accountId, cid, workspaceId, { name: 'Data Client', type: tmpl.type } as unknown as Record<string, unknown>));
+          applied.push('data_client');
+        } catch (e) {
+          failed.push({ id: 'data_client', error: msg(e) });
+        }
+      }
+    }
+    if (selected.has('data_tag') || selected.has('data_tag_url')) {
+      const itemId = selected.has('data_tag') ? 'data_tag' : 'data_tag_url';
+      const dtUrl = (values.serverUrl ?? '').trim();
+      if (!dtUrl) skipped.push({ id: itemId, reason: 'No server URL provided.' });
+      else {
+        try {
+          const webWs = await this.q(() => this.defaultWorkspaceId(accountId, webContainerId));
+          const webSnap = await this.q(() => this.getGtmContainerSnapshot(accountId, webContainerId, webWs));
+          const { findStapeDataTag } = await import('./server-plan');
+          const existingDt = findStapeDataTag(webSnap);
+          if (itemId === 'data_tag_url') {
+            if (!existingDt) skipped.push({ id: itemId, reason: 'No Data Tag found in the web container any more.' });
+            else {
+              const path = `accounts/${accountId}/containers/${webContainerId}/workspaces/${webWs}/tags/${existingDt.tagId}`;
+              const current = (await this.q(() => gtm.accounts.containers.workspaces.tags.get({ path }))).data;
+              const params = (current.parameter ?? []).filter((p) => p.key !== 'gtm_server_domain');
+              params.push({ type: 'template', key: 'gtm_server_domain', value: dtUrl });
+              await this.q(() => gtm.accounts.containers.workspaces.tags.update({ path, requestBody: { ...current, parameter: params } }));
+              applied.push('data_tag_url');
+            }
+          } else if (existingDt) {
+            reused.push('data_tag');
+          } else {
+            const tmpl = await this.q(() => this.importGalleryTemplate(accountId, webContainerId, webWs, 'stape-io', 'data-tag'));
+            if (!tmpl.type || !tmpl.type.startsWith('cvt_')) throw new Error(`Could not resolve the Data Tag template type (got "${tmpl.type}").`);
+            await this.q(() => this.createGtmTag(accountId, webContainerId, webWs, buildStapeDataTag(tmpl.type, 'Data Tag - All Pages', dtUrl) as unknown as Record<string, unknown>));
+            applied.push('data_tag');
+          }
+        } catch (e) {
+          failed.push({ id: itemId, error: msg(e) });
+        }
+      }
+    }
+
+    // 8 · CAPI tags (Meta / TikTok) - one per selected event; template imported once per platform.
+    const capiIds = selectedIds.filter((id) => id.startsWith('meta_capi:') || id.startsWith('tiktok_capi:'));
+    let metaType = '';
+    let tiktokType = '';
+    let metaVarsDone = false;
+    let tiktokVarsDone = false;
+    const localTriggers = triggers.slice();
+    const localTags = tags.slice();
+    const ensureEventTrigger = async (eventName: string): Promise<string> => {
+      const hit = localTriggers.find((tr) => {
+        if (tr.type !== 'customEvent') return false;
+        const fs = (tr as { customEventFilter?: Array<{ type?: string; parameter?: Array<{ key?: string; value?: unknown }> }> }).customEventFilter ?? [];
+        if (fs.length !== 1) return false;
+        const ps = fs[0].parameter ?? [];
+        return String(ps.find((x) => x.key === 'arg0')?.value ?? '') === '{{_event}}' && String(ps.find((x) => x.key === 'arg1')?.value ?? '') === eventName;
+      });
+      if (hit) return hit.triggerId;
+      const baseName = `ce - ${eventName}`;
+      const taken = new Set(localTriggers.map((t) => t.name));
+      const trName = taken.has(baseName) ? `${baseName} (server)` : baseName;
+      const created = await this.q(() => gtm.accounts.containers.workspaces.triggers.create({
+        parent,
+        requestBody: { name: trName, type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: eventName }] }] },
+      }));
+      const id = created.data.triggerId ?? '';
+      localTriggers.push({ triggerId: id, name: trName, type: 'customEvent', customEventFilter: [{ type: 'equals', parameter: [{ key: 'arg0', value: '{{_event}}' }, { key: 'arg1', value: eventName }] }], filter: [], autoEventFilter: [], parameter: [] } as unknown as (typeof localTriggers)[number]);
+      return id;
+    };
+    for (const id of capiIds) {
+      const isMeta = id.startsWith('meta_capi:');
+      const event = id.slice(id.indexOf(':') + 1);
+      const pixelId = (isMeta ? values.metaPixelId : values.tiktokPixelId)?.trim() ?? '';
+      const token = (isMeta ? values.metaAccessToken : values.tiktokAccessToken)?.trim() ?? '';
+      if (!pixelId || !token) {
+        skipped.push({ id, reason: `Missing ${isMeta ? 'Meta' : 'TikTok'} pixel id / access token.` });
+        continue;
+      }
+      const tagName = `${isMeta ? 'Meta CAPI' : 'TikTok CAPI'} - ${event}`;
+      if (localTags.some((t) => nrm(t.name) === nrm(tagName))) {
+        reused.push(id);
+        continue;
+      }
+      try {
+        if (isMeta && !metaType) metaType = (await this.q(() => this.importGalleryTemplate(accountId, cid, workspaceId, 'stape-io', 'facebook-tag'))).type;
+        if (!isMeta && !tiktokType) tiktokType = (await this.q(() => this.importGalleryTemplate(accountId, cid, workspaceId, 'stape-io', 'tiktok-tag'))).type;
+        if (isMeta && !metaVarsDone) {
+          await this.q(() => this.createMetaEmqVariables(accountId, cid, workspaceId)).catch(() => null);
+          metaVarsDone = true;
+        }
+        if (!isMeta && !tiktokVarsDone) {
+          await this.q(() => this.createTikTokEmqVariables(accountId, cid, workspaceId)).catch(() => null);
+          tiktokVarsDone = true;
+        }
+        const triggerId = await ensureEventTrigger(event);
+        const body = isMeta
+          ? buildMetaCapiServerTag(metaType, tagName, pixelId, token, event, { firingTriggerId: [triggerId] })
+          : buildTikTokCapiServerTag(tiktokType, tagName, pixelId, token, event, { firingTriggerId: [triggerId] });
+        await this.q(() => this.createGtmTag(accountId, cid, workspaceId, body as unknown as Record<string, unknown>));
+        localTags.push({ tagId: '', name: tagName, type: isMeta ? metaType : tiktokType, firingTriggerId: [triggerId], blockingTriggerId: [], paused: false, parameter: [], consentSettings: null } as unknown as (typeof localTags)[number]);
+        applied.push(id);
+      } catch (e) {
+        failed.push({ id, error: msg(e) });
+      }
+    }
+
+    return { serverContainer: container, workspaceId, applied, reused, skipped, failed };
+  }
+
+  /** Create a server tag for ONE event by CLONING an existing same-platform server tag: the
+   *  template's type + parameters (credentials, variable references) carry over unchanged; only the
+   *  firing trigger is new (a Custom Event trigger for the event, reused when an identical one
+   *  already exists). DRAFT-ONLY - workspace change, nothing published. The caller confirms first.
+   *  NOTE: any outgoing event-name parameter still holds the template's value - the UI tells the
+   *  user to review it in GTM before publishing. */
+  async createServerTagForEvent(
+    accountId: string,
+    containerId: string,
+    workspaceId: string,
+    templateTagId: string,
+    eventName: string,
+    tagName: string
+  ): Promise<{ tagId: string; name: string; triggerName: string; triggerReused: boolean }> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
+    const tpl = (await gtm.accounts.containers.workspaces.tags.get({ path: `${parent}/tags/${templateTagId}` })).data;
+    if (!tpl.type) throw new Error('Template tag could not be read.');
+    // Reuse an existing trigger whose only event condition is {{_event}} equals <eventName>.
+    const existing = await collectPages(
+      (pageToken) => gtm.accounts.containers.workspaces.triggers.list({ parent, pageToken }),
+      (r) => r.data.trigger,
+      (r) => r.data.nextPageToken
+    );
+    const matches = (tr: (typeof existing)[number]): boolean => {
+      const fs = tr.customEventFilter ?? [];
+      if (tr.type !== 'customEvent' || fs.length !== 1) return false;
+      const params = fs[0].parameter ?? [];
+      const arg0 = String(params.find((p) => p.key === 'arg0')?.value ?? '');
+      const arg1 = String(params.find((p) => p.key === 'arg1')?.value ?? '');
+      return arg0 === '{{_event}}' && arg1 === eventName && String(fs[0].type ?? '').toLowerCase() === 'equals';
+    };
+    const reuse = existing.find(matches);
+    let triggerId = reuse?.triggerId ?? '';
+    let triggerName = reuse?.name ?? '';
+    if (!triggerId) {
+      const baseName = `ce - ${eventName}`;
+      const taken = new Set(existing.map((t) => t.name ?? ''));
+      triggerName = taken.has(baseName) ? `${baseName} (server)` : baseName;
+      const created = await gtm.accounts.containers.workspaces.triggers.create({
+        parent,
+        requestBody: {
+          name: triggerName,
+          type: 'customEvent',
+          customEventFilter: [
+            { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: eventName }] },
+          ],
+        },
+      });
+      triggerId = created.data.triggerId ?? '';
+      if (!triggerId) throw new Error('Trigger creation returned no id.');
+    }
+    const res = await gtm.accounts.containers.workspaces.tags.create({
+      parent,
+      requestBody: {
+        name: tagName,
+        type: tpl.type,
+        parameter: tpl.parameter ?? [],
+        firingTriggerId: [triggerId],
+        ...(tpl.consentSettings ? { consentSettings: tpl.consentSettings } : {}),
+      },
+    });
+    return { tagId: res.data.tagId ?? '', name: res.data.name ?? tagName, triggerName, triggerReused: Boolean(reuse) };
+  }
+
+  /** The container's LIVE (published) version id, or null when none is published / unreadable.
+   *  Read-only; used as the draft-vs-live caveat on the server documentation. */
+  async getGtmLiveContainerVersionId(accountId: string, containerId: string): Promise<string | null> {
+    const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
+    const gtm = tagmanager({ version: 'v2', auth });
+    try {
+      const res = await gtm.accounts.containers.versions.live({ parent: `accounts/${accountId}/containers/${containerId}` });
+      return res.data.containerVersionId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Snapshot a SERVER container for auditServerContainer: its tagging server URL(s),
    *  clients, server tags (as AuditTags), and transformations. */
   async getServerContainerSnapshot(
@@ -1519,7 +1959,7 @@ export class GoogleDataService {
     const auth = this.activeAuth() as unknown as Parameters<typeof tagmanager>[0]['auth'];
     const gtm = tagmanager({ version: 'v2', auth });
     const parent = `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`;
-    const [container, rawTags, rawTriggers, clients, transformations] = await Promise.all([
+    const [container, rawTags, rawTriggers, rawVariables, clients, transformations] = await Promise.all([
       gtm.accounts.containers.get({ path: `accounts/${accountId}/containers/${containerId}` }),
       collectPages(
         (pageToken) => gtm.accounts.containers.workspaces.tags.list({ parent, pageToken }),
@@ -1531,15 +1971,21 @@ export class GoogleDataService {
         (r) => r.data.trigger,
         (r) => r.data.nextPageToken
       ),
+      collectPages(
+        (pageToken) => gtm.accounts.containers.workspaces.variables.list({ parent, pageToken }),
+        (r) => r.data.variable,
+        (r) => r.data.nextPageToken
+      ),
       this.listGtmClients(accountId, containerId, workspaceId),
       this.listGtmTransformations(accountId, containerId, workspaceId),
     ]);
-    const { tags, triggers } = toSnapshot(rawTags, rawTriggers, []);
+    const { tags, triggers, variables } = toSnapshot(rawTags, rawTriggers, rawVariables);
     return {
       taggingServerUrls: container.data.taggingServerUrls ?? [],
       clients,
       tags,
       triggers,
+      variables,
       transformations,
     };
   }
@@ -1756,7 +2202,9 @@ export class GoogleDataService {
     accountId: string,
     webContainerId: string,
     name: string,
-    serverUrl?: string
+    serverUrl?: string,
+    /** Complete THIS existing server container (add whatever is missing) instead of creating one. */
+    existingServerContainerId?: string
   ): Promise<{
     serverContainer: { containerId: string; publicId: string; name: string; taggingServerUrls: string[] };
     workspaceId: string;
@@ -1790,7 +2238,21 @@ export class GoogleDataService {
     // hit the quota before finishing), REUSE it and ensure the baseline instead of creating a
     // duplicate ("Found entity with duplicate name"). Combined with per-sub-call quota-retry, the
     // whole flow completes on a retry rather than erroring.
-    const existingServer = await this.findServerContainerByName(accountId, containerName);
+    let existingServer: { containerId: string; publicId: string; name: string; taggingServerUrls: string[] } | null = null;
+    if (existingServerContainerId) {
+      // Explicit target: COMPLETE this container regardless of its name (the shell-container case -
+      // a partially-created container whose name differs from the derived default was previously
+      // unreachable by the name-match resume).
+      const c = await this.q(() => gtm0.accounts.containers.get({ path: `accounts/${accountId}/containers/${existingServerContainerId}` }));
+      existingServer = {
+        containerId: c.data.containerId ?? existingServerContainerId,
+        publicId: c.data.publicId ?? '',
+        name: c.data.name ?? containerName,
+        taggingServerUrls: c.data.taggingServerUrls ?? [],
+      };
+    } else {
+      existingServer = await this.findServerContainerByName(accountId, containerName);
+    }
     const boot = existingServer
       ? await this.ensureServerBaseline(accountId, existingServer, measurementId)
       : await this.bootstrapServerSideTagging(accountId, containerName, measurementId);
@@ -2196,7 +2658,10 @@ export class GoogleDataService {
     const gtm = tagmanager({ version: 'v2', auth });
     const res = await gtm.accounts.containers.workspaces.triggers.create({
       parent: `accounts/${accountId}/containers/${containerId}/workspaces/${workspaceId}`,
-      requestBody: normalizeCustomEventTrigger(normalizeTimerTrigger(applyTriggerWaitDefaults(trigger))),
+      // normalizeTriggerType runs FIRST so the corrected `type` drives every downstream normalizer
+      // (a model-authored "custom_event"/"all_clicks" must become "customEvent"/"click" before the
+      // customEvent/timer/wait-default repairs inspect it).
+      requestBody: normalizeCustomEventTrigger(normalizeTimerTrigger(applyTriggerWaitDefaults(normalizeTriggerType(trigger)))),
     });
     this.journal('trigger', accountId, containerId, workspaceId, res.data.triggerId ?? '', `${res.data.name ?? 'trigger'} (#${res.data.triggerId})`);
     return { triggerId: res.data.triggerId ?? '', name: res.data.name ?? '', type: res.data.type ?? '' };
@@ -2488,7 +2953,7 @@ export class GoogleDataService {
     // NEWEST-FIRST at limit 1000, then reversed to chronological — so a custom range longer than the cap
     // keeps the MOST-RECENT days (what spike/trend cares about), not the oldest. Country = top-N (250).
     const emptyResult: Ga4ReportResult = { dimensionHeaders: [], metricHeaders: [], rows: [] };
-    const [curTotal, priorTotal, byEngagement, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage, byDevicePerf, byGeoPerf, byFunnel, byLlmSource] = await Promise.all([
+    const [curTotal, priorTotal, byEngagement, byDate, byDevice, byNvR, byCountry, byChannelDate, byChannelPerf, byLandingPage, byDevicePerf, byGeoPerf, byFunnel, byLlmSource, byPriorChannel, byItems] = await Promise.all([
       this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: TREND_METRICS }),
       this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: [], metrics: TREND_METRICS }),
       // Engagement totals (0=userEngagementDuration sec, 1=engagementRate 0-1, 2=engagedSessionsPerUser).
@@ -2524,6 +2989,12 @@ export class GoogleDataService {
       // referrals. NOTE: this is a systematic UNDERCOUNT (app/in-app browsers + copied links land in
       // Direct); the report says so.
       this.runGa4Report({ property, startDate, endDate, dimensions: ['sessionSource'], metrics: ['sessions', 'keyEvents', 'sessionKeyEventRate', 'totalRevenue', 'engagementRate'], dimensionFilter: { filter: { fieldName: 'sessionSource', inListFilter: { values: LLM_TRAFFIC_SOURCES } } }, orderBys: byMetricDesc, limit: '20' }).catch(() => emptyResult),
+      // PRIOR-window per-channel sessions (top 15): the "what changed by channel" decomposition joins
+      // these against the current channelPerformance rows. Best-effort.
+      this.runGa4Report({ property, startDate: priorStartDate, endDate: priorEndDate, dimensions: ['sessionDefaultChannelGroup'], metrics: ['sessions'], orderBys: byMetricDesc, limit: '15' }).catch(() => emptyResult),
+      // Top PRODUCTS by item revenue. ITEM-scoped metrics (a session that views 3 products counts once
+      // per product) - the report's caveat says so. Empty on non-ecommerce properties. Best-effort.
+      this.runGa4Report({ property, startDate, endDate, dimensions: ['itemName'], metrics: ['itemsViewed', 'itemsAddedToCart', 'itemsPurchased', 'itemRevenue'], orderBys: [{ metric: { metricName: 'itemRevenue' }, desc: true }], limit: '15' }).catch(() => emptyResult),
     ]);
     // Build the per-step user counts. This is an event-COVERAGE funnel (distinct users who fired each
     // event at all in the window), NOT a strict sequential path — GA4's true ordered funnel is
@@ -2639,6 +3110,16 @@ export class GoogleDataService {
         engagementRate: Number(r.metrics[4]) || 0, // 0-1
       })),
       funnelSteps: FUNNEL_EVENTS.map((event) => ({ event, users: funnelUsers.get(event) ?? 0 })),
+      priorChannelSessions: byPriorChannel.rows.map((r) => ({ channel: r.dimensions[0] || '(not set)', sessions: n(r.metrics[0]) })),
+      itemPerformance: byItems.rows
+        .map((r) => ({
+          item: r.dimensions[0] || '(not set)',
+          viewed: n(r.metrics[0]),
+          addedToCart: n(r.metrics[1]),
+          purchased: n(r.metrics[2]),
+          revenue: n(r.metrics[3]),
+        }))
+        .filter((x) => x.viewed > 0 || x.addedToCart > 0 || x.purchased > 0 || x.revenue > 0),
     };
   }
 
@@ -2848,6 +3329,65 @@ export class GoogleDataService {
       if (name && (Number(r.metrics[0]) || 0) > 0) present.add(name);
     }
     return [...present];
+  }
+
+  /** Predefined-signal readings for the event-PARAMETER matrix: per-event counts + the eventValue
+   *  metric (the summed `value` parameter), the searchTerm "(not set)" share, and the items* metric
+   *  totals. Follow-up queries fire only when their events actually have data (a lead-gen site never
+   *  pays for an items query). Read-only. */
+  async getGa4EventParamSignals(
+    property: string,
+    startDate: string,
+    endDate: string
+  ): Promise<{
+    events: Array<{ name: string; count: number; value: number }>;
+    searchTermNotSetPct: number | null;
+    items: { viewed: number; addedToCart: number; checkedOut: number; purchased: number } | null;
+  }> {
+    const base = await this.runGa4Report({
+      property,
+      startDate,
+      endDate,
+      dimensions: ['eventName'],
+      metrics: ['eventCount', 'eventValue'],
+      orderBys: [{ metric: { metricName: 'eventCount' }, desc: true }],
+      limit: '500',
+    });
+    const events = base.rows.map((r) => ({
+      name: r.dimensions[0] ?? '',
+      count: Number(r.metrics[0]) || 0,
+      value: Number(r.metrics[1]) || 0,
+    }));
+    const has = (n: string): boolean => events.some((e) => e.name === n && e.count > 0);
+    const wantSearch = has('search');
+    const wantItems = ['view_item', 'add_to_cart', 'begin_checkout', 'purchase'].some(has);
+    const [search, items] = await Promise.all([
+      wantSearch
+        ? this.runGa4Report({ property, startDate, endDate, dimensions: ['searchTerm'], metrics: ['eventCount'], limit: '250' }).catch(() => null)
+        : Promise.resolve(null),
+      wantItems
+        ? this.runGa4Report({ property, startDate, endDate, dimensions: [], metrics: ['itemsViewed', 'itemsAddedToCart', 'itemsCheckedOut', 'itemsPurchased'] }).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    let searchTermNotSetPct: number | null = null;
+    if (search) {
+      let total = 0;
+      let notSet = 0;
+      for (const r of search.rows) {
+        const c = Number(r.metrics[0]) || 0;
+        total += c;
+        if ((r.dimensions[0] ?? '').trim() === '(not set)' || (r.dimensions[0] ?? '').trim() === '') notSet += c;
+      }
+      searchTermNotSetPct = total > 0 ? (notSet / total) * 100 : null;
+    }
+    const im = items?.rows?.[0]?.metrics;
+    return {
+      events,
+      searchTermNotSetPct,
+      items: im
+        ? { viewed: Number(im[0]) || 0, addedToCart: Number(im[1]) || 0, checkedOut: Number(im[2]) || 0, purchased: Number(im[3]) || 0 }
+        : null,
+    };
   }
 
   /** Session counts by channel group and by source/medium over a window — either the last `days`

@@ -411,5 +411,70 @@ test('PII detector scans campaign names and traffic sources too, always masked',
   assert.ok(!JSON.stringify(srcOnly).includes('bob@corp.com'), 'source addresses masked too');
 });
 
+test('data-collection copy labels the daily figure (yesterday / last complete day) so it never reads stale', () => {
+  // Fresh property: last complete row is yesterday -> the copy SAYS yesterday.
+  const fresh = baseline({ dailySessions: [
+    { date: '20260628', sessions: 340 }, { date: '20260629', sessions: 345 }, { date: '20260630', sessions: 338 },
+  ] });
+  const r1 = monitorGa4(input({ baseline: fresh, dqCounts: dq({ todayYmd: '2026-07-01' }) }));
+  const d1 = r1.checks.find((c) => c.id === 'data_flow')!.detail;
+  assert.ok(/338 sessions yesterday \(Jun 30, 2026\)/.test(d1), d1);
+
+  // Trailing partial "today" is excluded, so the labeled day is still yesterday.
+  const partial = baseline({ dailySessions: [
+    { date: '20260629', sessions: 345 }, { date: '20260630', sessions: 338 }, { date: '20260701', sessions: 5 },
+  ] });
+  const r2 = monitorGa4(input({ baseline: partial, dqCounts: dq({ todayYmd: '2026-07-01' }) }));
+  assert.ok(/yesterday \(Jun 30, 2026\)/.test(r2.checks.find((c) => c.id === 'data_flow')!.detail));
+
+  // Series ending far in the past: the copy admits it is the last complete day GA4 has.
+  const d3 = monitorGa4(input()).checks.find((c) => c.id === 'data_flow')!.detail;
+  assert.ok(/on Jun 17, 2026 - the last complete day GA4 has/.test(d3), d3);
+});
+
+test('conversion-break alert carries structured Slack fields (metric lines, impact, curated actions)', () => {
+  // Sessions x4 while key events and revenue stay flat - the classic spike-without-conversions break.
+  const b = baseline({ sessions: 40000, priorSessions: 10000, keyEvents: 310, priorKeyEvents: 300, revenue: 101000, priorRevenue: 100000 });
+  const r = monitorGa4(input({ baseline: b }));
+  const a = r.alerts.find((x) => x.kind === 'conversion_break');
+  assert.ok(a, 'conversion break fires: ' + JSON.stringify(r.alerts.map((x) => x.kind)));
+  assert.ok(a!.summaryLines && a!.summaryLines.some((l) => /Sessions: \+300% \(10,000 \u2192 40,000\)/.test(l)), JSON.stringify(a!.summaryLines));
+  assert.ok(a!.summaryLines!.some((l) => /Key Events: \+3%/.test(l)), 'key-event delta line');
+  assert.ok(a!.summaryLines!.some((l) => /Revenue: \+1%/.test(l)), 'revenue delta line');
+  assert.ok(a!.actions && a!.actions.some((x) => /DebugView\/Realtime/.test(x)), 'curated action bullets');
+  assert.ok(a!.actions!.some((x) => /primary traffic source \(Organic Search\)/.test(x)), 'top source named in the actions');
+  assert.ok(a!.impact, 'impact carried from the growth finding businessRisk');
+});
+
+test('alerts speak to the owner: consequence-first plain voice, forwardable action, one severity vocabulary', () => {
+  const b = baseline({
+    channelPerformance: [
+      { channel: 'Organic Shopping', sessions: 30000, keyEvents: 2000, convRate: 0.04, revenue: 845315, engagementRate: 0.6 },
+      { channel: 'Paid Shopping', sessions: 900, keyEvents: 40, convRate: 0.03, revenue: 13200, engagementRate: 0.5 },
+    ],
+  });
+  const campaigns = {
+    windowDays: 28, dateRange: null, totalSessions: 50000, primaryMetric: 'conversions' as const,
+    taggedCampaigns: [
+      { campaign: 'Adv+ Shopping - All products', sessions: 8000, keyEvents: 23933, revenue: 532085, engagementRate: 0.6 },
+      { campaign: '20574896341', sessions: 4000, keyEvents: 9000, revenue: 227350, engagementRate: 0.55 },
+    ],
+    bestCampaign: null, untaggedSessions: 24000, untaggedSharePct: 48, summary: '', findings: [],
+  };
+  const r = monitorGa4(input({ baseline: b, campaigns }));
+
+  const mism = r.alerts.find((x) => x.kind === 'attribution_mismatch')!;
+  assert.ok(mism.plain && /less profitable than they are/.test(mism.plain), mism.plain);
+  assert.ok(!/reconcile/i.test(mism.plain!), 'no analyst jargon in the plain line');
+  assert.ok(mism.actions?.some((x) => /forward them this alert/i.test(x)), 'the reader action is forwardable');
+  assert.ok(mism.recommendation && /auto-tagging|utm/i.test(mism.recommendation), 'technical fix kept for whoever fixes it');
+
+  const untagged = r.alerts.find((x) => x.kind === 'untagged_share')!;
+  assert.ok(/About 1 in 2 of your visits/.test(untagged.plain ?? ''), 'percentage translated to a physical count: ' + untagged.plain);
+
+  assert.ok(!/serious/.test(r.summary), 'no third severity word: ' + r.summary);
+  assert.ok(/\d+ (critical|high)/.test(r.summary), 'summary counts in the alert vocabulary: ' + r.summary);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

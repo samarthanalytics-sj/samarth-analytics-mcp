@@ -246,5 +246,48 @@ test('reporting currency unset → info collection finding', () => {
   assert.ok(!auditGa4(base({ currencyCode: 'EUR' })).findings.some((f) => /currency/i.test(f.message)));
 });
 
+test('custom-definition parameter naming: camelCase/hyphen params get the exact snake_case rename', () => {
+  const r = auditGa4(base({
+    customDimensions: [
+      { parameterName: 'userType', displayName: 'User Type', scope: 'USER' },
+      { parameterName: 'page-section', displayName: 'Page Section', scope: 'EVENT' },
+      { parameterName: 'membership_tier', displayName: 'Membership Tier', scope: 'USER' },
+    ],
+    customMetrics: [{ parameterName: 'LoyaltyPoints', displayName: 'Loyalty Points' }],
+  }));
+  const f = r.findings.find((x) => /parameter name/.test(x.message));
+  assert.ok(f, 'naming finding fires');
+  assert.equal(f!.severity, 'low');
+  assert.equal(f!.category, 'customdef');
+  assert.ok(/"userType" -> user_type \(user property\)/.test(f!.message), f!.message);
+  assert.ok(/"page-section" -> page_section/.test(f!.message));
+  assert.ok(/"LoyaltyPoints" -> loyalty_points/.test(f!.message));
+  assert.ok(!/membership_tier/.test(f!.message), 'clean snake_case params not listed');
+  // All-clean definitions -> no naming finding.
+  const clean = auditGa4(base());
+  assert.ok(!clean.findings.some((x) => /parameter name/.test(x.message)));
+});
+
+test('default-only audiences while Ads linked → info; silent with a custom audience or without detail', () => {
+  const defaults = [
+    { displayName: 'All Users', membershipDurationDays: null },
+    { displayName: 'Purchasers', membershipDurationDays: 540 },
+  ];
+  const r = auditGa4(base({ audiences: 2, audienceDetails: defaults, googleAdsLinks: 1 }));
+  const f = r.findings.find((x) => /default audiences/.test(x.message));
+  assert.ok(f, 'default-only finding fires');
+  assert.equal(f!.severity, 'info');
+  assert.ok(/All Users, Purchasers/.test(f!.message));
+
+  const custom = auditGa4(base({ audiences: 3, audienceDetails: [...defaults, { displayName: 'Cart abandoners', membershipDurationDays: 30 }], googleAdsLinks: 1 }));
+  assert.ok(!custom.findings.some((x) => /default audiences/.test(x.message)), 'a real audience silences it');
+
+  const noAds = auditGa4(base({ audiences: 2, audienceDetails: defaults, googleAdsLinks: 0 }));
+  assert.ok(!noAds.findings.some((x) => /default audiences/.test(x.message)), 'no Ads link -> nothing to activate');
+
+  const noDetail = auditGa4(base({ audiences: 2, audienceDetails: null, googleAdsLinks: 1 }));
+  assert.ok(!noDetail.findings.some((x) => /default audiences/.test(x.message)), 'unread detail is never guessed');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

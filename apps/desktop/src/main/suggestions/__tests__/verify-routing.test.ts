@@ -1,7 +1,7 @@
 // Pure tests for the multi-page verify router (no browser).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/verify-routing.test.ts
 
-import { routeTagsToPages, elementMatchesTrigger, isHomePage } from '../verify-routing';
+import { routeTagsToPages, elementMatchesTrigger, isHomePage, normalizeVerifyPages } from '../verify-routing';
 import type { VerifyTagInput, DetectedElementView } from '../../../shared/ipc';
 
 let passed = 0;
@@ -35,6 +35,12 @@ check('isHomePage NOT an absolute subpage', !isHomePage('https://site.com/career
 check('text equals matches', elementMatchesTrigger(tag().trigger, el('/careers', 'View Open Positions')));
 check('text equals is case-insensitive', elementMatchesTrigger(tag().trigger, el('/careers', 'view open positions')));
 check('text equals does NOT match a different label', !elementMatchesTrigger(tag().trigger, el('/careers', 'Apply Now')));
+// Decorated on-page labels still EQUALS-match after normalization (arrow glyph, nbsp, extra whitespace).
+check('text equals matches a label with a trailing arrow glyph', elementMatchesTrigger(tag().trigger, el('/careers', 'View Open Positions →')));
+check('text equals matches a label with nbsp + extra spaces', elementMatchesTrigger(tag().trigger, el('/careers', '  View Open   Positions ')));
+// equals-then-contains fallback: an equals trigger matches a label carrying extra words.
+check('text equals falls back to contains for an extra-word label', elementMatchesTrigger(tag().trigger, el('/careers', 'View Open Positions Today')));
+check('text equals still rejects an unrelated label', !elementMatchesTrigger(tag().trigger, el('/careers', 'Read the blog')));
 {
   const t = tag({ trigger: { name: 'x', kind: 'link_click', clickTextValue: 'Free Audit', clickTextOperator: 'contains' } });
   check('text contains matches a superset label', elementMatchesTrigger(t.trigger, el('/', 'Get a Free Audit')));
@@ -129,6 +135,22 @@ check('non-click trigger never matches', !elementMatchesTrigger({ name: 'p', kin
   check('routes a click-URL tag to its page', r.page === '/resources');
 }
 
+// ── normalizeVerifyPages: the "pages to verify" list → same-origin absolute URLs ────────────────────
+{
+  const T = 'https://www.example.com/';
+  check('normalizeVerifyPages: resolves relative + keeps absolute same-origin',
+    JSON.stringify(normalizeVerifyPages(['/contact', 'https://www.example.com/pricing'], T))
+      === JSON.stringify(['https://www.example.com/contact', 'https://www.example.com/pricing']));
+  check('normalizeVerifyPages: drops off-origin URLs',
+    JSON.stringify(normalizeVerifyPages(['https://evil.com/x', '/ok'], T)) === JSON.stringify(['https://www.example.com/ok']));
+  check('normalizeVerifyPages: trims blanks and dedupes (order preserved)',
+    JSON.stringify(normalizeVerifyPages(['  /a  ', '', '/a', '/b'], T)) === JSON.stringify(['https://www.example.com/a', 'https://www.example.com/b']));
+  check('normalizeVerifyPages: drops unparseable entries', normalizeVerifyPages(['http://', 'ht tp://x'], T).every((u) => u.startsWith('https://www.example.com')) );
+  check('normalizeVerifyPages: empty for empty/non-array input',
+    normalizeVerifyPages([], T).length === 0 && normalizeVerifyPages(undefined, T).length === 0 && normalizeVerifyPages('x', T).length === 0);
+  check('normalizeVerifyPages: empty when target itself is unparseable', normalizeVerifyPages(['/a'], 'not a url').length === 0);
+}
+
 console.log(`\nverify-routing: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
-if (passed < 31) { console.error(`expected >= 31 checks, got ${passed}`); process.exit(1); }
+if (passed < 37) { console.error(`expected >= 37 checks, got ${passed}`); process.exit(1); }

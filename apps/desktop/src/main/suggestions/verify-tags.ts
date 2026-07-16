@@ -9,6 +9,7 @@
 import { parseGa4CollectHit, classifyCollector, beaconPlatform, beaconHost, isKnownAdPlatform } from '../../shared/runtime-capture';
 import { ctaTriggerFiresOn } from './scan-core';
 import { isFormEventName } from './form-tag-match';
+import { monitorVerdicts, type MonitorEvent } from './tag-monitor';
 import type { SuggestedTag } from '../../../../web-audit-mcp/src/agent/tag-suggest/types.js';
 import type {
   VerifyTagInput,
@@ -25,6 +26,11 @@ export interface PerTagCapture {
   targetFound: boolean;
   /** The interaction was actually performed. */
   performed: boolean;
+  /** For a custom_event FORM tag: whether we could supply its form-specific condition (customEventData)
+   *  when we pushed the event. False = we pushed a BARE event that can't satisfy its form_name filter, so
+   *  a non-fire is "we didn't reproduce its trigger" (inconclusive), not "it's broken". Undefined for
+   *  interactions that need no condition (a click, a scroll/CTA custom event, a pageview) → treated true. */
+  conditionSupplied?: boolean;
   note?: string;
   /** /collect hits captured (and aborted) after this interaction. */
   hits: CapturedHitView[];
@@ -173,6 +179,85 @@ export function evaluateVerify(
     return shot ? { ...v, screenshot: shot } : v;
   };
   return tags.map((tag): VerifyTagVerdict => withShot(evaluateOne(tag, byId, elements)));
+}
+
+/** AUTHORITATIVE verdicts from GTM's own Monitor stream (addEventCallback via the injected GTM Monitor
+ *  tag): a tag GTM fired on any driven event is `fired` (status success = clean; failure/exception/
+ *  timeout = fired-but-errored); a tag GTM never fired did NOT fire. Ground truth from the container
+ *  itself — no beacon inference, no dual-container ambiguity — and it carries the exact events + status,
+ *  which is what the Tag-Assistant-style firing panel renders. PURE. */
+export function verdictsFromMonitor(tags: VerifyTagInput[], events: MonitorEvent[], perTag: PerTagCapture[] = [], opts: { scopedPages?: number } = {}): VerifyTagVerdict[] {
+  // When the operator scoped the run to an explicit "Pages to verify" list, a tag left untested is almost
+  // always one whose CTA/form lives on a DIFFERENT page — not a scan-budget miss. Say so plainly.
+  const scopeHint = opts.scopedPages && opts.scopedPages > 0
+    ? ` You verified only ${opts.scopedPages === 1 ? 'this 1 page' : `these ${opts.scopedPages} pages`} (your “Pages to verify” list), so this tag’s trigger lives on a page you didn’t include — add that page to the list, or clear the box to verify the whole site.`
+    : '';
+  // Form tags ARE included now: the driver verifies them by a REAL form submit (never a synthetic push),
+  // so the monitor stream authoritatively reports which form tags fired on the real form_submission. A form
+  // tag that fired → fired; one whose form wasn't submitted (no matching form, or a Skip run) → its
+  // form_submission event never happened → INCONCLUSIVE ("verified only by a real submit"), never a false
+  // "not firing". This is what lets the Forms section + the table agree with Tag Assistant.
+  const reportable = tags;
+  const byId = monitorVerdicts(reportable.map((t) => t.id), events);
+  const capById = new Map(perTag.map((c) => [c.tagId, c] as const));
+  // Every dataLayer event that ACTUALLY happened during the drive, per the monitor stream. A
+  // custom-event tag whose event is not in this set was never really tested: GTM cannot fire a tag
+  // whose event never happened (e.g. a form that announces itself with its OWN event name, which
+  // only the real submit produces). Calling that "not firing" is a false alarm with wrong advice.
+  const seenEvents = new Set(events.map((e) => e.event).filter(Boolean));
+  return reportable.map((tag): VerifyTagVerdict => {
+    const m = byId.get(tag.id);
+    const base = { tagId: tag.id, tagName: tag.tagName, verifiedByMonitor: true } as const;
+    if (m && m.fired) {
+      const clean = m.status === 'success';
+      return {
+        ...base,
+        fired: true,
+        monitorStatus: m.status,
+        ...(m.onEvents.length ? { monitorEvents: m.onEvents, event: m.onEvents[0] } : {}),
+        ...(m.maxExecutionMs != null ? { monitorExecutionMs: m.maxExecutionMs } : {}),
+        ...(clean ? {} : { reason: `GTM fired this tag but it reported "${m.status}" — the tag ran with an error; check its configuration.` }),
+        interaction: { kind: 'none', targetFound: true, performed: true },
+      };
+    }
+    // NOT in the monitor report. The monitor is authoritative about what GTM fired ON THE EVENTS WE DROVE
+    // — but "GTM didn't fire it" is only a real problem when we actually REPRODUCED its trigger. A tag
+    // whose CTA lives on a page beyond the scan budget, or a form tag whose exact form-submit event we
+    // couldn't push (no matching form → empty condition), was simply never exercised. Flatly calling those
+    // "not firing" is a false negative — they DO fire in Tag Assistant when the real action supplies the
+    // trigger/condition. Split them into INCONCLUSIVE ("untested here") vs a genuine non-fire.
+    const cap = capById.get(tag.id);
+    const isFormTag = tag.trigger.kind === 'custom_event' && isFormEventName(tag.trigger.eventName ?? tag.eventName ?? '');
+    // conditionSupplied is undefined for interactions that need no condition (a click, a scroll/CTA custom
+    // event, a pageview) → treat as supplied. Only a form tag we pushed with an EMPTY condition is false.
+    const conditionOk = cap?.conditionSupplied ?? true;
+    const expectedEvent = tag.trigger.kind === 'custom_event' ? (tag.trigger.eventName ?? tag.eventName ?? '') : '';
+    const eventHappened = !expectedEvent || seenEvents.has(expectedEvent);
+    const exercised = Boolean(cap?.targetFound && cap?.performed) && conditionOk && eventHappened;
+    if (!exercised) {
+      const why = cap && cap.targetFound === false
+        ? 'we couldn’t find the button/link this tag listens to on the pages we drove — it may live on a page we didn’t scan'
+        : !eventHappened
+          ? `this tag waits for the event “${expectedEvent}”, and that event never happened during this run — the page only sends it on the real action${isFormTag ? ' (the real form submit)' : ''}`
+          : isFormTag
+            ? 'we couldn’t reproduce this tag’s exact form-submit event here (its form wasn’t among the ones we found), so its condition was never met'
+            : 'we couldn’t exercise this tag’s trigger on the pages we drove';
+      return {
+        ...base,
+        fired: false,
+        inconclusive: true,
+        reason: `${why} — that is NOT evidence it’s broken.${scopeHint} The real test is the “verify by real submit” step below (for forms) or a real interaction in GTM Preview.`,
+        interaction: { kind: 'none', targetFound: cap?.targetFound ?? false, performed: cap?.performed ?? false },
+      };
+    }
+    const sawWhat = expectedEvent ? `the event “${expectedEvent}” happened` : 'we drove its trigger';
+    return {
+      ...base,
+      fired: false,
+      reason: `GTM did not fire this tag even though ${sawWhat} — and GTM itself reported this run, so the container was definitely loaded. The problem is in the tag’s trigger conditions: a form name / id, page path, or other filter doesn’t match what the page actually sent. Open the trigger in GTM and compare it with the dataLayer log above.`,
+      interaction: { kind: 'none', targetFound: true, performed: true },
+    };
+  });
 }
 
 function evaluateOne(tag: VerifyTagInput, byId: Map<string, PerTagCapture>, elements: DetectedElementView[]): VerifyTagVerdict {

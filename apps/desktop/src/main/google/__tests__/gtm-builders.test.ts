@@ -49,6 +49,7 @@ import {
   isGa4EcommerceEvent,
   normalizeCustomEventName,
   normalizeCustomEventTrigger,
+  normalizeTriggerType,
   setCustomEventName,
   findUnusedTriggers,
   collectUsedTriggerIds,
@@ -89,6 +90,8 @@ import {
   ga4VariablePlan,
   planTriggerRetarget,
 } from '../gtm-builders';
+import type { AuditTag as TAuditTag, ContainerSnapshot as TContainerSnapshot, ServerContainerSnapshot as TServerContainerSnapshot } from '../gtm-builders';
+import { buildGoogleTagEventSettingsVariable } from '../gtm-builders';
 import { classifyPixel } from '../pixel-signatures';
 
 let passed = 0;
@@ -1276,21 +1279,24 @@ test('buildGa4ServerTag builds an sgtmgaaw tag relaying to the Measurement ID', 
   // a per-event tag uses a literal event name
   const purchase = buildGa4ServerTag('GA4 - Purchase', 'G-ABC123', 'purchase');
   assert.equal(((purchase.parameter ?? []) as Array<{ key: string; value: string }>).find((x) => x.key === 'eventName')?.value, 'purchase');
-  // no epToAdd/upToAdd unless explicitly requested (the plain relay forwards everything via "All")
-  assert.equal(p.find((x) => x.key === 'epToAdd'), undefined, 'no add-parameters list on a plain relay');
+  // no eventParameters/userProperties list unless explicitly requested (the plain relay forwards everything via "All")
+  assert.equal(p.find((x) => x.key === 'eventParameters'), undefined, 'no add-parameters list on a plain relay');
 });
 
-test('buildGa4ServerTag: optional eventParameters/userProperties → epToAdd/upToAdd (name/value rows)', () => {
+test('buildGa4ServerTag: optional eventParameters/userProperties → eventParameters/userProperties lists (fieldName/value rows, real sgtmgaaw shape)', () => {
   const t = buildGa4ServerTag('GA4 - Enriched', 'G-1', 'purchase', ['9'], {
     eventParameters: [{ name: 'page_type', value: 'checkout' }, { name: '', value: 'dropped' }],
     userProperties: [{ name: 'membership', value: '{{User Tier}}' }],
   });
   const rowsOf = (key: string): Array<[string, string]> => {
     const p = ((t.parameter as Array<{ key?: string; list?: Array<{ map: Array<{ key?: string; value?: string }> }> }>) ?? []).find((x) => x.key === key);
-    return (p?.list ?? []).map((r) => [r.map.find((m) => m.key === 'name')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
+    return (p?.list ?? []).map((r) => [r.map.find((m) => m.key === 'fieldName')?.value ?? '', r.map.find((m) => m.key === 'value')?.value ?? '']);
   };
-  assert.deepEqual(rowsOf('epToAdd'), [['page_type', 'checkout']], 'empty-name row dropped');
-  assert.deepEqual(rowsOf('upToAdd'), [['membership', '{{User Tier}}']]);
+  assert.deepEqual(rowsOf('eventParameters'), [['page_type', 'checkout']], 'empty-name row dropped');
+  assert.deepEqual(rowsOf('userProperties'), [['membership', '{{User Tier}}']]);
+  // Regression guard: the old broken keys must never come back.
+  const keySet = (t.parameter as Array<{ key?: string }>).map((x) => x.key);
+  assert.ok(!keySet.includes('epToAdd') && !keySet.includes('upToAdd'), 'no epToAdd/upToAdd (unrecognized by sgtmgaaw)');
   // the relay still keeps its base config
   const keys = (t.parameter as Array<{ key?: string }>).map((x) => x.key);
   assert.ok(keys.includes('measurementId') && keys.includes('epToIncludeDropdown'), 'base relay config preserved');
@@ -1493,6 +1499,80 @@ test('auditServerContainer is quiet on a healthy server container', () => {
   assert.equal(rep.hasGa4Config, true, 'GA4 client present');
 });
 
+test('auditServerContainer: legacy UA client + duplicate same-type clients flagged', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [
+      { clientId: '1', name: 'GA4 Client', type: 'gaaw_client' },
+      { clientId: '2', name: 'GA4 Client copy', type: 'gaaw_client' },
+      { clientId: '3', name: 'Old UA', type: 'ua_client' },
+    ],
+    transformations: [],
+    tags: [{ tagId: '1', name: 'GA4 - Server', type: 'sgtmgaaw', firingTriggerId: ['10'], blockingTriggerId: [], paused: false, parameter: [{ type: 'template', key: 'measurementId', value: 'G-1' }], consentSettings: null }],
+  });
+  const msgs = rep.findings.map((f) => f.message).join(' | ');
+  assert.ok(/Universal Analytics client/i.test(msgs), 'UA client flagged as legacy');
+  assert.ok(/2 clients of the same type "gaaw_client"/i.test(msgs), 'same-type duplicate flagged');
+});
+
+test('auditServerContainer: unused variables + dangling references, client params count as usage, server built-ins excluded', () => {
+  const rep = auditServerContainer({
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4 Client', type: 'gaaw_client', parameter: [{ type: 'template', key: 'cookieName', value: '{{used by client}}' }] }],
+    transformations: [],
+    tags: [{
+      tagId: '1', name: 'GA4 - Server', type: 'sgtmgaaw', firingTriggerId: ['10'], blockingTriggerId: [], paused: false,
+      parameter: [
+        { type: 'template', key: 'measurementId', value: '{{const - mid}}' },
+        { type: 'template', key: 'eventName', value: '{{ghost var}}' },
+        { type: 'template', key: 'serverEventName', value: '{{Event Name}}' },
+      ],
+      consentSettings: null,
+    }],
+    variables: [
+      { variableId: 'v1', name: 'const - mid', type: 'c', parameter: [] },
+      { variableId: 'v2', name: 'used by client', type: 'c', parameter: [] },
+      { variableId: 'v3', name: 'truly orphaned', type: 'c', parameter: [] },
+    ],
+  });
+  const msgs = rep.findings.map((f) => f.message).join(' | ');
+  assert.ok(/"truly orphaned" appears unused/i.test(msgs), 'orphan variable flagged');
+  assert.ok(!/"used by client" appears unused/i.test(msgs), 'client parameter usage keeps a variable off the unused list');
+  assert.ok(!/"const - mid" appears unused/i.test(msgs), 'tag-referenced variable not unused');
+  assert.ok(/references \{\{ghost var\}\}/i.test(msgs), 'dangling reference flagged');
+  assert.ok(!/Event Name/.test(rep.findings.filter((f) => f.category === 'variable').map((f) => f.message).join(' | ')), 'server built-in {{Event Name}} not called dangling');
+  assert.equal(rep.counts.variables, 3, 'variable count populated');
+});
+
+test('auditServerContainer: PII-named vars feeding CAPI tags with zero transformations -> one LOW look-here; silent with a transformation or when unreferenced', () => {
+  const base = {
+    taggingServerUrls: ['https://sgtm.example.com'],
+    clients: [{ clientId: '1', name: 'GA4 Client', type: 'gaaw_client' }],
+    tags: [{
+      tagId: 't1', name: 'Meta CAPI - Lead', type: 'cvt_x_1', firingTriggerId: ['9'], blockingTriggerId: [], paused: false,
+      parameter: [{ type: 'template', key: 'pixelId', value: '123456789012345' }, { type: 'template', key: 'userData', value: '{{ed - email}}' }],
+      consentSettings: null,
+    }],
+    variables: [
+      { variableId: 'v1', name: 'ed - email', type: 'ed', parameter: [] },
+      { variableId: 'v2', name: 'ed - page_location', type: 'ed', parameter: [] },
+    ],
+  };
+  const rep = auditServerContainer({ ...base, transformations: [] });
+  const f = rep.findings.find((x) => /PII-named variable/.test(x.message));
+  assert.ok(f, 'finding fires');
+  assert.equal(f!.severity, 'low');
+  assert.equal(f!.confidence, 'runtime-required');
+  assert.ok(/"ed - email"/.test(f!.message) && !/page_location/.test(f!.message), 'only the PII-named var listed');
+  assert.ok(/hash user data themselves/i.test(f!.message), 'honest: templates hash by default, not proof of a leak');
+
+  const withXf = auditServerContainer({ ...base, transformations: [{ transformationId: 'x1', name: 'Hash', type: 'hash' }] });
+  assert.ok(!withXf.findings.some((x) => /PII-named variable/.test(x.message)), 'a transformation silences it');
+
+  const unref = auditServerContainer({ ...base, tags: [{ ...base.tags[0], parameter: [{ type: 'template', key: 'pixelId', value: '123456789012345' }] }], transformations: [] });
+  assert.ok(!unref.findings.some((x) => /PII-named variable/.test(x.message)), 'a PII-named var not feeding a CAPI tag is not flagged');
+});
+
 // Helpers for the corpus-motivated server checks (Vocal Minority GTM-57RM3QCT reference).
 const clientNameEqualsGa4 = [
   { type: 'EQUALS', parameter: [
@@ -1588,50 +1668,62 @@ test('auditServerContainer (1): DOES flag two same-id relays on the same trigger
   assert.ok(rep.findings.some((f) => f.severity === 'critical' && /counted 2× in GA4/i.test(f.message)), 'same event on same trigger IS a duplicate');
 });
 
-test('auditServerContainer (2): flags URL-ENCODED trigger filter values on BOTH camelCase (live API) and UPPER_SNAKE (export) operators, not decoded or regex values', () => {
+test('auditServerContainer (2): flags URL-encoded EVENT-NAME ({{_event}}) filters (both operator casings), NOT decoded/regex values, and NOT page_location/URL filters where +/%XX are legitimate', () => {
   const rep = auditServerContainer({
     taggingServerUrls: ['https://sgtm.example.com'],
     clients: [{ clientId: '1', name: 'GA4', type: 'gaaw_client' }],
     transformations: [],
     triggers: [
-      // camelCase operator — the shape the LIVE tagmanager API returns (the runtime audit path).
-      { triggerId: '93', name: 'Sign Petition Click Trigger', type: 'ALWAYS', filter: [
+      // camelCase operator on the EVENT NAME — dead (GTM matches the DECODED {{_event}}).
+      { triggerId: '93', name: 'Sign Petition Click Trigger', type: 'customEvent', customEventFilter: [
         { type: 'contains', parameter: [
-          { type: 'template', key: 'arg0', value: '{{Event Name}}' },
+          { type: 'template', key: 'arg0', value: '{{_event}}' },
           { type: 'template', key: 'arg1', value: 'Sign+Petition+Click' },
         ] },
       ] },
-      // UPPER_SNAKE operator — the shape a container EXPORT uses; must also be caught.
-      { triggerId: '129', name: 'Form Submit Trigger', type: 'ALWAYS', filter: [
+      // UPPER_SNAKE operator (export shape) on the event name — must also be caught.
+      { triggerId: '129', name: 'Encoded Event Export', type: 'customEvent', customEventFilter: [
         { type: 'EQUALS', parameter: [
-          { type: 'template', key: 'arg0', value: '{{Page URL Variable}}' },
-          { type: 'template', key: 'arg1', value: '/petition%2Frefugee-rights/' },
+          { type: 'template', key: 'arg0', value: '{{_event}}' },
+          { type: 'template', key: 'arg1', value: 'sign%2Fpetition' },
         ] },
       ] },
       // Decoded event name — must NOT be flagged.
-      { triggerId: '153', name: 'Decoded Form Submit', type: 'ALWAYS', filter: [
+      { triggerId: '153', name: 'Decoded Event', type: 'customEvent', customEventFilter: [
         { type: 'contains', parameter: [
-          { type: 'template', key: 'arg0', value: '{{Event Name}}' },
+          { type: 'template', key: 'arg0', value: '{{_event}}' },
           { type: 'template', key: 'arg1', value: 'Sign Petition Form Submission' },
         ] },
       ] },
-      // A regex quantifier '+' is legal — matchRegex/MATCH_REGEX must NOT be flagged (both casings).
-      { triggerId: '114', name: 'Regex URL', type: 'ALWAYS', filter: [
+      // A regex quantifier '+' is legal — matchRegex must NOT be flagged.
+      { triggerId: '114', name: 'Regex Event', type: 'customEvent', customEventFilter: [
         { type: 'matchRegex', parameter: [
-          { type: 'template', key: 'arg0', value: '{{Page URL Variable}}' },
-          { type: 'template', key: 'arg1', value: '/expose-plastic/|/protect-turtles/a+b' },
+          { type: 'template', key: 'arg0', value: '{{_event}}' },
+          { type: 'template', key: 'arg1', value: 'sign_.+_click' },
         ] },
       ] },
+      // FALSE-POSITIVE GUARD: a page_location/URL filter legitimately holds '+'/%XX (the URL retains them
+      // and DOES match) — it must NOT be flagged as dead. This is exactly the shape buildServerEventTrigger's
+      // pageUrlContains produces ({{ed - page_location}} contains "…").
+      { triggerId: '200', name: 'Campaign Page Filter', type: 'customEvent',
+        customEventFilter: [{ type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'purchase' }] }],
+        filter: [
+          { type: 'contains', parameter: [
+            { type: 'template', key: 'arg0', value: '{{ed - page_location}}' },
+            { type: 'template', key: 'arg1', value: '/checkout?utm_campaign=summer+sale' },
+          ] },
+        ] },
     ],
     tags: [gaawTag('7', 'GA4 Tag', 'G-1', ['6'])],
   });
   const encoded = rep.findings.filter((f) => f.category === 'firing' && /URL-encoded/i.test(f.message));
   const names = encoded.map((f) => f.resource?.name).sort();
-  assert.deepEqual(names, ['Form Submit Trigger', 'Sign Petition Click Trigger'], 'flags the encoded triggers regardless of operator casing');
+  assert.deepEqual(names, ['Encoded Event Export', 'Sign Petition Click Trigger'], 'flags encoded EVENT-NAME filters regardless of operator casing');
   assert.ok(encoded.every((f) => f.severity === 'high'));
   assert.ok(encoded.some((f) => /"Sign\+Petition\+Click"/.test(f.message)), 'echoes the offending value');
-  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Decoded Form Submit'), 'decoded value not flagged');
-  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Regex URL'), 'regex quantifier not flagged');
+  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Decoded Event'), 'decoded event name not flagged');
+  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Regex Event'), 'regex quantifier not flagged');
+  assert.ok(!rep.findings.some((f) => f.resource?.name === 'Campaign Page Filter' && /URL-encoded/i.test(f.message)), 'a page_location contains "…+…" filter is NOT falsely flagged as dead');
 });
 
 test('auditServerContainer (3): flags SWAPPED Pixel ID / Access Token (never echoing the token), not correct or variable-backed tags', () => {
@@ -1927,24 +2019,27 @@ test('buildMetaCapiServerTag maps EMQ user_data (em/ph ONLY) + EVENT-AWARE ecomm
   const extDefault = (extVar?.parameter ?? []).find((p) => (p as { key?: string }).key === 'defaultValue') as { value?: string } | undefined;
   assert.equal(extDefault?.value, '{{ed - user_id}}', 'external_id ed variable falls back to user_id');
   assert.ok(emq.some((v) => v.name === 'ed - user_id'), 'ed - user_id is created');
-  // custom_data is the AddToCart recommended set (content_ids/contents/value/currency/num_items), NOT a
-  // fixed list — no order_id (AddToCart has none). content_type is deliberately OMITTED so the template's
-  // own product/product_group auto-detection is not clobbered by a hard-coded literal.
+  // custom_data holds only the SCALAR ecommerce fields that resolve from a flat GA4 key (value, currency,
+  // and order_id for events that carry it). content_ids / contents / num_items / content_type are
+  // deliberately NOT emitted: the Stape template's addEcommerceData BUILDS custom_data.contents from the
+  // event's `items` and auto-detects content_type BEFORE the (unconditional) customDataList override, so a
+  // row binding them to an {{ed - …}} that resolves undefined would ERASE the template's product data
+  // (cleanupData then drops it) — the exact contents-loss bug. AddToCart has no order_id.
   assert.deepEqual(rows('customDataList'), [
-    ['content_ids', '{{ed - content_ids}}'],
-    ['contents', '{{ed - contents}}'],
     ['value', '{{ed - value}}'],
     ['currency', '{{ed - currency}}'],
-    ['num_items', '{{ed - num_items}}'],
   ]);
-  // content_type is never emitted as a custom_data row (the template auto-detects it).
-  assert.ok(!rows('customDataList').some(([n]) => n === 'content_type'), 'content_type is left to the template');
+  // Regression guard: the product/aggregate fields the template reshapes must never be overridden.
+  for (const left of ['content_type', 'contents', 'content_ids', 'num_items']) {
+    assert.ok(!rows('customDataList').some(([n]) => n === left), `${left} is left to the template, not overridden`);
+  }
   assert.deepEqual(rows('serverEventDataList'), [['event_id', '{{ed - event_id}}']]);
-  // Purchase pulls in order_id (from transaction_id); a custom event falls back to the core set.
+  // Purchase pulls in order_id (from transaction_id) but still leaves contents/content_ids to the template.
   const purchase = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - Purchase Tag', 'P', 'T', 'Purchase');
   assert.ok(rowsOf(purchase, 'customDataList').some(([n, v]) => n === 'order_id' && v === '{{ed - transaction_id}}'), 'Purchase maps order_id');
+  assert.ok(!rowsOf(purchase, 'customDataList').some(([n]) => n === 'contents' || n === 'content_ids'), 'Purchase leaves contents/content_ids to the template');
   const custom = buildMetaCapiServerTag('cvt_5TP8W', 'Meta CAPI - Custom Tag', 'P', 'T', 'my_custom_event');
-  assert.deepEqual(rowsOf(custom, 'customDataList').map(([n]) => n), ['content_ids', 'value', 'currency', 'order_id'], 'custom event → core ecommerce set');
+  assert.deepEqual(rowsOf(custom, 'customDataList').map(([n]) => n), ['value', 'currency', 'order_id'], 'custom event → scalar set only');
   // Every referenced {{ed - …}} variable is provided by buildMetaEmqVariables (literals like "product" are skipped).
   const provided = new Set(buildMetaEmqVariables().map((v) => v.name));
   const referenced = [...rows('userDataList'), ...rows('customDataList'), ...rows('serverEventDataList')]
@@ -2387,6 +2482,100 @@ test('normalizeCustomEventTrigger leaves a valid server all-events trigger (matc
   assert.equal(evCond?.parameter.find((p) => p.key === 'arg1')?.value, '.*', 'match-all value untouched');
   // the {{Client Name}} scoping condition (in `filter`, not customEventFilter) survives untouched
   assert.ok(t.filter?.some((c) => c.parameter.some((p) => p.key === 'arg0' && p.value === '{{Client Name}}')), 'client-name filter preserved');
+});
+
+test('normalizeCustomEventTrigger MOVES a mis-placed scope condition out of customEventFilter into filter', () => {
+  // The exact create_gtm_trigger failure: the model put BOTH the {{_event}} match AND an extra
+  // {{dlv - event_label}} condition inside customEventFilter → API "must have exactly one custom-event filter".
+  const t = normalizeCustomEventTrigger({
+    name: 'Chat lead',
+    type: 'customEvent',
+    customEventFilter: [
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'generate_lead' }] },
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{dlv - event_label}}' }, { type: 'template', key: 'arg1', value: 'Chat' }] },
+    ],
+  }) as {
+    customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }>;
+    filter?: Array<{ parameter: Array<{ key: string; value: string }> }>;
+  };
+  assert.equal(t.customEventFilter.length, 1, 'customEventFilter holds exactly the one {{_event}} match');
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg0')?.value, '{{_event}}');
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'generate_lead');
+  assert.equal(t.filter?.length, 1, 'the mis-placed condition moved into filter');
+  assert.equal(t.filter?.[0].parameter.find((p) => p.key === 'arg0')?.value, '{{dlv - event_label}}');
+  assert.equal(t.filter?.[0].parameter.find((p) => p.key === 'arg1')?.value, 'Chat');
+});
+
+test('normalizeCustomEventTrigger merges mis-placed extras AFTER existing filter conditions', () => {
+  const t = normalizeCustomEventTrigger({
+    name: 'Scoped purchase',
+    type: 'customEvent',
+    filter: [{ type: 'contains', parameter: [{ type: 'template', key: 'arg0', value: '{{Page Path}}' }, { type: 'template', key: 'arg1', value: '/checkout' }] }],
+    customEventFilter: [
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'purchase' }] },
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{Form ID}}' }, { type: 'template', key: 'arg1', value: 'checkout-form' }] },
+    ],
+  }) as { customEventFilter: unknown[]; filter: Array<{ parameter: Array<{ key: string; value: string }> }> };
+  assert.equal(t.customEventFilter.length, 1, 'only the {{_event}} match stays in customEventFilter');
+  assert.deepEqual(
+    t.filter.map((c) => c.parameter.find((p) => p.key === 'arg0')?.value),
+    ['{{Page Path}}', '{{Form ID}}'],
+    'existing filter conditions kept first, mis-placed extra appended',
+  );
+});
+
+test('normalizeCustomEventTrigger tolerates a null/garbage element in customEventFilter (no throw)', () => {
+  const t = normalizeCustomEventTrigger({
+    name: 'Junk',
+    type: 'customEvent',
+    customEventFilter: [
+      null,
+      'nope',
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'purchase' }] },
+    ],
+  }) as { customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }>; filter?: unknown };
+  assert.equal(t.customEventFilter.length, 1, 'garbage elements dropped; the one real {{_event}} match kept');
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'purchase');
+  assert.equal('filter' in t, false, 'garbage is not smuggled into filter');
+});
+
+test('normalizeCustomEventTrigger dedups duplicate {{_event}} conditions to exactly one', () => {
+  const t = normalizeCustomEventTrigger({
+    name: 'Dup',
+    type: 'customEvent',
+    customEventFilter: [
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'sign up' }] },
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'sign up' }] },
+    ],
+  }) as { customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }>; filter?: unknown };
+  assert.equal(t.customEventFilter.length, 1, 'duplicate {{_event}} conditions collapse to one');
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'sign_up', 'match value snake_cased');
+  assert.equal('filter' in t, false, 'no empty filter array when there are no extra conditions');
+});
+
+test('normalizeTriggerType repairs the aliases the model invents; valid + unknown types pass through', () => {
+  const typeOf = (input: Record<string, unknown>): unknown => (normalizeTriggerType(input) as { type?: unknown }).type;
+  // All-Elements click aliases → the bare "click" enum value (the pasted API error).
+  for (const a of ['all_clicks', 'allClicks', 'allElements', 'all_elements', 'All Elements', 'click-all']) {
+    assert.equal(typeOf({ name: 'T', type: a }), 'click', `${a} → click`);
+  }
+  assert.equal(typeOf({ name: 'T', type: 'just_links' }), 'linkClick', 'just_links → linkClick');
+  assert.equal(typeOf({ name: 'T', type: 'form_submit' }), 'formSubmission', 'form_submit → formSubmission');
+  assert.equal(typeOf({ name: 'T', type: 'custom_event' }), 'customEvent', 'custom_event → customEvent');
+  assert.equal(typeOf({ name: 'T', type: 'window_loaded' }), 'windowLoaded', 'window_loaded → windowLoaded');
+  assert.equal(typeOf({ name: 'T', type: 'youtube_video' }), 'youTubeVideo', 'youtube_video → youTubeVideo');
+  // The Consent Initialization trigger's API value is "consentInit"; the longer spelling is a repair alias.
+  assert.equal(typeOf({ name: 'T', type: 'consentInitialization' }), 'consentInit', 'consentInitialization → consentInit');
+  assert.equal(typeOf({ name: 'T', type: 'consent_init' }), 'consentInit', 'consent_init → consentInit');
+  // Already-valid enum values are returned unchanged (same object, not rewritten). consentInit is the
+  // real API value and MUST pass through untouched (a wrong alias target would corrupt a valid trigger).
+  for (const v of ['click', 'linkClick', 'customEvent', 'formSubmission', 'pageview', 'domReady', 'windowLoaded', 'timer', 'init', 'consentInit', 'elementVisibility', 'scrollDepth', 'youTubeVideo', 'historyChange', 'jsError', 'triggerGroup']) {
+    const input = { name: 'T', type: v };
+    assert.equal(normalizeTriggerType(input), input, `${v} valid → identity (no clone)`);
+  }
+  // Unrecognized / server-only types are never mangled.
+  const unknown = { name: 'T', type: 'serverPageview' };
+  assert.equal(normalizeTriggerType(unknown), unknown, 'unknown type passes through untouched');
 });
 
 test('findUnusedTriggers: firing/blocking used; a DEAD trigger group does NOT keep its member used', () => {
@@ -3179,6 +3368,46 @@ test('snapEventType + buildSnapPixelTag: event mapping + flat advanced-matching 
     assert.throws(() => planTriggerRetarget(s2 as never, 'CTA Tag', corrected), /no firing trigger/);
   });
 }
+
+
+test('house style: audit finding text never carries em/en dashes (web + server engines)', () => {
+  // Fixtures chosen to produce findings whose source strings contained em dashes.
+  const webReport = auditContainer({
+    tags: [{ tagId: '1', name: 'Lonely Tag', type: 'gaawe', firingTriggerId: [], blockingTriggerId: [], paused: false, parameter: [], consentSettings: null } as unknown as TAuditTag],
+    triggers: [],
+    variables: [{ variableId: 'v1', name: 'unused var', type: 'v', parameter: [] }],
+  } as unknown as TContainerSnapshot);
+  const serverReport = auditServerContainer({
+    taggingServerUrls: [],
+    clients: [],
+    tags: [],
+    triggers: [],
+    variables: [{ variableId: 'v1', name: 'ed - event_id', type: 'ed', parameter: [] }],
+    transformations: [],
+  } as unknown as TServerContainerSnapshot);
+  assert.ok(webReport.findings.length > 0 && serverReport.findings.length > 0, 'fixtures must produce findings');
+  for (const r of [webReport, serverReport]) {
+    const visible = JSON.stringify([r.findings.map((f) => [f.message, f.recommendation]), r.boundary, r.runtimeRequired]);
+    assert.ok(!/[\u2014\u2013]/.test(visible), 'em/en dash leaked into audit output: ' + (visible.match(/.{0,60}[\u2014\u2013].{0,60}/) ?? [''])[0]);
+  }
+});
+
+
+test('buildGoogleTagEventSettingsVariable: gtes eventSettingsTable keyed parameter/parameterValue', () => {
+  const v = buildGoogleTagEventSettingsVariable('Click Variable', [
+    { key: 'click_text', value: '{{Click Text}}' },
+    { key: 'previous_page', value: '{{Referrer}}' },
+  ]);
+  assert.equal(v.type, 'gtes');
+  const table = (v.parameter as Array<{ key?: string; type?: string; list?: Array<{ type?: string; map?: Array<{ type?: string; key?: string; value?: string }> }> }>).find((x) => x.key === 'eventSettingsTable')!;
+  assert.equal(table.type, 'list');
+  assert.equal(table.list!.length, 2);
+  assert.equal(table.list![0].type, 'map');
+  assert.deepEqual(table.list![1].map, [
+    { type: 'template', key: 'parameter', value: 'previous_page' },
+    { type: 'template', key: 'parameterValue', value: '{{Referrer}}' },
+  ]);
+});
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

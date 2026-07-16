@@ -8,7 +8,7 @@
 
 import { readJsonFile, writeJsonFileAtomic } from '../storage/json-file';
 import { monitorGa4, firstMetric, noSourceSharePct, ga4DataLagDays, type Ga4MonitorInput } from '../google/ga4-monitor';
-import { buildSlackPayload, buildSlackDigestPayload, buildSlackAuditPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
+import { buildSlackPayload, buildSlackDigestPayload, buildSlackAuditPayload, buildSlackMonthlyPayload, buildSlackTestPayload, sendSlackWebhook, isValidSlackWebhook, type FetchLike } from './slack-notify';
 import { withQuotaRetry } from '../google/quota-retry';
 import { rankGa4Campaigns } from '../google/ga4-campaigns';
 import type { GoogleDataService } from '../google/data-service';
@@ -22,6 +22,8 @@ const DEFAULT_CONFIG: Ga4MonitorConfig = { enabled: false, intervalMinutes: 60, 
 const DIGEST_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
 // One FULL audit per property per week (heavy: the whole audit pipeline), run after a sweep once due.
 const AUDIT_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
+// The MONTHLY tracking report: always sends once due (weekly alerts protect, the monthly proves).
+const MONTHLY_EVERY_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Per-account secret ref for the DEFAULT Slack webhook (encrypted in the OS keychain). Properties
  *  without their own channel post here. */
@@ -32,6 +34,12 @@ export const slackWebhookRefForProperty = (accountId: string, propertyId: string
 const YMD = (offsetDays: number, base: Date): string => {
   const d = new Date(base.getTime() - offsetDays * 86_400_000);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+};
+/** Shift a YYYY-MM-DD by whole days (UTC arithmetic on the date parts, so DST-immune). */
+const shiftYmd = (ymd: string, deltaDays: number): string => {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d) + deltaDays * 86_400_000);
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
 };
 
 const hasEcommerce = (eventNames: string[]): boolean =>
@@ -48,8 +56,6 @@ export async function gatherGa4MonitorInput(
   now: () => number = Date.now
 ): Promise<Ga4MonitorInput> {
   const base = new Date(now());
-  const startDate = YMD(days, base);
-  const endDate = YMD(0, base);
   const errors: string[] = [];
   const grab = <T>(p: Promise<T>): Promise<T | null> =>
     p.catch((e) => {
@@ -57,12 +63,22 @@ export async function gatherGa4MonitorInput(
       return null;
     });
 
-  const [snap, dqCounts, realtime, baseline] = await Promise.all([
+  const [snap, dqCounts, realtime] = await Promise.all([
     grab(withQuotaRetry(() => data.getGa4PropertySnapshot(property))),
     grab(withQuotaRetry(() => data.getGa4DataQuality(property, days))),
     grab(data.runGa4RealtimeReport({ property, dimensions: [], metrics: ['activeUsers'] })),
-    grab(withQuotaRetry(() => data.getGa4Baseline(property, startDate, endDate))),
   ]);
+
+  // The monitor is LIVE, unlike the audit (whose report window deliberately ends yesterday for
+  // like-for-like comparisons): its baseline window ends TODAY, resolved in the PROPERTY's reporting
+  // timezone (dq's todayYmd, from the Admin API) so day boundaries match what GA4 itself reports.
+  // The machine's UTC clock is only the fallback when the dq query failed - for a property ahead of
+  // UTC that fallback can sit a day behind between local midnight and the UTC date change, which is
+  // exactly why todayYmd wins whenever it is available.
+  const todayYmd = dqCounts?.todayYmd ?? YMD(0, base);
+  const startDate = shiftYmd(todayYmd, -days);
+  const endDate = todayYmd;
+  const baseline = await grab(withQuotaRetry(() => data.getGa4Baseline(property, startDate, endDate)));
 
   const keyEventNames = (snap?.keyEvents ?? []).map((k) => k.eventName);
   const ecom = hasEcommerce(keyEventNames);
@@ -99,9 +115,8 @@ export async function gatherGa4MonitorInput(
     campaigns,
     snapshot: snap,
     priorChannelGroups: priorDq?.channelGroups ?? null,
-    // Freshness: how far the processed daily data lags behind today. The dq engine's todayYmd is the
-    // authoritative "today"; the request end date is the fallback when that query failed.
-    dataLagDays: ga4DataLagDays(baseline, dqCounts?.todayYmd ?? endDate),
+    // Freshness: how far the processed daily data lags behind today (property-timezone today).
+    dataLagDays: ga4DataLagDays(baseline, todayYmd),
   };
 }
 
@@ -231,6 +246,10 @@ export class Ga4MonitoringService {
         accountId: acct,
         lastDigestAt: Number.isFinite(Number((t as Ga4MonitorTarget).lastDigestAt)) && Number((t as Ga4MonitorTarget).lastDigestAt) > 0 ? Number((t as Ga4MonitorTarget).lastDigestAt) : undefined,
         lastAuditAt: Number.isFinite(Number((t as Ga4MonitorTarget).lastAuditAt)) && Number((t as Ga4MonitorTarget).lastAuditAt) > 0 ? Number((t as Ga4MonitorTarget).lastAuditAt) : undefined,
+        lastMonthlyAt: Number.isFinite(Number((t as Ga4MonitorTarget).lastMonthlyAt)) && Number((t as Ga4MonitorTarget).lastMonthlyAt) > 0 ? Number((t as Ga4MonitorTarget).lastMonthlyAt) : undefined,
+        lastAuditScore: Number.isFinite(Number((t as Ga4MonitorTarget).lastAuditScore)) ? Number((t as Ga4MonitorTarget).lastAuditScore) : undefined,
+        prevAuditScore: Number.isFinite(Number((t as Ga4MonitorTarget).prevAuditScore)) ? Number((t as Ga4MonitorTarget).prevAuditScore) : undefined,
+        issueLog: Array.isArray((t as Ga4MonitorTarget).issueLog) ? (t as Ga4MonitorTarget).issueLog!.slice(-50) : undefined,
       });
     }
     // Legacy single-property config ({propertyId, propertyLabel}) → a one-entry list, so an existing
@@ -505,7 +524,19 @@ export class Ga4MonitoringService {
         st.lastError = null;
 
         const newAlerts = result.alerts.filter((a) => !st.seenIds.has(a.id));
-        st.seenIds = new Set(result.alerts.map((a) => a.id));
+        const nowIds = new Set(result.alerts.map((a) => a.id));
+        const closedIds = [...st.seenIds].filter((id) => !nowIds.has(id));
+        st.seenIds = nowIds;
+
+        // Rolling issue history (persisted, capped): when each alert opened and closed. This is the
+        // monthly report's "what we caught and what we resolved" story.
+        if (newAlerts.length || closedIds.length) {
+          const log = (target.issueLog ?? []).slice();
+          for (const id of closedIds) for (const e of log) if (e.id === id && !e.closedAt) e.closedAt = at;
+          for (const a of newAlerts) log.push({ id: a.id, title: a.title, severity: a.severity, openedAt: at });
+          target.issueLog = log.slice(-50);
+          if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
+        }
 
         let slackSent = 0;
         let slackError: string | null = null;
@@ -525,6 +556,7 @@ export class Ga4MonitoringService {
           at,
           property: target.propertyId,
           propertyLabel: target.propertyLabel || target.propertyId,
+          timeZone: input.snapshot?.timeZone || '',
           health: result.health,
           summary: result.summary,
           checks: result.checks,
@@ -547,6 +579,11 @@ export class Ga4MonitoringService {
             try {
               const exec = await this.deps.runAudit(target.propertyId, this.config.days);
               target.lastAuditAt = at;
+              // Reliability TREND memory: the monthly report quotes "X%, up from Y%", not a snapshot.
+              if (Number.isFinite(exec.reliabilityPct)) {
+                if (Number.isFinite(Number(target.lastAuditScore))) target.prevAuditScore = target.lastAuditScore;
+                target.lastAuditScore = exec.reliabilityPct;
+              }
               if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
               const auditHook = this.webhookForTarget(active.id, target.propertyId);
               if (auditHook) {
@@ -576,6 +613,57 @@ export class Ga4MonitoringService {
             if (sent.ok) {
               target.lastDigestAt = at;
               if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
+            }
+          }
+        }
+
+        // MONTHLY tracking report: always sends once due - the weekly alerts protect (silence until
+        // something breaks), the monthly proves the watching. The FIRST sweep only starts the clock
+        // (no send), so the first report tells a real month's story instead of an empty one.
+        if (target.notify?.monthly !== false) {
+          if (!target.lastMonthlyAt) {
+            target.lastMonthlyAt = at;
+            if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
+          } else if (at - target.lastMonthlyAt >= MONTHLY_EVERY_MS) {
+            const webhookM = this.webhookForTarget(active.id, target.propertyId);
+            if (webhookM) {
+              const monthStart = at - MONTHLY_EVERY_MS;
+              const opened = (target.issueLog ?? [])
+                .filter((e) => e.openedAt > monthStart)
+                .map((e) => ({ title: e.title, closed: Boolean(e.closedAt) }));
+              const closedN = opened.filter((o) => o.closed).length;
+              const openNow = result.alerts.map((a) => ({ severity: a.severity, text: a.plain ?? a.title }));
+              const verdict =
+                openNow.length === 0 && opened.length === 0
+                  ? 'Tracking held steady this month - nothing broke.'
+                  : `${Math.max(opened.length, openNow.length)} issue${Math.max(opened.length, openNow.length) === 1 ? '' : 's'} this month: ${closedN} resolved, ${openNow.length} still open.`;
+              // Attribution-affecting issues put a trust flag on the month's numbers.
+              const trustKinds = new Set(['attribution_mismatch', 'untagged_share', 'concentration', 'channel_shift', 'no_data']);
+              const trustCaveat = result.alerts.some((a) => trustKinds.has(a.kind))
+                ? 'Attribution is currently unverified - treat the channel and campaign splits with caution.'
+                : null;
+              const top = result.alerts[0];
+              const recommendation = top
+                ? top.actions?.[0] ?? top.recommendation ?? `Fix first: ${top.title}`
+                : 'Nothing urgent. Keep tracking verified before your next campaign push.';
+              const metrics = input.baseline
+                ? { sessions: input.baseline.sessions, priorSessions: input.baseline.priorSessions, keyEvents: input.baseline.keyEvents, priorKeyEvents: input.baseline.priorKeyEvents, revenue: input.baseline.revenue, priorRevenue: input.baseline.priorRevenue }
+                : null;
+              const monthly = buildSlackMonthlyPayload(target.propertyLabel || target.propertyId, {
+                verdict,
+                reliabilityPct: Number.isFinite(Number(target.lastAuditScore)) ? Number(target.lastAuditScore) : null,
+                prevReliabilityPct: Number.isFinite(Number(target.prevAuditScore)) ? Number(target.prevAuditScore) : null,
+                opened,
+                openNow,
+                recommendation,
+                metrics,
+                trustCaveat,
+              });
+              const sentM = await sendSlackWebhook(webhookM, monthly, { fetchImpl: this.deps.slackFetch });
+              if (sentM.ok) {
+                target.lastMonthlyAt = at;
+                if (this.deps.configPath) writeJsonFileAtomic(this.deps.configPath, this.config);
+              }
             }
           }
         }

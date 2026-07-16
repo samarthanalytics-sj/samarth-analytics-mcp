@@ -72,7 +72,7 @@ export interface PageDriver {
 }
 
 export interface ScanOptions {
-  /** Pages to open/scan (default 10, hard cap 50). */
+  /** Pages to open/scan (default 10, hard cap 300 — see the clamp in crawlAndSuggest). */
   maxPages?: number;
   /** Link depth from the start URL (default 2, hard cap 4). */
   maxDepth?: number;
@@ -88,6 +88,9 @@ export interface ScanOptions {
    *  ≈ N× throughput on a multi-page site. Omitted / empty → the single primary driver → the original
    *  strictly-sequential behaviour (unchanged). All drivers (primary + these) are closed when done. */
   drivers?: PageDriver[];
+  /** Cooperative cancel. Checked at each worker's loop boundary — when it returns true the workers stop
+   *  claiming new pages and the crawl resolves with whatever it scanned so far (a Stop button). */
+  shouldStop?: () => boolean;
 }
 
 /** Streamed after every page is scanned — the RUNNING (full) suggestion list so the
@@ -99,6 +102,8 @@ export interface ScanProgress {
   opened: number;
   /** Pages still queued (an estimate of what's left). */
   queued: number;
+  /** The page that was just scanned (drives the live "scanning <url>" progress feed). */
+  page?: string;
   /** The complete suggestion list built from everything scanned SO FAR. */
   suggestions: SuggestedTag[];
 }
@@ -272,7 +277,7 @@ async function scanTarget(
   url: string,
   siteHost: string,
   base: string,
-): Promise<{ page?: PageScan; links?: string[]; reason?: string }> {
+): Promise<{ page?: PageScan; links?: string[]; navLinks?: string[]; reason?: string; rawForms?: RawForm[] }> {
   const driven = await driver.open(url);
   if (!driven.ok) return { reason: driven.error ? `scan failed: ${driven.error}`.slice(0, 200) : 'navigation failed' };
   if (driven.httpStatus !== null && driven.httpStatus >= 400) return { reason: `http ${driven.httpStatus}` };
@@ -290,12 +295,22 @@ async function scanTarget(
     hidden: f.hidden,
   }));
   const links: string[] = [];
+  const navLinks: string[] = [];
   for (const el of driven.raw.elements) {
     if (el.tag !== 'a' || !el.href) continue;
     const norm = normalizeUrl(el.href, url);
-    if (norm && sameSite(norm, base)) links.push(norm);
+    if (!norm || !sameSite(norm, base)) continue;
+    links.push(norm);
+    // Anchors in the site's HEADER / NAV / FOOTER are its primary navigation (contact, about, privacy,
+    // careers, services…). Surface those separately so the crawler can scan them FIRST — a page reachable
+    // only from the footer (a privacy policy carrying a mailto/tel, or a contact tab tucked in the footer)
+    // must not be stranded past the page budget.
+    if (el.region === 'header' || el.region === 'nav' || el.region === 'footer') navLinks.push(norm);
   }
-  return { page: { page: path, elements, forms, signals: driven.raw.signals }, links };
+  // Surface the RAW forms alongside the page so the verify scan can build the form-fill plan from this same
+  // crawl (site crawled ONCE for both click CTAs and forms). Kept off PageScan (a shared type); other
+  // callers just ignore it.
+  return { page: { page: path, elements, forms, signals: driven.raw.signals }, links, ...(navLinks.length ? { navLinks } : {}), ...(driven.rawForms ? { rawForms: driven.rawForms } : {}) };
 }
 
 /** Dedup key for a suggestion — its event + trigger filter (mirrors buildSuggestions). */
@@ -443,8 +458,8 @@ export function assembleResult(
   // Diagnostic: what the scan actually DETECTED (so a "missing form/CTA" report can be localized —
   // 0 forms here means the extractor never saw it, not that a later step dropped it).
   console.error(
-    `[tag-scan] ${siteHost}: ${pageScans.length} page(s) · forms=${input.forms.length} [${input.forms.map((f) => f.purpose).join(',')}] · ` +
-      `elements=${input.elements.length} [${[...new Set(input.elements.map((e) => e.kind))].join(',')}] · suggestions=${suggestions.length}`,
+    `[tag-scan] ${siteHost}: ${pageScans.length} page(s) | forms=${input.forms.length} [${input.forms.map((f) => f.purpose).join(',')}] | ` +
+      `elements=${input.elements.length} [${[...new Set(input.elements.map((e) => e.kind))].join(',')}] | suggestions=${suggestions.length}`,
   );
   return {
     site,
@@ -494,8 +509,15 @@ export async function crawlAndSuggest(
   startUrl: string,
   opts: ScanOptions = {},
   onProgress?: OnScanProgress,
+  // Called once per scanned page with its RAW forms — lets the verify scan build the form-fill plan from
+  // the SAME crawl that inventories click CTAs (one crawl, not two). Best-effort; ignored by other callers.
+  onPageForms?: (page: string, rawForms: RawForm[]) => void,
 ): Promise<TagScanResult> {
-  const maxPages = clamp(opts.maxPages, 10, 50);
+  // Cap lifted 150 → 300: a larger site (200+ pages) left many CTAs "untested here" under the old budget,
+  // and the user wants EVERY page scanned. The default (when no budget is passed) stays 10 — only callers
+  // that explicitly request more (Verify) reach higher. Pages are prioritized (header/nav/footer navigation
+  // first, then home → form-likely → content), so even a truncated budget covers the important pages.
+  const maxPages = clamp(opts.maxPages, 10, 300);
   const maxDepth = clamp(opts.maxDepth, 2, 4);
   const platforms = opts.platforms ?? ['ga4'];
 
@@ -519,7 +541,11 @@ export async function crawlAndSuggest(
   const pageScans: PageScan[] = [];
   const visited = new Set<string>();
   const discovered = new Set<string>([start]);
-  const queue: { url: string; depth: number; seed?: boolean }[] = [{ url: start, depth: 0 }];
+  // The start page is scanned FIRST (top priority) — it carries the site's header/footer nav, and we must
+  // discover those links before a large sitemap-seed set consumes the budget. Otherwise, with seeds present,
+  // the home page (depth-0, non-seed) would sort BELOW the seeds and be scanned last, too late to enqueue its
+  // footer links.
+  const queue: { url: string; depth: number; seed?: boolean; nav?: boolean }[] = [{ url: start, depth: 0, nav: true }];
   // Seed content-hub pages at TOP priority so they're scanned before the page budget is spent on the
   // (many) form-likely pages — otherwise content CTAs ("Read Full Case Study", …) never get inventoried.
   for (const s of opts.seedUrls ?? []) {
@@ -536,8 +562,12 @@ export async function crawlAndSuggest(
   // checks, reserving a budget slot and an `active` slot. null when nothing is claimable right now.
   const claimNext = (): { url: string; depth: number } | null => {
     while (queue.length > 0 && opened < maxPages) {
-      // Seeds first, then shallowest, then by crawl rank (home → form-likely → content hub → other).
-      queue.sort((a, b) => (b.seed ? 1 : 0) - (a.seed ? 1 : 0) || a.depth - b.depth || crawlRank(b.url) - crawlRank(a.url));
+      // Priority: the site's REAL navigation (header/nav/footer links) first — even above sitemap seeds and
+      // regardless of depth — so Contact / Privacy / Careers (often NOT in the sitemap, and only depth-1 from
+      // the home page) are never crowded out by a large sitemap. Then sitemap seeds, then shallowest, then
+      // crawl rank (home → form-likely → content hub → other).
+      const pri = (x: { seed?: boolean; nav?: boolean }): number => (x.nav ? 2 : x.seed ? 1 : 0);
+      queue.sort((a, b) => pri(b) - pri(a) || a.depth - b.depth || crawlRank(b.url) - crawlRank(a.url));
       const item = queue.shift()!;
       const key = item.url.replace(/\/$/, '');
       if (visited.has(key)) continue;
@@ -553,14 +583,16 @@ export async function crawlAndSuggest(
     }
     return null;
   };
-  // Add a scanned page's links to the frontier (synchronous critical section).
-  const enqueueLinks = (links: string[] | undefined, depth: number): void => {
+  // Add a scanned page's links to the frontier (synchronous critical section). `priority` orders them:
+  // 'nav' (header/nav/footer navigation) is scanned before everything, 'seed' before ordinary links, 'none'
+  // is a plain in-page/content link.
+  const enqueueLinks = (links: string[] | undefined, depth: number, priority: 'nav' | 'seed' | 'none' = 'none'): void => {
     if (depth >= maxDepth) return;
     for (const norm of links ?? []) {
       const k = norm.replace(/\/$/, '');
       if (visited.has(k) || discovered.has(norm)) continue;
       discovered.add(norm);
-      queue.push({ url: norm, depth: depth + 1 });
+      queue.push({ url: norm, depth: depth + 1, ...(priority === 'nav' ? { nav: true } : priority === 'seed' ? { seed: true } : {}) });
     }
   };
 
@@ -568,6 +600,7 @@ export async function crawlAndSuggest(
   // this reduces to the original strictly-sequential BFS.
   const worker = async (d: PageDriver): Promise<void> => {
     for (;;) {
+      if (opts.shouldStop?.()) return; // Stop pressed → drain workers; the crawl resolves with what it has
       const item = claimNext();
       if (!item) {
         if (active === 0) return; // queue drained and nobody can still enqueue → done
@@ -580,11 +613,15 @@ export async function crawlAndSuggest(
           notScanned.push({ url: item.url, reason: r.reason ?? 'not scanned' });
         } else {
           pageScans.push(r.page);
+          enqueueLinks(r.navLinks, item.depth, 'nav'); // header/nav/footer navigation → scanned first (above sitemap seeds)
           enqueueLinks(r.links, item.depth);
+          if (onPageForms && r.rawForms?.length) {
+            try { onPageForms(item.url, r.rawForms); } catch { /* a forms sink error must never abort the crawl */ }
+          }
           // Stream the running list so the review panel fills in as the crawl proceeds.
           if (onProgress) {
             try {
-              onProgress({ scanned: pageScans.length, opened, queued: queue.length, suggestions: runningSuggestions(pageScans, siteHost, platforms) });
+              onProgress({ scanned: pageScans.length, opened, queued: queue.length, page: item.url, suggestions: runningSuggestions(pageScans, siteHost, platforms) });
             } catch {
               /* a progress sink error must never abort the crawl */
             }
@@ -608,8 +645,9 @@ export async function crawlAndSuggest(
   return assembleResult(start, siteHost, pageScans, notScanned, warnings, opened, [], platforms, mergePoolDiagnostics(pool));
 }
 
-/** Max pages a single "scan selected" run (Main website) or CSV import will deep-scan. */
-export const SCAN_URLS_CAP = 50;
+/** Max pages a single "scan selected" run (Main website) or CSV import will deep-scan. Matches the
+ *  crawl budget used by tag verification so suggestions cover the same breadth of the site. */
+export const SCAN_URLS_CAP = 250;
 
 /**
  * Deep-scan a SPECIFIC list of URLs (no BFS) — used after the discover step,

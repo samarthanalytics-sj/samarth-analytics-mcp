@@ -2,6 +2,8 @@
 // READ-ONLY by design, so every finding is advisory (recommend a change for the
 // user to make in the GA4 UI); there are no auto-fixes.
 
+import { toSnakeEventName } from './ga4-event-hygiene';
+
 export interface Ga4DataStreamConfig {
   name: string;
   displayName: string;
@@ -65,6 +67,8 @@ export interface Ga4PropertySnapshot {
   bigQueryLinks?: Ga4BigQueryLinkConfig[] | null;
   /** Number of configured audiences (remarketing/segmentation); null = unread. */
   audiences?: number | null;
+  /** Audience detail (name + membership duration) when the list was read; null/absent = unread. */
+  audienceDetails?: Array<{ displayName: string; membershipDurationDays: number | null }> | null;
 }
 
 export interface Ga4Finding {
@@ -186,6 +190,26 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
         category: 'privacy',
         message: `Custom dimension "${dim.displayName || dim.parameterName}" looks like it may capture PII ("${hit}"). GA4's terms prohibit sending personally identifiable information.`,
         recommendation: 'Remove or hash/anonymize this dimension; never send email, phone, name, or address to GA4.',
+      });
+    }
+  }
+
+  // Custom-definition PARAMETER naming: GA4 registers a definition by its parameter name, and the
+  // registered spelling must EXACTLY match what the tags send - a camelCase/hyphenated drift means
+  // the dimension silently stays empty (the same failure mode as drifted event names).
+  {
+    const defs = [
+      ...(s.customDimensions ?? []).map((d) => ({ name: d.parameterName, user: d.scope === 'USER' })),
+      ...(s.customMetrics ?? []).map((m) => ({ name: m.parameterName, user: false })),
+    ];
+    const bad = defs.filter((d) => d.name && !/^[a-z][a-z0-9_]*$/.test(d.name));
+    if (bad.length) {
+      const shown = bad.slice(0, 8).map((d) => `"${d.name}" -> ${toSnakeEventName(d.name)}${d.user ? ' (user property)' : ''}`).join(', ');
+      findings.push({
+        severity: 'low',
+        category: 'customdef',
+        message: `${bad.length} custom-definition parameter name${bad.length === 1 ? '' : 's'} violate naming conventions: ${shown}${bad.length > 8 ? ` (+${bad.length - 8} more)` : ''}. The registered name must exactly match the parameter the tags send - a casing/separator drift means the definition quietly receives nothing.`,
+        recommendation: 'Use lowercase snake_case on BOTH sides: fix the tag to send the registered spelling, or re-register under the name actually sent (Admin > Custom definitions), then confirm data arrives.',
       });
     }
   }
@@ -351,6 +375,20 @@ export function auditGa4(s: Ga4PropertySnapshot, extraFindings: Ga4Finding[] = [
       message: 'No audiences are configured while Google Ads is linked — you cannot build remarketing lists or audience-triggered events from GA4 behavior.',
       recommendation: 'Create audiences (e.g. cart abandoners, high-value users) in Admin → Audiences to activate remarketing to the linked Ads account.',
     });
+  }
+
+  // Only GA4's auto-created default audiences while Ads is linked: technically "audiences exist",
+  // but no remarketing list reflects THIS business's funnel - same missed activation, softer wording.
+  if ((s.audienceDetails?.length ?? 0) > 0 && (s.googleAdsLinks ?? 0) > 0) {
+    const custom = (s.audienceDetails ?? []).filter((a) => !/^(all users|purchasers)$/i.test(a.displayName.trim()));
+    if (custom.length === 0) {
+      findings.push({
+        severity: 'info',
+        category: 'integrations',
+        message: `Only GA4's default audiences exist (${(s.audienceDetails ?? []).map((a) => a.displayName).join(', ')}) while Google Ads is linked — no remarketing list reflects your own funnel (cart abandoners, high-value users, repeat visitors).`,
+        recommendation: 'Build 2-3 behavior-based audiences in Admin → Audiences; they flow to the linked Ads account for remarketing and similar-audience seeding.',
+      });
+    }
   }
 
   // Reporting currency unset → revenue can be reported inconsistently. (A wrong-but-set currency vs

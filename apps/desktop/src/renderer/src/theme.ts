@@ -1,31 +1,78 @@
 // Light/dark theming via CSS custom properties. The styles object references var(--…) for ALL
-// colors — structural (backgrounds, surfaces, text, borders) AND semantic accents (blue/cyan/amber/
+// colors - structural (backgrounds, surfaces, text, borders) AND semantic accents (blue/cyan/amber/
 // red/green, each with a text / soft-bg / soft-border variant). Switching a theme just rewrites
 // these variables on :root, which updates every inline var() instantly (no React re-render).
-// The dark accent values are the originals; the light ones are darker text on tinted backgrounds so
-// chips/badges/banners read on a light surface instead of staying dark-on-light.
+//
+// Design system (2026-07 refresh, Linear/Vercel/shadcn-calibre):
+// - Slate-scale structural palette; dark is the default look, light is a first-class equal.
+// - Every text token is WCAG AA verified against every surface it sits on (contrast-check pass:
+//   text/dim/muted >= 4.5:1 on bg/surface/surface-2/surface-3/surface-alt; faint >= 3:1 and is
+//   caption/decoration-only; every accent >= 4.5:1 on its soft bg AND on the plain surface).
+// - Dark accents are LIGHT pastels with colored text on tinted backgrounds - never white on an
+//   accent (the pastels can't carry white). Solid actions use --primary/--danger + --on-*.
+// - New semantic aliases (--success/--warning/--error/--info) reference the accent vars, so both
+//   naming schemes stay in lockstep by construction.
 
 export type Theme = 'dark' | 'light';
 
 const STORAGE_KEY = 'samarth.theme.v1';
 
+// Tokens identical in both themes: type, radii, motion, and the semantic aliases.
+const SHARED: Record<string, string> = {
+  '--font-sans': "'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+  '--font-mono': "ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace",
+  '--radius-s': '6px',
+  '--radius-m': '10px',
+  '--radius-l': '14px',
+  '--ease': 'cubic-bezier(0.22, 0.61, 0.36, 1)',
+  '--success': 'var(--c-green)',
+  '--success-bg': 'var(--c-green-bg)',
+  '--success-border': 'var(--c-green-border)',
+  '--warning': 'var(--c-amber)',
+  '--warning-bg': 'var(--c-amber-bg)',
+  '--warning-border': 'var(--c-amber-border)',
+  '--error': 'var(--c-red)',
+  '--error-bg': 'var(--c-red-bg)',
+  '--error-border': 'var(--c-red-border)',
+  '--info': 'var(--c-blue)',
+  '--info-bg': 'var(--c-blue-bg)',
+  '--info-border': 'var(--c-blue-border)',
+};
+
 const VARS: Record<Theme, Record<string, string>> = {
   dark: {
-    '--bg': '#0b0f17',
-    '--surface': '#0d1320',
-    '--surface-2': '#161e2e',
-    '--surface-3': '#16223a',
-    '--surface-alt': '#111827',
-    '--border': '#1f2937',
-    '--border-2': '#334155',
-    '--text': '#e5e7eb',
+    ...SHARED,
+    '--bg': '#0a0d14',
+    '--surface': '#0f1420',
+    '--surface-2': '#161d2c',
+    '--surface-3': '#1d2637',
+    '--surface-alt': '#121826',
+    '--border': '#1e2635',
+    '--border-2': '#2e3a4f',
+    '--text': '#f1f5f9',
     '--text-dim': '#cbd5e1',
-    '--text-muted': '#9ca3af',
-    '--text-faint': '#6b7280',
-    // semantic accents — text / soft background / soft border
+    '--text-muted': '#9ca9bb',
+    '--text-faint': '#6b7a90',
+    // Solid interactive colors - the ONLY places light text sits on a saturated fill.
+    // White on #2563eb = 4.68:1 (AA). Dark hover goes LIGHTER; light hover goes darker.
+    '--primary': '#2563eb',
+    '--primary-hover': '#3b82f6',
+    '--primary-active': '#1d4ed8',
+    '--on-primary': '#ffffff',
+    '--primary-soft': 'rgba(37, 99, 235, 0.16)',
+    '--primary-soft-border': 'rgba(59, 130, 246, 0.45)',
+    '--danger': '#dc2626',
+    '--danger-hover': '#ef4444',
+    '--on-danger': '#ffffff',
+    // Focus ring + elevation (deeper, softer shadows for the dark surfaces).
+    '--ring': 'rgba(59, 130, 246, 0.45)',
+    '--shadow-1': '0 1px 2px rgba(0, 0, 0, 0.35)',
+    '--shadow-2': '0 4px 14px rgba(0, 0, 0, 0.40)',
+    '--shadow-3': '0 16px 44px rgba(0, 0, 0, 0.55)',
+    // Semantic accents - pastel text / tinted soft background / visible soft border.
     '--c-blue': '#93c5fd',
-    '--c-blue-bg': '#1e3a5f',
-    '--c-blue-border': '#1e3a5f',
+    '--c-blue-bg': '#16283f',
+    '--c-blue-border': '#2a4a73',
     '--c-cyan': '#7dd3fc',
     '--c-cyan-bg': '#0c2030',
     '--c-cyan-border': '#1e4258',
@@ -36,29 +83,43 @@ const VARS: Record<Theme, Record<string, string>> = {
     '--c-red-bg': '#3a1416',
     '--c-red-border': '#7f1d1d',
     '--c-green': '#6ee7b7',
-    '--c-green-bg': '#064e3b',
-    '--c-green-border': '#065f46',
+    '--c-green-bg': '#0a3d2e',
+    '--c-green-border': '#147a5c',
   },
   light: {
-    '--bg': '#f4f6f9',
+    ...SHARED,
+    '--bg': '#f8fafc',
     '--surface': '#ffffff',
-    '--surface-2': '#eef2f8',
-    '--surface-3': '#e4ecf7',
-    '--surface-alt': '#eaeef4',
+    '--surface-2': '#f1f5f9',
+    '--surface-3': '#e8eef5',
+    '--surface-alt': '#eef2f7',
     '--border': '#e2e8f0',
     '--border-2': '#cbd5e1',
     '--text': '#0f172a',
     '--text-dim': '#334155',
     '--text-muted': '#5b6776',
-    '--text-faint': '#94a3b8',
-    // semantic accents — darker text on a tinted bg so they read on a light surface
+    '--text-faint': '#7c8ba1',
+    '--primary': '#2563eb',
+    '--primary-hover': '#1d4ed8',
+    '--primary-active': '#1e40af',
+    '--on-primary': '#ffffff',
+    '--primary-soft': '#dbeafe',
+    '--primary-soft-border': '#93c5fd',
+    '--danger': '#dc2626',
+    '--danger-hover': '#b91c1c',
+    '--on-danger': '#ffffff',
+    '--ring': 'rgba(37, 99, 235, 0.30)',
+    '--shadow-1': '0 1px 2px rgba(15, 23, 42, 0.06)',
+    '--shadow-2': '0 4px 14px rgba(15, 23, 42, 0.08)',
+    '--shadow-3': '0 16px 44px rgba(15, 23, 42, 0.16)',
+    // Semantic accents - darker text on a tinted bg so they read on a light surface.
     '--c-blue': '#1d4ed8',
     '--c-blue-bg': '#dbeafe',
     '--c-blue-border': '#bfdbfe',
     '--c-cyan': '#0369a1',
     '--c-cyan-bg': '#e0f2fe',
     '--c-cyan-border': '#bae6fd',
-    '--c-amber': '#b45309',
+    '--c-amber': '#92400e',
     '--c-amber-bg': '#fef3c7',
     '--c-amber-border': '#fcd34d',
     '--c-red': '#b91c1c',
@@ -82,7 +143,7 @@ export function saveTheme(theme: Theme): void {
   try {
     localStorage.setItem(STORAGE_KEY, theme);
   } catch {
-    /* storage unavailable — non-fatal */
+    /* storage unavailable - non-fatal */
   }
 }
 
@@ -92,6 +153,7 @@ export function applyTheme(theme: Theme): void {
   const vars = VARS[theme];
   for (const name of Object.keys(vars)) root.style.setProperty(name, vars[name]);
   root.setAttribute('data-theme', theme);
+  root.style.colorScheme = theme; // native controls (scrollbars, selects, pickers) match the theme
   document.body.style.background = vars['--bg'];
   document.body.style.color = vars['--text'];
 }

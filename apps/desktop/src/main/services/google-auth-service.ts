@@ -5,8 +5,11 @@ import { loadGoogleOAuthClient, loadGoogleOAuthClientWithSource } from '../googl
 import type { AccountView, GoogleClientStatus } from '../../shared/ipc';
 
 // Orchestrates per-account Google sign-in: resolve the OAuth client, run the
-// loopback flow (opens the system browser → account chooser), then upsert the
-// account + vault the token via the registry. One flow at a time.
+// loopback flow (opens the SYSTEM browser → the user's real, already-signed-in
+// Chrome → account chooser), then upsert the account + vault the token via the
+// registry. One flow at a time. (Tag Assistant signs in separately, on demand —
+// it needs a session in its OWN automated browser, which can't reuse the user's
+// running Chrome; see ta-driver.)
 export class GoogleAuthService {
   /** The in-flight sign-in, if any. A new connect() cancels it (rather than
    *  refusing) so a blocked/denied consent screen that never redirected back

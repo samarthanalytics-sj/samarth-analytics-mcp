@@ -20,19 +20,31 @@ function isClickTrigger(kind: string): boolean {
 // lower-cases both, default operator = equals for text / contains for URL. Kept identical so routing
 // predicts what the driver will actually find + click — if these diverged, a tag could be routed to a
 // page the driver then can't drive on.
+// Normalize a label identically to the in-page driver (verify-driver.ts normLabel): nbsp → space, arrow/
+// chevron glyphs → space, collapse whitespace, case-fold. Kept in lock-step so routing predicts what the
+// driver will actually match on a decorated CTA ("Read full analysis →").
+function normLabel(s: string): string {
+  return (s || '')
+    .replace(/[   ]/g, ' ')
+    .replace(/[←-⇿➔➙➜➡⟶⮕▶▸❯»›→‹«]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
 function matches(hay: string, val: string | undefined, op: string | undefined, defaultOp: 'equals' | 'contains'): boolean {
   if (!val) return false;
-  const h = (hay || '').trim();
-  const hl = h.toLowerCase();
-  const vl = val.toLowerCase();
+  const h = normLabel(hay);
+  const vl = normLabel(val);
   const effectiveOp = op ?? defaultOp;
   switch (effectiveOp) {
-    case 'contains': return hl.indexOf(vl) >= 0;
-    case 'startsWith': return hl.indexOf(vl) === 0;
-    case 'endsWith': return vl.length > 0 && hl.lastIndexOf(vl) === hl.length - vl.length;
+    case 'contains': return h.indexOf(vl) >= 0;
+    case 'startsWith': return h.indexOf(vl) === 0;
+    case 'endsWith': return vl.length > 0 && h.length >= vl.length && h.lastIndexOf(vl) === h.length - vl.length;
     case 'matchRegex':
-      try { return new RegExp(val, 'i').test(h); } catch { return false; }
-    default: return hl === vl; // equals
+      try { return new RegExp(val, 'i').test((hay || '').trim()); } catch { return false; }
+    // equals, with a contains fallback — mirrors the driver's equals-then-contains, so a tag is routed to a
+    // page whose decorated/extra-word CTA the driver will then locate.
+    default: return h === vl || h.indexOf(vl) >= 0;
   }
 }
 
@@ -65,6 +77,28 @@ export function elementMatchesTrigger(trigger: VerifyTagInput['trigger'], el: De
   if (hasText && !matches(el.text ?? '', trigger.clickTextValue, trigger.clickTextOperator, 'equals')) return false;
   if (hasUrl && !hrefCandidates(el.href).some((h) => matches(h, trigger.clickUrlValue, trigger.clickUrlOperator, 'contains'))) return false;
   return true;
+}
+
+/**
+ * Normalize a user-pasted "pages to verify" list into same-origin absolute URLs. Each entry is resolved
+ * against `target` (so a bare "/contact" becomes absolute), dropped if it can't parse or is off-origin
+ * (never drive another site), and de-duplicated preserving order. PURE.
+ */
+export function normalizeVerifyPages(raw: unknown, target: string): string[] {
+  const list = Array.isArray(raw) ? raw : [];
+  let origin = '';
+  try { origin = new URL(target).origin; } catch { return []; }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of list) {
+    const s = String(r ?? '').trim();
+    if (!s) continue;
+    let abs: string;
+    try { abs = new URL(s, target).href; } catch { continue; }
+    try { if (new URL(abs).origin !== origin) continue; } catch { continue; }
+    if (!seen.has(abs)) { seen.add(abs); out.push(abs); }
+  }
+  return out;
 }
 
 /** A page the driver would drive anyway (homepage / site-wide) — path is "/" or empty. */

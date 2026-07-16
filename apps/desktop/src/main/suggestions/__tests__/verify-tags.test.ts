@@ -1,7 +1,8 @@
 // Pure tests for the "Verify tag firing" evaluator (no browser).
 // Run: tsx apps/desktop/src/main/suggestions/__tests__/verify-tags.test.ts
 
-import { evaluateVerify, type PerTagCapture } from '../verify-tags';
+import { evaluateVerify, verdictsFromMonitor, type PerTagCapture } from '../verify-tags';
+import type { MonitorEvent } from '../tag-monitor';
 import type { VerifyTagInput, CapturedHitView, DetectedElementView } from '../../../shared/ipc';
 
 let passed = 0;
@@ -296,6 +297,98 @@ const redditHit = (): CapturedHitView => ({ url: 'https://alb.reddit.com/rp.gif?
   // A NOT-fired tag still carries its screenshot (proof the CTA/page was reached).
   const missShot = evaluateVerify([tag()], [cap({ targetFound: true, performed: true, kind: 'click', hits: [], screenshot: shot })], els)[0];
   check('not-fired verdict still carries the screenshot', missShot.fired === false && missShot.screenshot === shot);
+}
+
+// ── verdictsFromMonitor: AUTHORITATIVE verdicts from GTM's own Monitor stream ──────────────────────
+{
+  const tags: VerifyTagInput[] = [
+    tag({ id: 'cfg', tagName: 'GA4 Config', eventName: 'page_view' }),
+    tag({ id: 'lead', tagName: 'Lead Form', eventName: 'generate_lead' }),
+    tag({ id: 'cta', tagName: 'CTA Click', eventName: 'cta_click' }),
+    tag({ id: 'ghost', tagName: 'Never Fires', eventName: 'x' }),
+  ];
+  const events: MonitorEvent[] = [
+    { event: 'gtm.load', tags: [{ id: 'cfg', status: 'success', executionTime: 2 }] },
+    { event: 'form_submit', tags: [{ id: 'cfg', status: 'success' }, { id: 'lead', status: 'success', executionTime: 9 }] },
+    { event: 'cta_click', tags: [{ id: 'cta', status: 'failure', executionTime: 30 }] },
+  ];
+  // perTag: what the driver actually exercised. 'lead'/'cta'/'cfg' were driven; 'ghost' was driven too
+  // (so its non-fire is a GENUINE not-firing, distinct from an un-exercised tag).
+  const perTag: PerTagCapture[] = [
+    cap({ tagId: 'cfg' }), cap({ tagId: 'lead' }), cap({ tagId: 'cta' }), cap({ tagId: 'ghost' }),
+  ];
+  const v = verdictsFromMonitor(tags, events, perTag);
+  const by = new Map(v.map((x) => [x.tagId, x]));
+
+  check('monitor: every verdict is flagged authoritative (verifiedByMonitor)', v.every((x) => x.verifiedByMonitor === true));
+  check('monitor: a GTM-fired tag → fired, with status + events', by.get('lead')!.fired === true && by.get('lead')!.monitorStatus === 'success' && (by.get('lead')!.monitorEvents ?? []).includes('form_submit'));
+  check('monitor: config tag fired on multiple events', JSON.stringify(by.get('cfg')!.monitorEvents) === JSON.stringify(['gtm.load', 'form_submit']));
+  check('monitor: a tag GTM fired with an ERROR status → fired but reason flags it', by.get('cta')!.fired === true && by.get('cta')!.monitorStatus === 'failure' && /error|failure/i.test(by.get('cta')!.reason ?? ''));
+  check('monitor: a DRIVEN tag GTM never fired → genuine not-firing (not inconclusive)', by.get('ghost')!.fired === false && !by.get('ghost')!.inconclusive && /did not fire|exercised/i.test(by.get('ghost')!.reason ?? ''));
+  check('monitor: execution time carried', by.get('lead')!.monitorExecutionMs === 9);
+}
+
+// ── verdictsFromMonitor: FORM tags are INCLUDED — credited from the REAL-submit stream ───────────────
+{
+  const tags: VerifyTagInput[] = [
+    tag({ id: 'faq', tagName: 'FAQs Click', eventName: 'faqs_click', trigger: { name: 'FAQ', kind: 'link_click', clickTextValue: 'FAQs', clickTextOperator: 'equals' } }),
+    tag({ id: 'scroll', tagName: 'Scroll Depth Tag', eventName: 'custom_scroll_depth', platform: 'ga4_event', trigger: { name: 'SD', kind: 'custom_event', eventName: 'custom_scroll_depth' } }),
+    // FORM tags — 'realform' fired on the real submit; 'cons' form was never submitted.
+    tag({ id: 'cons', tagName: 'Get Your Free GA4 Consultation Form Tag', eventName: 'form_submission', platform: 'ga4_event', trigger: { name: 'Cons', kind: 'custom_event', eventName: 'form_submission' } }),
+    tag({ id: 'realform', tagName: 'Contact Form Tag', eventName: 'form_submission', platform: 'ga4_event', trigger: { name: 'Contact', kind: 'custom_event', eventName: 'form_submission', customEventData: { form_name: 'contact_form' } } }),
+  ];
+  const perTag: PerTagCapture[] = [
+    cap({ tagId: 'faq', kind: 'click', targetFound: false, performed: false }),
+    cap({ tagId: 'scroll', kind: 'custom_event', targetFound: true, performed: true }),
+    // Form tags are NEVER driven synthetically → performed:false (note "verified by the real form submit").
+    cap({ tagId: 'cons', kind: 'custom_event', targetFound: true, performed: false }),
+    cap({ tagId: 'realform', kind: 'custom_event', targetFound: true, performed: false }),
+  ];
+  // The real submit fired 'realform' on form_submission; 'cons' is not in the stream (its form wasn't sent).
+  const events: MonitorEvent[] = [
+    { event: 'custom_scroll_depth', tags: [{ id: 'scroll', status: 'success' }] },
+    { event: 'form_submission', tags: [{ id: 'realform', status: 'success' }] },
+  ];
+  const out = verdictsFromMonitor(tags, events, perTag);
+  const by = new Map(out.map((x) => [x.tagId, x]));
+
+  check('monitor: a FORM tag that fired on the real submit → fired', by.get('realform')?.fired === true);
+  check('monitor: the fired form tag reports its event', by.get('realform')?.event === 'form_submission');
+  check('monitor: a form tag whose form was NOT submitted → inconclusive, not a false "not firing"', by.get('cons')?.fired === false && by.get('cons')?.inconclusive === true);
+  check('monitor: non-form tags still reported', by.has('faq') && by.has('scroll'));
+  check('monitor: a driven non-form custom-event tag GTM fired → fired', by.get('scroll')!.fired === true);
+  check('monitor: a click tag whose CTA was NOT found → inconclusive, not "not firing"', by.get('faq')!.fired === false && by.get('faq')!.inconclusive === true);
+}
+
+// ── verdictsFromMonitor: never-happened vs genuine not-fire (NON-form custom-event tags) ────────────
+// A custom-event tag whose event never happened during the run was never really tested (inconclusive);
+// a tag whose event DID happen but GTM skipped it is a genuine not-fire that blames trigger conditions,
+// never injection (the run itself proves the container loaded).
+{
+  const tags: VerifyTagInput[] = [
+    tag({ id: 'promo', tagName: 'Promo Popup Tag', eventName: 'promo_shown', platform: 'ga4_event', trigger: { name: 'Promo', kind: 'custom_event', eventName: 'promo_shown' } }),
+    tag({ id: 'cta', tagName: 'CTA Click Tag', eventName: 'cta_click', platform: 'ga4_event', trigger: { name: 'CTA', kind: 'custom_event', eventName: 'cta_click' } }),
+  ];
+  const perTag: PerTagCapture[] = [
+    cap({ tagId: 'promo', kind: 'custom_event', targetFound: true, performed: true }),
+    cap({ tagId: 'cta', kind: 'custom_event', targetFound: true, performed: true }),
+  ];
+  const events: MonitorEvent[] = [{ event: 'cta_click', tags: [] }]; // cta_click happened (no tag fired); promo_shown did not
+  const by = new Map(verdictsFromMonitor(tags, events, perTag).map((x) => [x.tagId, x]));
+
+  check('monitor: event never happened → inconclusive (untested), NOT a firing issue', by.get('promo')!.fired === false && by.get('promo')!.inconclusive === true);
+  check('monitor: never-happened reason names the awaited event in plain words', /waits for the event/.test(by.get('promo')!.reason ?? '') && /promo_shown/.test(by.get('promo')!.reason ?? ''));
+  check('monitor: event DID happen but GTM skipped the tag → genuine not-fire', by.get('cta')!.fired === false && !by.get('cta')!.inconclusive);
+  check('monitor: genuine not-fire says the container WAS loaded and blames trigger conditions', /container was definitely loaded/.test(by.get('cta')!.reason ?? '') && /trigger/.test(by.get('cta')!.reason ?? ''));
+  check('monitor: genuine not-fire never doubts injection', !/injected|snippet/i.test(by.get('cta')!.reason ?? ''));
+
+  // Scoped run: an untested tag's reason must say WHY (only N pages verified → its trigger is elsewhere).
+  const clickTag = [tag({ id: 'faq', tagName: 'FAQs Click Tag', eventName: 'faq_click', platform: 'ga4_event', trigger: { name: 'FAQ', kind: 'link_click' } })];
+  const notFoundCap = [cap({ tagId: 'faq', kind: 'click', targetFound: false, performed: false })];
+  const scoped = verdictsFromMonitor(clickTag, [], notFoundCap, { scopedPages: 1 })[0];
+  check('monitor: scoped run names the single-page scope in the untested reason', scoped.inconclusive === true && /verified only this 1 page/i.test(scoped.reason ?? '') && /add that page|verify the whole site/i.test(scoped.reason ?? ''));
+  const unscoped = verdictsFromMonitor(clickTag, [], notFoundCap)[0];
+  check('monitor: unscoped run has NO single-page scope note', !/verified only this 1 page/i.test(unscoped.reason ?? ''));
 }
 
 console.log(`\nverify-tags: ${passed} passed, ${failed} failed`);

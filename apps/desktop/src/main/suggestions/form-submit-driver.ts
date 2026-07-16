@@ -123,7 +123,7 @@ function grantConsentInPage(): void {
  *  Scoping to one element is the safety guarantee: a same-named field on another form is never
  *  touched, so we never fill + submit an unrelated newsletter/search form. Self-contained —
  *  serialized to page.evaluate (DOM globals only, no external refs). */
-function fillAndSubmitInPage(spec: { formId: string; formClasses: string; method: string; fields: FormSubmitFieldInput[] }): { filled: number; submitted: boolean; note?: string } {
+export function fillAndSubmitInPage(spec: { formId: string; formClasses: string; method: string; fields: FormSubmitFieldInput[] }): { filled: number; submitted: boolean; note?: string } {
   // React (and Vue/Angular) CONTROLLED inputs track their value through a framework-installed setter,
   // so a plain `el.value = x` is ignored — on submit the form validates its framework STATE (still
   // empty for our required fields) and BLOCKS the real submission, so only form_start fires, never

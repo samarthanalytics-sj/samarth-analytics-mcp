@@ -39,12 +39,12 @@ const form = (o: Partial<RawForm>): RawForm => {
   check('title carried through', v.title === 'Get In Touch');
   check('purpose classified (contact)', v.purpose === 'contact');
   check('hidden field excluded from the plan', !v.fields.some((x) => x.name === 'csrf'));
-  check('email filled with the traceable alias', byName('email')?.value === 'gtm-verify+run9@example.com');
-  check('first/last names split correctly', byName('fname')?.value === 'Gtm' && byName('lname')?.value === 'Verify');
+  check('email filled with the test address (+tag when supplied)', byName('email')?.value === 'test+run9@gmail.com');
+  check('first/last names are simple Test values', byName('fname')?.value === 'Test' && byName('lname')?.value === 'Test');
   check('category select picks first real option + carries options', byName('topic')?.value === 'Sales' && (byName('topic')?.options ?? []).includes('Support'));
   check('required flags carried', byName('email')?.required === true && byName('lname')?.required === false);
   check('selector is name-based', byName('email')?.selector === '[name="email"]');
-  check('message got the disclaimer text', /test submission/i.test(byName('message')?.value ?? ''));
+  check('message got the simple test text', byName('message')?.value === 'test form please ignore');
 }
 
 // ── a form with NO fillable fields (only a hidden control) is dropped ─────────────────────────────
@@ -63,7 +63,7 @@ const form = (o: Partial<RawForm>): RawForm => {
 check('localeOptions includes US', localeOptions().some((l) => l.id === 'us'));
 {
   const f = form({ index: 0, fields: [field({ type: 'email', name: 'email' })] });
-  check('unknown locale id falls back (still fills)', toFormFillViews([f], 'https://site.com', 'zz', 't')[0].fields[0].value.includes('gtm-verify+'));
+  check('unknown locale id falls back (still fills)', toFormFillViews([f], 'https://site.com', 'zz', 't')[0].fields[0].value.includes('@gmail.com'));
 }
 
 // ── Phase 2b: pair fired GA4 events → the container's actual tags (by event name) ────────────────

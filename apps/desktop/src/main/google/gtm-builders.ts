@@ -493,13 +493,13 @@ export function buildGa4ServerTag(
   const parameter: Param[] = [];
   if (eventName && eventName.trim() !== '') parameter.push(tpl('eventName', eventName));
   parameter.push(tpl('measurementId', measurementId), tpl('epToIncludeDropdown', 'all'), tpl('upToIncludeDropdown', 'all'));
-  // Optional "Parameters to Add / Edit" (epToAdd) + "User Properties to Add / Edit" (upToAdd) — for
-  // ENRICHMENT (server-derived values not already on the incoming event; the event's own params flow
-  // via epToIncludeDropdown='all'). Row shape via serverGa4ParamList — see its Preview-verify note.
+  // Optional "Event Parameters to Add / Edit" (eventParameters) + "User Properties to Add / Edit"
+  // (userProperties) — for ENRICHMENT (server-derived values not already on the incoming event; the
+  // event's own params flow via epToIncludeDropdown='all'). Row shape via serverGa4ParamList.
   const eps = (opts?.eventParameters ?? []).filter((p) => p.name && p.name.trim() !== '');
   const ups = (opts?.userProperties ?? []).filter((p) => p.name && p.name.trim() !== '');
-  if (eps.length) parameter.push(serverGa4ParamList('epToAdd', eps) as Param);
-  if (ups.length) parameter.push(serverGa4ParamList('upToAdd', ups) as Param);
+  if (eps.length) parameter.push(serverGa4ParamList('eventParameters', eps) as Param);
+  if (ups.length) parameter.push(serverGa4ParamList('userProperties', ups) as Param);
   return {
     name: sanitizeName(name),
     type: 'sgtmgaaw',
@@ -951,17 +951,73 @@ export function setCustomEventName(trigger: Record<string, unknown>, eventName: 
   return { ...trigger, type: 'customEvent', customEventFilter: updated };
 }
 
+/** The exact GTM v2 `Trigger.type` enum, keyed by a canonicalized form (lower-cased, with spaces /
+ *  underscores / hyphens stripped). Every VALID type maps to itself so a correct trigger is never
+ *  rewritten; the extra entries are the aliases the chat model routinely invents. */
+const TRIGGER_TYPE_ALIASES: Record<string, string> = {
+  // All-Elements clicks: GTM's enum value is the bare "click" (the model loves "all_clicks"/"allElements").
+  click: 'click', clicks: 'click', allclick: 'click', allclicks: 'click',
+  allelement: 'click', allelements: 'click', allelementclick: 'click', allelementclicks: 'click',
+  allelementsclick: 'click', allelementsclicks: 'click', elementclick: 'click', clickall: 'click',
+  // Just-Links clicks.
+  linkclick: 'linkClick', linkclicks: 'linkClick', justlink: 'linkClick', justlinks: 'linkClick',
+  linksclick: 'linkClick', linkonly: 'linkClick', clicklink: 'linkClick',
+  // Form submission.
+  formsubmission: 'formSubmission', formsubmissions: 'formSubmission', formsubmit: 'formSubmission',
+  formsubmits: 'formSubmission', submitform: 'formSubmission', form: 'formSubmission',
+  // Custom Event (dataLayer).
+  customevent: 'customEvent', customevents: 'customEvent', custom: 'customEvent', datalayerevent: 'customEvent',
+  // Page-load family.
+  pageview: 'pageview', pageviews: 'pageview', pageload: 'pageview',
+  domready: 'domReady', dom: 'domReady', domcontentloaded: 'domReady',
+  windowloaded: 'windowLoaded', windowload: 'windowLoaded', pageloaded: 'windowLoaded', windowonload: 'windowLoaded',
+  // History / JS error / timer.
+  historychange: 'historyChange', history: 'historyChange',
+  jserror: 'jsError', javascripterror: 'jsError', error: 'jsError',
+  timer: 'timer',
+  // Element visibility / scroll / video.
+  elementvisibility: 'elementVisibility', visibility: 'elementVisibility', elementvisible: 'elementVisibility',
+  scrolldepth: 'scrollDepth', scroll: 'scrollDepth',
+  youtubevideo: 'youTubeVideo', youtube: 'youTubeVideo', ytvideo: 'youTubeVideo', video: 'youTubeVideo',
+  // Initialization / consent. The Consent Initialization trigger's API enum value is "consentInit"
+  // (NOT "consentInitialization") - confirmed by container-verify.ts + the web-audit GTM fixture; the
+  // longer spellings are aliases that must be REPAIRED to consentInit, and the correct value maps to itself.
+  init: 'init', initialization: 'init', initallpages: 'init', pageviewinit: 'init',
+  consentinit: 'consentInit', consentinitialization: 'consentInit', consentinitialisation: 'consentInit',
+  // Trigger group.
+  triggergroup: 'triggerGroup', group: 'triggerGroup',
+};
+
+/** Repair a hand-authored trigger `type` to the exact GTM v2 enum value. The chat model routinely
+ *  invents aliases the API rejects ("Invalid value at 'trigger.type'"): "all_clicks"/"allClicks"/
+ *  "allElements"/"all_elements" for the All-Elements click trigger (correct: "click"), "form_submit"
+ *  for "formSubmission", "custom_event" for "customEvent", and so on. We canonicalize by stripping
+ *  case / underscores / hyphens / spaces, then map RECOGNIZED aliases only; an unrecognized type
+ *  passes through untouched so a genuinely valid (or server-only) type is never mangled and the API
+ *  can still return its own clear error. PURE. */
+export function normalizeTriggerType(trigger: Record<string, unknown>): Record<string, unknown> {
+  const raw = (trigger as { type?: unknown }).type;
+  if (typeof raw !== 'string' || !raw) return trigger;
+  const key = raw.toLowerCase().replace(/[\s_-]+/g, '');
+  const canonical = TRIGGER_TYPE_ALIASES[key];
+  return canonical && canonical !== raw ? { ...trigger, type: canonical } : trigger;
+}
+
 /** Normalize AND REPAIR a Custom Event trigger so the API always accepts it. The model often
  *  hand-builds a customEvent trigger (via the raw create_gtm_trigger tool) with the event name at the
- *  TOP-LEVEL `eventName` field — which is timer-only, so the API rejects `trigger.event_name` — and a
- *  missing/malformed `customEventFilter` ("must have exactly one custom-event filter"). This repairs
- *  both: (1) if a single valid `{{_event}}` condition exists, keep it and snake_case its match value
- *  (the original behavior); (2) if it's missing or duplicated, REBUILD exactly one `{{_event}} equals
- *  <name>` condition — taking the name from the top-level eventName (string or Parameter) or any arg1
- *  already present — while preserving non-event conditions (e.g. a server trigger's {{Client Name}}
- *  filter). A top-level `eventName` is ALWAYS stripped from a customEvent trigger. PURE. */
+ *  TOP-LEVEL `eventName` field (timer-only, so the API rejects `trigger.event_name` on a customEvent) and/or
+ *  a malformed `customEventFilter`. GTM requires `customEventFilter` to hold EXACTLY ONE condition (the
+ *  `{{_event}} equals <name>` match); every other scope condition belongs in `filter` (corpus-verified
+ *  in buildTrigger). This repairs all three:
+ *    - keeps the single `{{_event}}` condition (snake_casing its match value), rebuilding it from the
+ *      top-level eventName / any arg1 if none is present, and dropping duplicates so exactly one remains;
+ *    - MOVES any non-event conditions the model mis-placed inside `customEventFilter` out into `filter`
+ *      (merged after existing `filter` conditions); this is what fixes the API's "Custom-event trigger
+ *      must have exactly one custom-event filter" rejection;
+ *    - ALWAYS strips a top-level `eventName` from a customEvent trigger.
+ *  PURE. */
 export function normalizeCustomEventTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
-  const t = trigger as { type?: unknown; eventName?: unknown; customEventFilter?: unknown };
+  const t = trigger as { type?: unknown; eventName?: unknown; customEventFilter?: unknown; filter?: unknown };
   if (String(t.type ?? '') !== 'customEvent') return trigger;
 
   const stripEventName = (o: Record<string, unknown>): Record<string, unknown> => {
@@ -977,42 +1033,47 @@ export function normalizeCustomEventTrigger(trigger: Record<string, unknown>): R
   const valueOf = (v: unknown): string =>
     typeof v === 'string' ? v : v && typeof v === 'object' && typeof (v as { value?: unknown }).value === 'string' ? (v as { value: string }).value : '';
 
-  const cefIn = Array.isArray(t.customEventFilter) ? (t.customEventFilter as Array<Record<string, unknown>>) : [];
+  // Keep only real condition OBJECTS: a hand-authoring model can emit a null/primitive array element,
+  // and a bare `.parameter` access on one would throw mid-create instead of repairing the trigger.
+  const cefIn = (Array.isArray(t.customEventFilter) ? (t.customEventFilter as unknown[]) : []).filter(
+    (c): c is Record<string, unknown> => c != null && typeof c === 'object',
+  );
   const eventConds = cefIn.filter(isEventCond);
-
-  // (1) Exactly one {{_event}} condition → just snake_case its arg1 value; strip the top-level field.
-  if (eventConds.length === 1) {
-    const cef = cefIn.map((cond) => {
-      if (!isEventCond(cond)) return cond;
-      const params = (cond as { parameter: Array<Record<string, unknown>> }).parameter;
-      return {
-        ...cond,
-        parameter: params.map((p) => {
-          const pp = p as { key?: string; value?: unknown };
-          return pp.key === 'arg1' && typeof pp.value === 'string' ? { ...pp, value: normalizeCustomEventName(pp.value) } : p;
-        }),
-      };
-    });
-    return stripEventName({ ...trigger, customEventFilter: cef });
-  }
-
-  // (2) Missing or duplicated {{_event}} condition → rebuild exactly one, keeping any non-event
-  //     conditions. Derive the name from the top-level eventName, else any arg1 already present.
-  let arg1 = '';
-  for (const cond of cefIn) {
-    const params = (cond as { parameter?: unknown }).parameter;
-    if (Array.isArray(params)) {
-      const a1 = params.find((p) => (p as { key?: string }).key === 'arg1');
-      if (a1 && typeof (a1 as { value?: unknown }).value === 'string') { arg1 = (a1 as { value: string }).value; break; }
-    }
-  }
-  const name = normalizeCustomEventName(valueOf(t.eventName) || arg1);
   const nonEventConds = cefIn.filter((cond) => !isEventCond(cond));
-  return stripEventName({
-    ...trigger,
-    type: 'customEvent',
-    customEventFilter: [condition('{{_event}}', 'equals', name), ...nonEventConds],
-  });
+
+  // The single {{_event}} condition customEventFilter is allowed to keep.
+  let eventCond: Record<string, unknown>;
+  if (eventConds.length >= 1) {
+    // Keep the first {{_event}} condition (dropping any duplicates), snake_casing its match value.
+    const first = eventConds[0] as { parameter: Array<Record<string, unknown>> };
+    eventCond = {
+      ...(eventConds[0] as Record<string, unknown>),
+      parameter: first.parameter.map((p) => {
+        const pp = p as { key?: string; value?: unknown };
+        return pp.key === 'arg1' && typeof pp.value === 'string' ? { ...pp, value: normalizeCustomEventName(pp.value) } : p;
+      }),
+    };
+  } else {
+    // No {{_event}} condition present → rebuild one from the top-level eventName, else any arg1 present.
+    let arg1 = '';
+    for (const cond of cefIn) {
+      const params = (cond as { parameter?: unknown }).parameter;
+      if (Array.isArray(params)) {
+        const a1 = params.find((p) => (p as { key?: string }).key === 'arg1');
+        if (a1 && typeof (a1 as { value?: unknown }).value === 'string') { arg1 = (a1 as { value: string }).value; break; }
+      }
+    }
+    eventCond = condition('{{_event}}', 'equals', normalizeCustomEventName(valueOf(t.eventName) || arg1));
+  }
+
+  // Any scope conditions the model mis-placed inside customEventFilter move to `filter`, after any
+  // conditions already there. customEventFilter is left holding exactly the one {{_event}} match.
+  const existingFilter = Array.isArray(t.filter) ? (t.filter as Array<Record<string, unknown>>) : [];
+  const filter = [...existingFilter, ...nonEventConds];
+  const out: Record<string, unknown> = { ...trigger, type: 'customEvent', customEventFilter: [eventCond] };
+  if (filter.length) out.filter = filter;
+  else delete out.filter;
+  return stripEventName(out);
 }
 
 export function normalizeTimerTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
@@ -1154,6 +1215,25 @@ export function buildLookupTableVariable(
   if (hasDefault) parameter.push(tpl('defaultValue', defaultValue as string));
   parameter.push({ type: 'list', key: 'map', list: rows.map((r) => ({ type: 'map', map: [tpl('key', r.key), tpl('value', r.value)] })) });
   return { name, type: 'smm', parameter };
+}
+
+/** A "Google Tag: Event Settings" variable (type "gtes"): a REUSABLE event-parameter table that
+ *  GA4 event tags / Google tags reference (their eventSettingsVariable field), instead of hand-
+ *  rolling a Custom JavaScript object. Rows land in `eventSettingsTable` as list-of-maps keyed
+ *  `parameter`/`parameterValue` - the SAME corpus-validated shape the gaawe tag builder writes
+ *  inline (5,127 of 8,148 real GA4 tags; the name/value list shape is silently ignored). PURE. */
+export function buildGoogleTagEventSettingsVariable(name: string, rows: Array<{ key: string; value: string }>): GtmVariableResource {
+  return {
+    name,
+    type: 'gtes',
+    parameter: [
+      {
+        type: 'list',
+        key: 'eventSettingsTable',
+        list: rows.map((r) => ({ type: 'map', map: [tpl('parameter', r.key), tpl('parameterValue', r.value)] })),
+      },
+    ],
+  };
 }
 
 /** A RegEx Table variable (type "remm") mapping a regex-matched input to output values. Corpus shape:
@@ -1321,7 +1401,7 @@ function tagParam(tag: Record<string, unknown>, key: string): string {
 
 /** Read one setting (e.g. server_container_url) out of a Google tag's configSettingsTable —
  *  the list-of-maps shape upsertGoogleTagConfig writes. */
-function googleTagConfigValue(tag: Record<string, unknown>, configKey: string): string {
+export function googleTagConfigValue(tag: Record<string, unknown>, configKey: string): string {
   const params = Array.isArray(tag.parameter) ? (tag.parameter as Array<Record<string, unknown>>) : [];
   const table = params.find((p) => p.key === 'configSettingsTable');
   const rows = table && Array.isArray(table.list) ? (table.list as Array<Record<string, unknown>>) : [];
@@ -1502,6 +1582,9 @@ export interface AuditTag {
   /** Consent Mode v2 settings, when present on the tag. consentType is a
    *  parameter list that may itself reference {{variables}}. */
   consentSettings?: { consentStatus?: string; consentType?: unknown } | null;
+  /** The workspace folder this tag lives in (workspace-scoped id; resolve to a name to compare
+   *  organization across workspaces). Optional/additive — read-path only, never written. */
+  parentFolderId?: string;
 }
 export interface AuditTrigger {
   triggerId: string;
@@ -1512,6 +1595,7 @@ export interface AuditTrigger {
   autoEventFilter?: Array<Record<string, unknown>>;
   customEventFilter?: Array<Record<string, unknown>>;
   parameter?: Array<Record<string, unknown>>;
+  parentFolderId?: string;
 }
 export interface AuditVariable {
   variableId: string;
@@ -1519,6 +1603,7 @@ export interface AuditVariable {
   type: string;
   /** Variable config — scanned for {{variable}} references to other variables. */
   parameter?: Array<Record<string, unknown>>;
+  parentFolderId?: string;
 }
 
 /**
@@ -1553,17 +1638,22 @@ export interface AuditFinding {
 }
 
 /** Container-only boundary statement — what a config audit proves and what it cannot. */
+/** House style for ALL user-visible generated audit text: plain hyphens, never em/en
+ *  dashes. Applied at the audit-report boundary so the UI, the on-screen documentation,
+ *  and every export (MD/CSV/XLSX/PDF) inherit it without each sanitizing separately. */
+export const plainDashes = (t: string): string => t.replace(/[\u2014\u2013]/g, '-');
+
 export const AUDIT_BOUNDARY =
-  'Container-only audit: this proves CONFIGURATION, not runtime behaviour. It cannot confirm firing timing, dataLayer contents, PII in actual hits, or live consent behaviour — verify those in Tag Assistant / Network, GA4 DebugView, and your CMP.';
+  'Container-only audit: this proves CONFIGURATION, not runtime behaviour. It cannot confirm firing timing, dataLayer contents, PII in actual hits, or live consent behaviour - verify those in Tag Assistant / Network, GA4 DebugView, and your CMP.';
 
 /** Checks a container export CANNOT settle — surfaced so no one assumes they passed. */
 export const AUDIT_RUNTIME_REQUIRED: string[] = [
-  'Consent timing — load the site with no prior consent and watch the network: do GA4/Ads requests fire BEFORE the user chooses?',
-  'Double-firing — does any event (page_view, purchase, …) appear twice in GA4 DebugView for one interaction?',
-  'PII in hits — inspect actual /collect requests for email/phone/name in the page path, query params, or event parameters.',
-  'dataLayer reality — do custom-event triggers’ events actually push during the real user journey?',
-  'Ecommerce integrity — is the items array well-formed (currency/value) in the collect request?',
-  'Cross-domain & server IP — correct linker behaviour, and (server-side) the real client IP rather than the edge IP.',
+  'Consent timing - load the site with no prior consent and watch the network: do GA4/Ads requests fire BEFORE the user chooses?',
+  'Double-firing - does any event (page_view, purchase, …) appear twice in GA4 DebugView for one interaction?',
+  'PII in hits - inspect actual /collect requests for email/phone/name in the page path, query params, or event parameters.',
+  'dataLayer reality - do custom-event triggers’ events actually push during the real user journey?',
+  'Ecommerce integrity - is the items array well-formed (currency/value) in the collect request?',
+  'Cross-domain & server IP - correct linker behaviour, and (server-side) the real client IP rather than the edge IP.',
 ];
 
 /** Audit Brain confidence per finding category. Most container findings are provable
@@ -1605,7 +1695,7 @@ export interface AuditReport {
 /** Reserved GTM built-in trigger ids (All Pages, Initialization, Consent Initialization, DOM Ready,
  *  Window Loaded) live in the 2147479xxx range and are never user-deletable. triggers.list doesn't
  *  return them, but guard anyway so a cleanup never targets one. PURE. */
-function isBuiltinTriggerId(id: string): boolean {
+export function isBuiltinTriggerId(id: string): boolean {
   return /^2147479\d{3}$/.test(id);
 }
 
@@ -2459,6 +2549,8 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
   // Add the Audit Brain confidence + resource type to each finding in one pass.
   const withConfidence: AuditFinding[] = deduped.map((f) => ({
     ...f,
+    message: plainDashes(f.message),
+    recommendation: plainDashes(f.recommendation),
     confidence: f.confidence ?? confidenceFor(f.category),
     resource: f.resource ? { ...f.resource, type: typeById.get(`${f.resource.kind}:${f.resource.id}`) } : f.resource,
   }));
@@ -2486,22 +2578,27 @@ export function auditContainer(s: ContainerSnapshot, opts?: { clientRegion?: str
 export interface ServerContainerSnapshot {
   /** The container's tagging server URL(s) — empty if the host isn't provisioned yet. */
   taggingServerUrls: string[];
-  clients: Array<{ clientId: string; name: string; type: string }>;
+  /** parameter is optional (older callers/tests) — carried so client configs join the
+   *  {{variable}} reference scan. */
+  clients: Array<{ clientId: string; name: string; type: string; parameter?: unknown[] }>;
   tags: AuditTag[];
   /** The server workspace's triggers — needed to compare firing conditions (duplicate
    *  GA4 relays) and to scan filter values (URL-encoded event names). Optional so older
    *  callers/tests that omit it still type-check; treated as [] when absent. */
   triggers?: AuditTrigger[];
-  transformations: Array<{ transformationId: string; name: string; type: string }>;
+  /** The server workspace's variables — enables the unused-variable + dangling-reference
+   *  checks. Optional so older callers/tests still type-check. */
+  variables?: ContainerSnapshot['variables'];
+  transformations: Array<{ transformationId: string; name: string; type: string; parameter?: unknown[] }>;
 }
 
 export const AUDIT_SERVER_BOUNDARY =
-  'Server-container audit: this proves the server CONFIGURATION (a client to claim requests, server tags with their destination ids, no silent gaps) — NOT that the tagging server is deployed/reachable or that data actually flows. Confirm the live server with verify_server_endpoint, the web container\'s server_container_url, and GTM Preview on the server container.';
+  'Server-container audit: this proves the server CONFIGURATION (a client to claim requests, server tags with their destination ids, no silent gaps) - NOT that the tagging server is deployed/reachable or that data actually flows. Confirm the live server with verify_server_endpoint, the web container\'s server_container_url, and GTM Preview on the server container.';
 
 export const AUDIT_SERVER_RUNTIME_REQUIRED: string[] = [
-  'Server reachable — is the tagging-server host deployed and responding (GET <url>/healthy)?',
-  'Web→server flow — is the web Google tag\'s server_container_url pointed at this server, so requests actually arrive?',
-  'Client claim — on a live request, does the GA4 client claim it and do the server tags fire (GTM Preview on the server container)?',
+  'Server reachable - is the tagging-server host deployed and responding (GET <url>/healthy)?',
+  'Web→server flow - is the web Google tag\'s server_container_url pointed at this server, so requests actually arrive?',
+  'Client claim - on a live request, does the GA4 client claim it and do the server tags fire (GTM Preview on the server container)?',
 ];
 
 /** The Google destination server-tag types — each depends on the GA4 (gaaw) client
@@ -2509,7 +2606,7 @@ export const AUDIT_SERVER_RUNTIME_REQUIRED: string[] = [
 const GOOGLE_SERVER_TAG_TYPES = new Set(['sgtmgaaw', 'sgtmadsct', 'sgtmadscl', 'sgtmadsremarket']);
 
 /** Read a TEMPLATE param's string value off an audit tag ('' when absent/non-string). PURE. */
-function serverTagParam(t: AuditTag, key: string): string {
+export function serverTagParam(t: AuditTag, key: string): string {
   const params = Array.isArray(t.parameter) ? t.parameter : [];
   const p = params.find((x) => (x as { key?: string }).key === key) as { value?: unknown } | undefined;
   return p && typeof p.value === 'string' ? p.value : '';
@@ -2527,7 +2624,7 @@ function isVariableRef(v: string): boolean {
  *  require a Facebook-distinctive field (generateFbp / actionSource) that TikTok never emits
  *  (it uses generateTtp / eventSource). This keeps the Meta-only swapped-field and test-code
  *  checks from misfiring on a TikTok tag. PURE. */
-function isMetaCapiServerTag(t: AuditTag): boolean {
+export function isMetaCapiServerTag(t: AuditTag): boolean {
   if (!t.type.startsWith('cvt_')) return false;
   const params = Array.isArray(t.parameter) ? t.parameter : [];
   const keys = new Set(params.map((p) => (p as { key?: string }).key));
@@ -2537,7 +2634,7 @@ function isMetaCapiServerTag(t: AuditTag): boolean {
 
 /** The TikTok "Events API" server template ALSO stores pixelId + accessToken, but is distinguished from
  *  Meta by its TikTok-only fields (generateTtp / eventSource, vs Meta's generateFbp / actionSource). PURE. */
-function isTikTokCapiServerTag(t: AuditTag): boolean {
+export function isTikTokCapiServerTag(t: AuditTag): boolean {
   if (!t.type.startsWith('cvt_')) return false;
   const keys = new Set((Array.isArray(t.parameter) ? t.parameter : []).map((p) => (p as { key?: string }).key));
   if (!(keys.has('pixelId') && keys.has('accessToken'))) return false;
@@ -2724,20 +2821,27 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     });
   }
 
-  // (2) URL-ENCODED TRIGGER VALUES — a literal (non-regex) condition whose value carries
-  //     URL-encoding ("Sign+Petition+Click", %20, %2F) can never equal/contain a DECODED
-  //     dataLayer event name, so the trigger is dead. Variable refs + regex ops are skipped.
+  // (2) URL-ENCODED EVENT-NAME VALUES — a literal (non-regex) condition on the EVENT NAME ({{_event}})
+  //     whose value carries URL-encoding ("Sign+Petition+Click", %20, %2F) can never equal/contain a
+  //     DECODED dataLayer event name, so the trigger is dead. Scoped to {{_event}} conditions ONLY:
+  //     on a URL / page_location variable, '+' and %XX are LEGITIMATE URL characters that the value
+  //     genuinely retains and matches (this codebase's own buildServerEventTrigger pageUrlContains makes
+  //     `{{ed - page_location}} contains "…"` conditions), so flagging those would be a false positive.
+  //     Variable-ref match values + regex ops are also skipped.
   for (const tr of triggers) {
     const bad: string[] = [];
     const scan = (arr?: Array<Record<string, unknown>>): void => {
       for (const f of arr ?? []) {
         const op = String((f as { type?: unknown }).type ?? '');
         if (!LITERAL_MATCH_OPS.has(normOp(op))) continue;
-        for (const p of ((f as { parameter?: Array<{ key?: string; value?: unknown }> }).parameter) ?? []) {
-          const v = typeof p.value === 'string' ? p.value : '';
-          if (!v || isVariableRef(v)) continue;
-          if (looksUrlEncoded(v)) bad.push(v);
-        }
+        const cparams = ((f as { parameter?: Array<{ key?: string; value?: unknown }> }).parameter) ?? [];
+        // Only the event-name input makes URL-encoding "dead": GTM matches the DECODED {{_event}}.
+        const arg0 = cparams.find((p) => p.key === 'arg0');
+        if (String((arg0 as { value?: unknown } | undefined)?.value ?? '') !== '{{_event}}') continue;
+        const arg1 = cparams.find((p) => p.key === 'arg1');
+        const v = typeof (arg1 as { value?: unknown } | undefined)?.value === 'string' ? String((arg1 as { value?: string }).value) : '';
+        if (!v || isVariableRef(v)) continue;
+        if (looksUrlEncoded(v)) bad.push(v);
       }
     };
     scan(tr.filter);
@@ -2840,16 +2944,112 @@ export function auditServerContainer(s: ServerContainerSnapshot): AuditReport {
     });
   }
 
+  // ── Clients: legacy UA client + duplicate same-type clients ──
+  for (const c of s.clients) {
+    if (!/(^|_)ua($|_)/i.test(c.type)) continue;
+    push({
+      severity: 'low',
+      category: 'deprecated',
+      message: `Client "${c.name}" is a Universal Analytics client — UA is sunset, so the requests it claims feed a product that no longer reports, and it competes to claim requests ahead of your active clients.`,
+      recommendation: 'Delete the UA client (delete_gtm_client) unless something still deliberately depends on its claiming behavior.',
+      autoFixable: false,
+    });
+  }
+  const clientsByType = new Map<string, typeof s.clients>();
+  for (const c of s.clients) {
+    const arr = clientsByType.get(c.type) ?? [];
+    arr.push(c);
+    clientsByType.set(c.type, arr);
+  }
+  for (const [type, group] of clientsByType) {
+    if (group.length < 2) continue;
+    push({
+      severity: 'low',
+      confidence: 'likely',
+      category: 'unused',
+      message: `${group.length} clients of the same type "${type}" (${group.map((c) => `"${c.name}"`).join(', ')}) — an incoming request is claimed by ONE client (priority order), so a same-type duplicate usually never claims anything: dead weight or an accidental copy.`,
+      recommendation: 'Keep one client per type unless they are deliberately split by path/priority; delete the accidental copy.',
+      autoFixable: false,
+    });
+  }
+
+  // ── Variables: unused + dangling {{references}} — REUSES the web audit's helpers over the server
+  // workspace, with client + transformation parameters added to the reference corpus so a variable
+  // used only by a client/transformation is never called unused. Server-only built-ins are excluded
+  // from the dangling check (the web built-ins list doesn't know them). ──
+  if (s.variables?.length || s.tags.length) {
+    const pseudo: ContainerSnapshot = { tags: s.tags, triggers, variables: s.variables ?? [] };
+    const extraCorpus = JSON.stringify([
+      ...s.clients.map((c) => c.parameter ?? []),
+      ...s.transformations.map((x) => x.parameter ?? []),
+    ]);
+    for (const v of findUnusedVariables(pseudo)) {
+      if (extraCorpus.includes(`{{${v.name}}}`)) continue; // used by a client/transformation
+      push({
+        severity: 'low',
+        category: 'unused',
+        checkId: 'unused-variable',
+        resource: { kind: 'variable', id: v.variableId, name: v.name },
+        message: `Variable "${v.name}" appears unused — no server tag, trigger, client, transformation, or variable in this workspace references it.`,
+        recommendation: 'Delete it if it is truly unused — first confirm it is not relied on by a published version or a field this audit cannot inspect.',
+        autoFixable: false,
+      });
+    }
+    const SERVER_BUILTINS = new Set([
+      'Event Name', 'Client Name', 'Container ID', 'Container Version', 'Debug Mode', 'Environment Name',
+      'Random Number', 'Request Method', 'Request Path', 'Query String', 'Page Location', 'Page Hostname',
+      'Page Path', 'Referrer', 'IP Address', 'User Agent', 'Visitor Region',
+    ]);
+    for (const d of findDanglingVariableReferences(pseudo)) {
+      const missing = d.missing.filter((m) => !SERVER_BUILTINS.has(m) && !m.startsWith('_'));
+      if (!missing.length) continue;
+      const noun = d.resource.kind === 'tag' ? 'Server tag' : d.resource.kind === 'trigger' ? 'Trigger' : 'Variable';
+      push({
+        severity: 'medium',
+        confidence: 'likely',
+        category: 'variable',
+        resource: d.resource,
+        message: `${noun} "${d.resource.name}" references ${missing.map((m) => `{{${m}}}`).join(', ')} which this workspace does not define — the reference resolves to undefined at runtime.`,
+        recommendation: 'Create the missing variable (for server containers usually an Event Data variable reading the incoming field), or fix the reference.',
+        autoFixable: false,
+      });
+    }
+  }
+
+  // ── PII-named event data → CAPI tags, with ZERO transformations in the workspace. Deliberately
+  // LOW + runtime-required: the official/stape CAPI templates hash user data THEMSELVES, so a missing
+  // transformation is not proof of raw PII leaving the server - but it is the one config-visible
+  // state worth a manual look (a custom template or auto-map-off tag may forward raw values).
+  if (s.transformations.length === 0) {
+    const PII_VAR = /email|phone|first.?name|last.?name|full.?name|address|zip|postal/i;
+    const piiVars = (s.variables ?? []).filter((v) => PII_VAR.test(v.name));
+    const capiTags = s.tags.filter(
+      (t) => !t.paused && (isMetaCapiServerTag(t) || isTikTokCapiServerTag(t) || /linkedin|pinterest|snap|capi|conversions?\s*api/i.test(t.name)),
+    );
+    const flowing = piiVars.filter((v) => capiTags.some((t) => JSON.stringify(t.parameter ?? []).includes(`{{${v.name}}}`)));
+    if (flowing.length) {
+      push({
+        severity: 'low',
+        confidence: 'runtime-required',
+        category: 'security',
+        message: `PII-named variable${flowing.length === 1 ? '' : 's'} (${flowing.map((v) => `"${v.name}"`).join(', ')}) flow into CAPI server tags and this workspace has NO transformations. The official/stape CAPI templates hash user data themselves, so this is not proof of a leak - but a custom template or a tag with auto-mapping off may forward the raw values.`,
+        recommendation: 'Verify in the vendor Events Manager (Test Events) or sGTM preview that these fields arrive HASHED; if they arrive raw, add a transformation that SHA-256 hashes them before forwarding, or fix the tag template.',
+        autoFixable: false,
+      });
+    }
+  }
+
   const nameCounts = new Map<string, number>();
   for (const t of s.tags) nameCounts.set(t.name, (nameCounts.get(t.name) ?? 0) + 1);
   for (const [name, c] of nameCounts) if (c > 1) push({ severity: 'medium', category: 'naming', message: `Duplicate server-tag name "${name}" (${c} tags) — hard to tell them apart.`, recommendation: 'Rename so each tag is uniquely identifiable.', autoFixable: false });
 
+  const cleanFindings = findings.map((f) => ({ ...f, message: plainDashes(f.message), recommendation: plainDashes(f.recommendation) }));
   const summary = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-  for (const f of findings) summary[f.severity]++;
+  for (const f of cleanFindings) summary[f.severity]++;
   return {
-    counts: { tags: s.tags.length, triggers: triggers.length, variables: 0, clients: s.clients.length, transformations: s.transformations.length, findings: findings.length },
+    counts: { tags: s.tags.length, triggers: triggers.length, variables: s.variables?.length ?? 0, clients: s.clients.length, transformations: s.transformations.length, findings: findings.length },
     summary,
-    findings,
+    findings: cleanFindings,
     boundary: AUDIT_SERVER_BOUNDARY,
     runtimeRequired: AUDIT_SERVER_RUNTIME_REQUIRED,
     hasGa4Config: hasGa4Client,
@@ -3111,23 +3311,24 @@ const canonMetaUserDataKey = (name: string): string => {
  *  has no clean event key → "product"). Only keys with a binding are auto-mapped; an event's other
  *  recommended object properties (content_name, registration_method, …) are left for the user. */
 const META_CUSTOM_DATA_BINDING: Record<string, { ed: string } | { literal: string }> = {
-  content_ids: { ed: 'content_ids' },
-  contents: { ed: 'contents' },
-  // content_type is intentionally NOT bound: the Stape template's addEcommerceData auto-detects it
-  // ('product' for a single item, 'product_group' for a view_item_list / collection), and it runs
-  // BEFORE the tag's customDataList override — so a hard-coded literal 'product' here would OVERWRITE
-  // the template's correctly-detected 'product_group' for catalog product-set advertisers. Leaving it
-  // unbound lets the template's detection stand.
+  // contents / content_ids / num_items / content_type are intentionally NOT bound. The Stape template's
+  // addEcommerceData BUILDS custom_data.contents (an array of {id,quantity,item_price,…}) from the event's
+  // `items` and auto-detects content_type ('product' vs 'product_group'), BEFORE the tag's customDataList
+  // override runs — and that override is applied UNCONDITIONALLY (mappedData.custom_data[name] = value with
+  // no validity check). A GA4-sourced event has no FLAT `contents` key, so {{ed - contents}} resolves
+  // undefined; binding it would overwrite the template's product array with undefined, and cleanupData
+  // (isValidValue) then drops it — shipping every ecommerce tag with NO contents and breaking catalog/DPA
+  // matching. So we leave these to the template. (content_ids/num_items aren't built by the template and
+  // {{ed - …}} resolve undefined for GA4 events too, so binding them only risked the same erase for no gain.)
   value: { ed: 'value' },
   currency: { ed: 'currency' },
-  num_items: { ed: 'num_items' },
   order_id: { ed: 'transaction_id' },
 };
 /** Event-aware custom_data rows: the recommended object properties for `std` (minus event_id, which
  *  is sent via serverEventDataList) that have a binding, in a stable order. For a custom event
  *  (std null) fall back to the core ecommerce set. value + currency are always included. */
 function metaCustomDataRows(std: string | null): Param[] {
-  const keys = std ? (META_EVENT_OBJECT_PROPERTIES[std] ?? []) : ['content_ids', 'value', 'currency', 'order_id'];
+  const keys = std ? (META_EVENT_OBJECT_PROPERTIES[std] ?? []) : ['value', 'currency', 'order_id'];
   const rows: Param[] = [];
   const seen = new Set<string>();
   const add = (k: string): void => {
@@ -3329,6 +3530,29 @@ export function tikTokStandardEvent(event: string): string | null {
   if (GA4_TO_TIKTOK[norm]) return GA4_TO_TIKTOK[norm];
   for (const e of TIKTOK_STANDARD_EVENTS) if (e.toLowerCase() === norm) return e;
   return null;
+}
+
+/** Build a Stape DATA TAG (WEB container; gallery template stape-io/data-tag, `type` = its cvt_
+ *  code). Field keys verified against the template: gtm_server_domain (the tagging server URL),
+ *  request_path (default /data), event_type standard|custom, add_data_layer / add_common /
+ *  add_consent_state checkboxes. Defaults: standard page_view event on All Pages, full dataLayer +
+ *  common page data + consent state included. PURE. */
+export function buildStapeDataTag(type: string, name: string, serverUrl: string, opts?: { requestPath?: string; firingTriggerId?: string[] }): GtmTagResource {
+  return {
+    name,
+    type,
+    parameter: [
+      { type: 'template', key: 'event_type', value: 'standard' },
+      { type: 'template', key: 'event_name_standard', value: 'page_view' },
+      { type: 'template', key: 'gtm_server_domain', value: serverUrl },
+      { type: 'template', key: 'request_path', value: opts?.requestPath ?? '/data' },
+      { type: 'boolean', key: 'add_data_layer', value: 'true' },
+      { type: 'boolean', key: 'add_common', value: 'true' },
+      { type: 'boolean', key: 'add_consent_state', value: 'true' },
+    ],
+    // 2147479553 = the web container's built-in All Pages (pageview) trigger id.
+    firingTriggerId: opts?.firingTriggerId ?? ['2147479553'],
+  } as unknown as GtmTagResource;
 }
 
 /** Build a Stape "TikTok Events API" SERVER tag (gallery template stape-io/tiktok-tag; `type` = its
@@ -3799,10 +4023,14 @@ export const PINTEREST_USER_DATA_KEYS: string[] = [
   'hashed_maids', 'client_ip_address', 'client_user_agent', 'external_id', 'click_id',
 ];
 export const PINTEREST_CUSTOM_DATA_KEYS: string[] = [
-  'value', 'currency', 'content_ids', 'contents', 'content_name', 'content_category', 'content_brand',
-  'num_items', 'order_id', 'search_string', 'opt_out', 'np',
+  'currency', 'value', 'content_name', 'content_category', 'content_brand', 'content_ids', 'contents',
+  'num_items', 'order_id', 'search_string', 'opt_out_type', 'predicted_ltv', 'line_items',
 ];
-export const PINTEREST_SERVER_EVENT_DATA_KEYS: string[] = ['event_id', 'event_source_url', 'action_source', 'opt_out', 'partner_name'];
+export const PINTEREST_SERVER_EVENT_DATA_KEYS: string[] = [
+  'action_source', 'event_time', 'event_id', 'event_source_url', 'opt_out', 'partner_name',
+  'app_id', 'app_name', 'app_version', 'device_brand', 'device_carrier', 'device_model', 'device_type',
+  'os_version', 'wifi', 'language',
+];
 /** Common GA4 / plain-name aliases → the canonical Pinterest key. Applied only when the alias resolves
  *  to a key in the target table's SELECT set, so it can never turn a valid key into an invalid one. */
 const PINTEREST_KEY_ALIAS: Record<string, string> = {

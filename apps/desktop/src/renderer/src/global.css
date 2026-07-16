@@ -1,22 +1,63 @@
 /* Global polish layered on top of the app's inline-style system. Inline styles can't express :hover /
  * :active / :focus, so the interactive states live here and apply to every <button> app-wide. Colours
- * come from the theme CSS variables (set on <body> by theme.ts), so this works in light and dark. */
+ * come from the theme CSS variables (set on <body> by theme.ts), so this works in light and dark.
+ * 2026-07 design-system refresh: typography base, tokenized elevation (--shadow-*), a consistent
+ * focus ring (--ring) on every interactive control, and standardized 150ms transitions. */
 
+/* ── Typography base ─────────────────────────────────────────────────────────────────────────── */
+body {
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11'; /* Inter: open digits + disambiguated Il1 */
+}
+h1, h2, h3, h4 {
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+}
+code, pre, kbd, samp {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+::selection {
+  background: var(--primary-soft);
+}
+
+/* ── Interactive states ──────────────────────────────────────────────────────────────────────── */
 button {
-  transition: filter 0.12s ease, transform 0.05s ease, box-shadow 0.12s ease;
+  transition: filter 0.15s ease, transform 0.05s ease, box-shadow 0.15s ease,
+    background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 button:not(:disabled) {
   cursor: pointer;
 }
 button:hover:not(:disabled) {
-  filter: brightness(1.08);
+  filter: brightness(1.06);
 }
 button:active:not(:disabled) {
   transform: translateY(1px);
 }
-button:focus-visible {
-  outline: 2px solid var(--c-blue);
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+/* One consistent, theme-aware focus ring on every control (keyboard nav must always be visible). */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid transparent;
   outline-offset: 1px;
+  box-shadow: 0 0 0 3px var(--ring);
+}
+input,
+select,
+textarea {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  accent-color: var(--primary);
 }
 
 /* Native controls inherit Inter + sit on the themed surfaces (Windows otherwise renders them in a
@@ -66,29 +107,36 @@ button {
 /* Indeterminate progress bar (no % known) — a moving sliver over a track. Used by the running
    verification so the user sees it's working. Respects reduced-motion (falls back to a static fill). */
 .vf-progress { position: relative; height: 4px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
-.vf-progress::after { content: ''; position: absolute; top: 0; bottom: 0; left: -35%; width: 35%; border-radius: 999px; background: #2563eb; animation: vfIndeterminate 1.15s ease-in-out infinite; }
+.vf-progress::after { content: ''; position: absolute; top: 0; bottom: 0; left: -35%; width: 35%; border-radius: 999px; background: var(--primary); animation: vfIndeterminate 1.15s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .vf-progress::after { left: 0; width: 100%; opacity: 0.5; animation: none; } }
 
+/* Live verify feed — the page being scanned/driven, shown low-opacity so it reads as "in flight, don't
+   fixate on it". The url fades in on each change (React re-keys on the url), and a small dot pulses. */
+@keyframes vfPulse { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1); } }
+.vf-live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 999px; background: var(--primary); flex: none; animation: vfPulse 1.15s ease-in-out infinite; }
+.vf-live-url { animation: fadeIn 0.32s ease both; }
+@media (prefers-reduced-motion: reduce) { .vf-live-dot { animation: none; opacity: 0.7; } .vf-live-url { animation: none; } }
+
 /* Page/view transition — the switched-in view fades + lifts into place. */
-.view-enter { animation: viewEnter 0.24s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+.view-enter { animation: viewEnter 0.24s var(--ease, cubic-bezier(0.22, 0.61, 0.36, 1)) both; }
 
 /* Staggered card entrance — add .rise-in; set --d for a per-card delay if desired. */
-.rise-in { animation: riseIn 0.34s cubic-bezier(0.22, 0.61, 0.36, 1) both; animation-delay: var(--d, 0s); }
+.rise-in { animation: riseIn 0.34s var(--ease, cubic-bezier(0.22, 0.61, 0.36, 1)) both; animation-delay: var(--d, 0s); }
 .pop-in { animation: popIn 0.2s ease-out both; }
 
 /* Lift-on-hover for interactive cards/rows/stat tiles. */
-.hover-lift { transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease; }
-.hover-lift:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(15, 23, 42, 0.10); }
+.hover-lift { transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease; }
+.hover-lift:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); }
 
 /* Primary/solid buttons get a soft shadow on hover (on top of the global brightness bump). */
-button:hover:not(:disabled) { box-shadow: 0 2px 10px rgba(15, 23, 42, 0.10); }
+button:hover:not(:disabled) { box-shadow: var(--shadow-1); }
 
 /* Sidebar nav items: smooth colour/indent + an animated active accent bar. */
-.nav-item { position: relative; transition: background 0.14s ease, color 0.14s ease, padding-left 0.14s ease; }
+.nav-item { position: relative; transition: background 0.15s ease, color 0.15s ease, padding-left 0.15s ease; }
 .nav-item:hover { padding-left: 13px; }
 .nav-item::before {
   content: ''; position: absolute; left: 0; top: 50%; height: 0; width: 3px; border-radius: 3px;
-  background: var(--c-blue); transform: translateY(-50%); transition: height 0.18s ease; opacity: 0.9;
+  background: var(--primary); transform: translateY(-50%); transition: height 0.18s ease; opacity: 0.9;
 }
 .nav-item[data-active='true']::before { height: 60%; }
 
@@ -102,7 +150,7 @@ button:hover:not(:disabled) { box-shadow: 0 2px 10px rgba(15, 23, 42, 0.10); }
 /* Inline spinner (add to an element, size via font-size/width). */
 .spinner {
   display: inline-block; width: 1em; height: 1em; border-radius: 50%;
-  border: 2px solid var(--border-2); border-top-color: var(--c-blue);
+  border: 2px solid var(--border-2); border-top-color: var(--primary);
   animation: spin 0.7s linear infinite;
 }
 
@@ -111,12 +159,12 @@ button:hover:not(:disabled) { box-shadow: 0 2px 10px rgba(15, 23, 42, 0.10); }
 
 /* Modal / command-overlay entrance. */
 .overlay-in { animation: overlayIn 0.16s ease both; }
-.sheet-in { animation: sheetIn 0.22s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+.sheet-in { animation: sheetIn 0.22s var(--ease, cubic-bezier(0.22, 0.61, 0.36, 1)) both; }
 
 /* Chat composer shell — the textarea inside is borderless, so the focus ring lives on the wrapper. */
 .composer-shell:focus-within {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.22);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--ring);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -128,3 +176,10 @@ button:hover:not(:disabled) { box-shadow: 0 2px 10px rgba(15, 23, 42, 0.10); }
   }
   .hover-lift:hover { transform: none; }
 }
+
+/* Chat: the per-message "Remember" affordance stays subtle until you hover the bubble (or when its
+   inline form is open, flagged via data-open). Always visible on touch devices. */
+.chat-msg .msg-actions { opacity: 0; transition: opacity 0.12s ease; }
+.chat-msg:hover .msg-actions,
+.msg-actions[data-open='true'] { opacity: 1; }
+@media (hover: none) { .chat-msg .msg-actions { opacity: 1; } }

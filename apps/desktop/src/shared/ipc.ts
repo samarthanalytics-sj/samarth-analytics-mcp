@@ -44,6 +44,7 @@ export interface AccountView {
   llm?: LlmConfigView;
   /** Remembered GTM account/container/workspace selection. */
   gtmContext?: GtmContext;
+  ga4Context?: Ga4Context;
 }
 
 export interface AddAccountInput {
@@ -103,6 +104,8 @@ export interface GtmContainerView {
   name: string;
   publicId: string;
   path: string;
+  /** GTM usage contexts (e.g. ['web'] or ['server']) — lets pickers filter server containers. */
+  usageContext?: string[];
 }
 
 export interface GtmWorkspaceView {
@@ -112,6 +115,15 @@ export interface GtmWorkspaceView {
 }
 
 /** The GTM account/container/workspace the user is currently working in. */
+/** Which GA4 property the GA4 chat works against (the GA4 mirror of GtmContext). */
+export interface Ga4Context {
+  /** "properties/123456" */
+  property?: string;
+  propertyName?: string;
+  /** Display name of the parent GA4 account (for the breadcrumb). */
+  accountName?: string;
+}
+
 export interface GtmContext {
   accountId?: string;
   accountName?: string;
@@ -226,6 +238,10 @@ export interface Ga4ExecSummaryView {
 }
 /** Visualisations payload: the daily sessions trend line + colourful device/channel breakdowns. */
 export interface Ga4VisualsView {
+  /** Headline metric cards (current window vs prior): formatted value + signed delta % + the Data
+   *  Trust Matrix verdict for that metric, so a green arrow never over-claims an unverified number.
+   *  deltaPct null = no prior-window data to compare against. */
+  metrics?: Array<{ label: string; value: string; prior: string; deltaPct: number | null; verdict: 'safe' | 'caution' | 'unverified' | 'do_not_quote' }>;
   daily: Array<{ date: string; sessions: number }>;
   peakIndex: number;
   trendLabel: string;
@@ -293,6 +309,12 @@ export interface Ga4SectionsView {
     quoteNote: string | null;
     read: string;
     trendPattern: string | null;
+    /** One-line RESTATED window total with the single-bucket burst excluded (the quotable number
+     *  while the burst is unexplained); null when no concentration spike fired. */
+    restated: string | null;
+    /** "What changed by channel": top movers vs the prior period - the headline delta decomposed.
+     *  Empty when the prior per-channel slice is unavailable. deltaPct null = channel is new. */
+    drivers: Array<{ channel: string; from: string; to: string; delta: string; deltaPct: number | null }>;
   } | null;
   /** Section 4 — every finding, highest severity first. */
   findings: Ga4FindingCardView[];
@@ -331,6 +353,9 @@ export interface Ga4SectionsView {
   campaignPerformance: { rows: Array<{ campaign: string; sessions: string; conversions: string; purchases: string; revenue: string; engagement: string }>; best: string | null; untaggedShare: string; caveat: string } | null;
   /** Section 6 — AI/LLM referral-traffic performance + its share of all sessions. null = no AI traffic. */
   llmTraffic: { rows: Array<{ source: string; sessions: string; convRate: string; revenue: string; engagement: string }>; share: string } | null;
+  /** Section 6 — top products by ITEM revenue (item-scoped metrics; the caveat is mandatory).
+   *  null = non-ecommerce property or the item query returned nothing. */
+  productPerformance: { rows: Array<{ item: string; viewed: string; addedToCart: string; purchased: string; viewToBuy: string; revenue: string }>; caveat: string } | null;
   /** Section 6 — rule-based "Key insights" bullets (peaks/lows, top performers, the near-100%-conv flag). */
   insights: string[];
   /** Section 6 — true when the conversion-rate/revenue columns of the performance tables lean on a
@@ -648,6 +673,17 @@ export interface VerifyTagVerdict {
   /** JPEG data-URI screenshot of the page right after this tag's interaction (the driven control
    *  ringed) — visual proof of what was exercised. Best-effort; absent for un-driven/capped tags. */
   screenshot?: string;
+  /** true = this verdict is AUTHORITATIVE — it comes from GTM's own Monitoring API (addEventCallback via
+   *  the injected GTM Monitor tag), not from beacon inference. `fired`/`monitorStatus`/`monitorEvents`
+   *  are then ground truth: exactly which tags GTM fired, like Tag Assistant. */
+  verifiedByMonitor?: boolean;
+  /** For a monitor verdict: the tag's worst reported status — 'success' | 'failure' | 'exception' |
+   *  'timeout'. Absent for non-monitor verdicts. */
+  monitorStatus?: string;
+  /** For a monitor verdict: the dataLayer events GTM fired this tag on. */
+  monitorEvents?: string[];
+  /** For a monitor verdict: the tag's execution time (ms), when reported. */
+  monitorExecutionMs?: number;
 }
 
 /** Result of verifying tag firing (suggestions:verifyTags). */
@@ -661,6 +697,12 @@ export interface VerifyTagsResult {
   pagesOk: boolean;
   error?: string;
   verdicts: VerifyTagVerdict[];
+  /** true = this run used AUTHORITATIVE mode: verdicts came from the real Tag Assistant debug stream
+   *  (GTM's own per-event tag firing), not beacon inference. The UI renders the fired/not-fired panel. */
+  verifiedByMonitor?: boolean;
+  /** Authoritative mode needs a ONE-TIME Google sign-in for Tag Assistant to debug a GTM container —
+   *  the UI shows the "Sign in for Tag Assistant" button when set. */
+  needTaSignIn?: boolean;
   /** The distinct page URLs the driver actually navigated + drove tags on (multi-page drive). A
    *  click tag whose CTA lives off the homepage is driven on ITS page, so this is usually >1. */
   pagesDriven?: string[];
@@ -683,6 +725,96 @@ export interface VerifyTagsResult {
   /** Phase B (best-effort): GTM's on-page debug signal — whether the container actually loaded +
    *  the dataLayer event stream. Present only when gtmDebug was requested. */
   gtmDebug?: { containerLoaded: boolean; containerIds: string[]; dataLayerEvents: string[] };
+  /** Phase 3 (authoritative Tag Assistant runs): the per-event timeline — one entry per dataLayer event
+   *  the container processed, with the exact push (API Call), resolved variables, and the tags that fired
+   *  on it. Powers the in-app "show it in detail" results view. */
+  taEvents?: TaEventView[];
+  /** Phase 3: DLV-based trigger suggestions for tags that did NOT fire, built from the REAL captured
+   *  pushes — so the user can create/align a trigger for anything not firing. */
+  taSuggestions?: TaTriggerSuggestion[];
+}
+
+/** One row of the tag-verification results EXPORT (CSV / PDF / DOC). The renderer derives these from the
+ *  verdicts (reusing the same status/label logic the on-screen table uses) so the download matches the UI.
+ *  `screenshot` (a JPEG data-URI) is embedded as an <img> in the PDF/DOC; the CSV omits it (text only). */
+export interface VerifyExportRow {
+  /** Human label of the verdict's status, e.g. "Fired" / "Config OK" / "Server-side" / "Untested" / "Issue". */
+  status: string;
+  /** The tag's name, e.g. "GA4 - Event - Phone Click Tag". */
+  tag: string;
+  /** The event it fired on (the dataLayer/trigger event, e.g. "gtm.linkClick", in an authoritative run). */
+  triggerEvent?: string;
+  /** How the fire was observed — the interaction-kind label, e.g. "Tag" / "Click" / "Form". */
+  firedVia?: string;
+  /** The evidence line, e.g. "GTM monitor: success" or the observed beacon host(s). */
+  signal?: string;
+  /** JPEG data-URI proof screenshot (Tag Assistant tag-detail / driven page). Embedded in PDF/DOC only. */
+  screenshot?: string;
+}
+
+/** Everything the tag-verification export needs, sent from the renderer to the export IPC. Serializable. */
+export interface VerifyExportPayload {
+  /** The site verified (for the report heading + default filename). */
+  url?: string;
+  /** true = an authoritative Tag Assistant / GTM-monitor run (shown as a note in the report). */
+  authoritative?: boolean;
+  /** The scorecard counts, mirroring the on-screen cards. */
+  counts: { fired: number; config: number; server: number; untested: number; issues: number };
+  /** Coverage line: pages driven / crawled / total (each optional). */
+  pagesDriven?: number;
+  pagesCrawled?: number;
+  pagesTotal?: number;
+  /** Every verdict as an export row, in display order (fired → config → server → untested → not-firing). */
+  rows: VerifyExportRow[];
+}
+
+/** One dataLayer event in the Tag-Assistant-style timeline. */
+export interface TaEventView {
+  /** Stable, unique, 1-based chronological index — the timeline's identity. `eventId` is NOT unique across
+   *  a multi-page drive (gtm.uniqueEventId resets per page), so React keys, expand state, and the
+   *  screenshot alignment all key on `seq`. */
+  seq: number;
+  eventId: number;
+  eventName: string;
+  /** The exact dataLayer push that raised this event (TA's "API Call" block). */
+  apiCall?: Record<string, unknown>;
+  /** Resolved variable values at this event (name → value). */
+  variables?: Record<string, string>;
+  /** Tags GTM ran on this event, with their status. */
+  tagsFired: Array<{ name: string; status: 'fired' | 'failed' | 'running' | 'unknown' }>;
+  /** JPEG data-URI screenshot of the REAL Tag Assistant panel for this event (its Tags-Fired view),
+   *  captured by clicking the event in Tag Assistant. Best-effort — absent if the capture didn't land. */
+  screenshot?: string;
+}
+
+/** A DLV-based trigger suggestion for a tag that did NOT fire, built from the real captured pushes. */
+export interface TaTriggerSuggestion {
+  tagName: string;
+  /** The dataLayer event to trigger on (empty if none was captured). */
+  event: string;
+  /** Variable → observed value pairs to scope the trigger. `key` is the FULL GTM variable reference
+   *  (e.g. "dlv - form_name", "Page Path"), rendered {{key}}. */
+  conditions: Array<{ key: string; value: string }>;
+  /** Plain-English "how to build this in GTM". */
+  how: string;
+}
+
+/** A live progress tick streamed WHILE a verify run is in flight (suggestions:verify:event), so the UI
+ *  can show what's happening instead of a bare "Verifying…" spinner through a 50-page crawl + drive.
+ *  - prepare : minting/reading is about to start
+ *  - monitor : minting the throwaway GTM Monitor preview (authoritative mode only)
+ *  - crawl   : scanning site pages to locate each tag's trigger (the long phase)
+ *  - drive   : navigating each page and exercising its tags */
+export interface VerifyProgressView {
+  phase: 'prepare' | 'monitor' | 'crawl' | 'drive';
+  /** A short human label for the phase (e.g. "Scanning site pages to locate each tag"). */
+  message: string;
+  /** The page being scanned / driven right now, when applicable. */
+  page?: string;
+  /** Completed count so far in this phase (1-based), when known. */
+  done?: number;
+  /** Total for this phase (an estimate for the crawl, capped at the page budget), when known. */
+  total?: number;
 }
 
 /** Options for verifying tag firing. */
@@ -701,6 +833,20 @@ export interface VerifyTagsOptions {
   /** Page/depth budget for that pre-verify crawl (clamped by the scanner). */
   crawlMaxPages?: number;
   crawlMaxDepth?: number;
+  /** Verify ONLY these exact page URLs (one per line in the UI). When set, the auto-crawl is skipped and
+   *  EVERY tag is driven on EACH of these pages — so forms/tags on pages the crawl missed still get
+   *  exercised. Same-origin URLs only; anything else is dropped. */
+  verifyPages?: string[];
+  /** The operator-REVIEWED forms to submit for real through Tag Assistant (from the Forms review panel,
+   *  with any edited field values). When present, these are submitted instead of auto-discovered/default-
+   *  filled forms — so "Verify with Tag Assistant" uses exactly what the user reviewed. */
+  reviewedForms?: Array<{ page: string; formId: string; formClasses: string; method: string; fields: Array<{ selector: string; type: string; value: string }>; expectedTags?: string[] }>;
+  /** AUTHORITATIVE (Tag-Assistant-grade) mode: instead of a pasted snippet, mint a THROWAWAY preview
+   *  that injects a GTM Monitor tag, so verdicts come from GTM's OWN per-tag firing (addEventCallback),
+   *  not beacon inference. Requires the GTM account/container/workspace to mint from; draft-only, never
+   *  published, the throwaway workspace is discarded after. Opt-in (a container write) — the renderer
+   *  confirms first. */
+  monitor?: { accountId: string; containerId: string; workspaceId: string };
 }
 
 /* ── Real-submit form verification: fetch a form's OWN fields + a locale fill plan (review step) ── */
@@ -830,6 +976,9 @@ export interface FormTagVerifyPlanOptions {
   localeId?: string;
   /** Crawl budget for finding forms across the site. */
   maxPages?: number;
+  /** "Pages to verify" — when set, scan ONLY these pages for forms (no sitemap crawl), matching the
+   *  scoped tag-verification run. Same list the verify call gets, so the two stay in lockstep. */
+  verifyPages?: string[];
 }
 export interface FormTagVerifyPlanResult {
   url: string;
@@ -859,6 +1008,78 @@ export interface AuditFindingView {
   autoFixable: boolean;
   fix?: { tool: string; args: Record<string, unknown> };
 }
+/** Server-container remediation PLAN (mirrors server-plan.ts). */
+export interface ServerPlanView {
+  items: Array<{
+    id: string;
+    category: 'critical' | 'high' | 'medium' | 'low' | 'info';
+    status: 'existing' | 'missing';
+    kind: 'client' | 'trigger' | 'tag' | 'variable' | 'builtin' | 'config';
+    name: string;
+    description: string;
+    dependsOn: string[];
+    requires: string[];
+    defaultSelected: boolean;
+    executable: boolean;
+  }>;
+  detected: { measurementId: string | null; serverUrl: string | null; webWiredUrl: string | null; dataTag: 'configured' | 'misconfigured' | 'not_installed' };
+  inventory: {
+    clients: Array<{ name: string; type: string }>;
+    tags: Array<{ name: string; type: string; paused: boolean }>;
+    triggers: Array<{ name: string; type: string }>;
+    variables: Array<{ name: string; type: string }>;
+    enabledBuiltIns: string[];
+  };
+}
+export interface ServerPlanApplyResultView {
+  serverContainer: { containerId: string; publicId: string; name: string };
+  workspaceId: string;
+  applied: string[];
+  reused: string[];
+  skipped: Array<{ id: string; reason: string }>;
+  failed: Array<{ id: string; error: string }>;
+}
+
+/** Server container documentation for ON-SCREEN rendering. Mirrors server-doc.ts
+ *  buildServerDocView - the same helpers the MD/CSV/XLSX/PDF exports use, so what's shown
+ *  on the page and what's written to a file can't diverge. Secret values never appear. */
+/** A chat attachment after main-process text extraction. The renderer injects `text` into the
+ *  OUTGOING message only; the bubble renders just name/chars (never the content). */
+export interface ChatAttachmentView {
+  name: string;
+  bytes: number;
+  chars: number;
+  text: string;
+  truncated: boolean;
+}
+
+export interface ServerDocView {
+  meta: { containerName: string; publicId?: string; workspaceName?: string; generatedAt: string; liveVersionId: string | null };
+  overview: { taggingServerUrls: string[]; counts: { clients: number; tags: number; triggers: number; variables: number; transformations: number }; configScore: number | null };
+  findings: Array<{ severity: string; where: string; message: string; recommendation: string }>;
+  destinations: Array<{ destination: string; types: string; tags: number; paused: number }>;
+  flowLines: string[];
+  clients: Array<{ name: string; type: string }>;
+  tags: Array<{ name: string; type: string; destination: string; firesOn: string; vars: string; notes: string }>;
+  triggers: Array<{ name: string; type: string; condition: string }>;
+  variables: Array<{ name: string; type: string; usedBy: string }>;
+  transformations: Array<{ name: string; type: string }>;
+  /** Published version history (newest first, max 10). Header list only - no publish dates. */
+  versions: Array<{ versionId: string; name: string; tags: number; triggers: number; variables: number; live: boolean; deleted: boolean }>;
+  /** Web<->server linkage summary - present only when a web container was provided. */
+  webLink: { wiring: 'wired' | 'not_wired' | 'url_mismatch' | 'unknown'; idsMatch: boolean | null; coveragePct: number | null; score: { configuration: number; coverage: number | null; overall: number }; lines: string[] } | null;
+}
+
+/** Web GTM <-> Server GTM coverage comparison (config-level). Mirrors server-coverage.ts. */
+export interface ServerCoverageView {
+  rows: Array<{ platform: string; event: string; webTag: string; status: 'covered' | 'missing' | 'not_matchable'; by?: string; recommendation?: string; template?: { tagId: string; name: string } }>;
+  unusedServer: Array<{ tag: string; platform: string; event: string }>;
+  ga4: { client: boolean; relay: boolean; webMeasurementIds: string[]; serverMeasurementIds: string[]; idsMatch: boolean | null };
+  webWiring: { status: 'wired' | 'not_wired' | 'url_mismatch' | 'unknown'; webUrl: string; serverUrls: string[] };
+  summary: { webEvents: number; covered: number; missing: number; notMatchable: number; coveragePct: number | null };
+  score: { configuration: number; coverage: number | null; overall: number };
+}
+
 export interface AuditReportView {
   counts: { tags: number; triggers: number; variables: number; findings: number; clients?: number; transformations?: number };
   summary: { critical: number; high: number; medium: number; low: number; info: number };
@@ -869,6 +1090,118 @@ export interface AuditReportView {
   boundary?: string;
   /** Checks that need live verification, never scored as defects — shown in debug. */
   runtimeRequired?: string[];
+}
+
+/** ── Workspace Comparison (Container Audit) — the serializable diff of 2+ workspaces ─────────────────── */
+export type WsEntityKind = 'tag' | 'trigger' | 'variable' | 'builtInVariable' | 'folder';
+/** One field that differs between the two sides of a changed entity. */
+export interface FieldChangeView {
+  field: string;
+  a?: string;
+  b?: string;
+}
+/** One entity's status across a workspace pair. */
+export interface EntityDiffView {
+  kind: WsEntityKind;
+  name: string;
+  type?: string;
+  status: 'added' | 'removed' | 'changed' | 'unchanged';
+  changes?: FieldChangeView[];
+}
+export interface WorkspaceDiffSummaryView {
+  added: number;
+  removed: number;
+  changed: number;
+  unchanged: number;
+  byKind: Record<WsEntityKind, { added: number; removed: number; changed: number; unchanged: number }>;
+}
+/** base-vs-other pairwise diff. */
+export interface PairwiseDiffView {
+  aWorkspaceId: string;
+  aName: string;
+  bWorkspaceId: string;
+  bName: string;
+  entities: EntityDiffView[];
+  summary: WorkspaceDiffSummaryView;
+}
+/** Merge readiness of a COMMON entity (present in every selected workspace). */
+export type MergeStatus = 'safe' | 'review' | 'conflict';
+/** One entity consolidated ACROSS all selected workspaces (the common/uncommon tables). */
+export interface ConsolidatedEntityView {
+  kind: WsEntityKind;
+  name: string;
+  type?: string;
+  /** Workspace names that HAVE this entity. */
+  presentIn: string[];
+  /** Workspace names that are MISSING it. */
+  missingFrom: string[];
+  /** Present in every selected workspace. */
+  common: boolean;
+  /** Its config is identical in every workspace that has it. */
+  identical: boolean;
+  /** Number of DISTINCT config variants among the workspaces that have it. */
+  variants: number;
+  /** Fields that differ across the workspaces that have it. */
+  differingFields: string[];
+  /** safe = identical (mergeable) · review = differs, needs a decision · conflict = 3+ versions / type differs. */
+  mergeStatus: MergeStatus;
+  /** copy = uncommon, copy to the workspaces missing it · review · none = identical common. */
+  suggestedAction: 'copy' | 'review' | 'none';
+  notes: string;
+  /** Per-workspace flat field map (null = the entity is missing there) — for the side-by-side viewer. */
+  perWorkspace: Record<string, Record<string, string> | null>;
+}
+export interface WorkspaceStatsView {
+  workspaces: number;
+  totalEntities: number;
+  common: number;
+  unique: number;
+  mergeable: number;
+  conflicts: number;
+  missing: number;
+  byKind: Record<WsEntityKind, { total: number; common: number; unique: number }>;
+}
+export interface WorkspaceConsolidationView {
+  stats: WorkspaceStatsView;
+  common: ConsolidatedEntityView[];
+  uncommon: ConsolidatedEntityView[];
+}
+
+/** One dependency edge in the dependency graph (what an entity needs to work). */
+export interface DependencyView {
+  kind: 'trigger' | 'variable' | 'builtInVariable';
+  name: string;
+  /** True when the referenced trigger/variable exists in this workspace (built-ins are always true). */
+  present: boolean;
+}
+/** An entity plus everything it depends on, within one workspace. */
+export interface EntityDependenciesView {
+  kind: WsEntityKind;
+  name: string;
+  type?: string;
+  dependsOn: DependencyView[];
+}
+/** A dependency that resolves in some workspaces but is broken in others holding the same entity. */
+export interface CrossWorkspaceMissingDepView {
+  entity: { kind: WsEntityKind; name: string };
+  dependency: { kind: DependencyView['kind']; name: string };
+  missingIn: string[];
+  presentIn: string[];
+}
+
+/** The full multi-workspace comparison result (gtm:compareWorkspaces). */
+export interface WorkspaceCompareResultView {
+  containerId: string;
+  workspaces: Array<{ workspaceId: string; name: string; counts: Record<WsEntityKind, number> }>;
+  baseWorkspaceId: string;
+  pairs: PairwiseDiffView[];
+  /** Cross-workspace consolidation: common (in all) + uncommon (missing from some) + stats. */
+  consolidated: WorkspaceConsolidationView;
+  /** Per-workspace dependency graph (tag->triggers, entity->{{variables}}). */
+  dependencies: Array<{ workspaceId: string; name: string; entities: EntityDependenciesView[] }>;
+  /** Dependencies present in some workspaces but broken in others that hold the same entity. */
+  missingDependencies: CrossWorkspaceMissingDepView[];
+  headline: string;
 }
 
 /** Result of discovering a site's pages (suggestions:discover). */
@@ -956,11 +1289,20 @@ export interface Ga4MonitorTarget {
   /** WHAT this property posts to its Slack channel — chosen when connecting/editing the channel.
    *  alerts = new issues the moment they appear; digest = weekly health summary even when healthy;
    *  audit = weekly full-audit executive summary. Seeded from the old global toggles on migration. */
-  notify?: { alerts: boolean; digest: boolean; audit: boolean };
+  notify?: { alerts: boolean; digest: boolean; audit: boolean; monthly?: boolean };
   /** When this property's weekly health digest last posted (persisted so restarts don't re-send). */
   lastDigestAt?: number;
   /** When this property's weekly scheduled audit last ran (persisted so restarts don't re-run). */
   lastAuditAt?: number;
+  /** When this property's MONTHLY tracking report last posted. Seeded (without sending) on the first
+   *  sweep so the first report tells a real month's story, not an empty one. */
+  lastMonthlyAt?: number;
+  /** Reliability % from the two most recent weekly audits - the monthly report's trust TREND. */
+  lastAuditScore?: number;
+  prevAuditScore?: number;
+  /** Rolling issue history (capped at 50): when each alert opened and closed. Powers the monthly
+   *  report's "caught and resolved" story; persisted so restarts don't lose the month. */
+  issueLog?: Array<{ id: string; title: string; severity: string; openedAt: number; closedAt?: number }>;
 }
 
 /** Persisted config for the GA4 monitor (multi-property; mirrors the GTM MonitorConfig in shape). */
@@ -991,6 +1333,11 @@ export interface Ga4MonitorAlertView {
   title: string;
   detail: string;
   recommendation?: string;
+  /** Structured Slack-format extras (see Ga4MonitorAlert in ga4-monitor.ts). */
+  summaryLines?: string[];
+  impact?: string;
+  actions?: string[];
+  plain?: string;
 }
 
 export interface Ga4MonitorCheckView {
@@ -1005,6 +1352,9 @@ export interface Ga4MonitorRun {
   at: number;
   property: string;
   propertyLabel: string;
+  /** The GA4 property's REPORTING timezone: every daily figure in this run is a complete day in this
+   *  timezone (realtime is live). '' when the property snapshot could not be read. */
+  timeZone?: string;
   health: 'healthy' | 'warning' | 'critical';
   summary: string;
   checks: Ga4MonitorCheckView[];
@@ -1040,6 +1390,43 @@ export interface Ga4MonitorStatus extends Ga4MonitorConfig {
   lastSlackAt: number | null;
   /** One entry per configured target, in config order. */
   targetStatuses: Ga4MonitorTargetStatus[];
+}
+
+/** How the current outbound connection is classified. `unknown` = we have an IP but not enough signal. */
+export type NetworkConnectionType = 'local' | 'vpn' | 'proxy' | 'unknown';
+
+/**
+ * The public network location the app's own outbound traffic is using — shown in Settings and before/
+ * during an audit so the user can confirm which egress (VPN exit, proxy, or their real ISP) requests
+ * originate from. This reflects THIS app's egress; with a full-tunnel OS VPN it is also the route the
+ * website audits, form submissions, and click events take (they share the OS routing table).
+ */
+export interface NetworkLocationView {
+  /** Public IP as seen by the geolocation service, or null when the check couldn't reach the network. */
+  ip: string | null;
+  country: string | null;
+  /** ISO 3166-1 alpha-2 (e.g. "GB"), used for the flag. */
+  countryCode: string | null;
+  /** Region / state / province. */
+  region: string | null;
+  city: string | null;
+  /** ISP / organization / carrier string from the geo lookup (used for provider inference). */
+  org: string | null;
+  /** Autonomous System number, e.g. "AS9009", when the provider returns it. */
+  asn: string | null;
+  connectionType: NetworkConnectionType;
+  /** Best-effort VPN/proxy provider (e.g. "Surfshark", "NordVPN", "Proton VPN"), or null if not identifiable. */
+  provider: string | null;
+  /** How confident the VPN/provider verdict is. */
+  confidence: 'high' | 'medium' | 'low' | 'none';
+  /** Human-readable signals behind the verdict, e.g. ["network adapter: Surfshark", "IP org: Datacamp"]. */
+  detectedVia: string[];
+  /** Whether the check succeeded (`connected`), found no network (`offline`), or errored. */
+  status: 'connected' | 'offline' | 'error';
+  /** Error/why text when status is not `connected`. */
+  detail: string | null;
+  /** Epoch ms of when this location was last checked. */
+  checkedAt: number;
 }
 
 export interface GoogleClientStatus {

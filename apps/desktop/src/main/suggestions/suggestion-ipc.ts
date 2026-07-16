@@ -10,18 +10,20 @@
 // is not a way to bypass approval — write tools still only exist because a
 // confirm fn is supplied, and nothing is ever published.
 
-import { ipcMain, dialog, BrowserWindow } from 'electron';
+import { ipcMain, dialog, BrowserWindow, app } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from '../google/data-service';
-import { findGa4BaseTag } from '../google/gtm-builders';
+import { findGa4BaseTag, plainDashes } from '../google/gtm-builders';
 import { reportHtmlDocument } from '../google/ga4-report-export';
 import { buildToolRegistry, type ConfirmFn } from '../tools/registry';
-import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult, SuggestionScreenshotResult } from '../../shared/ipc';
-import { crawlAndSuggest, scanUrls, urlPriority, type ScanProgress } from './scan-core';
+import type { CreateTagOutcome, SuggestedTagView, TagScanOptions, VerifyTagInput, VerifyTagsOptions, VerifyTagsResult, VerifyProgressView, DetectedElementView, FormsForFillOptions, FormsForFillResult, SubmitFormVerifyOptions, SubmitFormVerifyResult, FormTagVerifyPlanOptions, FormTagVerifyPlanResult, SuggestionScreenshotResult } from '../../shared/ipc';
+import { crawlAndSuggest, scanUrls, type ScanProgress } from './scan-core';
 import { runVerifyDriver, runSuggestionScreenshots, type SuggestionShotTag } from './verify-driver';
 import { runFormSubmitDriver, type FormSubmitFieldInput } from './form-submit-driver';
-import { evaluateVerify } from './verify-tags';
-import { routeTagsToPages } from './verify-routing';
+import { evaluateVerify, verdictsFromMonitor } from './verify-tags';
+import { routeTagsToPages, normalizeVerifyPages } from './verify-routing';
+import { runTaVerify, taProfileDirFor, type TaFormSubmit } from './ta-driver';
+import { eventsForContainer, taEventsToMonitorEvents, toTaEventViews, buildTriggerSuggestions, pageScopeToPath } from './ta-stream';
 import { toFormFillViews, localeOptions, classifyFiredContainerTags } from './form-fill-plan';
 import { matchFormsToTags, dedupeSharedFields, isFormEventName, type PagedForm, type FormTagIdentity } from './form-tag-match';
 import { snapshotToVerifyInputs } from './container-verify';
@@ -34,7 +36,38 @@ import { makeDriver, makeDrivers, scanConcurrency, clampSettle } from './scan-ur
 import { parseSuggestions, createSuggestedTags, planGoogleTagVars, provisionVariables } from './suggestion-service';
 import { urlAllowed } from '../../../../web-audit-mcp/src/utils/urlGuard.js';
 
+/** The persistent browser profile that keeps the Tag Assistant Google session across runs — keyed PER
+ *  connected Google account, so switching the active Gmail uses that Gmail's own TA session. */
+function taProfileDir(accountId?: string | null): string {
+  return taProfileDirFor(app.getPath('userData'), accountId);
+}
+
+// Process-wide: the click-CTA element inventory captured by the verify SCAN step (formTagVerifyPlan crawls
+// the site to find forms AND, in the SAME pass, inventories click CTAs). The Tag Assistant / verify run that
+// follows within a few seconds reuses this instead of crawling again — so the site is scanned ONCE, not
+// twice. Short TTL, keyed by target URL; a stale/absent entry just falls back to crawling.
+const VERIFY_ELS_TTL_MS = 15 * 60_000; // long enough that reviewing/editing forms at the gate won't expire it
+const verifyElsCache = new Map<string, { els: DetectedElementView[]; pagesCrawled: number; pagesTotal: number; ts: number }>();
+const elsCacheKey = (url: string): string => url.trim().replace(/\/$/, '');
+function cacheVerifyEls(url: string, els: DetectedElementView[], pagesCrawled: number, pagesTotal: number): void {
+  verifyElsCache.set(elsCacheKey(url), { els, pagesCrawled, pagesTotal, ts: Date.now() });
+}
+function takeVerifyEls(url: string): { els: DetectedElementView[]; pagesCrawled: number; pagesTotal: number } | null {
+  const hit = verifyElsCache.get(elsCacheKey(url));
+  if (!hit || Date.now() - hit.ts > VERIFY_ELS_TTL_MS) return null;
+  return { els: hit.els, pagesCrawled: hit.pagesCrawled, pagesTotal: hit.pagesTotal };
+}
+
+// Cooperative cancel for a verify run (the Stop button). The renderer runs one verify at a time, so a
+// single module-level flag is enough: each verify-flow handler RESETS it when a fresh run starts, and the
+// crawl / drive loops poll shouldStop() and bail out early with whatever they have.
+let verifyCancelled = false;
+const shouldStopVerify = (): boolean => verifyCancelled;
+
 export function registerSuggestionsIpc(data: GoogleDataService): void {
+  // Stop the in-flight verify scan/drive. Sets the flag the crawl + Tag-Assistant drive loops poll; they
+  // finish the current page and resolve with a partial result. The renderer also stops the orchestration.
+  ipcMain.handle('suggestions:cancelVerify', () => { verifyCancelled = true; });
   ipcMain.handle('suggestions:fromJson', (_e, json: unknown) => parseSuggestions(String(json ?? '')));
 
   // Read-only: the container's existing tag names + whether a GA4 base/config tag is
@@ -78,7 +111,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
     const { canceled, filePath } = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (canceled || !filePath) return null;
     if (fmt === 'md') {
-      await writeFile(filePath, String(markdown ?? ''), 'utf8');
+      await writeFile(filePath, plainDashes(String(markdown ?? '')), 'utf8');
       return filePath;
     }
     // PDF — render the runbook HTML in a hidden, script-disabled window and print it to PDF.
@@ -177,14 +210,22 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
   // trigger when it didn't. Never delivers a real hit (abort-first capture).
   ipcMain.handle(
     'suggestions:verifyTags',
-    async (_e, url: unknown, tags: unknown, elements: unknown, opts?: VerifyTagsOptions): Promise<VerifyTagsResult> => {
+    async (event, requestId: unknown, url: unknown, tags: unknown, elements: unknown, opts?: VerifyTagsOptions): Promise<VerifyTagsResult> => {
       const target = String(url ?? '').trim();
       const verdict = urlAllowed(target, []);
       if (!verdict.ok) throw new Error(`Cannot verify that URL: ${verdict.reason}`);
       const tagList = (Array.isArray(tags) ? tags : []) as VerifyTagInput[];
       let els = (Array.isArray(elements) ? elements : []) as DetectedElementView[];
       if (tagList.length === 0) return { url: target, injected: false, previewAuth: false, pagesOk: false, error: 'No tags selected to verify.', verdicts: [] };
+      verifyCancelled = false; // fresh run — clear any stale Stop from a previous run
       const o = opts ?? {};
+      // Live progress: stream what the run is doing (crawl → drive, or the monitor mint) so the panel
+      // isn't a silent spinner through a 50-page crawl. Best-effort — a closed window never breaks verify.
+      const reqId = String(requestId ?? '');
+      const emit = (p: VerifyProgressView): void => {
+        try { if (reqId && !event.sender.isDestroyed()) event.sender.send('suggestions:verify:event', { requestId: reqId, ...p }); } catch { /* window gone */ }
+      };
+      emit({ phase: 'prepare', message: 'Preparing verification…' });
 
       // MULTI-PAGE DRIVE: a container's Click triggers are site-wide, so without knowing which page
       // each CTA lives on the driver would drive them all on the homepage and falsely report
@@ -193,8 +234,24 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       // click tag there. Best-effort — any crawl failure falls back to single-page driving.
       let pagesCrawled = 0;
       let pagesTotal = 0;
+      // "Verify ONLY these pages": the user pasted an explicit page list. Normalized to same-origin absolute
+      // URLs (off-site / unparseable dropped). When present, we skip the auto-crawl entirely and drive
+      // every tag on each of these pages (below) — direct control over coverage for missed forms.
+      const explicitPages = normalizeVerifyPages(o.verifyPages, target);
       const hasClickTags = tagList.some((t) => t.trigger.kind === 'link_click' || t.trigger.kind === 'all_clicks');
-      if (els.length === 0 && hasClickTags && o.crawlForPages !== false) {
+      // REUSE the scan step's crawl: the Forms scan (formTagVerifyPlan) that runs BEFORE the gate already
+      // crawled this URL and cached its click-CTA inventory, so pull that here and skip a SECOND full crawl.
+      // The one scan finds forms AND inventories click CTAs together.
+      if (els.length === 0 && explicitPages.length === 0) {
+        const cached = takeVerifyEls(target);
+        if (cached && cached.els.length) {
+          els = cached.els;
+          pagesCrawled = cached.pagesCrawled;
+          pagesTotal = cached.pagesTotal;
+          emit({ phase: 'prepare', message: 'Reusing the page scan from the form step' });
+        }
+      }
+      if (explicitPages.length === 0 && els.length === 0 && hasClickTags && o.crawlForPages !== false) {
         try {
           // SITEMAP-DRIVEN coverage: enumerate EVERY page the site lists (its sitemap, else a
           // rendered-link crawl) and scan them so a click CTA on ANY page is inventoried — not just the
@@ -209,14 +266,22 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
             seedUrls = disc.urls.filter((u) => u !== target);
             pagesTotal = disc.urls.length;
           } catch { /* discovery best-effort — plain BFS below */ }
-          // Scan every discovered page, capped by the budget (crawlAndSuggest clamps to 50). With the
-          // full prioritized page set seeded, the budget is spent on the pages most likely to carry CTAs.
-          const maxPages = o.crawlMaxPages ?? (seedUrls.length ? 50 : undefined);
+          // Scan every discovered page, capped by the budget (crawlAndSuggest clamps to 150). Default the
+          // budget to the FULL discovered set (up to the 150 cap) so CTAs on deeper pages of a large site
+          // are inventoried instead of stranded "untested here". With the prioritized page set seeded
+          // (home → form-likely → content), the budget is spent on the pages most likely to carry CTAs.
+          const maxPages = o.crawlMaxPages ?? (seedUrls.length ? Math.min(pagesTotal || seedUrls.length + 1, 150) : undefined);
           // cachePages: share rendered pages with the form-plan crawl that auto-runs on the same verify,
           // so each page renders ONCE across both crawls (not twice). The cache dedupes in-flight renders
           // by URL, so it stays correct with a PARALLEL driver pool.
           const crawlPool = await makeDrivers(Math.min(scanConcurrency(), maxPages ?? 25), { maxPages, maxDepth: o.crawlMaxDepth, cachePages: true });
-          const scan = await crawlAndSuggest(crawlPool[0], target, { maxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'], drivers: crawlPool.slice(1), ...(seedUrls.length ? { seedUrls } : {}) });
+          const crawlTotal = maxPages ?? 10; // honest total for the progress feed (the effective budget)
+          const scan = await crawlAndSuggest(
+            crawlPool[0],
+            target,
+            { maxPages, maxDepth: o.crawlMaxDepth, platforms: ['ga4'], drivers: crawlPool.slice(1), shouldStop: shouldStopVerify, ...(seedUrls.length ? { seedUrls } : {}) },
+            (p) => emit({ phase: 'crawl', message: 'Scanning site pages to locate each tag’s trigger', ...(p.page ? { page: p.page } : {}), done: p.scanned, total: crawlTotal }),
+          );
           els = scan.inventory.elements as DetectedElementView[];
           pagesCrawled = scan.pages.length;
           if (!pagesTotal) pagesTotal = pagesCrawled;
@@ -225,11 +290,152 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
         }
       }
       const routed = routeTagsToPages(tagList, els, target);
+      // Default: each tag on its routed page. Explicit-pages mode: drive EVERY tag on EACH chosen page, so
+      // a form/tag on a page the crawl missed is still exercised (the user's direct coverage control).
+      const nameById = new Map(tagList.map((t) => [t.id, t.tagName] as const));
+      const routedTags = explicitPages.length
+        ? explicitPages.flatMap((page) => tagList.map((t) => ({ id: t.id, name: t.tagName, page, trigger: t.trigger })))
+        : routed.map((t) => ({ id: t.id, ...(nameById.get(t.id) ? { name: nameById.get(t.id)! } : {}), ...(t.page ? { page: t.page } : {}), trigger: t.trigger }));
+      if (explicitPages.length) { pagesTotal = explicitPages.length; pagesCrawled = explicitPages.length; }
+
+      // AUTHORITATIVE mode: automate the REAL Tag Assistant. ZERO GTM writes — no version, no workspace,
+      // no extra container. TA connects to the live site; the debugged popup streams GTM's own per-event
+      // per-tag firing; we drive the pages and read that stream. Needs a one-time Google sign-in (the
+      // persistent TA browser profile keeps the session).
+      if (o.monitor) {
+        // Everything happens in ONE visible Tag Assistant window: it opens, does a one-time Google
+        // sign-in if needed (login_hint = the active account's email), connects to the site, drives the
+        // tags, and shows the real Tag Assistant panel while our stream capture runs. The profile is
+        // keyed to the ACTIVE connected Google account, so switching the app's account uses that Gmail's
+        // own container-owning session.
+        const ident = data.activeAccountIdentity();
+        const profileDir = taProfileDir(ident?.id);
+        // REAL FORM SUBMITS use the operator-REVIEWED forms from the Forms panel (with any edited values).
+        // The renderer runs a scan → gate → fill wizard FIRST (find forms-with-tags, ask skip/proceed, edit
+        // the shared data), so this single run drives the click tags AND submits exactly what was reviewed.
+        // Empty when the user skipped forms or the site had none → click-tag verification only.
+        const taForms: TaFormSubmit[] = (Array.isArray(o.reviewedForms) ? o.reviewedForms : [])
+          .map((f) => ({ page: String(f.page ?? ''), formId: String(f.formId ?? ''), formClasses: String(f.formClasses ?? ''), method: String(f.method ?? ''), fields: (f.fields ?? []).map((x) => ({ selector: String(x.selector ?? ''), type: String(x.type ?? ''), value: String(x.value ?? '') })) }))
+          .filter((f) => f.page && f.fields.length);
+        // Stop pressed during the crawl → don't even open Tag Assistant; return what we have.
+        if (shouldStopVerify()) return { url: target, injected: false, previewAuth: false, pagesOk: false, verdicts: [] };
+        emit({ phase: 'monitor', message: 'Opening Tag Assistant (your Chrome can stay open)...' });
+        const publicId = await data.getContainerPublicId(o.monitor.accountId, o.monitor.containerId);
+        const ta = await runTaVerify(profileDir, target, routedTags, publicId, {
+          settleMs: clampSettle(o.settleMs),
+          navTimeoutMs: o.navTimeoutMs,
+          ...(ident?.email ? { loginHint: ident.email } : {}),
+          // The GTM Preview snippet (gtm_auth/gtm_preview) makes the published GTM container enter Tag
+          // Assistant debug — without it, connect only debugs Google tags. Reuses the existing snippet box.
+          ...(o.containerSnippet ? { previewSnippet: o.containerSnippet } : {}),
+          ...(taForms.length ? { forms: taForms } : {}),
+          onSignInPrompt: () => emit({ phase: 'monitor', message: 'ONE-TIME Tag Assistant sign-in: complete it in the window that just opened (your email is pre-filled). It is saved after this, so verify never asks again.' }),
+          onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Driving tags in the Tag Assistant window', page, done, total }),
+          onFormProgress: (page, done, total) => emit({ phase: 'drive', message: 'Submitting a form for real in Tag Assistant', page, done, total }),
+          shouldStop: shouldStopVerify,
+        });
+        const base = { url: target, injected: false, previewAuth: false, pagesOk: ta.pagesOk, verifiedByMonitor: true as const, ...(ta.pagesDriven.length ? { pagesDriven: ta.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}) };
+        if (ta.needSignIn || ta.error) return { ...base, verdicts: [], error: ta.error ?? 'Tag Assistant run failed.', ...(ta.needSignIn ? { needTaSignIn: true } : {}) };
+        if (ta.debugProblem) return { ...base, verdicts: [], error: ta.debugProblem };
+        const taEvents = eventsForContainer(ta.capture!, publicId);
+        // HONESTY GUARD: TA connected but streamed no events for the container → the run proved nothing;
+        // never report that as "0 tags fired".
+        if (taEvents.length === 0) {
+          return { ...base, verdicts: [], error: 'Tag Assistant connected but streamed no events for this container — the debug session may not have attached. Re-run; if it persists, sign in again via “Sign in for Tag Assistant”.' };
+        }
+        const monitorEvents = taEventsToMonitorEvents(taEvents, tagList.map((t) => ({ id: t.id, tagName: t.tagName })));
+        const verdicts = verdictsFromMonitor(tagList, monitorEvents, ta.perTag, { scopedPages: explicitPages.length });
+        // DIAGNOSTIC: per-event fired tags (after the not-fired exclusion) + each fired tag's event list.
+        // Confirms attribution is correct (a click tag should show gtm.linkClick, not the synthetic
+        // form_submission). Concise — one line per non-empty event + one per fired tag.
+        for (const me of monitorEvents) {
+          if (me.tags.length) console.log(`[ta-attr] event ${me.event}: ${me.tags.map((t) => t.name ?? t.id).join(', ')}`);
+        }
+        for (const v of verdicts.filter((x) => x.fired)) {
+          console.log(`[ta-attr]   tag "${v.tagName}" -> shown event=${v.event ?? '?'} | all events=[${(v.monitorEvents ?? []).join(', ')}]`);
+        }
+        // Phase 3: the in-app detail views. taEventViews = the TA-style timeline (event → API Call push +
+        // tags fired). taSuggestions = DLV-based triggers for tags that didn't fire, built from the tag's
+        // expected custom_event name + the REAL pushes we captured.
+        const allEventViews = toTaEventViews(taEvents);
+        // Proof screenshots were captured DURING the drive; each records the panel's "Tags Fired" text, so
+        // attach a capture to whichever FIRED tags it names. shotFor returns the capture whose panel listed
+        // any of the given tag names. Fired verdicts get the capture that proves them (or the summary
+        // fallback so every fired tag has SOME proof); timeline events get the capture overlapping their tags.
+        const shotFor = (names: string[]): string | undefined =>
+          (ta.captures ?? []).find((c) => names.some((n) => n && c.fired.includes(n)))?.screenshot;
+        for (const v of allEventViews) {
+          const s = shotFor(v.tagsFired.filter((t) => t.status === 'fired' || t.status === 'running').map((t) => t.name));
+          if (s) v.screenshot = s;
+        }
+        for (const v of verdicts) {
+          if (!v.fired) continue;
+          const s = shotFor([v.tagName]) ?? ta.summaryShot;
+          if (s) v.screenshot = s;
+        }
+        // Timeline UI: show meaningful events only — those that fired a tag, or carry a real (non-internal)
+        // push. Hides the many empty gtm.init/gtm.dom/gtm.load ticks per page nav. (Suggestions still match
+        // against the FULL set below so an expected event is never missed.)
+        const taEventViews = allEventViews.filter(
+          (e) => e.tagsFired.length > 0 ||
+            (e.apiCall && Object.keys(e.apiCall).some((k) => k !== 'event' && k !== 'gtm.uniqueEventId' && !/^gtm\./i.test(k))),
+        );
+        const firedTagNames = new Set(verdicts.filter((v) => v.fired).map((v) => v.tagName));
+        // RECLASSIFY submitted-but-unfired form tags: a form tag is "inconclusive/untested" by default
+        // (form tags are never synthetically driven). But if its form was ACTUALLY submitted this run (it's
+        // in a reviewed form's expectedTags) and it still didn't fire, that is NOT "untested" — it's a real
+        // NOT-FIRING (its trigger's form name / id / page filter doesn't match what that form sent). Move it
+        // out of Untested so the operator gets an actionable fix instead of a vague "we didn't test it".
+        const reviewedForms = Array.isArray(o.reviewedForms) ? o.reviewedForms : [];
+        const submittedFormTags = new Set(reviewedForms.flatMap((f) => (Array.isArray(f.expectedTags) ? f.expectedTags : [])));
+        // The page each form tag's MATCHED form actually lives on (from the reviewed forms). Every form on
+        // this site pushes the SAME form_name / form_type, so the tag's own trigger scope (usually site-wide)
+        // can't tell them apart — the FORM's PAGE is the real discriminator. We use it both to explain a
+        // not-firing form tag and to suggest a concrete {{Page Path}} trigger (vs a useless "add a field").
+        const formPageByTag = new Map<string, string>();
+        for (const f of reviewedForms) {
+          const page = String((f as { page?: unknown }).page ?? '').trim();
+          if (!page) continue;
+          for (const tn of (Array.isArray(f.expectedTags) ? f.expectedTags : [])) {
+            if (typeof tn === 'string' && !formPageByTag.has(tn)) formPageByTag.set(tn, page);
+          }
+        }
+        for (const v of verdicts) {
+          if (v.inconclusive && !v.fired && submittedFormTags.has(v.tagName) && !firedTagNames.has(v.tagName)) {
+            v.inconclusive = false;
+            const fp = formPageByTag.get(v.tagName);
+            const path = fp ? pageScopeToPath(fp) ?? fp : '';
+            v.reason = path
+              ? `Its form on ${path} WAS submitted for real, but GTM didn’t fire this tag — its trigger condition doesn’t match what that form sent. Every form on this site pushes the SAME form_name / form_type, so scope this tag’s trigger by Page Path = “${path}” (the page is what makes it unique) — see the suggested trigger below.`
+              : 'Its form WAS submitted for real in this run, but GTM did not fire this tag — so its trigger condition (the form name / id, or a page-path filter) does not match what that form actually sent. Open the tag’s trigger in GTM and compare it with the dataLayer above.';
+          }
+        }
+        // Suggest DLV triggers only for tags that GENUINELY didn't fire — exclude "couldn't auto-test
+        // here" (inconclusive) and server-relayed tags, which aren't real failures.
+        const unfired = verdicts
+          .filter((v) => !v.fired && !v.inconclusive && !v.serverRelay && !firedTagNames.has(v.tagName))
+          .map((v) => {
+            const tag = tagList.find((t) => t.tagName === v.tagName);
+            const expectedEvent = tag && tag.trigger.kind === 'custom_event' ? tag.trigger.eventName : undefined;
+            // Prefer the MATCHED FORM's page (the real discriminator) over the tag's own trigger scope (often
+            // site-wide for a form tag), so the suggestion proposes a concrete {{Page Path}} = the form's page.
+            const page = formPageByTag.get(v.tagName) ?? tag?.page;
+            return { tagName: v.tagName, ...(expectedEvent ? { expectedEvent } : {}), ...(page ? { page } : {}) };
+          });
+        const taSuggestions = buildTriggerSuggestions(unfired, allEventViews);
+        return { ...base, verdicts, ...(taEventViews.length ? { taEvents: taEventViews } : {}), ...(taSuggestions.length ? { taSuggestions } : {}) };
+      }
 
       const driven = await runVerifyDriver(
         target,
-        routed.map((t) => ({ id: t.id, ...(t.page ? { page: t.page } : {}), trigger: t.trigger })),
-        { ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}), settleMs: clampSettle(o.settleMs), navTimeoutMs: o.navTimeoutMs, ...(o.gtmDebug ? { gtmDebug: true } : {}) },
+        routedTags,
+        {
+          ...(o.containerSnippet ? { containerSnippet: o.containerSnippet } : {}),
+          settleMs: clampSettle(o.settleMs),
+          navTimeoutMs: o.navTimeoutMs,
+          ...(o.gtmDebug ? { gtmDebug: true } : {}),
+          onPageProgress: (page, done, total) => emit({ phase: 'drive', message: 'Verifying tags on the page', page, done, total }),
+        },
       );
       const verdicts = evaluateVerify(tagList, driven.perTag, els);
       return { url: target, injected: driven.injected, previewAuth: driven.previewAuth, pagesOk: driven.pagesOk, ...(driven.error ? { error: driven.error } : {}), verdicts, ...(driven.pagesDriven ? { pagesDriven: driven.pagesDriven } : {}), ...(pagesCrawled ? { pagesCrawled } : {}), ...(pagesTotal ? { pagesTotal } : {}), ...(driven.networkLog ? { networkLog: driven.networkLog } : {}), ...(driven.dataLayer ? { dataLayer: driven.dataLayer } : {}), ...(driven.gtmDebug ? { gtmDebug: driven.gtmDebug } : {}) };
@@ -257,7 +463,7 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       try { await driver.close(); } catch { /* best-effort */ }
     }
     // A traceable, unique alias so a real submit (Phase 2) is filterable in the operator's CRM.
-    const emailTag = `d${Date.now().toString(36)}`;
+    const emailTag = ''; // plain test@gmail.com by default (simple test values); editable in the review
     const forms = toFormFillViews(rawForms, target, locale.id, emailTag);
     return { url: target, localeId: locale.id, locales: localeOptions(), forms, ...(error ? { error } : {}) };
   });
@@ -265,13 +471,20 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
   // CONTAINER-TAG-DRIVEN plan: crawl the site for forms, keep only forms that HAVE a matching container
   // form tag, and collapse their fields into ONE de-duplicated data-entry set. READ-ONLY (reads the DOM
   // + the container snapshot; fills/submits nothing — the operator submits from the review step).
-  ipcMain.handle('suggestions:formTagVerifyPlan', async (_e, url: unknown, opts?: FormTagVerifyPlanOptions): Promise<FormTagVerifyPlanResult> => {
+  ipcMain.handle('suggestions:formTagVerifyPlan', async (event, requestId: unknown, url: unknown, opts?: FormTagVerifyPlanOptions): Promise<FormTagVerifyPlanResult> => {
     const target = String(url ?? '').trim();
     const verdict = urlAllowed(target, []);
     if (!verdict.ok) throw new Error(`Cannot scan that URL: ${verdict.reason}`);
+    verifyCancelled = false; // fresh forms scan — clear any stale Stop from a previous run
     const o = (opts ?? {}) as FormTagVerifyPlanOptions;
+    // Live crawl progress (this scan can now cover the whole site), so the panel shows "Scanning X/Y" not a
+    // silent spinner. Best-effort — a closed window never breaks the scan.
+    const reqId = String(requestId ?? '');
+    const emit = (p: { page?: string; done: number; total: number }): void => {
+      try { if (reqId && !event.sender.isDestroyed()) event.sender.send('suggestions:formPlan:event', { requestId: reqId, phase: 'crawl', message: 'Scanning site pages for forms & CTAs', ...p }); } catch { /* window gone */ }
+    };
     const locale = localeById(o.localeId);
-    const emailTag = `d${Date.now().toString(36)}`;
+    const emailTag = ''; // plain test@gmail.com by default (simple test values); editable in the review
     let error: string | undefined;
     const empty = (err: string): FormTagVerifyPlanResult => ({ url: target, localeId: locale.id, locales: localeOptions(), matched: [], sharedFields: [], unmatchedTags: [], pagesCrawled: 0, error: err });
 
@@ -286,8 +499,17 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
           // wrongly reported as failing to fire on submit.
           .filter((t) => t.trigger.kind === 'custom_event' && isFormEventName(t.trigger.eventName ?? ''))
           .map((t) => {
-            const cd = t.trigger.customEventData;
-            return { tagName: t.tagName, eventName: t.eventName, platform: t.platform, ...(cd ? { formName: Object.values(cd)[0] } : {}) };
+            const cd = t.trigger.customEventData ?? {};
+            // Use the tag's actual form-name / form-id CONDITION as its identity — NOT an arbitrary first
+            // customEventData value. A pixel tag can carry non-form fields (value / currency / content_name)
+            // or none; Object.values(cd)[0] would then hand every such tag the SAME junk token and pile them
+            // all onto one form. With no form-name condition we omit it, so matching falls to the tag name
+            // (whose service token pairs with the form's page path).
+            const formName = cd.form_name ?? cd.formName ?? cd.form_id ?? cd.formId;
+            // t.page is the tag's resolved Page-Path / URL trigger scope (snapshotToVerifyInputs computes
+            // it). Feed it to matching so a page-scoped form tag pairs deterministically with that page's
+            // form — the strongest signal for generic-named tags (was discarded here before).
+            return { tagName: t.tagName, eventName: t.eventName, platform: t.platform, ...(formName ? { formName: String(formName) } : {}), ...(t.page ? { page: t.page } : {}) };
           });
       }
     } catch (e) {
@@ -297,34 +519,47 @@ export function registerSuggestionsIpc(data: GoogleDataService): void {
       return empty(o.accountId ? 'This container has no form (custom-event) tags to verify. Create form-tracking tags first.' : 'Pick a GTM account, container and workspace (the GTM bar) so we know which form tags to verify.');
     }
 
-    // 2. Crawl the site for forms across pages (same-site, bounded).
+    // 2. Crawl the site ONCE. This single pass BOTH collects the forms (per page, via the onPageForms
+    //    callback) AND inventories the click CTAs — which we cache so the Tag Assistant / verify run that
+    //    follows the gate reuses it instead of crawling again. That is what removes the double page scan:
+    //    while finding the forms we already capture the click data. cachePages shares renders with any
+    //    later crawl; the pool is closed by crawlAndSuggest.
     const pagedForms: PagedForm[] = [];
     let pagesCrawled = 0;
+    // "Pages to verify": when the operator gave an explicit list, scan ONLY those pages — no sitemap
+    // discovery, no BFS — so a single-page verify doesn't crawl the whole 226-page site. Kept in lockstep
+    // with the scoped tag-verification run (same normalizeVerifyPages list).
+    const explicitPages = normalizeVerifyPages(o.verifyPages, target);
     try {
-      const disc = await discoverSite(target);
-      // Visit the homepage + every FORM-LIKELY page (contact/careers/services/solutions/audit/
-      // consultation/demo…), skipping blog posts & guides — those carry only the shared footer form we
-      // already capture on the homepage. On a large site (many /services/* + /solutions/* landing forms)
-      // a low fixed cap found only the first couple; form-likely-first + a bigger budget covers them all.
-      const formLikely = disc.urls.filter((u) => u !== target && urlPriority(u) === 1);
-      const pages = [target, ...formLikely].slice(0, Math.max(1, Math.min(o.maxPages ?? 40, 60)));
-      // cachePages: reuse pages already rendered by the click-tag verify crawl (which auto-runs on the
-      // same verify and covers the whole sitemap) — these form-likely pages are a subset, so with the
-      // cache this crawl adds ~no extra browser work.
-      const driver = await makeDriver({ cachePages: true });
-      try {
-        for (const page of pages) {
-          if (!urlAllowed(page, []).ok) continue;
-          let driven: Awaited<ReturnType<typeof driver.open>> | null = null;
-          try { driven = await driver.open(page); } catch { continue; }
-          pagesCrawled += 1;
-          const raw = driven?.rawForms ?? [];
-          if (raw.length === 0) continue;
-          for (const v of toFormFillViews(raw, page, locale.id, emailTag)) pagedForms.push({ ...v, page });
-        }
-      } finally {
-        try { await driver.close(); } catch { /* best-effort */ }
+      let seedUrls: string[] = [];
+      let pagesTotal = 0;
+      if (explicitPages.length === 0) {
+        try {
+          const disc = await discoverSite(target);
+          seedUrls = disc.urls.filter((u) => u !== target);
+          pagesTotal = disc.urls.length;
+        } catch { /* discovery best-effort — crawlAndSuggest still BFS-crawls from the target */ }
       }
+      // Explicit list → scan exactly those (start = first page, the rest as top-priority seeds, budget =
+      // list length so BFS-discovered links never get a slot). Else: sitemap present → whole site (up to the
+      // 300 cap); none → a bounded BFS (60), header/nav/footer pages scanned first so none are stranded.
+      const startUrl = explicitPages.length ? explicitPages[0] : target;
+      const seeds = explicitPages.length ? explicitPages.slice(1) : seedUrls;
+      const maxPages = explicitPages.length
+        ? explicitPages.length
+        : o.maxPages ?? (seedUrls.length ? Math.min(pagesTotal || seedUrls.length + 1, 300) : 60);
+      const crawlTotal = maxPages;
+      const pool = await makeDrivers(Math.min(scanConcurrency(), maxPages), { maxPages, cachePages: true });
+      const scan = await crawlAndSuggest(
+        pool[0],
+        startUrl,
+        { maxPages, platforms: ['ga4'], drivers: pool.slice(1), shouldStop: shouldStopVerify, ...(seeds.length ? { seedUrls: seeds } : {}) },
+        (p) => emit({ ...(p.page ? { page: p.page } : {}), done: p.scanned, total: crawlTotal }),
+        (page, raw) => { for (const v of toFormFillViews(raw, page, locale.id, emailTag)) pagedForms.push({ ...v, page }); },
+      );
+      pagesCrawled = scan.summary.pagesScanned;
+      // Cache the click-CTA inventory (+ coverage counts) for the verify run that follows the gate.
+      cacheVerifyEls(target, scan.inventory.elements as DetectedElementView[], pagesCrawled, pagesTotal || pagesCrawled);
     } catch (e) {
       error = `Crawl issue: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`;
     }

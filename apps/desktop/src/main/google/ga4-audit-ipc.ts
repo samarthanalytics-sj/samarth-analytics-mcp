@@ -6,11 +6,14 @@ import { ipcMain, dialog, BrowserWindow } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import type { GoogleDataService } from './data-service';
 import { auditGa4 } from './ga4-audit';
+import { plainDashes } from './gtm-builders';
 import { auditGa4DataQuality } from './ga4-data-quality';
 import { buildGa4AuditReport, buildGa4ExecSummary, buildGa4Visuals, buildGa4Sections } from './ga4-report';
 import { auditGa4Growth } from './ga4-growth';
 import { rankGa4Campaigns } from './ga4-campaigns';
 import { auditGa4EventDeltas, auditGa4Transactions } from './ga4-integrity';
+import { auditGa4EventHygiene } from './ga4-event-hygiene';
+import { auditGa4ParamMatrix } from './ga4-param-matrix';
 import { auditGa4DeadDimensions } from './ga4-dead-dimensions';
 import { auditGa4EventCoverage, ECOMMERCE_RECOMMENDED_EVENTS } from './ga4-event-coverage';
 import { summarizeGa4Retention } from './ga4-retention';
@@ -29,7 +32,8 @@ async function writeReportFile(filePath: string, data: string | Uint8Array): Pro
   for (let i = 0; i <= 50; i++) {
     const target = dedupedReportPath(filePath, i);
     try {
-      await writeFile(target, data);
+      // Text exports (md/csv/doc-html) follow house style: plain hyphens, never em/en dashes.
+      await writeFile(target, typeof data === 'string' ? plainDashes(data) : data);
       return target;
     } catch (err) {
       const code = (err as { code?: string }).code ?? '';
@@ -72,17 +76,41 @@ export async function runGa4AuditPipeline(
   const ecom = (snap.keyEvents ?? []).some((k) => /purchase|add_to_cart|begin_checkout|view_item|add_payment_info/i.test(k.eventName));
   const sd = dqCounts.startDate ?? '';
   const ed = dqCounts.endDate ?? '';
-  const [deltas, txn, presentRec] = await Promise.all([
+  const [deltas, txn, presentRec, paramSignals] = await Promise.all([
     sd && ed ? withQuotaRetry(() => data.getGa4EventDeltas(p, sd, ed)).catch(() => null) : Promise.resolve(null),
     ecom && sd && ed ? withQuotaRetry(() => data.getGa4Transactions(p, sd, ed)).catch(() => null) : Promise.resolve(null),
     // Which of GA4's recommended online-sales events are actually sent — for the coverage check. The
     // engine gates on observed anchor events, so this is safe to run on every property (a non-
     // ecommerce site simply returns none and gets no finding).
     sd && ed ? data.getGa4PresentEvents(p, sd, ed, ECOMMERCE_RECOMMENDED_EVENTS).catch(() => null) : Promise.resolve(null),
+    // Predefined-signal readings for the event-parameter matrix (value/items/search_term coverage).
+    // Best-effort like everything else - a failed read just omits those findings.
+    sd && ed ? withQuotaRetry(() => data.getGa4EventParamSignals(p, sd, ed)).catch(() => null) : Promise.resolve(null),
   ]);
   const integrityFindings = [
     ...(deltas ? auditGa4EventDeltas({ events: deltas.events, keyEventNames: (snap.keyEvents ?? []).map((k) => k.eventName) }) : []),
     ...(txn ? auditGa4Transactions({ hasEcommerce: true, transactions: txn.transactions, notSetShare: txn.notSetShare }) : []),
+    // Event-name HYGIENE over the same fetched deltas (no extra API calls): naming-convention
+    // violations with exact renames, high-cardinality name families, key events that never fired.
+    ...(deltas
+      ? auditGa4EventHygiene({
+          events: deltas.events,
+          keyEventNames: (snap.keyEvents ?? []).map((k) => k.eventName),
+          // The deltas query caps at 500 rows per window - at the cap, absence is not evidence.
+          possiblyTruncated: deltas.events.length >= 500,
+          windowDays: dqCounts.windowDays,
+        })
+      : []),
+    // Event-PARAMETER matrix: required vs present vs missing per recommended event, grounded in the
+    // predefined API signals (eventValue, items* metrics, searchTerm) - honest not-verifiable rows
+    // for parameters the API cannot see.
+    ...(paramSignals
+      ? auditGa4ParamMatrix({
+          ...paramSignals,
+          txnNotSetShare: txn?.notSetShare ?? null,
+          registeredParams: (snap.customDimensions ?? []).map((d) => d.parameterName),
+        })
+      : []),
   ];
   if (integrityFindings.length) {
     const base = dataQuality.findings.filter((f) => !(f.severity === 'info' && /No major data-quality issues/.test(f.message)));
@@ -92,7 +120,8 @@ export async function runGa4AuditPipeline(
   // Not Verified, it never fails the audit (config + data quality always return).
   const baseline = await withQuotaRetry(() => data.getGa4Baseline(p, dqCounts.startDate ?? '', dqCounts.endDate ?? '')).catch(() => null);
   const attribution = await data.getGa4AttributionSettings(p).catch(() => null);
-  const audienceCount = await data.listGa4Audiences(p).then((a) => a.length).catch(() => null);
+  const audienceList = await data.listGa4Audiences(p).catch(() => null);
+  const audienceCount = audienceList === null ? null : audienceList.length;
   // Marketing-campaign performance (best-effort): rank the tagged utm_campaign traffic and surface the
   // untagged share. A failed query just leaves the section out (null), never fails the audit.
   const campaigns = await withQuotaRetry(() => data.getGa4CampaignPerformance(p, win)).then(rankGa4Campaigns).catch(() => null);
@@ -152,6 +181,7 @@ export async function runGa4AuditPipeline(
     growth,
     attribution,
     audienceCount,
+    audienceDetails: audienceList === null ? null : audienceList.map((a) => ({ displayName: a.displayName, membershipDurationDays: a.membershipDurationDays ?? null })),
     campaigns,
     retentionSummary,
     ecomVerification,

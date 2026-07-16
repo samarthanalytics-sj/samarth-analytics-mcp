@@ -14,12 +14,16 @@
 import os from 'node:os';
 import { requestAllowed } from './ssrf';
 import { classifyCollector, syntheticDataLayerEvent, buildNetworkLog, summarizeDataLayer, type Collector, type DescribedHit, type DataLayerEventView } from '../../shared/runtime-capture';
+import { isMonitorHit, parseMonitorHit, type MonitorEvent } from './tag-monitor';
+import { isFormEventName } from './form-tag-match';
 import { PlaywrightUnavailableError } from './playwright-driver';
 import type { PerTagCapture } from './verify-tags';
 
 interface PwRoute {
   request(): { url(): string; postData(): string | null; resourceType(): string };
-  continue(): Promise<void>;
+  /** `overrides.url` rewrites the request URL (same protocol) — used to append env-preview params to the
+   *  container's gtm.js request so Google serves our previewed version. */
+  continue(overrides?: { url?: string }): Promise<void>;
   abort(): Promise<void>;
 }
 interface PwResponse { status(): number }
@@ -78,6 +82,9 @@ export interface DriverTrigger {
 }
 export interface VerifyDriverTag {
   id: string;
+  /** The tag's display name (e.g. "GA4 - Event - Phone Click Tag") — used to target its OWN event in the
+   *  Tag Assistant rail for the proof screenshot, so each tag's shot is the event it actually fired on. */
+  name?: string;
   /** The page the tag's trigger lives on ("/contact", "site-wide", "/"). Drives per-page navigation. */
   page?: string;
   trigger: DriverTrigger;
@@ -170,6 +177,9 @@ export interface VerifyDriverOptions {
    *  Defaults to the machine's cores-1 (capped) when omitted; clamped to [1, cap] and never more than
    *  the page count. Set 1 to force the old sequential behaviour. */
   concurrency?: number;
+  /** Fired as each page's drive BEGINS (best-effort) so the caller can stream a live "verifying <url>"
+   *  progress feed. `done` counts pages started so far (1-based), `total` is the page count. */
+  onPageProgress?: (page: string, done: number, total: number) => void;
 }
 /** GTM's on-page debug signal (Phase B). Best-effort + observable — NOT the full Tag-Assistant
  *  per-tag protocol (that is undocumented and needs live-GTM validation). */
@@ -199,12 +209,16 @@ export interface VerifyDriverResult {
    *  cta_click, …) so a trigger can be built/aligned to the real event + params. Events the verifier
    *  pushed synthetically to test custom_event tags are flagged `synthetic`. */
   dataLayer?: DataLayerEventView[];
+  /** AUTHORITATIVE per-tag firing captured from an injected GTM Monitor tag (addEventCallback) — which
+   *  tags GTM fired on each event, with status. Present only when a monitor-preview snippet was used;
+   *  feeds verdictsFromMonitor for the Tag-Assistant-grade result. */
+  monitorEvents?: MonitorEvent[];
 }
 
 /** Read GTM's on-page debug signal + the real dataLayer pushes (serialized to page.evaluate — DOM
  *  globals only). Each push is SANITISED to a JSON-safe { event, params } (DOM nodes/functions dropped,
  *  nested objects summarised) so it survives the evaluate boundary; summarizeDataLayer formats it. */
-function readGtmDebugInPage(): { containerIds: string[]; dataLayerEvents: string[]; dataLayer: Array<{ event: string; params: Record<string, string> }> } {
+export function readGtmDebugInPage(): { containerIds: string[]; dataLayerEvents: string[]; dataLayer: Array<{ event: string; params: Record<string, string> }> } {
   const w = window as unknown as { google_tag_manager?: Record<string, unknown>; dataLayer?: Array<Record<string, unknown>> };
   const containerIds = w.google_tag_manager ? Object.keys(w.google_tag_manager).filter((k) => /^GTM-/i.test(k)) : [];
   const rawDl = Array.isArray(w.dataLayer) ? w.dataLayer : [];
@@ -268,10 +282,47 @@ export function isPreviewLoader(src: string | null): boolean {
   return Boolean(src && /gtm_auth=/.test(src) && /gtm_preview=/.test(src));
 }
 
+/** The GTM environment-preview params (gtm_auth / gtm_preview / gtm_cookies_win) a preview loader
+ *  carries, or null for a plain published-container loader.
+ *
+ *  These MUST ride the NAVIGATION URL, not just an injected loader. A page that already embeds this
+ *  container loads its LIVE gtm.js during page.goto and claims window.google_tag_manager[id]; a second
+ *  loader we inject afterwards for the SAME id is deduped away, so our previewed version — the only
+ *  place a just-created draft/monitor tag exists — never initialises (the "0 fired" bug). Put the params
+ *  on the page URL instead and the site's OWN gtm.js reads them at its bootstrap and serves the previewed
+ *  environment's version, exactly like a GTM environment share-preview link overriding a live site. */
+export function previewParamsFromLoader(loaderSrc: string | null): Record<string, string> | null {
+  if (!loaderSrc) return null;
+  try {
+    const q = new URL(loaderSrc).searchParams;
+    const auth = q.get('gtm_auth');
+    const preview = q.get('gtm_preview');
+    if (!auth || !preview) return null;
+    return { gtm_auth: auth, gtm_preview: preview, gtm_cookies_win: q.get('gtm_cookies_win') || 'x' };
+  } catch {
+    return null;
+  }
+}
+
+/** Merge GTM preview params into a page URL (preserving any existing query) so page.goto lands in
+ *  environment-preview mode. Applied to EVERY page.goto, not just the first: each page runs in its own
+ *  isolated worker context, so the gtm_cookies_win preview cookie does not carry across pages. Falls back
+ *  to the raw url if it can't be parsed. */
+export function withPreviewParams(pageUrl: string, params: Record<string, string> | null): string {
+  if (!params) return pageUrl;
+  try {
+    const u = new URL(pageUrl);
+    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+    return u.href;
+  } catch {
+    return pageUrl;
+  }
+}
+
 // ── In-page helpers (serialized to page.evaluate — DOM globals only) ──────────
 
 /** Neutralise navigations + real submits so driving fires GTM's trigger without side effects. */
-function installGuardsInPage(): void {
+export function installGuardsInPage(): void {
   const w = window as unknown as { __vf_guard?: boolean };
   if (w.__vf_guard) return;
   w.__vf_guard = true;
@@ -292,7 +343,7 @@ function installGuardsInPage(): void {
  * verification. Synthetic override — the question we answer is "does the tag fire when consent is
  * granted", not "what does the site's CMP do". Mirrors gtag('consent','update',{...granted}).
  */
-function grantConsentInPage(): void {
+export function grantConsentInPage(): void {
   const w = window as unknown as { dataLayer?: unknown[] };
   const dl = (w.dataLayer = w.dataLayer || []);
   const gtag = function (this: unknown): void {
@@ -325,7 +376,7 @@ export function buildCustomEventPayload(
 }
 
 /** Push a (synthetic) dataLayer event so a custom_event trigger fires. */
-function pushDataLayerInPage(payload: Record<string, unknown>): void {
+export function pushDataLayerInPage(payload: Record<string, unknown>): void {
   const w = window as unknown as { dataLayer?: unknown[] };
   w.dataLayer = w.dataLayer || [];
   w.dataLayer.push(payload);
@@ -366,14 +417,14 @@ export interface DriveSpec {
    *  pass, where the tag doesn't exist yet — we only want a proof image of WHERE it would fire. */
   locateOnly?: boolean;
 }
-interface DriveOutcome {
+export interface DriveOutcome {
   targetFound: boolean;
   performed: boolean;
   note?: string;
 }
 
 /** Locate the element/form the trigger targets and perform the interaction. */
-function driveInPage(spec: DriveSpec): DriveOutcome {
+export function driveInPage(spec: DriveSpec): DriveOutcome {
   // Ring the element we're about to drive + scroll it into view, so the screenshot the driver takes
   // right after is visual PROOF of exactly which control was clicked / which form was submitted.
   const highlight = (node: Element): void => {
@@ -394,29 +445,38 @@ function driveInPage(spec: DriveSpec): DriveOutcome {
       h.scrollIntoView({ block: 'center', inline: 'center' });
     } catch { /* best-effort — never let highlighting break the drive */ }
   };
+  // Normalize a visible label for text matching: non-breaking spaces → space, arrow/chevron glyphs (a CTA
+  // rendered "Read full analysis →" / "Learn more ›") → space, collapse whitespace, case-fold. This lets a
+  // decorated on-page label EQUALS-match the trigger's plain text (the #1 cause of a real CTA reading
+  // "Untested" because the exact-text compare failed).
+  const normLabel = (s: string): string => (s || '')
+    .replace(/[   ]/g, ' ')
+    .replace(/[←-⇿➔➙➜➡⟶⮕▶▸❯»›→‹«]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
   const matches = (hay: string, val: string | undefined, op: string | undefined): boolean => {
     if (!val) return false;
-    const h = (hay || '').trim();
-    const hl = h.toLowerCase();
-    const vl = val.toLowerCase();
+    const h = normLabel(hay);
+    const vl = normLabel(val);
     switch (op) {
       case 'contains':
-        return hl.indexOf(vl) >= 0;
+        return h.indexOf(vl) >= 0;
       case 'startsWith':
-        return hl.indexOf(vl) === 0;
+        return h.indexOf(vl) === 0;
       case 'endsWith':
-        // `hl.length >= vl.length` guards the empty/short-haystack case: without it, hay='' + val='?'
+        // `h.length >= vl.length` guards the empty/short-haystack case: without it, hay='' + val='?'
         // gives lastIndexOf=-1 === (0-1)=-1 → TRUE, so every TEXT-LESS <a>/<button> (logo, icon, FAB)
         // "ends with ?" and the shortest-text ranking rings an icon instead of a real FAQ question row.
-        return vl.length > 0 && hl.length >= vl.length && hl.lastIndexOf(vl) === hl.length - vl.length;
+        return vl.length > 0 && h.length >= vl.length && h.lastIndexOf(vl) === h.length - vl.length;
       case 'matchRegex':
         try {
-          return new RegExp(val, 'i').test(h);
+          return new RegExp(val, 'i').test((hay || '').trim());
         } catch {
           return false;
         }
       default:
-        return hl === vl; // equals
+        return h === vl; // equals (on normalized labels)
     }
   };
 
@@ -469,14 +529,24 @@ function driveInPage(spec: DriveSpec): DriveOutcome {
     return false;
   };
   const ownTextLen = (n: Element): number => ((n.textContent || (n as HTMLInputElement).value || '') as string).trim().length;
-  const candidates: Element[] = [];
-  for (const n of nodes) {
-    const txt = ((n.textContent || (n as HTMLInputElement).value || '') as string).trim();
-    const href = (n.getAttribute && n.getAttribute('href')) || '';
-    const okText = spec.clickText ? matches(txt, spec.clickText, spec.clickTextOp || 'equals') : true;
-    const okUrl = spec.clickUrl ? matches(href, spec.clickUrl, spec.clickUrlOp || 'contains') : true;
-    if (spec.clickText && okText && okUrl) candidates.push(n);
-    else if (!spec.clickText && spec.clickUrl && okUrl) candidates.push(n);
+  const collect = (textOp: string): Element[] => {
+    const out: Element[] = [];
+    for (const n of nodes) {
+      const txt = ((n.textContent || (n as HTMLInputElement).value || '') as string).trim();
+      const href = (n.getAttribute && n.getAttribute('href')) || '';
+      const okText = spec.clickText ? matches(txt, spec.clickText, textOp) : true;
+      const okUrl = spec.clickUrl ? matches(href, spec.clickUrl, spec.clickUrlOp || 'contains') : true;
+      if (spec.clickText && okText && okUrl) out.push(n);
+      else if (!spec.clickText && spec.clickUrl && okUrl) out.push(n);
+    }
+    return out;
+  };
+  let candidates = collect(spec.clickTextOp || 'equals');
+  // EQUALS-THEN-CONTAINS fallback: an EQUALS text trigger that matched nothing is retried as CONTAINS —
+  // for a label carrying extra words / a wrapping child ("Read full analysis of Q4" vs "Read Full
+  // Analysis"). The content → leaf → shortest-own-label ranking below still keeps it off a broader control.
+  if (candidates.length === 0 && spec.clickText && (spec.clickTextOp || 'equals') === 'equals') {
+    candidates = collect('contains');
   }
   // Prefer content over chrome; then the innermost control (drop any that merely wraps another match);
   // then the tightest label (a button reading exactly "FAQs" beats a card that just contains it).
@@ -616,7 +686,7 @@ async function captureShot(page: PwPage, state: { n: number }): Promise<string |
   }
 }
 
-function specFor(trigger: DriverTrigger): DriveSpec {
+export function specFor(trigger: DriverTrigger): DriveSpec {
   return {
     kind: trigger.kind,
     ...(trigger.clickTextValue ? { clickText: trigger.clickTextValue, clickTextOp: trigger.clickTextOperator } : {}),
@@ -659,6 +729,12 @@ export async function runVerifyDriver(
   const settleMs = opts.settleMs ?? 900;
   const loaderSrc = buildLoaderSrc(opts.containerSnippet);
   const previewAuth = isPreviewLoader(loaderSrc);
+  // When the loader is a workspace/environment PREVIEW, its gtm_auth/gtm_preview params must ride the
+  // navigation URL so the site's own gtm.js serves our previewed version (see previewParamsFromLoader).
+  const previewParams = previewParamsFromLoader(loaderSrc);
+  // The GTM-XXXX id our loader targets — used to skip the fallback injection when that container already
+  // loaded on the page (via the site's own gtm.js + our URL params), so we never add a redundant loader.
+  const loaderContainerId = loaderSrc?.match(/[?&]id=(GTM-[A-Z0-9]+)/i)?.[1] ?? null;
   const perTag: PerTagCapture[] = [];
 
   if (!(await requestAllowed(url))) {
@@ -671,6 +747,8 @@ export async function runVerifyDriver(
   // thread; perTag is keyed by tagId downstream, so its order never matters).
   let injected = false;
   const pagesDriven: string[] = [];
+  let pagesToDrive = 0; // set right before the pool; the `total` for onPageProgress
+  let pagesStarted = 0; // incremented (synchronously) as each page's drive begins → the `done`
   const debugContainerIds = new Set<string>();
   const debugEvents = new Set<string>();
   // Real dataLayer pushes captured across pages + the event names WE pushed synthetically (so those
@@ -691,7 +769,11 @@ export async function runVerifyDriver(
     page: PwPage;
     captured: { url: string; body: string | null; collector: Collector }[];
     armed: { on: boolean };
+    /** GTM Monitor pixel URLs captured on this worker (authoritative per-tag firing) — parsed at the end. */
+    monitorHits: string[];
   }
+  // Monitor pixels, collected per worker → merged + parsed into MonitorEvent[] for authoritative verdicts.
+  const monitorHitsByWorker: string[][] = [];
 
   let browser: PwBrowser | null = null;
   try {
@@ -701,10 +783,35 @@ export async function runVerifyDriver(
     const makeWorker = async (): Promise<VerifyWorker> => {
       const context = await launched.newContext({ viewport: { width: 1366, height: 900 } });
       const captured: VerifyWorker['captured'] = [];
+      const monitorHits: string[] = [];
       const armed = { on: false }; // after THIS worker's container loads, kill every beacon (capture+abort)
       await context.route('**/*', (route) => {
         const req = route.request();
         const reqUrl = req.url();
+        // PREVIEW OVERRIDE (the reliable path): a normally-installed GTM snippet requests
+        // `googletagmanager.com/gtm.js?id=GTM-XXXX` with NO preview params, and its loader does NOT read
+        // gtm_auth/gtm_preview from the page URL — so a site that already publishes this container serves
+        // its LIVE version and our monitor/draft tags never load. Rewrite that request to carry the env
+        // preview params (exactly what the environment install snippet's src has), so Google serves OUR
+        // previewed version instead. Same origin + protocol, only added query params. Only the container's
+        // own loader is rewritten (not gtag/js), only when it lacks gtm_auth, so it runs at most once.
+        if (
+          previewParams && loaderContainerId &&
+          /googletagmanager\.com\/gtm\.js\?/i.test(reqUrl) &&
+          reqUrl.includes(`id=${loaderContainerId}`) &&
+          !/[?&]gtm_auth=/i.test(reqUrl)
+        ) {
+          const qp = `&gtm_auth=${previewParams.gtm_auth}&gtm_preview=${previewParams.gtm_preview}&gtm_cookies_win=${previewParams.gtm_cookies_win}`;
+          void route.continue({ url: reqUrl + qp });
+          return;
+        }
+        // The injected GTM Monitor tag GET-pixels per-tag firing to our sentinel endpoint — capture +
+        // abort it (it is route-aborted anyway) BEFORE the collector/armed checks so it isn't misread.
+        if (isMonitorHit(reqUrl)) {
+          monitorHits.push(reqUrl);
+          void route.abort();
+          return;
+        }
         const collector = classifyCollector(reqUrl);
         if (collector) {
           captured.push({ url: reqUrl, body: safePostData(req), collector });
@@ -722,10 +829,11 @@ export async function runVerifyDriver(
         );
       });
       const page = await context.newPage();
-      return { context, page, captured, armed };
+      return { context, page, captured, armed, monitorHits };
     };
     const closeWorker = async (w: VerifyWorker): Promise<void> => {
       capturedByWorker.push(w.captured);
+      monitorHitsByWorker.push(w.monitorHits);
       await w.context.close();
     };
 
@@ -733,6 +841,10 @@ export async function runVerifyDriver(
     // drive the group's triggers. One call per page; runPagePool fans these across the worker pool.
     const driveOnePage = async (w: VerifyWorker, [pageUrl, groupTags]: [string, VerifyDriverTag[]]): Promise<void> => {
       const { page, captured } = w;
+      if (opts.onPageProgress) {
+        pagesStarted += 1; // single-threaded increment — safe across parallel workers
+        try { opts.onPageProgress(pageUrl, pagesStarted, pagesToDrive); } catch { /* progress is a nicety */ }
+      }
       // Disarm BEFORE this page's own load. The page must load with its beacons flowing so client-rendered
       // CTAs/images actually render (classified analytics collectors are still captured+aborted regardless
       // of armed); we RE-arm only after injecting the container below, so a beacon fired during the page's
@@ -743,7 +855,10 @@ export async function runVerifyDriver(
       w.armed.on = false;
       const loadStart = captured.length;
       try {
-        await page.goto(pageUrl, { waitUntil: 'networkidle', timeout: navTimeoutMs });
+        // In preview mode, navigate WITH the env params so the site's own gtm.js serves our previewed
+        // version at its bootstrap (the injected loader below is deduped when the site already embeds this
+        // container). pagesDriven/notes keep the clean pageUrl; only the goto carries the params.
+        await page.goto(withPreviewParams(pageUrl, previewParams), { waitUntil: 'networkidle', timeout: navTimeoutMs });
       } catch (e) {
         const note = `could not load ${pageUrl}: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`;
         for (const t of groupTags) perTag.push({ tagId: t.id, kind: 'navigate', targetFound: false, performed: false, note, hits: [] });
@@ -751,18 +866,33 @@ export async function runVerifyDriver(
       }
       pagesDriven.push(pageUrl);
 
+      // FALLBACK loader injection — ONLY when the container isn't already on the page. If we navigated
+      // with env preview params and the site embeds this container, its own gtm.js already served our
+      // previewed version, so injecting a second loader for the same id would be a redundant deduped
+      // no-op (and an extra gtm.start push). Inject only when the container is absent (a target that does
+      // NOT embed it, e.g. a staging page) so DRAFT/monitor tags still load.
       if (loaderSrc) {
-        await page.evaluate((src: string) => {
-          const w = window as unknown as { dataLayer?: unknown[] };
-          w.dataLayer = w.dataLayer || [];
-          w.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
-          const s = document.createElement('script');
-          s.async = true;
-          s.src = src;
-          (document.head || document.documentElement).appendChild(s);
-        }, loaderSrc);
-        injected = true;
-        await page.waitForTimeout(Math.max(settleMs, 1200)); // container + tags load
+        const alreadyLoaded = loaderContainerId
+          ? await page
+              .evaluate(
+                (id: string) => Boolean((window as unknown as { google_tag_manager?: Record<string, unknown> }).google_tag_manager?.[id]),
+                loaderContainerId,
+              )
+              .catch(() => false)
+          : false;
+        if (!alreadyLoaded) {
+          await page.evaluate((src: string) => {
+            const w = window as unknown as { dataLayer?: unknown[] };
+            w.dataLayer = w.dataLayer || [];
+            w.dataLayer.push({ 'gtm.start': Date.now(), event: 'gtm.js' });
+            const s = document.createElement('script');
+            s.async = true;
+            s.src = src;
+            (document.head || document.documentElement).appendChild(s);
+          }, loaderSrc);
+          injected = true;
+          await page.waitForTimeout(Math.max(settleMs, 1200)); // container + tags load
+        }
       }
 
       await page.evaluate(installGuardsInPage);
@@ -838,11 +968,17 @@ export async function runVerifyDriver(
               /* best-effort — no shot on failure */
             }
           }
+          // A FORM tag keys off a form_name/id condition — we truly exercised it only if we could push
+          // that condition (customEventData). A bare push (no matching form → empty data) can't satisfy it,
+          // so its non-fire is "not reproduced here", not "broken". Non-form custom events (cta_click,
+          // scroll) need no condition, so a bare push fully exercises them.
+          const conditionSupplied = Object.keys(data).length > 0 || !isFormEventName(evName);
           perTag.push({
             tagId: tag.id,
             kind: 'custom_event',
             targetFound: true,
             performed: true,
+            conditionSupplied,
             hits: captured.slice(before).map((h) => ({ url: h.url, body: h.body, collector: h.collector })),
             ...(ceShot ? { screenshot: ceShot } : {}),
           });
@@ -889,6 +1025,7 @@ export async function runVerifyDriver(
 
     // Fan the per-page drive across a bounded worker pool (each page handled exactly once, none skipped).
     const pageGroups = [...groupByPage(url, tags)];
+    pagesToDrive = pageGroups.length; // the `total` reported to onPageProgress
     const concurrency = clampConcurrency(opts.concurrency, pageGroups.length);
     await runPagePool(pageGroups, concurrency, makeWorker, driveOnePage, closeWorker);
 
@@ -897,7 +1034,9 @@ export async function runVerifyDriver(
       : undefined;
     const dataLayer = summarizeDataLayer(debugDataLayer.map((p) => ({ ...p, synthetic: syntheticEvents.has(p.event) })));
     const networkLog = buildNetworkLog(capturedByWorker.flat());
-    return { pagesOk: true, injected, previewAuth, perTag, ...(pagesDriven.length ? { pagesDriven } : {}), ...(networkLog.length ? { networkLog } : {}), ...(dataLayer.length ? { dataLayer } : {}), ...(gtmDebug ? { gtmDebug } : {}) };
+    // Authoritative per-tag firing from the injected GTM Monitor (if any pixels were captured).
+    const monitorEvents = monitorHitsByWorker.flat().map(parseMonitorHit).filter((e): e is MonitorEvent => e !== null);
+    return { pagesOk: true, injected, previewAuth, perTag, ...(pagesDriven.length ? { pagesDriven } : {}), ...(networkLog.length ? { networkLog } : {}), ...(dataLayer.length ? { dataLayer } : {}), ...(gtmDebug ? { gtmDebug } : {}), ...(monitorEvents.length ? { monitorEvents } : {}) };
   } catch (e) {
     return { pagesOk: false, injected: Boolean(loaderSrc), previewAuth, perTag, error: (e instanceof Error ? e.message : String(e)).slice(0, 300) };
   } finally {
@@ -1010,7 +1149,7 @@ function rescrollRingedInPage(): void {
 /** Hide fixed/sticky cookie-consent + similar overlays so a ringed FOOTER element (email/phone/footer
  *  CTA — the usual site-wide mailto) isn't obscured behind the banner in the proof screenshot. Only
  *  hides fixed/sticky consent-style containers; best-effort and read-only-ish (a discarded page). */
-function hideCookieOverlaysInPage(): void {
+export function hideCookieOverlaysInPage(): void {
   try {
     const sel = [
       '[id*="cookie" i]', '[class*="cookie" i]', '[id*="consent" i]', '[class*="consent" i]',

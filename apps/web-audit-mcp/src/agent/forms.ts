@@ -61,7 +61,7 @@ export function extractFormsInPage(): RawForm[] {
   const MAX_FIELDS = 50;
   // High-precision submit-intent vocabulary (kept tight to avoid matching
   // pagination/filter buttons). Anchored on the button so we find the right box.
-  const SUBMIT_RE = /\b(submit|send|subscribe|sign\s*up|sign\s*me\s*up|get\s+started|register|join\b|request\s+(a\s+)?(quote|demo|info|callback)|contact\s+us|book\s+(a\s+)?(demo|call|meeting)|get\s+(a\s+)?quote)\b/i;
+  const SUBMIT_RE = /\b(submit|send|subscribe|sign\s*up|sign\s*me\s*up|get\s+started|register|join\b|request\s+(a\s+)?(quote|demo|info|callback)|contact\s+us|book\s+(a\s+)?(demo|call|meeting)|get\s+(a\s+)?quote|apply\s+(now|today|for)|submit\s+(an?\s+)?application|notify\s+me|get\s+updates|stay\s+(updated|informed))\b/i;
   const TEXTISH = new Set(['text', 'email', 'tel', 'url', 'search', 'password', 'number', 'textarea']);
   const out: RawForm[] = [];
 
@@ -181,10 +181,22 @@ export function extractFormsInPage(): RawForm[] {
     }
     const inside = headingIn(el);
     if (inside) return inside;
+    // Nearest heading ABOVE the form. A React/Tailwind form is often nested several levels below its
+    // section heading, so walk up to 6 ancestors and, at each level, take the LAST heading that PRECEDES
+    // the form in document order — its own card/section title (e.g. "Stay Updated", "Contact Information")
+    // — rather than the first heading in a large ancestor (which would grab the page hero). This is what
+    // lets an anonymous form (no id/name, empty title) be matched to its tag by name.
     let node: Element | null = el.parentElement;
-    for (let i = 0; node && i < 3; i++, node = node.parentElement) {
-      const h = headingIn(node);
-      if (h) return h;
+    for (let i = 0; node && i < 6; i++, node = node.parentElement) {
+      let best = '';
+      for (const h of Array.from(node.querySelectorAll('legend, h1, h2, h3, h4, h5, h6'))) {
+        // el follows h  ⟺  h precedes the form (DOCUMENT_POSITION_FOLLOWING = 4)
+        if ((h.compareDocumentPosition(el) & 4) !== 0) {
+          const t = (h.textContent || '').replace(/\s+/g, ' ').trim();
+          if (t) best = t;
+        }
+      }
+      if (best) return best.slice(0, 60);
     }
     return '';
   };
@@ -225,7 +237,10 @@ export function extractFormsInPage(): RawForm[] {
     for (const btn of Array.from(doc.querySelectorAll('button, [role="button"], a, [onclick], input[type="submit"], input[type="button"]'))) {
       if (out.length >= MAX_FORMS) break;
       if (btn.closest('form')) continue;
-      const label = ((btn.textContent || '') + ' ' + ((btn as HTMLInputElement).value || '')).trim();
+      // Include aria-label + title, not just text/value: a footer "Stay Updated" / newsletter subscribe
+      // control is often an ICON/arrow button whose intent lives in aria-label ("Subscribe"), so the
+      // text-only label was empty and the widget was never anchored → its form tag stayed untested.
+      const label = ((btn.textContent || '') + ' ' + ((btn as HTMLInputElement).value || '') + ' ' + (btn.getAttribute('aria-label') || '') + ' ' + (btn.getAttribute('title') || '')).trim();
       if (!SUBMIT_RE.test(label)) continue;
       // Climb up to 10 ancestors (deeply-nested React layouts put the submit control
       // several wrappers away from the fields) to find the smallest container holding a field.

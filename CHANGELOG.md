@@ -1,3 +1,757 @@
+## [1.347.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.346.0...v1.347.0) (2026-07-16)
+
+### Features
+
+* **desktop:** chat memory Phase 2b — auto-suggest memories from the chat (with review) ([22a6f6d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/22a6f6da7fb3352e959aacec0c0d6eefd22019d4))
+
+## [1.346.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.345.0...v1.346.0) (2026-07-16)
+
+### Features
+
+* **desktop:** attach files to the chat - the model reads pdf/xlsx/csv/txt docs ([#595](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/595)) ([564ef3c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/564ef3cc019b40340e0082f1145e1931fa6a4d25))
+
+## [1.345.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.344.0...v1.345.0) (2026-07-16)
+
+### Features
+
+* **desktop:** chat memory Phase 2a — in-chat "Remember this" ([c6ca337](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c6ca33796534d9f1a9aee5cecb6649c49b4cfe13))
+
+## [1.344.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.343.0...v1.344.0) (2026-07-16)
+
+### Features
+
+* **desktop:** chat memory Phase 1 — remember what the user told me (local, secret-filtered) ([c475368](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c475368ad0b1812718280e3a46248d16d4457199))
+
+## [1.343.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.342.0...v1.343.0) (2026-07-16)
+
+### Features
+
+* **desktop:** design-system refresh - semantic tokens, elevation, WCAG AA palettes, focus rings ([#592](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/592)) ([5b60dd8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5b60dd8adee29980630a6a8a9de706922b5e6f32)), closes [#93c5fd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/93c5fd)
+
+### Bug Fixes
+
+* **desktop:** repair model-authored GTM trigger types and custom-event filters on create ([75b0a49](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/75b0a49ea5c3be965096e207861391188556bfa7))
+
+## [1.342.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.341.1...v1.342.0) (2026-07-16)
+
+### Features
+
+* **desktop:** create_gtm_variable_typed gains the Google Tag: Event Settings (gtes) kind ([#590](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/590)) ([5425120](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5425120106c66557bd0644bc311853410d854d06))
+
+## [1.341.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.341.0...v1.341.1) (2026-07-16)
+
+### Bug Fixes
+
+* **desktop:** recover from an empty GTM container list in the picker ([917155e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/917155e742a23528f3f74430d83a4e36712bcf37))
+
+## [1.341.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.340.0...v1.341.0) (2026-07-15)
+
+### Features
+
+* **desktop:** GA4 audit report gains restated totals, change drivers, and product performance ([#588](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/588)) ([6041c8a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6041c8aeea1da3fb7b7658854f7832fc7e141df7))
+
+## [1.340.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.339.2...v1.340.0) (2026-07-15)
+
+### Features
+
+* **desktop:** server documentation gains variable usage, version history, config score, and the web link ([#587](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/587)) ([efcc3cd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/efcc3cdbb7eb0502d0326c4d6bb8afd4c1a41722))
+
+## [1.339.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.339.1...v1.339.2) (2026-07-15)
+
+### Bug Fixes
+
+* **desktop:** no em/en dashes in ANY export - enforced at every export boundary ([#586](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/586)) ([fae9b33](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fae9b33d4fcd2f836a24ef8c6731c546e76ead89))
+
+## [1.339.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.339.0...v1.339.1) (2026-07-15)
+
+### Bug Fixes
+
+* **desktop:** audit finding text uses plain hyphens, never em/en dashes ([#585](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/585)) ([a426826](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a4268264c37c5e646d7b8ac463fbe42b8efab882))
+
+## [1.339.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.338.0...v1.339.0) (2026-07-15)
+
+### Features
+
+* **desktop:** show the server documentation on the page, not just as downloads ([#584](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/584)) ([ba853a1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ba853a15cc1361d88eead5e8d7ffc9e6ca9f37ad))
+
+## [1.338.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.337.0...v1.338.0) (2026-07-15)
+
+### Features
+
+* **desktop:** remove the quick Create/Complete & verify button from the server create page ([#583](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/583)) ([051cdd9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/051cdd9cc70a28070673f73693100d7a8ea6768c))
+
+## [1.337.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.336.0...v1.337.0) (2026-07-15)
+
+### Features
+
+* **desktop:** detect and support the Stape Data Tag pipeline in the server plan workflow ([#582](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/582)) ([adde0bb](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/adde0bb5ab589838963e334589d3beb46d272ce0))
+
+## [1.336.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.335.0...v1.336.0) (2026-07-15)
+
+### Features
+
+* **desktop:** audit-first plan/select/apply workflow for server container creation ([cd9c344](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cd9c3441e94f3abfed94f0c52e069673354af8ae))
+
+## [1.335.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.334.0...v1.335.0) (2026-07-15)
+
+### Features
+
+* **desktop:** one-click server container creation - complete-or-create + automatic verification ([f73136f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f73136f73eb619fa543ef9a5461b60d845ec2ddb))
+
+## [1.334.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.333.1...v1.334.0) (2026-07-15)
+
+### Features
+
+* **desktop:** download the Web-Server coverage report (CSV / PDF) ([6077468](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6077468ed7b0b45d94010c2b5189ee0fa0456768))
+
+## [1.333.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.333.0...v1.333.1) (2026-07-15)
+
+### Bug Fixes
+
+* **desktop:** no em/en dashes anywhere in the renderer UI - simple hyphens only ([86b0dff](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/86b0dff8cbd613023f26ebf358ab4d84ff549a2c)), closes [#577](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/577)
+
+## [1.333.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.332.0...v1.333.0) (2026-07-15)
+
+### Features
+
+* **desktop:** Server container tab as a service launcher - pick, select a service, open its own page ([8f62452](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8f6245262df8f49a5bf3582a29a77e6744538ae9))
+
+## [1.332.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.331.0...v1.332.0) (2026-07-15)
+
+### Features
+
+* **desktop:** server documentation becomes a deliverable - issues, destinations, request flow, draft-vs-live caveat ([ad5772d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ad5772d90fad7209bf22103f982280b5fdf53c6c))
+
+## [1.331.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.330.0...v1.331.0) (2026-07-15)
+
+### Features
+
+* **desktop:** Server container tab restructured into a simple pick-once -> act flow ([65b181f](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/65b181fcbe536cbdc6ef16efefdfbb7e9449babf))
+
+## [1.330.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.329.0...v1.330.0) (2026-07-15)
+
+### Features
+
+* **desktop:** one-click create for missing server-tag coverage (clone from a same-platform template) ([843a98a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/843a98a0cc62d6f503d25fcac7b6f6839cc09c19))
+
+## [1.329.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.328.0...v1.329.0) (2026-07-15)
+
+### Features
+
+* **desktop:** server doc Excel export + PII-transformation look-here check ([f5cf7c3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f5cf7c36ed12c8dd77be4ef69034ea5597f890a2))
+
+## [1.328.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.327.0...v1.328.0) (2026-07-15)
+
+### Features
+
+* **desktop:** server container documentation export (MD / CSV / PDF) ([a888d1e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a888d1e47fd380b60b2b599f140793cdd338357e))
+
+## [1.327.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.326.0...v1.327.0) (2026-07-14)
+
+### Features
+
+* **desktop:** Web-Server GTM coverage comparison + health score in the Server container tab ([6c48265](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6c48265ab6d8ff4016a045452f8e8e2771e8949b))
+
+## [1.326.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.325.0...v1.326.0) (2026-07-14)
+
+### Features
+
+* **desktop:** server container audit in the Server container tab ([01e7bae](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/01e7bae1927387c00511467cf64dda00527e174a))
+
+## [1.325.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.324.1...v1.325.0) (2026-07-14)
+
+### Features
+
+* **desktop:** headline metric cards with green/red deltas on the GA4 audit report ([015bb31](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/015bb31c3a7c90ec6b410d46d9caeabb5695173d))
+
+## [1.324.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.324.0...v1.324.1) (2026-07-14)
+
+### Bug Fixes
+
+* **desktop:** clearer Workspace Comparison labels (real workspace names, no em dashes) ([#567](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/567)) ([41775d1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/41775d10d5d498394ec706b54b2ae85a09a18aa3))
+
+## [1.324.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.323.0...v1.324.0) (2026-07-14)
+
+### Features
+
+* **desktop:** GA4 user-property naming audit + audience detail ([78eaae9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/78eaae91d86a04ad4f80dded231f219be4ca1ddf))
+
+## [1.323.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.322.0...v1.323.0) (2026-07-14)
+
+### Features
+
+* **desktop:** expand Workspace Comparison — dependencies, folders, built-ins, per-kind stats ([#565](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/565)) ([5563b41](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5563b4133c9ec3a82bb1c165d9cc47cdcd255f10))
+
+## [1.322.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.321.0...v1.322.0) (2026-07-14)
+
+### Features
+
+* **desktop:** GA4 event-parameter matrix - required vs present vs missing per recommended event ([cceb179](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cceb179a901f3828d86846942bc76f12ae700c13))
+
+## [1.321.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.320.0...v1.321.0) (2026-07-14)
+
+### Features
+
+* **desktop:** GA4 event-name hygiene audit - naming conventions, cardinality families, silent key events ([da46fb4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/da46fb40af04666435d30d421c6edaaa6c7748e0))
+
+## [1.320.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.319.0...v1.320.0) (2026-07-14)
+
+### Features
+
+* **desktop:** native Excel (.xlsx) export for Workspace Comparison ([ba005cf](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ba005cfed536558b5972e7dfa08597cfcf707ea4))
+
+## [1.319.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.318.0...v1.319.0) (2026-07-14)
+
+### Features
+
+* **desktop:** auto-detect network changes for the location panel ([#561](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/561)) ([d921e34](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d921e34f69ca10ed95ed70f2a003604246f51e7f))
+
+## [1.318.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.317.0...v1.318.0) (2026-07-14)
+
+### Features
+
+* **desktop:** add Network & Location settings + per-run egress banner ([#560](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/560)) ([edeb6ef](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/edeb6efc55bc82ec0c85efbd650ed75ebfd52682))
+
+## [1.317.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.316.0...v1.317.0) (2026-07-14)
+
+### Features
+
+* **desktop:** raise the tag-suggestion deep-scan cap 50 → 250 (match verification) ([92b7879](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/92b7879c43de973a8f65f1db7551d9dfe4930567))
+
+## [1.316.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.315.1...v1.316.0) (2026-07-14)
+
+### Features
+
+* **verify:** add Stop button to cancel website scanning during tag verification ([#558](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/558)) ([3922a9c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3922a9c1a8b6431819242655cbd9290facc44914))
+
+## [1.315.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.315.0...v1.315.1) (2026-07-14)
+
+### Bug Fixes
+
+* **verify:** remove the CSV export format from tag-verification results ([#557](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/557)) ([6daa689](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6daa689f1af5ce6ca621dc1d4d4af25f399815cf))
+
+## [1.315.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.314.0...v1.315.0) (2026-07-14)
+
+### Features
+
+* **desktop:** remove the "GA4 event" column from tag verification (table + all exports) ([6478fca](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6478fca1fc53a89600c8281c65dada17a581857d)), closes [#552](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/552) [#555](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/555)
+
+## [1.314.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.313.1...v1.314.0) (2026-07-14)
+
+### Features
+
+* **verify:** native Excel (.xlsx) export with proof screenshots embedded ([#555](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/555)) ([e2ba5e3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e2ba5e3b7cdccd0a43f06708e97199c4025c42b8))
+
+## [1.313.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.313.0...v1.313.1) (2026-07-14)
+
+### Bug Fixes
+
+* **verify:** CSV export — UTF-8 BOM (fix mojibake) + Proof note points to the image ([#554](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/554)) ([4005d79](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4005d791db8a3efe1cc82f24a7bf4b3046da1eb1))
+
+## [1.313.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.312.0...v1.313.0) (2026-07-14)
+
+### Features
+
+* **desktop:** single Tag-verification entry — remove "Verify firing", keep "Verify with Tag Assistant" ([9687e55](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9687e5514ee0db83a7af53615d13c105496da807))
+
+## [1.312.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.311.0...v1.312.0) (2026-07-14)
+
+### Features
+
+* **desktop:** download tag-verification results (CSV/PDF/DOC) + GA4 event-name column ([ab40eb2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ab40eb2c7e45439d2f7c58cd02d11650c45ba8a6))
+
+## [1.311.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.310.1...v1.311.0) (2026-07-14)
+
+### Features
+
+* **audit:** consolidated Workspace Comparison — common/uncommon tables, merge status, stats dashboard ([#551](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/551)) ([a5fa40d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a5fa40d41e9879a4a5f9e64d586afc74e18b3033)), closes [#549](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/549)
+
+## [1.310.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.310.0...v1.310.1) (2026-07-14)
+
+### Bug Fixes
+
+* **verify:** match generic form tags to forms by core name ↔ title ([#550](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/550)) ([93cf964](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/93cf964f45f3fd386d28d6f34193de98ad93ec62))
+
+## [1.310.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.14...v1.310.0) (2026-07-14)
+
+### Features
+
+* **audit:** add Workspace Comparison to the Container Audit module ([#549](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/549)) ([b78d01b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b78d01b1ffdd10f53dc58e09903d7e6a5417aae0))
+
+## [1.309.14](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.13...v1.309.14) (2026-07-14)
+
+### Bug Fixes
+
+* **desktop:** show each account's email in Settings → Accounts, not truncated ([66b19bc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/66b19bcda9bc0ed6a3ca3b9c0855dfb3921a216f))
+
+## [1.309.13](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.12...v1.309.13) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** scrape lazy-mounted (IntersectionObserver) forms — show the scan window offscreen ([#547](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/547)) ([a89261b](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a89261b5968bcd4474b124a8b8ae231b698f9fa1))
+
+## [1.309.12](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.11...v1.309.12) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** scan footer/nav pages (Contact, Privacy, Careers) not in the sitemap ([#546](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/546)) ([97e7792](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/97e779264b1660d1b8db63347bf34776616aa851))
+
+## [1.309.11](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.10...v1.309.11) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** collapse the Forms section after a run so no tag is listed twice ([#545](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/545)) ([42baac5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/42baac5f8160431e8c6d5ed3364047268a4c189b))
+
+## [1.309.10](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.9...v1.309.10) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** concrete per-form trigger suggestions, inlined into Not-firing (no duplicate section) ([#544](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/544)) ([83cd413](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/83cd413a8c157d04fc5cccf82fddc9120693456d))
+
+## [1.309.9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.8...v1.309.9) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** proof screenshot shows the tag's OWN event, never the Summary ([#543](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/543)) ([0549124](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/05491248fe054fa4d5ac989fa8a37839e7722101))
+
+## [1.309.8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.7...v1.309.8) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** say WHY tags are untested in a scoped single-page run ([#542](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/542)) ([c46eca6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c46eca6aca55c7aba04ef26fbfdbd396e34f3d81))
+
+## [1.309.7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.6...v1.309.7) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** forms scan respects the "Pages to verify" list (no whole-site crawl) ([#541](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/541)) ([ab9be2a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ab9be2ad561ffeba5dda333d6e606641df4032dd))
+
+## [1.309.6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.5...v1.309.6) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** let an absolute "Pages to verify" URL stand alone; dim the disabled Verify button ([#540](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/540)) ([8bf1bad](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8bf1badb29577749a7598a25c40963b051e50fcb))
+
+## [1.309.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.4...v1.309.5) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** treat form_id as a form-identity discriminator in trigger suggestions ([#539](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/539)) ([a0db2a7](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a0db2a76608ae33e1bc26d00accfa96e97763ed7))
+
+## [1.309.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.3...v1.309.4) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** scope trigger suggestions by the DISTINCTIVE variable, not shared form_name/type ([#538](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/538)) ([a491289](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a4912896bcd20b4d8fbaefaabeffde318e075bb9)), closes [#536](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/536)
+
+## [1.309.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.2...v1.309.3) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** drop volatile DLV conditions (timestamp), add Page Path to trigger suggestions ([#536](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/536)) ([54cf491](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/54cf4916934a72185aa33986152fd2c72e816f4f))
+
+## [1.309.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.1...v1.309.2) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** move DLV trigger-suggestions to the results footer ([#535](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/535)) ([89f34ec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/89f34ec19d5748c9ad7a7a7b29d5d2c4e7f51ba9))
+
+## [1.309.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.309.0...v1.309.1) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** per-tag proof screenshots show each tag's own event, not the Summary ([#534](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/534)) ([18e2242](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/18e22426c437277cc68a98c06f4e7fb79ba17b75))
+
+## [1.309.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.4...v1.309.0) (2026-07-13)
+
+### Features
+
+* **verify:** collapse the setup after a run + filter/search the results ([#533](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/533)) ([23a4bae](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/23a4baee6ab71702457bb09ff5f6bdfb9641122b))
+
+## [1.308.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.3...v1.308.4) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** proof screenshot never shows a blank "Tags Fired: None" panel ([#532](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/532)) ([c44fe44](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c44fe44032dbad67b98a146b9bbdec91cc90c6f5))
+
+## [1.308.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.2...v1.308.3) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** cut Untested — match decorated CTAs, reclassify submitted-but-unfired, extract icon-submit forms ([#531](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/531)) ([c44ac89](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c44ac89cbb0f08c96d29ab113eadffdf972da954))
+
+## [1.308.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.1...v1.308.2) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** pair form tags to their page's form by trigger page-scope (fewer Untested) ([#530](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/530)) ([bdff5c2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bdff5c2c51c790177fbacb9b1b2087bd8d869d36))
+
+## [1.308.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.308.0...v1.308.1) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** capture proof screenshots during the drive + visible Untested reasons ([#529](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/529)) ([43f6b2a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/43f6b2a67226eb6710838912e38da9c409651143))
+
+## [1.308.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.5...v1.308.0) (2026-07-13)
+
+### Features
+
+* **verify:** scan header/nav/footer pages first + whole-site coverage with live progress ([#528](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/528)) ([3d37f75](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3d37f75015f31542fa9a999447cf374c0dc83b20))
+
+## [1.307.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.4...v1.307.5) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** credit form tags from the real-submit stream; more screenshots; deeper footer scan ([#527](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/527)) ([b622e38](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b622e380abf0f2e8331e91585d68c56fb0532aa4))
+
+## [1.307.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.3...v1.307.4) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** per-tag screenshots in the results table + honest form firing status ([#526](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/526)) ([58a0613](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/58a0613ed1ec5d22c5f6ce34b06eda8f26d9fb69))
+
+## [1.307.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.2...v1.307.3) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** one site crawl for the Tag Assistant flow (no double page scan) ([#525](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/525)) ([f2277f2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f2277f261708f4ebeb181deb0754b640daed8199))
+
+## [1.307.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.1...v1.307.2) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** scan-first form gate + reliable per-event Tag Assistant screenshots ([#524](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/524)) ([2cc28f0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2cc28f0b14c0b09dd2905d2e3c19355036a5cb91))
+
+## [1.307.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.307.0...v1.307.1) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** stop cross-page event collision mislabeling click tags as gtm.formInteract ([#523](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/523)) ([a6a39f1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a6a39f1f54b17481b64c2bc124252cda92f6d0a6))
+
+## [1.307.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.306.0...v1.307.0) (2026-07-13)
+
+### Features
+
+* **verify:** Phase 3 — screenshots from the Tag Assistant panel per event ([#522](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/522)) ([9fdfac8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9fdfac822daae64e0db23bebc90fe64802b61a7f))
+
+## [1.306.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.305.0...v1.306.0) (2026-07-13)
+
+### Features
+
+* **verify:** simpler default form-fill values — text "Test", numbers 1234567890, message "test form please ignore" ([#520](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/520)) ([a8c1a28](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a8c1a28180b288407da1c8bcf21f3eb6aa5ab1e6))
+
+## [1.305.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.304.1...v1.305.0) (2026-07-13)
+
+### Features
+
+* **verify:** Phase 2b — Verify with Tag Assistant submits the operator's REVIEWED form values ([#519](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/519)) ([c1b4538](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c1b4538395b30280cfe359aefa0b572bf53e5b41))
+
+## [1.304.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.304.0...v1.304.1) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** use the real dataLayer push event as the event name (fixes wrong EVENT column + timeline headers) ([#518](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/518)) ([492043c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/492043c52a124719ed86e6807e6ce97d60390ba6)), closes [#515](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/515)
+
+## [1.304.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.303.0...v1.304.0) (2026-07-13)
+
+### Features
+
+* **verify:** Phase 2 — real form submits through Tag Assistant + simple Test values ([#517](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/517)) ([104df97](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/104df975708d10588d782c1606a4413e7dfff3ed))
+
+## [1.303.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.302.1...v1.303.0) (2026-07-13)
+
+### Features
+
+* **verify:** Phase 1 — drop the location/locale picker from form review (generic editable values) ([#516](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/516)) ([e4ebae2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e4ebae22d30e3eb2374a4fa7eb2ad90782b0b46c))
+
+## [1.302.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.302.0...v1.302.1) (2026-07-13)
+
+### Bug Fixes
+
+* **verify:** don't credit evaluated-but-not-fired tags to an event (wrong EVENT column) ([#515](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/515)) ([0d2b968](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0d2b968800798cb8f05ce4b1781a7f097dd8e207))
+
+## [1.302.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.301.0...v1.302.0) (2026-07-11)
+
+### Features
+
+* **verify:** Phase 3 — in-app Tag Assistant results view (event timeline + DLV suggestions) ([#514](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/514)) ([1d5e7ec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1d5e7ecc9f3833a772233ca9d10369fd3ce32ee7))
+
+## [1.301.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.300.0...v1.301.0) (2026-07-11)
+
+### Features
+
+* **verify:** "Pages to verify" — scope Tag Assistant verification to specific URLs ([#513](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/513)) ([a3c9245](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a3c9245b9860a699ce4cf878d0131c9fa3d3129b))
+
+## [1.300.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.299.1...v1.300.0) (2026-07-11)
+
+### Features
+
+* **verify:** keep the Tag Assistant window open after a run so the user can inspect it ([#512](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/512)) ([40325b5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/40325b58f466241872d844b2db06c1fdd434985b))
+
+## [1.299.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.299.0...v1.299.1) (2026-07-11)
+
+### Bug Fixes
+
+* **verify:** in GTM Preview mode, (re)load the connect page WITH preview params ([#511](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/511)) ([e710bf4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e710bf4ea18f54283064f7c59888ea64fb72b9b0)), closes [#510](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/510)
+
+## [1.299.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.298.0...v1.299.0) (2026-07-10)
+
+### Features
+
+* **verify:** GTM Preview mode for Tag Assistant — debug the published GTM container's tags ([#510](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/510)) ([056c144](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/056c1448a050be87a68fa2500a4d5c236b7d2543))
+
+## [1.298.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.297.0...v1.298.0) (2026-07-10)
+
+### Features
+
+* **verify:** Tag Assistant signs in ONCE and saves it — never close Chrome (revert real-profile) ([#509](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/509)) ([1b1705e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1b1705eea7979934d9d4fe51c8b171ca1700ab6b)), closes [#508](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/508) [#507](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/507)
+
+## [1.297.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.296.0...v1.297.0) (2026-07-10)
+
+### Features
+
+* **verify:** run Tag Assistant in the user's REAL Chrome profile (no separate sign-in) ([#508](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/508)) ([0c0ca8e](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/0c0ca8eba637345bc0abfe66be5e954734b3c774)), closes [post-#506](https://github.com/samarthanalytics-sj/post-/issues/506)
+
+## [1.296.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.295.1...v1.296.0) (2026-07-10)
+
+### Features
+
+* **verify:** run Tag Assistant VISIBLY with one in-window sign-in; fix mojibake logs ([#507](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/507)) ([8637a63](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/8637a6327dcda7656563e3eff7bdf149a9087c92))
+
+## [1.295.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.295.0...v1.295.1) (2026-07-10)
+
+### Bug Fixes
+
+* **auth:** revert unified sign-in — connect opens the user's real Chrome again (not a blank automated one) ([#506](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/506)) ([3ce8f15](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3ce8f154b533206e839bc9cc78d018256c05523c)), closes [#505](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/505)
+
+## [1.295.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.294.2...v1.295.0) (2026-07-10)
+
+### Features
+
+* **auth:** unify sign-in — run OAuth consent inside the Tag Assistant browser profile ([#505](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/505)) ([d26dcd4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d26dcd46babd56f84ea27033fe989884f37d4650))
+
+## [1.294.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.294.1...v1.294.2) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** key the Tag Assistant session per connected Google account (multi-Gmail) ([#504](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/504)) ([71046a6](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/71046a60e30a2c4bbe537e392247316de18db07d))
+
+## [1.294.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.294.0...v1.294.1) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** make Tag Assistant Google sign-in actually succeed + serialize profile access ([#503](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/503)) ([cae6b67](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/cae6b6772afe0de8abb62064e7d71b44be41e7a8)), closes [#502](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/502)
+
+## [1.294.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.293.0...v1.294.0) (2026-07-10)
+
+### Features
+
+* **verify:** Tag Assistant sign-in happens at account connect / inline — sign-in button removed ([#502](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/502)) ([b2132e4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/b2132e455a9956c62708d3406ef90a92ee665bb6))
+
+## [1.293.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.292.0...v1.293.0) (2026-07-10)
+
+### Features
+
+* **verify:** Tag Assistant automation Phase 2 — session driver; remove the monitor-container code path ([#501](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/501)) ([4248b49](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4248b49bc807f6f05739b0b841fefb205cb88ad8))
+
+## [1.292.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.291.0...v1.292.0) (2026-07-10)
+
+### Features
+
+* **verify:** Tag Assistant automation Phase 1 — debug-stream parser (pure core) ([#500](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/500)) ([83abc58](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/83abc58c1c233f9bd38fa68f90454b6d49cb770d))
+
+## [1.291.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.290.3...v1.291.0) (2026-07-10)
+
+### Features
+
+* **verify:** zero-footprint GTM Monitor via a separate reusable container (no version in your container) ([#499](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/499)) ([a1590fa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a1590fa29257e842f26301db977f248d086f2a7f))
+
+## [1.290.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.290.2...v1.290.3) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** sweep leaked throwaway workspaces + log GTM's real delete error ([#496](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/496)) ([2bb6f5d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2bb6f5d18d478d58c006f19c85318a0ae8a05c1e))
+
+## [1.290.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.290.1...v1.290.2) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** sweep leaked preview environments so the version sweep can finish ([#495](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/495)) ([df163bd](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/df163bd6c05e5b31ad7fa457ce152fcea659f762)), closes [#492](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/492)
+
+## [1.290.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.290.0...v1.290.1) (2026-07-10)
+
+### Bug Fixes
+
+* **forms:** derive an anonymous form's title from the nearest heading above it ([#494](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/494)) ([221902a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/221902a92a462deca1bf9b68f7b8a117e27d109a))
+
+## [1.290.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.5...v1.290.0) (2026-07-10)
+
+### Features
+
+* **verify:** render the real-submit form-tag results as a table (like the monitor) ([#493](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/493)) ([bfa5fb1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bfa5fb1779ccd67f08437fbb82bde5fa5e81869d))
+
+## [1.289.5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.4...v1.289.5) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** sweep all "Samarth Verify (auto)" versions after each monitor run ([#492](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/492)) ([f57fec8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/f57fec873972082b0e5840c4967e5f568dd08771)), closes [#35](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/35) [#490](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/490)
+
+## [1.289.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.3...v1.289.4) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** keep form tags out of the monitor table + stop pixel-tag form pile-on ([#491](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/491)) ([7124c4a](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/7124c4a0712fad8fc63282f83bdc1744a1ad94e6))
+
+## [1.289.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.2...v1.289.3) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** GTM Monitor preview creates NO container version (workspace-linked environment) ([#490](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/490)) ([04485b2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/04485b23a2dce19e95051e385480a10ca72d1974))
+
+## [1.289.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.1...v1.289.2) (2026-07-10)
+
+### Bug Fixes
+
+* **desktop:** teach the GA4 chat to answer "when was data last recorded" ([5791dbc](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5791dbc3a38c9f284f19f2117d1f9b60595ce780))
+
+## [1.289.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.289.0...v1.289.1) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** never-driven custom events are 'untested here', and monitor non-fires stop doubting injection ([3a6c442](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3a6c442f46f4818f0e0df3e9a822e174b9c3b9d3))
+
+## [1.289.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.288.3...v1.289.0) (2026-07-10)
+
+### Features
+
+* **desktop:** download the GA4 monitoring report as PDF or CSV ([87206fa](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/87206fad7f9e4bbd280ccf20fdb9c7f780c9976f))
+
+## [1.288.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.288.2...v1.288.3) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** match form tags by tag-name/page-path when the form_name condition is generic ([#486](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/486)) ([52fada1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/52fada183618deb101b9a6040215f4f3f2e1c11e))
+
+## [1.288.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.288.1...v1.288.2) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** monitor mode marks un-exercised tags "untested here", not false "not firing" ([#485](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/485)) ([009bd01](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/009bd012a85651272ffe0ba6644d6cab53ac76b7))
+
+## [1.288.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.288.0...v1.288.1) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** serve the monitor preview by REWRITING the gtm.js request; match consultation form tags ([#484](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/484)) ([debb5a2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/debb5a20d25ce05f5a30c93f0aaf1f715d9a312d))
+
+## [1.288.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.287.0...v1.288.0) (2026-07-10)
+
+### Features
+
+* **desktop:** searchable context picker, workspace in audit filename, wider verify coverage ([#483](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/483)) ([bca5ede](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/bca5ede312037b63f4eb9b6c7b1e92e894452200))
+
+## [1.287.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.4...v1.287.0) (2026-07-10)
+
+### Features
+
+* **verify:** live progress feed + honest "monitor didn't load" verdict ([#482](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/482)) ([3aeced8](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/3aeced85cd144f77bdc7f4336681caf3602be9a2))
+
+## [1.286.4](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.3...v1.286.4) (2026-07-10)
+
+### Bug Fixes
+
+* **verify:** monitor preview must ride the navigation URL, not an injected loader ([#481](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/481)) ([2965015](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2965015a72b6bea0d201bc908e9df0b9a9d20d70))
+
+## [1.286.3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.2...v1.286.3) (2026-07-09)
+
+### Bug Fixes
+
+* **verify:** unique per-run names for GTM Monitor trigger + tag ([#480](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/480)) ([a945f27](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/a945f27228bef9d34eb3480a86bf508fa8e86cb2))
+
+## [1.286.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.1...v1.286.2) (2026-07-09)
+
+### Bug Fixes
+
+* **verify:** monitor tag failed (0 fired) + version pile-up — endpoint must match Simo's send_pixel perm ([e2eb646](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e2eb646fcf1ed0e09bd671f5a8738c8591d16bf2))
+
+## [1.286.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.286.0...v1.286.1) (2026-07-09)
+
+### Bug Fixes
+
+* **verify:** GTM Monitor throwaway workspace name must not contain ':' (first in-app run) ([34b5f29](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/34b5f29e7cb24a693a93fabb65dad7a6f9c7e9e1))
+
+## [1.286.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.285.0...v1.286.0) (2026-07-09)
+
+### Features
+
+* **desktop:** weekly/monthly Slack cadence + owner-language alerts + Slack channel beside the property ([5623291](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/56232912f83413ffef3658dc728188cfcf4de1b6))
+* **verify:** GTM Monitor Phase 4 — "Verify with GTM Monitor" button + Tag-Assistant-style firing view ([ae41720](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/ae41720390f2492e1d1dabb31bf0350ce4ddc4c9))
+
+## [1.285.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.284.0...v1.285.0) (2026-07-09)
+
+### Features
+
+* **verify:** GTM Monitor Phase 3 — driver captures the monitor signal → authoritative verdicts ([e0fe8a5](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/e0fe8a599e946ef46385a9f6697e9a687de3601b))
+
+## [1.284.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.283.0...v1.284.0) (2026-07-09)
+
+### Features
+
+* **desktop:** Slack alerts in the labeled template (Severity/Property/Issue/Summary/Impact/Actions) ([fa52609](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/fa5260937c0db960d328b5c35dbed7d99d892525))
+* **verify:** GTM Monitor Phase 2 — throwaway-workspace injection, built to Simo Ahava's real spec ([9e2b33c](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/9e2b33cb5c37aa0caa34af020462c334b6af100e)), closes [#471](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/471)
+
+## [1.283.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.282.1...v1.283.0) (2026-07-09)
+
+### Features
+
+* **verify:** GTM Monitor foundation — authoritative per-tag firing (addEventCallback) ([1294481](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/1294481d9d68db477761f20180fe0094f4196c47))
+
+## [1.282.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.282.0...v1.282.1) (2026-07-09)
+
+### Bug Fixes
+
+* **desktop:** correct five sGTM server-tag builder + audit bugs ([d4b676d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/d4b676d6aa02a47db7971bbd550c89c3a5b04468))
+
+## [1.282.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.281.0...v1.282.0) (2026-07-09)
+
+### Features
+
+* **desktop:** search box in the GA4 chat property picker ([24ae306](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/24ae306b1a82711c1ecdaf0b9465c38a725dd081))
+
+## [1.281.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.280.2...v1.281.0) (2026-07-09)
+
+### Features
+
+* **desktop:** GA4 chat property selector - visible working-property bar like the GTM one ([4c6dec9](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4c6dec95d17fb108e9efd14ed15222e57b86fcec)), closes [#id](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/id)
+
+## [1.280.2](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.280.1...v1.280.2) (2026-07-09)
+
+### Bug Fixes
+
+* **desktop:** Settings masonry — no empty gap under short cards ([4e587ae](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/4e587ae70cf8692d3b7c65249309c79d57ead97f)), closes [#465](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/465)
+
+## [1.280.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.280.0...v1.280.1) (2026-07-09)
+
+### Bug Fixes
+
+* **desktop:** monitor window is live + property-timezone anchored; label the daily figure's day ([6e503ee](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/6e503eee7a558a0bc2c60d5fcfb8392b944e7e20))
+
+## [1.280.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.279.0...v1.280.0) (2026-07-09)
+
+### Features
+
+* **desktop:** brand logos and bold labels in the sidebar nav ([08532ec](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/08532ecc4824c1e421dff1adf397bf4a99dcb619))
+
+## [1.279.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.278.0...v1.279.0) (2026-07-09)
+
+### Features
+
+* **desktop:** GA4 monitor health checks as a table, plainer hero + AI summary ([2ac5c82](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/2ac5c823d3e8f48b40387800762b0094e1a38d96))
+
+### Bug Fixes
+
+* **desktop:** Settings uses the full width — responsive card grid ([653f6b3](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/653f6b3df49a7ade7cc939ca0f02b971e3a27fbd))
+
 ## [1.278.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.277.0...v1.278.0) (2026-07-09)
 
 ### Features
