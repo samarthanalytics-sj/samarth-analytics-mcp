@@ -105,6 +105,20 @@ export function memoryDedupeKey(m: { kind: MemoryKind; text: string; scope?: Mem
   return `${m.kind}|${s.containerId ?? ''}|${s.property ?? ''}|${m.text.toLowerCase()}`;
 }
 
+/** Memories matching a free-text "forget X" query — text contains the whole query, OR contains every
+ *  significant term (>= 3 chars) of it. Used by the chat `forget` tool to find what to remove. PURE.
+ *  A query with NO term of >= 3 chars (e.g. "a", "it", "forget it") is too vague to match safely and
+ *  returns nothing — this is the guard against a short query mass-deleting the account's memories. */
+export function findMemoriesMatching(memories: Memory[], query: string): Memory[] {
+  const q = String(query ?? '').trim().toLowerCase();
+  const terms = q.split(/\s+/).filter((t) => t.length >= 3);
+  if (!q || terms.length === 0) return [];
+  return memories.filter((m) => {
+    const t = m.text.toLowerCase();
+    return t.includes(q) || terms.every((term) => t.includes(term));
+  });
+}
+
 /** Does a memory's scope apply to the current chat context? Account-wide always applies. */
 export function memoryApplies(m: Memory, ctx: { containerId?: string; property?: string }): boolean {
   const s = m.scope ?? {};

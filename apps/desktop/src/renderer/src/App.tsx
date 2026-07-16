@@ -964,74 +964,6 @@ function saveChatThread(key: string, messages: ChatMessage[]): void {
   }
 }
 
-/** Phase 2 — in-chat capture: a subtle "Remember this" affordance under each chat message. Saves the
- *  (editable) text into the assistant's memory (the Phase 1 store), scoped to the current client, so the
- *  user can teach it mid-conversation without opening Settings — e.g. save a correction as a "rule". */
-function MessageRememberButton({ text, product, active, onError }: {
-  text: string; product: 'gtm' | 'ga4'; active: AccountView | undefined; onError: (m: string) => void;
-}): JSX.Element | null {
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [kind, setKind] = useState<MemoryKind>('fact');
-  const [scopeClient, setScopeClient] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [savedNote, setSavedNote] = useState('');
-
-  const containerId = active?.gtmContext?.containerId;
-  const property = active?.ga4Context?.property;
-  const canClient = product === 'gtm' ? Boolean(containerId) : Boolean(property);
-  const clientLabel = product === 'gtm' ? (active?.gtmContext?.containerName ?? containerId ?? '') : (active?.ga4Context?.propertyName ?? property ?? '');
-
-  function start(): void {
-    setDraft(text.length > 500 ? text.slice(0, 500) : text);
-    setKind('fact'); setScopeClient(canClient); setSavedNote(''); setOpen(true);
-  }
-  async function save(): Promise<void> {
-    const t = draft.trim();
-    if (!t || saving) return;
-    setSaving(true);
-    try {
-      const scope = scopeClient && canClient
-        ? (product === 'gtm'
-            ? { containerId: containerId!, ...(active?.gtmContext?.containerName ? { label: active.gtmContext.containerName } : {}) }
-            : { property: property!, ...(active?.ga4Context?.propertyName ? { label: active.ga4Context.propertyName } : {}) })
-        : {};
-      const res = await window.desktop.memory.add({ kind, text: t, scope, source: 'chat' });
-      setOpen(false);
-      setSavedNote(res.redacted ? '✓ Remembered (a secret was removed)' : res.deduped ? '✓ Already remembered' : '✓ Remembered');
-    } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
-    finally { setSaving(false); }
-  }
-
-  if (!active) return null;
-  const btn: React.CSSProperties = { background: 'transparent', border: 'none', color: 'var(--text-faint)', fontSize: 11, cursor: 'pointer', padding: '1px 4px' };
-  return (
-    <div className="msg-actions" data-open={open ? 'true' : 'false'} style={{ marginTop: 2 }}>
-      {savedNote && !open ? (
-        <span style={{ fontSize: 11, color: 'var(--c-green)' }}>{savedNote} <button style={{ ...btn, color: 'var(--c-blue)' }} onClick={start}>edit</button></span>
-      ) : !open ? (
-        <button style={btn} onClick={start} title="Save this to the assistant's memory (used in future chats)">🧠 Remember this</button>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: 8, border: '1px solid var(--border-2)', borderRadius: 8, background: 'var(--surface-2)', maxWidth: 440 }}>
-          <textarea value={draft} onChange={(e) => setDraft(e.target.value)} maxLength={500} style={{ ...styles.input, width: '100%', minHeight: 44, fontSize: 12.5, resize: 'vertical' }} />
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            <select value={kind} onChange={(e) => setKind(e.target.value as MemoryKind)} style={{ ...styles.input, padding: '3px 6px', fontSize: 12 }}>
-              {MEMORY_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
-            </select>
-            {canClient && (
-              <label style={{ fontSize: 11.5, display: 'flex', gap: 4, alignItems: 'center', color: 'var(--text-dim)' }}>
-                <input type="checkbox" checked={scopeClient} onChange={(e) => setScopeClient(e.target.checked)} /> only {clientLabel}
-              </label>
-            )}
-            <button style={{ ...styles.primaryBtn, padding: '3px 10px', fontSize: 12, ...(saving || !draft.trim() ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }} disabled={saving || !draft.trim()} onClick={() => void save()}>Save</button>
-            <button style={{ ...styles.linkBtn, fontSize: 12 }} onClick={() => setOpen(false)}>Cancel</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 /** Phase 2b — auto-suggest: run an LLM pass over the current conversation to PROPOSE durable memories, then
  *  let the user approve / edit / skip each one. Human-in-the-loop by design: nothing is saved until "Keep". */
 function MemorySuggestBar({ active, product, messages, onError }: {
@@ -1366,7 +1298,6 @@ function ChatView({
           {messages.map((m, i) => (
             <div
               key={i}
-              className="chat-msg"
               style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -1429,7 +1360,6 @@ function ChatView({
                   {formatMsgTime(m.ts)}
                 </div>
               )}
-              {m.text ? <MessageRememberButton text={m.text} product={product} active={active} onError={onError} /> : null}
             </div>
           ))}
           {busy && !pendingConfirm && (
@@ -1504,7 +1434,7 @@ function ChatView({
             style={styles.attachBtn}
             disabled={!ready || busy || attaching}
             onClick={() => void pickAttachment()}
-            title="Attach a file - pdf, xlsx, csv, txt, md, json… (the model reads its text)"
+            title="Attach a file - pdf, docx, xlsx, csv, txt, md, json… (the model reads its text)"
             aria-label="Attach a file"
           >
             {attaching ? (

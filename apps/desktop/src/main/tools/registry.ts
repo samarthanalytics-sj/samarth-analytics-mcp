@@ -3,6 +3,8 @@ import type { LlmToolDef, ToolExecutor } from '../llm/types';
 import type { GoogleProduct, GtmContext } from '../../shared/ipc';
 import type { AuditHistoryStore } from '../storage/audit-history';
 import { ManifestStore } from '../storage/manifest-store';
+import type { MemoryStore } from '../storage/memory-store';
+import { MEMORY_KINDS, findMemoriesMatching, type MemoryKind, type MemoryScope } from '../../shared/chat-memory';
 import { fingerprintResource, diffManifest, type ManifestResource } from '../../shared/install-manifest';
 import { buildTrackingStatus } from '../../shared/tracking-status';
 import {
@@ -103,6 +105,15 @@ export type ConfirmFn = (proposal: WriteProposal) => Promise<Record<string, unkn
 export interface GtmContextControl {
   current: () => GtmContext | undefined;
   set: (ctx: GtmContext) => Promise<void> | void;
+}
+
+/** Wiring for the chat MEMORY tools (remember / forget). Present only in the chat path — the model reads,
+ *  saves and removes the ACTIVE account's local notes (the same store the chat injects each turn). */
+export interface MemoryToolContext {
+  store: MemoryStore;
+  accountId: string;
+  /** The client scope for a client-scoped memory: containerId in a GTM turn, property in a GA4 turn. */
+  scope: MemoryScope;
 }
 
 export interface Tool extends LlmToolDef {
@@ -310,7 +321,8 @@ export function buildToolRegistry(
   product?: GoogleProduct,
   history?: AuditHistoryStore,
   ctxControl?: GtmContextControl,
-  manifests?: ManifestStore
+  manifests?: ManifestStore,
+  memoryCtx?: MemoryToolContext
 ): ToolExecutor {
   const readTools: Tool[] = [
     {
@@ -3896,10 +3908,66 @@ export function buildToolRegistry(
       ]
     : [];
 
+  // Chat MEMORY tools (remember / forget). Present only when a memory context is wired (the chat path).
+  // They write to the LOCAL memory store (not GTM), so they are NOT gated by `confirm` and are NOT GTM/GA4
+  // writes — the user telling the assistant to remember/forget is explicit consent. Product-agnostic:
+  // appended AFTER the product filter so they work in both GTM and GA4 chats.
+  const memoryTools: Tool[] = memoryCtx
+    ? [
+        {
+          name: 'remember_memory',
+          description:
+            'Save a durable NOTE to the assistant\'s memory for this account/client so it is recalled in FUTURE chats. ' +
+            'Call this when the user tells you to remember something ("remember ...", "note that ...", "keep in mind ..."), ' +
+            'states a lasting preference/correction/decision ("we use order_completed for purchase", "don\'t suggest scroll tracking again", "always name tags like ..."), ' +
+            'or after you make a NOTABLE persistent change the user would want on record (e.g. created or deleted a key tag/trigger). ' +
+            'Be CONSERVATIVE: do not save transient values, one-off numbers, secrets, API keys, or personal data. Confirm briefly what you saved.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              text: { type: 'string', description: 'The note, as a short standalone statement (not "the user said ..."). Under 200 chars.' },
+              kind: { type: 'string', enum: [...MEMORY_KINDS], description: 'rule = a correction/instruction to follow; preference; decision; fact; glossary = a client-specific term/event mapping. Default fact.' },
+              scope: { type: 'string', enum: ['account', 'client'], description: 'client = only for the current container/property; account = all of this account. Default client when a container/property is active.' },
+            },
+            required: ['text'],
+            additionalProperties: false,
+          },
+          handler: async (a): Promise<unknown> => {
+            const text = s(a.text).trim();
+            if (!text) return { saved: false, message: 'No text to remember.' };
+            const kind = (MEMORY_KINDS.includes(a.kind as MemoryKind) ? a.kind : 'fact') as MemoryKind;
+            const wantClient = a.scope === 'client' || (a.scope == null && (memoryCtx.scope.containerId || memoryCtx.scope.property));
+            const scope: MemoryScope = wantClient ? { ...memoryCtx.scope } : {};
+            const res = memoryCtx.store.add(memoryCtx.accountId, { kind, text, scope, source: 'chat' });
+            return { saved: true, deduped: res.deduped, secretRemoved: res.redacted, kind: res.memory.kind, text: res.memory.text, scope: res.memory.scope.containerId || res.memory.scope.property ? 'client' : 'account' };
+          },
+        },
+        {
+          name: 'forget_memory',
+          description:
+            'Remove saved memories that match a description. Call this when the user says to forget or stop applying something ' +
+            '("forget that", "don\'t remember X anymore", "stop suggesting Y"). Pass a distinctive query; it removes every memory ' +
+            'whose text matches and reports them. If nothing matches, say so.',
+          inputSchema: {
+            type: 'object',
+            properties: { query: { type: 'string', description: 'A description of what to forget (matched against saved memory text).' } },
+            required: ['query'],
+            additionalProperties: false,
+          },
+          handler: async (a): Promise<unknown> => {
+            const query = s(a.query).trim();
+            const matches = findMemoriesMatching(memoryCtx.store.list(memoryCtx.accountId), query);
+            for (const m of matches) memoryCtx.store.remove(memoryCtx.accountId, m.id);
+            return { removed: matches.length, texts: matches.map((m) => m.text) };
+          },
+        },
+      ]
+    : [];
+
   // GA4 Admin write tools (product 'ga4') live in a separate catalog; included
   // only when a confirm function is provided, exactly like the GTM write tools.
   const all = [...readTools, ...(confirm ? [...writeTools, ...buildGa4WriteTools(data)] : []), ...contextTools];
-  const tools = product ? all.filter((t) => productOf(t.name) === product) : all;
+  const tools = [...(product ? all.filter((t) => productOf(t.name) === product) : all), ...memoryTools];
 
   return {
     list: (): LlmToolDef[] =>

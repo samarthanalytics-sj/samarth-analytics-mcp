@@ -2,7 +2,7 @@
 // tsx src/shared/__tests__/chat-memory.test.ts
 import {
   redactSecrets, normalizeMemoryText, memoryApplies, memoryDedupeKey,
-  selectRelevantMemories, formatMemoriesForPrompt, MEMORY_MAX_LEN, type Memory,
+  selectRelevantMemories, formatMemoriesForPrompt, findMemoriesMatching, MEMORY_MAX_LEN, type Memory,
 } from '../chat-memory';
 
 let passed = 0;
@@ -73,6 +73,21 @@ check('scope: property-scoped applies only to its property', memoryApplies(mem({
 // ── memoryDedupeKey ─────────────────────────────────────────────────────────────
 check('dedupe: same kind+scope+text (case-insensitive) → same key', memoryDedupeKey({ kind: 'fact', text: 'Hello', scope: {} }) === memoryDedupeKey({ kind: 'fact', text: 'hello', scope: {} }));
 check('dedupe: different scope → different key', memoryDedupeKey({ kind: 'fact', text: 'x', scope: { containerId: 'A' } }) !== memoryDedupeKey({ kind: 'fact', text: 'x', scope: { containerId: 'B' } }));
+
+// ── findMemoriesMatching (the "forget X" matcher) ───────────────────────────────
+{
+  const list: Memory[] = [
+    mem({ id: 'a', text: 'do not suggest scroll tracking for this client' }),
+    mem({ id: 'b', text: 'purchase fires on order_completed' }),
+    mem({ id: 'c', text: 'client uses shopify' }),
+  ];
+  check('forget: matches a full substring', findMemoriesMatching(list, 'scroll tracking').map((m) => m.id).join() === 'a');
+  check('forget: matches when all significant terms appear', findMemoriesMatching(list, 'shopify client').map((m) => m.id).join() === 'c');
+  check('forget: no match → empty', findMemoriesMatching(list, 'facebook pixel').length === 0);
+  check('forget: empty query → empty (never removes everything)', findMemoriesMatching(list, '  ').length === 0);
+  check('forget: too-vague short query (no term >= 3 chars) → empty (no mass delete)', findMemoriesMatching(list, 'a').length === 0 && findMemoriesMatching(list, 'it').length === 0 && findMemoriesMatching(list, 'do').length === 0);
+  check('forget: is case-insensitive', findMemoriesMatching(list, 'ORDER_COMPLETED').map((m) => m.id).join() === 'b');
+}
 
 console.log(`\nchat-memory: ${passed} passed, ${failed} failed`);
 if (failed) { console.error(failures.join('\n')); process.exit(1); }
