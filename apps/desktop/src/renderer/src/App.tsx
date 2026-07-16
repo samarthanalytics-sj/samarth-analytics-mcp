@@ -1455,7 +1455,7 @@ function ChatView({
           style={styles.attachBtn}
           disabled={!ready || busy || attaching}
           onClick={() => void pickAttachment()}
-          title="Attach a file - pdf, xlsx, csv, txt, md, json… (the model reads its text)"
+          title="Attach a file - pdf, docx, xlsx, csv, txt, md, json… (the model reads its text)"
           aria-label="Attach a file"
         >
           {attaching ? (

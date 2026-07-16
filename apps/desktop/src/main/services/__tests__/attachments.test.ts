@@ -64,6 +64,17 @@ test('xlsx extracts per-sheet CSV blocks with quoting', async () => {
   assert.ok(a.text.includes('GA4 - Purchase,"has, comma"'), 'comma cell is quoted: ' + a.text);
 });
 
+test('a .doc that is really HTML (this app exports) reads as text', async () => {
+  const p = await tmp('report.doc', '<html><body><h1>Verification results</h1><p>All 12 tags fired.</p></body></html>');
+  const a = await extractAttachmentText(p);
+  assert.ok(a.text.includes('All 12 tags fired.'));
+});
+
+test('a corrupt .docx fails with a parser error, never "Unsupported"', async () => {
+  const p = await tmp('broken.docx', 'this is not a zip');
+  await assert.rejects(() => extractAttachmentText(p), (e: Error) => !/Unsupported file type/.test(e.message));
+});
+
 test('unsupported extension is refused with the supported list', async () => {
   const p = await tmp('archive.zip', 'PK');
   await assert.rejects(() => extractAttachmentText(p), /Unsupported file type ".zip"/);

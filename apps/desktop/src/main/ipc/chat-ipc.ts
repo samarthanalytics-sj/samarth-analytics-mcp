@@ -22,7 +22,7 @@ export function registerChatIpc(service: ChatService): void {
       title: 'Attach a file to the chat',
       properties: ['openFile' as const],
       filters: [
-        { name: 'Documents', extensions: ['pdf', 'xlsx', 'csv', 'tsv', 'txt', 'md', 'json', 'log', 'html', 'xml', 'yml', 'yaml'] },
+        { name: 'Documents', extensions: ['pdf', 'docx', 'doc', 'xlsx', 'csv', 'tsv', 'txt', 'md', 'json', 'log', 'html', 'xml', 'yml', 'yaml'] },
         { name: 'All files', extensions: ['*'] },
       ],
     };
