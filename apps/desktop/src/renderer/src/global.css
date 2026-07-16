@@ -113,6 +113,12 @@ button:hover:not(:disabled) { box-shadow: 0 2px 10px rgba(15, 23, 42, 0.10); }
 .overlay-in { animation: overlayIn 0.16s ease both; }
 .sheet-in { animation: sheetIn 0.22s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
 
+/* Chat composer shell — the textarea inside is borderless, so the focus ring lives on the wrapper. */
+.composer-shell:focus-within {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.22);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;

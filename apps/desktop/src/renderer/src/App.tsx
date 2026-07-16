@@ -75,7 +75,50 @@ const MODEL_OPTIONS: Record<LlmProvider, Array<{ id: string; label: string }>> =
   ],
 };
 
+// The app's single solid accent pair — used for primary/danger fills (white text) in BOTH themes.
+// The pastel --c-* accent vars are for text/soft-bg chips only, never solid fills (contrast breaks).
+const SOLID_BLUE = '#2563eb';
+const SOLID_RED = '#dc2626';
+
 type View = 'chat' | 'gtm' | 'ga4' | 'prompts' | 'settings';
+
+/* ─────────────────────────── Icon rail (primary nav) ─────────────────────────── */
+
+/** Monochrome line icon per primary view, drawn with currentColor so the item state sets the colour. */
+const RAIL_ICON: Record<View, JSX.Element> = {
+  chat: <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z" />,
+  gtm: <><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z" /><circle cx="7" cy="7" r="1.3" /></>,
+  ga4: <><path d="M4 20h16" /><path d="M7 20v-6" /><path d="M12 20V9" /><path d="M17 20v-9" /></>,
+  prompts: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></>,
+  settings: <><circle cx="12" cy="12" r="3.2" /><path d="M12 2v3" /><path d="M12 19v3" /><path d="M2 12h3" /><path d="M19 12h3" /><path d="M4.9 4.9L7 7" /><path d="M17 17l2.1 2.1" /><path d="M19.1 4.9L17 7" /><path d="M7 17l-2.1 2.1" /></>,
+};
+
+/** One icon-rail item: line icon + tiny label, blue accent + left bar when active. An optional badge
+ *  renders as an amber dot and replaces the tooltip (used for the "OAuth client not set" warning). */
+function RailItem({ view, label, active, onClick, badge }: { view: View; label: string; active: boolean; onClick: () => void; badge?: string }): JSX.Element {
+  return (
+    <button
+      style={{ ...styles.railItem, ...(active ? styles.railItemActive : {}) }}
+      onClick={onClick}
+      title={badge ?? label}
+      aria-current={active ? 'page' : undefined}
+    >
+      {active && <span style={styles.railActiveBar} aria-hidden />}
+      {badge && <span style={styles.railBadge} aria-hidden />}
+      <svg viewBox="0 0 24 24" width={19} height={19} fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ display: 'block' }}>
+        {RAIL_ICON[view]}
+      </svg>
+      <span style={styles.railLabel}>{label}</span>
+    </button>
+  );
+}
+
+/** "Swapnil Jaykar" → "SJ", "alex.johnson@acmecorp.com" → "AJ" — the rail avatar's initials. */
+function initialsOf(name: string): string {
+  const words = name.replace(/@.*$/, '').split(/[\s._-]+/).filter(Boolean);
+  const init = words.slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
+  return init || name.slice(0, 2).toUpperCase();
+}
 type GtmTab = 'suggestions' | 'audit' | 'verify' | 'server';
 type Ga4Tab = 'audit' | 'monitoring';
 
@@ -721,57 +764,41 @@ export function App(): JSX.Element {
   return (
     <div style={styles.app}>
       <ThemeToggle />
+      {/* Compact icon rail. Account management lives in Settings → Accounts; the avatar at the bottom
+          shows the active account (status dot = Google signed in) and jumps there. */}
       <aside style={styles.sidebar}>
-        <div style={styles.brand}>
-          <div style={styles.logo}>S</div>
-          <div>
-            <div style={styles.brandName}>Samarth</div>
-            <div style={styles.brandSub}>GTM / GA4 Desktop</div>
-          </div>
-        </div>
+        <div style={styles.railLogo} title={`Samarth · GTM / GA4 Desktop · v${info?.version ?? '0.0.0'}`}>S</div>
 
-        {/* Active account (read-only). Switching, connect, rename and remove all live in Settings →
-            Accounts now, so the sidebar stays a clean shell. Clicking the chip jumps to Settings. */}
-        <button
-          style={styles.activeAcct}
-          onClick={() => setView('settings')}
-          title={active ? `${active.email} — manage accounts in Settings` : 'Add an account in Settings'}
-        >
-          {active ? (
-            <>
-              <span style={{ ...styles.dot, background: active.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
-              <span style={styles.activeAcctName}>{active.displayName || active.email}</span>
-              <span style={styles.activeAcctManage}>Manage ›</span>
-            </>
-          ) : (
-            <span style={styles.sideMuted}>No account · add in Settings</span>
-          )}
-        </button>
-        {google && !google.configured && (
-          <div style={styles.sideWarn}>OAuth client not set — see Settings.</div>
-        )}
+        <nav style={styles.railNav} aria-label="Primary">
+          {([
+            ['chat', 'Chat'],
+            ['gtm', 'GTM'],
+            ['ga4', 'GA4'],
+            ['prompts', 'Prompts'],
+          ] as Array<[View, string]>).map(([v, label]) => (
+            <RailItem key={v} view={v} label={label} active={view === v} onClick={() => setView(v)} />
+          ))}
+        </nav>
 
         <div style={{ flex: 1 }} />
 
-        <div style={styles.sideNav}>
-          {([
-            ['chat', '💬 Chat'],
-            ['gtm', '🗂 GTM Tools'],
-            ['ga4', '📊 GA4 Tools'],
-            ['prompts', '📖 Prompts'],
-            ['settings', '⚙ Settings'],
-          ] as Array<[View, string]>).map(([v, label]) => (
-            <button
-              key={v}
-              className="nav-item"
-              data-active={view === v ? 'true' : 'false'}
-              style={{ ...styles.navItem, ...(view === v ? styles.navActive : {}) }}
-              onClick={() => setView(v)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <nav style={styles.railNav} aria-label="Settings and account">
+          <RailItem
+            view="settings"
+            label="Settings"
+            active={view === 'settings'}
+            onClick={() => setView('settings')}
+            badge={google && !google.configured ? 'OAuth client not set - open Settings' : undefined}
+          />
+        </nav>
+        <button
+          style={styles.railAvatar}
+          onClick={() => setView('settings')}
+          title={active ? `${active.email} - manage accounts in Settings` : 'Add an account in Settings'}
+        >
+          {active ? initialsOf(active.displayName || active.email) : '+'}
+          <span style={{ ...styles.railAvatarDot, background: active?.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} aria-hidden />
+        </button>
         <div style={styles.sideVersion}>v{info?.version ?? '0.0.0'}</div>
       </aside>
 
@@ -1117,50 +1144,78 @@ function ChatView({
       {product === 'gtm' && active && <GtmContextBar active={active} refresh={refresh} onError={onError} />}
 
       <div style={styles.chatLog}>
-        {messages.length === 0 && (
-          <EmptyState
-            icon="💬"
-            title="Ask about your GTM & GA4"
-            hint={'Try “list my GTM accounts”, “run a GA4 report for last 28 days”, or “create an email-click event tag”.'}
-          />
-        )}
-        {messages.map((m, i) => (
-          <div
-            key={i}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              maxWidth: '75%',
-              alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-              alignItems: m.role === 'user' ? 'flex-end' : 'flex-start',
-            }}
-          >
-            <div style={{ ...(m.role === 'user' ? styles.userMsg : styles.asstMsg), maxWidth: '100%' }}>
-              {m.role === 'assistant' ? (
-                <>
-                  {m.text ? <Markdown text={m.text} /> : m.toolErrors?.length ? null : <span style={{ opacity: 0.6 }}>…</span>}
-                  {m.toolErrors?.length ? (
-                    <div style={styles.toolErrors}>
-                      {m.toolErrors.map((te, j) => (
-                        <div key={j} style={styles.toolErrorLine}>
-                          ⚠️ <strong>{te.name}</strong> failed — {te.error}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
+        <div style={styles.chatColumn}>
+          {messages.length === 0 && (
+            <EmptyState
+              icon="💬"
+              title="Ask about your GTM & GA4"
+              hint={'Try “list my GTM accounts”, “run a GA4 report for last 28 days”, or “create an email-click event tag”.'}
+            />
+          )}
+          {messages.map((m, i) => (
+            <div
+              key={i}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                // Assistant replies read as documents (tables, audit sections) — give them the column;
+                // user messages stay compact right-aligned bubbles.
+                maxWidth: m.role === 'user' ? '75%' : '94%',
+                alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+                alignItems: m.role === 'user' ? 'flex-end' : 'flex-start',
+              }}
+            >
+              {m.role === 'assistant' && m.tools?.length ? (
+                <div style={styles.toolTrace}>
+                  {m.tools.map((name, j) => {
+                    const failed = m.toolErrors?.some((te) => te.name === name);
+                    // The newest call shows a spinner while the reply hasn't started streaming yet —
+                    // completion isn't reported per-tool, only failures are, so ✓ means "ran, no error".
+                    const running = busy && i === messages.length - 1 && j === (m.tools?.length ?? 0) - 1 && !m.text && !failed;
+                    return (
+                      <span key={j} style={{ ...styles.toolChip, ...(failed ? styles.toolChipFail : {}) }}>
+                        {running ? (
+                          <span className="spinner" style={{ fontSize: 9 }} aria-label="running" />
+                        ) : (
+                          <span style={{ color: failed ? 'var(--c-red)' : 'var(--c-green)', fontWeight: 700 }} aria-hidden>{failed ? '✕' : '✓'}</span>
+                        )}
+                        {name}
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <div style={{ ...(m.role === 'user' ? styles.userMsg : styles.asstMsg), maxWidth: '100%' }}>
+                {m.role === 'assistant' ? (
+                  <>
+                    {m.text ? <Markdown text={m.text} /> : m.toolErrors?.length ? null : <span style={{ opacity: 0.6 }}>…</span>}
+                    {m.toolErrors?.length ? (
+                      <div style={styles.toolErrors}>
+                        {m.toolErrors.map((te, j) => (
+                          <div key={j} style={styles.toolErrorLine}>
+                            ⚠️ <strong>{te.name}</strong> failed: {te.error}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
+                )}
+              </div>
+              {m.ts != null && (
+                <div style={styles.msgTime} title={new Date(m.ts).toLocaleString()}>
+                  {formatMsgTime(m.ts)}
+                </div>
               )}
             </div>
-            {m.ts != null && (
-              <div style={styles.msgTime} title={new Date(m.ts).toLocaleString()}>
-                {formatMsgTime(m.ts)}
-              </div>
-            )}
-          </div>
-        ))}
-        {busy && !pendingConfirm && <div style={styles.asstMsg}>Thinking…</div>}
+          ))}
+          {busy && !pendingConfirm && (
+            <div style={{ ...styles.asstMsg, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <span className="spinner" style={{ fontSize: 11 }} aria-hidden /> Thinking…
+            </div>
+          )}
+        </div>
       </div>
 
       {pendingConfirm && (
@@ -1210,44 +1265,59 @@ function ChatView({
             <div style={styles.slashMenuFoot}>↑↓ navigate · Enter select · Esc dismiss</div>
           </div>
         )}
-        <textarea
-          ref={taRef}
-          style={styles.composerInput}
-          placeholder={ready ? 'Message, or / for commands…  (Enter to send, Shift+Enter for a new line)' : hint}
-          value={input}
-          disabled={!ready || busy}
-          rows={1}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            // When the slash menu is open, the arrow/Enter/Tab/Esc keys drive it instead of the textarea.
-            if (slashMatches.length > 0) {
-              if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((slashActive + 1) % slashMatches.length); return; }
-              if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((slashActive - 1 + slashMatches.length) % slashMatches.length); return; }
-              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptSlash(slashMatches[slashActive]); return; }
-              if (e.key === 'Escape') { e.preventDefault(); setInput(''); return; }
-            }
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
-        {busy ? (
-          <button
-            style={styles.stopBtn}
-            onClick={() => {
-              void window.desktop.llm.stop();
-              setPendingConfirm(null);
+        <div className="composer-shell" style={styles.composerShell}>
+          <textarea
+            ref={taRef}
+            style={styles.composerInput}
+            placeholder={ready ? (product === 'gtm' ? 'Ask about this GTM container, or / for commands…' : 'Ask about this GA4 property, or / for commands…') : hint}
+            value={input}
+            disabled={!ready || busy}
+            rows={1}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              // When the slash menu is open, the arrow/Enter/Tab/Esc keys drive it instead of the textarea.
+              if (slashMatches.length > 0) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIdx((slashActive + 1) % slashMatches.length); return; }
+                if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((slashActive - 1 + slashMatches.length) % slashMatches.length); return; }
+                if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptSlash(slashMatches[slashActive]); return; }
+                if (e.key === 'Escape') { e.preventDefault(); setInput(''); return; }
+              }
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
             }}
-            title="Stop the running query"
-          >
-            Stop
-          </button>
-        ) : (
-          <button style={styles.sendBtn} onClick={send} disabled={!ready}>
-            Send
-          </button>
-        )}
+          />
+          {busy ? (
+            <button
+              style={styles.stopBtn}
+              onClick={() => {
+                void window.desktop.llm.stop();
+                setPendingConfirm(null);
+              }}
+              title="Stop the running query"
+              aria-label="Stop the running query"
+            >
+              <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden><rect x="1" y="1" width="10" height="10" rx="2.5" fill="currentColor" /></svg>
+            </button>
+          ) : (
+            <button
+              style={{ ...styles.sendBtn, ...(!ready || !input.trim() ? styles.sendBtnIdle : {}) }}
+              onClick={send}
+              disabled={!ready}
+              title="Send (Enter)"
+              aria-label="Send message"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M22 2L11 13" /><path d="M22 2l-7 20-4-9-9-4z" />
+              </svg>
+            </button>
+          )}
+        </div>
+        <div style={styles.composerHints} aria-hidden>
+          <span><b style={styles.hintKey}>Enter</b> to send · <b style={styles.hintKey}>Shift+Enter</b> for a new line · <b style={styles.hintKey}>/</b> for commands</span>
+          <span>{product === 'gtm' ? 'GTM toolset' : 'GA4 toolset'}</span>
+        </div>
       </div>
     </div>
   );
@@ -6098,6 +6168,37 @@ function Ga4AuditPanel({
 
 /* ─────────────────────────── Settings ─────────────────────────── */
 
+/* Settings is a two-pane layout: a filterable section sub-nav on the left, the selected section's
+ * cards on the right. Sections map 1:1 to what the app actually configures. */
+const SETTINGS_SECTIONS: Array<{ id: string; title: string; sub: string; keywords: string }> = [
+  { id: 'appearance', title: 'Appearance', sub: 'Theme and display', keywords: 'theme dark light mode display colour color' },
+  { id: 'google', title: 'Google Sign-In', sub: 'OAuth & scopes', keywords: 'google oauth client id secret scopes sign in authentication' },
+  { id: 'accounts', title: 'Accounts', sub: 'Manage accounts', keywords: 'account switch rename remove disconnect connect active google email' },
+  { id: 'llm', title: 'Language Model', sub: 'AI provider & model', keywords: 'llm model ai provider anthropic openai gemini claude gpt chat' },
+  { id: 'providers', title: 'Providers', sub: 'API credentials', keywords: 'api key credential anthropic openai google gemini token' },
+  { id: 'diagnostics', title: 'Diagnostics', sub: 'System info', keywords: 'diagnostics dpapi secret store runtime electron chrome node' },
+  { id: 'about', title: 'About', sub: 'Version & updates', keywords: 'about version app info platform update' },
+];
+
+/** Monochrome line icon per settings section (currentColor, so the nav state sets the colour). */
+const SETTINGS_ICON: Record<string, JSX.Element> = {
+  appearance: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2.5" /><path d="M12 19.5V22" /><path d="M2 12h2.5" /><path d="M19.5 12H22" /><path d="M4.9 4.9l1.8 1.8" /><path d="M17.3 17.3l1.8 1.8" /><path d="M19.1 4.9l-1.8 1.8" /><path d="M6.7 17.3l-1.8 1.8" /></>,
+  google: <path d="M12 2l8 3v6c0 5-3.4 8-8 10-4.6-2-8-5-8-10V5z" />,
+  accounts: <><circle cx="9" cy="8" r="3.5" /><path d="M2.5 19a6.5 6.5 0 0 1 13 0" /><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8" /><path d="M17.5 13.4a6.5 6.5 0 0 1 4 5.6" /></>,
+  llm: <><path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z" /><path d="M19 15l.8 2.2 2.2.8-2.2.8L19 21l-.8-2.2-2.2-.8 2.2-.8z" /></>,
+  providers: <><circle cx="7.5" cy="15.5" r="4.5" /><path d="M10.7 12.3L20 3" /><path d="M16 7l3 3" /></>,
+  diagnostics: <path d="M3 12h4l3 8 4-16 3 8h4" />,
+  about: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 7.5h.01" /></>,
+};
+
+function SettingsSectionIcon({ id, size = 17 }: { id: string; size?: number }): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ display: 'block' }}>
+      {SETTINGS_ICON[id] ?? <circle cx="12" cy="12" r="9" />}
+    </svg>
+  );
+}
+
 function SettingsView({
   active,
   accounts,
@@ -6136,12 +6237,62 @@ function SettingsView({
   useEffect(() => {
     window.desktop.providers.status().then(setProvStatus).catch((e) => onError(String(e)));
   }, []);
+  // Two-pane navigation state: selected section + the search filter over the section list.
+  const [section, setSection] = useState('appearance');
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+  const visibleSections = SETTINGS_SECTIONS.filter((s) => !q || `${s.title} ${s.sub} ${s.keywords}`.toLowerCase().includes(q));
+  // If the search hides the selected section, show the first match instead (the selection is kept).
+  const sec = visibleSections.some((s) => s.id === section) ? section : visibleSections[0]?.id ?? section;
+  const current = SETTINGS_SECTIONS.find((s) => s.id === sec) ?? SETTINGS_SECTIONS[0];
   return (
-    <div style={styles.settings}>
-      <h1 style={styles.settingsTitle}>Settings</h1>
+    <div style={styles.settingsWrap}>
+      <div style={styles.settingsTopBar}>
+        <h1 style={styles.settingsTitle}>Settings</h1>
+        <input
+          style={styles.settingsSearch}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search settings…"
+          aria-label="Search settings"
+        />
+      </div>
+      <div style={styles.settingsShell}>
+        <nav style={styles.settingsNav} aria-label="Settings sections">
+          {visibleSections.map((s) => {
+            const on = s.id === sec;
+            return (
+              <button
+                key={s.id}
+                style={{ ...styles.settingsNavItem, ...(on ? styles.settingsNavItemActive : {}) }}
+                onClick={() => setSection(s.id)}
+                aria-current={on ? 'true' : undefined}
+              >
+                <span style={{ ...styles.settingsNavIcon, color: on ? 'var(--c-blue)' : 'var(--text-muted)' }}>
+                  <SettingsSectionIcon id={s.id} />
+                </span>
+                <span style={{ minWidth: 0 }}>
+                  <span style={styles.settingsNavTitle}>{s.title}</span>
+                  <span style={styles.settingsNavSub}>{s.sub}</span>
+                </span>
+              </button>
+            );
+          })}
+          {visibleSections.length === 0 && <p style={{ ...styles.muted, padding: '8px 10px' }}>No settings match “{query}”.</p>}
+        </nav>
 
+        <div style={styles.settingsBody}>
+          <div style={styles.settingsBodyCol}>
+            <header style={styles.settingsHeader}>
+              <span style={{ display: 'inline-flex', color: 'var(--text-muted)' }}><SettingsSectionIcon id={current.id} size={20} /></span>
+              <div>
+                <h2 style={styles.settingsHeaderTitle}>{current.title}</h2>
+                <div style={styles.settingsHeaderSub}>{current.sub}</div>
+              </div>
+            </header>
+
+      {sec === 'appearance' && (
       <section style={styles.card}>
-        <h2 style={styles.h2}>Appearance</h2>
         <div style={{ ...styles.kv, borderBottom: 'none' }}>
           <span>Theme</span>
           <div style={styles.toggle}>
@@ -6154,19 +6305,22 @@ function SettingsView({
           </div>
         </div>
       </section>
+      )}
 
+      {sec === 'google' && (
       <section style={styles.card}>
-        <h2 style={styles.h2}>Google sign-in (OAuth client)</h2>
+        <h2 style={styles.h2}>OAuth client</h2>
         <OAuthClientCard google={google} />
       </section>
+      )}
 
-      {/* Accounts — the full switcher + management that used to live in the sidebar. Switch the active
-          account, rename it, disconnect its Google token, remove it, or connect a new one. */}
+      {/* Accounts — the full switcher + management. Switch the active account, rename it, disconnect
+          its Google token, remove it, or connect a new one. */}
+      {sec === 'accounts' && (<>
       <section style={styles.card}>
-        <h2 style={styles.h2}>Accounts</h2>
         <p style={styles.settingsSub}>Switch which Google account is active, rename it, or connect another. The active account is used across GTM Tools, GA4 Tools and Chat.</p>
         <div style={styles.acctRows}>
-          {accounts.length === 0 && <p style={styles.muted}>No accounts yet — connect one below.</p>}
+          {accounts.length === 0 && <p style={styles.muted}>No accounts yet. Connect one below.</p>}
           {accounts.map((a) => (
             <div key={a.id} style={{ ...styles.acctRow, ...(a.isActive ? styles.acctRowActive : {}) }}>
               <span style={{ ...styles.dot, background: a.hasGoogleToken ? 'var(--c-green)' : 'var(--text-faint)' }} />
@@ -6206,20 +6360,19 @@ function SettingsView({
         <div style={{ marginTop: 12 }}>
           {connecting ? (
             <div style={{ display: 'flex', gap: 8 }}>
-              <button style={styles.connectBtn} disabled>Signing in…</button>
+              <button style={{ ...styles.connectDashed, flex: 1 }} disabled>Signing in…</button>
               <button style={styles.cancelBtn} onClick={cancelConnect} title="Cancel sign-in">Cancel</button>
             </div>
           ) : (
-            <button style={styles.connectBtn} onClick={connect} disabled={!google?.configured} title={google?.configured ? 'Connect another Google account' : 'Set the OAuth client above first'}>
-              + Connect account
+            <button style={styles.connectDashed} onClick={connect} disabled={!google?.configured} title={google?.configured ? 'Connect another Google account' : 'Set the OAuth client first (Google Sign-In section)'}>
+              + Connect another account
             </button>
           )}
-          {google && !google.configured && <p style={{ ...styles.settingsSub, color: 'var(--c-amber)', marginTop: 8 }}>Set the OAuth client above before connecting an account.</p>}
+          {google && !google.configured && <p style={{ ...styles.settingsSub, color: 'var(--c-amber)', marginTop: 8 }}>Set the OAuth client (Google Sign-In section) before connecting an account.</p>}
         </div>
       </section>
 
-      {active ? (
-        <>
+      {active && (
           <section style={styles.card}>
             <h2 style={styles.h2}>Active account</h2>
             <div style={styles.kv}>
@@ -6280,28 +6433,30 @@ function SettingsView({
               </button>
             </div>
           </section>
+      )}
+      </>)}
 
-          <section style={styles.card}>
-            <h2 style={styles.h2}>Language model</h2>
-            <p style={styles.settingsSub}>The model this account uses for chat. Pick a preset or choose Custom to enter any model id.</p>
-            {/* key by account id so switching accounts re-reads the newly active account's saved config. */}
-            <LlmEditor key={active.id} account={active} provStatus={provStatus} onChange={refresh} onError={onError} />
-          </section>
-        </>
+      {sec === 'llm' && (active ? (
+        <section style={styles.card}>
+          <p style={styles.settingsSub}>The model this account uses for chat. Pick a preset or choose Custom to enter any model id.</p>
+          {/* key by account id so switching accounts re-reads the newly active account's saved config. */}
+          <LlmEditor key={active.id} account={active} provStatus={provStatus} onChange={refresh} onError={onError} />
+        </section>
       ) : (
         <section style={styles.card}>
-          <h2 style={styles.h2}>Active account</h2>
-          <p style={styles.muted}>Connect a Google account from the sidebar to configure it.</p>
+          <p style={styles.muted}>Connect a Google account first (Accounts section) to configure its model.</p>
         </section>
-      )}
+      ))}
 
+      {sec === 'providers' && (
       <section style={styles.card}>
-        <h2 style={styles.h2}>Providers (API keys)</h2>
+        <p style={styles.settingsSub}>App-level API keys, shared by every account that picks the provider.</p>
         <ProvidersEditor status={provStatus} onStatus={setProvStatus} onChange={refresh} onError={onError} />
       </section>
+      )}
 
+      {sec === 'diagnostics' && (
       <section style={styles.card}>
-        <h2 style={styles.h2}>Diagnostics</h2>
         {selfTest && (
           <div style={styles.kv}>
             <span>Secret store (DPAPI)</span>
@@ -6311,17 +6466,29 @@ function SettingsView({
           </div>
         )}
         {info && (
-          <>
-            <div style={styles.kv}><span>App</span><b>{info.name} {info.version}</b></div>
-            <div style={{ ...styles.kv, borderBottom: 'none' }}>
-              <span>Runtime</span>
-              <b style={{ fontWeight: 500, color: 'var(--text-dim)', textAlign: 'right' }}>
-                Electron {info.electron} · Chrome {info.chrome} · Node {info.node} · {info.platform}
-              </b>
-            </div>
-          </>
+          <div style={{ ...styles.kv, borderBottom: 'none' }}>
+            <span>Runtime</span>
+            <b style={{ fontWeight: 500, color: 'var(--text-dim)', textAlign: 'right' }}>
+              Electron {info.electron} · Chrome {info.chrome} · Node {info.node} · {info.platform}
+            </b>
+          </div>
         )}
       </section>
+      )}
+
+      {sec === 'about' && (
+      <section style={styles.card}>
+        <div style={styles.kv}><span>App</span><b>{info?.name ?? 'Samarth Desktop'}</b></div>
+        <div style={styles.kv}><span>Version</span><b>v{info?.version ?? '0.0.0'}</b></div>
+        <div style={{ ...styles.kv, borderBottom: 'none' }}>
+          <span>Platform</span>
+          <b style={{ fontWeight: 500, color: 'var(--text-dim)' }}>{info?.platform ?? 'unknown'}</b>
+        </div>
+      </section>
+      )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -6533,31 +6700,28 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--text)',
     background: 'var(--bg)',
   },
+  // Compact icon rail: logo on top, icon+label nav, Settings + avatar pinned to the bottom.
   sidebar: {
-    width: 248,
+    width: 68,
     flexShrink: 0,
     background: 'var(--surface)',
     borderRight: '1px solid var(--border)',
     display: 'flex',
     flexDirection: 'column',
-    padding: 16,
+    alignItems: 'center',
+    padding: '14px 8px 10px',
     boxSizing: 'border-box',
   },
-  brand: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 },
-  logo: { width: 34, height: 34, borderRadius: 9, background: '#2563eb', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 },
-  brandName: { fontWeight: 700 },
-  brandSub: { fontSize: 11, color: 'var(--text-faint)' },
-  sideLabel: { fontSize: 11, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-faint)', margin: '4px 0 8px' },
-  accountList: { display: 'flex', flexDirection: 'column', gap: 4, overflowY: 'auto', flex: 1 },
+  railLogo: { width: 36, height: 36, borderRadius: 10, background: SOLID_BLUE, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 15, marginBottom: 14, flexShrink: 0, cursor: 'default', userSelect: 'none' },
+  railNav: { display: 'flex', flexDirection: 'column', gap: 6, width: '100%' },
+  railItem: { position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, width: '100%', padding: '8px 2px 7px', background: 'transparent', border: 'none', borderRadius: 10, color: 'var(--text-muted)', cursor: 'pointer' },
+  railItemActive: { background: 'var(--surface-3)', color: 'var(--c-blue)' },
+  railActiveBar: { position: 'absolute', left: 0, top: '24%', bottom: '24%', width: 3, borderRadius: 999, background: SOLID_BLUE },
+  railBadge: { position: 'absolute', top: 6, right: 10, width: 7, height: 7, borderRadius: 999, background: 'var(--c-amber)' },
+  railLabel: { fontSize: 10, fontWeight: 600, letterSpacing: 0.2, lineHeight: 1 },
+  railAvatar: { position: 'relative', width: 34, height: 34, borderRadius: 999, background: 'var(--surface-3)', border: '1px solid var(--border-2)', color: 'var(--text)', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', marginTop: 8, flexShrink: 0 },
+  railAvatarDot: { position: 'absolute', right: -1, bottom: -1, width: 9, height: 9, borderRadius: 999, border: '2px solid var(--surface)', boxSizing: 'content-box' },
   sideMuted: { color: 'var(--text-faint)', fontSize: 13, padding: '6px 4px' },
-  acctBtn: { display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: '1px solid transparent', borderRadius: 8, padding: '8px 10px', color: 'var(--text-dim)', cursor: 'pointer', textAlign: 'left', fontSize: 13 },
-  acctBtnActive: { background: 'var(--surface-3)', border: '1px solid var(--border-2)', color: 'var(--text)' },
-  acctEmail: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 },
-  acctEditBtn: { flexShrink: 0, fontSize: 12, color: 'var(--text-faint)', padding: '0 2px', cursor: 'pointer', lineHeight: 1 },
-  // Sidebar active-account chip (read-only; click → Settings). Replaces the old accounts list.
-  activeAcct: { display: 'flex', alignItems: 'center', gap: 8, width: '100%', background: 'var(--surface-3)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', color: 'var(--text)', cursor: 'pointer', textAlign: 'left', fontSize: 13 },
-  activeAcctName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 },
-  activeAcctManage: { fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 },
   // Settings → Accounts list rows.
   acctRows: { display: 'flex', flexDirection: 'column', gap: 6 },
   acctRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)', flexWrap: 'wrap' },
@@ -6568,14 +6732,10 @@ const styles: Record<string, React.CSSProperties> = {
   acctRowBtn: { background: 'var(--surface-2)', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
   acctRowBtnDanger: { background: 'transparent', color: 'var(--c-red)', border: '1px solid var(--c-red-border)', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' },
   acctRenameInput: { flex: 1, minWidth: 0, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '3px 7px', fontSize: 13, fontFamily: 'inherit' },
-  connectBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer', marginTop: 8 },
   connectRow: { display: 'flex', gap: 6, marginTop: 8, alignItems: 'stretch' },
   cancelBtn: { background: 'var(--surface-2)', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 12px', fontSize: 13, cursor: 'pointer' },
   sideWarn: { color: 'var(--c-amber)', fontSize: 11, marginTop: 8 },
-  sideNav: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 },
-  navItem: { background: 'transparent', border: 'none', borderRadius: 8, padding: '8px 10px', color: 'var(--text-dim)', cursor: 'pointer', textAlign: 'left', fontSize: 14 },
-  navActive: { background: 'var(--surface-3)', color: 'var(--text)' },
-  sideVersion: { color: 'var(--text-faint)', fontSize: 11, marginTop: 10 },
+  sideVersion: { color: 'var(--text-faint)', fontSize: 10, marginTop: 8, userSelect: 'none' },
 
   main: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 },
   gtmWorkspace: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
@@ -6596,7 +6756,7 @@ const styles: Record<string, React.CSSProperties> = {
   promptCard: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' },
   promptText: { fontSize: 13, color: 'var(--text)', lineHeight: 1.45 },
   promptActions: { display: 'flex', gap: 6, flexShrink: 0 },
-  promptUse: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' },
+  promptUse: { background: SOLID_BLUE, color: '#fff', border: 'none', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' },
   promptCopy: { background: 'transparent', color: 'var(--c-blue)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer' },
   errorBar: { background: 'var(--c-red-bg)', borderBottom: '1px solid var(--c-red-border)', color: 'var(--c-red)', padding: '10px 52px 10px 16px', display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 },
   errorClose: { background: 'transparent', border: 'none', color: 'var(--c-red)', cursor: 'pointer' },
@@ -6610,7 +6770,7 @@ const styles: Record<string, React.CSSProperties> = {
   // option reads as a distinct blue pill inside the track — the selected side is unmistakable.
   toggle: { display: 'inline-flex', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 9, overflow: 'hidden', padding: 2, gap: 2 },
   toggleBtn: { background: 'transparent', color: 'var(--text-dim)', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', borderRadius: 7 },
-  toggleActive: { background: '#2563eb', color: '#fff', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', borderRadius: 7, boxShadow: '0 1px 3px rgba(37,99,235,0.45)' },
+  toggleActive: { background: SOLID_BLUE, color: '#fff', border: 'none', padding: '6px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer', borderRadius: 7, boxShadow: '0 1px 3px rgba(37,99,235,0.45)' },
   chatTitle: { fontWeight: 600, fontSize: 19, color: 'var(--text)', letterSpacing: -0.3 },
   chatSub: { fontSize: 12.5, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.5 },
   ctxBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 20px', background: 'var(--surface-2)', borderBottom: '1px solid var(--border)', fontSize: 13, color: 'var(--text-dim)' },
@@ -6629,19 +6789,33 @@ const styles: Record<string, React.CSSProperties> = {
   ctxField: { display: 'flex', flexDirection: 'column', gap: 3 },
   ctxFieldLabel: { fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-muted)', fontWeight: 600 },
   ctxSelectChosen: { borderColor: 'var(--c-blue)', boxShadow: '0 0 0 1px var(--c-blue)' },
-  ctxUseBtn: { background: 'var(--c-blue)', color: '#fff', border: 'none', borderRadius: 7, padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
+  // Solid blue, NOT var(--c-blue): the dark-theme --c-blue is a pastel text colour, and white-on-pastel
+  // is unreadable. Solid fills always use SOLID_BLUE in both themes.
+  ctxUseBtn: { background: SOLID_BLUE, color: '#fff', border: 'none', borderRadius: 7, padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
   ctxUseBtnDisabled: { opacity: 0.45, cursor: 'not-allowed' },
-  chatLog: { flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 10 },
+  chatLog: { flex: 1, overflowY: 'auto', padding: 20 },
+  // The conversation reads as a centered document column (like a report), not edge-to-edge bubbles.
+  chatColumn: { width: '100%', maxWidth: 880, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 10 },
+  // Tool-call trace above an assistant reply — which MCP tools ran for this answer, mono like a log line.
+  toolTrace: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 },
+  toolChip: { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '3px 9px', fontSize: 11.5, fontFamily: 'ui-monospace, monospace', color: 'var(--text-dim)' },
+  toolChipFail: { background: 'var(--c-red-bg)', border: '1px solid var(--c-red-border)', color: 'var(--c-red)' },
   empty: { color: 'var(--text-faint)', textAlign: 'center', maxWidth: 420, margin: '60px auto', lineHeight: 1.6, flexShrink: 0 },
-  userMsg: { alignSelf: 'flex-end', background: '#2563eb', color: '#fff', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14 },
-  asstMsg: { alignSelf: 'flex-start', background: 'var(--surface-2)', color: 'var(--text)', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14, border: '1px solid var(--border)' },
-  msgTime: { fontSize: 11, color: 'var(--text-faint)', margin: '3px 4px 0', userSelect: 'none' },
-  toolTrace: { color: 'var(--c-blue)', fontSize: 11, marginBottom: 4 },
+  userMsg: { alignSelf: 'flex-end', background: SOLID_BLUE, color: '#fff', padding: '9px 13px', borderRadius: 14, maxWidth: '75%', fontSize: 14 },
+  asstMsg: { alignSelf: 'flex-start', background: 'var(--surface-2)', color: 'var(--text)', padding: '10px 14px', borderRadius: 14, maxWidth: '75%', fontSize: 14, border: '1px solid var(--border)' },
+  msgTime: { fontSize: 10.5, color: 'var(--text-faint)', margin: '3px 4px 0', userSelect: 'none', fontFamily: 'ui-monospace, monospace', letterSpacing: 0.3 },
   toolErrors: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 },
   toolErrorLine: { background: 'var(--c-red-bg)', border: '1px solid var(--c-red-border)', color: 'var(--c-red)', borderRadius: 8, padding: '6px 9px', fontSize: 12, lineHeight: 1.4, wordBreak: 'break-word' },
-  composer: { display: 'flex', gap: 8, padding: 16, borderTop: '1px solid var(--border)', alignItems: 'flex-end' },
+  composer: { display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 16px 10px', borderTop: '1px solid var(--border)' },
+  // The input is a single rounded shell (textarea + icon send button inside); the focus ring lives on
+  // the shell via .composer-shell:focus-within in global.css since the textarea itself is borderless.
+  composerShell: { display: 'flex', alignItems: 'flex-end', gap: 8, width: '100%', maxWidth: 880, margin: '0 auto', background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 14, padding: '6px 6px 6px 14px', boxSizing: 'border-box', transition: 'border-color 0.14s ease, box-shadow 0.14s ease' },
+  composerHints: { width: '100%', maxWidth: 880, margin: '0 auto', display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 11, color: 'var(--text-faint)', padding: '0 4px', boxSizing: 'border-box' },
+  hintKey: { color: 'var(--text-muted)', fontWeight: 600 },
   // Slash-command autocomplete menu — floats above the composer.
-  slashMenu: { position: 'absolute', bottom: 'calc(100% - 6px)', left: 16, right: 16, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 12, boxShadow: '0 12px 32px rgba(2,6,23,0.22)', padding: 6, zIndex: 30, maxHeight: 300, overflowY: 'auto' },
+  // Centered over the input shell (left/right 0 + margin auto — no transform, which would fight the
+  // .sheet-in entrance animation's keyframed transform).
+  slashMenu: { position: 'absolute', bottom: 'calc(100% - 6px)', left: 0, right: 0, margin: '0 auto', width: 'min(880px, calc(100% - 32px))', background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 12, boxShadow: '0 12px 32px rgba(2,6,23,0.22)', padding: 6, zIndex: 30, maxHeight: 300, overflowY: 'auto' },
   slashMenuHead: { fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text-faint)', padding: '4px 8px 6px' },
   slashItem: { display: 'flex', flexDirection: 'column', gap: 1, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderRadius: 8, padding: '7px 9px', cursor: 'pointer', color: 'var(--text)' },
   slashItemActive: { background: 'var(--c-blue-bg)' },
@@ -6651,11 +6825,11 @@ const styles: Record<string, React.CSSProperties> = {
   slashMenuFoot: { fontSize: 10.5, color: 'var(--text-faint)', padding: '6px 8px 3px', borderTop: '1px solid var(--border)', marginTop: 4 },
   composerInput: {
     flex: 1,
-    background: 'var(--surface)',
+    background: 'transparent',
     color: 'var(--text)',
-    border: '1px solid var(--border-2)',
-    borderRadius: 12,
-    padding: '11px 14px',
+    border: 'none',
+    outline: 'none',
+    padding: '8px 0',
     fontSize: 14,
     fontFamily: 'inherit',
     lineHeight: 1.45,
@@ -6664,8 +6838,10 @@ const styles: Record<string, React.CSSProperties> = {
     maxHeight: 160,
     boxSizing: 'border-box',
   },
-  sendBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
-  stopBtn: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
+  sendBtn: { width: 36, height: 36, background: SOLID_BLUE, color: '#fff', border: 'none', borderRadius: 10, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  // Dimmed (but still themed blue) when there's nothing to send yet or the account isn't ready.
+  sendBtnIdle: { opacity: 0.45 },
+  stopBtn: { width: 36, height: 36, background: SOLID_RED, color: '#fff', border: 'none', borderRadius: 10, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   revertBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', margin: '0 0 8px', background: 'var(--border)', border: '1px solid var(--border)', borderRadius: 10 },
   revertText: { fontSize: 13, color: 'var(--text-dim)' },
   revertBtn: { background: 'transparent', color: 'var(--c-amber)', border: '1px solid var(--c-amber)', borderRadius: 8, padding: '6px 12px', fontSize: 13, cursor: 'pointer' },
@@ -6684,8 +6860,24 @@ const styles: Record<string, React.CSSProperties> = {
   viewToggleOn: { background: 'var(--c-blue-bg)', color: 'var(--text)', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
   viewToggleOff: { background: 'transparent', color: 'var(--c-blue)', border: 'none', cursor: 'pointer', fontSize: 12, padding: '3px 10px' },
 
-  settings: { flex: 1, overflowY: 'auto', padding: 24, maxWidth: 720 },
-  settingsTitle: { fontSize: 22, fontWeight: 700, margin: '0 0 16px' },
+  // Settings: title + search top bar over a two-pane shell (section sub-nav | section cards).
+  settingsWrap: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 },
+  settingsTopBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '13px 20px', borderBottom: '1px solid var(--border)' },
+  settingsTitle: { fontSize: 19, fontWeight: 700, margin: 0, letterSpacing: -0.3 },
+  settingsSearch: { width: 230, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '7px 12px', fontSize: 13, fontFamily: 'inherit' },
+  settingsShell: { flex: 1, display: 'flex', minHeight: 0 },
+  settingsNav: { width: 232, flexShrink: 0, borderRight: '1px solid var(--border)', overflowY: 'auto', padding: 10, display: 'flex', flexDirection: 'column', gap: 2 },
+  settingsNavItem: { display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderRadius: 10, padding: '9px 10px', cursor: 'pointer', color: 'var(--text-dim)' },
+  settingsNavItemActive: { background: 'var(--surface-3)', color: 'var(--text)' },
+  settingsNavIcon: { display: 'inline-flex', flexShrink: 0 },
+  settingsNavTitle: { display: 'block', fontSize: 13.5, fontWeight: 600, lineHeight: 1.25 },
+  settingsNavSub: { display: 'block', fontSize: 11, color: 'var(--text-faint)', marginTop: 1 },
+  settingsBody: { flex: 1, overflowY: 'auto', padding: 24, minWidth: 0 },
+  settingsBodyCol: { maxWidth: 720 },
+  settingsHeader: { display: 'flex', alignItems: 'center', gap: 10, margin: '0 0 16px' },
+  settingsHeaderTitle: { fontSize: 18, fontWeight: 700, margin: 0, letterSpacing: -0.2 },
+  settingsHeaderSub: { fontSize: 12.5, color: 'var(--text-muted)', marginTop: 2 },
+  connectDashed: { width: '100%', background: 'transparent', color: 'var(--text-muted)', border: '1px dashed var(--border-2)', borderRadius: 10, padding: '10px 12px', fontSize: 13, cursor: 'pointer' },
   settingsSub: { color: 'var(--text-muted)', fontSize: 13, margin: '-2px 0 14px', lineHeight: 1.55 },
   card: { background: 'var(--surface-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 16, flexShrink: 0 },
   // Section heading — a real 15px/600 heading (design level) rather than the old tiny all-caps label.
@@ -6697,12 +6889,12 @@ const styles: Record<string, React.CSSProperties> = {
   formRow: { display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
   select: { background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
   input: { flex: 1, minWidth: 120, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 8, padding: '8px 10px', fontSize: 13 },
-  primaryBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
+  primaryBtn: { background: SOLID_BLUE, color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
   ghostBtn: { background: 'var(--border)', color: 'var(--text)', border: '1px solid var(--border-2)', borderRadius: 10, padding: '9px 14px', fontSize: 13, cursor: 'pointer' },
-  toggleOn: { background: '#1d4ed8', color: '#fff', border: '1px solid #2563eb', borderRadius: 10, padding: '8px 14px', fontSize: 13, cursor: 'pointer' },
+  toggleOn: { background: SOLID_BLUE, color: '#fff', border: '1px solid transparent', borderRadius: 10, padding: '8px 14px', fontSize: 13, cursor: 'pointer' },
   toggleOff: { background: 'transparent', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 10, padding: '8px 14px', fontSize: 13, cursor: 'pointer' },
   dangerGhost: { background: 'transparent', color: 'var(--c-red)', border: '1px solid var(--c-red-border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer' },
-  dangerSolid: { background: '#dc2626', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
+  dangerSolid: { background: SOLID_RED, color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 14, cursor: 'pointer' },
   resultList: { listStyle: 'none', margin: '12px 0 0', padding: 0 },
   resultRow: { padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 13, fontFamily: 'ui-monospace, monospace' },
   muted: { color: 'var(--text-faint)', fontSize: 13 },
@@ -6712,7 +6904,7 @@ const styles: Record<string, React.CSSProperties> = {
   // action rather than a faint text link. Its buttons are solid but a touch smaller than primaryBtn
   // so the "Apply all fixes" CTA still reads as the primary action.
   downloadBar: { marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '11px 14px', background: 'rgba(37,99,235,0.1)', border: '1px solid rgba(37,99,235,0.55)', borderRadius: 10 },
-  downloadBtn: { background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 15px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 },
+  downloadBtn: { background: SOLID_BLUE, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 15px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 },
 
   // Tag-suggestion review panel.
   reviewWrap: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
