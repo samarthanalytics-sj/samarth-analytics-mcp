@@ -223,7 +223,7 @@ app.whenReady().then(() => {
   registerGoogleIpc(googleAuth);
   registerDataIpc(dataService);
   registerChatIpc(chatService);
-  registerMemoryIpc(memory, registry);
+  registerMemoryIpc(memory, registry, chatService);
   registerMonitorIpc(monitor);
   registerSuggestionsIpc(dataService);
   registerGtmAuditIpc(dataService);
