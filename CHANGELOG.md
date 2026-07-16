@@ -1,3 +1,9 @@
+## [1.344.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.343.0...v1.344.0) (2026-07-16)
+
+### Features
+
+* **desktop:** chat memory Phase 1 — remember what the user told me (local, secret-filtered) ([c475368](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/c475368ad0b1812718280e3a46248d16d4457199))
+
 ## [1.343.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.342.0...v1.343.0) (2026-07-16)
 
 ### Features
