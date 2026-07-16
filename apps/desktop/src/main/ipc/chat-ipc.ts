@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import { ipcMain, dialog, BrowserWindow } from 'electron';
 import type { ChatService } from '../services/chat-service';
 import type { ChatTurn, GoogleProduct } from '../../shared/ipc';
 import type { WriteProposal } from '../tools/registry';
@@ -13,6 +13,25 @@ let confirmSeq = 0;
 const activeChats = new Map<string, AbortController>();
 
 export function registerChatIpc(service: ChatService): void {
+  // Attach a document to the chat: OS file picker -> plain-text extraction in the MAIN process
+  // (the renderer never touches the filesystem). Returns null when the user cancels; extraction
+  // failures throw with a plain-language reason (size cap, unsupported type, no readable text).
+  ipcMain.handle('llm:pickAttachment', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const opts = {
+      title: 'Attach a file to the chat',
+      properties: ['openFile' as const],
+      filters: [
+        { name: 'Documents', extensions: ['pdf', 'xlsx', 'csv', 'tsv', 'txt', 'md', 'json', 'log', 'html', 'xml', 'yml', 'yaml'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    };
+    const { canceled, filePaths } = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+    if (canceled || !filePaths[0]) return null;
+    const { extractAttachmentText } = await import('../services/attachments');
+    return extractAttachmentText(filePaths[0]);
+  });
+
   // Non-streaming, read-only (no confirm → write tools unavailable).
   ipcMain.handle(
     'llm:chat',

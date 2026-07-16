@@ -12,6 +12,7 @@ import type {
   ChatReply,
   ChatStreamEvent,
   ChatTurn,
+  ChatAttachmentView,
   CreateTagOutcome,
   Ga4AccountView,
   Ga4AuditWindow,
@@ -138,6 +139,9 @@ const api = {
   llm: {
     chat: (history: ChatTurn[], message: string, product: GoogleProduct): Promise<ChatReply> =>
       ipcRenderer.invoke('llm:chat', history, message, product),
+
+    // OS file picker + main-process text extraction for a chat attachment (null = cancelled).
+    pickAttachment: (): Promise<ChatAttachmentView | null> => ipcRenderer.invoke('llm:pickAttachment'),
 
     // Streaming chat. `onEvent` fires for text chunks + tool calls as they arrive;
     // the returned promise resolves with the final reply (or rejects on error).

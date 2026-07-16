@@ -14,6 +14,7 @@ import type {
   ConsolidatedEntityView,
   MergeStatus,
   ChatTurn,
+  ChatAttachmentView,
   CreateTagOutcome,
   DiscoverResult,
   Ga4MonitorRun,
@@ -899,6 +900,11 @@ interface ChatMessage {
   /** Epoch ms when the message was created (a query's send time / a reply's start time).
    *  Optional - messages stored before this field existed simply render without a timestamp. */
   ts?: number;
+  /** The exact text SENT to the model when it differs from the display (attachment injected).
+   *  History replays `sent` so follow-up questions still see the document. */
+  sent?: string;
+  /** Attached-file chip data for the bubble (the content itself lives only in `sent`). */
+  attachment?: { name: string; chars: number };
 }
 
 /** Short timestamp shown under a chat bubble: just the time for today's messages, date + time
@@ -1018,6 +1024,8 @@ function ChatView({
   seed?: { text: string; nonce: number; product?: 'gtm' | 'ga4' } | null;
 }): JSX.Element {
   const [input, setInput] = useState('');
+  const [attachment, setAttachment] = useState<ChatAttachmentView | null>(null);
+  const [attaching, setAttaching] = useState(false);
   const [busy, setBusy] = useState(false);
   const [product, setProduct] = useState<'gtm' | 'ga4'>('gtm');
   // Slash-command autocomplete: highlighted index in the menu; reset whenever the input text changes.
@@ -1096,23 +1104,48 @@ function ChatView({
   const slashMatches = ready && !busy ? slashMenuMatches(input) : [];
   const slashActive = Math.min(slashIdx, Math.max(0, slashMatches.length - 1));
 
+  async function pickAttachment(): Promise<void> {
+    if (attaching || busy) return;
+    onError('');
+    setAttaching(true);
+    try {
+      const a = await window.desktop.llm.pickAttachment();
+      if (a) setAttachment(a);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAttaching(false);
+    }
+  }
+
   async function send(): Promise<void> {
     const text = input.trim();
-    if (!text || busy) return;
+    if ((!text && !attachment) || busy) return;
     // Expand a slash command (/audit, /report, …) into the full instruction, and DISPLAY the short
     // command while SENDING the expansion. A command whose toolset lives in the other product flips it
     // first (keep the command in the box; the user presses Enter again once the thread has settled).
-    const resolved = resolveChatInput(text, product);
+    const resolved = text ? resolveChatInput(text, product) : { display: '', sent: '', product };
     if (resolved.product !== product) { setProduct(resolved.product); return; }
     onError('');
-    const history: ChatTurn[] = messages.map((m) => ({ role: m.role, text: m.text }));
+    // Attachment: the document text rides in the SENT message only; the bubble shows a chip.
+    // History replays m.sent so follow-up questions still see the document.
+    const att = attachment;
+    const sentText = att
+      ? `[Attached file: ${att.name}]\n\n<file-content>\n${att.text}\n</file-content>\n\n${resolved.sent || 'Please read the attached file and summarize what it contains.'}`
+      : resolved.sent;
+    const history: ChatTurn[] = messages.map((m) => ({ role: m.role, text: m.sent ?? m.text }));
     const now = Date.now();
-    setMessages((m) => [...m, { role: 'user', text: resolved.display, ts: now }, { role: 'assistant', text: '', tools: [], ts: now }]);
+    setMessages((m) => [
+      ...m,
+      { role: 'user', text: resolved.display, ...(att ? { sent: sentText, attachment: { name: att.name, chars: att.chars } } : {}), ts: now },
+      { role: 'assistant', text: '', tools: [], ts: now },
+    ]);
     setInput('');
+    setAttachment(null);
     setBusy(true);
     setRevertable(null);
     try {
-      await window.desktop.llm.chatStream(history, resolved.sent, product, (ev) => {
+      await window.desktop.llm.chatStream(history, sentText, product, (ev) => {
         setMessages((m) => {
           const copy = [...m];
           const last = copy[copy.length - 1];
@@ -1240,7 +1273,16 @@ function ChatView({
                   ) : null}
                 </>
               ) : (
-                <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || '…'}</div>
+                <>
+                  {m.attachment && (
+                    <div style={styles.msgAttach}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.attachment.name}</span>
+                      <span style={{ opacity: 0.75, flexShrink: 0 }}>{m.attachment.chars.toLocaleString('en-US')} chars</span>
+                    </div>
+                  )}
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{m.text || (m.attachment ? 'Read the attached file.' : '…')}</div>
+                </>
               )}
             </div>
             {m.ts != null && (
@@ -1301,6 +1343,29 @@ function ChatView({
             <div style={styles.slashMenuFoot}>↑↓ navigate · Enter select · Esc dismiss</div>
           </div>
         )}
+        {attachment && (
+          <div className="pop-in" style={styles.attachChip}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{attachment.name}</span>
+            <span style={{ color: 'var(--text-faint)', flexShrink: 0 }}>
+              {attachment.chars.toLocaleString('en-US')} chars{attachment.truncated ? ' · truncated' : ''}
+            </span>
+            <button style={styles.attachRemove} aria-label="Remove attachment" title="Remove attachment" onClick={() => setAttachment(null)}>×</button>
+          </div>
+        )}
+        <button
+          style={styles.attachBtn}
+          disabled={!ready || busy || attaching}
+          onClick={() => void pickAttachment()}
+          title="Attach a file - pdf, xlsx, csv, txt, md, json… (the model reads its text)"
+          aria-label="Attach a file"
+        >
+          {attaching ? (
+            <span className="spinner" />
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+          )}
+        </button>
         <textarea
           ref={taRef}
           style={styles.composerInput}
@@ -9201,6 +9266,10 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: 'border-box',
   },
   sendBtn: { background: 'var(--primary)', color: 'var(--on-primary)', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
+  attachBtn: { background: 'var(--surface-2)', color: 'var(--text-dim)', border: '1px solid var(--border-2)', borderRadius: 12, width: 44, height: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, padding: 0 },
+  attachChip: { position: 'absolute', bottom: 'calc(100% + 6px)', left: 16, display: 'inline-flex', alignItems: 'center', gap: 8, maxWidth: 440, background: 'var(--surface)', border: '1px solid var(--border-2)', borderRadius: 999, padding: '5px 8px 5px 12px', fontSize: 12.5, color: 'var(--text-dim)', boxShadow: 'var(--shadow-2)', zIndex: 25 },
+  attachRemove: { background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '0 2px', flexShrink: 0 },
+  msgAttach: { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.16)', borderRadius: 8, padding: '3px 9px', fontSize: 12, marginBottom: 6, maxWidth: '100%' },
   stopBtn: { background: 'var(--danger)', color: 'var(--on-danger)', border: 'none', borderRadius: 12, padding: '11px 18px', fontSize: 14, cursor: 'pointer', height: 44 },
   revertBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', margin: '0 0 8px', background: 'var(--border)', border: '1px solid var(--border)', borderRadius: 10 },
   revertText: { fontSize: 13, color: 'var(--text-dim)' },
