@@ -49,6 +49,7 @@ import {
   isGa4EcommerceEvent,
   normalizeCustomEventName,
   normalizeCustomEventTrigger,
+  normalizeTriggerType,
   setCustomEventName,
   findUnusedTriggers,
   collectUsedTriggerIds,
@@ -2481,6 +2482,100 @@ test('normalizeCustomEventTrigger leaves a valid server all-events trigger (matc
   assert.equal(evCond?.parameter.find((p) => p.key === 'arg1')?.value, '.*', 'match-all value untouched');
   // the {{Client Name}} scoping condition (in `filter`, not customEventFilter) survives untouched
   assert.ok(t.filter?.some((c) => c.parameter.some((p) => p.key === 'arg0' && p.value === '{{Client Name}}')), 'client-name filter preserved');
+});
+
+test('normalizeCustomEventTrigger MOVES a mis-placed scope condition out of customEventFilter into filter', () => {
+  // The exact create_gtm_trigger failure: the model put BOTH the {{_event}} match AND an extra
+  // {{dlv - event_label}} condition inside customEventFilter → API "must have exactly one custom-event filter".
+  const t = normalizeCustomEventTrigger({
+    name: 'Chat lead',
+    type: 'customEvent',
+    customEventFilter: [
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'generate_lead' }] },
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{dlv - event_label}}' }, { type: 'template', key: 'arg1', value: 'Chat' }] },
+    ],
+  }) as {
+    customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }>;
+    filter?: Array<{ parameter: Array<{ key: string; value: string }> }>;
+  };
+  assert.equal(t.customEventFilter.length, 1, 'customEventFilter holds exactly the one {{_event}} match');
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg0')?.value, '{{_event}}');
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'generate_lead');
+  assert.equal(t.filter?.length, 1, 'the mis-placed condition moved into filter');
+  assert.equal(t.filter?.[0].parameter.find((p) => p.key === 'arg0')?.value, '{{dlv - event_label}}');
+  assert.equal(t.filter?.[0].parameter.find((p) => p.key === 'arg1')?.value, 'Chat');
+});
+
+test('normalizeCustomEventTrigger merges mis-placed extras AFTER existing filter conditions', () => {
+  const t = normalizeCustomEventTrigger({
+    name: 'Scoped purchase',
+    type: 'customEvent',
+    filter: [{ type: 'contains', parameter: [{ type: 'template', key: 'arg0', value: '{{Page Path}}' }, { type: 'template', key: 'arg1', value: '/checkout' }] }],
+    customEventFilter: [
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'purchase' }] },
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{Form ID}}' }, { type: 'template', key: 'arg1', value: 'checkout-form' }] },
+    ],
+  }) as { customEventFilter: unknown[]; filter: Array<{ parameter: Array<{ key: string; value: string }> }> };
+  assert.equal(t.customEventFilter.length, 1, 'only the {{_event}} match stays in customEventFilter');
+  assert.deepEqual(
+    t.filter.map((c) => c.parameter.find((p) => p.key === 'arg0')?.value),
+    ['{{Page Path}}', '{{Form ID}}'],
+    'existing filter conditions kept first, mis-placed extra appended',
+  );
+});
+
+test('normalizeCustomEventTrigger tolerates a null/garbage element in customEventFilter (no throw)', () => {
+  const t = normalizeCustomEventTrigger({
+    name: 'Junk',
+    type: 'customEvent',
+    customEventFilter: [
+      null,
+      'nope',
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'purchase' }] },
+    ],
+  }) as { customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }>; filter?: unknown };
+  assert.equal(t.customEventFilter.length, 1, 'garbage elements dropped; the one real {{_event}} match kept');
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'purchase');
+  assert.equal('filter' in t, false, 'garbage is not smuggled into filter');
+});
+
+test('normalizeCustomEventTrigger dedups duplicate {{_event}} conditions to exactly one', () => {
+  const t = normalizeCustomEventTrigger({
+    name: 'Dup',
+    type: 'customEvent',
+    customEventFilter: [
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'sign up' }] },
+      { type: 'equals', parameter: [{ type: 'template', key: 'arg0', value: '{{_event}}' }, { type: 'template', key: 'arg1', value: 'sign up' }] },
+    ],
+  }) as { customEventFilter: Array<{ parameter: Array<{ key: string; value: string }> }>; filter?: unknown };
+  assert.equal(t.customEventFilter.length, 1, 'duplicate {{_event}} conditions collapse to one');
+  assert.equal(t.customEventFilter[0].parameter.find((p) => p.key === 'arg1')?.value, 'sign_up', 'match value snake_cased');
+  assert.equal('filter' in t, false, 'no empty filter array when there are no extra conditions');
+});
+
+test('normalizeTriggerType repairs the aliases the model invents; valid + unknown types pass through', () => {
+  const typeOf = (input: Record<string, unknown>): unknown => (normalizeTriggerType(input) as { type?: unknown }).type;
+  // All-Elements click aliases → the bare "click" enum value (the pasted API error).
+  for (const a of ['all_clicks', 'allClicks', 'allElements', 'all_elements', 'All Elements', 'click-all']) {
+    assert.equal(typeOf({ name: 'T', type: a }), 'click', `${a} → click`);
+  }
+  assert.equal(typeOf({ name: 'T', type: 'just_links' }), 'linkClick', 'just_links → linkClick');
+  assert.equal(typeOf({ name: 'T', type: 'form_submit' }), 'formSubmission', 'form_submit → formSubmission');
+  assert.equal(typeOf({ name: 'T', type: 'custom_event' }), 'customEvent', 'custom_event → customEvent');
+  assert.equal(typeOf({ name: 'T', type: 'window_loaded' }), 'windowLoaded', 'window_loaded → windowLoaded');
+  assert.equal(typeOf({ name: 'T', type: 'youtube_video' }), 'youTubeVideo', 'youtube_video → youTubeVideo');
+  // The Consent Initialization trigger's API value is "consentInit"; the longer spelling is a repair alias.
+  assert.equal(typeOf({ name: 'T', type: 'consentInitialization' }), 'consentInit', 'consentInitialization → consentInit');
+  assert.equal(typeOf({ name: 'T', type: 'consent_init' }), 'consentInit', 'consent_init → consentInit');
+  // Already-valid enum values are returned unchanged (same object, not rewritten). consentInit is the
+  // real API value and MUST pass through untouched (a wrong alias target would corrupt a valid trigger).
+  for (const v of ['click', 'linkClick', 'customEvent', 'formSubmission', 'pageview', 'domReady', 'windowLoaded', 'timer', 'init', 'consentInit', 'elementVisibility', 'scrollDepth', 'youTubeVideo', 'historyChange', 'jsError', 'triggerGroup']) {
+    const input = { name: 'T', type: v };
+    assert.equal(normalizeTriggerType(input), input, `${v} valid → identity (no clone)`);
+  }
+  // Unrecognized / server-only types are never mangled.
+  const unknown = { name: 'T', type: 'serverPageview' };
+  assert.equal(normalizeTriggerType(unknown), unknown, 'unknown type passes through untouched');
 });
 
 test('findUnusedTriggers: firing/blocking used; a DEAD trigger group does NOT keep its member used', () => {

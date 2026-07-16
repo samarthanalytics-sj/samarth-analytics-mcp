@@ -951,17 +951,73 @@ export function setCustomEventName(trigger: Record<string, unknown>, eventName: 
   return { ...trigger, type: 'customEvent', customEventFilter: updated };
 }
 
+/** The exact GTM v2 `Trigger.type` enum, keyed by a canonicalized form (lower-cased, with spaces /
+ *  underscores / hyphens stripped). Every VALID type maps to itself so a correct trigger is never
+ *  rewritten; the extra entries are the aliases the chat model routinely invents. */
+const TRIGGER_TYPE_ALIASES: Record<string, string> = {
+  // All-Elements clicks: GTM's enum value is the bare "click" (the model loves "all_clicks"/"allElements").
+  click: 'click', clicks: 'click', allclick: 'click', allclicks: 'click',
+  allelement: 'click', allelements: 'click', allelementclick: 'click', allelementclicks: 'click',
+  allelementsclick: 'click', allelementsclicks: 'click', elementclick: 'click', clickall: 'click',
+  // Just-Links clicks.
+  linkclick: 'linkClick', linkclicks: 'linkClick', justlink: 'linkClick', justlinks: 'linkClick',
+  linksclick: 'linkClick', linkonly: 'linkClick', clicklink: 'linkClick',
+  // Form submission.
+  formsubmission: 'formSubmission', formsubmissions: 'formSubmission', formsubmit: 'formSubmission',
+  formsubmits: 'formSubmission', submitform: 'formSubmission', form: 'formSubmission',
+  // Custom Event (dataLayer).
+  customevent: 'customEvent', customevents: 'customEvent', custom: 'customEvent', datalayerevent: 'customEvent',
+  // Page-load family.
+  pageview: 'pageview', pageviews: 'pageview', pageload: 'pageview',
+  domready: 'domReady', dom: 'domReady', domcontentloaded: 'domReady',
+  windowloaded: 'windowLoaded', windowload: 'windowLoaded', pageloaded: 'windowLoaded', windowonload: 'windowLoaded',
+  // History / JS error / timer.
+  historychange: 'historyChange', history: 'historyChange',
+  jserror: 'jsError', javascripterror: 'jsError', error: 'jsError',
+  timer: 'timer',
+  // Element visibility / scroll / video.
+  elementvisibility: 'elementVisibility', visibility: 'elementVisibility', elementvisible: 'elementVisibility',
+  scrolldepth: 'scrollDepth', scroll: 'scrollDepth',
+  youtubevideo: 'youTubeVideo', youtube: 'youTubeVideo', ytvideo: 'youTubeVideo', video: 'youTubeVideo',
+  // Initialization / consent. The Consent Initialization trigger's API enum value is "consentInit"
+  // (NOT "consentInitialization") - confirmed by container-verify.ts + the web-audit GTM fixture; the
+  // longer spellings are aliases that must be REPAIRED to consentInit, and the correct value maps to itself.
+  init: 'init', initialization: 'init', initallpages: 'init', pageviewinit: 'init',
+  consentinit: 'consentInit', consentinitialization: 'consentInit', consentinitialisation: 'consentInit',
+  // Trigger group.
+  triggergroup: 'triggerGroup', group: 'triggerGroup',
+};
+
+/** Repair a hand-authored trigger `type` to the exact GTM v2 enum value. The chat model routinely
+ *  invents aliases the API rejects ("Invalid value at 'trigger.type'"): "all_clicks"/"allClicks"/
+ *  "allElements"/"all_elements" for the All-Elements click trigger (correct: "click"), "form_submit"
+ *  for "formSubmission", "custom_event" for "customEvent", and so on. We canonicalize by stripping
+ *  case / underscores / hyphens / spaces, then map RECOGNIZED aliases only; an unrecognized type
+ *  passes through untouched so a genuinely valid (or server-only) type is never mangled and the API
+ *  can still return its own clear error. PURE. */
+export function normalizeTriggerType(trigger: Record<string, unknown>): Record<string, unknown> {
+  const raw = (trigger as { type?: unknown }).type;
+  if (typeof raw !== 'string' || !raw) return trigger;
+  const key = raw.toLowerCase().replace(/[\s_-]+/g, '');
+  const canonical = TRIGGER_TYPE_ALIASES[key];
+  return canonical && canonical !== raw ? { ...trigger, type: canonical } : trigger;
+}
+
 /** Normalize AND REPAIR a Custom Event trigger so the API always accepts it. The model often
  *  hand-builds a customEvent trigger (via the raw create_gtm_trigger tool) with the event name at the
- *  TOP-LEVEL `eventName` field — which is timer-only, so the API rejects `trigger.event_name` — and a
- *  missing/malformed `customEventFilter` ("must have exactly one custom-event filter"). This repairs
- *  both: (1) if a single valid `{{_event}}` condition exists, keep it and snake_case its match value
- *  (the original behavior); (2) if it's missing or duplicated, REBUILD exactly one `{{_event}} equals
- *  <name>` condition — taking the name from the top-level eventName (string or Parameter) or any arg1
- *  already present — while preserving non-event conditions (e.g. a server trigger's {{Client Name}}
- *  filter). A top-level `eventName` is ALWAYS stripped from a customEvent trigger. PURE. */
+ *  TOP-LEVEL `eventName` field (timer-only, so the API rejects `trigger.event_name` on a customEvent) and/or
+ *  a malformed `customEventFilter`. GTM requires `customEventFilter` to hold EXACTLY ONE condition (the
+ *  `{{_event}} equals <name>` match); every other scope condition belongs in `filter` (corpus-verified
+ *  in buildTrigger). This repairs all three:
+ *    - keeps the single `{{_event}}` condition (snake_casing its match value), rebuilding it from the
+ *      top-level eventName / any arg1 if none is present, and dropping duplicates so exactly one remains;
+ *    - MOVES any non-event conditions the model mis-placed inside `customEventFilter` out into `filter`
+ *      (merged after existing `filter` conditions); this is what fixes the API's "Custom-event trigger
+ *      must have exactly one custom-event filter" rejection;
+ *    - ALWAYS strips a top-level `eventName` from a customEvent trigger.
+ *  PURE. */
 export function normalizeCustomEventTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
-  const t = trigger as { type?: unknown; eventName?: unknown; customEventFilter?: unknown };
+  const t = trigger as { type?: unknown; eventName?: unknown; customEventFilter?: unknown; filter?: unknown };
   if (String(t.type ?? '') !== 'customEvent') return trigger;
 
   const stripEventName = (o: Record<string, unknown>): Record<string, unknown> => {
@@ -977,42 +1033,47 @@ export function normalizeCustomEventTrigger(trigger: Record<string, unknown>): R
   const valueOf = (v: unknown): string =>
     typeof v === 'string' ? v : v && typeof v === 'object' && typeof (v as { value?: unknown }).value === 'string' ? (v as { value: string }).value : '';
 
-  const cefIn = Array.isArray(t.customEventFilter) ? (t.customEventFilter as Array<Record<string, unknown>>) : [];
+  // Keep only real condition OBJECTS: a hand-authoring model can emit a null/primitive array element,
+  // and a bare `.parameter` access on one would throw mid-create instead of repairing the trigger.
+  const cefIn = (Array.isArray(t.customEventFilter) ? (t.customEventFilter as unknown[]) : []).filter(
+    (c): c is Record<string, unknown> => c != null && typeof c === 'object',
+  );
   const eventConds = cefIn.filter(isEventCond);
-
-  // (1) Exactly one {{_event}} condition → just snake_case its arg1 value; strip the top-level field.
-  if (eventConds.length === 1) {
-    const cef = cefIn.map((cond) => {
-      if (!isEventCond(cond)) return cond;
-      const params = (cond as { parameter: Array<Record<string, unknown>> }).parameter;
-      return {
-        ...cond,
-        parameter: params.map((p) => {
-          const pp = p as { key?: string; value?: unknown };
-          return pp.key === 'arg1' && typeof pp.value === 'string' ? { ...pp, value: normalizeCustomEventName(pp.value) } : p;
-        }),
-      };
-    });
-    return stripEventName({ ...trigger, customEventFilter: cef });
-  }
-
-  // (2) Missing or duplicated {{_event}} condition → rebuild exactly one, keeping any non-event
-  //     conditions. Derive the name from the top-level eventName, else any arg1 already present.
-  let arg1 = '';
-  for (const cond of cefIn) {
-    const params = (cond as { parameter?: unknown }).parameter;
-    if (Array.isArray(params)) {
-      const a1 = params.find((p) => (p as { key?: string }).key === 'arg1');
-      if (a1 && typeof (a1 as { value?: unknown }).value === 'string') { arg1 = (a1 as { value: string }).value; break; }
-    }
-  }
-  const name = normalizeCustomEventName(valueOf(t.eventName) || arg1);
   const nonEventConds = cefIn.filter((cond) => !isEventCond(cond));
-  return stripEventName({
-    ...trigger,
-    type: 'customEvent',
-    customEventFilter: [condition('{{_event}}', 'equals', name), ...nonEventConds],
-  });
+
+  // The single {{_event}} condition customEventFilter is allowed to keep.
+  let eventCond: Record<string, unknown>;
+  if (eventConds.length >= 1) {
+    // Keep the first {{_event}} condition (dropping any duplicates), snake_casing its match value.
+    const first = eventConds[0] as { parameter: Array<Record<string, unknown>> };
+    eventCond = {
+      ...(eventConds[0] as Record<string, unknown>),
+      parameter: first.parameter.map((p) => {
+        const pp = p as { key?: string; value?: unknown };
+        return pp.key === 'arg1' && typeof pp.value === 'string' ? { ...pp, value: normalizeCustomEventName(pp.value) } : p;
+      }),
+    };
+  } else {
+    // No {{_event}} condition present → rebuild one from the top-level eventName, else any arg1 present.
+    let arg1 = '';
+    for (const cond of cefIn) {
+      const params = (cond as { parameter?: unknown }).parameter;
+      if (Array.isArray(params)) {
+        const a1 = params.find((p) => (p as { key?: string }).key === 'arg1');
+        if (a1 && typeof (a1 as { value?: unknown }).value === 'string') { arg1 = (a1 as { value: string }).value; break; }
+      }
+    }
+    eventCond = condition('{{_event}}', 'equals', normalizeCustomEventName(valueOf(t.eventName) || arg1));
+  }
+
+  // Any scope conditions the model mis-placed inside customEventFilter move to `filter`, after any
+  // conditions already there. customEventFilter is left holding exactly the one {{_event}} match.
+  const existingFilter = Array.isArray(t.filter) ? (t.filter as Array<Record<string, unknown>>) : [];
+  const filter = [...existingFilter, ...nonEventConds];
+  const out: Record<string, unknown> = { ...trigger, type: 'customEvent', customEventFilter: [eventCond] };
+  if (filter.length) out.filter = filter;
+  else delete out.filter;
+  return stripEventName(out);
 }
 
 export function normalizeTimerTrigger(trigger: Record<string, unknown>): Record<string, unknown> {

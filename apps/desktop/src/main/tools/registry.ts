@@ -3721,7 +3721,9 @@ export function buildToolRegistry(
       name: 'create_gtm_trigger',
       description:
         'Create a trigger in a GTM workspace. `trigger` is a GTM API Trigger resource. ' +
-        'Click-on-links uses type "linkClick"; filter operator types are LOWERCASE ' +
+        'An ALL-ELEMENTS click trigger uses type "click"; click-on-links uses type "linkClick" ' +
+        '(NOT "all_clicks"/"allElements"/"form_submit" - the tool auto-corrects common aliases, ' +
+        'but prefer the exact value). Filter operator types are LOWERCASE ' +
         '(equals, contains, startsWith, endsWith, matchRegex) and conditions go in `filter` ' +
         'with arg0/arg1 template parameters. Example (Click URL contains mailto:): ' +
         '{"name":"Email link click","type":"linkClick","filter":[{"type":"contains",' +
@@ -3733,7 +3735,11 @@ export function buildToolRegistry(
         'do NOT use a top-level "eventName" field (that is TIMER-only; the API rejects it on a ' +
         'customEvent trigger). Example: {"name":"Purchase","type":"customEvent","customEventFilter":' +
         '[{"type":"equals","parameter":[{"type":"template","key":"arg0","value":"{{_event}}"},' +
-        '{"type":"template","key":"arg1","value":"purchase"}]}]}.',
+        '{"type":"template","key":"arg1","value":"purchase"}]}]}. ' +
+        'customEventFilter must hold ONLY that single {{_event}} match. Any ADDITIONAL scope conditions ' +
+        '(e.g. {{Page Path}} contains /checkout, {{Form ID}} equals x) go in `filter`, not ' +
+        'customEventFilter (the API rejects more than one custom-event filter; the tool also moves ' +
+        'mis-placed extras to `filter` for you).',
       inputSchema: {
         type: 'object',
         properties: {
