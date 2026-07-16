@@ -211,7 +211,19 @@ export class ChatService {
     // Both products get write tools (and the confirm flow) when a confirm fn is
     // provided. GTM writes land in a draft workspace; GA4 Admin writes apply to
     // the live property (deletes/archives are approval-gated).
-    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests);
+    // The chat memory tools (remember_memory / forget_memory) write to the LOCAL per-account store, scoped
+    // to the active client (container in a GTM turn, property in a GA4 turn) — matching how memories inject.
+    const memoryCtx = this.memory
+      ? {
+          store: this.memory,
+          accountId: active.id,
+          scope: {
+            ...(product === 'gtm' && active.gtmContext?.containerId ? { containerId: active.gtmContext.containerId } : {}),
+            ...(product === 'ga4' && active.ga4Context?.property ? { property: active.ga4Context.property } : {}),
+          },
+        }
+      : undefined;
+    const tools = buildToolRegistry(this.data, confirm, product, this.history, ctxControl, this.manifests, memoryCtx);
 
     const productLabel = product === 'gtm' ? 'Google Tag Manager (GTM)' : 'Google Analytics 4 (GA4)';
     const system =
@@ -336,6 +348,15 @@ export class ChatService {
           'which property and do not re-list properties unless the user asks to switch. '
         : '') +
       this.memoryBlock(active, product, message) +
+      (this.memory
+        ? 'MEMORY: you have a persistent, per-client memory (any saved notes appear above under REMEMBERED CONTEXT). ' +
+          'When the user tells you to REMEMBER something, or states a durable preference, correction, or decision ' +
+          '(e.g. "we use order_completed for purchase", "do not suggest scroll tracking again", "always name tags like X"), ' +
+          'call remember_memory to save it (kind: rule for an instruction/correction, else preference / decision / fact / glossary). ' +
+          'When the user says to FORGET something ("forget that", "stop applying X"), call forget_memory with a short description. ' +
+          'Also save a brief memory when you make a NOTABLE persistent change the user would want on record (e.g. created or deleted a key tag/trigger, with what and when). ' +
+          'Be conservative: never remember secrets, API keys, personal data, or transient one-off values. Briefly confirm what you remembered or forgot. '
+        : '') +
       dateContextLine(new Date()) +
       'Call tools when asked; never invent ids. When the user asks to list or count ' +
       'tags, triggers, variables, accounts, containers, or workspaces, the tools already ' +

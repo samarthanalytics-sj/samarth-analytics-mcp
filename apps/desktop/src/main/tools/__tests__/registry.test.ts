@@ -6,6 +6,7 @@ import { buildToolRegistry, type GtmContextControl } from '../registry';
 import { buildGa4WriteTools } from '../ga4-write-tools';
 import { AuditHistoryStore } from '../../storage/audit-history';
 import { ManifestStore } from '../../storage/manifest-store';
+import { MemoryStore } from '../../storage/memory-store';
 import type { GoogleDataService } from '../../google/data-service';
 import type { GtmContext } from '../../../shared/ipc';
 
@@ -2205,6 +2206,28 @@ async function main(): Promise<void> {
     const verify = JSON.parse(await ro.execute('verify_server_endpoint', { serverUrl: 'https://sgtm.example.com' }));
     assert.equal(verify.ok, true);
     assert.ok(verify.url.endsWith('/healthy'), 'probes the /healthy endpoint');
+  });
+
+  await test('memory tools (remember/forget) appear only with a memory context, in BOTH products, and work', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'reg-mem-'));
+    const store = new MemoryStore(join(dir, 'm.json'), 500, () => 1);
+    const memCtx = { store, accountId: 'acct1', scope: { containerId: 'GTM-A' } };
+    const regGtm = buildToolRegistry(fakeData().data, undefined, 'gtm', undefined, undefined, undefined, memCtx);
+    const regGa4 = buildToolRegistry(fakeData().data, undefined, 'ga4', undefined, undefined, undefined, memCtx);
+    assert.ok(regGtm.list().some((t) => t.name === 'remember_memory') && regGtm.list().some((t) => t.name === 'forget_memory'), 'present in gtm');
+    assert.ok(regGa4.list().some((t) => t.name === 'remember_memory'), 'present in ga4 too (appended after the product filter)');
+    assert.equal(buildToolRegistry(fakeData().data).list().some((t) => t.name === 'remember_memory'), false, 'absent without a memory context');
+
+    const saved = rec(JSON.parse(await regGtm.execute('remember_memory', { text: 'always snake_case events', kind: 'rule' })));
+    assert.equal(saved.saved, true);
+    assert.equal(saved.kind, 'rule');
+    assert.equal(store.list('acct1').length, 1);
+    assert.equal(store.list('acct1')[0].scope.containerId, 'GTM-A', 'defaulted to the active client scope');
+
+    const forgot = rec(JSON.parse(await regGtm.execute('forget_memory', { query: 'snake_case' })));
+    assert.equal(forgot.removed, 1);
+    assert.equal(store.list('acct1').length, 0);
+    rmSync(dir, { recursive: true, force: true });
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

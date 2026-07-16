@@ -170,10 +170,3 @@ button:hover:not(:disabled) { box-shadow: var(--shadow-1); }
   }
   .hover-lift:hover { transform: none; }
 }
-
-/* Chat: the per-message "Remember" affordance stays subtle until you hover the bubble (or when its
-   inline form is open, flagged via data-open). Always visible on touch devices. */
-.chat-msg .msg-actions { opacity: 0; transition: opacity 0.12s ease; }
-.chat-msg:hover .msg-actions,
-.msg-actions[data-open='true'] { opacity: 1; }
-@media (hover: none) { .chat-msg .msg-actions { opacity: 1; } }
