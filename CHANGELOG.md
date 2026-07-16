@@ -1,3 +1,9 @@
+## [1.347.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.346.0...v1.347.0) (2026-07-16)
+
+### Features
+
+* **desktop:** chat memory Phase 2b — auto-suggest memories from the chat (with review) ([22a6f6d](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/22a6f6da7fb3352e959aacec0c0d6eefd22019d4))
+
 ## [1.346.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.345.0...v1.346.0) (2026-07-16)
 
 ### Features
