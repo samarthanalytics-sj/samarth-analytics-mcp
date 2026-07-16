@@ -1,3 +1,9 @@
+## [1.348.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.347.0...v1.348.0) (2026-07-16)
+
+### Features
+
+* **desktop:** chat attachments read Word files (.docx + legacy .doc) ([#598](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/598)) ([50992e1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/50992e14d9ab8a60306bdc960e8fa382227512fa))
+
 ## [1.347.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.346.0...v1.347.0) (2026-07-16)
 
 ### Features
