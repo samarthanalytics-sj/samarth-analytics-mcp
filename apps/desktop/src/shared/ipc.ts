@@ -1043,6 +1043,16 @@ export interface ServerPlanApplyResultView {
 /** Server container documentation for ON-SCREEN rendering. Mirrors server-doc.ts
  *  buildServerDocView - the same helpers the MD/CSV/XLSX/PDF exports use, so what's shown
  *  on the page and what's written to a file can't diverge. Secret values never appear. */
+/** A chat attachment after main-process text extraction. The renderer injects `text` into the
+ *  OUTGOING message only; the bubble renders just name/chars (never the content). */
+export interface ChatAttachmentView {
+  name: string;
+  bytes: number;
+  chars: number;
+  text: string;
+  truncated: boolean;
+}
+
 export interface ServerDocView {
   meta: { containerName: string; publicId?: string; workspaceName?: string; generatedAt: string; liveVersionId: string | null };
   overview: { taggingServerUrls: string[]; counts: { clients: number; tags: number; triggers: number; variables: number; transformations: number }; configScore: number | null };
