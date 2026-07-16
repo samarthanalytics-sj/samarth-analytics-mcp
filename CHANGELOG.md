@@ -1,3 +1,9 @@
+## [1.342.0](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.341.1...v1.342.0) (2026-07-16)
+
+### Features
+
+* **desktop:** create_gtm_variable_typed gains the Google Tag: Event Settings (gtes) kind ([#590](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/issues/590)) ([5425120](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/commit/5425120106c66557bd0644bc311853410d854d06))
+
 ## [1.341.1](https://github.com/samarthanalytics-sj/samarth-analytics-mcp/compare/v1.341.0...v1.341.1) (2026-07-16)
 
 ### Bug Fixes
