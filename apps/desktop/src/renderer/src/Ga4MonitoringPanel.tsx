@@ -19,7 +19,8 @@ const SEV_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3, low:
 // --c-* accents INVERT to light pastels in dark mode (see memory: never put white on var(--c-*)), so
 // these fixed mid-dark solids are used wherever white text sits on a filled accent - readable in BOTH modes.
 const SOLID_BLUE = '#2563eb';
-const SEV_SOLID: Record<string, string> = { critical: '#dc2626', high: '#dc2626', medium: '#b45309', low: '#b45309', info: '#475569' };
+// Solid severity fills: every value carries WHITE text at >= 4.5:1 (AA) in both themes.
+const SEV_SOLID: Record<string, string> = { critical: 'var(--danger)', high: 'var(--danger)', medium: '#b45309', low: '#b45309', info: '#475569' };
 const HEALTH: Record<string, { color: string; bg: string; label: string; icon: string }> = {
   critical: { color: 'var(--c-red)', bg: 'var(--c-red-bg, rgba(239,68,68,.12))', label: 'Critical', icon: '🔴' },
   warning: { color: 'var(--c-amber, #b8860b)', bg: 'var(--c-amber-bg, rgba(245,158,11,.14))', label: 'Warning', icon: '🟠' },
@@ -209,7 +210,7 @@ function HeroCard({ run, isRunning, disabled, onRun }: { run: Ga4MonitorRun; isR
     );
   }
 
-  const solid = SEV_SOLID[top.severity] ?? '#dc2626';
+  const solid = SEV_SOLID[top.severity] ?? 'var(--danger)';
   return (
     <div style={{ ...card, padding: 18 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
